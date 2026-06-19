@@ -202,6 +202,9 @@ graph TD
     *   Manual overrides for all local parameters (smoothing, nose smoothing, whitening, lips/eyes enhancements, Dodge & Burn).
     *   Accordion folders for detailed skin tone adjustments, tone curves, and lens effects.
     *   Reference Image uploader for live color transfer.
+    *   **Batch Processing Tab**: Folder ingestion with descriptive grouping, progress bar, contact sheet generation, and ZIP packaging.
+    *   **Style Learning Tab**: Dataset-level style extraction from original/edited pairs, saved to `styles/` directory.
+    *   **Virtual Studio Relighting Tab**: 3D face relighting controls (azimuth, elevation, strength) using Blinn-Phong shading.
     *   Export resolution overrides (Original, 4K, 2K, 1080p, 720p) and format encoders (JPEG with quality slider, PNG, WebP).
     *   Fast Preview mode running downscaled inference for low latency interaction.
 
@@ -235,8 +238,33 @@ Provides a decoupled, reusable I/O boundary that handles file read/write, format
 *   **EXIF Metadata Restoration**: Automatically transposes image orientations via `PIL.ImageOps.exif_transpose` during loading, and copies EXIF headers from original to processed outputs during saving using `copy_exif` (while normalizing the orientation tag).
 *   **Stitched Comparison Generator**: Generates high-resolution side-by-side comparison images using a light-gray vertical separator.
 *   **Adaptive Scale Limiting**: Rescales large canvases to match processing thresholds while tracking scale factor ratios.
+*   **Shared Helpers**: Also exports `resize_for_processing`, `output_format`, `encode_write_params`, and the `IMAGE_EXTENSIONS` / `RAW_EXTENSIONS` sets used by CLI, GUI, and batch tooling.
 
-### 3.14. Command Line Interface (`cli.py`)
+### 3.14. Virtual Studio Relighting (`retouch/relight.py`)
+Implements directional 3D shading based on a FaceMesh depth map derived from MediaPipe landmarks:
+*   **Delaunay Triangulation Depth Map**: Builds a depth map (`Z_pixels`) by averaging MediaPipe landmark `z` coordinates across Delaunay triangles, scaled by `face_width` for aspect-ratio correctness.
+*   **Surface Normal Estimation**: Computes per-pixel surface normals via Sobel gradients on the blurred depth map.
+*   **Blinn-Phong Lighting**: Applies diffuse (ambient-clamped `I_diffuse`) and specular (`I_specular^alpha`) components from configurable `azimuth` and `elevation` light angles.
+*   **Yaw Guard**: Attenuates the effect on extreme profiles (`ratio > 1.7`) to prevent unnatural lighting on side profiles.
+*   **Highlight Protection**: Decays specular contribution from `L > 220` to `L = 250` to avoid blowing out bright skin areas.
+*   **Skin-Masked Compositing**: Blends the relit result onto the original using the soft skin mask.
+
+### 3.15. Batch Processor (`retouch/batch_processor.py`)
+Folder-based batch ingestion with descriptive grouping, persistent caching, and contact sheet generation:
+*   **`BatchProcessorCache`**: Persistent JSON cache keyed by SHA-256 of the input directory path, stored under `~/.cache/retouch/`. Caches per-file face count, face width, HSV stats, and modification timestamps to avoid re-analysis on repeat runs.
+*   **`classify_image`**: Rule-based grouping into 8 categories (Portrait/Scenic × Bright/Dark × Colorful/Muted) using HSV statistics and face counts.
+*   **`analyze_and_group`**: Scans all images in a directory using the engine's detector, computes HSV stats (optionally masked to the subject via person segmentation), and groups them by the classification scheme.
+*   **`generate_contact_sheet`**: Produces a tiled grid of processed thumbnails with PIL-rendered filename labels and empty-cell placeholders.
+*   **`BatchProcessor.process_folder`**: Top-level ingestion → analysis/grouping → style processing → contact sheet → optional ZIP packaging, with a `progress_callback` for GUI integration.
+
+### 3.16. Style Library & Dataset Learning (`retouch/style_library.py`)
+Dynamic preset management and dataset-wide style extraction:
+*   **`save_style_profile`**: Serializes a `StyleProfile` (or raw dict) with metadata (name, author, version, tags, timestamp) to a JSON file under `styles/`. Auto-increments version on duplicate names to protect history.
+*   **`load_style_profile`** / **`list_styles`**: Load individual or enumerate all saved style profiles with metadata.
+*   **`normalize_stem`**: Strips Lightroom-style suffixes (`_edit`, `_edited`, `_retouched`, `_v1–_v3`, `_crop`, `_copy`) to match original/edited pairs by stem.
+*   **`learn_dataset_style`**: Walks original and edited directories, matches pairs via normalized stems, runs `StyleAnalyzer.extract` on each, filters zero-delta profiles (failed face detection), and averages parameters using a trimmed mean (top/bottom 10% removed when N ≥ 5) to produce a single averaged style profile.
+
+### 3.17. Command Line Interface (`cli.py`)
 Provides batch processing capabilities and pipeline customization via command line options:
 *   **Batch Directory Recursion**: Recursively resolves inputs (`find_images`) to batch-process folders of target images.
 *   **Multiprocessing Engine**: Leverages Python's `multiprocessing` to process multiple images in parallel across CPU cores using pool-based task scheduling.
