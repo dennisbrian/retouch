@@ -88,7 +88,7 @@ class SkinProcessor:
             lab[:, :, 2] = lab[:, :, 2] + (b_target - lab[:, :, 2]) * skin_mask * blend_factor
 
         whitened = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
-        return whitened
+        return blend_masked(img_bgr, whitened, skin_mask)
 
     def equalize(self, img_bgr, skin_mask, strength=40, ref_lab=None):
         """CLAHE + local average color equalization to unify skin tone.
@@ -108,9 +108,11 @@ class SkinProcessor:
             ref_source = ref_lab.astype(np.float32) if ref_lab is not None else lab
             median_a = np.median(ref_source[:, :, 1][skin_indices])
             median_b = np.median(ref_source[:, :, 2][skin_indices])
-            # Pull towards median by 20% (final blend_masked at end scales by s and skin_mask) (Bug 4)
-            lab[:, :, 1] = lab[:, :, 1] + (median_a - lab[:, :, 1]) * 0.20
-            lab[:, :, 2] = lab[:, :, 2] + (median_b - lab[:, :, 2]) * 0.20
+            # Pull towards median by 20% scaled by strength, applied only inside the skin mask
+            # This avoids shifting non-skin pixels and matches the strength parameter.
+            pull = 0.20 * s * skin_mask
+            lab[:, :, 1] = lab[:, :, 1] + (median_a - lab[:, :, 1]) * pull
+            lab[:, :, 2] = lab[:, :, 2] + (median_b - lab[:, :, 2]) * pull
 
         # 2. CLAHE on luminance channel — write result back only over skin
         lab_u = np.clip(lab, 0, 255).astype(np.uint8)
@@ -128,7 +130,7 @@ class SkinProcessor:
 
         # Blend back using the soft skin mask to avoid hard edge seams (Bug 3 & 4)
         equalized = cv2.cvtColor(lab_u, cv2.COLOR_LAB2BGR)
-        return blend_masked(img_bgr, equalized, skin_mask * s)
+        return blend_masked(img_bgr, equalized, skin_mask)
 
     def dodge_burn(self, img_bgr, regions, strength=40):
         """Subtle 3-5% sculpting (brighten nose bridge, forehead center, cheeks;
@@ -160,7 +162,8 @@ class SkinProcessor:
         # Darken contours: -4% max (jawline doesn't need highlight protection)
         lab[:, :, 0] = np.clip(lab[:, :, 0] - lab[:, :, 0] * darken_mask * 0.04 * s, 0, 255)
 
-        return cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        return blend_masked(img_bgr, result, regions.skin)
 
     def harmonize_neck(self, img_bgr, face_landmarks, person_mask, face_skin_mask, neck_mask=None, strength=40):
         """Unify the neck and chest skin color and brightness with the face skin to prevent the 'white face + yellow neck' discrepancy."""
@@ -243,11 +246,10 @@ class SkinProcessor:
         neck_median_a = np.median(lab[:, :, 1][neck_indices])
         neck_median_b = np.median(lab[:, :, 2][neck_indices])
 
-        # Shift neck luminance (brightness lift) if neck is darker
+        # Shift neck luminance (brightness adjustment, can be positive or negative)
         # Allow up to 75% matching to keep shadows natural
-        if neck_median_l < face_median_l:
-            l_diff = (face_median_l - neck_median_l) * 0.75 * s
-            lab[:, :, 0] = np.clip(lab[:, :, 0] + neck_mask_final * l_diff, 0, 255)
+        l_diff = (face_median_l - neck_median_l) * 0.75 * s
+        lab[:, :, 0] = np.clip(lab[:, :, 0] + neck_mask_final * l_diff, 0, 255)
 
         # Shift neck color channels (AB) towards face color to align color cast
         a_diff = (face_median_a - neck_median_a) * 0.7 * s
@@ -283,6 +285,8 @@ class SkinProcessor:
         kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_k, dilate_k))
         highlight_mask = cv2.dilate(highlight_mask, kernel_dilate)
         highlight_mask = cv2.GaussianBlur(highlight_mask, (blur_k, blur_k), 0)
+        # Re-clamp mask to skin boundary to prevent glow from bleeding into hair/eyes/background
+        highlight_mask *= (skin_mask > 0.1).astype(np.float32)
         highlight_mask = np.clip(highlight_mask, 0.0, 1.0)
 
         # Apply color shift to highlights
@@ -291,6 +295,9 @@ class SkinProcessor:
         if tone == "neutral":
             # neutral white highlight glow
             pass
+        elif tone == "porcelain":
+            # cool porcelain color shift (LAB L+15, b-10)
+            lab_shifted[:, :, 2] = np.clip(lab_shifted[:, :, 2] - 10.0, 0, 255)
         else: # rosy
             # rosy-lavender color shift (LAB L+15, a+10, b-5)
             lab_shifted[:, :, 1] = np.clip(lab_shifted[:, :, 1] + 10.0, 0, 255)

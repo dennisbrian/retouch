@@ -410,12 +410,15 @@ class ColorGrader:
         # ---- Halation ----
         if "halation" in settings:
             h_conf = settings["halation"]
-            result = self._add_halation(
-                result,
-                threshold=h_conf.get("threshold", 200),
-                radius=h_conf.get("radius", 15),
-                intensity=h_conf.get("intensity", 0.3)
-            )
+            if isinstance(h_conf, (int, float)):
+                result = self._add_halation(result, intensity=float(h_conf))
+            else:
+                result = self._add_halation(
+                    result,
+                    threshold=h_conf.get("threshold", 200),
+                    radius=h_conf.get("radius", 15),
+                    intensity=h_conf.get("intensity", 0.3),
+                )
 
         # ---- Vignette ----
         if settings.get("vignette", 0) > 0:
