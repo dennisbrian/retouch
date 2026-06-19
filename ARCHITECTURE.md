@@ -329,3 +329,25 @@ For images containing multiple faces:
 1. **Parallel Execution**: The per-face processing stage (`_stage_per_face`) distributes the execution of `_process_one_face` across threads using Python's `ThreadPoolExecutor`.
 2. **Worker Pool Cap**: Workers are capped at `min(len(faces), 4)` to avoid CPU thrashing and memory overhead.
 3. **Thread-Safe Slicing**: Each thread operates on its own ROI crop, and writes results into a list of independent `_FaceResult` structures, which are merged back serially in `_composite_faces`.
+
+---
+
+## 7. Changelog
+
+| PR/Commit | Module | Fix |
+|---|---|---|
+| BUGFIX-1 | `engine.py` | `s_mask` multi-face scope leak — accumulated skin mask now correctly passed to split-tone mask |
+| BUGFIX-2 | `engine.py` | `color_ref` double-write — removed erroneous early `None` assignment shadowing the kwarg |
+| BUGFIX-3 | `engine.py` | `r_dark_circles` reused `"whites"` key instead of dedicated `"dark_circles"` |
+| BUGFIX-4 | `engine.py` | LUT name collision — internal ndarray renamed to `_brightness_lut` |
+| BUGFIX-5 | `frequency.py` | `dodge_burn` mask dtype — force `float32` accumulator to prevent silent uint8 truncation |
+| BUGFIX-6 | `skin.py` | `equalize` blend strength — final `blend_masked` now uses `skin_mask * s` for consistent strength scaling with AB harmonization |
+| BUGFIX-7 | `grading.py` | `_add_halation` accepts `float`/`int` as direct intensity (not just dict) |
+| BUGFIX-8 | `frequency.py` | `np.random.RandomState` replaced with `np.random.default_rng` (modern PCG64) |
+| BUGFIX-9 | `frequency.py` | Hash seed sign safety — added `abs()` guard before `& 0xFFFFFFFF` |
+| BUGFIX-10 | `skin.py` | `whiten` blend masking — added missing `blend_masked` with skin mask |
+| BUGFIX-11 | `skin.py` | `equalize` AB harmonization — pull scaled by `s` and restricted to skin mask |
+| BUGFIX-12 | `skin.py` | `dodge_burn` — added `blend_masked` compositing with skin mask |
+| BUGFIX-13 | `skin.py` | `specular_bloom` porcelain tone — added porcelain LAB shift branch |
+| BUGFIX-14 | `skin.py` | `harmonize_neck` — bi-directional adjustment (brightens neck when darker, darkens when lighter) |
+| BUGFIX-15 | `skin.py` | `specular_bloom` — clamp highlight mask to skin boundary to prevent bleed into hair/eyes |
