@@ -133,6 +133,15 @@ def synthetic_face():
     return img
 
 
+@pytest.fixture(scope="module")
+def engine():
+    """Shared RetouchEngine with guaranteed teardown."""
+    from retouch.engine import RetouchEngine
+
+    with RetouchEngine() as eng:
+        yield eng
+
+
 @pytest.fixture
 def natural_image_path():
     """Path to a real human face image for integration tests.

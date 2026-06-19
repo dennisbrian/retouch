@@ -1,11 +1,14 @@
 """Tests for retouch/engine.py — helper functions, ProcessingContext, ProcessingResult."""
 
+import cv2
 import numpy as np
 import pytest
 
 from retouch.engine import (
+    RetouchEngine,
     ProcessingContext,
     ProcessingResult,
+    _FaceResult,
     resolve_recipe,
     build_context,
     _adjust_contrast,
@@ -108,6 +111,46 @@ class TestBuildContext:
         ctx = build_context("natural", rec, {"color_grade": "cosplay", "grade_intensity": 0.5})
         assert ctx.grade_intensity == 0.5
 
+    def test_dark_circles_do_not_fall_back_to_whites(self):
+        rec = {"eyes": {"whites": 0.8}}
+        ctx = build_context("natural", rec, {})
+        assert ctx.dark_circles == 0.0
+        assert ctx.teeth_whiten == 80.0
+
+
+class TestCompositeFaces:
+    def test_uses_union_of_edited_masks(self):
+        engine = RetouchEngine.__new__(RetouchEngine)
+        base = np.zeros((4, 4, 3), dtype=np.uint8)
+        canvas = base.copy()
+        canvas[1, 1] = [10, 20, 30]
+        canvas[1, 2] = [40, 50, 60]
+        canvas[2, 1] = [70, 80, 90]
+
+        skin_hair = np.zeros((4, 4), dtype=np.float32)
+        lips = np.zeros((4, 4), dtype=np.float32)
+        sharpen = np.zeros((4, 4), dtype=np.float32)
+        skin_hair[1, 1] = 1.0
+        lips[1, 2] = 1.0
+        sharpen[2, 1] = 1.0
+
+        face_result = _FaceResult(
+            canvas=canvas,
+            skin_mask=np.zeros((4, 4), dtype=np.float32),
+            skin_hair_mask=skin_hair,
+            lips_mask=lips,
+            sharpen_mask=sharpen,
+            roi_box=(0, 0, 4, 4),
+        )
+
+        result, _, _, acc_lips, acc_sharpen = engine._composite_faces(base, [face_result], 4, 4)
+
+        assert np.array_equal(result[1, 1], [10, 20, 30])
+        assert np.array_equal(result[1, 2], [40, 50, 60])
+        assert np.array_equal(result[2, 1], [70, 80, 90])
+        assert acc_lips[1, 2] == 1.0
+        assert acc_sharpen[2, 1] == 1.0
+
 
 class TestAdjustContrast:
     def test_zero_returns_same(self):
@@ -205,6 +248,3 @@ class TestAccum:
         m = np.ones((10, 10), dtype=np.float32)
         result = _accum(acc, m)
         assert result.max() == 1.0
-
-
-import cv2

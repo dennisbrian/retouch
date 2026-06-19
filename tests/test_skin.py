@@ -133,6 +133,42 @@ class TestHarmonizeNeck:
         result = proc.harmonize_neck(img, FakeLandmarks(), pm, np.zeros((64, 64)))
         assert np.all(result == img)
 
+    def test_depth_gating_applied_when_low_yaw(self, proc):
+        class MockLandmark:
+            def __init__(self, x, y, z=0.0):
+                self.x = x
+                self.y = y
+                self.z = z
+                
+        class MockLandmarksList:
+            def __init__(self, yaw_ratio=1.0):
+                self.landmark = [MockLandmark(0.5, 0.5, 0.0) for _ in range(468)]
+                self.landmark[6].x = 0.5
+                self.landmark[234].x = 0.3
+                self.landmark[454].x = 0.7
+                self.landmark[33].x = 0.4
+                self.landmark[263].x = 0.6
+                self.landmark[152].y = 0.7
+                
+                if yaw_ratio != 1.0:
+                    shift = 0.2 * (yaw_ratio - 1.0) / (yaw_ratio + 1.0)
+                    self.landmark[6].x = 0.5 + shift
+
+        img = np.full((100, 100, 3), 128, dtype=np.uint8)
+        face_skin = np.zeros((100, 100), dtype=np.float32)
+        face_skin[40:60, 40:60] = 1.0
+        
+        neck_mask = np.zeros((100, 100), dtype=np.float32)
+        neck_mask[75:90, 30:70] = 1.0
+        
+        person_mask = np.ones((100, 100), dtype=np.uint8) * 255
+        
+        lms_low = MockLandmarksList(yaw_ratio=1.0)
+        lms_low.landmark[152].z = 10.0
+        
+        result_gated = proc.harmonize_neck(img, lms_low, person_mask, face_skin, neck_mask, strength=100)
+        assert np.allclose(result_gated, img)
+
 
 class TestSpecularBloom:
     def test_zero_strength(self, proc, img, face_mask):

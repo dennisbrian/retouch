@@ -11,8 +11,8 @@ import gradio as gr
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from retouch import RetouchEngine
+from retouch.io import imread_exif
 from retouch.recipes import RECIPES
-from cli import _imread_exif, _make_comparison
 
 RECIPE_NAMES = list(RECIPES.keys())
 
@@ -30,9 +30,13 @@ def recipe_defaults(recipe_name):
         "smooth": int(rec["frequency"]["smooth"] * 100),
         "mid_reduction": rec["frequency"].get("mid_reduction", 0.45),
         "texture_opacity": rec["texture"].get("opacity", 1.0),
+        "pore_synthesis": int(rec["texture"].get("pore_synthesis", 0.0) * 100),
         "nose_smooth": 0,
         "whiten": int(rec["skin"].get("rosy", rec["skin"].get("porcelain", 0)) * 100),
         "equalize": int(rec["skin"].get("equalize", 0) * 100),
+        "relight": int(rec["skin"].get("relight", 0.0) * 100),
+        "relight_azimuth": int(rec["skin"].get("relight_azimuth", 0.0)),
+        "relight_elevation": int(rec["skin"].get("relight_elevation", 30.0)),
         "eye_enhance": int(rec["eyes"].get("iris", 0) * 100),
         "lip_enhance": int(rec["lips"].get("gloss", 0) * 100),
         "lip_tint": rec["lips"].get("tint", "none"),
@@ -51,8 +55,9 @@ def recipe_defaults(recipe_name):
 
 
 def process_image(img_path, recipe,
-                  smooth, mid_reduction, texture_opacity, nose_smooth,
+                  smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth,
                   whiten, equalize,
+                  relight, relight_azimuth, relight_elevation,
                   eye_enhance, teeth_whiten,
                   lip_enhance, lip_tint, blush,
                   hair_enhance, dodge_burn, specular_bloom, contrast, brightness,
@@ -66,7 +71,7 @@ def process_image(img_path, recipe,
     try:
         if isinstance(img_path, dict):
             img_path = img_path.get("name") or img_path.get("path")
-        img_bgr = _imread_exif(img_path)
+        img_bgr = imread_exif(img_path)
         original = img_bgr.copy()
 
         lip_tint_val = lip_tint if lip_tint != "none" else None
@@ -75,7 +80,7 @@ def process_image(img_path, recipe,
         if color_ref_path is not None:
             if isinstance(color_ref_path, dict):
                 color_ref_path = color_ref_path.get("name") or color_ref_path.get("path")
-            color_ref_bgr = _imread_exif(color_ref_path)
+            color_ref_bgr = imread_exif(color_ref_path)
 
         engine = get_engine()
         result = engine.process(
@@ -84,9 +89,13 @@ def process_image(img_path, recipe,
             smooth=smooth,
             mid_reduction=mid_reduction,
             texture_opacity=texture_opacity,
+            pore_synthesis=pore_synthesis,
             nose_smooth=nose_smooth if nose_smooth > 0 else None,
             whiten=whiten,
             equalize=equalize,
+            relight=relight,
+            relight_azimuth=relight_azimuth,
+            relight_elevation=relight_elevation,
             eye_enhance=eye_enhance,
             teeth_whiten=teeth_whiten,
             lip_enhance=lip_enhance,
@@ -154,8 +163,9 @@ def process_image(img_path, recipe,
 def on_recipe_change(recipe):
     d = recipe_defaults(recipe)
     return (
-        d["smooth"], d["mid_reduction"], d["texture_opacity"], d["nose_smooth"],
+        d["smooth"], d["mid_reduction"], d["texture_opacity"], d["pore_synthesis"], d["nose_smooth"],
         d["whiten"], d["equalize"],
+        d["relight"], d["relight_azimuth"], d["relight_elevation"],
         d["eye_enhance"], d["teeth_whiten"],
         d["lip_enhance"], d["lip_tint"], d["blush"],
         d["hair_enhance"], d["dodge_burn"], d["specular_bloom"], d["contrast"], d["brightness"],
@@ -191,6 +201,7 @@ with gr.Blocks(title="Retouch GUI", theme=gr.themes.Soft()) as app:
                 nose_smooth = gr.Slider(0, 100, 0, step=1, label="Nose Smooth (0 = follow face)")
                 mid_reduction = gr.Slider(0.0, 1.0, 0.4, step=0.05, label="Mid Reduction")
                 texture_opacity = gr.Slider(0.0, 1.0, 1.0, step=0.05, label="Texture Opacity")
+                pore_synthesis = gr.Slider(0, 100, 0, step=1, label="Pore Synthesis")
 
         with gr.Column(scale=1):
             img_output = gr.Image(label="Output", height=360)
@@ -214,6 +225,11 @@ with gr.Blocks(title="Retouch GUI", theme=gr.themes.Soft()) as app:
                 whites = gr.Slider(-100, 100, 0, step=1, label="Whites")
                 blacks = gr.Slider(-100, 100, 0, step=1, label="Blacks")
 
+            with gr.Accordion("Virtual Studio Relighting", open=False):
+                relight = gr.Slider(0, 100, 0, step=1, label="Relight Strength")
+                relight_azimuth = gr.Slider(-180, 180, 0, step=1, label="Light Azimuth")
+                relight_elevation = gr.Slider(-90, 90, 30, step=1, label="Light Elevation")
+
             with gr.Accordion("Eyes & Lips", open=False):
                 eye_enhance = gr.Slider(0, 100, 5, step=1, label="Eye Enhance")
                 teeth_whiten = gr.Slider(0, 100, 5, step=1, label="Teeth Whiten")
@@ -234,8 +250,9 @@ with gr.Blocks(title="Retouch GUI", theme=gr.themes.Soft()) as app:
     recipe.change(
         fn=on_recipe_change,
         inputs=[recipe],
-        outputs=[smooth, mid_reduction, texture_opacity, nose_smooth,
+        outputs=[smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth,
                  whiten, equalize,
+                 relight, relight_azimuth, relight_elevation,
                  eye_enhance, teeth_whiten,
                  lip_enhance, lip_tint, blush,
                  hair_enhance, dodge_burn, specular_bloom, contrast, brightness,
@@ -245,8 +262,9 @@ with gr.Blocks(title="Retouch GUI", theme=gr.themes.Soft()) as app:
     process_btn.click(
         fn=process_image,
         inputs=[img_input, recipe,
-                smooth, mid_reduction, texture_opacity, nose_smooth,
+                smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth,
                 whiten, equalize,
+                relight, relight_azimuth, relight_elevation,
                 eye_enhance, teeth_whiten,
                 lip_enhance, lip_tint, blush,
                 hair_enhance, dodge_burn, specular_bloom, contrast, brightness,

@@ -9,73 +9,33 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import cpu_count
 
 import cv2
-import numpy as np
 from tqdm import tqdm
-from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from retouch import RetouchEngine, retouch as _retouch_fn
+from retouch import RetouchEngine
 from retouch.grading import PRESETS, ColorGrader
+from retouch.io import (
+    IMAGE_EXTENSIONS,
+    copy_exif,
+    encode_write_params,
+    imread_exif,
+    make_comparison,
+    output_format,
+    resize_for_processing,
+)
 from retouch.recipes import RECIPES
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp", ".raf", ".cr2", ".cr3", ".nef", ".nrw", ".arw", ".dng", ".orf", ".rw2", ".pef", ".srw", ".x3f"}
-
-RAW_EXTENSIONS = {".raf", ".cr2", ".cr3", ".nef", ".nrw", ".arw", ".dng", ".orf", ".rw2", ".pef", ".srw", ".x3f"}
-
-RECIPE_CHOICES = ["natural", "portrait", "beauty", "cosplay", "cosplay_3d", "cosplay_no_eq", "anime", "xiaohongshu", "dreamy", "magazine", "korean_beauty", "idol", "wedding", "anime_cosplay", "scifi_cosplay", "cyber_doll", "fantasy_goddess", "pink_dream", "blue_dream", "xhs_ultrasoft", "meitu_clone", "fuji_porcelain"]
-PRESET_CHOICES = ["natural", "magazine", "beauty", "cosplay", "cosplay_3d", "cosplay_no_eq", "heavy", "dreamy", "anime", "portrait", "xiaohongshu", "korean_beauty", "idol", "wedding", "anime_cosplay", "scifi_cosplay", "cyber_doll", "fantasy_goddess", "pink_dream", "blue_dream", "xhs_ultrasoft", "meitu_clone", "fuji_porcelain"]
+RECIPE_CHOICES = sorted(RECIPES.keys())
+PRESET_CHOICES = RECIPE_CHOICES
 
 
-def _imread_exif(path):
-    """Read image (supports RAW via rawpy), applying EXIF orientation."""
-    path = Path(path)
-    if path.suffix.lower() in RAW_EXTENSIONS:
-        import rawpy
-        with rawpy.imread(str(path)) as raw:
-            rgb = raw.postprocess(use_camera_wb=True, no_auto_bright=True, bright=1.5)
-        return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-    from PIL import ImageOps
-    pil_img = Image.open(path)
-    pil_img = ImageOps.exif_transpose(pil_img) or pil_img
-    return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-
-
-def _resize_for_processing(img_bgr, max_dim):
-    """Downscale so longest side ≤ max_dim. Returns (resized, scale_factor)."""
-    if max_dim is None:
-        return img_bgr, 1.0
-    h, w = img_bgr.shape[:2]
-    current_max = max(h, w)
-    if current_max <= max_dim:
-        return img_bgr, 1.0
-    scale = max_dim / current_max
-    new_w = int(w * scale)
-    new_h = int(h * scale)
-    resized = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
-    return resized, scale
-
-
-def _copy_exif(src_path, dst_path):
-    try:
-        from PIL.ExifTags import Base as ExifBase
-        src_img = Image.open(src_path)
-        exif = src_img.getexif()
-        if exif:
-            # Orientation has been baked into the pixel data — reset it to Normal
-            if_base = None
-            try:
-                from PIL.ExifTags import Base
-                if_base = Base
-            except ImportError:
-                if_base = ExifBase
-            orientation_tag = getattr(if_base, 'Orientation', None)
-            if orientation_tag is None:
-                orientation_tag = 0x0112  # fallback
-            exif[orientation_tag] = 1
-            dst_img = Image.open(dst_path)
-            dst_img.save(dst_path, exif=exif.tobytes())
-    except Exception:
-        pass
+def _finalize_params(params):
+    """Load color reference once; safe to share read-only across batch jobs."""
+    finalized = dict(params)
+    ref_path = finalized.pop("color_ref_path", None)
+    if ref_path is not None:
+        finalized["color_ref"] = imread_exif(Path(ref_path))
+    return finalized
 
 
 _worker_engine = None
@@ -86,17 +46,10 @@ def _init_worker():
     _worker_engine = RetouchEngine()
 
 
-def _load_color_ref(params):
-    """Load reference image for colour transfer if specified."""
-    ref_path = params.pop("color_ref_path", None)
-    if ref_path:
-        ref_img = _imread_exif(Path(ref_path))
-        params["color_ref"] = ref_img
-
-
 def _process_single(args):
-    img_path, output_dir, params, fmt, quality, force, copy_exif_flag, max_dim, compare_flag, global_only = args
+    img_path, output_dir, params, format_arg, quality, force, copy_exif_flag, max_dim, compare_flag, global_only = args
     try:
+        fmt = output_format(img_path, format_arg)
         stem = img_path.stem
         out_path = (output_dir / f"{stem}.{fmt}") if output_dir else \
             img_path.with_suffix(f".{fmt}")
@@ -104,13 +57,13 @@ def _process_single(args):
         if out_path.exists() and not force:
             return (img_path.name, "skipped")
 
-        img_bgr = _imread_exif(img_path)
+        img_bgr = imread_exif(img_path)
         orig_shape = img_bgr.shape[:2]
         original_full = img_bgr.copy() if compare_flag else None
-        img_bgr, _scale = _resize_for_processing(img_bgr, max_dim)
+        img_bgr, _scale = resize_for_processing(img_bgr, max_dim)
 
         if global_only:
-            result = _apply_global_finish(img_bgr, params)
+            result = _apply_global_finish(img_bgr, dict(params))
         else:
             global _worker_engine
             if _worker_engine is not None:
@@ -121,8 +74,7 @@ def _process_single(args):
                 should_close = True
 
             try:
-                _load_color_ref(params)
-                result = engine.process(img_bgr, **params)
+                result = engine.process(img_bgr, **dict(params))
             finally:
                 if should_close:
                     engine.close()
@@ -132,49 +84,19 @@ def _process_single(args):
             result = cv2.resize(result, (orig_shape[1], orig_shape[0]),
                                 interpolation=cv2.INTER_LINEAR)
 
-        write_params = []
-        if fmt in ("jpg", "jpeg"):
-            write_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
-        elif fmt == "webp":
-            write_params = [cv2.IMWRITE_WEBP_QUALITY, quality]
-
-        cv2.imwrite(str(out_path), result, write_params)
+        cv2.imwrite(str(out_path), result, encode_write_params(fmt, quality))
 
         if copy_exif_flag:
-            _copy_exif(img_path, out_path)
+            copy_exif(img_path, out_path)
 
         if compare_flag:
             compare_path = (output_dir / f"{stem}_compare.{fmt}") if output_dir else \
                 img_path.parent / f"{stem}_compare.{fmt}"
-            _make_comparison(original_full, result, compare_path, fmt, quality)
+            make_comparison(original_full, result, compare_path, fmt, quality)
 
         return (img_path.name, "done")
     except Exception as e:
         return (img_path.name, f"failed: {e}")
-
-
-def _make_comparison(original, retouched, compare_path, fmt, quality):
-    """Stitch a side-by-side comparison of original and retouched images."""
-    try:
-        if original is None or retouched is None:
-            return
-
-        if original.shape[:2] != retouched.shape[:2]:
-            retouched = cv2.resize(retouched, (original.shape[1], original.shape[0]))
-
-        h = original.shape[0]
-        separator = np.full((h, 4, 3), 200, dtype=np.uint8)
-        combined = np.hstack([original, separator, retouched])
-
-        write_params = []
-        if fmt in ("jpg", "jpeg"):
-            write_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
-        elif fmt == "webp":
-            write_params = [cv2.IMWRITE_WEBP_QUALITY, quality]
-
-        cv2.imwrite(str(compare_path), combined, write_params)
-    except Exception:
-        pass
 
 
 def _recipe_defaults(recipe_name):
@@ -429,20 +351,18 @@ def main():
         print(f"Workers: {args.workers}")
         return
 
+    params = _finalize_params(params)
+
     output_dir = Path(args.output) if args.output else None
     if output_dir:
         output_dir.mkdir(parents=True, exist_ok=True)
-
-    fmt = args.format
-    if fmt == "same":
-        fmt = "jpg"
 
     t0 = time.time()
     done = skipped = failed = 0
 
     if args.workers > 1 and len(files) > 1:
         pool_args = [
-            (f, output_dir, params, fmt, args.quality, args.force, not args.no_exif, args.max_dim, args.compare, args.global_only)
+            (f, output_dir, params, args.format, args.quality, args.force, not args.no_exif, args.max_dim, args.compare, args.global_only)
             for f in files
         ]
         with ProcessPoolExecutor(
@@ -464,12 +384,13 @@ def main():
         engine = None if args.global_only else RetouchEngine()
         try:
             for f in tqdm(files, desc="Retouching", unit="img"):
-                img_bgr = _imread_exif(f)
+                img_bgr = imread_exif(f)
                 if img_bgr is None:
                     failed += 1
                     tqdm.write(f"  ✖ {f.name}: failed to read")
                     continue
 
+                fmt = output_format(f, args.format)
                 out_path = output_dir / f"{f.stem}.{fmt}" if output_dir else \
                     f.with_suffix(f".{fmt}")
 
@@ -479,31 +400,24 @@ def main():
 
                 orig_shape = img_bgr.shape[:2]
                 original_full = img_bgr.copy() if args.compare else None
-                img_bgr, _scale = _resize_for_processing(img_bgr, args.max_dim)
+                img_bgr, _scale = resize_for_processing(img_bgr, args.max_dim)
 
                 if args.global_only:
-                    result = _apply_global_finish(img_bgr, params)
+                    result = _apply_global_finish(img_bgr, dict(params))
                 else:
-                    _load_color_ref(params)
-                    result = engine.process(img_bgr, **params)
+                    result = engine.process(img_bgr, **dict(params))
 
                 if _scale < 1.0:
                     result = cv2.resize(result, (orig_shape[1], orig_shape[0]),
                                         interpolation=cv2.INTER_LINEAR)
-                write_params = []
-                if fmt in ("jpg", "jpeg"):
-                    write_params = [cv2.IMWRITE_JPEG_QUALITY, args.quality]
-                elif fmt == "webp":
-                    write_params = [cv2.IMWRITE_WEBP_QUALITY, args.quality]
-
-                cv2.imwrite(str(out_path), result, write_params)
+                cv2.imwrite(str(out_path), result, encode_write_params(fmt, args.quality))
                 if not args.no_exif:
-                    _copy_exif(f, out_path)
+                    copy_exif(f, out_path)
 
                 if args.compare:
                     compare_path = (output_dir / f"{f.stem}_compare.{fmt}") if output_dir else \
                         f.parent / f"{f.stem}_compare.{fmt}"
-                    _make_comparison(original_full, result, compare_path, fmt, args.quality)
+                    make_comparison(original_full, result, compare_path, fmt, args.quality)
                 done += 1
         finally:
             if engine is not None:

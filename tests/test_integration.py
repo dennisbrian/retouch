@@ -11,7 +11,7 @@ import numpy as np
 import cv2
 import pytest
 
-from retouch.engine import RetouchEngine, retouch
+from retouch.engine import RetouchEngine, retouch, ProcessingResult
 from retouch.recipes import RECIPES
 
 
@@ -46,15 +46,13 @@ class TestPipelineOnSyntheticFace:
     the pipeline handles both the face-found and no-face paths gracefully.
     """
 
-    def test_pipeline_runs_all_recipes(self, synthetic_face):
-        engine = RetouchEngine()
+    def test_pipeline_runs_all_recipes(self, engine, synthetic_face):
         for recipe_name in RECIPES:
             result = engine.process(synthetic_face, recipe=recipe_name)
             _assert_valid_output(result, synthetic_face)
             assert result.params.active_recipe == recipe_name
 
-    def test_pipeline_with_overrides(self, synthetic_face):
-        engine = RetouchEngine()
+    def test_pipeline_with_overrides(self, engine, synthetic_face):
         result = engine.process(
             synthetic_face,
             recipe="cosplay",
@@ -67,18 +65,15 @@ class TestPipelineOnSyntheticFace:
         )
         _assert_valid_output(result, synthetic_face)
 
-    def test_pipeline_fast_preview(self, synthetic_face):
-        engine = RetouchEngine()
+    def test_pipeline_fast_preview(self, engine, synthetic_face):
         result = engine.process(synthetic_face, recipe="natural", fast=True)
         _assert_valid_output(result, synthetic_face)
 
-    def test_pipeline_auto_exposure(self, synthetic_face):
-        engine = RetouchEngine()
+    def test_pipeline_auto_exposure(self, engine, synthetic_face):
         result = engine.process(synthetic_face, recipe="natural", auto_exposure=True)
         _assert_valid_output(result, synthetic_face)
 
-    def test_pipeline_tonal_adjustments(self, synthetic_face):
-        engine = RetouchEngine()
+    def test_pipeline_tonal_adjustments(self, engine, synthetic_face):
         result = engine.process(
             synthetic_face,
             recipe="natural",
@@ -90,8 +85,7 @@ class TestPipelineOnSyntheticFace:
         )
         _assert_valid_output(result, synthetic_face)
 
-    def test_pipeline_color_grade_only(self, synthetic_face):
-        engine = RetouchEngine()
+    def test_pipeline_color_grade_only(self, engine, synthetic_face):
         result = engine.process(
             synthetic_face,
             recipe="natural",
@@ -103,8 +97,7 @@ class TestPipelineOnSyntheticFace:
         )
         _assert_valid_output(result, synthetic_face)
 
-    def test_pipeline_nose_smooth(self, synthetic_face):
-        engine = RetouchEngine()
+    def test_pipeline_nose_smooth(self, engine, synthetic_face):
         result = engine.process(
             synthetic_face,
             recipe="natural",
@@ -112,8 +105,7 @@ class TestPipelineOnSyntheticFace:
         )
         _assert_valid_output(result, synthetic_face)
 
-    def test_pipeline_specular_bloom(self, synthetic_face):
-        engine = RetouchEngine()
+    def test_pipeline_specular_bloom(self, engine, synthetic_face):
         result = engine.process(
             synthetic_face,
             recipe="natural",
@@ -122,8 +114,7 @@ class TestPipelineOnSyntheticFace:
         )
         _assert_valid_output(result, synthetic_face)
 
-    def test_pipeline_whiten_tone(self, synthetic_face):
-        engine = RetouchEngine()
+    def test_pipeline_whiten_tone(self, engine, synthetic_face):
         for tone in ("rosy", "porcelain", "neutral"):
             result = engine.process(
                 synthetic_face,
@@ -133,8 +124,7 @@ class TestPipelineOnSyntheticFace:
             )
             _assert_valid_output(result, synthetic_face)
 
-    def test_pipeline_dodge_burn(self, synthetic_face):
-        engine = RetouchEngine()
+    def test_pipeline_dodge_burn(self, engine, synthetic_face):
         result = engine.process(
             synthetic_face,
             recipe="natural",
@@ -150,13 +140,11 @@ class TestPipelineOnSyntheticFace:
 class TestNoFaceFallback:
     """When no face is detected, the pipeline should still produce output."""
 
-    def test_blank_image_no_crash(self, blank_image):
-        engine = RetouchEngine()
+    def test_blank_image_no_crash(self, engine, blank_image):
         result = engine.process(blank_image, recipe="natural")
         _assert_valid_output(result, blank_image, expected_faces=0)
 
-    def test_blank_image_with_color_grade(self, blank_image):
-        engine = RetouchEngine()
+    def test_blank_image_with_color_grade(self, engine, blank_image):
         result = engine.process(
             blank_image,
             recipe="natural",
@@ -165,15 +153,13 @@ class TestNoFaceFallback:
         )
         _assert_valid_output(result, blank_image, expected_faces=0)
 
-    def test_blank_image_with_impact(self, blank_image):
-        engine = RetouchEngine()
+    def test_blank_image_with_impact(self, engine, blank_image):
         result = engine.process(
             blank_image, recipe="natural", impact=50.0,
         )
         _assert_valid_output(result, blank_image, expected_faces=0)
 
-    def test_blank_image_all_recipes(self, blank_image):
-        engine = RetouchEngine()
+    def test_blank_image_all_recipes(self, engine, blank_image):
         for recipe_name in RECIPES:
             result = engine.process(blank_image, recipe=recipe_name)
             _assert_valid_output(result, blank_image)
@@ -208,7 +194,6 @@ class TestRetouchFunction:
 
     def test_retouch_returns_processing_result(self, synthetic_face):
         result = retouch(synthetic_face)
-        from retouch.engine import ProcessingResult
         assert isinstance(result, ProcessingResult)
 
 
@@ -231,26 +216,22 @@ class TestWithRealImage:
             pytest.skip(f"Could not read image: {natural_image_path}")
         return img
 
-    def test_detects_face(self, real_face):
+    def test_detects_face(self, engine, real_face):
         """Verify that at least one face is detected in the real image."""
-        engine = RetouchEngine()
         faces = engine._detector.detect(real_face)
-        assert len(faces) >= 1, f"No face detected in {natural_image_path}"
+        assert len(faces) >= 1, "No face detected in real test image"
 
-    def test_full_pipeline_real_face(self, real_face):
-        engine = RetouchEngine()
+    def test_full_pipeline_real_face(self, engine, real_face):
         result = engine.process(real_face, recipe="natural")
         _assert_valid_output(result, real_face)
         assert result.face_count >= 1
 
-    def test_multiple_recipes_real_face(self, real_face):
-        engine = RetouchEngine()
+    def test_multiple_recipes_real_face(self, engine, real_face):
         for recipe in ("natural", "cosplay", "magazine", "beauty", "film"):
             result = engine.process(real_face, recipe=recipe)
             _assert_valid_output(result, real_face)
 
-    def test_real_face_timings_populated(self, real_face):
-        engine = RetouchEngine()
+    def test_real_face_timings_populated(self, engine, real_face):
         result = engine.process(real_face, recipe="natural")
         expected_stages = {
             "detection", "reshape", "per_face",

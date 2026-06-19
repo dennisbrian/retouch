@@ -1,6 +1,6 @@
 # Pro Max Face Retouch Engine — Architecture & Pipeline Design
 
-This document details the architectural design, processing pipeline, and component breakdown of the **Pro Max Face Retouch Engine (v2.x)**.
+This document details the architectural design, processing pipeline, and component breakdown of the **Pro Max Face Retouch Engine (v3.0)**.
 
 ---
 
@@ -16,12 +16,13 @@ The workspace contains two co-existing versions of the engine:
     *   A professional-grade, modular pipeline.
     *   Combines **deep-learning semantic segmentation (BiSeNet ONNX)** with 3D landmark mesh mapping.
     *   Features a **17-stage processing pipeline** split into local face retouching and global image styling. Handles advanced features like blemish inpainting, face-to-neck matching, specular lip gloss finishes, hair shine lifts, Dodge & Burn, parametric tonal adjustments, reference-based color transfer, and stacked color grading.
+    *   **High-Resolution ROI Optimization**: Processes high-resolution images (up to 24 MP and beyond) by extracting and processing a padded Portrait ROI enclosing the face, hair, and neck, reducing peak memory from **7.5 GB to 1.84 GB** and total runtime from **15.3s to 3.09s**.
 
 ---
 
 ## 2. Global Pipeline Architecture
 
-The workflow is divided into: **Face Detection** (bounding boxes), **Crop Landmark Fitting** (3D mesh coordinates), **Semantic Region Parsing** (pixel-precise masks), **Frequency Separation** (texture isolation), **Targeted Enhancement** (component-level edits), and **Global Finishing** (brightness, curves, reference color transfer, grading, vignettes, and bloom).
+The workflow is divided into: **Face Detection** (bounding boxes), **Portrait ROI Extraction & Landmark Fitting** (shifting coordinates relative to crop), **Semantic Region Parsing** (pixel-precise masks), **Frequency Separation** (texture isolation), **Targeted Enhancement** (component-level edits), **Seamless ROI Blend Back**, and **Global Finishing** (brightness, curves, reference color transfer, grading, vignettes, and bloom).
 
 ![Pipeline Architecture](pipeline_architecture.png)
 
@@ -45,21 +46,26 @@ graph TD
         person_mask["Selfie segmenter<br/><small>Person vs. background mask</small>"]:::segmentation
     end
 
-    subgraph Stage2_Parse["Stage 2: Semantic Segmentation"]
-        bisenet["BiSeNet ONNX<br/><small>Pixel-precise parsing</small>"]:::segmentation
+    subgraph ROI_Crop["Portrait ROI Cropper (High-Res Optimization)"]
+        roi_extract["Portrait ROI Crop<br/><small>Face + Neck + Hair bounding box</small>"]:::detection
+        coord_shift["Landmark Coordinate Shifting<br/><small>Map landmarks relative to ROI crop</small>"]:::detection
+    end
+
+    subgraph Stage2_Parse["Stage 2: Semantic Segmentation (ROI Crop)"]
+        bisenet["BiSeNet ONNX<br/><small>Pixel-precise parsing on crop</small>"]:::segmentation
         faceregions["FaceRegions masks<br/><small>Skin cleaning post-feathering<br/>Left/right under-eye masks</small>"]:::segmentation
     end
 
-    subgraph Stage3_4["Stages 3-4: Frequency Separation & Smoothing"]
+    subgraph Stage3_4["Stages 3-4: Frequency Separation & Smoothing (ROI Crop)"]
         freqsep["3-level frequency separation<br/><small>Gaussian blur scaled to face width</small>"]:::frequency
         smoothing["Frequency smoothing<br/><small>Smooth & mid_reduction controls<br/>Independent nose_smooth</small>"]:::frequency
     end
 
-    subgraph Stage5_12["Stages 5-12: Component-Level Enhancements"]
-        skin["Skin foundation<br/><small>Equalization & whitening<br/>Shadow protection (L > 80)</small>"]:::enhancement
+    subgraph Stage5_12["Stages 5-12: Component-Level Enhancements (ROI Crop)"]
+        skin["Skin foundation<br/><small>Equalization & whitening<br/>Bi-directional support (tanning)<br/>Shadow protection (L > 80)</small>"]:::enhancement
         blemish["Blemish removal<br/><small>Fast marching inpaint</small>"]:::enhancement
         undereye["Under-eye repair<br/><small>Dark circles correction</small>"]:::enhancement
-        neck["Neck matching<br/><small>Face-to-neck skin blending</small>"]:::enhancement
+        neck["Neck matching<br/><small>Bi-directional face-to-neck skin blending</small>"]:::enhancement
         eyes_teeth["Eyes & Teeth<br/><small>Sclera, iris, catchlight, teeth whitening</small>"]:::enhancement
         lips["Lips<br/><small>Matte/gloss/velvet finishes<br/>Cosplay tint wash & 0.45 highlight lift</small>"]:::enhancement
         blush["Blush Wash<br/><small>Rosy cheeks & nose tip<br/>Under-eye eyeshadow blend</small>"]:::enhancement
@@ -67,9 +73,13 @@ graph TD
         dodge_burn["Dodge & Burn<br/><small>Micro sculpting</small>"]:::enhancement
     end
 
-    subgraph Stage13_17["Stages 13-17: Global Tonal & Grading Finishing"]
+    subgraph ROI_Merge["Portrait ROI Merger"]
+        blend_back["ROI Blend Back<br/><small>Pasting processed ROI and masks back<br/>using feathered skin+hair mask</small>"]:::detection
+    end
+
+    subgraph Stage13_17["Stages 13-17: Global Tonal & Grading Finishing (Full Canvas)"]
         tonal["Global adjustments<br/><small>Contrast, brightness (gamma)<br/>Tonal curves (highlights, shadows, whites, blacks)</small>"]:::finishing
-        color_transfer["Color Transfer<br/><small>Reference-based tone mapping</small>"]:::finishing
+        color_transfer["Subject-Aware Color Transfer<br/><small>Reference-based Skin, Hair, Background matching<br/>Reinhard ratio limits [0.3, 3.0]</small>"]:::finishing
         grading["Color Grading<br/><small>Split-toning, HSL, presets/stacking<br/>White costume pearl/lavender lift</small>"]:::finishing
         sharpening["Selective final sharpening<br/><small>Unsharp masking over face/hair/eyebrow edges</small>"]:::finishing
         impact["Global high-impact finish<br/><small>Luminance curves, saturation, clarity, glow</small>"]:::finishing
@@ -77,19 +87,14 @@ graph TD
 
     output["Output Image (BGR)"]:::inputOutput
 
-    %% Model definitions
-    subgraph Models["Model Assets"]
-        m1["face_landmarker.task<br/><small>MediaPipe CPU Delegate</small>"]:::model
-        m2["resnet18.onnx (BiSeNet)<br/><small>CoreML → CPU fallback</small>"]:::model
-        m3["selfie_segmenter.tflite<br/><small>TFLite CPU Delegate</small>"]:::model
-    end
-
     %% Connections
     input --> detector
     input --> person_mask
     detector --> slimming
-    slimming --> bisenet
-    person_mask --> bisenet
+    slimming --> roi_extract
+    person_mask --> roi_extract
+    roi_extract --> coord_shift
+    coord_shift --> bisenet
     bisenet --> faceregions
     
     faceregions --> freqsep
@@ -105,7 +110,8 @@ graph TD
     blush --> hair
     hair --> dodge_burn
     
-    dodge_burn --> tonal
+    dodge_burn --> blend_back
+    blend_back --> tonal
     tonal --> color_transfer
     color_transfer --> grading
     grading --> sharpening
@@ -161,9 +167,9 @@ graph TD
     *   **Specular and contrast boosts**: Follows with local specular highlight Morped dilation and local contrast boosts (via unsharp masking) to achieve silky hair strand separation.
 *   **Under-Eye & Sculpting (`retouch/undereye.py` & `retouch/skin.py`)**: Lightens dark circles and applies subtle Dodge & Burn contours to the nose bridge, forehead center, cheeks, and jawline.
 *   **Skin Foundation & Equalization (`retouch/skin.py`)**:
-    *   **Adaptive Rosy Foundation (`whiten`)**: Performs soft-clipping skin whitening and rosy/porcelain color shifts, utilizing a clean pre-modification reference copy (`lab_original`) for target medians. Implements shadow protection during foundation/whitening shifts (applied only to regions where $L > 80$) to prevent bruised or purple shadows in darker areas.
-    *   **Skin Tone Equalization (`equalize`)**: Equalizes skin tone using local average color harmonization and CLAHE luminance leveling. Features highlight protection (`_get_highlight_protection`) to avoid clipping highlight areas, and uses soft-feathered skin mask blending to eliminate edge seams.
-    *   **Face-to-Neck Harmonization (`harmonize_neck`)**: Matches neck/chest skin tone to the face to prevent white face / dark neck discrepancies. Features crash protection against empty face landmarks, and applies an adaptive Gaussian blur kernel to the neck mask based on face size.
+    *   **Adaptive Rosy Foundation (`whiten`)**: Performs soft-clipping skin whitening and rosy/porcelain color shifts, utilizing a clean pre-modification reference copy (`lab_original`) for target medians. Implements shadow protection during foundation/whitening shifts (applied only to regions where $L > 80$) to prevent bruised or purple shadows in darker areas. Supports negative strength for skin darkening (tanning/moody look) with a shadow-preserving decay.
+    *   **Skin Tone Equalization (`equalize`)**: Equalizes skin tone using local average color harmonization and CLAHE luminance leveling. Features highlight protection (`_get_highlight_protection`) to avoid clipping highlight areas. Harmonizes color using strength-aware pull values (`0.20 * s * skin_mask`) and blends back onto the skin mask.
+    *   **Face-to-Neck Harmonization (`harmonize_neck`)**: Matches neck/chest skin tone to the face to prevent white face / dark neck discrepancies. Features crash protection against empty face landmarks, and applies an adaptive Gaussian blur kernel to the neck mask based on face size. Supports bi-directional neck corrections (neck lighter or darker than the face).
 
 ### 3.7. Color Grading & Global Finishing (`retouch/grading.py` & `retouch/engine.py`)
 *   **Luminance Curves**: S-curves applied to the LAB L-channel to shape contrast.
@@ -179,7 +185,16 @@ graph TD
 *   **Selective Final Sharpening**: Photoshop-style selective unsharp masking over a soft mask (targeting eyes, eyebrows, and hair edges) with custom radius, amount, and threshold settings to finalize high-frequency details.
 *   **Global High-Impact Finish**: A dedicated finishing pass (`add_impact_finish`) that uses luminance curves, saturation boosts, micro-contrast clarity, and pink-tinted glow to add global punch.
 
-### 3.8. Interactive GUI Dashboard (`gui.py`)
+### 3.8. Portrait Style Cloning & Subject-Aware Matching (`retouch/style.py`)
+*   **`StyleProfile`**: A JSON-serializable dataclass representing the extracted style parameters (global brightness delta, global contrast delta, global saturation delta, skin L/a/b color deltas, skin smoothness, mid-frequency reduction, and texture opacity). Includes `save()` and `load()` helpers.
+*   **`StyleAnalyzer`**: Extracts a style profile from an aligned Original vs. Edited image pair. Features:
+    *   *Percentile-based Contrast*: Uses the `p95 - p5` LAB L range to isolate contrast from exposure shifts.
+    *   *Multi-Face Learning*: Accumulates skin masks across multiple faces using a bounding-box-area-weighted average face width to run frequency separation.
+    *   *Luminance Grayscale Projection*: Projects multi-channel frequency layers using Rec.601 coefficients to avoid shape mismatch indexing bugs.
+*   **`StyleApplier`**: Automatically maps a `StyleProfile` to native `RetouchEngine` parameters (contrast, brightness, smoothing, and whitening tone settings).
+*   **`subject_aware_transfer`**: Performs independent, masked Reinhard color matching in the LAB color space for the **Skin**, **Hair**, and **Background** regions between the target image and reference image. Clamps the standard-deviation transfer ratio to `[0.3, 3.0]` to prevent color explosions in uniform regions.
+
+### 3.9. Interactive GUI Dashboard (`gui.py`)
 *   **Gradio Web GUI**: Provides a modern, browser-based user interface to interactively process images.
 *   **Features**:
     *   Interactive dropdown for selecting pre-configured recipes (which automatically populate sliders).
@@ -189,6 +204,43 @@ graph TD
     *   Reference Image uploader for live color transfer.
     *   Export resolution overrides (Original, 4K, 2K, 1080p, 720p) and format encoders (JPEG with quality slider, PNG, WebP).
     *   Fast Preview mode running downscaled inference for low latency interaction.
+
+### 3.10. Recipe System (`retouch/recipes.py`)
+*   **Structured Presets**: Configures high-level presets (e.g., `natural`, `cosplay`, `scifi_cosplay`, `cyber_doll`, `fuji_porcelain`, etc.) by mapping component parameters to scaling factors.
+*   **Recipe Inheritance (`extends`)**: Allows a recipe to inherit from a base recipe (using the `extends` keyword), resolving deep overrides recursively through a deep merging utility (`_deep_merge`).
+*   **Specialized Behavior**: Defines sets of recipes that automatically trigger specific engine logic (e.g., `_NOSE_BLUSH_RECIPES` for nose tip blush, `_SLIMMING_RECIPES` for liquid jaw/chin reshaping, and `_WHITE_COSTUME_RECIPES` for white costume highlight recovery).
+
+### 3.11. Processing Pipeline Context & Result Types (`retouch/engine.py`)
+*   **`ProcessingContext`**: A typed dataclass that encapsulates all parameters for a processing run, replacing raw dictionaries to provide compile-time safety and self-documenting parameter lists.
+*   **`ProcessingResult`**: An ndarray-derived container subclass that acts directly as a standard uint8 BGR image for compatibility with OpenCV/PIL while embedding rich processing metadata:
+    *   `skin_mask`: Cumulative normalized skin mask.
+    *   `skin_hair_mask`: Combined skin, hair, and neck mask.
+    *   `lips_mask`: Lip region mask.
+    *   `sharpen_mask`: Soft mask used for final selective unsharp masking.
+    *   `face_count`: Number of faces processed.
+    *   `params`: The fully-resolved `ProcessingContext` instance.
+    *   `timings`: Execution times for each pipeline stage (detection, reshape, per-face, global, grading, finish, total).
+
+### 3.12. Common Mathematical and Mask Utilities (`retouch/utils.py`)
+Provides reusable image processing, coordinate geometry, and mask operations:
+*   **`feather_mask`**: Feathers binary masks dynamically using Gaussian blur to eliminate hard edges.
+*   **`blend_masked`**: Composites a processed BGR image onto the original using a normalized float32 mask.
+*   **`correct_exposure`**: Adjusts global luminance distributions using histogram shifts.
+*   **`vibrance`**: Selectively adjusts BGR color saturation inside a mask while avoiding over-saturation of skin tones.
+*   **`inter_eye_distance`**: Computes distance between pupils to scale filters relative to face size.
+
+### 3.13. Image Input/Output & RAW Format Handler (`retouch/io.py`)
+Provides a decoupled, reusable I/O boundary that handles file read/write, format conversions, and metadata preservation:
+*   **RAW Image Support**: Integrates `rawpy` to decode professional camera RAW formats (e.g., `.raf`, `.cr2`, `.nef`, `.arw`, `.dng`) directly into BGR arrays.
+*   **EXIF Metadata Restoration**: Automatically transposes image orientations via `PIL.ImageOps.exif_transpose` during loading, and copies EXIF headers from original to processed outputs during saving using `copy_exif` (while normalizing the orientation tag).
+*   **Stitched Comparison Generator**: Generates high-resolution side-by-side comparison images using a light-gray vertical separator.
+*   **Adaptive Scale Limiting**: Rescales large canvases to match processing thresholds while tracking scale factor ratios.
+
+### 3.14. Command Line Interface (`cli.py`)
+Provides batch processing capabilities and pipeline customization via command line options:
+*   **Batch Directory Recursion**: Recursively resolves inputs (`find_images`) to batch-process folders of target images.
+*   **Multiprocessing Engine**: Leverages Python's `multiprocessing` to process multiple images in parallel across CPU cores using pool-based task scheduling.
+*   **Parameter Mapping**: Builds parameter configurations (`build_params`) from arguments and applies recipe defaults with runtime overrides.
 
 ---
 
@@ -228,3 +280,24 @@ Following a batch analysis of 699 frames, the face detection subsystem was optim
 
 ### Remaining Edge Cases (~4%)
 The remaining ~4% of undetected frames (e.g., `DSCF6900`) represent extreme profiles, high-contrast shadow occlusion, or tiny faces in distant environment shots where MediaPipe landmarks cannot be mathematically resolved.
+
+---
+
+## 6. Performance & Parallel Execution Framework
+
+To handle large-scale images (up to 24 MP and higher) in near real-time, the engine implements two main performance optimization pathways:
+
+### 6.1. Padded Portrait ROI Extraction (Local Processing)
+Instead of executing CPU-intensive operations (such as high-dimensional semantic parsing, 3-level frequency separation, and bilateral/guided filtering) on the full resolution canvas:
+1. **BBox Padding**: An expanded region of interest (ROI) enclosing the face, hair, neck, and upper chest is calculated dynamically from the face bounding box (padding top by 80%, bottom by 180%, and sides by 60% of face height/width).
+2. **Coordinate Relocalization**: Bounding box coordinates and landmark coordinates are mapped relative to the cropped ROI.
+3. **Execution**: Semantic segmentation, Bilateral frequency separation, and component enhancement logic operate exclusively on the crop.
+4. **Feathered Blending**: The processed crop is blended back into the original full-resolution canvas using soft skin+hair masks.
+
+This optimization cuts peak memory from **7.5 GB to 1.84 GB** (a 4x reduction) and total runtime from **15.3s to 3.09s** (a 5x speedup) on 24 MP images.
+
+### 6.2. Multi-Face ThreadPool Parallelization
+For images containing multiple faces:
+1. **Parallel Execution**: The per-face processing stage (`_stage_per_face`) distributes the execution of `_process_one_face` across threads using Python's `ThreadPoolExecutor`.
+2. **Worker Pool Cap**: Workers are capped at `min(len(faces), 4)` to avoid CPU thrashing and memory overhead.
+3. **Thread-Safe Slicing**: Each thread operates on its own ROI crop, and writes results into a list of independent `_FaceResult` structures, which are merged back serially in `_composite_faces`.

@@ -1,0 +1,2 @@
+-r requirements.txt
+rawpy>=0.19.0

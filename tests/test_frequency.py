@@ -103,3 +103,46 @@ def checkerboard_100():
             val = 255 if (x // 10 + y // 10) % 2 == 0 else 0
             img[y:y+10, x:x+10] = val
     return img
+
+
+class TestPoreSynthesis:
+    def test_pore_synthesis_changes_image(self):
+        img = np.full((100, 100, 3), 128, dtype=np.uint8)
+        layers = separate(img, face_width=100)
+        mask = np.ones((100, 100), dtype=np.float32)
+        # Without pore synthesis
+        res_no_pore = combine(layers, skin_mask=mask, smooth_strength=0, mid_reduction=0, pore_synthesis=0.0)
+        # With pore synthesis
+        res_with_pore = combine(
+            layers, skin_mask=mask, smooth_strength=0, mid_reduction=0,
+            pore_synthesis=0.5, face_width=100.0, roi_coords=(10, 20)
+        )
+        assert not np.array_equal(res_no_pore, res_with_pore)
+        
+    def test_pore_synthesis_is_deterministic(self):
+        img = np.full((100, 100, 3), 128, dtype=np.uint8)
+        layers = separate(img, face_width=100)
+        mask = np.ones((100, 100), dtype=np.float32)
+        res1 = combine(
+            layers, skin_mask=mask, smooth_strength=0, mid_reduction=0,
+            pore_synthesis=0.5, face_width=100.0, roi_coords=(10, 20)
+        )
+        res2 = combine(
+            layers, skin_mask=mask, smooth_strength=0, mid_reduction=0,
+            pore_synthesis=0.5, face_width=100.0, roi_coords=(10, 20)
+        )
+        assert np.array_equal(res1, res2)
+
+    def test_pore_synthesis_different_coords_different_noise(self):
+        img = np.full((100, 100, 3), 128, dtype=np.uint8)
+        layers = separate(img, face_width=100)
+        mask = np.ones((100, 100), dtype=np.float32)
+        res1 = combine(
+            layers, skin_mask=mask, smooth_strength=0, mid_reduction=0,
+            pore_synthesis=0.5, face_width=100.0, roi_coords=(10, 20)
+        )
+        res2 = combine(
+            layers, skin_mask=mask, smooth_strength=0, mid_reduction=0,
+            pore_synthesis=0.5, face_width=100.0, roi_coords=(10, 21)
+        )
+        assert not np.array_equal(res1, res2)

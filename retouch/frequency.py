@@ -83,7 +83,8 @@ def separate(img_bgr, face_width):
 
 
 def combine(layers, skin_mask=None, smooth_strength=0.5,
-            mid_reduction=0.4, texture_opacity=1.0, face_width=None):
+            mid_reduction=0.4, texture_opacity=1.0, face_width=None,
+            pore_synthesis=0.0, roi_coords=None):
     """Re-combine layers after selective processing.
 
     Compositing is done on final pixel values to avoid tonal discontinuities
@@ -97,6 +98,8 @@ def combine(layers, skin_mask=None, smooth_strength=0.5,
         texture_opacity: High-frequency reprojection opacity (0–1).
                          Recommended range 0.4–1.0. Lower = smoother/waxier.
         face_width: Face width in pixels (for adaptive mask feathering).
+        pore_synthesis: Strength of micro-pore texture synthesis (0-1).
+        roi_coords: Tuple of (roi_x1, roi_y1) coordinates for deterministic spatial seeding.
 
     Returns:
         (H, W, 3) uint8 BGR result.
@@ -124,6 +127,26 @@ def combine(layers, skin_mask=None, smooth_strength=0.5,
     if m.ndim == 2:
         m = m[:, :, np.newaxis]
 
+    # Texture opacity
+    if texture_opacity < 1.0:
+        high = high * (1.0 - m * (1.0 - texture_opacity))
+
+    # Pore synthesis
+    if face_width and roi_coords and pore_synthesis > 0:
+        roi_x1, roi_y1 = roi_coords
+        seed = hash((int(face_width * 100), roi_x1, roi_y1)) & 0xFFFFFFFF
+        rng = np.random.RandomState(seed)
+        h, w = layers.low.shape[:2]
+        noise = rng.normal(0, 15.0, (h, w, 3)).astype(np.float32)
+        sigma = face_width / 120.0
+        if sigma < 0.5:
+            sigma = 0.5
+        k_size = int(sigma * 3.0) * 2 + 1
+        k_size = max(3, k_size | 1)
+        noise_blur = cv2.GaussianBlur(noise, (k_size, k_size), sigma)
+        P = noise - noise_blur
+        high = high + (pore_synthesis * P * m)
+
     # ---- Build the processed result inside the mask ----
     # Reduce mid layer (remove blemishes/wrinkles)
     if mid_reduction > 0:
@@ -131,8 +154,6 @@ def combine(layers, skin_mask=None, smooth_strength=0.5,
 
     # Early exit for no-smoothing case
     if smooth_strength <= 0:
-        if texture_opacity < 1.0:
-            high = high * (1.0 - m * (1.0 - texture_opacity))
         processed = low + mid + high
         return blend_masked(layers.reconstruct(), processed, m[:, :, 0])
 
@@ -156,10 +177,6 @@ def combine(layers, skin_mask=None, smooth_strength=0.5,
     smoothed_low_final = smoothed_low_bilateral * (1.0 - blend_gaussian) + smoothed_low_gaussian * blend_gaussian
 
     low = low * (1.0 - m) + smoothed_low_final * m
-
-    # Texture opacity
-    if texture_opacity < 1.0:
-        high = high * (1.0 - m * (1.0 - texture_opacity))
 
     processed = low + mid + high
 

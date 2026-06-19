@@ -229,6 +229,28 @@ class SkinProcessor:
             # Exclude face_skin_mask to avoid double-processing the face
             neck_mask_final = np.clip(neck_mask_est * skin_match - face_skin_mask, 0, 1)
 
+        # Apply Z-depth gating if yaw ratio is within 1.3
+        lm = face_landmarks.landmark
+        d_left = abs(lm[6].x - lm[234].x)
+        d_right = abs(lm[454].x - lm[6].x)
+        yaw_ratio = max(d_left, d_right) / (min(d_left, d_right) + 1e-5)
+
+        if yaw_ratio <= 1.3:
+            p1 = np.array([lm[33].x * w_img, lm[33].y * h_img, lm[33].z * face_w])
+            p2 = np.array([lm[263].x * w_img, lm[263].y * h_img, lm[263].z * face_w])
+            p3 = np.array([lm[6].x * w_img, lm[6].y * h_img, lm[6].z * face_w])
+            
+            n = np.cross(p2 - p1, p3 - p1)
+            n = n / (np.linalg.norm(n) + 1e-5)
+            
+            z_neck = lm[152].z * face_w
+            Y, X = np.ogrid[:h_img, :w_img]
+            dist_to_plane = np.abs(n[0] * (X - p1[0]) + n[1] * (Y - p1[1]) + n[2] * (z_neck - p1[2]))
+            
+            threshold = face_w * 0.15
+            depth_gate = (dist_to_plane < threshold).astype(np.float32)
+            neck_mask_final *= depth_gate
+
         if neck_mask_final.max() < 0.01:
             return img_bgr
 
