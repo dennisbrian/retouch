@@ -329,6 +329,27 @@ RECIPES = {
         "vignette": 10.0,
     },
 
+    # ------------------------------------------------------------------
+    # Anime Crystal Void — dark fantasy test recipe
+    # ------------------------------------------------------------------
+    "anime_crystal_void": {
+        "extends": "anime_cinematic_v1",
+
+        "subject_separation": 0.85,
+        "bloom": {"opacity": 0.35},
+        "chromatic_aberration": 1.5,
+        "eyes": {"iris": 0.20},
+
+        # Unimplemented features (stored for future wiring)
+        "background_blur": 0.55,
+        "background_desaturation": 0.40,
+        "light_wrap": 0.25,
+        "blue_shadow_grade": 0.75,
+        "cyan_midtone_grade": 0.45,
+        "subject_sharpen": 0.30,
+        "matte_black": 0.10,
+    },
+
     "anime_cinematic_fantasy": {
         "extends": "anime_cinematic_v1",
         "brightness": 10.0,
@@ -341,3 +362,9 @@ RECIPES = {
         "chromatic_aberration": 5.0,
     },
 }
+
+# Shorter aliases for the new anime cinematic recipes
+RECIPES["soft"] = RECIPES["anime_cinematic_soft"]
+RECIPES["action"] = RECIPES["anime_cinematic_action"]
+RECIPES["fantasy"] = RECIPES["anime_cinematic_fantasy"]
+

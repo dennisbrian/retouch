@@ -109,6 +109,7 @@ from .utils import correct_exposure, apply_global_bloom
 _ANIME_CINEMATIC_RECIPES = frozenset({
     "anime_cinematic_v1", "anime_cinematic_soft",
     "anime_cinematic_action", "anime_cinematic_fantasy",
+    "soft", "action", "fantasy",
 })
 
 _NOSE_BLUSH_RECIPES = frozenset({
@@ -127,6 +128,7 @@ _WHITE_COSTUME_RECIPES = frozenset({
     "pink_dream", "meitu_clone",
     "anime_cinematic_v1", "anime_cinematic_soft",
     "anime_cinematic_action", "anime_cinematic_fantasy",
+    "soft", "action", "fantasy",
 })
 
 
@@ -277,17 +279,19 @@ class ProcessingResult(np.ndarray):
 # ---------------------------------------------------------------------------
 
 def resolve_recipe(name: str) -> Dict:
-    """Return a fully-merged recipe dict, honouring single-level 'extends'."""
+    """Return a fully-merged recipe dict, resolving 'extends' recursively."""
     rec = RECIPES.get(name)
     if rec is None:
         rec = RECIPES.get("natural", {})
     parent_name = rec.get("extends")
     if parent_name and parent_name in RECIPES:
         import copy
-        merged = copy.deepcopy(RECIPES[parent_name])
+        resolved_parent = resolve_recipe(parent_name)
+        merged = copy.deepcopy(resolved_parent)
         _deep_merge(merged, rec)
         return merged
     return rec
+
 
 
 def _deep_merge(base: Dict, override: Dict) -> None:
@@ -338,9 +342,13 @@ def build_context(
         r_dodge_burn = _pct(r_dodge_burn_raw.get("amount", 0.0))
     else:
         r_dodge_burn = float(r_dodge_burn_raw)
-    r_relight = _pct(rec.get("skin", {}).get("relight", 0.0))
-    r_relight_azimuth = rec.get("skin", {}).get("relight_azimuth", 0.0)
-    r_relight_elevation = rec.get("skin", {}).get("relight_elevation", 30.0)
+    r_relight_raw = rec.get("skin", {}).get("relight")
+    if r_relight_raw is not None:
+        r_relight = _pct(r_relight_raw)
+    else:
+        r_relight = float(rec.get("relight_strength", 0.0))
+    r_relight_azimuth = rec.get("skin", {}).get("relight_azimuth", rec.get("light_azimuth", 0.0))
+    r_relight_elevation = rec.get("skin", {}).get("relight_elevation", rec.get("light_elevation", 30.0))
 
     # --- Eyes ---
     eyes = rec.get("eyes", {})
@@ -1332,7 +1340,7 @@ class RetouchEngine:
           background -= 0.4 EV * strength%
         Applied in LAB L-channel for clean exposure shifts.
         """
-        strength = ctx.subject_separation / 100.0
+        strength = ctx.subject_separation
         if strength <= 0 or person_mask is None:
             return img
 
