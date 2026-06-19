@@ -123,39 +123,41 @@ def combine(layers, skin_mask=None, smooth_strength=0.5,
         h, w = layers.low.shape[:2]
         feather_r = max(DEFAULT_FEATHER_MIN, int(min(h, w) * FALLBACK_FEATHER_FACTOR) | 1)
 
-    m = cv2.GaussianBlur(m_raw, (feather_r, feather_r), 0)
-    if m.ndim == 2:
-        m = m[:, :, np.newaxis]
+    m_2d = cv2.GaussianBlur(m_raw, (feather_r, feather_r), 0)
+    m_3d = m_2d[:, :, np.newaxis]
 
-    # Texture opacity
+    # Texture opacity — attenuate high band inside the mask
     if texture_opacity < 1.0:
-        high = high * (1.0 - m * (1.0 - texture_opacity))
+        high = high * (1.0 - m_3d * (1.0 - texture_opacity))
 
-    # Pore synthesis
+    # Pore synthesis — inject synthetic high-frequency noise back before mid reduction
+    # so mid reduction doesn't erase the pores we just added.
     if face_width and roi_coords and pore_synthesis > 0:
         roi_x1, roi_y1 = roi_coords
-        seed = hash((int(face_width * 100), roi_x1, roi_y1)) & 0xFFFFFFFF
-        rng = np.random.RandomState(seed)
+        seed = abs(hash((int(face_width * 100), roi_x1, roi_y1))) & 0xFFFFFFFF
+        rng = np.random.default_rng(seed)
         h, w = layers.low.shape[:2]
-        noise = rng.normal(0, 15.0, (h, w, 3)).astype(np.float32)
+        noise = rng.standard_normal((h, w, 3)).astype(np.float32) * 15.0
         sigma = face_width / 120.0
         if sigma < 0.5:
-            sigma = 0.5
+            sigma = 0.5  # floor: tiny faces (< 60px) share the same pore scale
         k_size = int(sigma * 3.0) * 2 + 1
         k_size = max(3, k_size | 1)
         noise_blur = cv2.GaussianBlur(noise, (k_size, k_size), sigma)
         P = noise - noise_blur
-        high = high + (pore_synthesis * P * m)
+        high = high + (pore_synthesis * P * m_3d)
 
     # ---- Build the processed result inside the mask ----
-    # Reduce mid layer (remove blemishes/wrinkles)
+    # Reduce mid layer (remove blemishes/wrinkles) — applied after pore synthesis
+    # so pores are preserved even at high mid_reduction.
     if mid_reduction > 0:
-        mid = mid * (1.0 - m * mid_reduction)
+        mid = mid * (1.0 - m_3d * mid_reduction)
 
     # Early exit for no-smoothing case
     if smooth_strength <= 0:
         processed = low + mid + high
-        return blend_masked(layers.reconstruct(), processed, m[:, :, 0])
+        # blend source is the original reconstruction; low/mid/high are copies
+        return blend_masked(layers.reconstruct(), processed, m_2d)
 
     # Smooth low + mid layers (even out colour/tone transitions)
     # 1. Soft Gaussian blur on Low layer for perfectly clean gradients (no bilateral blotches)
@@ -165,6 +167,7 @@ def combine(layers, skin_mask=None, smooth_strength=0.5,
 
     # Scale d proportionally to face size (Issue 4)
     d = max(BILATERAL_D_MIN, adaptive_ksize(f_width, factor=BILATERAL_D_FACTOR, minimum=BILATERAL_D_MIN))
+    # Bilateral on low+mid_original to extract a smoothed-low estimate, preserving mid-frequency detail
     low_mid_u8 = np.clip(low + mid_original, 0, 255).astype(np.uint8)
     sigma_color = SIGMA_BASE + smooth_strength * SIGMA_STRENGTH_FACTOR
     sigma_space = SIGMA_BASE + smooth_strength * SIGMA_STRENGTH_FACTOR
@@ -176,9 +179,9 @@ def combine(layers, skin_mask=None, smooth_strength=0.5,
     blend_gaussian = min(1.0, smooth_strength * GAUSSIAN_BLEND_FACTOR)
     smoothed_low_final = smoothed_low_bilateral * (1.0 - blend_gaussian) + smoothed_low_gaussian * blend_gaussian
 
-    low = low * (1.0 - m) + smoothed_low_final * m
+    low = low * (1.0 - m_3d) + smoothed_low_final * m_3d
 
     processed = low + mid + high
 
     # Composite on final pixel values to avoid tonal edge artifacts (Issue 1)
-    return blend_masked(layers.reconstruct(), processed, m[:, :, 0])
+    return blend_masked(layers.reconstruct(), processed, m_2d)
