@@ -416,6 +416,7 @@ class _FaceResult:
     skin_hair_mask: np.ndarray
     lips_mask: np.ndarray
     sharpen_mask: np.ndarray
+    roi_box: Tuple[int, int, int, int]
 
 
 # ---------------------------------------------------------------------------
@@ -506,6 +507,9 @@ class RetouchEngine:
         color_ref: Optional[np.ndarray] = None,
         color_transfer_intensity: float = 1.0,
         fast: bool = False,
+        style_profile: Optional[StyleProfile] = None,
+        style_ref: Optional[np.ndarray] = None,
+        debug_dir: Optional[str] = None,
     ) -> ProcessingResult:
         """Process a single image through the full Retouch pipeline.
 
@@ -538,9 +542,24 @@ class RetouchEngine:
         overrides = {k: v for k, v in locals().items() if k not in {
             "self", "img_bgr", "recipe", "preset", "fast",
             "timings", "orig_h", "orig_w", "scale", "active_recipe", "rec",
+            "style_profile", "style_ref", "debug_dir",
         }}
 
         ctx = build_context(active_recipe, rec, overrides)
+
+        if style_profile is not None:
+            ctx.contrast = style_profile.contrast_delta
+            ctx.brightness = np.clip(style_profile.brightness_delta * 2.0, -100.0, 100.0)
+            ctx.smooth = np.clip(style_profile.skin_smooth_strength * 100.0, 0.0, 100.0)
+            ctx.mid_reduction = np.clip(style_profile.skin_mid_reduction, 0.0, 1.0)
+            ctx.texture_opacity = np.clip(style_profile.skin_texture_opacity, 0.0, 1.0)
+            ctx.whiten = np.clip(style_profile.skin_l_mean_delta * 4.0, -100.0, 100.0)
+            if style_profile.skin_a_mean_delta > 1.0:
+                ctx.whiten_tone = "rosy"
+            elif style_profile.skin_b_mean_delta < -1.0:
+                ctx.whiten_tone = "porcelain"
+            else:
+                ctx.whiten_tone = "neutral"
 
         # ------------------------------------------------------------------
         # Stage 0 — Detection + segmentation
@@ -602,7 +621,7 @@ class RetouchEngine:
         # Stage 4 — Colour grading
         # ------------------------------------------------------------------
         t4 = time.perf_counter()
-        result = self._stage_grade(result, ctx, acc_skin, acc_skin_hair, acc_lips, person_mask)
+        result = self._stage_grade(result, ctx, acc_skin, acc_skin_hair, acc_lips, person_mask, style_ref=style_ref, faces=faces)
         timings["grading"] = (time.perf_counter() - t4) * 1000
 
         # ------------------------------------------------------------------
@@ -619,6 +638,38 @@ class RetouchEngine:
             result = cv2.resize(result, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
 
         timings["total"] = sum(timings.values())
+
+        # ------------------------------------------------------------------
+        # Debug Visualizations (masks and frequency layers)
+        # ------------------------------------------------------------------
+        if debug_dir is not None:
+            import os
+            os.makedirs(debug_dir, exist_ok=True)
+            
+            # Save accumulated masks
+            cv2.imwrite(os.path.join(debug_dir, "skin_mask.png"), (acc_skin * 255).astype(np.uint8))
+            cv2.imwrite(os.path.join(debug_dir, "skin_hair_mask.png"), (acc_skin_hair * 255).astype(np.uint8))
+            cv2.imwrite(os.path.join(debug_dir, "lips_mask.png"), (acc_lips * 255).astype(np.uint8))
+            cv2.imwrite(os.path.join(debug_dir, "sharpen_mask.png"), (acc_sharpen * 255).astype(np.uint8))
+            
+            # Glow mask visualization
+            pm_norm = _norm_mask(person_mask)
+            if pm_norm is not None:
+                if pm_norm.ndim == 3:
+                    pm_norm = pm_norm.squeeze(-1)
+                sharp_fg = np.clip(pm_norm - acc_skin, 0.0, 1.0)
+                g_mask = 1.0 - sharp_fg
+            else:
+                g_mask = np.ones(result.shape[:2], dtype=np.float32)
+            cv2.imwrite(os.path.join(debug_dir, "glow_mask.png"), (g_mask * 255).astype(np.uint8))
+            
+            # Frequency layers of the primary face
+            if faces:
+                face_width = faces[0].ied * 2.5
+                layers = freq_separate(img_bgr, face_width)
+                cv2.imwrite(os.path.join(debug_dir, "freq_low.png"), np.clip(layers.low, 0, 255).astype(np.uint8))
+                cv2.imwrite(os.path.join(debug_dir, "freq_mid.png"), np.clip(layers.mid + 128, 0, 255).astype(np.uint8))
+                cv2.imwrite(os.path.join(debug_dir, "freq_high.png"), np.clip(layers.high + 128, 0, 255).astype(np.uint8))
 
         return ProcessingResult(
             image=result,
@@ -687,30 +738,68 @@ class RetouchEngine:
         h_img: int,
         w_img: int,
     ) -> _FaceResult:
-        """Full per-face pipeline. Operates on a private copy of the canvas."""
-        canvas = img.copy()
-        face_width = face.ied * 2.5
+        """Full per-face pipeline. Operates on a private copy of the cropped Portrait ROI canvas."""
+        face_x, face_y, face_w, face_h = face.bbox
+
+        # Safe expanded padding to cover hair (top) and neck/chest (bottom)
+        pad_t = int(face_h * 0.8)
+        pad_b = int(face_h * 1.8)
+        pad_l = int(face_w * 0.6)
+        pad_r = int(face_w * 0.6)
+
+        roi_y1 = max(0, face_y - pad_t)
+        roi_y2 = min(h_img, face_y + face_h + pad_b)
+        roi_x1 = max(0, face_x - pad_l)
+        roi_x2 = min(w_img, face_x + face_w + pad_r)
+
+        roi_h = roi_y2 - roi_y1
+        roi_w = roi_x2 - roi_x1
+
+        # Private copy of cropped canvas & segmentation masks
+        canvas = img[roi_y1:roi_y2, roi_x1:roi_x2].copy()
+        roi_person_mask = person_mask[roi_y1:roi_y2, roi_x1:roi_x2] if person_mask is not None else None
+
+        # Shift landmarks & bbox to be relative to the ROI crop
+        import copy
+        shifted_landmarks = copy.deepcopy(face.landmarks)
+        for lm in shifted_landmarks.landmark:
+            lm.x = (lm.x * w_img - roi_x1) / roi_w
+            lm.y = (lm.y * h_img - roi_y1) / roi_h
+
+        shifted_bbox = (face_x - roi_x1, face_y - roi_y1, face_w, face_h)
+
+        from retouch.detection import FaceData
+        shifted_face = FaceData(
+            bbox=shifted_bbox,
+            landmarks=shifted_landmarks,
+            ied=face.ied
+        )
+
+        face_width = shifted_face.ied * 2.5
         active_recipe = ctx.active_recipe
 
         # ---- Parse regions ----
         regions = self._parser.parse(
-            face.landmarks, img, face.bbox, person_mask, face.ied
+            shifted_face.landmarks, canvas, shifted_face.bbox, roi_person_mask, shifted_face.ied
         )
 
-        # ---- Accumulate masks (PERF-2/3: normalise once) ----
+        # ---- Accumulate masks ----
         skin_n = _norm_mask(regions.skin)
         hair_n = _norm_mask(regions.hair)
         lips_n = _norm_mask(regions.lips)
+        neck_n = _norm_mask(regions.neck)
 
-        acc_skin = np.zeros((h_img, w_img), dtype=np.float32)
-        acc_skin_hair = np.zeros((h_img, w_img), dtype=np.float32)
+        acc_skin = np.zeros((roi_h, roi_w), dtype=np.float32)
+        acc_skin_hair = np.zeros((roi_h, roi_w), dtype=np.float32)
         if skin_n is not None:
             acc_skin = np.clip(acc_skin + skin_n, 0.0, 1.0)
             acc_skin_hair = np.clip(acc_skin_hair + skin_n, 0.0, 1.0)
         if hair_n is not None:
             acc_skin_hair = np.clip(acc_skin_hair + hair_n, 0.0, 1.0)
+        if neck_n is not None:
+            acc_skin_hair = np.clip(acc_skin_hair + neck_n, 0.0, 1.0)
 
-        acc_lips = np.zeros((h_img, w_img), dtype=np.float32)
+        acc_lips = np.zeros((roi_h, roi_w), dtype=np.float32)
         if lips_n is not None:
             acc_lips = np.clip(acc_lips + lips_n, 0.0, 1.0)
 
@@ -719,10 +808,10 @@ class RetouchEngine:
         layers = freq_separate(canvas, face_width)
 
         # ---- Build smooth mask (protect eyes/brows/lips) ----
-        smooth_mask = skin_n.copy() if skin_n is not None else np.zeros((h_img, w_img), np.float32)
+        smooth_mask = skin_n.copy() if skin_n is not None else np.zeros((roi_h, roi_w), np.float32)
 
-        if face.ied > 0:
-            k_size = max(3, int(face.ied * 0.08) | 1)
+        if shifted_face.ied > 0:
+            k_size = max(3, int(shifted_face.ied * 0.08) | 1)
             kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
             dilated_left_eye = cv2.dilate(regions.left_eye, kernel) if regions.left_eye is not None else None
             dilated_right_eye = cv2.dilate(regions.right_eye, kernel) if regions.right_eye is not None else None
@@ -785,7 +874,7 @@ class RetouchEngine:
             canvas = self._skin.equalize(canvas, regions.skin, ctx.equalize, ref_lab=original_lab)
 
         # ---- Foundation / whitening ----
-        if ctx.whiten > 0:
+        if ctx.whiten != 0:
             canvas = self._skin.whiten(canvas, regions.skin, ctx.whiten, tone=ctx.whiten_tone)
 
         # ---- Specular bloom ----
@@ -803,14 +892,14 @@ class RetouchEngine:
             canvas = self._undereye.repair(canvas, regions, ctx.dark_circles)
 
         # ---- Neck harmonisation ----
-        if ctx.whiten > 0 or ctx.equalize > 0:
+        if ctx.whiten != 0 or ctx.equalize > 0:
             canvas = self._skin.harmonize_neck(
                 canvas,
-                face.landmarks,
-                person_mask,
+                shifted_face.landmarks,
+                roi_person_mask,
                 regions.skin,
                 regions.neck,
-                strength=max(ctx.whiten, ctx.equalize),
+                strength=max(abs(ctx.whiten), ctx.equalize),
             )
 
         # ---- Eye enhancement ----
@@ -831,7 +920,7 @@ class RetouchEngine:
         # ---- Blush ----
         if ctx.blush > 0:
             canvas = self._makeup.apply_blush(
-                canvas, face.landmarks, face_width, ctx.blush,
+                canvas, shifted_face.landmarks, face_width, ctx.blush,
                 regions=regions,
                 nose_blush=(active_recipe in _NOSE_BLUSH_RECIPES),
                 under_eye_blush=(active_recipe in _UNDER_EYE_BLUSH_RECIPES),
@@ -840,8 +929,8 @@ class RetouchEngine:
         # ---- Hair shine ----
         if ctx.hair_enhance > 0:
             canvas = self._hair.enhance(
-                canvas, person_mask, regions.face_oval,
-                face.bbox, ctx.hair_enhance, regions.hair,
+                canvas, roi_person_mask, regions.face_oval,
+                shifted_face.bbox, ctx.hair_enhance, regions.hair,
             )
 
         # ---- Dodge & burn ----
@@ -849,11 +938,11 @@ class RetouchEngine:
             canvas = self._skin.dodge_burn(canvas, regions, ctx.dodge_burn)
 
         # ---- Build sharpening mask ----
-        acc_sharpen = np.zeros((h_img, w_img), dtype=np.float32)
-        eye_sharpen = _accum(np.zeros((h_img, w_img), np.float32), regions.left_eye)
+        acc_sharpen = np.zeros((roi_h, roi_w), dtype=np.float32)
+        eye_sharpen = _accum(np.zeros((roi_h, roi_w), np.float32), regions.left_eye)
         eye_sharpen = _accum(eye_sharpen, regions.right_eye)
 
-        other_sharpen = _accum(np.zeros((h_img, w_img), np.float32), regions.left_eyebrow)
+        other_sharpen = _accum(np.zeros((roi_h, roi_w), np.float32), regions.left_eyebrow)
         other_sharpen = _accum(other_sharpen, regions.right_eyebrow)
 
         if regions.hair is not None and _norm_mask(regions.hair).max() > 0.01:
@@ -872,6 +961,7 @@ class RetouchEngine:
             skin_hair_mask=acc_skin_hair,
             lips_mask=acc_lips,
             sharpen_mask=acc_sharpen,
+            roi_box=(roi_x1, roi_y1, roi_x2, roi_y2)
         )
 
     def _composite_faces(
@@ -881,40 +971,26 @@ class RetouchEngine:
         h_img: int,
         w_img: int,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Merge per-face canvases into a single output image.
-
-        For a single face this is a simple substitution. For multiple faces,
-        each face result modifies the base image in the region defined by its
-        accumulated skin+hair mask; regions outside any face mask fall back to
-        the base canvas from the most-recently-processed face (global changes
-        like hair and neck should be captured there).
-        """
+        """Merge cropped per-face canvases and masks back into a single full-resolution output image."""
         acc_skin = np.zeros((h_img, w_img), dtype=np.float32)
         acc_skin_hair = np.zeros((h_img, w_img), dtype=np.float32)
         acc_lips = np.zeros((h_img, w_img), dtype=np.float32)
         acc_sharpen = np.zeros((h_img, w_img), dtype=np.float32)
 
-        if len(face_results) == 1:
-            fr = face_results[0]
-            return (
-                fr.canvas,
-                fr.skin_mask,
-                fr.skin_hair_mask,
-                fr.lips_mask,
-                fr.sharpen_mask,
-            )
-
-        # Multi-face composite: blend each face result into the base using its
-        # skin+hair mask as the alpha channel.
         result = base.copy()
         for fr in face_results:
+            x1, y1, x2, y2 = fr.roi_box
             alpha = fr.skin_hair_mask[:, :, np.newaxis]
-            result = (fr.canvas * alpha + result * (1.0 - alpha)).astype(np.uint8)
+            
+            # Blend cropped canvas back using skin_hair_mask as alpha channel
+            roi_blend = (fr.canvas * alpha + result[y1:y2, x1:x2] * (1.0 - alpha)).astype(np.uint8)
+            result[y1:y2, x1:x2] = roi_blend
 
-            acc_skin = np.maximum(acc_skin, fr.skin_mask)
-            acc_skin_hair = np.maximum(acc_skin_hair, fr.skin_hair_mask)
-            acc_lips = np.maximum(acc_lips, fr.lips_mask)
-            acc_sharpen = np.maximum(acc_sharpen, fr.sharpen_mask)
+            # Accumulate cropped masks into full-resolution canvas masks
+            acc_skin[y1:y2, x1:x2] = np.maximum(acc_skin[y1:y2, x1:x2], fr.skin_mask)
+            acc_skin_hair[y1:y2, x1:x2] = np.maximum(acc_skin_hair[y1:y2, x1:x2], fr.skin_hair_mask)
+            acc_lips[y1:y2, x1:x2] = np.maximum(acc_lips[y1:y2, x1:x2], fr.lips_mask)
+            acc_sharpen[y1:y2, x1:x2] = np.maximum(acc_sharpen[y1:y2, x1:x2], fr.sharpen_mask)
 
         return result, acc_skin, acc_skin_hair, acc_lips, acc_sharpen
 
@@ -954,9 +1030,16 @@ class RetouchEngine:
         acc_skin_hair: np.ndarray,
         acc_lips: np.ndarray,
         person_mask: Optional[np.ndarray],
+        style_ref: Optional[np.ndarray] = None,
+        faces=None,
     ) -> np.ndarray:
         """Colour transfer, grading, and white-costume lift."""
         result = img
+
+        # Subject-Aware Color Transfer (Meitu/Xingtu-style portrait match)
+        if style_ref is not None:
+            from .style import subject_aware_transfer
+            result = subject_aware_transfer(self, result, style_ref, target_faces=faces, target_person=person_mask)
 
         # Colour transfer (reference-based)
         if ctx.color_ref is not None:

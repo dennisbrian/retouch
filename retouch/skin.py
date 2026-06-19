@@ -29,18 +29,18 @@ class SkinProcessor:
 
         Uses a soft-clipping luminance lift to brighten the skin without clipping highlights,
         and applies a rosy-porcelain color correction (nudge 'a' positive for pink/rosy tones,
-        nudge 'b' negative for cool porcelain tones).
+        nudge 'b' negative for cool porcelain tones). Supports negative strength for skin darkening.
 
         Args:
             img_bgr: (H, W, 3) uint8.
             skin_mask: (H, W) float mask 0–1.
-            strength: 0–100.
+            strength: -100–100.
             tone: "rosy", "porcelain", or "neutral".
 
         Returns:
             (H, W, 3) uint8 result.
         """
-        if strength <= 0:
+        if strength == 0:
             return img_bgr
 
         s = strength / 100.0
@@ -54,19 +54,26 @@ class SkinProcessor:
         shadow_protection = np.clip((l_val_orig - 80.0) / 40.0, 0.0, 1.0)
         skin_color_mask = skin_mask * shadow_protection
 
-        # Soft-clipping luminance lift using skin_color_mask instead of skin_mask to protect contours
-        lift_factor = 0.16 * s
-        lab[:, :, 0] = lab[:, :, 0] + (255.0 - lab[:, :, 0]) * skin_color_mask * lift_factor * protection
+        # Soft-clipping luminance lift/reduction using skin_color_mask
+        if s >= 0:
+            lift_factor = 0.16 * s
+            lab[:, :, 0] = lab[:, :, 0] + (255.0 - lab[:, :, 0]) * skin_color_mask * lift_factor * protection
+        else:
+            # Darkening (tanning/moody look): protect deep shadows from clipping
+            shadow_decay = np.clip((lab[:, :, 0] - 10.0) / 20.0, 0.0, 1.0)
+            lift_factor = 0.16 * s
+            lab[:, :, 0] = lab[:, :, 0] + lab[:, :, 0] * skin_color_mask * lift_factor * shadow_decay
 
+        abs_s = abs(s)
         if tone == "porcelain":
             # cool/porcelain only: no rosy positive shift on a channel, only negative on b channel
-            lab[:, :, 2] = lab[:, :, 2] - 5.0 * s * skin_color_mask
+            lab[:, :, 2] = lab[:, :, 2] - 5.0 * abs_s * skin_color_mask
         elif tone == "neutral":
-            # neutral: no color shift at all, just luminance lift
+            # neutral: no color shift at all, just luminance lift/reduction
             pass
         else:  # rosy
-            lab[:, :, 1] = lab[:, :, 1] + 3.0 * s * skin_color_mask
-            lab[:, :, 2] = lab[:, :, 2] - 4.0 * s * skin_color_mask
+            lab[:, :, 1] = lab[:, :, 1] + 3.0 * abs_s * skin_color_mask
+            lab[:, :, 2] = lab[:, :, 2] - 4.0 * abs_s * skin_color_mask
 
         # Nudge AB toward the person's own median to avoid imposing a fixed skin tone
         skin_indices = skin_mask > 0.3
@@ -76,7 +83,7 @@ class SkinProcessor:
             median_b = np.median(lab_original[:, :, 2][skin_indices])
             a_target = 128.0 + (median_a - 128.0) * 0.85
             b_target = 128.0 + (median_b - 128.0) * 0.85
-            blend_factor = 0.12 * s
+            blend_factor = 0.12 * abs_s
             lab[:, :, 1] = lab[:, :, 1] + (a_target - lab[:, :, 1]) * skin_mask * blend_factor
             lab[:, :, 2] = lab[:, :, 2] + (b_target - lab[:, :, 2]) * skin_mask * blend_factor
 
