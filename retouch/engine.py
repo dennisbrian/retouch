@@ -306,7 +306,19 @@ class RetouchEngine:
 
             # ---- 4. Frequency-based smoothing ----
             smooth_mask = regions.skin.astype(np.float32)
-            for exclude_region in [regions.left_eye, regions.right_eye,
+
+            # Dilate eye masks slightly to protect eyelashes and eyelid contours from smoothing
+            dilated_left_eye = regions.left_eye
+            dilated_right_eye = regions.right_eye
+            if face.ied > 0:
+                k_size = max(3, int(face.ied * 0.08) | 1)
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
+                if regions.left_eye is not None:
+                    dilated_left_eye = cv2.dilate(regions.left_eye, kernel)
+                if regions.right_eye is not None:
+                    dilated_right_eye = cv2.dilate(regions.right_eye, kernel)
+
+            for exclude_region in [dilated_left_eye, dilated_right_eye,
                                    regions.left_under_eye, regions.right_under_eye,
                                    regions.left_eyebrow, regions.right_eyebrow,
                                    regions.lips]:
