@@ -24,7 +24,7 @@ class SkinProcessor:
         )
         return img_bgr
 
-    def whiten(self, img_bgr, skin_mask, strength=30):
+    def whiten(self, img_bgr, skin_mask, strength=30, tone="rosy"):
         """Adaptive Rosy Foundation: LAB-based skin whitening and rosy/porcelain cosmetic shift.
 
         Uses a soft-clipping luminance lift to brighten the skin without clipping highlights,
@@ -35,6 +35,7 @@ class SkinProcessor:
             img_bgr: (H, W, 3) uint8.
             skin_mask: (H, W) float mask 0–1.
             strength: 0–100.
+            tone: "rosy", "porcelain", or "neutral".
 
         Returns:
             (H, W, 3) uint8 result.
@@ -44,23 +45,35 @@ class SkinProcessor:
 
         s = strength / 100.0
         lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        lab_original = lab.copy()  # Snapshot lab before any channel modifications (Bug 1 & 2)
 
         protection = self._get_highlight_protection(lab)
 
-        # Soft-clipping luminance lift
-        lift_factor = 0.16 * s
-        lab[:, :, 0] = lab[:, :, 0] + (255.0 - lab[:, :, 0]) * skin_mask * lift_factor * protection
+        # Compute skin_color_mask incorporating shadow protection to preserve 3D contours (Issue 8)
+        l_val_orig = lab_original[:, :, 0]
+        shadow_protection = np.clip((l_val_orig - 80.0) / 40.0, 0.0, 1.0)
+        skin_color_mask = skin_mask * shadow_protection
 
-        # Rosy color shift: nudge a channel (green-red) positive for pink rosy glow
-        # Porcelain color shift: nudge b channel (blue-yellow) negative for cool porcelain tones
-        lab[:, :, 1] = lab[:, :, 1] + 3.0 * s * skin_mask
-        lab[:, :, 2] = lab[:, :, 2] - 4.0 * s * skin_mask
+        # Soft-clipping luminance lift using skin_color_mask instead of skin_mask to protect contours
+        lift_factor = 0.16 * s
+        lab[:, :, 0] = lab[:, :, 0] + (255.0 - lab[:, :, 0]) * skin_color_mask * lift_factor * protection
+
+        if tone == "porcelain":
+            # cool/porcelain only: no rosy positive shift on a channel, only negative on b channel
+            lab[:, :, 2] = lab[:, :, 2] - 5.0 * s * skin_color_mask
+        elif tone == "neutral":
+            # neutral: no color shift at all, just luminance lift
+            pass
+        else:  # rosy
+            lab[:, :, 1] = lab[:, :, 1] + 3.0 * s * skin_color_mask
+            lab[:, :, 2] = lab[:, :, 2] - 4.0 * s * skin_color_mask
 
         # Nudge AB toward the person's own median to avoid imposing a fixed skin tone
         skin_indices = skin_mask > 0.3
         if np.any(skin_indices):
-            median_a = np.median(lab[:, :, 1][skin_indices])
-            median_b = np.median(lab[:, :, 2][skin_indices])
+            # Use lab_original to ensure reference is from original channels (Bug 1 & 2)
+            median_a = np.median(lab_original[:, :, 1][skin_indices])
+            median_b = np.median(lab_original[:, :, 2][skin_indices])
             a_target = 128.0 + (median_a - 128.0) * 0.85
             b_target = 128.0 + (median_b - 128.0) * 0.85
             blend_factor = 0.12 * s
@@ -70,7 +83,7 @@ class SkinProcessor:
         whitened = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
         return whitened
 
-    def equalize(self, img_bgr, skin_mask, strength=40):
+    def equalize(self, img_bgr, skin_mask, strength=40, ref_lab=None):
         """CLAHE + local average color equalization to unify skin tone.
 
         Pulls yellow foreheads or red cheeks toward the local skin median color.
@@ -82,14 +95,15 @@ class SkinProcessor:
         s = strength / 100.0
         lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
 
-        # 1. Local skin color harmonization
+        # 1. Local skin color harmonization using original ref_lab if provided (Issue 3)
         skin_indices = skin_mask > 0.3
         if np.any(skin_indices):
-            median_a = np.median(lab[:, :, 1][skin_indices])
-            median_b = np.median(lab[:, :, 2][skin_indices])
-            pull = 0.20 * s
-            lab[:, :, 1] = lab[:, :, 1] + (median_a - lab[:, :, 1]) * skin_mask * pull
-            lab[:, :, 2] = lab[:, :, 2] + (median_b - lab[:, :, 2]) * skin_mask * pull
+            ref_source = ref_lab.astype(np.float32) if ref_lab is not None else lab
+            median_a = np.median(ref_source[:, :, 1][skin_indices])
+            median_b = np.median(ref_source[:, :, 2][skin_indices])
+            # Pull towards median by 20% (final blend_masked at end scales by s and skin_mask) (Bug 4)
+            lab[:, :, 1] = lab[:, :, 1] + (median_a - lab[:, :, 1]) * 0.20
+            lab[:, :, 2] = lab[:, :, 2] + (median_b - lab[:, :, 2]) * 0.20
 
         # 2. CLAHE on luminance channel — write result back only over skin
         lab_u = np.clip(lab, 0, 255).astype(np.uint8)
@@ -97,9 +111,15 @@ class SkinProcessor:
         clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
         l_channel = lab_u[:, :, 0].copy()
         l_clahe = clahe.apply(l_channel)
-        skin_bin = (skin_mask > 0.3).astype(np.uint8)
-        lab_u[:, :, 0] = l_clahe * skin_bin + l_channel * (1 - skin_bin)
 
+        # Apply highlight protection inside equalize to prevent clipping (Design issue)
+        protection = self._get_highlight_protection(lab)
+        l_channel_f = l_channel.astype(np.float32)
+        l_clahe_f = l_clahe.astype(np.float32)
+        l_final_f = l_clahe_f * protection + l_channel_f * (1.0 - protection)
+        lab_u[:, :, 0] = np.clip(l_final_f, 0, 255).astype(np.uint8)
+
+        # Blend back using the soft skin mask to avoid hard edge seams (Bug 3 & 4)
         equalized = cv2.cvtColor(lab_u, cv2.COLOR_LAB2BGR)
         return blend_masked(img_bgr, equalized, skin_mask * s)
 
@@ -123,6 +143,8 @@ class SkinProcessor:
 
         # Darken mask
         darken_mask = regions.jawline_contour if regions.jawline_contour is not None else np.zeros_like(regions.skin)
+        # Ensure mutually exclusive masks to prevent negative/asymmetric shifts on overlap (Bug 5)
+        darken_mask = np.clip(darken_mask - brighten_mask, 0.0, 1.0)
 
         # Brighten highlights: +5% max
         l_val = lab[:, :, 0]
@@ -151,6 +173,14 @@ class SkinProcessor:
         face_median_a = np.median(lab[:, :, 1][face_skin_indices])
         face_median_b = np.median(lab[:, :, 2][face_skin_indices])
 
+        # Estimate face size from landmarks unconditionally to make k_blur adaptive (Bug 7 & 8)
+        coords = [(int(lm.x * w_img), int(lm.y * h_img)) for lm in face_landmarks.landmark]
+        if not coords:
+            return img_bgr
+        xs, ys = zip(*coords)
+        face_w = max(xs) - min(xs)
+        face_h = max(ys) - min(ys)
+
         # ---- 1. Segment Neck/Chest skin ----
         if neck_mask is not None and neck_mask.max() > 0.01:
             neck_mask_final = neck_mask.copy()
@@ -158,12 +188,6 @@ class SkinProcessor:
             # MediaPipe FaceMesh lower chin landmark index
             chin_y = int(face_landmarks.landmark[self.MEDIAPIPE_CHIN_IDX].y * h_img)
             chin_x = int(face_landmarks.landmark[self.MEDIAPIPE_CHIN_IDX].x * w_img)
-
-            # Estimate face size from landmarks
-            coords = [(int(lm.x * w_img), int(lm.y * h_img)) for lm in face_landmarks.landmark]
-            xs, ys = zip(*coords)
-            face_w = max(xs) - min(xs)
-            face_h = max(ys) - min(ys)
 
             # Neck region box directly below the chin
             neck_y1 = chin_y
@@ -199,8 +223,8 @@ class SkinProcessor:
             return img_bgr
 
         # Soft feather
-        # | 1 forces odd kernel size
-        k_blur = 15
+        # Adaptive blur kernel size proportional to face width
+        k_blur = max(15, int(face_w * 0.03)) | 1
         neck_mask_final = cv2.GaussianBlur(neck_mask_final, (k_blur, k_blur), 0)
 
         # ---- 2. Face-to-Neck Harmonization ----
@@ -224,7 +248,53 @@ class SkinProcessor:
         lab[:, :, 1] = np.clip(lab[:, :, 1] + neck_mask_final * a_diff, 0, 255)
         lab[:, :, 2] = np.clip(lab[:, :, 2] + neck_mask_final * b_diff, 0, 255)
 
+        # Document: OpenCV LAB channels for float32 are encoded in [0, 255]
         return cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+
+    def apply_specular_bloom(self, img_bgr, skin_mask, strength=40, tone="rosy"):
+        """Generates a soft pink/lavender or neutral halo around skin highlights where L > 220."""
+        if strength <= 0 or skin_mask is None:
+            return img_bgr
+
+        # Convert to LAB to find highlights in L channel
+        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        l_chan = lab[:, :, 0]
+
+        # Soft threshold ramp from L=220 to L=240 inside skin region (Issue 7)
+        highlight_mask = np.clip((l_chan - 220.0) / 20.0, 0.0, 1.0) * (skin_mask > 0.1).astype(np.float32)
+
+        if highlight_mask.max() < 0.01:
+            return img_bgr
+
+        # Calculate kernel size proportional to image size (approx 0.5% for dilation, 3% for blur)
+        h, w = img_bgr.shape[:2]
+        min_dim = min(h, w)
+        dilate_k = max(3, int(min_dim * 0.005)) | 1
+        blur_k = max(15, int(min_dim * 0.03)) | 1
+
+        # Dilate and Gaussian blur the highlight mask to create the soft halo/glow bleed
+        kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_k, dilate_k))
+        highlight_mask = cv2.dilate(highlight_mask, kernel_dilate)
+        highlight_mask = cv2.GaussianBlur(highlight_mask, (blur_k, blur_k), 0)
+        highlight_mask = np.clip(highlight_mask, 0.0, 1.0)
+
+        # Apply color shift to highlights
+        lab_shifted = lab.copy()
+        lab_shifted[:, :, 0] = np.clip(lab_shifted[:, :, 0] + 15.0, 0, 255)
+        if tone == "neutral":
+            # neutral white highlight glow
+            pass
+        else: # rosy
+            # rosy-lavender color shift (LAB L+15, a+10, b-5)
+            lab_shifted[:, :, 1] = np.clip(lab_shifted[:, :, 1] + 10.0, 0, 255)
+            lab_shifted[:, :, 2] = np.clip(lab_shifted[:, :, 2] - 5.0, 0, 255)
+
+        # Convert shifted image back to BGR
+        img_shifted_bgr = cv2.cvtColor(np.clip(lab_shifted, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+
+        # Blend using the blurred highlight mask * strength
+        s = strength / 100.0
+        return blend_masked(img_bgr, img_shifted_bgr, highlight_mask * s)
 
     @staticmethod
     def _get_highlight_protection(lab):

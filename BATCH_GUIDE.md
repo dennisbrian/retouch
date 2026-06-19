@@ -6,10 +6,10 @@ This guide describes how to run the batch processing CLI tool for the **Pro Max 
 
 ## 1. Quick Start
 
-To run a batch of images with the new **`cosplay_3d`** recipe (which preserves natural 3D highlights and shading):
+To run a batch of images with the stronger **`cyber_doll`** recipe for the pink/cyan high-impact cosplay look:
 
 ```bash
-python3 cli.py "/path/to/input_folder" -o "/path/to/output_folder" --preset cosplay_3d
+python3 cli.py "/path/to/input_folder" -o "/path/to/output_folder" --recipe cyber_doll --impact 70 --global-only
 ```
 
 By default, this will:
@@ -24,7 +24,9 @@ By default, this will:
 
 | Option | Shorthand | Default | Description |
 | :--- | :--- | :--- | :--- |
-| **`--preset`** / `--recipe` | | `natural` | Choose the retouch recipe: `cosplay_3d`, `cosplay_no_eq`, `cosplay`, `natural`, `portrait`, `beauty`, `anime`, `xiaohongshu`, `dreamy`, `magazine`. |
+| **`--preset`** / `--recipe` | | `natural` | Choose the retouch recipe: `cyber_doll`, `scifi_cosplay`, `cosplay_3d`, `cosplay_no_eq`, `cosplay`, `natural`, `portrait`, `beauty`, `anime`, `xiaohongshu`, `dreamy`, `magazine`. |
+| **`--impact`** | | Recipe default | Global punch/finish intensity from `0` to `100`. Useful when a result feels too weak after normal retouching. |
+| **`--global-only`** | | *Off* | Skip face detection and local skin/eye/lip edits. Use this for fast color, contrast, glow, and impact retouching, or when MediaPipe cannot run in the current environment. |
 | **`-o`** / `--output` | | *None* | Directory where output images and comparisons are saved. |
 | **`-f`** / `--force` | | *Off* | Overwrite existing files in the output directory. |
 | **`-r`** / `--recursive` | | *Off* | Recursively search subdirectories for images. |
@@ -41,12 +43,14 @@ By default, this will:
 ## 3. Practical Examples
 
 ### Example A: Fast Preview Batch
-If you have a large folder of images (e.g. 500+ photos) and want a fast preview of the `cosplay_3d` look, downscale them to `2048px` and use maximum CPU threads:
+If you have a large folder of images (e.g. 500+ photos) and want a fast preview of the stronger reference-style look, downscale them to `2048px` and use maximum CPU threads:
 
 ```bash
 python3 cli.py "/Users/dennis/Pictures/Photoshoot" \
   -o "/Users/dennis/Desktop/Processed" \
-  --preset cosplay_3d \
+  --recipe cyber_doll \
+  --impact 70 \
+  --global-only \
   --max-dim 2048 \
   --workers 8
 ```

@@ -202,6 +202,11 @@ class FaceParser:
                         if k in bisenet_masks:
                             r = feather // 2 if k in ['left_eye', 'right_eye', 'lips', 'left_eyebrow', 'right_eyebrow'] else feather
                             bisenet_masks[k] = feather_mask(bisenet_masks[k], radius=r)
+
+                    # Clean skin mask after feathering to avoid bleeding skin whitening/equalization into lips/eyes/eyebrows
+                    for excl_k in ['left_eyebrow', 'right_eyebrow', 'left_eye', 'right_eye', 'lips', 'mouth_interior']:
+                        if excl_k in bisenet_masks and bisenet_masks[excl_k] is not None:
+                            bisenet_masks['skin'] = np.clip(bisenet_masks['skin'] - bisenet_masks[excl_k], 0.0, 1.0)
             except Exception:
                 pass
 

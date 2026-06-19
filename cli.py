@@ -15,15 +15,25 @@ from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from retouch import RetouchEngine, retouch as _retouch_fn
+from retouch.grading import PRESETS, ColorGrader
+from retouch.recipes import RECIPES
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp", ".raf", ".cr2", ".cr3", ".nef", ".nrw", ".arw", ".dng", ".orf", ".rw2", ".pef", ".srw", ".x3f"}
 
-RECIPE_CHOICES = ["natural", "portrait", "beauty", "cosplay", "cosplay_3d", "cosplay_no_eq", "anime", "xiaohongshu", "dreamy", "magazine", "korean_beauty", "idol", "wedding", "anime_cosplay"]
-PRESET_CHOICES = ["natural", "magazine", "beauty", "cosplay", "cosplay_3d", "cosplay_no_eq", "heavy", "dreamy", "anime", "portrait", "xiaohongshu", "korean_beauty", "idol", "wedding", "anime_cosplay"]
+RAW_EXTENSIONS = {".raf", ".cr2", ".cr3", ".nef", ".nrw", ".arw", ".dng", ".orf", ".rw2", ".pef", ".srw", ".x3f"}
+
+RECIPE_CHOICES = ["natural", "portrait", "beauty", "cosplay", "cosplay_3d", "cosplay_no_eq", "anime", "xiaohongshu", "dreamy", "magazine", "korean_beauty", "idol", "wedding", "anime_cosplay", "scifi_cosplay", "cyber_doll", "fantasy_goddess", "pink_dream", "blue_dream", "xhs_ultrasoft", "meitu_clone", "fuji_porcelain"]
+PRESET_CHOICES = ["natural", "magazine", "beauty", "cosplay", "cosplay_3d", "cosplay_no_eq", "heavy", "dreamy", "anime", "portrait", "xiaohongshu", "korean_beauty", "idol", "wedding", "anime_cosplay", "scifi_cosplay", "cyber_doll", "fantasy_goddess", "pink_dream", "blue_dream", "xhs_ultrasoft", "meitu_clone", "fuji_porcelain"]
 
 
 def _imread_exif(path):
-    """Read image, applying EXIF orientation so pixel data is upright."""
+    """Read image (supports RAW via rawpy), applying EXIF orientation."""
+    path = Path(path)
+    if path.suffix.lower() in RAW_EXTENSIONS:
+        import rawpy
+        with rawpy.imread(str(path)) as raw:
+            rgb = raw.postprocess(use_camera_wb=True, no_auto_bright=True, bright=1.5)
+        return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
     from PIL import ImageOps
     pil_img = Image.open(path)
     pil_img = ImageOps.exif_transpose(pil_img) or pil_img
@@ -76,8 +86,16 @@ def _init_worker():
     _worker_engine = RetouchEngine()
 
 
+def _load_color_ref(params):
+    """Load reference image for colour transfer if specified."""
+    ref_path = params.pop("color_ref_path", None)
+    if ref_path:
+        ref_img = _imread_exif(Path(ref_path))
+        params["color_ref"] = ref_img
+
+
 def _process_single(args):
-    img_path, output_dir, params, fmt, quality, force, copy_exif_flag, max_dim = args
+    img_path, output_dir, params, fmt, quality, force, copy_exif_flag, max_dim, compare_flag, global_only = args
     try:
         stem = img_path.stem
         out_path = (output_dir / f"{stem}.{fmt}") if output_dir else \
@@ -88,25 +106,29 @@ def _process_single(args):
 
         img_bgr = _imread_exif(img_path)
         orig_shape = img_bgr.shape[:2]
+        original_full = img_bgr.copy() if compare_flag else None
         img_bgr, _scale = _resize_for_processing(img_bgr, max_dim)
 
-        global _worker_engine
-        if _worker_engine is not None:
-            engine = _worker_engine
-            should_close = False
+        if global_only:
+            result = _apply_global_finish(img_bgr, params)
         else:
-            engine = RetouchEngine()
-            should_close = True
+            global _worker_engine
+            if _worker_engine is not None:
+                engine = _worker_engine
+                should_close = False
+            else:
+                engine = RetouchEngine()
+                should_close = True
 
-        try:
-            result = engine.process(img_bgr, **params)
-        finally:
-            if should_close:
-                engine.close()
+            try:
+                _load_color_ref(params)
+                result = engine.process(img_bgr, **params)
+            finally:
+                if should_close:
+                    engine.close()
 
         # Upscale back to original dimensions
         if _scale < 1.0:
-            h2, w2 = result.shape[:2]
             result = cv2.resize(result, (orig_shape[1], orig_shape[0]),
                                 interpolation=cv2.INTER_LINEAR)
 
@@ -121,19 +143,19 @@ def _process_single(args):
         if copy_exif_flag:
             _copy_exif(img_path, out_path)
 
+        if compare_flag:
+            compare_path = (output_dir / f"{stem}_compare.{fmt}") if output_dir else \
+                img_path.parent / f"{stem}_compare.{fmt}"
+            _make_comparison(original_full, result, compare_path, fmt, quality)
+
         return (img_path.name, "done")
     except Exception as e:
         return (img_path.name, f"failed: {e}")
 
 
-def _make_comparison(img_path, output_dir, fmt, quality, params):
-    """Read the already-retouched output and stitch a side-by-side comparison."""
+def _make_comparison(original, retouched, compare_path, fmt, quality):
+    """Stitch a side-by-side comparison of original and retouched images."""
     try:
-        retouched_path = output_dir / f"{img_path.stem}.{fmt}"
-        compare_path = output_dir / f"{img_path.stem}_compare.{fmt}"
-
-        original = _imread_exif(img_path)
-        retouched = cv2.imread(str(retouched_path))
         if original is None or retouched is None:
             return
 
@@ -153,6 +175,50 @@ def _make_comparison(img_path, output_dir, fmt, quality, params):
         cv2.imwrite(str(compare_path), combined, write_params)
     except Exception:
         pass
+
+
+def _recipe_defaults(recipe_name):
+    recipe = RECIPES.get(recipe_name or "natural", RECIPES["natural"])
+    return {
+        "color_grade": recipe["color_harmony"].get("preset"),
+        "grade_intensity": recipe["color_harmony"].get("amount", 0.0),
+        "impact": int(recipe.get("finish", {}).get("impact", 0.0) * 100),
+    }
+
+
+def _apply_global_finish(img_bgr, params):
+    """Fast retouch path that avoids face detection and local facial edits."""
+    result = img_bgr.copy()
+    defaults = _recipe_defaults(params.get("recipe"))
+    grader = ColorGrader()
+
+    if params.get("contrast"):
+        result = RetouchEngine._adjust_contrast(result, params["contrast"])
+
+    color_grade = params.get("color_grade", defaults["color_grade"])
+    grade_intensity = params.get(
+        "grade_intensity",
+        1.0 if params.get("color_grade") else defaults["grade_intensity"],
+    )
+
+    settings = PRESETS.get(color_grade, PRESETS["natural"]).copy() if color_grade else {}
+    if params.get("chromatic_aberration") is not None:
+        settings["chromatic_aberration"] = params["chromatic_aberration"]
+    if params.get("halation") is not None:
+        settings["halation"] = params["halation"]
+    if params.get("grain") is not None:
+        settings["grain"] = params["grain"]
+    if params.get("lut") is not None:
+        settings["lut"] = params["lut"]
+
+    if settings:
+        result = grader.grade(result, settings, grade_intensity)
+
+    impact = params.get("impact", defaults["impact"])
+    if impact > 0:
+        result = grader.add_impact_finish(result, impact)
+
+    return result
 
 
 def find_images(input_path, recursive):
@@ -176,6 +242,7 @@ def build_params(args):
 
     scalars = {
         "smooth": args.smooth,
+        "nose_smooth": args.nose_smooth,
         "whiten": args.whiten,
         "eye_enhance": args.eye_enhance,
         "dark_circles": args.dark_circles,
@@ -184,6 +251,11 @@ def build_params(args):
         "teeth_whiten": args.teeth_whiten,
         "equalize": args.equalize,
         "contrast": args.contrast,
+        "brightness": args.brightness,
+        "highlights": args.highlights,
+        "shadows": args.shadows,
+        "whites": args.whites,
+        "blacks": args.blacks,
         "grade_intensity": args.grade_intensity,
         "texture_opacity": args.texture_opacity,
         "mid_reduction": args.mid_reduction,
@@ -191,6 +263,8 @@ def build_params(args):
         "dodge_burn": args.dodge_burn,
         "slimming": args.slimming,
         "blush": args.blush,
+        "impact": args.impact,
+        "specular_bloom": args.specular_bloom,
     }
     params.update({k: v for k, v in scalars.items() if v is not None})
 
@@ -198,10 +272,28 @@ def build_params(args):
         params["color_grade"] = args.color_grade
     if args.lip_tint:
         params["lip_tint"] = args.lip_tint
+    if getattr(args, "whiten_tone", None):
+        params["whiten_tone"] = args.whiten_tone
+    if getattr(args, "specular_bloom_tone", None):
+        params["specular_bloom_tone"] = args.specular_bloom_tone
     if getattr(args, "lip_finish", None):
         params["lip_finish"] = args.lip_finish
     if getattr(args, "auto_exposure", False):
         params["auto_exposure"] = True
+
+    if getattr(args, "chromatic_aberration", None) is not None:
+        params["chromatic_aberration"] = args.chromatic_aberration
+    if getattr(args, "grain", None) is not None:
+        params["grain"] = args.grain
+    if getattr(args, "lut", None) is not None:
+        params["lut"] = args.lut
+    if getattr(args, "halation", None) is not None:
+        params["halation"] = {"threshold": 210, "radius": 21, "intensity": args.halation}
+
+    if args.color_ref:
+        params["color_ref_path"] = args.color_ref
+    if args.color_ref_strength is not None:
+        params["color_transfer_intensity"] = args.color_ref_strength
 
     return params
 
@@ -226,6 +318,8 @@ def main():
                         help="Preview without processing")
     parser.add_argument("--auto-exposure", action="store_true",
                         help="Automatically normalize overexposed/underexposed photos")
+    parser.add_argument("--global-only", action="store_true",
+                        help="Skip face detection and apply only global color/impact retouch")
 
     # Processing controls
     parser.add_argument("--recipe", choices=RECIPE_CHOICES,
@@ -234,6 +328,8 @@ def main():
                         help="Quick parameter preset (legacy alias)")
     parser.add_argument("--smooth", type=int, default=None,
                         help="Skin smoothing 0-100")
+    parser.add_argument("--nose-smooth", type=int, default=None,
+                        help="Nose-specific smoothing 0-100 (independent from face)")
     parser.add_argument("--whiten", type=int, default=None,
                         help="Skin whitening 0-100")
     parser.add_argument("--eye-enhance", type=int, default=None,
@@ -252,7 +348,21 @@ def main():
                         help="Skin tone equalization 0-100")
     parser.add_argument("--contrast", type=int, default=None,
                         help="Contrast -50 to 50")
-    parser.add_argument("--color-grade", type=str, default=None,
+    parser.add_argument("--brightness", type=int, default=None,
+                        help="Brightness -50 to 50")
+    parser.add_argument("--highlights", type=int, default=None,
+                        help="Highlights -100 to 100")
+    parser.add_argument("--shadows", type=int, default=None,
+                        help="Shadows -100 to 100")
+    parser.add_argument("--whites", type=int, default=None,
+                        help="Whites -100 to 100")
+    parser.add_argument("--blacks", type=int, default=None,
+                        help="Blacks -100 to 100")
+    parser.add_argument("--color-ref", type=str, default=None,
+                        help="Reference image path for colour transfer")
+    parser.add_argument("--color-ref-strength", type=float, default=1.0,
+                        help="Colour transfer blend intensity 0-1")
+    parser.add_argument("--color-grade", choices=["natural", "magazine", "beauty", "cosplay", "dreamy", "anime", "scifi", "cyber_doll", "film", "cyberpunk", "golden_hour", "bw_noir", "fantasy", "pink_dream", "blue_dream", "xhs_ultrasoft", "meitu_clone"], default=None,
                         help="Colour grading preset")
     parser.add_argument("--grade-intensity", type=float, default=None,
                         help="Grading blend intensity 0-1")
@@ -264,8 +374,24 @@ def main():
                         help="Face slimming 0-100")
     parser.add_argument("--blush", type=int, default=None,
                         help="Blush intensity 0-100")
+    parser.add_argument("--impact", type=int, default=None,
+                        help="Global punch/finish intensity 0-100")
     parser.add_argument("--lip-finish", choices=["matte", "gloss", "velvet"], default=None,
                         help="Lip finish type")
+    parser.add_argument("--chromatic-aberration", type=float, default=None,
+                        help="Radial chromatic aberration displacement in pixels")
+    parser.add_argument("--grain", type=float, default=None,
+                        help="Luminance-weighted film grain strength (0.0 - 0.2)")
+    parser.add_argument("--lut", choices=["kodak", "fuji"], default=None,
+                        help="3D LUT color emulation preset")
+    parser.add_argument("--halation", type=float, default=None,
+                        help="Film halation bleed intensity (0.0 - 1.0)")
+    parser.add_argument("--specular-bloom", type=int, default=None,
+                        help="Specular pink/lavender highlight bloom 0-100")
+    parser.add_argument("--whiten-tone", choices=["rosy", "porcelain", "neutral"], default=None,
+                        help="Skin whitening undertone preset")
+    parser.add_argument("--specular-bloom-tone", choices=["rosy", "neutral"], default=None,
+                        help="Specular bloom color tone")
 
     # Advanced
     parser.add_argument("--texture-opacity", type=float, default=None,
@@ -316,7 +442,7 @@ def main():
 
     if args.workers > 1 and len(files) > 1:
         pool_args = [
-            (f, output_dir, params, fmt, args.quality, args.force, not args.no_exif, args.max_dim)
+            (f, output_dir, params, fmt, args.quality, args.force, not args.no_exif, args.max_dim, args.compare, args.global_only)
             for f in files
         ]
         with ProcessPoolExecutor(
@@ -335,7 +461,7 @@ def main():
                     failed += 1
                     tqdm.write(f"  ✖ {name}: {status}")
     else:
-        engine = RetouchEngine()
+        engine = None if args.global_only else RetouchEngine()
         try:
             for f in tqdm(files, desc="Retouching", unit="img"):
                 img_bgr = _imread_exif(f)
@@ -352,9 +478,14 @@ def main():
                     continue
 
                 orig_shape = img_bgr.shape[:2]
+                original_full = img_bgr.copy() if args.compare else None
                 img_bgr, _scale = _resize_for_processing(img_bgr, args.max_dim)
 
-                result = engine.process(img_bgr, **params)
+                if args.global_only:
+                    result = _apply_global_finish(img_bgr, params)
+                else:
+                    _load_color_ref(params)
+                    result = engine.process(img_bgr, **params)
 
                 if _scale < 1.0:
                     result = cv2.resize(result, (orig_shape[1], orig_shape[0]),
@@ -368,14 +499,15 @@ def main():
                 cv2.imwrite(str(out_path), result, write_params)
                 if not args.no_exif:
                     _copy_exif(f, out_path)
+
+                if args.compare:
+                    compare_path = (output_dir / f"{f.stem}_compare.{fmt}") if output_dir else \
+                        f.parent / f"{f.stem}_compare.{fmt}"
+                    _make_comparison(original_full, result, compare_path, fmt, args.quality)
                 done += 1
         finally:
-            engine.close()
-
-    if args.compare:
-        tqdm.write("Generating comparisons...")
-        for f in tqdm(files, desc="Comparison", unit="img"):
-            _make_comparison(f, output_dir or f.parent, fmt, args.quality, params)
+            if engine is not None:
+                engine.close()
 
     elapsed = time.time() - t0
     print(f"\nDone — {done} processed, {skipped} skipped, {failed} failed"

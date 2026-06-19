@@ -70,7 +70,9 @@ class LipEnhancer:
 
         # ---- Colour tint (optional) ----
         if tint is not None:
-            result = self._apply_tint(result, lip_mask, tint, s * 0.25)
+            # For cosplay, apply a much stronger tint wash (0.85 opacity max) to achieve vibrant anime look
+            tint_opacity = s * 0.85 if (isinstance(tint, str) and tint == "cosplay") else s * 0.25
+            result = self._apply_tint(result, lip_mask, tint, tint_opacity)
 
         # ---- Re-apply texture with dynamic opacity based on finish ----
         if finish == "velvet":
@@ -113,7 +115,8 @@ class LipEnhancer:
         specular_mask = cv2.GaussianBlur(specular_mask, (3, 3), 0)
 
         # Boost highlights using the safe soft-clipping lift
-        l_boost = (255.0 - l_chan) * specular_mask * 0.25 * strength
+        # Increased lift factor from 0.25 to 0.45 to make specular highlights pop strongly
+        l_boost = (255.0 - l_chan) * specular_mask * 0.45 * strength
         lab[:, :, 0] = np.clip(l_chan + l_boost, 0, 255)
 
         return cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)

@@ -158,4 +158,103 @@ RECIPES = {
         "bloom": {"opacity": 0.06},
         "texture": {"opacity": 0.90},
     },
+    "scifi_cosplay": {
+        # Tuned to match the vibrant, ultra-smooth, high-contrast, porcelain-skin reference.
+        # Features strong highlights, clean shadows, strong eye catchlights, and ethereal bloom.
+        "frequency": {"smooth": 0.85, "mid_reduction": 0.75}, # high smoothing + strong blemish reduction for doll skin
+        "skin": {"equalize": 0.20, "rosy": 0.45},  # increase whitening & equalization for bright even skin
+        "eyes": {"whites": 0.35, "iris": 0.55, "catchlight": 0.50},  # punchy colored contacts and catchlights
+        "lips": {"tint": "cosplay", "gloss": 0.45},  # vibrant lips with strong glossy highlights
+        "hair": {"shine": 0.40},              # structural shine on wig
+        "dodge_burn": {"amount": 0.35},       # stronger facial sculpting / nose highlight
+        "color_harmony": {"preset": "scifi", "amount": 0.70},  # custom sci-fi cyan/pink split toning & S-curve
+        "bloom": {"opacity": 0.15},           # strong ethereal neon bloom/glow
+        "texture": {"opacity": 0.25},         # heavily reduce texture to 25% for a clean porcelain digital look
+    },
+    "fantasy_goddess": {
+        # Ethereal low-contrast fantasy look with soft-focus glow, atmospheric fog, and sparkles.
+        "frequency": {"smooth": 0.75, "mid_reduction": 0.60},
+        "skin": {"equalize": 0.20, "rosy": 0.35},
+        "eyes": {"whites": 0.30, "iris": 0.40, "catchlight": 0.35},
+        "lips": {"tint": "pink", "gloss": 0.30},
+        "hair": {"shine": 0.30},
+        "dodge_burn": {"amount": 0.15},
+        "color_harmony": {"preset": "fantasy", "amount": 0.80},
+        "bloom": {"opacity": 0.45},
+        "texture": {"opacity": 0.25},
+        "contrast": -25,
+    },
+    "cyber_doll": {
+        # Stronger cosplay reference look: porcelain skin, bright eyes, pink/cyan lighting, and punchy output.
+        "frequency": {"smooth": 0.82, "mid_reduction": 0.70},
+        "skin": {"equalize": 0.12, "rosy": 0.42},
+        "eyes": {"whites": 0.36, "iris": 0.60, "catchlight": 0.55},
+        "lips": {"tint": "cosplay", "gloss": 0.48},
+        "hair": {"shine": 0.55},
+        "dodge_burn": {"amount": 0.34},
+        "color_harmony": {"preset": "cyber_doll", "amount": 0.90},
+        "bloom": {"opacity": 0.16},
+        "texture": {"opacity": 0.30},
+        "finish": {"impact": 0.70},
+    },
+    "pink_dream": {
+        "frequency": {"smooth": 0.25, "mid_reduction": 0.35},
+        "skin": {"equalize": 0.30, "rosy": 0.45},
+        "eyes": {"whites": 0.35, "iris": 0.50, "catchlight": 0.45},
+        "lips": {"tint": None, "gloss": 0.00},
+        "hair": {"shine": 0.50},
+        "dodge_burn": {"amount": 0.30},
+        "color_harmony": {"preset": "pink_dream", "amount": 0.85},
+        "bloom": {"opacity": 0.05},
+        "texture": {"opacity": 0.90},
+        "finish": {"impact": 0.60},
+    },
+    "blue_dream": {
+        "frequency": {"smooth": 0.75, "mid_reduction": 0.60},
+        "skin": {"equalize": 0.20, "rosy": 0.30},
+        "eyes": {"whites": 0.30, "iris": 0.40, "catchlight": 0.35},
+        "lips": {"tint": "cosplay", "gloss": 0.30},
+        "hair": {"shine": 0.35},
+        "dodge_burn": {"amount": 0.20},
+        "color_harmony": {"preset": "blue_dream", "amount": 0.80},
+        "bloom": {"opacity": 0.20},
+        "texture": {"opacity": 0.35},
+        "finish": {"impact": 0.50},
+    },
+    "xhs_ultrasoft": {
+        "frequency": {"smooth": 0.85, "mid_reduction": 0.75},
+        "skin": {"equalize": 0.30, "rosy": 0.50},
+        "eyes": {"whites": 0.25, "iris": 0.30, "catchlight": 0.25},
+        "lips": {"tint": "rose", "gloss": 0.25},
+        "hair": {"shine": 0.25},
+        "dodge_burn": {"amount": 0.15},
+        "color_harmony": {"preset": "xhs_ultrasoft", "amount": 0.90},
+        "bloom": {"opacity": 0.15},
+        "texture": {"opacity": 0.20},
+        "finish": {"impact": 0.40},
+    },
+    "meitu_clone": {
+        "frequency": {"smooth": 0.70, "mid_reduction": 0.60},
+        "skin": {"equalize": 0.25, "rosy": 0.45},
+        "eyes": {"whites": 0.38, "iris": 0.60, "catchlight": 0.50},
+        "lips": {"tint": None, "gloss": 0.00},
+        "hair": {"shine": 0.50},
+        "dodge_burn": {"amount": 0.35},
+        "color_harmony": {"preset": "meitu_clone", "amount": 0.90},
+        "bloom": {"opacity": 0.16},
+        "texture": {"opacity": 0.45},
+        "finish": {"impact": 0.70},
+    },
+    "fuji_porcelain": {
+        "frequency": {"smooth": 0.72, "mid_reduction": 0.75},
+        "skin": {"equalize": 0.50, "rosy": 0.70},
+        "eyes": {"whites": 0.30, "iris": 0.35, "catchlight": 0.30},
+        "lips": {"tint": "pink", "gloss": 0.20},
+        "hair": {"shine": 0.15},
+        "dodge_burn": {"amount": 0.55},
+        "color_harmony": {"preset": "natural", "amount": 0.50},
+        "bloom": {"opacity": 0.05},
+        "texture": {"opacity": 0.35},
+        "specular_bloom": 50,
+    },
 }

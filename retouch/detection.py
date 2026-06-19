@@ -78,10 +78,14 @@ class FaceDetector:
 
         vision = mp.tasks.vision
         base = mp.tasks.BaseOptions
+        base_options = base(
+            model_asset_path=_FACE_LANDMARKER_MODEL,
+            delegate=base.Delegate.CPU,
+        )
 
         self._landmarker = vision.FaceLandmarker.create_from_options(
             vision.FaceLandmarkerOptions(
-                base_options=base(model_asset_path=_FACE_LANDMARKER_MODEL),
+                base_options=base_options,
                 num_faces=max_faces,
                 min_face_detection_confidence=min_confidence,
                 min_face_presence_confidence=min_confidence,
@@ -93,9 +97,13 @@ class FaceDetector:
         # ---- Selfie segmenter ----
         self._segmenter = None
         if os.path.exists(_SELFIE_SEGMENTER_MODEL):
+            segmenter_base_options = base(
+                model_asset_path=_SELFIE_SEGMENTER_MODEL,
+                delegate=base.Delegate.CPU,
+            )
             self._segmenter = vision.ImageSegmenter.create_from_options(
                 vision.ImageSegmenterOptions(
-                    base_options=base(model_asset_path=_SELFIE_SEGMENTER_MODEL),
+                    base_options=segmenter_base_options,
                     output_category_mask=False,
                     output_confidence_masks=True,
                 )

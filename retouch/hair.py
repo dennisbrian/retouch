@@ -73,45 +73,61 @@ class HairEnhancer:
         lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
         l_chan = lab[:, :, 0]
 
-        hair_pixels = l_chan[h_mask > 0.3]
-        if len(hair_pixels) == 0:
-            return img_bgr
-
-        mean_val = hair_pixels.mean()
-        std_val = max(hair_pixels.std(), 1.0)
-        
-        # Specular highlight threshold (must be reasonably bright)
-        thresh = max(mean_val + std_val * 0.8, 120.0)
-
-        # Hair highlight mask
-        specular_mask = ((l_chan > thresh) & (h_mask > 0.3)).astype(np.float32)
-        if specular_mask.sum() == 0:
-            return img_bgr
-
-        # ---- 3. Smooth & Dilate highlights ----
-        scale = w_face / 500.0
-        k_dilate = max(int(3 * scale), 1)
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_dilate, k_dilate))
-        specular_mask = cv2.dilate(specular_mask, kernel, iterations=1)
-
-        k_feather = max(int(7 * scale), 3) | 1
-        specular_mask = cv2.GaussianBlur(specular_mask, (k_feather, k_feather), 0)
-
-        # ---- 4. Specular & local contrast boost ----
+        # Apply global hair region lifts (exposure, midtones, highlights) to the L channel
         s = strength / 100.0
+        l_lifted = l_chan.copy()
+        
+        # Exposure lift: +0.08 * s
+        l_lifted += (255.0 - l_lifted) * 0.08 * s
+        
+        # Midtones lift: +0.12 * s
+        l_lifted += (255.0 - l_lifted) * 0.12 * s
+        
+        # Highlights lift: +0.10 * s on pixels where L > 128
+        high_idx = l_chan > 128
+        l_lifted[high_idx] += (255.0 - l_lifted[high_idx]) * 0.10 * s
+        
+        # Blend the globally lifted L channel back using h_mask
+        l_chan_new = l_chan * (1.0 - h_mask) + l_lifted * h_mask
+        l_chan_new = np.clip(l_chan_new, 0, 255)
 
-        # Specular boost: +10% lift to highlights
-        l_boosted = np.clip(l_chan * (1.0 + 0.10 * s), 0, 255)
+        # ---- 3. Detect bright hair/wig highlights for specular shine ----
+        hair_pixels = l_chan_new[h_mask > 0.3]
+        if len(hair_pixels) > 0:
+            mean_val = hair_pixels.mean()
+            std_val = max(hair_pixels.std(), 1.0)
+            
+            # Specular highlight threshold (must be reasonably bright)
+            thresh = max(mean_val + std_val * 0.8, 120.0)
 
-        # Local contrast (silky hair strand separation) via unsharp mask
-        k_sharp = max(int(5 * scale), 3) | 1
-        l_blurred = cv2.GaussianBlur(l_chan, (k_sharp, k_sharp), 0)
-        l_sharp = np.clip(l_chan + (l_chan - l_blurred) * 0.5 * s, 0, 255)
+            # Hair highlight mask
+            specular_mask = ((l_chan_new > thresh) & (h_mask > 0.3)).astype(np.float32)
+            if specular_mask.sum() > 0:
+                scale = w_face / 500.0
+                k_dilate = max(int(3 * scale), 1)
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_dilate, k_dilate))
+                specular_mask = cv2.dilate(specular_mask, kernel, iterations=1)
 
-        # Recombine: 40% specular boost + 60% local contrast sharpening
-        l_enhanced = l_boosted * 0.4 + l_sharp * 0.6
+                k_feather = max(int(7 * scale), 3) | 1
+                specular_mask = cv2.GaussianBlur(specular_mask, (k_feather, k_feather), 0)
 
-        # Blend back using the specular mask
-        lab[:, :, 0] = l_chan * (1.0 - specular_mask) + l_enhanced * specular_mask
+                # ---- 4. Specular & local contrast boost ----
+                # Specular boost: +10% lift to highlights
+                l_boosted = np.clip(l_chan_new * (1.0 + 0.10 * s), 0, 255)
+
+                # Local contrast via unsharp mask
+                k_sharp = max(int(5 * scale), 3) | 1
+                l_blurred = cv2.GaussianBlur(l_chan_new, (k_sharp, k_sharp), 0)
+                l_sharp = np.clip(l_chan_new + (l_chan_new - l_blurred) * 0.5 * s, 0, 255)
+
+                # Recombine: 40% specular boost + 60% local contrast sharpening
+                l_enhanced = l_boosted * 0.4 + l_sharp * 0.6
+
+                # Blend back using the specular mask
+                l_chan_new = l_chan_new * (1.0 - specular_mask) + l_enhanced * specular_mask
+                l_chan_new = np.clip(l_chan_new, 0, 255)
+
+        lab[:, :, 0] = l_chan_new
 
         return cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
+

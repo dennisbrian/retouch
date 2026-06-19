@@ -15,13 +15,13 @@ The workspace contains two co-existing versions of the engine:
 2.  **Production Engine (`/Applications/htdocs/retouch/retouch/`)**:
     *   A professional-grade, modular pipeline.
     *   Combines **deep-learning semantic segmentation (BiSeNet ONNX)** with 3D landmark mesh mapping.
-    *   Features a 15-stage processing pipeline including blemish inpainting, face-to-neck matching, specular lip gloss, hair shine, Dodge & Burn, and LAB-space color grading.
+    *   Features a **17-stage processing pipeline** split into local face retouching and global image styling. Handles advanced features like blemish inpainting, face-to-neck matching, specular lip gloss finishes, hair shine lifts, Dodge & Burn, parametric tonal adjustments, reference-based color transfer, and stacked color grading.
 
 ---
 
 ## 2. Global Pipeline Architecture
 
-The workflow is divided into: **Face Detection** (bounding boxes), **Crop Landmark Fitting** (3D mesh coordinates), **Semantic Region Parsing** (pixel-precise masks), **Frequency Separation** (texture isolation), **Targeted Enhancement** (component-level edits), and **Global Finishing** (grading, vignettes, and bloom).
+The workflow is divided into: **Face Detection** (bounding boxes), **Crop Landmark Fitting** (3D mesh coordinates), **Semantic Region Parsing** (pixel-precise masks), **Frequency Separation** (texture isolation), **Targeted Enhancement** (component-level edits), and **Global Finishing** (brightness, curves, reference color transfer, grading, vignettes, and bloom).
 
 ![Pipeline Architecture](pipeline_architecture.png)
 
@@ -39,87 +39,78 @@ graph TD
     %% Nodes
     input["Input Image (BGR)"]:::inputOutput
     
-    subgraph Stage1["Stage 1: Face Detection & Landmarking"]
-        detector["RetinaFace detector<br/><small>Bounding boxes · BGR→RGB fix · TF_USE_LEGACY_KERAS env var</small>"]:::detection
-        crop["Crop + 30% pad<br/><small>FaceLandmarker on crop</small>"]:::detection
-        remap["Remap to full coords"]:::detection
-        fallback["Full image fallback<br/><small>FaceLandmarker on full frame</small>"]:::detection
-        facedata["FaceData collection<br/><small>478 landmarks · IED · bbox · score</small>"]:::detection
+    subgraph Stage1_2["Stage 1-2: Detection, Slimming & Segmenter"]
+        detector["Face detector<br/><small>RetinaFace / MediaPipe Fallback<br/>Explicit CPU delegation</small>"]:::detection
+        slimming["Liquid face reshaping<br/><small>Slimming & chin lifts</small>"]:::detection
+        person_mask["Selfie segmenter<br/><small>Person vs. background mask</small>"]:::segmentation
     end
 
-    subgraph Stage2["Stage 2: Semantic Segmentation"]
-        selfie["Selfie segmenter<br/><small>Person vs. background mask</small>"]:::segmentation
-        bisenet["BiSeNet ONNX<br/><small>Pixel-precise semantic masks</small>"]:::segmentation
-        faceregions["FaceRegions masks<br/><small>Skin · brows · eyes · lips · neck · hair · IED feathering</small>"]:::segmentation
+    subgraph Stage2_Parse["Stage 2: Semantic Segmentation"]
+        bisenet["BiSeNet ONNX<br/><small>Pixel-precise parsing</small>"]:::segmentation
+        faceregions["FaceRegions masks<br/><small>Skin cleaning post-feathering<br/>Left/right under-eye masks</small>"]:::segmentation
     end
 
-    subgraph Stage3["Stage 3: Bilateral Smoothing"]
-        freqsep["3-level frequency separation<br/><small>Coarse · medium · fine bands · Gaussian radius scaled to face width</small>"]:::frequency
-        smoothing["Bilateral skin smoothing<br/><small>Preserves pores · peach fuzz · avoids plastic look</small>"]:::frequency
+    subgraph Stage3_4["Stages 3-4: Frequency Separation & Smoothing"]
+        freqsep["3-level frequency separation<br/><small>Gaussian blur scaled to face width</small>"]:::frequency
+        smoothing["Frequency smoothing<br/><small>Smooth & mid_reduction controls<br/>Independent nose_smooth</small>"]:::frequency
     end
 
-    subgraph Stage4_9["Stages 4-9: Component-Level Enhancements"]
+    subgraph Stage5_12["Stages 5-12: Component-Level Enhancements"]
+        skin["Skin foundation<br/><small>Equalization & whitening<br/>Shadow protection (L > 80)</small>"]:::enhancement
         blemish["Blemish removal<br/><small>Fast marching inpaint</small>"]:::enhancement
-        eye["Eye enhancement<br/><small>Sclera · iris · catchlight</small>"]:::enhancement
-        teeth["Teeth whitening<br/><small>LAB/HSV yellow removal</small>"]:::enhancement
-        lip["Lip gloss<br/><small>Saturation + specular</small>"]:::enhancement
-        hair["Hair shine<br/><small>Structural highlight boost</small>"]:::enhancement
-        sculpt["Sculpting<br/><small>Under-eye · Dodge & Burn</small>"]:::enhancement
-        neck["Neck matching & skin equalisation"]:::enhancement
+        undereye["Under-eye repair<br/><small>Dark circles correction</small>"]:::enhancement
+        neck["Neck matching<br/><small>Face-to-neck skin blending</small>"]:::enhancement
+        eyes_teeth["Eyes & Teeth<br/><small>Sclera, iris, catchlight, teeth whitening</small>"]:::enhancement
+        lips["Lips<br/><small>Matte/gloss/velvet finishes<br/>Cosplay tint wash & 0.45 highlight lift</small>"]:::enhancement
+        blush["Blush Wash<br/><small>Rosy cheeks & nose tip<br/>Under-eye eyeshadow blend</small>"]:::enhancement
+        hair["Hair Shine<br/><small>Exposure, midtone, highlight lifts<br/>Local specular/contrast boosts</small>"]:::enhancement
+        dodge_burn["Dodge & Burn<br/><small>Micro sculpting</small>"]:::enhancement
     end
 
-    subgraph Stage10_12["Stages 10-12: Global Finishing"]
-        grading["Global colour grading<br/><small>LAB S-curves · split toning shadows/highlights · clarity</small>"]:::finishing
-        vignette["Vignette & micro-contrast"]:::finishing
-    end
-
-    subgraph Stage13["Stage 13: Glow Layer"]
-        bloom["Smart highlight bloom<br/><small>Screen blur · L > 180 restricted · dreamy glow</small>"]:::finishing
+    subgraph Stage13_17["Stages 13-17: Global Tonal & Grading Finishing"]
+        tonal["Global adjustments<br/><small>Contrast, brightness (gamma)<br/>Tonal curves (highlights, shadows, whites, blacks)</small>"]:::finishing
+        color_transfer["Color Transfer<br/><small>Reference-based tone mapping</small>"]:::finishing
+        grading["Color Grading<br/><small>Split-toning, HSL, presets/stacking<br/>White costume pearl/lavender lift</small>"]:::finishing
+        sharpening["Selective final sharpening<br/><small>Unsharp masking over face/hair/eyebrow edges</small>"]:::finishing
+        impact["Global high-impact finish<br/><small>Luminance curves, saturation, clarity, glow</small>"]:::finishing
     end
 
     output["Output Image (BGR)"]:::inputOutput
 
     %% Model definitions
     subgraph Models["Model Assets"]
-        m1["face_landmarker.task<br/><small>MediaPipe</small>"]:::model
+        m1["face_landmarker.task<br/><small>MediaPipe CPU Delegate</small>"]:::model
         m2["resnet18.onnx (BiSeNet)<br/><small>CoreML → CPU fallback</small>"]:::model
-        m3["selfie_segmenter.tflite<br/><small>TFLite</small>"]:::model
+        m3["selfie_segmenter.tflite<br/><small>TFLite CPU Delegate</small>"]:::model
     end
 
     %% Connections
     input --> detector
-    detector -->|primary| crop
-    detector -->|fallback| fallback
-    crop --> remap
-    remap --> facedata
-    fallback --> facedata
-    
-    facedata --> selfie
-    facedata --> bisenet
-    selfie --> faceregions
+    input --> person_mask
+    detector --> slimming
+    slimming --> bisenet
+    person_mask --> bisenet
     bisenet --> faceregions
     
     faceregions --> freqsep
     freqsep --> smoothing
     
-    smoothing --> blemish
-    smoothing --> eye
-    smoothing --> teeth
-    smoothing --> lip
-    smoothing --> hair
-    smoothing --> sculpt
+    smoothing --> skin
+    skin --> blemish
+    blemish --> undereye
+    undereye --> neck
+    neck --> eyes_teeth
+    eyes_teeth --> lips
+    lips --> blush
+    blush --> hair
+    hair --> dodge_burn
     
-    blemish --> neck
-    eye --> neck
-    teeth --> neck
-    lip --> neck
-    hair --> neck
-    sculpt --> neck
-    
-    neck --> grading
-    grading --> vignette
-    vignette --> bloom
-    bloom --> output
+    dodge_burn --> tonal
+    tonal --> color_transfer
+    color_transfer --> grading
+    grading --> sharpening
+    sharpening --> impact
+    impact --> output
 ```
 
 ---
@@ -130,38 +121,74 @@ graph TD
 *   **RetinaFace (Primary)**: Detects face bounding boxes.
     *   *Keras 3 Runtime Fix*: Sets `os.environ["TF_USE_LEGACY_KERAS"] = "1"` at initialization. This avoids silent execution crashes due to symbolic tensor serialization errors under Keras 3.x / TensorFlow 2.16+.
 *   **Crop-based Fitting**: Crops face regions with 30% padding and runs `FaceLandmarker` on the crop. Landmarks are remapped back to full-image coordinates. This makes landmark fitting highly robust on side profiles and distant subjects.
-*   **MediaPipe Landmarker (Fallback)**: If RetinaFace fails or is unavailable, the system runs landmarker on the full image.
+*   **MediaPipe Landmarker (Fallback)**: If RetinaFace fails or is unavailable, the system runs the landmarker on the full image.
+*   **Explicit CPU Delegation**: To guarantee cross-platform execution stability and avoid silent execution hangs/crashes, the underlying MediaPipe Landmarker and Image Segmenter pipelines are initialized with explicit CPU delegate configuration (`base.Delegate.CPU`).
 
 ### 3.2. Face Reshaping / Slimming (`retouch/geometry.py`)
 *   **FaceReshaper**: Applies photographer-grade local translation warping (liquid warping) to jawline landmarks 234 & 454 (inward shift of 2%–5%), cheeks 117 & 346 (inward shift of 1%–3%), and chin 152 (upward shift of 1%–2%).
 *   **Parallel Execution Grid**: Accumulates coordinate displacements for all faces first, executing a single `cv2.remap` for zero-overhead performance.
 
 ### 3.3. Makeup Engine (`retouch/makeup.py` & `retouch/lips.py`)
-*   **Blush Engine**: Generates heavily feathered radial masks around cheek landmarks 117 & 346, applying a rosy flush by nudging the LAB `a` channel positively.
-*   **Lipstick Finishes**: Supports `matte` (pure color tint preserving lip textures), `gloss` (adds specular gloss reflection highlights), and `velvet` (bilateral smoothing on lip textures and reduced opacity texture overlay).
+*   **Blush Engine (`retouch/makeup.py`)**: 
+    *   Generates heavily feathered radial masks around cheek landmarks 117 & 346, applying a rosy flush by nudging the LAB `a` channel positively.
+    *   **Nose tip blush**: Supports a cute circular nose tip wash centered at landmark 4 (nose tip).
+    *   **Under-eye blush**: Integrates an anime-style eyeshadow blend utilizing feathered left and right under-eye masks.
+    *   **Color contamination exclusion**: Automatically subtracts the lip mask from the blush mask to prevent blush shifts from modifying lip colors.
+    *   **Vibrant scaling**: Increased maximum shift factor from `12.0` to `16.0` for vivid, clean cosplay looks.
+*   **Lip Tint & Specular Upgrades (`retouch/lips.py`)**:
+    *   Supports `matte` (pure color tint preserving lip textures), `gloss` (adds specular gloss reflection highlights), and `velvet` (bilateral smoothing on lip textures and reduced opacity texture overlay).
+    *   **Cosplay tint wash**: Applies a strong, anime-accurate tint wash at up to 85% opacity (instead of the standard 25% max) for the cosplay recipe.
+    *   **Highlight Pop**: Increased highlight lift factor from 0.25 to 0.45, making specular highlights on lips pop prominently.
 
 ### 3.4. Face Parsing & Region Masking (`retouch/parsing.py`)
 *   **BiSeNet ResNet18 ONNX**: Performs pixel-precise semantic segmentation of face parts. Output categories (skin, eyebrows, eyes, mouth interior, lips, neck, hair) are converted to float32 masks.
 *   **Adaptive Feathering**: Feathers mask edges dynamically based on the **Inter-Eye Distance (IED)** to guarantee seamless blending during skin adjustments.
+*   **Mask Cleaning Post-Feathering**: Cleans the skin mask after feathering by subtracting the eyebrows, eyes, lips, and mouth interior masks. This prevents skin whitening/equalization filters from bleeding into facial features.
 *   **Landmark Fallback**: If ONNX inference is bypassed, it generates polygon-based region masks using specific MediaPipe landmarks.
 
 ### 3.5. Frequency Separation & Smoothing (`retouch/frequency.py` & `retouch/skin.py`)
 *   **3-Level Separation**: Splits the image into coarse (color/tonal flow), medium (minor skin structures), and fine (pore details/hair strands) frequency bands using Gaussian blur radius scaled to the face width.
-*   **Bilateral Filtering**: Smooths low/medium bands to level out skin blotchiness while conserving high-frequency details (pores, peach fuzz), keeping the texture natural and preventing a "plastic" look.
+*   **Bilateral Filtering & Mid-Frequency Reduction**: Smooths low/medium bands to level out skin blotchiness while conserving high-frequency details. Performs bilateral filtering directly on the `float32` representation to prevent precision loss and preserve micro-contrast. Restricts the hybrid Gaussian blend factor to `smooth_strength * 0.25` (instead of `1.25`) to ensure bilateral filtering remains dominant and avoids washing out fine textures. Introduces the `mid_reduction` parameter to target minor skin structures and blemish anomalies without creating a plastic look.
+*   **Independent Nose Smoothing**: Supports a dedicated `nose_smooth` override to allow separate control over the nose bridge texture smoothing versus the rest of the face.
 
 ### 3.6. Component-Level Enhancers
 *   **Blemish Removal (`retouch/blemish.py`)**: Identifies high-frequency blemishes on the skin mask and applies fast marching inpainting.
 *   **Eyes (`retouch/eyes.py`)**: Whitens the sclera (using LAB luminance boosts) and sharpens/saturates the iris. Boosts catchlights and reflections by up to 25%.
 *   **Teeth (`retouch/teeth.py`)**: Segments the mouth interior and whitens/desaturates yellow-hued pixels in the LAB/HSV color space.
-*   **Lips (`retouch/lips.py`)**: Saturation/vibrance boost combined with specular highlight isolation to simulate lip gloss.
-*   **Hair & Outfit (`retouch/hair.py`)**: Segments hair and outfit boundaries using the selfie segmenter and applies structural highlight boosts.
+*   **Hair & Outfit (`retouch/hair.py`)**: 
+    *   Segments hair and outfit boundaries using the selfie segmenter.
+    *   **Luminance lifts**: Applies region-wide exposure (+8%), midtone (+12%), and highlights (+10% on pixels > 128) lifts to the LAB L-channel.
+    *   **Specular and contrast boosts**: Follows with local specular highlight Morped dilation and local contrast boosts (via unsharp masking) to achieve silky hair strand separation.
 *   **Under-Eye & Sculpting (`retouch/undereye.py` & `retouch/skin.py`)**: Lightens dark circles and applies subtle Dodge & Burn contours to the nose bridge, forehead center, cheeks, and jawline.
+*   **Skin Foundation & Equalization (`retouch/skin.py`)**:
+    *   **Adaptive Rosy Foundation (`whiten`)**: Performs soft-clipping skin whitening and rosy/porcelain color shifts, utilizing a clean pre-modification reference copy (`lab_original`) for target medians. Implements shadow protection during foundation/whitening shifts (applied only to regions where $L > 80$) to prevent bruised or purple shadows in darker areas.
+    *   **Skin Tone Equalization (`equalize`)**: Equalizes skin tone using local average color harmonization and CLAHE luminance leveling. Features highlight protection (`_get_highlight_protection`) to avoid clipping highlight areas, and uses soft-feathered skin mask blending to eliminate edge seams.
+    *   **Face-to-Neck Harmonization (`harmonize_neck`)**: Matches neck/chest skin tone to the face to prevent white face / dark neck discrepancies. Features crash protection against empty face landmarks, and applies an adaptive Gaussian blur kernel to the neck mask based on face size.
 
-### 3.7. Color Grading & Finishing (`retouch/grading.py`)
+### 3.7. Color Grading & Global Finishing (`retouch/grading.py` & `retouch/engine.py`)
 *   **Luminance Curves**: S-curves applied to the LAB L-channel to shape contrast.
-*   **Split Toning**: Colorizes shadows and highlights independently using target LAB $a/b$ vectors.
-*   **Smart Glow (Soft Bloom)**: Screens a heavily blurred version of the image back onto itself, restricted strictly to high-brightness areas ($L > 180$) to simulate dreamy lighting without washing out shadows.
-*   **Vignetting & Clarity**: Radial falloff vignettes and unsharp mask-based micro-contrast.
+*   **Parametric Tonal Adjustments**: Adds direct overrides for highlights, shadows, whites, and blacks via parametric LUT curve adjustments.
+*   **Global Brightness**: Leverages gamma-curve lookup tables to correct exposure.
+*   **Reference-Based Color Transfer**: Matches the color tone and palette of an uploaded reference image using local distribution adjustments.
+*   **Split Toning & Presets**: Colorizes shadows and highlights independently. Introduces 3-way split toning (shadows, midtones, highlights) in LAB space, and supports preset weights stacking (`grade_stack`).
+*   **Smart Glow (Orton & Bloom)**: 
+    *   *Smart Bloom*: Screens a blurred highlights layer ($L > 225$) back onto itself, restricted to a spatial mask to protect hair and eyes.
+    *   *Orton Glow*: Blends a soft Pegtop-blended layer for dreamy fantasy aesthetics.
+*   **Highlight Costume Lift**: Lifts high-luminance ($L > 170$) low-saturation white colors (excluding skin, hair, and lips) with soft feathering in cosplay-oriented presets (e.g. `pink_dream`, `meitu_clone`) to recover costume details.
+*   **Vignetting, Clarity & Lens Effects**: Micro-contrast (clarity) via guided filtering, radial vignetting, film grain, LUT emulations, halation, and radial chromatic aberration.
+*   **Selective Final Sharpening**: Photoshop-style selective unsharp masking over a soft mask (targeting eyes, eyebrows, and hair edges) with custom radius, amount, and threshold settings to finalize high-frequency details.
+*   **Global High-Impact Finish**: A dedicated finishing pass (`add_impact_finish`) that uses luminance curves, saturation boosts, micro-contrast clarity, and pink-tinted glow to add global punch.
+
+### 3.8. Interactive GUI Dashboard (`gui.py`)
+*   **Gradio Web GUI**: Provides a modern, browser-based user interface to interactively process images.
+*   **Features**:
+    *   Interactive dropdown for selecting pre-configured recipes (which automatically populate sliders).
+    *   Side-by-side comparison mode showing original vs retouched outputs.
+    *   Manual overrides for all local parameters (smoothing, nose smoothing, whitening, lips/eyes enhancements, Dodge & Burn).
+    *   Accordion folders for detailed skin tone adjustments, tone curves, and lens effects.
+    *   Reference Image uploader for live color transfer.
+    *   Export resolution overrides (Original, 4K, 2K, 1080p, 720p) and format encoders (JPEG with quality slider, PNG, WebP).
+    *   Fast Preview mode running downscaled inference for low latency interaction.
 
 ---
 
@@ -171,6 +198,7 @@ ONNX models are located in `models/` and initialized with hardware acceleration 
 *   **resnet18.onnx** (BiSeNet): Prefers `CoreMLExecutionProvider` on Apple Silicon macOS, falling back automatically to `CPUExecutionProvider` on other architectures.
 *   **face_landmarker.task**: MediaPipe task binary.
 *   **selfie_segmenter.tflite**: TensorFlow Lite segmenter.
+*   *Note*: Underlying MediaPipe elements delegate execution to `CPU` specifically to ensure cross-platform runtime reliability.
 
 ---
 
@@ -200,4 +228,3 @@ Following a batch analysis of 699 frames, the face detection subsystem was optim
 
 ### Remaining Edge Cases (~4%)
 The remaining ~4% of undetected frames (e.g., `DSCF6900`) represent extreme profiles, high-contrast shadow occlusion, or tiny faces in distant environment shots where MediaPipe landmarks cannot be mathematically resolved.
-
