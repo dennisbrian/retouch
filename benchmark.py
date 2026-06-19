@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import tracemalloc
+import numpy as np
 import cv2
 
 # Add current directory to path
@@ -58,6 +59,14 @@ def run_benchmark(image_path, target_megapixels):
     print(f"Peak Memory usage: {peak_mem / (1024 * 1024):.1f} MB")
 
 
+def warmup():
+    """Warm up JIT/CoreML/GPU to avoid cold-start bias in timed runs."""
+    engine = RetouchEngine()
+    tiny = np.full((100, 100, 3), 128, dtype=np.uint8)
+    engine.process(tiny, recipe="natural")
+    engine.close()
+
+
 def main():
     # Use one of the sample images in the repository
     sample_img = "test_output/DSCF4550.jpg"
@@ -67,6 +76,9 @@ def main():
         jpgs = glob.glob("test_output/*.jpg")
         if jpgs:
             sample_img = jpgs[0]
+
+    # Warm up before timing to avoid cold-start artifacts
+    warmup()
 
     # Benchmark at 12 MP, 24 MP, and 50 MP (or lower if testing fast)
     run_benchmark(sample_img, 12.0)
