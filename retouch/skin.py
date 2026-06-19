@@ -128,9 +128,9 @@ class SkinProcessor:
         l_final_f = l_clahe_f * protection + l_channel_f * (1.0 - protection)
         lab_u[:, :, 0] = np.clip(l_final_f, 0, 255).astype(np.uint8)
 
-        # Blend back using the soft skin mask to avoid hard edge seams (Bug 3 & 4)
+        # Blend back using the soft skin mask scaled by strength for consistency with AB harmonization
         equalized = cv2.cvtColor(lab_u, cv2.COLOR_LAB2BGR)
-        return blend_masked(img_bgr, equalized, skin_mask)
+        return blend_masked(img_bgr, equalized, skin_mask * s)
 
     def dodge_burn(self, img_bgr, regions, strength=40):
         """Subtle 3-5% sculpting (brighten nose bridge, forehead center, cheeks;
@@ -143,15 +143,18 @@ class SkinProcessor:
         lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
         protection = self._get_highlight_protection(lab)
 
-        # Brighten masks
-        brighten_mask = np.zeros_like(regions.skin)
+        # Brighten masks — force float32 to avoid uint8 truncation with float additions
+        brighten_mask = np.zeros(regions.skin.shape, dtype=np.float32)
         for mask in (regions.nose_bridge, regions.forehead_center,
                      regions.cheek_highlights_l, regions.cheek_highlights_r):
             if mask is not None:
                 brighten_mask = np.clip(brighten_mask + mask, 0, 1)
 
-        # Darken mask
-        darken_mask = regions.jawline_contour if regions.jawline_contour is not None else np.zeros_like(regions.skin)
+        # Darken mask — force float32 consistency
+        if regions.jawline_contour is not None:
+            darken_mask = regions.jawline_contour.astype(np.float32, copy=False)
+        else:
+            darken_mask = np.zeros(regions.skin.shape, dtype=np.float32)
         # Ensure mutually exclusive masks to prevent negative/asymmetric shifts on overlap (Bug 5)
         darken_mask = np.clip(darken_mask - brighten_mask, 0.0, 1.0)
 
