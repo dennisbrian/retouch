@@ -1,0 +1,10 @@
+{
+  "description": "Warm, soft, Instagram-style natural look",
+  "curves": {
+    "L": [[0, 0], [40, 35], [128, 132], [200, 210], [255, 255]]
+  },
+  "warmth": 0.04,
+  "saturation_boost": 0.05,
+  "shadow_lift": 5,
+  "vignette": 0.0
+}

@@ -35,6 +35,8 @@ def imread_exif(path):
 
     pil_img = Image.open(path)
     pil_img = ImageOps.exif_transpose(pil_img) or pil_img
+    if pil_img.mode != "RGB":
+        pil_img = pil_img.convert("RGB")
     return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
 

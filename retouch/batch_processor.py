@@ -374,6 +374,13 @@ class BatchProcessor:
 
             except Exception as e:
                 logger.error("Failed to process %s: %s", file_path, e)
+                from .utils import log_crash
+                log_crash(e, {
+                    "stage": "process_file",
+                    "file_path": str(file_path),
+                    "style_name_or_recipe": str(style_name_or_recipe),
+                    "export_fmt": export_fmt
+                })
                 status_msg += f"Error processing {file_path.name}: {e}\n"
 
         # 5. Generate Contact Sheet
@@ -388,6 +395,8 @@ class BatchProcessor:
                 status_msg += "Generated contact sheet: contact_sheet.jpg\n"
             except Exception as e:
                 logger.error("Failed to generate contact sheet: %s", e)
+                from .utils import log_crash
+                log_crash(e, {"stage": "generate_contact_sheet"})
                 status_msg += f"Failed to generate contact sheet: {e}\n"
 
         # 6. Package into ZIP
@@ -407,6 +416,8 @@ class BatchProcessor:
                 status_msg += "Packaged files into ZIP: batch_export.zip\n"
             except Exception as e:
                 logger.error("Failed to package ZIP: %s", e)
+                from .utils import log_crash
+                log_crash(e, {"stage": "package_zip"})
                 status_msg += f"Failed to package ZIP: {e}\n"
 
         if progress_callback:

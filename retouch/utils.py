@@ -326,3 +326,39 @@ def apply_global_bloom(
     s_factor = strength / 100.0
     result = img_f * (1.0 - s_factor) + screen * s_factor
     return np.clip(result, 0, 255).astype(np.uint8)
+
+
+def log_crash(exc: Exception, context_info: dict = None) -> str:
+    """Log details of a crash (traceback, timestamp, context params) to ~/.cache/retouch/crash.log."""
+    import os
+    import sys
+    import traceback
+    from datetime import datetime
+    from pathlib import Path
+
+    try:
+        cache_dir = Path.home() / ".cache" / "retouch"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        crash_log_file = cache_dir / "crash.log"
+
+        timestamp = datetime.now().isoformat()
+        tb_str = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+
+        entry = []
+        entry.append(f"=== CRASH RECORDED AT {timestamp} ===")
+        if context_info:
+            entry.append("Context Metadata:")
+            for k, v in context_info.items():
+                entry.append(f"  {k}: {v}")
+        entry.append("Traceback:")
+        entry.append(tb_str)
+        entry.append("=====================================\n\n")
+
+        with open(crash_log_file, "a", encoding="utf-8") as f:
+            f.write("\n".join(entry))
+
+        return str(crash_log_file)
+    except Exception as log_err:
+        sys.stderr.write(f"Failed to write crash log: {log_err}\n")
+        return ""
+

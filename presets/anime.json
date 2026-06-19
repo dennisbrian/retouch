@@ -1,0 +1,12 @@
+{
+  "description": "Vibrant, high-contrast, anime-inspired colors",
+  "curves": {
+    "L": [[0, 0], [40, 30], [128, 135], [210, 230], [255, 255]]
+  },
+  "warmth": 0.01,
+  "saturation_boost": 0.22,
+  "shadow_lift": 0,
+  "vignette": 0.06,
+  "glow": 0.02,
+  "clarity": 0.15
+}

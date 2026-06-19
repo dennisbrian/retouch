@@ -91,6 +91,18 @@ class TestResolveRecipe:
             rec = resolve_recipe("natural")
             assert "frequency" in rec or "skin" in rec
 
+    def test_recursive_extends_merges(self):
+        # 'soft' extends 'anime_cinematic_soft', which extends 'anime_cinematic_v1', which extends 'natural'
+        rec = resolve_recipe("soft")
+        # Should have inherited from natural
+        assert "color_harmony" in rec
+        assert rec["color_harmony"]["preset"] == "natural"
+        # Should have inherited from anime_cinematic_v1
+        assert rec["frequency"]["smooth"] == 0.32
+        # Should have the override from anime_cinematic_soft
+        assert rec["bloom"]["opacity"] == 0.22
+
+
 
 class TestBuildContext:
     def test_returns_processing_context(self):

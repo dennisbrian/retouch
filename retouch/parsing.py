@@ -312,82 +312,117 @@ class FaceParser:
                 )
 
         # 2. Run inference in sub-batches of size 4 (preserves memory)
-        _MAX_BATCH_SIZE = 4
-        logits_list = []
-        num_valid = len(inputs)
+        try:
+            _MAX_BATCH_SIZE = 4
+            logits_list = []
+            num_valid = len(inputs)
 
-        for i in range(0, num_valid, _MAX_BATCH_SIZE):
-            sub_inputs = inputs[i:i+_MAX_BATCH_SIZE]
-            sub_batch = np.stack(sub_inputs, axis=0) # shape (B, 3, 512, 512)
+            for i in range(0, num_valid, _MAX_BATCH_SIZE):
+                sub_inputs = inputs[i:i+_MAX_BATCH_SIZE]
+                sub_batch = np.stack(sub_inputs, axis=0) # shape (B, 3, 512, 512)
 
-            outs = self._sess.run(None, {'input': sub_batch})
-            logits = outs[0] # shape (B, 19, 512, 512)
-            for b in range(len(sub_inputs)):
-                logits_list.append(logits[b])
+                try:
+                    outs = self._sess.run(None, {'input': sub_batch})
+                    logits = outs[0] # shape (B, 19, 512, 512)
+                    for b in range(len(sub_inputs)):
+                        logits_list.append(logits[b])
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "Batch inference failed (likely due to CoreML dynamic batch limits): %s. "
+                        "Falling back to sequential inference (batch size 1).", e
+                    )
+                    for b_in in sub_inputs:
+                        single_batch = b_in[np.newaxis, :, :, :]
+                        outs_single = self._sess.run(None, {'input': single_batch})
+                        logits_list.append(outs_single[0][0])
 
-        # 3. Postprocess and paste back in order (preserves input index positioning)
-        for idx_valid, idx_face in enumerate(valid_indices):
-            cx1, cy1, cx2, cy2, cw, ch, h_img, w_img = crop_coords[idx_valid]
-            logits = logits_list[idx_valid]
+            # 3. Postprocess and paste back in order (preserves input index positioning)
+            for idx_valid, idx_face in enumerate(valid_indices):
+                cx1, cy1, cx2, cy2, cw, ch, h_img, w_img = crop_coords[idx_valid]
+                logits = logits_list[idx_valid]
 
-            pred_crop = np.argmax(logits, axis=0).astype(np.uint8)
-            pred_crop_resized = cv2.resize(pred_crop, (cw, ch), interpolation=cv2.INTER_NEAREST)
+                pred_crop = np.argmax(logits, axis=0).astype(np.uint8)
+                pred_crop_resized = cv2.resize(pred_crop, (cw, ch), interpolation=cv2.INTER_NEAREST)
 
-            full_label_map = np.zeros((h_img, w_img), dtype=np.uint8)
-            full_label_map[cy1:cy2, cx1:cx2] = pred_crop_resized
+                full_label_map = np.zeros((h_img, w_img), dtype=np.uint8)
+                full_label_map[cy1:cy2, cx1:cx2] = pred_crop_resized
 
-            # Generate masks
-            bisenet_masks = {}
-            bisenet_masks['skin'] = (full_label_map == 1).astype(np.float32)
-            bisenet_masks['left_eyebrow'] = (full_label_map == 2).astype(np.float32)
-            bisenet_masks['right_eyebrow'] = (full_label_map == 3).astype(np.float32)
-            bisenet_masks['left_eye'] = (full_label_map == 4).astype(np.float32)
-            bisenet_masks['right_eye'] = (full_label_map == 5).astype(np.float32)
-            bisenet_masks['mouth_interior'] = (full_label_map == 11).astype(np.float32)
-            bisenet_masks['lips'] = ((full_label_map == 12) | (full_label_map == 13)).astype(np.float32)
-            bisenet_masks['neck'] = (full_label_map == 14).astype(np.float32)
-            bisenet_masks['hair'] = (full_label_map == 17).astype(np.float32)
+                # Generate masks
+                bisenet_masks = {}
+                bisenet_masks['skin'] = (full_label_map == 1).astype(np.float32)
+                bisenet_masks['left_eyebrow'] = (full_label_map == 2).astype(np.float32)
+                bisenet_masks['right_eyebrow'] = (full_label_map == 3).astype(np.float32)
+                bisenet_masks['left_eye'] = (full_label_map == 4).astype(np.float32)
+                bisenet_masks['right_eye'] = (full_label_map == 5).astype(np.float32)
+                bisenet_masks['mouth_interior'] = (full_label_map == 11).astype(np.float32)
+                bisenet_masks['lips'] = ((full_label_map == 12) | (full_label_map == 13)).astype(np.float32)
+                bisenet_masks['neck'] = (full_label_map == 14).astype(np.float32)
+                bisenet_masks['hair'] = (full_label_map == 17).astype(np.float32)
 
-            bisenet_masks['face_oval'] = (
-                (full_label_map == 1) | (full_label_map == 2) | (full_label_map == 3) |
-                (full_label_map == 4) | (full_label_map == 5) | (full_label_map == 10) |
-                (full_label_map == 11) | (full_label_map == 12) | (full_label_map == 13)
-            ).astype(np.float32)
+                bisenet_masks['face_oval'] = (
+                    (full_label_map == 1) | (full_label_map == 2) | (full_label_map == 3) |
+                    (full_label_map == 4) | (full_label_map == 5) | (full_label_map == 10) |
+                    (full_label_map == 11) | (full_label_map == 12) | (full_label_map == 13)
+                ).astype(np.float32)
 
-            # Feathering
-            feather = max(int(ieds[idx_face] * 0.08), 3)
-            for k in ['skin', 'left_eyebrow', 'right_eyebrow', 'left_eye', 'right_eye', 'lips', 'face_oval', 'neck', 'hair']:
-                if k in bisenet_masks:
-                    r = feather // 2 if k in ['left_eye', 'right_eye', 'lips', 'left_eyebrow', 'right_eyebrow'] else feather
-                    bisenet_masks[k] = feather_mask(bisenet_masks[k], radius=r)
+                # Feathering
+                feather = max(int(ieds[idx_face] * 0.08), 3)
+                for k in ['skin', 'left_eyebrow', 'right_eyebrow', 'left_eye', 'right_eye', 'lips', 'face_oval', 'neck', 'hair']:
+                    if k in bisenet_masks:
+                        r = feather // 2 if k in ['left_eye', 'right_eye', 'lips', 'left_eyebrow', 'right_eyebrow'] else feather
+                        bisenet_masks[k] = feather_mask(bisenet_masks[k], radius=r)
 
-            # Clean skin
-            for excl_k in ['left_eyebrow', 'right_eyebrow', 'left_eye', 'right_eye', 'lips', 'mouth_interior']:
-                if excl_k in bisenet_masks and bisenet_masks[excl_k] is not None:
-                    bisenet_masks['skin'] = np.clip(bisenet_masks['skin'] - bisenet_masks[excl_k], 0.0, 1.0)
+                # Clean skin
+                for excl_k in ['left_eyebrow', 'right_eyebrow', 'left_eye', 'right_eye', 'lips', 'mouth_interior']:
+                    if excl_k in bisenet_masks and bisenet_masks[excl_k] is not None:
+                        bisenet_masks['skin'] = np.clip(bisenet_masks['skin'] - bisenet_masks[excl_k], 0.0, 1.0)
 
-            # Build FaceRegions
-            regions = FaceRegions()
-            regions.skin = bisenet_masks.get('skin')
-            regions.lips = bisenet_masks.get('lips')
-            regions.mouth_interior = bisenet_masks.get('mouth_interior')
-            regions.left_eye = bisenet_masks.get('left_eye')
-            regions.right_eye = bisenet_masks.get('right_eye')
-            regions.left_eyebrow = bisenet_masks.get('left_eyebrow')
-            regions.right_eyebrow = bisenet_masks.get('right_eyebrow')
-            regions.face_oval = bisenet_masks.get('face_oval')
-            regions.neck = bisenet_masks.get('neck')
-            regions.hair = bisenet_masks.get('hair')
+                # Build FaceRegions
+                regions = FaceRegions()
+                regions.skin = bisenet_masks.get('skin')
+                regions.lips = bisenet_masks.get('lips')
+                regions.mouth_interior = bisenet_masks.get('mouth_interior')
+                regions.left_eye = bisenet_masks.get('left_eye')
+                regions.right_eye = bisenet_masks.get('right_eye')
+                regions.left_eyebrow = bisenet_masks.get('left_eyebrow')
+                regions.right_eyebrow = bisenet_masks.get('right_eyebrow')
+                regions.face_oval = bisenet_masks.get('face_oval')
+                regions.neck = bisenet_masks.get('neck')
+                regions.hair = bisenet_masks.get('hair')
 
-            # Handle fallback if skin is empty
-            if regions.skin is None or regions.skin.max() < 0.01:
-                regions = self._landmark_fallback_only(
-                    landmarks_compat_list[idx_face], crop_list[idx_face], person_masks[idx_face], ieds[idx_face]
-                )
-            else:
-                self._add_landmark_subregions(regions, landmarks_compat_list[idx_face], h_img, w_img, ieds[idx_face], feather)
+                # Handle fallback if skin is empty
+                if regions.skin is None or regions.skin.max() < 0.01:
+                    regions = self._landmark_fallback_only(
+                        landmarks_compat_list[idx_face], crop_list[idx_face], person_masks[idx_face], ieds[idx_face]
+                    )
+                else:
+                    self._add_landmark_subregions(regions, landmarks_compat_list[idx_face], h_img, w_img, ieds[idx_face], feather)
 
-            results[idx_face] = regions
+                results[idx_face] = regions
+        except Exception as batch_err:
+            import logging
+            logging.getLogger(__name__).error(
+                "Critical failure in batch parsing pipeline: %s. Falling back to sequential single-face parse.",
+                batch_err
+            )
+            for i in range(num_faces):
+                try:
+                    results[i] = self.parse(
+                        landmarks_compat_list[i],
+                        crop_list[i],
+                        face_bbox_list[i],
+                        person_masks[i],
+                        ieds[i]
+                    )
+                except Exception as parse_err:
+                    logging.getLogger(__name__).error(
+                        "Sequential single-face fallback also failed for face %d: %s. Using landmark fallback.",
+                        i, parse_err
+                    )
+                    results[i] = self._landmark_fallback_only(
+                        landmarks_compat_list[i], crop_list[i], person_masks[i], ieds[i]
+                    )
 
         return results
 

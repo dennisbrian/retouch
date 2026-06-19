@@ -12,6 +12,7 @@ import gradio as gr
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from retouch import RetouchEngine
+from retouch.engine import resolve_recipe
 from retouch.io import imread_exif
 from retouch.recipes import RECIPES
 from retouch.style_library import list_styles, save_style_profile, learn_dataset_style
@@ -29,7 +30,7 @@ def get_engine():
 
 
 def recipe_defaults(recipe_name):
-    rec = RECIPES.get(recipe_name, RECIPES["natural"])
+    rec = resolve_recipe(recipe_name)
     return {
         "smooth": int(rec["frequency"]["smooth"] * 100),
         "mid_reduction": rec["frequency"].get("mid_reduction", 0.45),
@@ -38,26 +39,30 @@ def recipe_defaults(recipe_name):
         "nose_smooth": 0,
         "whiten": int(rec["skin"].get("rosy", rec["skin"].get("porcelain", 0)) * 100),
         "equalize": int(rec["skin"].get("equalize", 0) * 100),
-        "relight": int(rec["skin"].get("relight", 0.0) * 100),
-        "relight_azimuth": int(rec["skin"].get("relight_azimuth", 0.0)),
-        "relight_elevation": int(rec["skin"].get("relight_elevation", 30.0)),
+        "relight": int(rec.get("skin", {}).get("relight", rec.get("relight_strength", 0.0) / 100.0) * 100),
+        "relight_azimuth": int(rec.get("skin", {}).get("relight_azimuth", rec.get("light_azimuth", 0.0))),
+        "relight_elevation": int(rec.get("skin", {}).get("relight_elevation", rec.get("light_elevation", 30.0))),
         "eye_enhance": int(rec["eyes"].get("whites", rec["eyes"].get("iris", 0)) * 100),
         "lip_enhance": int(rec["lips"].get("gloss", 0) * 100),
         "lip_tint": rec["lips"].get("tint", "none"),
-        "blush": 25 if recipe_name in ("cosplay", "scifi_cosplay", "cyber_doll", "anime_cosplay", "anime", "xiaohongshu", "idol", "wedding") else 0,
+        "blush": 30 if recipe_name in ("anime_cinematic_v1", "anime_cinematic_soft", "anime_cinematic_action", "anime_cinematic_fantasy", "soft", "action", "fantasy")
+                 else (25 if recipe_name in ("cosplay", "scifi_cosplay", "cyber_doll", "anime_cosplay", "anime", "xiaohongshu", "idol", "wedding") else 0),
         "teeth_whiten": int(rec["eyes"].get("whites", 0) * 100),
         "hair_enhance": int(rec["hair"].get("shine", 0) * 100),
-        "dodge_burn": int(rec["dodge_burn"].get("amount", 0) * 100),
+        "dodge_burn": int(
+            (rec.get("dodge_burn", {}).get("amount", 0.0) if isinstance(rec.get("dodge_burn"), dict)
+             else rec.get("dodge_burn", 0.0) / 100.0) * 100
+        ),
         "specular_bloom": rec.get("specular_bloom", 0),
         "bloom": int(rec.get("bloom", {}).get("opacity", 0.0) * 100),
         "bloom_threshold": int(rec.get("bloom", {}).get("threshold", 210.0)),
         "bloom_softness": int(rec.get("bloom", {}).get("softness", 30.0)),
         "contrast": rec.get("contrast", 0),
-        "brightness": 0,
-        "highlights": 0,
-        "shadows": 0,
-        "whites": 0,
-        "blacks": 0,
+        "brightness": int(rec.get("brightness", 0.0)),
+        "highlights": int(rec.get("highlights", 0.0)),
+        "shadows": int(rec.get("shadows", 0.0)),
+        "whites": int(rec.get("whites", 0.0)),
+        "blacks": int(rec.get("blacks", 0.0)),
     }
 
 
@@ -338,6 +343,15 @@ def process_image(img_paths, recipe,
 
         except Exception as e:
             print(f"Failed to process {path_item}: {e}")
+            from retouch.utils import log_crash
+            crash_path = log_crash(e, {
+                "recipe": recipe,
+                "image_path": str(curr_path),
+                "show_compare": show_compare,
+                "fast": fast
+            })
+            if crash_path:
+                print(f"Crash details saved to: {crash_path}")
 
     if not exported_paths:
         return None, None, "Error: No images were successfully processed."

@@ -18,7 +18,11 @@ from .io import imread_exif, IMAGE_EXTENSIONS
 logger = logging.getLogger(__name__)
 
 # Default styles directory relative to the package root or workspace root
-DEFAULT_STYLE_DIR = Path(__file__).resolve().parent.parent / "styles"
+import sys
+if getattr(sys, "frozen", False):
+    DEFAULT_STYLE_DIR = Path.home() / ".cache" / "retouch" / "styles"
+else:
+    DEFAULT_STYLE_DIR = Path(__file__).resolve().parent.parent / "styles"
 
 
 def ensure_style_dir(directory: Path | str = DEFAULT_STYLE_DIR) -> Path:

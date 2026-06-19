@@ -1,0 +1,21 @@
+{
+  "description": "Neon cyberpunk: teal midtones, magenta/pink highlights, heavy bloom, and chromatic aberration",
+  "curves": {
+    "L": [[0, 0], [45, 30], [128, 135], [210, 230], [255, 255]]
+  },
+  "rgb_curves": {
+    "B": [[0, 0], [128, 145], [255, 255]],
+    "R": [[0, 0], [128, 120], [255, 255]]
+  },
+  "warmth": -0.05,
+  "saturation_boost": 0.25,
+  "shadow_lift": 0,
+  "vignette": 0.08,
+  "glow": 0.06,
+  "glow_tint": [220, 110, 180],
+  "chromatic_aberration": 4.0,
+  "split_tone": {
+    "shadows": [110, 122],
+    "highlights": [134, 112]
+  }
+}

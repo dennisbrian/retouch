@@ -1,0 +1,36 @@
+{
+  "description": "Meitu inspired vibrant pink cosplay finish",
+  "curves": {
+    "L": [[0, 20], [64, 85], [128, 143], [192, 198], [255, 245]]
+  },
+  "rgb_curves": {
+    "R": [[0, 5], [64, 70], [128, 138], [192, 200], [255, 255]],
+    "G": [[0, 0], [64, 62], [128, 126], [192, 190], [255, 250]],
+    "B": [[0, 10], [64, 58], [128, 118], [192, 185], [255, 240]]
+  },
+  "white_balance": {
+    "R": 1.08,
+    "G": 1.00,
+    "B": 0.92
+  },
+  "calibration": {
+    "red": {"hue": 12.0, "sat": 15.0},
+    "green": {"hue": -15.0, "sat": -5.0},
+    "blue": {"hue": 15.0, "sat": -10.0}
+  },
+  "hsl_adjustments": {
+    "hue": {"red": 5, "orange": -8, "yellow": -30, "cyan": -50, "blue": -25, "purple": 10, "magenta": 10},
+    "saturation": {"red": 8, "orange": -15, "yellow": -60, "green": -80, "cyan": -70, "blue": -50, "purple": 15, "magenta": 20},
+    "luminance": {"red": 10, "orange": 25, "yellow": 0, "cyan": 0, "blue": 15, "purple": 15, "magenta": 25}
+  },
+  "split_tone_three_way": {
+    "shadows": {"hue": 285.0, "sat": 8.0},
+    "midtones": {"hue": 325.0, "sat": 6.0},
+    "highlights": {"hue": 40.0, "sat": 6.0},
+    "balance": 20.0
+  },
+  "glow": 0.02,
+  "orton_glow": 0.01,
+  "vignette": 0.08,
+  "grain": 0.02
+}

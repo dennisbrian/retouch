@@ -1,0 +1,20 @@
+{
+  "description": "Xiaohongshu bright flat contrast style with clean skin highlights",
+  "curves": {
+    "L": [[0, 20], [45, 42], [128, 130], [210, 215], [255, 240]]
+  },
+  "hsl_adjustments": {
+    "hue": {"orange": -4, "yellow": -15},
+    "saturation": {"orange": -20, "yellow": -45},
+    "luminance": {"orange": 30, "yellow": 5}
+  },
+  "split_tone_three_way": {
+    "shadows": {"hue": 270.0, "sat": 8.0},
+    "midtones": {"hue": 340.0, "sat": 8.0},
+    "highlights": {"hue": 50.0, "sat": 6.0},
+    "balance": 0.0
+  },
+  "glow": 0.06,
+  "orton_glow": 0.06,
+  "grain": 0.02
+}

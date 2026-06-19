@@ -95,8 +95,9 @@ class TestReinhardTransferMasked:
         assert np.allclose(result, img, atol=2)
 
     def test_different_images(self):
-        src = np.full((20, 20, 3), 100, dtype=np.uint8)
-        ref = np.full((20, 20, 3), 200, dtype=np.uint8)
+        rng = np.random.default_rng(42)
+        src = np.clip(rng.normal(100, 15, (20, 20, 3)), 0, 255).astype(np.uint8)
+        ref = np.clip(rng.normal(180, 15, (20, 20, 3)), 0, 255).astype(np.uint8)
         mask = np.ones((20, 20), dtype=np.float32)
         result = reinhard_transfer_masked(src, ref, mask, mask)
         assert not np.allclose(result, src)

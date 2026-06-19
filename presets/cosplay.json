@@ -1,0 +1,12 @@
+{
+  "description": "Vibrant saturated, anime-inspired colours",
+  "curves": {
+    "L": [[0, 0], [50, 35], [128, 135], [200, 220], [255, 255]]
+  },
+  "warmth": -0.01,
+  "saturation_boost": 0.18,
+  "shadow_lift": 0,
+  "vignette": 0.08,
+  "clarity": 0.3,
+  "glow": 0.03
+}

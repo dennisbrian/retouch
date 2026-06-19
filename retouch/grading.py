@@ -1,343 +1,105 @@
 """Colour grading presets — final output tone and mood.
 
-Presets:
+Presets are loaded from individual JSON files in the presets/ directory.
+Built-in presets:
     natural   — warm, soft, Instagram-style.
     magazine  — cool shadows, matte, fashion editorial.
     beauty    — clean, bright, commercial beauty ad.
     cosplay   — vibrant saturated, anime-inspired colours.
 """
 
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
+
 import cv2
 import numpy as np
 
 from .utils import apply_curve, blend_masked
 
+# ---------------------------------------------------------------------------
+# Preset loading
+# ---------------------------------------------------------------------------
 
-PRESETS = {
-    "natural": {
-        "description": "Warm, soft, Instagram-style natural look",
-        "curves": {
-            # Gentle S-curve for contrast
-            "L": [(0, 0), (40, 35), (128, 132), (200, 210), (255, 255)],
-        },
-        "warmth": 0.04,           # slight warm shift
-        "saturation_boost": 0.05, # subtle boost
-        "shadow_lift": 5,         # don't crush blacks
-        "vignette": 0.0,
-    },
-    "magazine": {
-        "description": "Cool shadows, matte, fashion editorial look",
-        "curves": {
-            # Lifted blacks, compressed highlights for matte look
-            "L": [(0, 15), (30, 35), (128, 128), (220, 215), (255, 240)],
-        },
-        "warmth": -0.02,          # cool shift
-        "saturation_boost": -0.05, # slightly desaturated
-        "shadow_lift": 15,        # matte lifted shadows
-        "vignette": 0.15,
-        "split_tone": {
-            "shadows": (110, 135),  # teal shadows (a, b in LAB)
-            "highlights": (132, 115), # warm highlights
-        },
-    },
-    "beauty": {
-        "description": "Clean, bright, commercial beauty",
-        "curves": {
-            # Soft contrast, bright midtones
-            "L": [(0, 5), (50, 55), (128, 140), (200, 210), (255, 255)],
-        },
-        "warmth": 0.01,
-        "saturation_boost": 0.03,
-        "shadow_lift": 3,
-        "vignette": 0.0,
-        "glow": 0.02,             # 2% soft bloom (reduced by 50%)
-    },
-    "cosplay": {
-        "description": "Vibrant saturated, anime-inspired colours",
-        "curves": {
-            # Strong S-curve for punchy contrast
-            "L": [(0, 0), (50, 35), (128, 135), (200, 220), (255, 255)],
-        },
-        "warmth": -0.01,          # slightly cooler whites
-        "saturation_boost": 0.18, # vivid colours
-        "shadow_lift": 0,
-        "vignette": 0.08,
-        "clarity": 0.3,           # micro-contrast boost
-        "glow": 0.03,             # 3% soft bloom (reduced by 50%)
-    },
-    "dreamy": {
-        "description": "Dreamy soft-focus look with warm highlights and pastel shadows",
-        "curves": {
-            # Soft contrast, slightly lifted shadows
-            "L": [(0, 10), (45, 50), (128, 132), (200, 215), (255, 250)],
-        },
-        "warmth": 0.03,
-        "saturation_boost": 0.08,
-        "shadow_lift": 8,
-        "vignette": 0.05,
-        "glow": 0.04,             # 4% soft bloom (reduced by 50%)
-        "split_tone": {
-            "shadows": (124, 126),  # cool/pastel shadows (ab in LAB)
-            "highlights": (133, 131), # warm highlights
-        },
-    },
-    "anime": {
-        "description": "Vibrant, high-contrast, anime-inspired colors",
-        "curves": {
-            # Strong S-curve for punchy contrast
-            "L": [(0, 0), (40, 30), (128, 135), (210, 230), (255, 255)],
-        },
-        "warmth": 0.01,
-        "saturation_boost": 0.22,
-        "shadow_lift": 0,
-        "vignette": 0.06,
-        "glow": 0.02,             # 2% soft bloom (reduced by 60%)
-        "clarity": 0.15,
-    },
-    "scifi": {
-        "description": "Cool cyan shadows, pink/magenta highlights, vibrant neon styling",
-        "curves": {
-            # High-contrast S-curve with slightly lifted blacks
-            "L": [(0, 5), (45, 25), (128, 130), (210, 235), (255, 255)],
-        },
-        "warmth": -0.04,          # cool/cyan highlights
-        "saturation_boost": 0.24, # highly saturated neon colors
-        "shadow_lift": 5,
-        "vignette": 0.05,
-        "clarity": 0.25,
-        "glow": 0.05,             # 5% bloom (reduced by 50%)
-        "split_tone": {
-            "shadows": (110, 122),    # deep teal/cyan shadows (a=110, b=122 in LAB)
-            "highlights": (134, 112), # pink/magenta highlights (a=134, b=112 in LAB)
-        },
-    },
-    "cyber_doll": {
-        "description": "High-impact cyan/pink cosplay doll finish",
-        "curves": {
-            "L": [(0, 0), (35, 20), (128, 136), (205, 238), (255, 255)],
-        },
-        "rgb_curves": {
-            "B": [(0, 8), (110, 140), (255, 255)],
-            "R": [(0, 0), (128, 128), (210, 238), (255, 255)],
-        },
-        "warmth": -0.05,
-        "saturation_boost": 0.30,
-        "shadow_lift": 2,
-        "vignette": 0.08,
-        "clarity": 0.34,
-        "glow": 0.07,             # 7% bloom (reduced by 50%)
-        "glow_tint": (235, 135, 210),
-        "chromatic_aberration": 1.2,
-        "split_tone": {
-            "shadows": (108, 119),
-            "highlights": (138, 111),
-        },
-    },
-    "film": {
-        "description": "Warm film look (Kodak Portra style) with cyan shadows, lifted blacks, and grain",
-        "curves": {
-            "L": [(0, 10), (50, 45), (128, 130), (200, 215), (255, 245)],
-        },
-        "rgb_curves": {
-            "R": [(0, 0), (128, 132), (255, 255)],
-            "B": [(0, 5), (128, 122), (255, 250)],
-        },
-        "warmth": 0.03,
-        "saturation_boost": 0.10,
-        "shadow_lift": 10,
-        "vignette": 0.05,
-        "grain": 0.08,
-        "lut": "kodak",
-        "split_tone": {
-            "shadows": (120, 124),     # subtle green/blue shadows
-            "highlights": (131, 133),  # warm orange highlights
-        },
-    },
-    "cyberpunk": {
-        "description": "Neon cyberpunk: teal midtones, magenta/pink highlights, heavy bloom, and chromatic aberration",
-        "curves": {
-            "L": [(0, 0), (45, 30), (128, 135), (210, 230), (255, 255)],
-        },
-        "rgb_curves": {
-            "B": [(0, 0), (128, 145), (255, 255)],
-            "R": [(0, 0), (128, 120), (255, 255)],
-        },
-        "warmth": -0.05,
-        "saturation_boost": 0.25,
-        "shadow_lift": 0,
-        "vignette": 0.08,
-        "glow": 0.06,             # 6% bloom (reduced by 50%)
-        "glow_tint": (220, 110, 180), # pink-magenta glow (BGR)
-        "chromatic_aberration": 4.0,
-        "split_tone": {
-            "shadows": (110, 122),     # teal shadows
-            "highlights": (134, 112),  # pink highlights
-        },
-    },
-    "golden_hour": {
-        "description": "Rich golden warm look with soft sun-drenched glow and halation",
-        "curves": {
-            "L": [(0, 0), (50, 48), (128, 138), (200, 215), (255, 255)],
-        },
-        "warmth": 0.06,
-        "saturation_boost": 0.15,
-        "shadow_lift": 5,
-        "glow": 0.04,             # 4% glow (reduced by 50%)
-        "glow_tint": (120, 200, 255), # golden-yellow glow (BGR)
-        "halation": {
-            "threshold": 210,
-            "radius": 21,
-            "intensity": 0.4
-        },
-    },
-    "bw_noir": {
-        "description": "High-contrast dramatic black and white",
-        "curves": {
-            "L": [(0, 0), (50, 30), (128, 128), (205, 225), (255, 255)],
-        },
-        "saturation_boost": -1.0, # pure black and white
-        "vignette": 0.18,
-        "clarity": 0.4,
-        "grain": 0.06,
-    },
-    "fantasy": {
-        "description": "Ethereal fantasy goddess: low contrast, cool blue/purple shadows, silver highlights, clarity reduction",
-        "curves": {
-            # Lifted blacks, flattened highlights for low contrast
-            "L": [(0, 12), (64, 72), (128, 128), (192, 184), (255, 245)],
-        },
-        "warmth": -0.03,            # gentler cool shift to protect skin healthy tone
-        "saturation_boost": -0.02,  # less desaturation
-        "shadow_lift": 10,          # moderate shadow lift to keep face structure
-        "vignette": 0.0,
-        "clarity": -0.08,           # gentler soft focus (avoiding muddy/dirty face)
-        "glow": 0.12,               # 12% bloom (reduced from 28% to prevent soft scaling)
-        "glow_tint": (255, 235, 242), # cool white/silver glow (BGR)
-        "haze": 0.05,               # 5% atmospheric haze (reduced from 12% to prevent soft scaling)
-        "sparkles": 0.25,           # procedurally place sparkles on highlight peaks
-        "split_tone": {
-            "shadows": (124, 124),    # cleaner shadows (less cyan/green cast)
-            "highlights": (128, 127), # clean highlights
-        }
-    },
-    "pink_dream": {
-        "description": "Xiaohongshu inspired pink anime cosplay style with blue-indigo shadows",
-        "curves": {
-            "L": [(0, 6), (64, 68), (128, 140), (192, 204), (255, 248)],
-        },
-        "rgb_curves": {
-            "R": [(0, 2), (64, 66), (128, 138), (192, 202), (255, 252)],
-            "G": [(0, 0), (64, 54), (128, 120), (192, 186), (255, 242)],
-            "B": [(0, 22), (64, 72), (128, 130), (192, 192), (255, 245)],
-        },
-        "white_balance": {
-            "R": 1.04, "G": 0.98, "B": 0.98
-        },
-        "calibration": {
-            "red": {"hue": 8.0, "sat": 15.0},
-            "green": {"hue": -30.0, "sat": -20.0},
-            "blue": {"hue": 10.0, "sat": 8.0}
-        },
-        "hsl_adjustments": {
-            "hue": {"red": 5, "orange": -10, "yellow": -30, "cyan": -10, "blue": -10, "purple": 8, "magenta": 8},
-            "saturation": {"red": 12, "orange": -10, "yellow": -65, "green": -85, "cyan": -20, "blue": 18, "purple": 30, "magenta": 30},
-            "luminance": {"red": 10, "orange": 22, "yellow": 0, "cyan": 0, "blue": 8, "purple": 8, "magenta": 18}
-        },
-        "split_tone_three_way": {
-            "shadows": {"hue": 255.0, "sat": 25.0},
-            "midtones": {"hue": 325.0, "sat": 12.0},
-            "highlights": {"hue": 215.0, "sat": 6.0},
-            "balance": 10.0
-        },
-        "glow": 0.025,              # 2.5% glow (reduced from 5%)
-        "orton_glow": 0.01,         # 1% Orton glow (reduced from 2%)
-        "vignette": 0.06,
-        "grain": 0.02,
-    },
-    "blue_dream": {
-        "description": "Dreamy soft cool cosplay style with cool cyan highlights and blue shadows",
-        "curves": {
-            "L": [(0, 10), (32, 28), (128, 128), (220, 215), (255, 248)],
-        },
-        "white_balance": {
-            "R": 0.94, "G": 1.00, "B": 1.06
-        },
-        "calibration": {
-            "red": {"hue": -5.0, "sat": -5.0},
-            "green": {"hue": 10.0, "sat": 5.0},
-            "blue": {"hue": -10.0, "sat": 10.0}
-        },
-        "split_tone_three_way": {
-            "shadows": {"hue": 240.0, "sat": 18.0},
-            "midtones": {"hue": 190.0, "sat": 12.0},
-            "highlights": {"hue": 60.0, "sat": 8.0},
-            "balance": -10.0
-        },
-        "glow": 0.08,               # 8% glow (reduced from 20%)
-        "orton_glow": 0.04,         # 4% Orton glow (reduced from 10%)
-        "haze": 0.04,               # 4% haze (reduced from 10%)
-        "vignette": 0.05,
-        "grain": 0.03,
-    },
-    "xhs_ultrasoft": {
-        "description": "Xiaohongshu bright flat contrast style with clean skin highlights",
-        "curves": {
-            "L": [(0, 20), (45, 42), (128, 130), (210, 215), (255, 240)],
-        },
-        "hsl_adjustments": {
-            "hue": {"orange": -4, "yellow": -15},
-            "saturation": {"orange": -20, "yellow": -45},
-            "luminance": {"orange": 30, "yellow": 5}
-        },
-        "split_tone_three_way": {
-            "shadows": {"hue": 270.0, "sat": 8.0},
-            "midtones": {"hue": 340.0, "sat": 8.0},
-            "highlights": {"hue": 50.0, "sat": 6.0},
-            "balance": 0.0
-        },
-        "glow": 0.06,               # 6% glow (reduced from 15%)
-        "orton_glow": 0.06,         # 6% Orton glow (reduced from 15%)
-        "grain": 0.02,
-    },
-    "meitu_clone": {
-        "description": "Meitu inspired vibrant pink cosplay finish",
-        "curves": {
-            "L": [(0, 20), (64, 85), (128, 143), (192, 198), (255, 245)],
-        },
-        "rgb_curves": {
-            "R": [(0, 5), (64, 70), (128, 138), (192, 200), (255, 255)],
-            "G": [(0, 0), (64, 62), (128, 126), (192, 190), (255, 250)],
-            "B": [(0, 10), (64, 58), (128, 118), (192, 185), (255, 240)],
-        },
-        "white_balance": {
-            "R": 1.08, "G": 1.00, "B": 0.92
-        },
-        "calibration": {
-            "red": {"hue": 12.0, "sat": 15.0},
-            "green": {"hue": -15.0, "sat": -5.0},
-            "blue": {"hue": 15.0, "sat": -10.0}
-        },
-        "hsl_adjustments": {
-            "hue": {"red": 5, "orange": -8, "yellow": -30, "cyan": -50, "blue": -25, "purple": 10, "magenta": 10},
-            "saturation": {"red": 8, "orange": -15, "yellow": -60, "green": -80, "cyan": -70, "blue": -50, "purple": 15, "magenta": 20},
-            "luminance": {"red": 10, "orange": 25, "yellow": 0, "cyan": 0, "blue": 15, "purple": 15, "magenta": 25}
-        },
-        "split_tone_three_way": {
-            "shadows": {"hue": 285.0, "sat": 8.0},
-            "midtones": {"hue": 325.0, "sat": 6.0},
-            "highlights": {"hue": 40.0, "sat": 6.0},
-            "balance": 20.0
-        },
-        "glow": 0.02,              # 2% glow (reduced from 4%)
-        "orton_glow": 0.01,         # 1% Orton glow (reduced from 2%)
-        "vignette": 0.08,
-        "grain": 0.02,
-    },
-}
+_DEFAULT_PRESETS_DIR = Path(__file__).resolve().parent.parent / "presets"
+_USER_PRESETS_DIRS: List[Path] = []
 
+
+def register_presets_dir(directory: str | Path) -> None:
+    """Register an additional directory to search for presets (user/marketplace)."""
+    _USER_PRESETS_DIRS.append(Path(directory))
+
+
+def _find_preset_file(name: str) -> Optional[Path]:
+    """Search for a preset JSON file in registered directories, default dir first."""
+    for d in [_DEFAULT_PRESETS_DIR] + _USER_PRESETS_DIRS:
+        for ext in ("", ".json"):
+            p = d / f"{name}{ext}"
+            if p.exists():
+                return p
+    return None
+
+
+def load_preset(name: str) -> Dict[str, Any]:
+    """Load a single preset by name from the presets directory."""
+    fpath = _find_preset_file(name)
+    if fpath is None:
+        raise FileNotFoundError(
+            f"Preset '{name}' not found in {_DEFAULT_PRESETS_DIR} "
+            f"(or any registered user preset directory)"
+        )
+    with open(fpath, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def load_all_presets() -> Dict[str, Dict[str, Any]]:
+    """Load all presets from the default presets directory."""
+    presets: Dict[str, Dict[str, Any]] = {}
+    if not _DEFAULT_PRESETS_DIR.exists():
+        return presets
+    for fpath in sorted(_DEFAULT_PRESETS_DIR.glob("*.json")):
+        name = fpath.stem
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                presets[name] = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            import warnings
+            warnings.warn(f"Failed to load preset '{name}': {e}")
+    return presets
+
+
+def list_available_presets() -> List[str]:
+    """Return a sorted list of all available preset names."""
+    names: List[str] = []
+    seen: set = set()
+    for d in [_DEFAULT_PRESETS_DIR] + _USER_PRESETS_DIRS:
+        if d.exists():
+            for fpath in sorted(d.glob("*.json")):
+                name = fpath.stem
+                if name not in seen:
+                    seen.add(name)
+                    names.append(name)
+    return names
+
+
+# Backward-compatible module-level dict populated at import time
+PRESETS: Dict[str, Dict[str, Any]] = load_all_presets()
+
+
+# ---------------------------------------------------------------------------
+# ColorGrader
+# ---------------------------------------------------------------------------
 
 class ColorGrader:
     """Apply colour grading presets to finalise image tone/mood."""
+
+    def __init__(self):
+        # Clarity cache: (l_chan_copy, base, detail)
+        self._clarity_cache_l: Optional[np.ndarray] = None
+        self._clarity_cache: Optional[Tuple[np.ndarray, np.ndarray]] = None
 
     def grade(
         self,
@@ -362,8 +124,17 @@ class ColorGrader:
         Returns:
             (H, W, 3) uint8 graded image.
         """
+        # Reset clarity cache for fresh computation
+        self._clarity_cache_l = None
+        self._clarity_cache = None
+
         if isinstance(preset, str):
-            settings = PRESETS.get(preset, PRESETS["natural"])
+            settings = PRESETS.get(preset)
+            if settings is None:
+                try:
+                    settings = load_preset(preset)
+                except FileNotFoundError:
+                    settings = PRESETS.get("natural", {})
         else:
             settings = preset
 
@@ -380,6 +151,17 @@ class ColorGrader:
         # ---- RGB curves ----
         if "rgb_curves" in settings:
             result = self._apply_rgb_curves(result, settings["rgb_curves"])
+
+        # ---- RGB Tone Curve Split (cinematic per-channel tone curves) ----
+        tone_rgb = {}
+        if "tone_curve_red" in settings:
+            tone_rgb["R"] = settings["tone_curve_red"]
+        if "tone_curve_green" in settings:
+            tone_rgb["G"] = settings["tone_curve_green"]
+        if "tone_curve_blue" in settings:
+            tone_rgb["B"] = settings["tone_curve_blue"]
+        if tone_rgb:
+            result = self._apply_rgb_curves(result, tone_rgb)
 
         # ---- Shadow lift ----
         if settings.get("shadow_lift", 0) > 0:
@@ -455,9 +237,9 @@ class ColorGrader:
         if settings.get("chromatic_aberration", 0) > 0 and not skip_post_effects:
             result = self._add_chromatic_aberration(result, settings["chromatic_aberration"])
 
-        # ---- LUT Emulation ----
+        # ---- Film Emulation ----
         if "lut" in settings and not skip_post_effects:
-            result = self._add_lut_emulation(result, settings["lut"])
+            result = self._add_film_emulation(result, settings["lut"])
 
         # ---- Grain ----
         if settings.get("grain", 0) > 0 and not skip_post_effects:
@@ -495,6 +277,41 @@ class ColorGrader:
         return cv2.addWeighted(original, 1.0 - s, result, s, 0)
 
     # ------------------------------------------------------------------
+    # Multi-preset blending
+    # ------------------------------------------------------------------
+
+    def grade_stack(self, img_bgr, preset_weights):
+        """Blend multiple presets with custom weights — true independent mixing.
+
+        Each preset is applied at full strength to the *original* image,
+        then the results are weighted and accumulated. This avoids the
+        compounding artifacts of sequential application.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 input image.
+            preset_weights: dict mapping preset name -> float weight.
+
+        Returns:
+            (H, W, 3) uint8 blended result.
+        """
+        if not preset_weights:
+            return img_bgr
+        total_w = sum(preset_weights.values())
+        if total_w <= 0:
+            return img_bgr
+
+        base = img_bgr.astype(np.float32)
+        accum = np.zeros_like(base)
+        for preset_name, weight in preset_weights.items():
+            if weight <= 0:
+                continue
+            graded = self.grade(img_bgr, preset_name, 1.0)
+            accum += graded.astype(np.float32) * weight
+
+        result = accum / total_w
+        return np.clip(result, 0, 255).astype(np.uint8)
+
+    # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
 
@@ -506,7 +323,6 @@ class ColorGrader:
         img_f = img_bgr.astype(np.float32)
         h, w = img_bgr.shape[:2]
 
-        # Reduced blur radius factor for sharper core glow (Issue 2)
         ksize = max(int(min(h, w) * 0.025), 7) | 1
         blurred = cv2.GaussianBlur(img_f, (ksize, ksize), 0)
 
@@ -515,20 +331,14 @@ class ColorGrader:
             if tint_arr.max() <= 1.0:
                 tint_arr = tint_arr * 255.0
             tint_layer = np.ones_like(blurred) * tint_arr
-            # Use additive blending to tint the glow without suppressing cool channels (Issue 11)
             blurred = cv2.addWeighted(blurred, 0.7, tint_layer, 0.3, 0)
 
-        # Screen blend mode formula
         screen = 255.0 - (255.0 - img_f) * (255.0 - blurred) / 255.0
 
-        # Mask strictly to highlights (L > 225 in LAB space)
         lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
         l_chan = lab[:, :, 0].astype(np.float32)
-
-        # Soft transition: 0 at L=225, 1 at L=245
         highlight_mask = np.clip((l_chan - 225.0) / 20.0, 0, 1)[:, :, np.newaxis]
 
-        # Combine with spatial mask if provided
         if mask is not None:
             m_f = mask.astype(np.float32)
             if m_f.max() > 1.0:
@@ -537,7 +347,6 @@ class ColorGrader:
                 m_f = m_f[:, :, np.newaxis]
             highlight_mask = highlight_mask * m_f
 
-        # Blend original with screen layer based on mask and opacity
         result = img_f * (1.0 - highlight_mask * opacity) + screen * (highlight_mask * opacity)
         return np.clip(result, 0, 255).astype(np.uint8)
 
@@ -549,16 +358,13 @@ class ColorGrader:
     def _lift_shadows(self, img, lift):
         lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
         l = lab[:, :, 0]
-        # Only lift dark pixels (below midtone)
         shadow_mask = np.clip(1.0 - l / 128.0, 0, 1)
         lab[:, :, 0] = np.clip(l + shadow_mask * lift, 0, 255)
         return cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
     def _adjust_warmth(self, img, warmth):
         lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
-        # b channel: positive warmth = more yellow, negative = more blue
         lab[:, :, 2] = np.clip(lab[:, :, 2] + warmth * 30, 0, 255)
-        # a channel: slight push for warm feel
         lab[:, :, 1] = np.clip(lab[:, :, 1] + warmth * 10, 0, 255)
         return cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
@@ -588,7 +394,6 @@ class ColorGrader:
         split_toned = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
         if mask is not None:
-            from .utils import blend_masked
             return blend_masked(img, split_toned, mask)
         return split_toned
 
@@ -611,19 +416,32 @@ class ColorGrader:
         return mean_a * guide + mean_b
 
     def _add_clarity(self, img, strength):
-        """Edge-preserving micro-contrast (clarity) using Guided Filter."""
+        """Edge-preserving micro-contrast (clarity) using Guided Filter.
+
+        Base and detail layers are cached when the L channel matches the
+        previous call, avoiding redundant O(N) guided filter recomputation
+        for large images (e.g., 24 MP).
+        """
         if strength == 0:
             return img
 
         lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
         l_chan = lab[:, :, 0].astype(np.float32)
 
-        h, w = img.shape[:2]
-        r = max(int(min(h, w) * 0.015), 5)
-        eps = 0.02 * (255.0 ** 2)
+        # Use cached base/detail if L channel is identical
+        if (self._clarity_cache_l is not None
+                and self._clarity_cache_l.shape == l_chan.shape
+                and np.array_equal(self._clarity_cache_l, l_chan)):
+            base, detail = self._clarity_cache
+        else:
+            h, w = img.shape[:2]
+            r = max(int(min(h, w) * 0.015), 5)
+            eps = 0.02 * (255.0 ** 2)
 
-        base = self._guided_filter(l_chan / 255.0, l_chan / 255.0, r, eps / (255.0 ** 2)) * 255.0
-        detail = l_chan - base
+            base = self._guided_filter(l_chan / 255.0, l_chan / 255.0, r, eps / (255.0 ** 2)) * 255.0
+            detail = l_chan - base
+            self._clarity_cache_l = l_chan.copy()
+            self._clarity_cache = (base, detail)
 
         l_new = np.clip(base + detail * (1.0 + strength), 0, 255)
         lab[:, :, 0] = l_new.astype(np.uint8)
@@ -723,8 +541,6 @@ class ColorGrader:
 
         lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
         l_chan = lab[:, :, 0].astype(np.float32)
-
-        # Weight peaks at 128 (midtone) and tapers off towards 0 and 255
         weight = np.exp(-((l_chan - 128.0) ** 2) / (2.0 * 64.0 ** 2))
 
         weighted_noise = (noise_blurred * weight)[:, :, np.newaxis]
@@ -732,19 +548,35 @@ class ColorGrader:
         return np.clip(img_f + weighted_noise, 0, 255).astype(np.uint8)
 
     def _adjust_white_balance(self, img_bgr, multipliers):
-        """Adjust white balance using channel multipliers."""
+        """Adjust white balance via LAB a/b offset to avoid highlight clipping.
+
+        Instead of multiplying BGR channels (which clips specular highlights
+        when multipliers > 1.0), we compute the LAB a/b shift that a neutral
+        gray pixel would experience under the given multipliers and apply
+        that uniformly — preserving all highlight detail.
+        """
         b_mult = multipliers.get("B", 1.0)
         g_mult = multipliers.get("G", 1.0)
         r_mult = multipliers.get("R", 1.0)
 
-        if abs(b_mult - 1.0) < 0.001 and abs(g_mult - 1.0) < 0.001 and abs(r_mult - 1.0) < 0.001:
+        if all(abs(m - 1.0) < 0.001 for m in (r_mult, g_mult, b_mult)):
             return img_bgr
 
-        img_f = img_bgr.astype(np.float32)
-        img_f[:, :, 0] *= b_mult
-        img_f[:, :, 1] *= g_mult
-        img_f[:, :, 2] *= r_mult
-        return np.clip(img_f, 0, 255).astype(np.uint8)
+        # Compute the LAB offset from how a neutral gray shifts under multipliers
+        gray = np.array([128, 128, 128], dtype=np.float32)
+        wb = np.clip(gray * np.array([b_mult, g_mult, r_mult]), 0, 255).astype(np.uint8).reshape(1, 1, 3)
+        gray_u8 = gray.astype(np.uint8).reshape(1, 1, 3)
+
+        gray_lab = cv2.cvtColor(gray_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
+        wb_lab = cv2.cvtColor(wb, cv2.COLOR_BGR2LAB).astype(np.float32)
+
+        a_off = wb_lab[0, 0, 1] - gray_lab[0, 0, 1]
+        b_off = wb_lab[0, 0, 2] - gray_lab[0, 0, 2]
+
+        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        lab[:, :, 1] = np.clip(lab[:, :, 1] + a_off, 0, 255)
+        lab[:, :, 2] = np.clip(lab[:, :, 2] + b_off, 0, 255)
+        return cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
     def _apply_calibration(self, img_bgr, calibration):
         """Apply primary color calibration slider adjustments."""
@@ -769,7 +601,6 @@ class ColorGrader:
 
         sigma = 15.0
 
-        # Compute weights for red, green, blue primary regions
         dist_r = np.minimum(np.abs(h - 0.0), np.abs(h - 180.0))
         w_r = np.exp(-(dist_r ** 2) / (2.0 * sigma ** 2))
 
@@ -795,18 +626,15 @@ class ColorGrader:
         h, w = img_bgr.shape[:2]
         img_f = img_bgr.astype(np.float32) / 255.0
 
-        # Scale blur radius proportional to image size (Issue 9)
         ksize = max(blur_radius, int(min(h, w) * 0.015)) | 1
         blurred = cv2.GaussianBlur(img_f, (ksize, ksize), 0)
 
-        # Soft Light Pegtop blending
         soft_light = (1.0 - 2.0 * blurred) * (img_f ** 2) + 2.0 * blurred * img_f
 
         result = img_f * (1.0 - opacity) + soft_light * opacity
         orton_img = np.clip(result * 255.0, 0, 255).astype(np.uint8)
 
         if mask is not None:
-            from .utils import blend_masked
             return blend_masked(img_bgr, orton_img, mask)
         return orton_img
 
@@ -854,12 +682,16 @@ class ColorGrader:
         split_toned = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
         if mask is not None:
-            from .utils import blend_masked
             return blend_masked(img_bgr, split_toned, mask)
         return split_toned
 
-    def _add_lut_emulation(self, img_bgr, lut_preset):
-        """3D LUT approximation via polynomial mapping."""
+    def _add_film_emulation(self, img_bgr, lut_preset):
+        """1D per-channel polynomial film curve emulation (renamed from LUT emulation).
+
+        These are per-channel polynomial curves, not true 3D LUTs (which would
+        include cross-channel interaction). The name 'film_emulation' more
+        accurately describes the technique.
+        """
         presets = {
             "kodak": {
                 "R": [0.00001 * (x**2) + 0.8 * x for x in range(256)],
@@ -884,66 +716,58 @@ class ColorGrader:
         r = cv2.LUT(r, lut_r)
         return cv2.merge([b, g, r])
 
-    def grade_stack(self, img_bgr, preset_weights):
-        """Chain/blend multiple presets with custom weights."""
-        if not preset_weights:
-            return img_bgr
-        total_w = sum(preset_weights.values())
-        if total_w <= 0:
-            return img_bgr
-        result = img_bgr.copy()
-        for preset_name, weight in preset_weights.items():
-            if weight <= 0:
-                continue
-            result = self.grade(result, preset_name, weight)
-        return result
-
     def _apply_hsl_adjustments(self, img_bgr, adjustments):
-        """Apply Hue, Saturation, and Luminance adjustments per color range."""
+        """Apply Hue, Saturation, and Luminance adjustments per color range.
+
+        Uses Gaussian-weighted hue blending instead of hard binary masks
+        to avoid color discontinuities at range boundaries.
+        """
         hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
         h = hsv[:, :, 0]
         s = hsv[:, :, 1]
         v = hsv[:, :, 2]
-        
-        ranges = {
-            "red": [(0, 8), (172, 180)],
-            "orange": [(8, 20)],
-            "yellow": [(20, 35)],
-            "green": [(35, 80)],
-            "cyan": [(80, 105)],
-            "blue": [(105, 140)],
-            "magenta": [(140, 172)],
+
+        # Color centers (in OpenCV HSV hue: 0-180)
+        color_centers = {
+            "red": 0.0,
+            "orange": 14.0,
+            "yellow": 27.0,
+            "green": 57.0,
+            "cyan": 92.0,
+            "blue": 122.0,
+            "purple": 148.0,
+            "magenta": 156.0,
         }
-        
+        sigma = 10.0
+
         hue_adj = adjustments.get("hue", {})
         sat_adj = adjustments.get("saturation", {})
         lum_adj = adjustments.get("luminance", {})
-        
-        for color, r_list in ranges.items():
+
+        for color in color_centers:
             h_shift = hue_adj.get(color, 0)
             s_shift = sat_adj.get(color, 0)
             l_shift = lum_adj.get(color, 0)
-            
+
             if h_shift == 0 and s_shift == 0 and l_shift == 0:
                 continue
-                
-            mask = np.zeros_like(h, dtype=bool)
-            for low, high in r_list:
-                mask |= (h >= low) & (h <= high)
-                
+
+            center = color_centers[color]
+            dist = np.abs(h - center)
+            # Handle wraparound for red (center at 0)
+            dist = np.minimum(dist, 180.0 - dist)
+            weight = np.exp(-(dist ** 2) / (2.0 * sigma ** 2))
+
             if h_shift != 0:
-                # HSV hue range is [0, 180], so degrees shift is divided by 2
                 shift_cv = float(h_shift) / 2.0
-                h = np.where(mask, (h + shift_cv) % 180, h)
-                
+                h = (h + weight * shift_cv) % 180
+
             if s_shift != 0:
-                # Saturation is [0, 255]
-                s = np.where(mask, np.clip(s + s_shift, 0, 255), s)
-                
+                s = np.where(weight > 0.01, np.clip(s + weight * s_shift, 0, 255), s)
+
             if l_shift != 0:
-                # Value/Luminance is [0, 255]
-                v = np.where(mask, np.clip(v + l_shift, 0, 255), v)
-                
+                v = np.where(weight > 0.01, np.clip(v + weight * l_shift, 0, 255), v)
+
         hsv[:, :, 0] = h
         hsv[:, :, 1] = s
         hsv[:, :, 2] = v
@@ -1031,7 +855,6 @@ class ColorGrader:
             ref_chan = lab_ref[:, :, c].ravel()
             src_sorted = np.sort(src_chan)
             ref_sorted = np.sort(ref_chan)
-            # Use midpoint averaging to resolve banding on smooth regions (Issue 10)
             left = np.searchsorted(src_sorted, src_chan, side="left")
             right = np.searchsorted(src_sorted, src_chan, side="right")
             indices = (left + right) // 2
@@ -1052,21 +875,18 @@ class ColorGrader:
         """Create a dreamy atmospheric fog/haze over the entire frame."""
         if strength <= 0:
             return img_bgr
-            
+
         h, w = img_bgr.shape[:2]
         img_f = img_bgr.astype(np.float32)
-        
-        # Blur the image heavily to get the ambient colors
+
         ksize = max(int(min(h, w) * 0.08), 25) | 1
         blurred = cv2.GaussianBlur(img_f, (ksize, ksize), 0)
-        
-        # Add a soft pastel blue-purple tone to the haze to make it look magical (silver-white/blue)
-        haze_tint = np.array([245.0, 230.0, 240.0], dtype=np.float32) / 255.0 # BGR: light lavender/blue
+
+        haze_tint = np.array([245.0, 230.0, 240.0], dtype=np.float32) / 255.0
         haze_layer = blurred * haze_tint
-        
-        # Screen blend mode for fog
+
         screen = 255.0 - (255.0 - img_f) * (255.0 - haze_layer) / 255.0
-        
+
         if mask is not None:
             m_f = mask.astype(np.float32)
             if m_f.max() > 1.0:
@@ -1077,10 +897,8 @@ class ColorGrader:
         else:
             haze_factor = strength
 
-        # Blend haze based on strength and mask
         result = img_f * (1.0 - haze_factor) + screen * haze_factor
-        
-        # Lift shadows slightly to wash out deep blacks (Dehaze: -20 effect)
+
         lab = cv2.cvtColor(np.clip(result, 0, 255).astype(np.uint8), cv2.COLOR_BGR2LAB).astype(np.float32)
         l = lab[:, :, 0]
         shadow_lift = 25.0 * strength
@@ -1090,7 +908,7 @@ class ColorGrader:
             lab[:, :, 0] = np.clip(l + shadow_mask * (shadow_lift * m_2d), 0, 255)
         else:
             lab[:, :, 0] = np.clip(l + shadow_mask * shadow_lift, 0, 255)
-        
+
         return cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
     def _add_sparkles(self, img_bgr, opacity):
@@ -1100,54 +918,37 @@ class ColorGrader:
 
         h, w = img_bgr.shape[:2]
         gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-        
-        # Find extreme highlights (pixels > 230)
+
         _, thresh = cv2.threshold(gray, 230, 255, cv2.THRESH_BINARY)
-        
-        # Find local maxima to avoid putting sparkles on every single highlight pixel
+
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
         local_max = cv2.dilate(gray, kernel)
         peaks = (gray == local_max) & (thresh > 0)
-        
+
         y_indices, x_indices = np.where(peaks)
         if len(x_indices) == 0:
             return img_bgr
 
-        # Limit the number of sparkles to prevent clutter (e.g. max 50 sparkles)
         num_sparkles = min(len(x_indices), 50)
-        # Randomly select a subset
         indices = np.random.choice(len(x_indices), num_sparkles, replace=False)
-        
-        # Create a blank sparkle overlay
+
         sparkle_overlay = np.zeros_like(img_bgr, dtype=np.uint8)
-        
+
         for idx in indices:
             cx, cy = x_indices[idx], y_indices[idx]
-            
-            # Determine a random size for the star (cross arm length: 6 to 12 pixels)
             size = np.random.randint(6, 13)
-            
             color = (255, 255, 255)
-            
-            # Draw core diamond (rotated square) or circle
+
             cv2.circle(sparkle_overlay, (cx, cy), 1, color, -1)
-            
-            # Draw star arms
             cv2.line(sparkle_overlay, (cx - size, cy), (cx + size, cy), (240, 245, 255), 1)
             cv2.line(sparkle_overlay, (cx, cy - size), (cx, cy + size), (240, 245, 255), 1)
-            
-            # Draw diagonal soft flares
             diag_size = int(size * 0.6)
             cv2.line(sparkle_overlay, (cx - diag_size, cy - diag_size), (cx + diag_size, cy + diag_size), (220, 230, 255), 1)
             cv2.line(sparkle_overlay, (cx - diag_size, cy + diag_size), (cx + diag_size, cy - diag_size), (220, 230, 255), 1)
-            
-        # Blur the sparkles slightly to make them look like glowing light flares
+
         sparkle_overlay = cv2.GaussianBlur(sparkle_overlay, (3, 3), 0)
-        
-        # Screen blend mode
+
         img_f = img_bgr.astype(np.float32)
         sparkle_f = sparkle_overlay.astype(np.float32)
-        
         screened = 255.0 - (255.0 - img_f) * (255.0 - sparkle_f * opacity) / 255.0
         return np.clip(screened, 0, 255).astype(np.uint8)
-

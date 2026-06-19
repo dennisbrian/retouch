@@ -1,0 +1,16 @@
+{
+  "description": "Cool cyan shadows, pink/magenta highlights, vibrant neon styling",
+  "curves": {
+    "L": [[0, 5], [45, 25], [128, 130], [210, 235], [255, 255]]
+  },
+  "warmth": -0.04,
+  "saturation_boost": 0.24,
+  "shadow_lift": 5,
+  "vignette": 0.05,
+  "clarity": 0.25,
+  "glow": 0.05,
+  "split_tone": {
+    "shadows": [110, 122],
+    "highlights": [134, 112]
+  }
+}

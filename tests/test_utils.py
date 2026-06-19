@@ -215,3 +215,36 @@ class TestGlobalBloom:
         img[1000:1200, 1000:1200] = 255
         result = apply_global_bloom(img, strength=50.0, threshold=200.0, softness=30.0)
         assert result.shape == (2200, 2200, 3)
+
+
+class TestLogCrash:
+    def test_log_crash_writes_file(self):
+        from retouch.utils import log_crash
+        from pathlib import Path
+
+        # Clean up any existing crash log
+        cache_dir = Path.home() / ".cache" / "retouch"
+        crash_log_file = cache_dir / "crash.log"
+        if crash_log_file.exists():
+            crash_log_file.unlink()
+
+        try:
+            raise ValueError("Test value error for logging")
+        except ValueError as e:
+            path = log_crash(e, {"test_key": "test_value"})
+
+        assert path is not None
+        assert Path(path).exists()
+        assert Path(path).name == "crash.log"
+
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        assert "ValueError" in content
+        assert "Test value error for logging" in content
+        assert "test_key" in content
+        assert "test_value" in content
+
+        # Clean up
+        if crash_log_file.exists():
+            crash_log_file.unlink()
+

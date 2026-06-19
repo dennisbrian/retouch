@@ -1,0 +1,27 @@
+{
+  "description": "Dreamy soft cool cosplay style with cool cyan highlights and blue shadows",
+  "curves": {
+    "L": [[0, 10], [32, 28], [128, 128], [220, 215], [255, 248]]
+  },
+  "white_balance": {
+    "R": 0.94,
+    "G": 1.00,
+    "B": 1.06
+  },
+  "calibration": {
+    "red": {"hue": -5.0, "sat": -5.0},
+    "green": {"hue": 10.0, "sat": 5.0},
+    "blue": {"hue": -10.0, "sat": 10.0}
+  },
+  "split_tone_three_way": {
+    "shadows": {"hue": 240.0, "sat": 18.0},
+    "midtones": {"hue": 190.0, "sat": 12.0},
+    "highlights": {"hue": 60.0, "sat": 8.0},
+    "balance": -10.0
+  },
+  "glow": 0.08,
+  "orton_glow": 0.04,
+  "haze": 0.04,
+  "vignette": 0.05,
+  "grain": 0.03
+}

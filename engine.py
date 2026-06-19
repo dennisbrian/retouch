@@ -4,6 +4,7 @@ import mediapipe as mp
 from mediapipe.tasks.python import vision
 from mediapipe.tasks.python import BaseOptions
 from pathlib import Path
+from dataclasses import dataclass
 
 _MODEL_PATH = str(
     Path(__file__).parent / "face_landmarker_v2_with_blendshapes.task"
@@ -43,14 +44,21 @@ _LANDMARK_INDICES = {
 }
 
 
-def _lm(l, idx):
-    return l[idx]
+@dataclass
+class _FaceData:
+    landmarks: object
+    w: int
+    h: int
+    skin_mask: np.ndarray
+    ied: float
+    rad: int
+    points: dict
 
 
 def _landmarks_to_points(landmarks, indices, w, h):
     pts = []
     for i in indices:
-        lm = _lm(landmarks, i)
+        lm = landmarks.landmark[i]
         x, y = int(lm.x * w), int(lm.y * h)
         pts.append([x, y])
     return np.array(pts, dtype=np.int32)
@@ -65,18 +73,18 @@ def _mask_from_points(shape, points, feather=15):
 
 
 def _inter_eye_distance(landmarks, w, h):
-    left = _lm(landmarks, 33)
-    right = _lm(landmarks, 263)
+    left = landmarks.landmark[33]
+    right = landmarks.landmark[263]
     dx = (right.x - left.x) * w
     dy = (right.y - left.y) * h
     return np.sqrt(dx * dx + dy * dy)
 
 
-def _face_skin_mask(shape, landmarks, w, h):
-    oval = _landmarks_to_points(landmarks, _LANDMARK_INDICES["face_oval"], w, h)
-    le = _landmarks_to_points(landmarks, _LANDMARK_INDICES["left_eye"], w, h)
-    re = _landmarks_to_points(landmarks, _LANDMARK_INDICES["right_eye"], w, h)
-    lo = _landmarks_to_points(landmarks, _LANDMARK_INDICES["lips_outer"], w, h)
+def _face_skin_mask(shape, points, w, h):
+    oval = points["face_oval"]
+    le = points["left_eye"]
+    re = points["right_eye"]
+    lo = points["lips_outer"]
 
     mask = np.zeros(shape[:2], dtype=np.uint8)
     cv2.fillPoly(mask, [oval], 255)
@@ -89,27 +97,23 @@ def _face_skin_mask(shape, landmarks, w, h):
 
 
 def _frequency_separate(img, radius):
-    low = cv2.GaussianBlur(img, (0, 0), radius)
-    high = cv2.subtract(img.astype(np.int16), low.astype(np.int16)) + 128
-    high = np.clip(high, 0, 255).astype(np.uint8)
+    low = cv2.GaussianBlur(img, (0, 0), radius).astype(np.float32)
+    high = img.astype(np.float32) - low
     return low, high
 
 
 def _frequency_recombine(low, high):
-    result = cv2.add(low.astype(np.int16), high.astype(np.int16)) - 128
-    return np.clip(result, 0, 255).astype(np.uint8)
+    return np.clip(low + high, 0, 255).astype(np.uint8)
 
 
-def _dodge_burn(img_bgr, landmarks, w, h, strength):
+def _dodge_burn(img_bgr, face_data, strength):
     if strength == 0:
         return img_bgr
     s = strength / 100.0
     lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
 
-    left_eye = _landmarks_to_points(landmarks, _LANDMARK_INDICES["left_eye"], w, h)
-    right_eye = _landmarks_to_points(landmarks, _LANDMARK_INDICES["right_eye"], w, h)
-
-    for eye_pts in [left_eye, right_eye]:
+    for eye_key in ["left_eye", "right_eye"]:
+        eye_pts = face_data.points[eye_key]
         cx = int(np.mean(eye_pts[:, 0]))
         cy = int(np.mean(eye_pts[:, 1]))
         rx = int(np.max(eye_pts[:, 0]) - np.min(eye_pts[:, 0])) + 10
@@ -126,15 +130,19 @@ def _dodge_burn(img_bgr, landmarks, w, h, strength):
     return cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
 
-def _enhance_eyes_mediapipe(img_bgr, landmarks, w, h, strength):
+def _enhance_eyes_mediapipe(img_bgr, face_data, strength):
     if strength == 0:
         return img_bgr
     s = strength / 100.0
     result = img_bgr.copy()
+    h, w = img_bgr.shape[:2]
+
+    combined_iris = np.zeros((h, w), dtype=np.float32)
+    combined_sclera = np.zeros((h, w), dtype=np.float32)
 
     for eye_key, iris_key in [("left_eye", "left_iris"), ("right_eye", "right_iris")]:
-        eye_pts = _landmarks_to_points(landmarks, _LANDMARK_INDICES[eye_key], w, h)
-        iris_pts = _landmarks_to_points(landmarks, _LANDMARK_INDICES[iris_key], w, h)
+        eye_pts = face_data.points[eye_key]
+        iris_pts = face_data.points[iris_key]
 
         cx = int(np.mean(iris_pts[:, 0]))
         cy = int(np.mean(iris_pts[:, 1]))
@@ -145,44 +153,45 @@ def _enhance_eyes_mediapipe(img_bgr, landmarks, w, h, strength):
             int(np.max(eye_pts[:, 0]) - np.min(eye_pts[:, 0])) // 2 + 5, 10
         )
 
-        iris_mask = np.zeros(img_bgr.shape[:2], dtype=np.float32)
-        cv2.circle(iris_mask, (cx, cy), iris_radius, 1, -1)
-        iris_mask = cv2.GaussianBlur(iris_mask, (0, 0), iris_radius // 2)
+        iris_mask_part = np.zeros((h, w), dtype=np.float32)
+        cv2.circle(iris_mask_part, (cx, cy), iris_radius, 1, -1)
+        iris_mask_part = cv2.GaussianBlur(iris_mask_part, (0, 0), iris_radius // 2)
+        combined_iris = np.maximum(combined_iris, iris_mask_part)
 
-        sclera_mask = np.zeros(img_bgr.shape[:2], dtype=np.float32)
-        cv2.circle(sclera_mask, (cx, cy), eye_radius, 1, -1)
-        sclera_mask = np.clip(sclera_mask - iris_mask, 0, 1)
-        sclera_mask = cv2.GaussianBlur(sclera_mask, (0, 0), 3)
+        sclera_part = np.zeros((h, w), dtype=np.float32)
+        cv2.circle(sclera_part, (cx, cy), eye_radius, 1, -1)
+        sclera_part = np.clip(sclera_part - iris_mask_part, 0, 1)
+        sclera_part = cv2.GaussianBlur(sclera_part, (0, 0), 3)
+        combined_sclera = np.maximum(combined_sclera, sclera_part)
 
-        kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]],
-                          dtype=np.float32)
-        sharpened = cv2.filter2D(result, -1, kernel)
+    kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]], dtype=np.float32)
+    sharpened = cv2.filter2D(result, -1, kernel)
 
-        for c in range(3):
-            result[:, :, c] = np.clip(
-                result[:, :, c] * (1 - iris_mask * s) +
-                sharpened[:, :, c] * iris_mask * s,
-                0, 255
-            ).astype(np.uint8)
+    for c in range(3):
+        result[:, :, c] = np.clip(
+            result[:, :, c] * (1 - combined_iris * s) +
+            sharpened[:, :, c] * combined_iris * s,
+            0, 255
+        ).astype(np.uint8)
 
-        hsv = cv2.cvtColor(result, cv2.COLOR_BGR2HSV).astype(np.float32)
-        hsv[:, :, 1] = np.clip(hsv[:, :, 1] + iris_mask * 30 * s, 0, 255)
-        result = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+    hsv = cv2.cvtColor(result, cv2.COLOR_BGR2HSV).astype(np.float32)
+    hsv[:, :, 1] = np.clip(hsv[:, :, 1] + combined_iris * 30 * s, 0, 255)
+    result = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
-        lab2 = cv2.cvtColor(result, cv2.COLOR_BGR2LAB).astype(np.float32)
-        lab2[:, :, 0] = np.clip(lab2[:, :, 0] + sclera_mask * 20 * s, 0, 255)
-        result = cv2.cvtColor(lab2.astype(np.uint8), cv2.COLOR_LAB2BGR)
+    lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB).astype(np.float32)
+    lab[:, :, 0] = np.clip(lab[:, :, 0] + combined_sclera * 20 * s, 0, 255)
+    result = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
     return result
 
 
-def _enhance_lips(img_bgr, landmarks, w, h, strength):
+def _enhance_lips(img_bgr, face_data, strength):
     if strength == 0:
         return img_bgr
     s = strength / 100.0
 
-    outer = _landmarks_to_points(landmarks, _LANDMARK_INDICES["lips_outer"], w, h)
-    inner = _landmarks_to_points(landmarks, _LANDMARK_INDICES["lips_inner"], w, h)
+    outer = face_data.points["lips_outer"]
+    inner = face_data.points["lips_inner"]
 
     mask = np.zeros(img_bgr.shape[:2], dtype=np.uint8)
     cv2.fillPoly(mask, [outer], 255)
@@ -204,16 +213,20 @@ def _whiten_skin_lab(img_bgr, skin_mask, strength):
     s = strength / 100.0
     lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
     lab[:, :, 0] = np.clip(lab[:, :, 0] + skin_mask * 20 * s, 0, 255)
-    lab[:, :, 1] = np.clip(lab[:, :, 1] - skin_mask * 8 * s, 0, 255)
-    lab[:, :, 2] = np.clip(lab[:, :, 2] - skin_mask * 8 * s, 0, 255)
+    lab[:, :, 1] = np.clip(lab[:, :, 1] - skin_mask * 2 * s, 0, 255)
+    lab[:, :, 2] = np.clip(lab[:, :, 2] + skin_mask * 4 * s, 0, 255)
     return cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
 
 def _adjust_contrast(img, contrast):
     if contrast == 0:
         return img
-    f = (259 * (contrast + 255)) / (255 * (259 - contrast))
-    return np.clip(f * (img.astype(np.float32) - 128) + 128, 0, 255).astype(np.uint8)
+    t = contrast / 100.0
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
+    l = lab[:, :, 0] / 255.0
+    l = np.clip(0.5 + (l - 0.5) * (1.0 + t * 0.5), 0, 1)
+    lab[:, :, 0] = l * 255.0
+    return cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
 
 def detect_faces(img_bgr):
@@ -223,6 +236,23 @@ def detect_faces(img_bgr):
     landmarker = _get_landmarker()
     result = landmarker.detect(mp_img)
     return result.face_landmarks if result and result.face_landmarks else []
+
+
+def _build_face_data(face_landmarks, img_shape, w, h):
+    points = {
+        k: _landmarks_to_points(face_landmarks, v, w, h)
+        for k, v in _LANDMARK_INDICES.items()
+    }
+    skin_mask = _face_skin_mask(img_shape, points, w, h)
+    ied = _inter_eye_distance(face_landmarks, w, h)
+    rad = max(int(ied / 20), 3)
+    return _FaceData(
+        landmarks=face_landmarks,
+        w=w, h=h,
+        skin_mask=skin_mask,
+        ied=ied, rad=rad,
+        points=points,
+    )
 
 
 def retouch(
@@ -241,35 +271,30 @@ def retouch(
     faces = detect_faces(img_bgr)
 
     if faces:
+        face_datas = [_build_face_data(f, img_bgr.shape, w, h) for f in faces]
+
         combined_skin_mask = np.zeros((h, w), dtype=np.float32)
+        for fd in face_datas:
+            combined_skin_mask = np.maximum(combined_skin_mask, fd.skin_mask)
 
-        for face_landmarks in faces:
-            skin_mask = _face_skin_mask(img_bgr.shape, face_landmarks, w, h)
-            combined_skin_mask = np.maximum(combined_skin_mask, skin_mask)
+        if smooth > 0:
+            avg_rad = max(int(np.mean([fd.rad for fd in face_datas])), 3)
+            low, high = _frequency_separate(result, avg_rad)
+        else:
+            low = high = None
 
-            dist = _inter_eye_distance(face_landmarks, w, h)
-            rad = max(int(dist / 20), 3)
-
+        for fd in face_datas:
             if eye_enhance > 0:
-                result = _enhance_eyes_mediapipe(
-                    result, face_landmarks, w, h, eye_enhance
-                )
+                result = _enhance_eyes_mediapipe(result, fd, eye_enhance)
 
             if lip_enhance > 0:
-                result = _enhance_lips(
-                    result, face_landmarks, w, h, lip_enhance
-                )
+                result = _enhance_lips(result, fd, lip_enhance)
 
             if dark_circles > 0:
-                result = _dodge_burn(
-                    result, face_landmarks, w, h, dark_circles
-                )
+                result = _dodge_burn(result, fd, dark_circles)
 
             if smooth > 0:
-                face_skin = _face_skin_mask(img_bgr.shape, face_landmarks, w, h)
-                low, high = _frequency_separate(result, rad)
                 smooth_strength = smooth / 100.0
-
                 smoothed_low = cv2.bilateralFilter(
                     low, int(5 + smooth_strength * 25),
                     int(10 + smooth_strength * 90),
@@ -277,13 +302,12 @@ def retouch(
                 )
 
                 if no_texture:
-                    result = result * (1 - face_skin[..., None]) + \
-                             smoothed_low * face_skin[..., None]
+                    face_blend = smoothed_low
                 else:
-                    recombined = _frequency_recombine(smoothed_low, high)
-                    result = result * (1 - face_skin[..., None]) + \
-                             recombined * face_skin[..., None]
+                    face_blend = _frequency_recombine(smoothed_low, high)
 
+                result = result * (1 - fd.skin_mask[..., None]) + \
+                         face_blend * fd.skin_mask[..., None]
                 result = np.clip(result, 0, 255).astype(np.uint8)
 
         if whiten > 0:
@@ -291,11 +315,10 @@ def retouch(
 
     else:
         if smooth > 0:
-            low = cv2.GaussianBlur(result, (0, 0), 15)
-            high = cv2.subtract(result.astype(np.int16), low.astype(np.int16)) + 128
-            high = np.clip(high, 0, 255).astype(np.uint8)
-            smoothed_low = cv2.bilateralFilter(low, 15, 50, 50)
-            recombined = _frequency_recombine(smoothed_low, high)
+            low = cv2.GaussianBlur(result, (0, 0), 15).astype(np.float32)
+            high = result.astype(np.float32) - low
+            smoothed_low = cv2.bilateralFilter(low.astype(np.uint8), 15, 50, 50)
+            recombined = np.clip(smoothed_low.astype(np.float32) + high, 0, 255).astype(np.uint8)
             result = recombined
 
         if whiten > 0:

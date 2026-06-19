@@ -83,8 +83,8 @@ class StyleAnalyzer:
         orig_l, orig_a, orig_b = cv2.split(orig_lab)
         edit_l, edit_a, edit_b = cv2.split(edit_lab)
 
-        # Global Brightness Delta (difference in LAB L channel mean)
-        brightness_delta = float(np.mean(edit_l) - np.mean(orig_l))
+        # Global Brightness Delta (difference in LAB L channel median, more robust than mean)
+        brightness_delta = float(np.percentile(edit_l, 50) - np.percentile(orig_l, 50))
 
         # Global Contrast (difference of 95th-5th percentiles mapped to slider range [-50, 50] to resist exposure bias)
         orig_p95 = np.percentile(orig_l, 95)
@@ -159,9 +159,20 @@ class StyleAnalyzer:
                     skin_b_mean_delta = float(np.mean(edit_skin_b) - np.mean(orig_skin_b))
 
                     # Analyze textures via frequency separation
-                    face_width = face.ied * 2.5
-                    orig_layers = freq_separate(original_img, face_width)
-                    edit_layers = freq_separate(edited_img, face_width)
+                    # Crop to skin bounding box first — 5-20x faster on large portraits
+                    fs_radius = face_width
+                    skin_ys, skin_xs = np.where(skin_indices)
+                    y0 = max(0, int(skin_ys.min()) - 50)
+                    y1 = min(h_img, int(skin_ys.max()) + 50)
+                    x0 = max(0, int(skin_xs.min()) - 50)
+                    x1 = min(w_img, int(skin_xs.max()) + 50)
+
+                    crop_orig = original_img[y0:y1, x0:x1]
+                    crop_edit = edited_img[y0:y1, x0:x1]
+                    crop_skin = skin_indices[y0:y1, x0:x1]
+
+                    orig_layers = freq_separate(crop_orig, fs_radius)
+                    edit_layers = freq_separate(crop_edit, fs_radius)
 
                     # Convert multi-channel layers to 1D luminance arrays to avoid channel shape bugs
                     weights = np.array([0.114, 0.587, 0.299], dtype=np.float32)  # BGR weights
@@ -171,8 +182,8 @@ class StyleAnalyzer:
                     edit_high_gray = np.dot(edit_layers.high, weights)
 
                     # Extract mid frequency energy inside skin mask
-                    orig_mid_skin = orig_mid_gray[skin_indices]
-                    edit_mid_skin = edit_mid_gray[skin_indices]
+                    orig_mid_skin = orig_mid_gray[crop_skin]
+                    edit_mid_skin = edit_mid_gray[crop_skin]
                     orig_mid_energy = np.mean(np.abs(orig_mid_skin))
                     edit_mid_energy = np.mean(np.abs(edit_mid_skin))
 
@@ -180,8 +191,8 @@ class StyleAnalyzer:
                     skin_mid_reduction = float(np.clip(1.0 - mid_ratio, 0.0, 1.0))
 
                     # Extract high frequency energy inside skin mask
-                    orig_high_skin = orig_high_gray[skin_indices]
-                    edit_high_skin = edit_high_gray[skin_indices]
+                    orig_high_skin = orig_high_gray[crop_skin]
+                    edit_high_skin = edit_high_gray[crop_skin]
                     orig_high_energy = np.mean(np.abs(orig_high_skin))
                     edit_high_energy = np.mean(np.abs(edit_high_skin))
 
@@ -216,8 +227,9 @@ class StyleApplier:
 
     def apply(self, target_img: np.ndarray, profile: StyleProfile) -> np.ndarray:
         """Process target_img using parameter values resolved from the StyleProfile."""
-        # 1. Map global parameters (brightness delta L maps to slider value ≈ scale by 2.0)
-        brightness_val = np.clip(profile.brightness_delta * 2.0, -100.0, 100.0)
+        # 1. Map global parameters (brightness delta L maps to slider value ≈ scale by 1.0)
+        #    gamma model: brightness=10 → gamma=0.9 → mid-gray +9L, so factor ~1.0
+        brightness_val = np.clip(profile.brightness_delta * 1.0, -100.0, 100.0)
 
         # 2. Map skin parameters
         smooth_val = np.clip(profile.skin_smooth_strength * 100.0, 0.0, 100.0)
@@ -232,7 +244,7 @@ class StyleApplier:
         else:
             whiten_tone = "neutral"
 
-        return self.engine.process(
+        result = self.engine.process(
             target_img,
             smooth=smooth_val,
             mid_reduction=mid_red_val,
@@ -241,7 +253,33 @@ class StyleApplier:
             whiten_tone=whiten_tone,
             contrast=profile.contrast_delta,
             brightness=brightness_val,
+            saturation=profile.saturation_delta,
         )
+
+        # 3. Direct LAB skin tone shift (preserves fine-grained A/B deltas)
+        if abs(profile.skin_a_mean_delta) > 0.5 or abs(profile.skin_b_mean_delta) > 0.5:
+            faces = self.engine._detector.detect(result)
+            if faces:
+                faces = sorted(faces, key=lambda f: f.bbox[2] * f.bbox[3], reverse=True)
+                person = self.engine._detector.segment_person(result)
+                person_f = person.astype(np.float32)
+                if person_f.max() > 1.0:
+                    person_f /= 255.0
+                if person_f.ndim == 3:
+                    person_f = person_f[:, :, 0]
+                regions = self.engine._parser.parse(
+                    faces[0].landmarks, result, faces[0].bbox, person_f, faces[0].ied
+                )
+                if regions.skin is not None:
+                    s_mask = regions.skin.astype(np.float32)
+                    if s_mask.max() > 1.0:
+                        s_mask /= 255.0
+                    lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB).astype(np.float32)
+                    lab[:, :, 1] += profile.skin_a_mean_delta * s_mask
+                    lab[:, :, 2] += profile.skin_b_mean_delta * s_mask
+                    result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +331,8 @@ def reinhard_transfer_masked(
     for c in range(3):
         val = src_lab[:, :, c]
         # Guard against ratio explosion if src std is extremely low
+        if std_src[c] < 1e-3:
+            continue
         ratio = np.clip(std_ref[c] / std_src[c], 0.3, 3.0)
         trans_val = (val - mean_src[c]) * ratio + mean_ref[c]
         trans_lab[:, :, c] = val * (1.0 - src_mask) + trans_val * src_mask
@@ -342,6 +382,9 @@ def subject_aware_transfer(
 
     # --- Skin & Hair Transfer (if faces detected in both) ---
     if target_faces and ref_faces:
+        # Sort both by area descending for deterministic largest-face matching
+        target_faces = sorted(target_faces, key=lambda f: f.bbox[2] * f.bbox[3], reverse=True)
+        ref_faces = sorted(ref_faces, key=lambda f: f.bbox[2] * f.bbox[3], reverse=True)
         t_face = target_faces[0]
         r_face = ref_faces[0]
 

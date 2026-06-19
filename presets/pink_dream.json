@@ -1,0 +1,36 @@
+{
+  "description": "Xiaohongshu inspired pink anime cosplay style with blue-indigo shadows",
+  "curves": {
+    "L": [[0, 6], [64, 68], [128, 140], [192, 204], [255, 248]]
+  },
+  "rgb_curves": {
+    "R": [[0, 2], [64, 66], [128, 138], [192, 202], [255, 252]],
+    "G": [[0, 0], [64, 54], [128, 120], [192, 186], [255, 242]],
+    "B": [[0, 22], [64, 72], [128, 130], [192, 192], [255, 245]]
+  },
+  "white_balance": {
+    "R": 1.04,
+    "G": 0.98,
+    "B": 0.98
+  },
+  "calibration": {
+    "red": {"hue": 8.0, "sat": 15.0},
+    "green": {"hue": -30.0, "sat": -20.0},
+    "blue": {"hue": 10.0, "sat": 8.0}
+  },
+  "hsl_adjustments": {
+    "hue": {"red": 5, "orange": -10, "yellow": -30, "cyan": -10, "blue": -10, "purple": 8, "magenta": 8},
+    "saturation": {"red": 12, "orange": -10, "yellow": -65, "green": -85, "cyan": -20, "blue": 18, "purple": 30, "magenta": 30},
+    "luminance": {"red": 10, "orange": 22, "yellow": 0, "cyan": 0, "blue": 8, "purple": 8, "magenta": 18}
+  },
+  "split_tone_three_way": {
+    "shadows": {"hue": 255.0, "sat": 25.0},
+    "midtones": {"hue": 325.0, "sat": 12.0},
+    "highlights": {"hue": 215.0, "sat": 6.0},
+    "balance": 10.0
+  },
+  "glow": 0.025,
+  "orton_glow": 0.01,
+  "vignette": 0.06,
+  "grain": 0.02
+}

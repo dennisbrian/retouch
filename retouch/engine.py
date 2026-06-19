@@ -278,15 +278,20 @@ class ProcessingResult(np.ndarray):
 # Recipe helpers
 # ---------------------------------------------------------------------------
 
-def resolve_recipe(name: str) -> Dict:
+def resolve_recipe(name: str, _seen: Optional[set] = None) -> Dict:
     """Return a fully-merged recipe dict, resolving 'extends' recursively."""
+    if _seen is None:
+        _seen = set()
+    if name in _seen:
+        return RECIPES.get("natural", {})
+    _seen.add(name)
     rec = RECIPES.get(name)
     if rec is None:
         rec = RECIPES.get("natural", {})
     parent_name = rec.get("extends")
     if parent_name and parent_name in RECIPES:
         import copy
-        resolved_parent = resolve_recipe(parent_name)
+        resolved_parent = resolve_recipe(parent_name, _seen)
         merged = copy.deepcopy(resolved_parent)
         _deep_merge(merged, rec)
         return merged
@@ -719,7 +724,7 @@ class RetouchEngine:
             if overrides["contrast"] is None:
                 ctx.contrast = style_profile.contrast_delta
             if overrides["brightness"] is None:
-                ctx.brightness = np.clip(style_profile.brightness_delta * 2.0, -100.0, 100.0)
+                ctx.brightness = np.clip(style_profile.brightness_delta * 1.0, -100.0, 100.0)
             if overrides["smooth"] is None:
                 ctx.smooth = np.clip(style_profile.skin_smooth_strength * 100.0, 0.0, 100.0)
             if overrides["mid_reduction"] is None:
@@ -735,6 +740,8 @@ class RetouchEngine:
                     ctx.whiten_tone = "porcelain"
                 else:
                     ctx.whiten_tone = "neutral"
+            if overrides["saturation"] is None:
+                ctx.saturation = np.clip(style_profile.saturation_delta, -100.0, 100.0)
 
         # ------------------------------------------------------------------
         # Stage 0 — Detection + segmentation
@@ -795,8 +802,10 @@ class RetouchEngine:
         # ------------------------------------------------------------------
         # Stage 4 — Subject-background separation
         # ------------------------------------------------------------------
+        t_subj = time.perf_counter()
         if ctx.subject_separation > 0:
             result = self._stage_subject_separation(result, person_mask, ctx)
+        timings["subject_separation"] = (time.perf_counter() - t_subj) * 1000
 
         # ------------------------------------------------------------------
         # Stage 5 — Colour grading
@@ -806,7 +815,7 @@ class RetouchEngine:
         timings["grading"] = (time.perf_counter() - t4) * 1000
 
         # ------------------------------------------------------------------
-        # Stage 5 — Selective sharpening + impact finish
+        # Stage 6 — Selective sharpening + impact finish
         # ------------------------------------------------------------------
         t5 = time.perf_counter()
         result = self._stage_finish(result, ctx, acc_sharpen, faces=faces)
@@ -817,6 +826,15 @@ class RetouchEngine:
         # ------------------------------------------------------------------
         if fast and scale < 1.0:
             result = cv2.resize(result, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
+
+        # Direct LAB skin tone shift from style profile
+        if style_profile is not None:
+            if abs(style_profile.skin_a_mean_delta) > 0.5 or abs(style_profile.skin_b_mean_delta) > 0.5:
+                if faces and acc_skin is not None and acc_skin.max() > 0.01:
+                    lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB).astype(np.float32)
+                    lab[:, :, 1] += style_profile.skin_a_mean_delta * acc_skin
+                    lab[:, :, 2] += style_profile.skin_b_mean_delta * acc_skin
+                    result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
 
         timings["total"] = sum(timings.values())
 
@@ -876,8 +894,7 @@ class RetouchEngine:
         result = img.copy()
         if ctx.subject_separation > 0:
             result = self._stage_subject_separation(result, person_mask, ctx)
-        if ctx.contrast:
-            result = _adjust_contrast(result, ctx.contrast)
+        result = self._stage_global(result, ctx)
 
         # Assemble post-effects settings
         post_effects: Dict[str, Any] = {}
@@ -1354,15 +1371,16 @@ class RetouchEngine:
         L = lab[:, :, 0]
 
         # Subject brighten: +0.3 EV = multiply by 2^(0.3) ≈ 1.23
-        subject_gain = 1.0 + 0.23 * strength
-        background_gain = 1.0 - 0.33 * strength  # -0.4 EV ≈ * 0.76
+        s = strength / 100.0
+        subject_gain = 1.0 + 0.23 * s
+        background_gain = 1.0 - 0.33 * s  # -0.4 EV ≈ * 0.76
 
         mask_subject = pm
         mask_bg = np.clip(1.0 - pm, 0.0, 1.0)
 
         L_new = L * (mask_subject * subject_gain + mask_bg * background_gain)
         lab[:, :, 0] = np.clip(L_new, 0.0, 255.0)
-        return cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
+        return cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
 
     def _stage_global(self, img: np.ndarray, ctx: ProcessingContext) -> np.ndarray:
         """Global tonal operators (contrast, brightness, HSL tonal curve)."""
@@ -1389,6 +1407,15 @@ class RetouchEngine:
                 whites=ctx.whites or 0,
                 blacks=ctx.blacks or 0,
             )
+
+        if ctx.clarity:
+            result = self._grader._add_clarity(result, ctx.clarity / 100.0)
+
+        if ctx.vibrance:
+            result = _adjust_vibrance(result, ctx.vibrance)
+
+        if ctx.saturation:
+            result = _adjust_saturation(result, ctx.saturation)
 
         return result
 
@@ -1459,6 +1486,15 @@ class RetouchEngine:
                 skip_glows=skip_glows, skip_post_effects=True,
             )
 
+        # Apply recipe-level split toning (from ProcessingContext, not preset)
+        if any((ctx.shadow_hue, ctx.shadow_sat, ctx.midtone_hue, ctx.midtone_sat, ctx.highlight_hue, ctx.highlight_sat)):
+            tones = {
+                "shadows": {"hue": ctx.shadow_hue, "sat": ctx.shadow_sat},
+                "midtones": {"hue": ctx.midtone_hue, "sat": ctx.midtone_sat},
+                "highlights": {"hue": ctx.highlight_hue, "sat": ctx.highlight_sat},
+            }
+            result = self._grader._split_tone_three_way(result, tones, mask=acc_skin)
+
         # Apply Global Cinematic Bloom (runs after color grading, but before halation/grain)
         if ctx.bloom > 0.0:
             result = apply_global_bloom(
@@ -1489,14 +1525,18 @@ class RetouchEngine:
         faces=None,
     ) -> np.ndarray:
         result = img
-        if acc_sharpen.max() > 0.01:
-            radius = 0.8
+        sharpen_mask = acc_sharpen
+        if ctx.sharpen > 0 and sharpen_mask.max() <= 0.01:
+            sharpen_mask = np.ones_like(sharpen_mask)
+        if ctx.sharpen > 0 or acc_sharpen.max() > 0.01:
+            radius = ctx.sharpen_radius
             if faces:
                 avg_ied = np.mean([f.ied for f in faces])
-                radius = 0.8 * (avg_ied / 80.0)
+                radius = ctx.sharpen_radius * (avg_ied / 80.0)
                 radius = max(0.5, min(4.0, radius))
+            amount = max(1.2, ctx.sharpen / 100.0 * 2.0) if ctx.sharpen > 0 else 1.2
             result = _apply_selective_sharpening(
-                result, acc_sharpen, radius=radius, amount=1.2, threshold=2
+                result, sharpen_mask, radius=radius, amount=amount, threshold=2
             )
         if ctx.impact > 0:
             result = self._grader.add_impact_finish(result, ctx.impact)
@@ -1544,6 +1584,30 @@ class RetouchEngine:
 # ---------------------------------------------------------------------------
 # Module-level pure helpers (also used by tests)
 # ---------------------------------------------------------------------------
+
+def _adjust_vibrance(img: np.ndarray, vibrance: float) -> np.ndarray:
+    """Smart saturation boost — protects skin tones, boosts unsaturated areas more."""
+    if vibrance == 0:
+        return img
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV).astype(np.float32)
+    h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+    factor = 1.0 + (vibrance / 100.0) * (1.0 - s / 255.0)
+    skin_hue = ((h > 0) & (h < 25)) | ((h > 160) & (h < 180))
+    skin_factor = np.clip(1.0 - (vibrance / 100.0) * 0.5, 0.5, 1.0)
+    factor = np.where(skin_hue, np.minimum(factor, skin_factor), factor)
+    hsv[:, :, 1] = np.clip(s * factor, 0, 255)
+    return cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+
+
+def _adjust_saturation(img: np.ndarray, saturation: float) -> np.ndarray:
+    """Uniform saturation adjustment."""
+    if saturation == 0:
+        return img
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV).astype(np.float32)
+    factor = 1.0 + saturation / 100.0
+    hsv[:, :, 1] = np.clip(hsv[:, :, 1] * factor, 0, 255)
+    return cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+
 
 def _adjust_contrast(img: np.ndarray, contrast: float) -> np.ndarray:
     if contrast == 0:

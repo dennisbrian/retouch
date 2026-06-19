@@ -96,6 +96,17 @@ def _process_single(args):
 
         return (img_path.name, "done")
     except Exception as e:
+        from retouch.utils import log_crash
+        log_crash(e, {
+            "image_path": str(img_path),
+            "output_dir": str(output_dir) if output_dir else None,
+            "params": str(params),
+            "format_arg": format_arg,
+            "quality": quality,
+            "max_dim": max_dim,
+            "compare_flag": compare_flag,
+            "global_only": global_only
+        })
         return (img_path.name, f"failed: {e}")
 
 

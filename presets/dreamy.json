@@ -1,0 +1,15 @@
+{
+  "description": "Dreamy soft-focus look with warm highlights and pastel shadows",
+  "curves": {
+    "L": [[0, 10], [45, 50], [128, 132], [200, 215], [255, 250]]
+  },
+  "warmth": 0.03,
+  "saturation_boost": 0.08,
+  "shadow_lift": 8,
+  "vignette": 0.05,
+  "glow": 0.04,
+  "split_tone": {
+    "shadows": [124, 126],
+    "highlights": [133, 131]
+  }
+}
