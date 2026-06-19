@@ -27,6 +27,9 @@ class TestProcessingContext:
         assert ctx.whiten == 0.0
         assert ctx.contrast == 0.0
         assert ctx.impact == 0.0
+        assert ctx.bloom == 0.0
+        assert ctx.bloom_threshold == 210.0
+        assert ctx.bloom_softness == 30.0
         assert ctx.active_recipe == "natural"
         assert ctx.whiten_tone == "rosy"
 
@@ -99,6 +102,15 @@ class TestBuildContext:
         rec = RECIPES.get("natural", {})
         ctx = build_context("natural", rec, {"smooth": 90.0})
         assert ctx.smooth == 90.0
+
+    def test_override_bloom(self):
+        rec = {"bloom": {"opacity": 0.05, "threshold": 220.0, "softness": 15.0}}
+        ctx = build_context("natural", rec, {"bloom": 40.0})
+        # Override wins
+        assert ctx.bloom == 40.0
+        # Recipe default threshold wins
+        assert ctx.bloom_threshold == 220.0
+        assert ctx.bloom_softness == 15.0
 
     def test_color_grade_default_intensity(self):
         rec = RECIPES.get("natural", {})
@@ -248,3 +260,21 @@ class TestAccum:
         m = np.ones((10, 10), dtype=np.float32)
         result = _accum(acc, m)
         assert result.max() == 1.0
+
+
+class TestEngineBloom:
+    def test_no_face_fallback_applies_bloom(self, engine):
+        # A dark 100x100 image with a bright square in the center
+        img = np.zeros((100, 100, 3), dtype=np.uint8)
+        img[45:55, 45:55] = 255
+        
+        # When processing an image with no faces, _no_face_fallback is triggered
+        # We specify bloom override
+        res = engine.process(img, bloom=100.0, bloom_threshold=200.0, bloom_softness=10.0)
+        
+        # Check that bloom is applied by verifying that outer pixels are brightened
+        assert res.shape == (100, 100, 3)
+        assert np.any(res[40, 40] > 0)
+        assert res.params.bloom == 100.0
+        assert res.params.bloom_threshold == 200.0
+        assert res.params.bloom_softness == 10.0

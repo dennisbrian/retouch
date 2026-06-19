@@ -12,6 +12,7 @@ from retouch.utils import (
     apply_curve,
     correct_exposure,
     adaptive_ksize,
+    apply_global_bloom,
 )
 
 
@@ -180,3 +181,37 @@ class TestAdaptiveKsize:
         k1 = adaptive_ksize(100, factor=0.1, minimum=3)
         k2 = adaptive_ksize(200, factor=0.1, minimum=3)
         assert k2 >= k1
+
+
+class TestGlobalBloom:
+    def test_zero_strength_returns_original(self):
+        img = np.full((100, 100, 3), 128, dtype=np.uint8)
+        result = apply_global_bloom(img, strength=0.0, threshold=200.0, softness=30.0)
+        assert np.all(result == img)
+
+    def test_bloom_disperses_highlights(self):
+        # Create a dark image with a bright square in the center
+        img = np.zeros((100, 100, 3), dtype=np.uint8)
+        img[45:55, 45:55] = 255  # bright highlight
+        
+        # Apply bloom with 100 strength, 200 threshold, and 10 softness
+        result = apply_global_bloom(img, strength=100.0, threshold=200.0, softness=10.0)
+        
+        # Verify that the center is still bright
+        assert np.all(result[49, 49] > 200)
+        # Verify that pixels outside the original highlight are now non-zero (bloom dispersion)
+        assert np.any(result[40, 40] > 0)
+        assert np.any(result[60, 60] > 0)
+
+    def test_low_threshold_glows_all(self):
+        img = np.full((50, 50, 3), 160, dtype=np.uint8)
+        result = apply_global_bloom(img, strength=50.0, threshold=150.0, softness=20.0)
+        # Low threshold means the entire image glows, screen blending increases brightness
+        assert result.mean() > img.mean()
+
+    def test_downsampled_large_image(self):
+        # Create a large image (> 2000px min_dim)
+        img = np.zeros((2200, 2200, 3), dtype=np.uint8)
+        img[1000:1200, 1000:1200] = 255
+        result = apply_global_bloom(img, strength=50.0, threshold=200.0, softness=30.0)
+        assert result.shape == (2200, 2200, 3)

@@ -339,7 +339,17 @@ PRESETS = {
 class ColorGrader:
     """Apply colour grading presets to finalise image tone/mood."""
 
-    def grade(self, img_bgr, preset="natural", intensity=1.0, split_tone_mask=None, glow_mask=None, haze_mask=None):
+    def grade(
+        self,
+        img_bgr,
+        preset="natural",
+        intensity=1.0,
+        split_tone_mask=None,
+        glow_mask=None,
+        haze_mask=None,
+        skip_glows=False,
+        skip_post_effects=False,
+    ):
         """Apply a colour grading preset.
 
         Args:
@@ -408,7 +418,7 @@ class ColorGrader:
             result = self._add_haze(result, settings["haze"], mask=haze_mask)
 
         # ---- Halation ----
-        if "halation" in settings:
+        if "halation" in settings and not skip_post_effects:
             h_conf = settings["halation"]
             if isinstance(h_conf, (int, float)):
                 result = self._add_halation(result, intensity=float(h_conf))
@@ -425,7 +435,7 @@ class ColorGrader:
             result = self._add_vignette(result, settings["vignette"])
 
         # ---- Smart Glow (Soft Bloom) ----
-        if settings.get("glow", 0) > 0:
+        if settings.get("glow", 0) > 0 and not skip_glows:
             result = self._add_glow(
                 result,
                 settings["glow"],
@@ -434,7 +444,7 @@ class ColorGrader:
             )
 
         # ---- Orton Glow ----
-        if settings.get("orton_glow", 0) > 0:
+        if settings.get("orton_glow", 0) > 0 and not skip_glows:
             result = self._add_orton_glow(result, settings["orton_glow"], mask=glow_mask)
 
         # ---- Sparkles overlay ----
@@ -442,15 +452,15 @@ class ColorGrader:
             result = self._add_sparkles(result, settings["sparkles"])
 
         # ---- Chromatic Aberration ----
-        if settings.get("chromatic_aberration", 0) > 0:
+        if settings.get("chromatic_aberration", 0) > 0 and not skip_post_effects:
             result = self._add_chromatic_aberration(result, settings["chromatic_aberration"])
 
         # ---- LUT Emulation ----
-        if "lut" in settings:
+        if "lut" in settings and not skip_post_effects:
             result = self._add_lut_emulation(result, settings["lut"])
 
         # ---- Grain ----
-        if settings.get("grain", 0) > 0:
+        if settings.get("grain", 0) > 0 and not skip_post_effects:
             result = self._add_grain(result, settings["grain"])
 
         # ---- Blend with original by intensity ----

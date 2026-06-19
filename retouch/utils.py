@@ -254,3 +254,75 @@ def correct_exposure(
         return cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR), True
 
     return img_bgr, False
+
+
+def apply_global_bloom(
+    img_bgr: np.ndarray,
+    strength: float,
+    threshold: float = 210.0,
+    softness: float = 30.0,
+) -> np.ndarray:
+    """Apply a multi-scale atmospheric glow/bloom effect to the entire image.
+
+    Resembles Composite Nation's Oniric Photoshop plugin.
+    Isolates highlight regions above the threshold, blurs at 3 scales, and screen-blends.
+    """
+    if strength <= 0:
+        return img_bgr
+
+    # Convert to LAB to isolate highlights based on L (luminance) channel
+    lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    l_chan = lab[:, :, 0]
+
+    # Soft threshold ramp from threshold to threshold + softness
+    soft_w = max(1.0, softness)
+    highlight_mask = np.clip((l_chan - threshold) / soft_w, 0.0, 1.0)
+    
+    if highlight_mask.max() < 0.01:
+        return img_bgr
+
+    h, w = img_bgr.shape[:2]
+    min_dim = min(h, w)
+    
+    # Isolate highlights in float32 (color-preserving, avoid early quantization to uint8)
+    highlights = img_bgr.astype(np.float32) * highlight_mask[:, :, np.newaxis]
+
+    # Downsampled bloom optimization for large images
+    target_min = 2000
+    is_downsampled = min_dim > target_min
+    if is_downsampled:
+        scale = target_min / min_dim
+        highlights_low = cv2.resize(
+            highlights, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA
+        )
+        blur_dim = min(highlights_low.shape[:2])
+    else:
+        highlights_low = highlights
+        blur_dim = min_dim
+
+    # Cascaded Gaussian blurs representing different scales of atmospheric glow (1%, 3%, 8%)
+    k1 = max(15, int(blur_dim * 0.01)) | 1
+    k2 = max(31, int(blur_dim * 0.03)) | 1
+    k3 = max(63, int(blur_dim * 0.08)) | 1
+
+    blur1 = cv2.GaussianBlur(highlights_low, (k1, k1), 0)
+    blur2 = cv2.GaussianBlur(highlights_low, (k2, k2), 0)
+    blur3 = cv2.GaussianBlur(highlights_low, (k3, k3), 0)
+
+    # Blend multi-scale glows to form realistic falloff
+    glow_low = blur1 * 0.5 + blur2 * 0.3 + blur3 * 0.2
+    
+    if is_downsampled:
+        glow = cv2.resize(glow_low, (w, h), interpolation=cv2.INTER_LINEAR)
+    else:
+        glow = glow_low
+    
+    # Screen blend to avoid clipping:
+    # screen = 255 - ((255 - img) * (255 - glow) / 255)
+    img_f = img_bgr.astype(np.float32)
+    screen = 255.0 - ((255.0 - img_f) * (255.0 - glow) / 255.0)
+
+    # Linearly interpolate between original BGR and Screened BGR based on strength factor
+    s_factor = strength / 100.0
+    result = img_f * (1.0 - s_factor) + screen * s_factor
+    return np.clip(result, 0, 255).astype(np.uint8)

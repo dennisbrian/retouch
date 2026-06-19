@@ -49,6 +49,9 @@ def recipe_defaults(recipe_name):
         "hair_enhance": int(rec["hair"].get("shine", 0) * 100),
         "dodge_burn": int(rec["dodge_burn"].get("amount", 0) * 100),
         "specular_bloom": rec.get("specular_bloom", 0),
+        "bloom": int(rec.get("bloom", {}).get("opacity", 0.0) * 100),
+        "bloom_threshold": int(rec.get("bloom", {}).get("threshold", 210.0)),
+        "bloom_softness": int(rec.get("bloom", {}).get("softness", 30.0)),
         "contrast": rec.get("contrast", 0),
         "brightness": 0,
         "highlights": 0,
@@ -65,7 +68,7 @@ def get_custom_style_names():
 
 def apply_custom_style(style_name):
     if not style_name:
-        return [gr.update()]*24
+        return [gr.update()]*27
     
     styles = list_styles()
     target = None
@@ -75,7 +78,7 @@ def apply_custom_style(style_name):
             break
             
     if not target:
-        return [gr.update()]*24
+        return [gr.update()]*27
         
     p_dict = target["profile"]
     profile = StyleProfile(**p_dict)
@@ -93,7 +96,7 @@ def apply_custom_style(style_name):
         0, 0, 30,
         5, 5,
         5, "none", 0,
-        5, 0, 0, contrast_val, brightness_val,
+        5, 0, 0, 0, 210, 30, contrast_val, brightness_val,
         0, 0, 0, 0
     )
 
@@ -211,7 +214,7 @@ def process_image(img_paths, recipe,
                   relight, relight_azimuth, relight_elevation,
                   eye_enhance, teeth_whiten,
                   lip_enhance, lip_tint, blush,
-                  hair_enhance, dodge_burn, specular_bloom, contrast, brightness,
+                  hair_enhance, dodge_burn, specular_bloom, bloom, bloom_threshold, bloom_softness, contrast, brightness,
                   highlights, shadows, whites, blacks,
                   color_ref_path, color_ref_strength,
                   show_compare, fast,
@@ -276,6 +279,9 @@ def process_image(img_paths, recipe,
                 hair_enhance=hair_enhance,
                 dodge_burn=dodge_burn,
                 specular_bloom=specular_bloom,
+                bloom=bloom,
+                bloom_threshold=bloom_threshold,
+                bloom_softness=bloom_softness,
                 contrast=contrast,
                 brightness=brightness,
                 highlights=highlights,
@@ -356,7 +362,7 @@ def on_recipe_change(recipe):
         d["relight"], d["relight_azimuth"], d["relight_elevation"],
         d["eye_enhance"], d["teeth_whiten"],
         d["lip_enhance"], d["lip_tint"], d["blush"],
-        d["hair_enhance"], d["dodge_burn"], d["specular_bloom"], d["contrast"], d["brightness"],
+        d["hair_enhance"], d["dodge_burn"], d["specular_bloom"], d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["contrast"], d["brightness"],
         d["highlights"], d["shadows"], d["whites"], d["blacks"],
     )
 
@@ -436,6 +442,9 @@ with gr.Blocks(title="Retouch GUI", theme=gr.themes.Soft()) as app:
                         hair_enhance = gr.Slider(0, 100, 5, step=1, label="Hair Shine")
                         dodge_burn = gr.Slider(0, 100, 0, step=1, label="Dodge & Burn")
                         specular_bloom = gr.Slider(0, 100, 0, step=1, label="Specular Bloom")
+                        bloom = gr.Slider(0, 100, 0, step=1, label="Bloom")
+                        bloom_threshold = gr.Slider(150, 250, 210, step=1, label="Bloom Threshold")
+                        bloom_softness = gr.Slider(1, 100, 30, step=1, label="Bloom Softness")
 
                     with gr.Accordion("Color Transfer", open=False):
                         gr.Markdown("Upload a reference image to match its colour tone")
@@ -503,7 +512,7 @@ with gr.Blocks(title="Retouch GUI", theme=gr.themes.Soft()) as app:
                  relight, relight_azimuth, relight_elevation,
                  eye_enhance, teeth_whiten,
                  lip_enhance, lip_tint, blush,
-                 hair_enhance, dodge_burn, specular_bloom, contrast, brightness,
+                 hair_enhance, dodge_burn, specular_bloom, bloom, bloom_threshold, bloom_softness, contrast, brightness,
                  highlights, shadows, whites, blacks],
     )
 
@@ -515,7 +524,7 @@ with gr.Blocks(title="Retouch GUI", theme=gr.themes.Soft()) as app:
                  relight, relight_azimuth, relight_elevation,
                  eye_enhance, teeth_whiten,
                  lip_enhance, lip_tint, blush,
-                 hair_enhance, dodge_burn, specular_bloom, contrast, brightness,
+                 hair_enhance, dodge_burn, specular_bloom, bloom, bloom_threshold, bloom_softness, contrast, brightness,
                  highlights, shadows, whites, blacks],
     )
 
@@ -548,7 +557,7 @@ with gr.Blocks(title="Retouch GUI", theme=gr.themes.Soft()) as app:
                 relight, relight_azimuth, relight_elevation,
                 eye_enhance, teeth_whiten,
                 lip_enhance, lip_tint, blush,
-                hair_enhance, dodge_burn, specular_bloom, contrast, brightness,
+                hair_enhance, dodge_burn, specular_bloom, bloom, bloom_threshold, bloom_softness, contrast, brightness,
                 highlights, shadows, whites, blacks,
                 color_ref_img, color_ref_strength,
                 show_compare, fast,

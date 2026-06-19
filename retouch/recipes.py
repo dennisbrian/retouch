@@ -257,4 +257,87 @@ RECIPES = {
         "texture": {"opacity": 0.35},
         "specular_bloom": 50,
     },
+
+    # ------------------------------------------------------------------
+    # Anime Cinematic Series — AAA game promotional art look
+    # All numeric values mapped to engine recipe format (0-1 ratios where
+    # the engine multiplies by 100, or raw values for flat params).
+    # ------------------------------------------------------------------
+    "anime_cinematic_v1": {
+        "extends": "natural",
+
+        "frequency": {"smooth": 0.32, "mid_reduction": 0.22},
+        "skin": {"equalize": 0.38, "porcelain": 0.42},
+        "eyes": {"whites": 0.18, "iris": 0.22, "catchlight": 0.25, "dark_circles": 0.22},
+        "lips": {"tint": None, "gloss": 0.22},
+        "hair": {"shine": 0.75},
+        "dodge_burn": 18.0,
+        "texture": {"opacity": 0.88},
+
+        # Flat top-level keys (already wired in build_context)
+        "relight_strength": 35.0,
+        "light_azimuth": 45.0,
+        "light_elevation": 35.0,
+
+        "brightness": 6.0,
+        "contrast": 12.0,
+        "highlights": -10.0,
+        "shadows": -4.0,
+        "whites": 8.0,
+        "blacks": 6.0,
+        "clarity": 14.0,
+        "saturation": 6.0,
+        "vibrance": 12.0,
+
+        "shadow_hue": 225.0,
+        "shadow_sat": 12.0,
+        "midtone_hue": 0.0,
+        "midtone_sat": 0.0,
+        "highlight_hue": 320.0,
+        "highlight_sat": 10.0,
+
+        "bloom": {"opacity": 0.16, "threshold": 190.0},
+        "glow": 8.0,
+
+        "vignette": 6.0,
+        "sharpen": 20.0,
+        "sharpen_radius": 1.2,
+        "chromatic_aberration": 4.0,
+        "grain": 0.0,
+        "specular_bloom_tone": "rosy",
+    },
+
+    "anime_cinematic_soft": {
+        "extends": "anime_cinematic_v1",
+        "contrast": 8.0,
+        "skin": {"porcelain": 0.50},
+        "bloom": {"opacity": 0.22},
+        "highlight_sat": 6.0,
+        "clarity": 8.0,
+        "chromatic_aberration": 2.0,
+        "hair": {"shine": 0.85},
+    },
+
+    "anime_cinematic_action": {
+        "extends": "anime_cinematic_v1",
+        "contrast": 18.0,
+        "clarity": 24.0,
+        "sharpen": 30.0,
+        "relight_strength": 45.0,
+        "chromatic_aberration": 6.0,
+        "bloom": {"opacity": 0.10},
+        "vignette": 10.0,
+    },
+
+    "anime_cinematic_fantasy": {
+        "extends": "anime_cinematic_v1",
+        "brightness": 10.0,
+        "bloom": {"opacity": 0.25},
+        "glow": 18.0,
+        "skin": {"porcelain": 0.55},
+        "hair": {"shine": 0.90},
+        "highlight_sat": 14.0,
+        "shadow_sat": 14.0,
+        "chromatic_aberration": 5.0,
+    },
 }
