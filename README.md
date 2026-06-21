@@ -92,5 +92,6 @@ python3 -m pytest tests/ -v
 
 ## Documentation
 
+- [API.md](API.md) — Python API reference and parameter list
 - [ARCHITECTURE.md](ARCHITECTURE.md) — pipeline design and module breakdown
 - [BATCH_GUIDE.md](BATCH_GUIDE.md) — batch processing examples
