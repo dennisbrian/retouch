@@ -554,18 +554,12 @@ class ColorGrader:
             src_chan = lab_src[:, :, c]
             ref_chan = lab_ref[:, :, c]
             
-            # CRITICAL FIX: Use proper CDF interpolation to handle different dimensions 
-            # and accurately map intensity percentiles.
-            src_hist, _ = np.histogram(src_chan, bins=256, range=(0, 255))
-            src_cdf = src_hist.cumsum().astype(np.float32)
-            if src_cdf[-1] > 0: src_cdf /= src_cdf[-1]
-                
-            ref_hist, _ = np.histogram(ref_chan, bins=256, range=(0, 255))
-            ref_cdf = ref_hist.cumsum().astype(np.float32)
-            if ref_cdf[-1] > 0: ref_cdf /= ref_cdf[-1]
-                
-            mapping = np.interp(src_cdf, ref_cdf, np.arange(256))
-            mapped = mapping[src_chan].astype(np.uint8)
+            s_values, bin_idx, s_counts = np.unique(src_chan, return_inverse=True, return_counts=True)
+            ref_values, r_counts = np.unique(ref_chan, return_counts=True)
+            s_quantiles = np.cumsum(s_counts).astype(np.float64) / src_chan.size
+            r_quantiles = np.cumsum(r_counts).astype(np.float64) / ref_chan.size
+            interp_values = np.interp(s_quantiles, r_quantiles, ref_values)
+            mapped = interp_values[bin_idx].reshape(src_chan.shape).astype(np.uint8)
             channels.append(mapped)
 
         lab_result = np.stack(channels, axis=2)
@@ -573,6 +567,7 @@ class ColorGrader:
         if intensity < 1.0: result = cv2.addWeighted(img_bgr, 1.0 - intensity, result, intensity, 0)
         if mask is not None: return blend_masked(img_bgr, result, mask)
         return result
+
 
     def _add_haze(self, img_bgr, strength, mask=None):
         if strength <= 0: return img_bgr
