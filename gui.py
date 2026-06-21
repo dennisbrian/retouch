@@ -45,8 +45,7 @@ def recipe_defaults(recipe_name):
         "eye_enhance": int(rec["eyes"].get("whites", rec["eyes"].get("iris", 0)) * 100),
         "lip_enhance": int(rec["lips"].get("gloss", 0) * 100),
         "lip_tint": rec["lips"].get("tint", "none"),
-        "blush": 30 if recipe_name in ("anime_cinematic_v1", "anime_cinematic_soft", "anime_cinematic_action", "anime_cinematic_fantasy", "soft", "action", "fantasy")
-                 else (25 if recipe_name in ("cosplay", "scifi_cosplay", "cyber_doll", "anime_cosplay", "anime", "xiaohongshu", "idol", "wedding") else 0),
+        "blush": int(rec.get("blush", 0.0)),
         "teeth_whiten": int(rec["eyes"].get("whites", 0) * 100),
         "hair_enhance": int(rec["hair"].get("shine", 0) * 100),
         "dodge_burn": int(

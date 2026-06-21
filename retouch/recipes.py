@@ -14,8 +14,17 @@ RECIPES = {
         "color_harmony": {"preset": "natural", "amount": 0.00},
         "bloom": {"opacity": 0.00},
         "texture": {"opacity": 1.00},
+        
+        # Modular mappings
+        "slimming": 0.0,
+        "blush": 0.0,
+        "lip_finish": "gloss",
+        "nose_blush": False,
+        "under_eye_blush": False,
+        "white_costume_lift": False,
     },
     "portrait": {
+        "extends": "natural",
         "frequency": {"smooth": 0.45},
         "skin": {"equalize": 0.35, "rosy": 0.20},
         "eyes": {"whites": 0.15, "iris": 0.15, "catchlight": 0.15},
@@ -27,6 +36,7 @@ RECIPES = {
         "texture": {"opacity": 1.00},
     },
     "cosplay": {
+        "extends": "natural",
         "frequency": {"smooth": 0.55},
         "skin": {"equalize": 0.40, "rosy": 0.35},
         "eyes": {"whites": 0.30, "iris": 0.35, "catchlight": 0.25},
@@ -36,52 +46,39 @@ RECIPES = {
         "color_harmony": {"preset": "cosplay", "amount": 0.20},
         "bloom": {"opacity": 0.06},
         "texture": {"opacity": 0.90},
+        
+        # Modular overrides
+        "slimming": 30.0,
+        "blush": 25.0,
+        "nose_blush": True,
+        "under_eye_blush": True,
     },
     "cosplay_3d": {
-        "frequency": {"smooth": 0.55},
+        "extends": "cosplay",
         "skin": {"equalize": 0.00, "rosy": 0.35},
-        "eyes": {"whites": 0.30, "iris": 0.35, "catchlight": 0.25},
-        "lips": {"tint": "cosplay", "gloss": 0.20},
-        "hair": {"shine": 0.30},
-        "dodge_burn": {"amount": 0.15},
-        "color_harmony": {"preset": "cosplay", "amount": 0.20},
-        "bloom": {"opacity": 0.06},
-        "texture": {"opacity": 0.90},
     },
     "cosplay_no_eq": {
-        "frequency": {"smooth": 0.55},
+        "extends": "cosplay",
         "skin": {"equalize": 0.00, "rosy": 0.35},
-        "eyes": {"whites": 0.30, "iris": 0.35, "catchlight": 0.25},
-        "lips": {"tint": "cosplay", "gloss": 0.20},
-        "hair": {"shine": 0.30},
-        "dodge_burn": {"amount": 0.15},
-        "color_harmony": {"preset": "cosplay", "amount": 0.20},
-        "bloom": {"opacity": 0.06},
-        "texture": {"opacity": 0.90},
     },
     "xiaohongshu": {
+        "extends": "natural",
         "frequency": {"smooth": 0.50},
         "skin": {"equalize": 0.40, "rosy": 0.50},
         "eyes": {"whites": 0.25, "iris": 0.25, "catchlight": 0.20},
         "lips": {"tint": "rose", "gloss": 0.20},
         "hair": {"shine": 0.25},
         "dodge_burn": {"amount": 0.10},
-        "color_harmony": {"preset": "dreamy", "amount": 0.35},
+        "color_harmony": {"preset": "fantasy", "amount": 0.35},
         "bloom": {"opacity": 0.08},
         "texture": {"opacity": 0.90},
-    },
-    "anime": {
-        "frequency": {"smooth": 0.55},
-        "skin": {"equalize": 0.30, "rosy": 0.30},
-        "eyes": {"whites": 0.40, "iris": 0.50, "catchlight": 0.40},
-        "lips": {"tint": "coral", "gloss": 0.25},
-        "hair": {"shine": 0.40},
-        "dodge_burn": {"amount": 0.10},
-        "color_harmony": {"preset": "anime", "amount": 0.30},
-        "bloom": {"opacity": 0.08},
-        "texture": {"opacity": 0.90},
+        
+        # Modular overrides
+        "slimming": 30.0,
+        "blush": 25.0,
     },
     "beauty": {
+        "extends": "natural",
         "frequency": {"smooth": 0.50},
         "skin": {"equalize": 0.30, "rosy": 0.25},
         "eyes": {"whites": 0.20, "iris": 0.25, "catchlight": 0.20},
@@ -92,29 +89,8 @@ RECIPES = {
         "bloom": {"opacity": 0.10},
         "texture": {"opacity": 0.85},
     },
-    "dreamy": {
-        "frequency": {"smooth": 0.60},
-        "skin": {"equalize": 0.35, "rosy": 0.35},
-        "eyes": {"whites": 0.30, "iris": 0.30, "catchlight": 0.25},
-        "lips": {"tint": "rose", "gloss": 0.30},
-        "hair": {"shine": 0.25},
-        "dodge_burn": {"amount": 0.15},
-        "color_harmony": {"preset": "dreamy", "amount": 0.80},
-        "bloom": {"opacity": 0.08},
-        "texture": {"opacity": 0.90},
-    },
-    "magazine": {
-        "frequency": {"smooth": 0.70},
-        "skin": {"equalize": 0.35, "rosy": 0.60},
-        "eyes": {"whites": 0.20, "iris": 0.20, "catchlight": 0.15},
-        "lips": {"tint": None, "gloss": 0.15},
-        "hair": {"shine": 0.15},
-        "dodge_burn": {"amount": 0.25},
-        "color_harmony": {"preset": "magazine", "amount": 0.70},
-        "bloom": {"opacity": 0.03},
-        "texture": {"opacity": 0.85},
-    },
     "korean_beauty": {
+        "extends": "natural",
         "frequency": {"smooth": 0.45},
         "skin": {"equalize": 0.10, "rosy": 0.20},
         "eyes": {"whites": 0.15, "iris": 0.20, "catchlight": 0.15},
@@ -124,8 +100,12 @@ RECIPES = {
         "color_harmony": {"preset": "natural", "amount": 0.30},
         "bloom": {"opacity": 0.04},
         "texture": {"opacity": 0.95},
+        
+        # Modular overrides
+        "lip_finish": "velvet",
     },
     "idol": {
+        "extends": "natural",
         "frequency": {"smooth": 0.50},
         "skin": {"equalize": 0.15, "rosy": 0.30},
         "eyes": {"whites": 0.25, "iris": 0.35, "catchlight": 0.30},
@@ -135,8 +115,13 @@ RECIPES = {
         "color_harmony": {"preset": "cosplay", "amount": 0.40},
         "bloom": {"opacity": 0.07},
         "texture": {"opacity": 0.90},
+        
+        # Modular overrides
+        "slimming": 30.0,
+        "blush": 25.0,
     },
     "wedding": {
+        "extends": "natural",
         "frequency": {"smooth": 0.50},
         "skin": {"equalize": 0.15, "rosy": 0.25},
         "eyes": {"whites": 0.15, "iris": 0.20, "catchlight": 0.15},
@@ -146,9 +131,13 @@ RECIPES = {
         "color_harmony": {"preset": "beauty", "amount": 0.50},
         "bloom": {"opacity": 0.05},
         "texture": {"opacity": 0.90},
+        
+        # Modular overrides
+        "blush": 25.0,
+        "lip_finish": "matte",
     },
     "anime_cosplay": {
-        "frequency": {"smooth": 0.55},
+        "extends": "cosplay",
         "skin": {"equalize": 0.00, "rosy": 0.35},
         "eyes": {"whites": 0.30, "iris": 0.35, "catchlight": 0.25},
         "lips": {"tint": "cosplay", "gloss": 0.20},
@@ -159,20 +148,25 @@ RECIPES = {
         "texture": {"opacity": 0.90},
     },
     "scifi_cosplay": {
-        # Tuned to match the vibrant, ultra-smooth, high-contrast, porcelain-skin reference.
-        # Features strong highlights, clean shadows, strong eye catchlights, and ethereal bloom.
-        "frequency": {"smooth": 0.85, "mid_reduction": 0.75}, # high smoothing + strong blemish reduction for doll skin
-        "skin": {"equalize": 0.20, "rosy": 0.45},  # increase whitening & equalization for bright even skin
-        "eyes": {"whites": 0.35, "iris": 0.55, "catchlight": 0.50},  # punchy colored contacts and catchlights
-        "lips": {"tint": "cosplay", "gloss": 0.45},  # vibrant lips with strong glossy highlights
-        "hair": {"shine": 0.40},              # structural shine on wig
-        "dodge_burn": {"amount": 0.35},       # stronger facial sculpting / nose highlight
-        "color_harmony": {"preset": "scifi", "amount": 0.70},  # custom sci-fi cyan/pink split toning & S-curve
-        "bloom": {"opacity": 0.15},           # strong ethereal neon bloom/glow
-        "texture": {"opacity": 0.25},         # heavily reduce texture to 25% for a clean porcelain digital look
+        "extends": "natural",
+        "frequency": {"smooth": 0.85, "mid_reduction": 0.75},
+        "skin": {"equalize": 0.20, "rosy": 0.45},
+        "eyes": {"whites": 0.35, "iris": 0.55, "catchlight": 0.50},
+        "lips": {"tint": "cosplay", "gloss": 0.45},
+        "hair": {"shine": 0.40},
+        "dodge_burn": {"amount": 0.35},
+        "color_harmony": {"preset": "cyberpunk", "amount": 0.70},
+        "bloom": {"opacity": 0.15},
+        "texture": {"opacity": 0.25},
+        
+        # Modular overrides
+        "slimming": 0.0,
+        "blush": 35.0,
+        "nose_blush": True,
+        "under_eye_blush": True,
     },
     "fantasy_goddess": {
-        # Ethereal low-contrast fantasy look with soft-focus glow, atmospheric fog, and sparkles.
+        "extends": "natural",
         "frequency": {"smooth": 0.75, "mid_reduction": 0.60},
         "skin": {"equalize": 0.20, "rosy": 0.35},
         "eyes": {"whites": 0.30, "iris": 0.40, "catchlight": 0.35},
@@ -183,21 +177,15 @@ RECIPES = {
         "bloom": {"opacity": 0.45},
         "texture": {"opacity": 0.25},
         "contrast": -25,
-    },
-    "cyber_doll": {
-        # Stronger cosplay reference look: porcelain skin, bright eyes, pink/cyan lighting, and punchy output.
-        "frequency": {"smooth": 0.82, "mid_reduction": 0.70},
-        "skin": {"equalize": 0.12, "rosy": 0.42},
-        "eyes": {"whites": 0.36, "iris": 0.60, "catchlight": 0.55},
-        "lips": {"tint": "cosplay", "gloss": 0.48},
-        "hair": {"shine": 0.55},
-        "dodge_burn": {"amount": 0.34},
-        "color_harmony": {"preset": "cyber_doll", "amount": 0.90},
-        "bloom": {"opacity": 0.16},
-        "texture": {"opacity": 0.30},
-        "finish": {"impact": 0.70},
+        
+        # Modular overrides
+        "slimming": 35.0,
+        "blush": 30.0,
+        "nose_blush": True,
+        "under_eye_blush": True,
     },
     "pink_dream": {
+        "extends": "natural",
         "frequency": {"smooth": 0.25, "mid_reduction": 0.35},
         "skin": {"equalize": 0.30, "rosy": 0.45},
         "eyes": {"whites": 0.35, "iris": 0.50, "catchlight": 0.45},
@@ -208,8 +196,16 @@ RECIPES = {
         "bloom": {"opacity": 0.05},
         "texture": {"opacity": 0.90},
         "finish": {"impact": 0.60},
+        
+        # Modular overrides
+        "slimming": 30.0,
+        "blush": 30.0,
+        "nose_blush": True,
+        "under_eye_blush": True,
+        "white_costume_lift": True,
     },
     "blue_dream": {
+        "extends": "natural",
         "frequency": {"smooth": 0.75, "mid_reduction": 0.60},
         "skin": {"equalize": 0.20, "rosy": 0.30},
         "eyes": {"whites": 0.30, "iris": 0.40, "catchlight": 0.35},
@@ -220,8 +216,13 @@ RECIPES = {
         "bloom": {"opacity": 0.20},
         "texture": {"opacity": 0.35},
         "finish": {"impact": 0.50},
+        
+        # Modular overrides
+        "slimming": 30.0,
+        "blush": 25.0,
     },
     "xhs_ultrasoft": {
+        "extends": "natural",
         "frequency": {"smooth": 0.85, "mid_reduction": 0.75},
         "skin": {"equalize": 0.30, "rosy": 0.50},
         "eyes": {"whites": 0.25, "iris": 0.30, "catchlight": 0.25},
@@ -232,20 +233,14 @@ RECIPES = {
         "bloom": {"opacity": 0.15},
         "texture": {"opacity": 0.20},
         "finish": {"impact": 0.40},
-    },
-    "meitu_clone": {
-        "frequency": {"smooth": 0.70, "mid_reduction": 0.60},
-        "skin": {"equalize": 0.25, "rosy": 0.45},
-        "eyes": {"whites": 0.38, "iris": 0.60, "catchlight": 0.50},
-        "lips": {"tint": None, "gloss": 0.00},
-        "hair": {"shine": 0.50},
-        "dodge_burn": {"amount": 0.35},
-        "color_harmony": {"preset": "meitu_clone", "amount": 0.90},
-        "bloom": {"opacity": 0.16},
-        "texture": {"opacity": 0.45},
-        "finish": {"impact": 0.70},
+        
+        # Modular overrides
+        "slimming": 30.0,
+        "blush": 25.0,
+        "lip_finish": "velvet",
     },
     "fuji_porcelain": {
+        "extends": "natural",
         "frequency": {"smooth": 0.72, "mid_reduction": 0.75},
         "skin": {"equalize": 0.50, "rosy": 0.70},
         "eyes": {"whites": 0.30, "iris": 0.35, "catchlight": 0.30},
@@ -257,15 +252,8 @@ RECIPES = {
         "texture": {"opacity": 0.35},
         "specular_bloom": 50,
     },
-
-    # ------------------------------------------------------------------
-    # Anime Cinematic Series — AAA game promotional art look
-    # All numeric values mapped to engine recipe format (0-1 ratios where
-    # the engine multiplies by 100, or raw values for flat params).
-    # ------------------------------------------------------------------
     "anime_cinematic_v1": {
         "extends": "natural",
-
         "frequency": {"smooth": 0.32, "mid_reduction": 0.22},
         "skin": {"equalize": 0.38, "porcelain": 0.42},
         "eyes": {"whites": 0.18, "iris": 0.22, "catchlight": 0.25, "dark_circles": 0.22},
@@ -273,12 +261,9 @@ RECIPES = {
         "hair": {"shine": 0.75},
         "dodge_burn": 18.0,
         "texture": {"opacity": 0.88},
-
-        # Flat top-level keys (already wired in build_context)
         "relight_strength": 35.0,
         "light_azimuth": 45.0,
         "light_elevation": 35.0,
-
         "brightness": 6.0,
         "contrast": 12.0,
         "highlights": -10.0,
@@ -288,25 +273,27 @@ RECIPES = {
         "clarity": 14.0,
         "saturation": 6.0,
         "vibrance": 12.0,
-
         "shadow_hue": 225.0,
         "shadow_sat": 12.0,
         "midtone_hue": 0.0,
         "midtone_sat": 0.0,
         "highlight_hue": 320.0,
         "highlight_sat": 10.0,
-
         "bloom": {"opacity": 0.16, "threshold": 190.0},
         "glow": 8.0,
-
         "vignette": 6.0,
         "sharpen": 20.0,
         "sharpen_radius": 1.2,
         "chromatic_aberration": 4.0,
         "grain": 0.0,
         "specular_bloom_tone": "rosy",
+        
+        # Modular overrides
+        "blush": 30.0,
+        "nose_blush": True,
+        "under_eye_blush": True,
+        "white_costume_lift": True,
     },
-
     "anime_cinematic_soft": {
         "extends": "anime_cinematic_v1",
         "contrast": 8.0,
@@ -317,7 +304,6 @@ RECIPES = {
         "chromatic_aberration": 2.0,
         "hair": {"shine": 0.85},
     },
-
     "anime_cinematic_action": {
         "extends": "anime_cinematic_v1",
         "contrast": 18.0,
@@ -328,19 +314,12 @@ RECIPES = {
         "bloom": {"opacity": 0.10},
         "vignette": 10.0,
     },
-
-    # ------------------------------------------------------------------
-    # Anime Crystal Void — dark fantasy test recipe
-    # ------------------------------------------------------------------
     "anime_crystal_void": {
         "extends": "anime_cinematic_v1",
-
         "subject_separation": 0.85,
         "bloom": {"opacity": 0.35},
         "chromatic_aberration": 1.5,
         "eyes": {"iris": 0.20},
-
-        # Unimplemented features (stored for future wiring)
         "background_blur": 0.55,
         "background_desaturation": 0.40,
         "light_wrap": 0.25,
@@ -349,7 +328,6 @@ RECIPES = {
         "subject_sharpen": 0.30,
         "matte_black": 0.10,
     },
-
     "anime_cinematic_fantasy": {
         "extends": "anime_cinematic_v1",
         "brightness": 10.0,
@@ -363,8 +341,6 @@ RECIPES = {
     },
 }
 
-# Shorter aliases for the new anime cinematic recipes
 RECIPES["soft"] = RECIPES["anime_cinematic_soft"]
 RECIPES["action"] = RECIPES["anime_cinematic_action"]
 RECIPES["fantasy"] = RECIPES["anime_cinematic_fantasy"]
-

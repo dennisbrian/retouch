@@ -98,6 +98,7 @@ from .grading import ColorGrader, PRESETS
 from .hair import HairEnhancer
 from .relight import Relighter
 from .recipes import RECIPES
+from .style import StyleProfile
 from .utils import correct_exposure, apply_global_bloom
 
 
@@ -106,30 +107,7 @@ from .utils import correct_exposure, apply_global_bloom
 # ---------------------------------------------------------------------------
 
 # Anime cinematic variants get standard nose blush, no slimming
-_ANIME_CINEMATIC_RECIPES = frozenset({
-    "anime_cinematic_v1", "anime_cinematic_soft",
-    "anime_cinematic_action", "anime_cinematic_fantasy",
-    "soft", "action", "fantasy",
-})
-
-_NOSE_BLUSH_RECIPES = frozenset({
-    "scifi_cosplay", "cyber_doll", "cosplay", "anime",
-    "fantasy_goddess", "pink_dream", "meitu_clone",
-}) | _ANIME_CINEMATIC_RECIPES
-_UNDER_EYE_BLUSH_RECIPES = _NOSE_BLUSH_RECIPES
-_MATTE_LIP_RECIPES = frozenset({"wedding", "magazine"})
-_VELVET_LIP_RECIPES = frozenset({"korean_beauty", "xhs_ultrasoft"})
-_SLIMMING_RECIPES = frozenset({
-    "cosplay", "cosplay_3d", "cosplay_no_eq", "anime_cosplay", "anime",
-    "xiaohongshu", "idol", "blue_dream", "xhs_ultrasoft",
-})
-_BLUSH_RECIPES = _SLIMMING_RECIPES | frozenset({"wedding"})
-_WHITE_COSTUME_RECIPES = frozenset({
-    "pink_dream", "meitu_clone",
-    "anime_cinematic_v1", "anime_cinematic_soft",
-    "anime_cinematic_action", "anime_cinematic_fantasy",
-    "soft", "action", "fantasy",
-})
+# Mapped modularly in recipes config
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +205,11 @@ class ProcessingContext:
     # --- Internal recipe tag (used for conditional logic) ---
     active_recipe: str = "natural"
 
+    # --- Modular flags ---
+    nose_blush: bool = False
+    under_eye_blush: bool = False
+    white_costume_lift: bool = False
+
 
 # ---------------------------------------------------------------------------
 # ProcessingResult — rich return value
@@ -290,7 +273,6 @@ def resolve_recipe(name: str, _seen: Optional[set] = None) -> Dict:
         rec = RECIPES.get("natural", {})
     parent_name = rec.get("extends")
     if parent_name and parent_name in RECIPES:
-        import copy
         resolved_parent = resolve_recipe(parent_name, _seen)
         merged = copy.deepcopy(resolved_parent)
         _deep_merge(merged, rec)
@@ -409,24 +391,12 @@ def build_context(
     r_bloom_softness = rec.get("bloom", {}).get("softness", 30.0)
 
     # --- Reshaping / makeup defaults ---
-    if active_recipe == "fantasy_goddess":
-        r_slimming, r_blush = 35.0, 30.0
-    elif active_recipe in ("scifi_cosplay", "cyber_doll", "pink_dream", "meitu_clone"):
-        r_slimming = 0.0 if active_recipe == "scifi_cosplay" else 30.0
-        r_blush = 35.0 if active_recipe in ("scifi_cosplay", "cyber_doll") else 30.0
-    elif active_recipe in _ANIME_CINEMATIC_RECIPES:
-        r_slimming = 0.0
-        r_blush = 30.0
-    else:
-        r_slimming = 30.0 if active_recipe in _SLIMMING_RECIPES else 0.0
-        r_blush = 25.0 if active_recipe in _BLUSH_RECIPES else 0.0
-
-    if active_recipe in _MATTE_LIP_RECIPES:
-        r_lip_finish = "matte"
-    elif active_recipe in _VELVET_LIP_RECIPES:
-        r_lip_finish = "velvet"
-    else:
-        r_lip_finish = "gloss"
+    r_slimming = rec.get("slimming", 0.0)
+    r_blush = rec.get("blush", 0.0)
+    r_lip_finish = rec.get("lip_finish", "gloss")
+    r_nose_blush = rec.get("nose_blush", False)
+    r_under_eye_blush = rec.get("under_eye_blush", False)
+    r_white_costume_lift = rec.get("white_costume_lift", False)
 
     return ProcessingContext(
         smooth=_ov("smooth", r_smooth),
@@ -489,6 +459,9 @@ def build_context(
         bloom_threshold=_ov("bloom_threshold", r_bloom_threshold),
         bloom_softness=_ov("bloom_softness", r_bloom_softness),
         active_recipe=active_recipe,
+        nose_blush=_ov("nose_blush", r_nose_blush),
+        under_eye_blush=_ov("under_eye_blush", r_under_eye_blush),
+        white_costume_lift=_ov("white_costume_lift", r_white_costume_lift),
     )
 
 
@@ -568,6 +541,10 @@ class RetouchEngine:
         self._hair = HairEnhancer()
         self._relighter = Relighter()
 
+        # Warm up JIT kernels on engine startup (safe fallback if Numba is missing)
+        from .perf_optimizations import warmup_jit_kernels
+        warmup_jit_kernels()
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -618,6 +595,9 @@ class RetouchEngine:
         specular_bloom: Optional[float] = None,
         specular_bloom_tone: Optional[str] = None,
         whiten_tone: Optional[str] = None,
+        nose_blush: Optional[bool] = None,
+        under_eye_blush: Optional[bool] = None,
+        white_costume_lift: Optional[bool] = None,
         auto_exposure: bool = False,
         bloom: Optional[float] = None,
         bloom_threshold: Optional[float] = None,
@@ -696,6 +676,9 @@ class RetouchEngine:
             "specular_bloom": specular_bloom,
             "specular_bloom_tone": specular_bloom_tone,
             "whiten_tone": whiten_tone,
+            "nose_blush": nose_blush,
+            "under_eye_blush": under_eye_blush,
+            "white_costume_lift": white_costume_lift,
             "auto_exposure": auto_exposure,
             "bloom": bloom,
             "bloom_threshold": bloom_threshold,
@@ -1262,8 +1245,8 @@ class RetouchEngine:
             canvas = self._makeup.apply_blush(
                 canvas, shifted_face.landmarks, face_width, ctx.blush,
                 regions=regions,
-                nose_blush=(active_recipe in _NOSE_BLUSH_RECIPES),
-                under_eye_blush=(active_recipe in _UNDER_EYE_BLUSH_RECIPES),
+                nose_blush=ctx.nose_blush,
+                under_eye_blush=ctx.under_eye_blush,
             )
 
         # ---- Hair shine ----
@@ -1391,10 +1374,9 @@ class RetouchEngine:
 
         if ctx.brightness is not None and ctx.brightness != 0:
             gamma = np.clip(1.0 - (ctx.brightness / 100.0), 0.1, 4.0)
-            # BUGFIX-4: renamed ndarray to _brightness_lut to avoid clobbering ctx.lut
-            _brightness_lut = np.array(
-                [((i / 255.0) ** gamma) * 255 for i in range(256)], dtype=np.uint8
-            )
+            # BUGFIX-4 + PERF: Vectorized LUT calculation
+            x = np.arange(256, dtype=np.float32) / 255.0
+            _brightness_lut = (np.power(x, gamma) * 255.0).astype(np.uint8)
             result = cv2.LUT(result, _brightness_lut)
 
         if any(v is not None and v != 0 for v in (
@@ -1512,7 +1494,7 @@ class RetouchEngine:
             )
 
         # White costume pearl/lavender lift
-        if ctx.active_recipe in _WHITE_COSTUME_RECIPES:
+        if ctx.white_costume_lift:
             result = self._apply_white_costume_lift(result, acc_skin, acc_lips, ctx.grade_intensity)
 
         return result
@@ -1592,7 +1574,8 @@ def _adjust_vibrance(img: np.ndarray, vibrance: float) -> np.ndarray:
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV).astype(np.float32)
     h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
     factor = 1.0 + (vibrance / 100.0) * (1.0 - s / 255.0)
-    skin_hue = ((h > 0) & (h < 25)) | ((h > 160) & (h < 180))
+    # Optimized skin hue mask: red-orange hues (keep h > 0 to match original intent, only drop redundant h < 180)
+    skin_hue = ((h > 0) & (h < 25)) | (h > 160)
     skin_factor = np.clip(1.0 - (vibrance / 100.0) * 0.5, 0.5, 1.0)
     factor = np.where(skin_hue, np.minimum(factor, skin_factor), factor)
     hsv[:, :, 1] = np.clip(s * factor, 0, 255)
@@ -1660,10 +1643,11 @@ def _apply_selective_sharpening(
     high_freq = img_f - blurred
     mask_3d = mask[:, :, np.newaxis] if mask.ndim == 2 else mask
     if threshold > 0:
-        gray_high = cv2.cvtColor(
-            np.abs(high_freq).astype(np.uint8), cv2.COLOR_BGR2GRAY
-        ).astype(np.float32)
-        threshold_mask = (gray_high >= threshold)[:, :, np.newaxis]
+        # OPTIMIZATION: Compute grayscale directly from float arrays instead of uint8 casting.
+        # OpenCV uses BGR ordering, so channels are 0: Blue, 1: Green, 2: Red.
+        # Standard BT.601 weights are 0.114 * B + 0.587 * G + 0.299 * R.
+        gray_high = 0.114 * high_freq[:, :, 0] + 0.587 * high_freq[:, :, 1] + 0.299 * high_freq[:, :, 2]
+        threshold_mask = (np.abs(gray_high) >= threshold)[:, :, np.newaxis]
         sharpened_diff = threshold_mask * (high_freq * (amount * mask_3d))
     else:
         sharpened_diff = high_freq * (amount * mask_3d)

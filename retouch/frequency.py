@@ -107,21 +107,33 @@ def combine(layers, skin_mask=None, smooth_strength=0.5,
     if skin_mask is None:
         return layers.reconstruct()
 
-    low = layers.low.copy()
-    mid_original = layers.mid
+    m_raw = skin_mask.astype(np.float32)
+
+    # --- Bounding Box Optimization ---
+    # Crop to the mask region to avoid running heavy ops (like bilateral filter) 
+    # on the entire image when the skin only covers a small fraction.
+    ys, xs = np.where(m_raw > 0.01)
+    if len(xs) == 0:
+        return layers.reconstruct()
+
+    fw_approx = face_width if face_width else (min(layers.low.shape[:2]) * APPROX_FACE_WIDTH_RATIO)
+    pad = max(10, int(fw_approx * 0.1))
+    x1, x2 = max(0, xs.min() - pad), min(m_raw.shape[1], xs.max() + pad + 1)
+    y1, y2 = max(0, ys.min() - pad), min(m_raw.shape[0], ys.max() + pad + 1)
+
+    low = layers.low[y1:y2, x1:x2].copy()
+    mid_original = layers.mid[y1:y2, x1:x2]
     mid = mid_original.copy()
-    high = layers.high.copy()
+    high = layers.high[y1:y2, x1:x2].copy()
+    m_raw = m_raw[y1:y2, x1:x2]
 
     texture_opacity = max(0.0, min(1.0, texture_opacity))
 
-    m_raw = skin_mask.astype(np.float32)
-
     if face_width:
-        # | 1 forces odd kernel size (GaussianBlur requirement) (Issue 12)
         feather_r = max(DEFAULT_FEATHER_MIN, int(face_width * DEFAULT_FEATHER_FACTOR) | 1)
     else:
-        h, w = layers.low.shape[:2]
-        feather_r = max(DEFAULT_FEATHER_MIN, int(min(h, w) * FALLBACK_FEATHER_FACTOR) | 1)
+        h_full, w_full = layers.low.shape[:2]
+        feather_r = max(DEFAULT_FEATHER_MIN, int(min(h_full, w_full) * FALLBACK_FEATHER_FACTOR) | 1)
 
     m_2d = cv2.GaussianBlur(m_raw, (feather_r, feather_r), 0)
     m_3d = m_2d[:, :, np.newaxis]
@@ -130,58 +142,68 @@ def combine(layers, skin_mask=None, smooth_strength=0.5,
     if texture_opacity < 1.0:
         high = high * (1.0 - m_3d * (1.0 - texture_opacity))
 
-    # Pore synthesis — inject synthetic high-frequency noise back before mid reduction
-    # so mid reduction doesn't erase the pores we just added.
+    # Pore synthesis — inject synthetic high-frequency noise
     if face_width and roi_coords and pore_synthesis > 0:
         roi_x1, roi_y1 = roi_coords
         seed = abs(hash((int(face_width * 100), roi_x1, roi_y1))) & 0xFFFFFFFF
         rng = np.random.default_rng(seed)
-        h, w = layers.low.shape[:2]
-        noise = rng.standard_normal((h, w, 3)).astype(np.float32) * 15.0
-        sigma = face_width / 120.0
-        if sigma < 0.5:
-            sigma = 0.5  # floor: tiny faces (< 60px) share the same pore scale
-        k_size = int(sigma * 3.0) * 2 + 1
-        k_size = max(3, k_size | 1)
-        noise_blur = cv2.GaussianBlur(noise, (k_size, k_size), sigma)
-        P = noise - noise_blur
+        h, w = low.shape[:2]
+
+        # Generate 2D (1-channel) noise to avoid chroma noise.
+        noise = rng.standard_normal((h, w)).astype(np.float32) * 15.0
+
+        sigma = max(0.5, face_width / 120.0)
+        noise_blur = cv2.GaussianBlur(noise, (0, 0), sigma)
+
+        P = (noise - noise_blur)[:, :, np.newaxis]
         high = high + (pore_synthesis * P * m_3d)
 
-    # ---- Build the processed result inside the mask ----
-    # Reduce mid layer (remove blemishes/wrinkles) — applied after pore synthesis
-    # so pores are preserved even at high mid_reduction.
+    # Reduce mid layer
     if mid_reduction > 0:
         mid = mid * (1.0 - m_3d * mid_reduction)
 
     # Early exit for no-smoothing case
     if smooth_strength <= 0:
-        processed = low + mid + high
-        # blend source is the original reconstruction; low/mid/high are copies
-        return blend_masked(layers.reconstruct(), processed, m_2d)
+        processed_crop = low + mid + high
+        orig_crop = layers.low[y1:y2, x1:x2] + layers.mid[y1:y2, x1:x2] + layers.high[y1:y2, x1:x2]
+        result_crop = blend_masked(orig_crop, processed_crop, m_2d)
 
-    # Smooth low + mid layers (even out colour/tone transitions)
-    # 1. Soft Gaussian blur on Low layer for perfectly clean gradients (no bilateral blotches)
-    f_width = face_width if face_width else (min(layers.low.shape[0], layers.low.shape[1]) * APPROX_FACE_WIDTH_RATIO)
+        full_result = layers.reconstruct()
+        full_result[y1:y2, x1:x2] = result_crop
+        return full_result
+
+    # Smooth low + mid layers
+    f_width = face_width if face_width else fw_approx
     k_smooth = adaptive_ksize(f_width, factor=SMOOTH_K_FACTOR, minimum=SMOOTH_K_MIN)
     smoothed_low_gaussian = cv2.GaussianBlur(low, (k_smooth, k_smooth), 0)
 
-    # Scale d proportionally to face size (Issue 4)
-    d = max(BILATERAL_D_MIN, adaptive_ksize(f_width, factor=BILATERAL_D_FACTOR, minimum=BILATERAL_D_MIN))
-    # Bilateral on low+mid_original to extract a smoothed-low estimate, preserving mid-frequency detail
-    low_mid_u8 = np.clip(low + mid_original, 0, 255).astype(np.uint8)
+    # Bilateral Filter
+    # Keep in float32 to avoid quantization banding on gradients (uint8 artifacts).
+    low_mid_f32 = np.clip(low + mid_original, 0, 255)
     sigma_color = SIGMA_BASE + smooth_strength * SIGMA_STRENGTH_FACTOR
     sigma_space = SIGMA_BASE + smooth_strength * SIGMA_STRENGTH_FACTOR
-    smoothed_u8 = cv2.bilateralFilter(low_mid_u8, d, sigma_color, sigma_space)
-    smoothed_low_mid = smoothed_u8.astype(np.float32)
-    smoothed_low_bilateral = smoothed_low_mid - mid_original
 
-    # 3. Hybrid blend: higher smooth_strength uses slightly more Gaussian blur, but bilateral remains dominant
+    # Use d=-1 to let OpenCV compute an optimal, efficient kernel size.
+    smoothed_f32 = cv2.bilateralFilter(low_mid_f32, -1, sigma_color, sigma_space)
+    smoothed_low_bilateral = smoothed_f32 - mid_original
+
+    # Hybrid blend (cv2.addWeighted is slightly faster and purely SIMD optimized)
     blend_gaussian = min(1.0, smooth_strength * GAUSSIAN_BLEND_FACTOR)
-    smoothed_low_final = smoothed_low_bilateral * (1.0 - blend_gaussian) + smoothed_low_gaussian * blend_gaussian
+    smoothed_low_final = cv2.addWeighted(
+        smoothed_low_bilateral, 1.0 - blend_gaussian,
+        smoothed_low_gaussian, blend_gaussian,
+        0.0
+    )
 
     low = low * (1.0 - m_3d) + smoothed_low_final * m_3d
 
-    processed = low + mid + high
+    # Composite on final pixel values
+    processed_crop = low + mid + high
+    orig_crop = layers.low[y1:y2, x1:x2] + layers.mid[y1:y2, x1:x2] + layers.high[y1:y2, x1:x2]
+    result_crop = blend_masked(orig_crop, processed_crop, m_2d)
 
-    # Composite on final pixel values to avoid tonal edge artifacts (Issue 1)
-    return blend_masked(layers.reconstruct(), processed, m_2d)
+    # Paste back into the full image
+    full_result = layers.reconstruct()
+    full_result[y1:y2, x1:x2] = result_crop
+
+    return full_result

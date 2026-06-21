@@ -141,6 +141,20 @@ class TestBuildContext:
         assert ctx.dark_circles == 0.0
         assert ctx.teeth_whiten == 80.0
 
+    def test_override_modular_flags(self):
+        rec = {"nose_blush": False, "under_eye_blush": False, "white_costume_lift": False}
+        ctx = build_context("natural", rec, {"nose_blush": True, "under_eye_blush": True, "white_costume_lift": True})
+        assert ctx.nose_blush is True
+        assert ctx.under_eye_blush is True
+        assert ctx.white_costume_lift is True
+
+        rec_true = {"nose_blush": True, "under_eye_blush": True, "white_costume_lift": True}
+        ctx_false = build_context("natural", rec_true, {"nose_blush": False, "under_eye_blush": False, "white_costume_lift": False})
+        assert ctx_false.nose_blush is False
+        assert ctx_false.under_eye_blush is False
+        assert ctx_false.white_costume_lift is False
+
+
 
 class TestCompositeFaces:
     def test_uses_union_of_edited_masks(self):

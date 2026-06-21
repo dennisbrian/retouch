@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from retouch import RetouchEngine
-from retouch.grading import PRESETS, ColorGrader
+from retouch.grading import PRESETS, ColorGrader, list_available_presets
 from retouch.io import (
     IMAGE_EXTENSIONS,
     copy_exif,
@@ -27,6 +27,7 @@ from retouch.recipes import RECIPES
 
 RECIPE_CHOICES = sorted(RECIPES.keys())
 PRESET_CHOICES = RECIPE_CHOICES
+COLOR_GRADE_CHOICES = list_available_presets()
 
 
 def _finalize_params(params):
@@ -198,6 +199,9 @@ def build_params(args):
         "blush": args.blush,
         "impact": args.impact,
         "specular_bloom": args.specular_bloom,
+        "nose_blush": getattr(args, "nose_blush", None),
+        "under_eye_blush": getattr(args, "under_eye_blush", None),
+        "white_costume_lift": getattr(args, "white_costume_lift", None),
     }
     params.update({k: v for k, v in scalars.items() if v is not None})
 
@@ -295,7 +299,7 @@ def main():
                         help="Reference image path for colour transfer")
     parser.add_argument("--color-ref-strength", type=float, default=1.0,
                         help="Colour transfer blend intensity 0-1")
-    parser.add_argument("--color-grade", choices=["natural", "magazine", "beauty", "cosplay", "dreamy", "anime", "scifi", "cyber_doll", "film", "cyberpunk", "golden_hour", "bw_noir", "fantasy", "pink_dream", "blue_dream", "xhs_ultrasoft", "meitu_clone"], default=None,
+    parser.add_argument("--color-grade", choices=COLOR_GRADE_CHOICES, default=None,
                         help="Colour grading preset")
     parser.add_argument("--grade-intensity", type=float, default=None,
                         help="Grading blend intensity 0-1")
@@ -323,8 +327,18 @@ def main():
                         help="Specular pink/lavender highlight bloom 0-100")
     parser.add_argument("--whiten-tone", choices=["rosy", "porcelain", "neutral"], default=None,
                         help="Skin whitening undertone preset")
-    parser.add_argument("--specular-bloom-tone", choices=["rosy", "neutral"], default=None,
-                        help="Specular bloom color tone")
+    parser.add_argument("--nose-blush", action="store_true", default=None,
+                        help="Enable nose blush override")
+    parser.add_argument("--no-nose-blush", action="store_false", dest="nose_blush",
+                        help="Disable nose blush override")
+    parser.add_argument("--under-eye-blush", action="store_true", default=None,
+                        help="Enable under-eye blush override")
+    parser.add_argument("--no-under-eye-blush", action="store_false", dest="under_eye_blush",
+                        help="Disable under-eye blush override")
+    parser.add_argument("--white-costume-lift", action="store_true", default=None,
+                        help="Enable white costume lift override")
+    parser.add_argument("--no-white-costume-lift", action="store_false", dest="white_costume_lift",
+                        help="Disable white costume lift override")
 
     # Advanced
     parser.add_argument("--texture-opacity", type=float, default=None,

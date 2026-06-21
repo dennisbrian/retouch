@@ -227,7 +227,7 @@ class TestWithRealImage:
         assert result.face_count >= 1
 
     def test_multiple_recipes_real_face(self, engine, real_face):
-        for recipe in ("natural", "cosplay", "magazine", "beauty", "film"):
+        for recipe in ("natural", "cosplay", "pink_dream", "beauty", "film"):
             result = engine.process(real_face, recipe=recipe)
             _assert_valid_output(result, real_face)
 

@@ -13,6 +13,7 @@ import cv2
 import numpy as np
 import os
 import onnxruntime as ort
+from .perf_optimizations import build_ort_providers
 
 from .utils import get_points, create_polygon_mask, feather_mask
 
@@ -119,9 +120,7 @@ class FaceParser:
             logger = logging.getLogger(__name__)
             try:
                 # Auto-discover execution providers in order of preference
-                available = ort.get_available_providers()
-                preferred = ["CoreMLExecutionProvider", "CUDAExecutionProvider", "DmlExecutionProvider", "OpenVINOExecutionProvider", "CPUExecutionProvider"]
-                providers = [p for p in preferred if p in available]
+                providers = build_ort_providers()
                 
                 self._sess = ort.InferenceSession(self._model_path, providers=providers)
                 logger.info("ONNX Runtime initialized with active providers: %s", self._sess.get_providers())

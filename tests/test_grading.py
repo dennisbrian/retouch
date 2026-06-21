@@ -41,9 +41,16 @@ class TestPRESETS:
         assert len(PRESETS) == len(set(PRESETS.keys()))
 
     def test_known_presets_exist(self):
-        known = {"natural", "magazine", "beauty", "cosplay", "film", "scifi", "fantasy"}
+        known = {"natural", "beauty", "cosplay", "film", "fantasy"}
         for k in known:
             assert k in PRESETS, f"Missing preset: {k}"
+
+    def test_recipe_presets_exist_in_presets(self):
+        from retouch.recipes import RECIPES
+        for recipe_name, recipe in RECIPES.items():
+            preset_name = recipe.get("color_harmony", {}).get("preset")
+            if preset_name:
+                assert preset_name in PRESETS, f"Recipe '{recipe_name}' references missing preset '{preset_name}'"
 
 
 class TestGrade:
@@ -78,7 +85,7 @@ class TestGrade:
     def test_split_tone_mask(self, grader, img):
         mask = np.zeros((64, 64), dtype=np.float32)
         mask[16:48, 16:48] = 1.0
-        result = grader.grade(img, "magazine", split_tone_mask=mask)
+        result = grader.grade(img, "film", split_tone_mask=mask)
         assert result.shape == img.shape
 
     def test_glow_mask(self, grader, img):

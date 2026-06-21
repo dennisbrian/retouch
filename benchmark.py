@@ -7,7 +7,7 @@ Measures stage execution times and peak memory usage across different resolution
 import os
 import sys
 import time
-import tracemalloc
+import gc
 import numpy as np
 import cv2
 
@@ -15,8 +15,21 @@ import cv2
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from retouch import RetouchEngine
 
+# Try to use psutil for accurate process memory, fallback to resource module
+try:
+    import psutil
+    def get_process_memory_mb():
+        return psutil.Process(os.getpid()).memory_info().rss / (1024 * 1024)
+except ImportError:
+    import resource
+    def get_process_memory_mb():
+        # ru_maxrss is in kilobytes on Linux, bytes on macOS
+        if sys.platform == 'darwin':
+            return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 * 1024)
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
 
-def run_benchmark(image_path, target_megapixels):
+
+def run_benchmark(engine, image_path, target_megapixels, iterations=3):
     print(f"\n--- Benchmarking at ~{target_megapixels} MP ---")
     if not os.path.exists(image_path):
         print(f"Error: Sample image not found at {image_path}")
@@ -32,59 +45,88 @@ def run_benchmark(image_path, target_megapixels):
 
     target_h = int(h * scale)
     target_w = int(w * scale)
-    img_resized = cv2.resize(img, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
-    print(f"Resized input from {w}x{h} ({current_mp:.1f} MP) to {target_w}x{target_h} ({target_megapixels:.1f} MP)")
-
-    # Start memory tracing
-    tracemalloc.start()
     
-    # Initialize engine
-    engine = RetouchEngine()
+    # Use optimal interpolation flags
+    interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC
+    img_resized = cv2.resize(img, (target_w, target_h), interpolation=interp)
+    print(f"Input size: {target_w}x{target_h} ({target_megapixels:.1f} MP)")
+
+    # Force garbage collection before starting
+    gc.collect()
     
-    t0 = time.perf_counter()
-    result = engine.process(img_resized, recipe="natural")
-    total_time = (time.perf_counter() - t0) * 1000
+    times = []
+    peak_mem = 0.0
+    base_mem = get_process_memory_mb()
     
-    # Get memory stats
-    _, peak_mem = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
+    best_timings = None
+    face_count = 0
+    best_run_time = float('inf')
+    
+    for i in range(iterations):
+        t0 = time.perf_counter()
+        result = engine.process(img_resized, recipe="natural")
+        t1 = time.perf_counter()
+        
+        elapsed = (t1 - t0) * 1000
+        times.append(elapsed)
+        
+        # Capture timings and face count from the best run to avoid running a 4th time
+        if elapsed < best_run_time:
+            best_run_time = elapsed
+            best_timings = result.timings.copy()
+            face_count = result.face_count
+        
+        current_mem = get_process_memory_mb()
+        if current_mem > peak_mem:
+            peak_mem = current_mem
+            
+        print(f"  Run {i+1}/{iterations}: {elapsed:7.1f} ms")
 
-    engine.close()
+    # Clean up result to free memory
+    del result
+    gc.collect()
 
-    # Print timings and memory
-    print(f"Face count: {result.face_count}")
-    print("Timings (ms):")
-    for stage, ms in result.timings.items():
-        print(f"  {stage:12}: {ms:7.1f} ms")
-    print(f"Peak Memory usage: {peak_mem / (1024 * 1024):.1f} MB")
+    best_time = min(times)
+    avg_time = sum(times) / len(times)
+    mem_delta = peak_mem - base_mem
 
+    print(f"Face count: {face_count}")
+    print("Best Run Timings (ms):")
+    if best_timings:
+        for stage, ms in best_timings.items():
+            print(f"  {stage:12}: {ms:7.1f} ms")
 
-def warmup():
-    """Warm up JIT/CoreML/GPU to avoid cold-start bias in timed runs."""
-    engine = RetouchEngine()
-    tiny = np.full((100, 100, 3), 128, dtype=np.uint8)
-    engine.process(tiny, recipe="natural")
-    engine.close()
+    print(f"Timing Summary: Best = {best_time:.1f} ms | Avg = {avg_time:.1f} ms")
+    print(f"Peak Memory usage: {peak_mem:.1f} MB (Delta: +{mem_delta:.1f} MB)")
 
 
 def main():
     # Use one of the sample images in the repository
     sample_img = "test_output/DSCF4550.jpg"
     if not os.path.exists(sample_img):
-        # Fallback to any other jpeg in test_output
         import glob
         jpgs = glob.glob("test_output/*.jpg")
         if jpgs:
             sample_img = jpgs[0]
+        else:
+            print("No sample images found in test_output/. Exiting.")
+            return
 
-    # Warm up before timing to avoid cold-start artifacts
-    warmup()
+    print("Initializing RetouchEngine...")
+    engine = RetouchEngine()
+    
+    # Warm up model loading and JIT caches
+    print("Warming up...")
+    tiny = np.random.randint(0, 256, (256, 256, 3), dtype=np.uint8)
+    engine.process(tiny, recipe="natural")
 
-    # Benchmark at 12 MP, 24 MP, and 50 MP (or lower if testing fast)
-    run_benchmark(sample_img, 12.0)
-    run_benchmark(sample_img, 24.0)
-    # We do a quick 3 MP run to ensure fast testing too
-    run_benchmark(sample_img, 3.0)
+    # Benchmark at different resolutions
+    run_benchmark(engine, sample_img, 3.0)
+    run_benchmark(engine, sample_img, 12.0)
+    run_benchmark(engine, sample_img, 24.0)
+
+    engine.close()
+    print("\nBenchmarking complete.")
 
 
 if __name__ == "__main__":

@@ -78,9 +78,12 @@ class FaceDetector:
 
         vision = mp.tasks.vision
         base = mp.tasks.BaseOptions
+
+        delegate = base.Delegate.CPU
+
         base_options = base(
             model_asset_path=_FACE_LANDMARKER_MODEL,
-            delegate=base.Delegate.CPU,
+            delegate=delegate,
         )
 
         self._landmarker = vision.FaceLandmarker.create_from_options(
@@ -99,7 +102,7 @@ class FaceDetector:
         if os.path.exists(_SELFIE_SEGMENTER_MODEL):
             segmenter_base_options = base(
                 model_asset_path=_SELFIE_SEGMENTER_MODEL,
-                delegate=base.Delegate.CPU,
+                delegate=delegate,
             )
             self._segmenter = vision.ImageSegmenter.create_from_options(
                 vision.ImageSegmenterOptions(
@@ -189,8 +192,23 @@ class FaceDetector:
         # failed crop-landmarking (partial coverage).
         retinaface_lost_some = retinaface_box_count > 0 and len(faces) < retinaface_box_count
         if not faces or retinaface_lost_some:
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
-            result = self._landmarker.detect(mp_image)
+            # OPTIMIZATION: Run detection on downscaled copy to speed up inference on 4K/high-res frames
+            max_dim = 1024
+            if max(h, w) > max_dim:
+                scale = max_dim / float(max(h, w))
+                w_down = int(w * scale)
+                h_down = int(h * scale)
+                img_down = cv2.resize(img_rgb, (w_down, h_down), interpolation=cv2.INTER_AREA)
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_down)
+                result = self._landmarker.detect(mp_image)
+                # If downscaling finds no faces, fallback to full resolution as safety guard
+                if not result.face_landmarks:
+                    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
+                    result = self._landmarker.detect(mp_image)
+            else:
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
+                result = self._landmarker.detect(mp_image)
+
             if result.face_landmarks:
                 existing = set()
                 for f in faces:
