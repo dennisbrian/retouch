@@ -175,13 +175,13 @@ graph TD
 *   **Luminance Curves**: S-curves applied to the LAB L-channel to shape contrast.
 *   **Parametric Tonal Adjustments**: Adds direct overrides for highlights, shadows, whites, and blacks via parametric LUT curve adjustments.
 *   **Global Brightness**: Leverages gamma-curve lookup tables to correct exposure.
-*   **Reference-Based Color Transfer**: Matches the color tone and palette of an uploaded reference image using local distribution adjustments.
-*   **Split Toning & Presets**: Colorizes shadows and highlights independently. Introduces 3-way split toning (shadows, midtones, highlights) in LAB space, and supports preset weights stacking (`grade_stack`).
+*   **Reference-Based Color Transfer**: Matches the color tone and palette of an uploaded reference image using local distribution adjustments. Robust histogram color transfer (`color_transfer_hist`) maps color channels via unique-value-based CDF interpolation, resolving index errors and flat-input mapping.
+*   **Split Toning & Presets**: Colorizes shadows and highlights independently. Introduces 3-way split toning (shadows, midtones, highlights) in LAB space, and supports preset weights stacking (`grade_stack`). Preset weight stacking skips glows and post-effects during cumulative blending to avoid compounding noise or bloom artifacts.
 *   **Smart Glow (Orton & Bloom)**: 
     *   *Smart Bloom*: Screens a blurred highlights layer ($L > 225$) back onto itself, restricted to a spatial mask to protect hair and eyes.
     *   *Orton Glow*: Blends a soft Pegtop-blended layer for dreamy fantasy aesthetics.
 *   **Highlight Costume Lift**: Lifts high-luminance ($L > 170$) low-saturation white colors (excluding skin, hair, and lips) with soft feathering in cosplay-oriented presets (e.g. `pink_dream`, `meitu_clone`) to recover costume details.
-*   **Vignetting, Clarity & Lens Effects**: Micro-contrast (clarity) via guided filtering, radial vignetting, film grain, LUT emulations, halation, and radial chromatic aberration.
+*   **Vignetting, Clarity & Lens Effects**: Micro-contrast (clarity) via guided filtering (removing redundant comparison check caching to prevent frame rate drops), radial vignetting, film grain, static LUT emulations (precomputed to eliminate per-call list comprehension overhead), halation, and radial chromatic aberration.
 *   **Selective Final Sharpening**: Photoshop-style selective unsharp masking over a soft mask (targeting eyes, eyebrows, and hair edges) with custom radius, amount, and threshold settings to finalize high-frequency details.
 *   **Global High-Impact Finish**: A dedicated finishing pass (`add_impact_finish`) that uses luminance curves, saturation boosts, micro-contrast clarity, and pink-tinted glow to add global punch.
 
@@ -214,7 +214,7 @@ graph TD
 *   **Specialized Behavior**: Defines sets of recipes that automatically trigger specific engine logic (e.g., `_NOSE_BLUSH_RECIPES` for nose tip blush, `_SLIMMING_RECIPES` for liquid jaw/chin reshaping, and `_WHITE_COSTUME_RECIPES` for white costume highlight recovery).
 
 ### 3.11. Processing Pipeline Context & Result Types (`retouch/engine.py`)
-*   **`ProcessingContext`**: A typed dataclass that encapsulates all parameters for a processing run, replacing raw dictionaries to provide compile-time safety and self-documenting parameter lists.
+*   **`ProcessingContext`**: A typed dataclass that encapsulates all parameters for a processing run, replacing raw dictionaries to provide compile-time safety and self-documenting parameter lists. Exposes modular override flags for `nose_blush`, `under_eye_blush`, and `white_costume_lift` configured in CLI and engine API.
 *   **`ProcessingResult`**: An ndarray-derived container subclass that acts directly as a standard uint8 BGR image for compatibility with OpenCV/PIL while embedding rich processing metadata:
     *   `skin_mask`: Cumulative normalized skin mask.
     *   `skin_hair_mask`: Combined skin, hair, and neck mask.
@@ -351,3 +351,8 @@ For images containing multiple faces:
 | BUGFIX-13 | `skin.py` | `specular_bloom` porcelain tone — added porcelain LAB shift branch |
 | BUGFIX-14 | `skin.py` | `harmonize_neck` — bi-directional adjustment (brightens neck when darker, darkens when lighter) |
 | BUGFIX-15 | `skin.py` | `specular_bloom` — clamp highlight mask to skin boundary to prevent bleed into hair/eyes |
+| BUGFIX-16 | `grading.py` | CDF histogram mismatch — rewritten histogram color transfer mapping via unique-value-based interpolation |
+| BUGFIX-17 | `grading.py` | Noise compounding — skip glows and post-effects during preset stack accumulation blending |
+| PERF-4 | `grading.py` | Film LUT precomputation — precomputed film emulation lookup tables statically at class level |
+| PERF-5 | `grading.py` | Clarity caching bottleneck — eliminated redundant array checks in `_add_clarity` |
+| FEATURE-1 | `engine.py` / `cli.py` | Modular overrides — added parameters, CLI options, and context resolution for `nose_blush`, `under_eye_blush`, and `white_costume_lift` |
