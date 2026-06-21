@@ -97,7 +97,7 @@ Passing an explicit value override to these parameters takes precedence over the
 *   **`dark_circles`** (`float`, `0` to `100`): Under-eye bag dark circles reduction.
 *   **`teeth_whiten`** (`float`, `0` to `100`): Whiten and brighten teeth enamel.
 *   **`lip_enhance`** (`float`, `0` to `100`): Enhance lip texture definition, gloss, and contour.
-*   **`lip_tint`** (`str`, e.g. `"cosplay"`, `"rose"`, `"pink"`, `"coral"`, `"natural"`, `"berry"`): Apply a natural cosmetic color tone to the lips.
+*   **`lip_tint`** (`str` or `None`, e.g. `"cosplay"`, `"rose"`, `"pink"`, `"coral"`, `"natural"`, `"berry"`): Apply a natural cosmetic color tone to the lips.
 *   **`lip_finish`** (`str`, default: `"gloss"`): Set texture finish for lips.
 
 ##### **Makeup & Face Structure**
@@ -143,6 +143,7 @@ Passing an explicit value override to these parameters takes precedence over the
 *   **`sharpen`** (`float`): Final unsharp mask sharpening amount.
 *   **`sharpen_radius`** (`float`): Radius of the sharpening filter.
 *   **`impact`** (`float`, `0` to `100`): Dynamic contrast finish impact parameter.
+*   **`glow`** (`float`): Soft dreamy glow effect strength.
 
 ---
 
@@ -169,7 +170,7 @@ from retouch import retouch
 
 img = cv2.imread("face.jpg")
 # Automatically spins up and shuts down a RetouchEngine instance
-out = retouch(img, recipe="cosplay", smooth=65, whiten=15)
+out = retouch(img, preset="cosplay", smooth=65, whiten=15)
 cv2.imwrite("output.jpg", out)
 ```
 
