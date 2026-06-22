@@ -1,5 +1,7 @@
 """Tests for retouch/detection.py — data classes and helpers only (no model)."""
 
+from unittest.mock import MagicMock, patch
+
 import numpy as np
 import pytest
 
@@ -279,3 +281,342 @@ class TestResolveDelegate:
         # Should be callable as a class method
         result = FaceDetector._resolve_delegate(_Base)
         assert result == "cpu"
+
+
+# ---------------------------------------------------------------------------
+# FaceDetector.__init__  (mocked to avoid loading MediaPipe)
+# ---------------------------------------------------------------------------
+
+
+def _mock_create_tasks_default():
+    """Build a (mock_landmarker, mock_segmenter) pair for injection."""
+    return MagicMock(), MagicMock()
+
+
+class TestFaceDetectorInit:
+    """Tests for FaceDetector.__init__ — covered via _create_tasks mock."""
+
+    def test_default_params(self):
+        with patch.object(
+            FaceDetector, "_create_tasks",
+            return_value=_mock_create_tasks_default(),
+        ):
+            detector = FaceDetector()
+            try:
+                assert detector.max_faces == 10
+                assert detector.min_confidence == 0.4
+                assert detector._landmarker is not None
+                assert detector._segmenter is not None
+            finally:
+                detector.close()
+
+    def test_custom_params(self):
+        with patch.object(
+            FaceDetector, "_create_tasks",
+            return_value=_mock_create_tasks_default(),
+        ):
+            detector = FaceDetector(max_faces=5, min_confidence=0.7)
+            try:
+                assert detector.max_faces == 5
+                assert detector.min_confidence == 0.7
+            finally:
+                detector.close()
+
+    def test_custom_params_with_segmenter_none(self):
+        with patch.object(
+            FaceDetector, "_create_tasks",
+            return_value=(MagicMock(), None),
+        ):
+            detector = FaceDetector(max_faces=2, min_confidence=0.9)
+            try:
+                assert detector.max_faces == 2
+                assert detector.min_confidence == 0.9
+                assert detector._landmarker is not None
+                assert detector._segmenter is None
+            finally:
+                detector.close()
+
+    def test_refine_landmarks_param_accepted(self):
+        # `refine_landmarks` is currently a constructor arg that is accepted
+        # but not stored. We just need to confirm it does not break init.
+        with patch.object(
+            FaceDetector, "_create_tasks",
+            return_value=_mock_create_tasks_default(),
+        ):
+            detector = FaceDetector(refine_landmarks=False)
+            try:
+                assert detector.max_faces == 10
+            finally:
+                detector.close()
+
+    def test_calls_create_tasks_exactly_once(self):
+        with patch.object(
+            FaceDetector, "_create_tasks",
+            return_value=_mock_create_tasks_default(),
+        ) as mock_create:
+            detector = FaceDetector()
+            try:
+                assert mock_create.call_count == 1
+                # _create_tasks signature: (base, vision, delegate, max_faces,
+                # min_confidence). Inspect positional args.
+                args, kwargs = mock_create.call_args
+                # delegate is positional arg index 2
+                assert args[3] == 10
+                assert args[4] == 0.4
+            finally:
+                detector.close()
+
+    def test_create_tasks_called_with_resolved_delegate(self):
+        # _resolve_delegate is called internally; whatever it returns is
+        # forwarded as the delegate to _create_tasks.
+        with patch.object(
+            FaceDetector, "_create_tasks",
+            return_value=_mock_create_tasks_default(),
+        ) as mock_create, \
+             patch.object(
+                 FaceDetector, "_resolve_delegate", return_value="FAKE-DELEGATE",
+             ) as mock_resolve:
+            detector = FaceDetector()
+            try:
+                assert mock_resolve.called
+                args, _ = mock_create.call_args
+                assert args[2] == "FAKE-DELEGATE"
+            finally:
+                detector.close()
+
+    def test_gpu_failure_falls_back_to_cpu(self):
+        # When _create_tasks raises on GPU and _resolve_delegate returned
+        # base.Delegate.GPU, the constructor must fall back to CPU.
+        import mediapipe as mp
+
+        base = mp.tasks.BaseOptions
+        gpu = base.Delegate.GPU
+        cpu = base.Delegate.CPU
+
+        call_count = {"n": 0}
+
+        def fake_create(base_arg, vision_arg, delegate, max_faces, min_confidence):
+            call_count["n"] += 1
+            if delegate == gpu:
+                raise RuntimeError("GPU init failed")
+            return MagicMock(), None
+
+        with patch.object(
+            FaceDetector, "_create_tasks", side_effect=fake_create,
+        ), patch.object(FaceDetector, "_resolve_delegate", return_value=gpu):
+            detector = FaceDetector()
+            try:
+                # Two calls: one with GPU (failed), one with CPU (succeeded)
+                assert call_count["n"] == 2
+                assert detector._landmarker is not None
+            finally:
+                detector.close()
+
+    def test_cpu_failure_re_raises(self):
+        # When _create_tasks fails for a non-GPU delegate, the exception
+        # must propagate to the caller.
+        with patch.object(
+            FaceDetector, "_create_tasks",
+            side_effect=RuntimeError("CPU init failed"),
+        ):
+            with pytest.raises(RuntimeError, match="CPU init failed"):
+                FaceDetector()
+
+
+# ---------------------------------------------------------------------------
+# FaceDetector.close
+# ---------------------------------------------------------------------------
+
+
+class TestFaceDetectorClose:
+    """Tests for FaceDetector.close() — resource cleanup."""
+
+    def test_close_calls_close_on_landmarker(self):
+        mock_landmarker = MagicMock()
+        mock_segmenter = MagicMock()
+        with patch.object(
+            FaceDetector, "_create_tasks",
+            return_value=(mock_landmarker, mock_segmenter),
+        ):
+            detector = FaceDetector()
+            detector.close()
+        assert mock_landmarker.close.called
+
+    def test_close_calls_close_on_segmenter(self):
+        mock_landmarker = MagicMock()
+        mock_segmenter = MagicMock()
+        with patch.object(
+            FaceDetector, "_create_tasks",
+            return_value=(mock_landmarker, mock_segmenter),
+        ):
+            detector = FaceDetector()
+            detector.close()
+        assert mock_segmenter.close.called
+
+    def test_close_with_none_segmenter(self):
+        # When segmenter was not loaded (model missing), close() must not
+        # try to call .close() on None.
+        mock_landmarker = MagicMock()
+        with patch.object(
+            FaceDetector, "_create_tasks",
+            return_value=(mock_landmarker, None),
+        ):
+            detector = FaceDetector()
+            detector.close()
+        assert mock_landmarker.close.called
+
+    def test_close_with_no_attributes(self):
+        # Build a bare instance without invoking __init__ and call close().
+        # The method must guard with hasattr and not raise.
+        detector = FaceDetector.__new__(FaceDetector)
+        detector.close()
+
+    def test_close_with_none_attributes(self):
+        detector = FaceDetector.__new__(FaceDetector)
+        detector._landmarker = None
+        detector._segmenter = None
+        detector.close()
+
+
+# ---------------------------------------------------------------------------
+# FaceDetector context manager protocol
+# ---------------------------------------------------------------------------
+
+
+class TestFaceDetectorContextManager:
+    def test_context_manager_returns_self(self):
+        with patch.object(
+            FaceDetector, "_create_tasks",
+            return_value=_mock_create_tasks_default(),
+        ):
+            with FaceDetector() as detector:
+                assert isinstance(detector, FaceDetector)
+
+    def test_context_manager_calls_close_on_exit(self):
+        mock_landmarker = MagicMock()
+        mock_segmenter = MagicMock()
+        with patch.object(
+            FaceDetector, "_create_tasks",
+            return_value=(mock_landmarker, mock_segmenter),
+        ):
+            with FaceDetector():
+                pass
+        assert mock_landmarker.close.called
+        assert mock_segmenter.close.called
+
+
+# ---------------------------------------------------------------------------
+# FaceDetector._create_tasks  (MediaPipe task creation)
+# ---------------------------------------------------------------------------
+
+
+class TestCreateTasks:
+    """Tests for FaceDetector._create_tasks — MediaPipe task wiring."""
+
+    def test_returns_tuple_of_two(self):
+        mock_base = MagicMock()
+        mock_vision = MagicMock()
+        mock_landmarker = MagicMock()
+        mock_segmenter = MagicMock()
+        mock_vision.FaceLandmarker.create_from_options.return_value = mock_landmarker
+        mock_vision.ImageSegmenter.create_from_options.return_value = mock_segmenter
+
+        with patch("retouch.detection.os.path.exists", return_value=True):
+            out = FaceDetector._create_tasks(
+                mock_base, mock_vision, "CPU", 5, 0.7,
+            )
+        assert isinstance(out, tuple)
+        assert len(out) == 2
+
+    def test_creates_face_landmarker(self):
+        mock_base = MagicMock()
+        mock_vision = MagicMock()
+        mock_vision.FaceLandmarker.create_from_options.return_value = MagicMock()
+        mock_vision.ImageSegmenter.create_from_options.return_value = MagicMock()
+
+        with patch("retouch.detection.os.path.exists", return_value=True):
+            FaceDetector._create_tasks(mock_base, mock_vision, "CPU", 5, 0.7)
+        assert mock_vision.FaceLandmarker.create_from_options.called
+
+    def test_creates_image_segmenter_when_model_exists(self):
+        mock_base = MagicMock()
+        mock_vision = MagicMock()
+        mock_vision.FaceLandmarker.create_from_options.return_value = MagicMock()
+        mock_vision.ImageSegmenter.create_from_options.return_value = MagicMock()
+
+        with patch("retouch.detection.os.path.exists", return_value=True):
+            landmarker, segmenter = FaceDetector._create_tasks(
+                mock_base, mock_vision, "CPU", 5, 0.7,
+            )
+        assert mock_vision.ImageSegmenter.create_from_options.called
+        assert segmenter is not None
+        assert landmarker is not None
+
+    def test_skips_image_segmenter_when_model_missing(self):
+        mock_base = MagicMock()
+        mock_vision = MagicMock()
+        mock_vision.FaceLandmarker.create_from_options.return_value = MagicMock()
+        mock_vision.ImageSegmenter.create_from_options.return_value = MagicMock()
+
+        def fake_exists(path):
+            return "face_landmarker" in path  # segmenter model missing
+
+        with patch("retouch.detection.os.path.exists", side_effect=fake_exists):
+            landmarker, segmenter = FaceDetector._create_tasks(
+                mock_base, mock_vision, "CPU", 5, 0.7,
+            )
+        assert not mock_vision.ImageSegmenter.create_from_options.called
+        assert segmenter is None
+        assert landmarker is not None
+
+    def test_forwards_max_faces_to_landmarker_options(self):
+        mock_base = MagicMock()
+        mock_vision = MagicMock()
+        mock_vision.FaceLandmarker.create_from_options.return_value = MagicMock()
+        mock_vision.ImageSegmenter.create_from_options.return_value = MagicMock()
+
+        with patch("retouch.detection.os.path.exists", return_value=True):
+            FaceDetector._create_tasks(mock_base, mock_vision, "CPU", 7, 0.6)
+        # The function constructs vision.FaceLandmarkerOptions(...) with
+        # num_faces=<max_faces>; the mock records that constructor call.
+        options_kwargs = mock_vision.FaceLandmarkerOptions.call_args.kwargs
+        assert options_kwargs.get("num_faces") == 7
+
+    def test_forwards_min_confidence_to_landmarker_options(self):
+        mock_base = MagicMock()
+        mock_vision = MagicMock()
+        mock_vision.FaceLandmarker.create_from_options.return_value = MagicMock()
+        mock_vision.ImageSegmenter.create_from_options.return_value = MagicMock()
+
+        with patch("retouch.detection.os.path.exists", return_value=True):
+            FaceDetector._create_tasks(mock_base, mock_vision, "CPU", 5, 0.85)
+        options_kwargs = mock_vision.FaceLandmarkerOptions.call_args.kwargs
+        assert options_kwargs.get("min_face_detection_confidence") == pytest.approx(0.85)
+        assert options_kwargs.get("min_face_presence_confidence") == pytest.approx(0.85)
+
+    def test_forwards_delegate_to_base_options(self):
+        mock_base = MagicMock()
+        mock_vision = MagicMock()
+        mock_vision.FaceLandmarker.create_from_options.return_value = MagicMock()
+        mock_vision.ImageSegmenter.create_from_options.return_value = MagicMock()
+
+        with patch("retouch.detection.os.path.exists", return_value=True):
+            FaceDetector._create_tasks(mock_base, mock_vision, "MY-DELEGATE", 5, 0.5)
+        # The first positional arg to `mock_base` (BaseOptions ctor) is the
+        # model path; the keyword arg is the delegate.
+        kwargs = mock_base.call_args_list[0].kwargs
+        assert kwargs.get("delegate") == "MY-DELEGATE"
+
+    def test_uses_landmarker_model_path(self):
+        mock_base = MagicMock()
+        mock_vision = MagicMock()
+        mock_vision.FaceLandmarker.create_from_options.return_value = MagicMock()
+        mock_vision.ImageSegmenter.create_from_options.return_value = MagicMock()
+
+        with patch("retouch.detection.os.path.exists", return_value=True):
+            FaceDetector._create_tasks(mock_base, mock_vision, "CPU", 5, 0.5)
+        # The model_asset_path kwarg should reference the landmarker model
+        # path constant from detection.py
+        from retouch import detection as det_mod
+        kwargs = mock_base.call_args_list[0].kwargs
+        assert kwargs.get("model_asset_path") == det_mod._FACE_LANDMARKER_MODEL
