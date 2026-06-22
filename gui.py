@@ -701,43 +701,6 @@ COMPARE_TPL = """
   <div class="cmp-label" style="position:absolute;top:10px;left:10px;background:rgba(0,0,0,0.55);color:#fff;padding:2px 10px;border-radius:3px;font-size:11px;letter-spacing:1px;pointer-events:none">BEFORE</div>
   <div class="cmp-label" style="position:absolute;top:10px;right:10px;background:rgba(0,0,0,0.55);color:#fff;padding:2px 10px;border-radius:3px;font-size:11px;letter-spacing:1px;pointer-events:none">AFTER</div>
 </div>
-<script>
-(function(){{
-  var c = document.getElementById('cmp-%(uid)s');
-  var o = c.querySelector('.cmp-overlay');
-  var h = c.querySelector('.cmp-handle');
-  var imgResult = c.children[0];
-  var imgOrig = o.children[0];
-  
-  function syncSize() {{
-    var rect = imgResult.getBoundingClientRect();
-    if (rect.width > 0 && rect.height > 0) {{
-      imgOrig.style.width = rect.width + 'px';
-      imgOrig.style.height = rect.height + 'px';
-    }}
-  }}
-  
-  imgResult.onload = syncSize;
-  window.addEventListener('resize', syncSize);
-  setTimeout(syncSize, 100);
-  setTimeout(syncSize, 500);
-  setTimeout(syncSize, 1000);
-  
-  var d = false;
-  function m(x){{
-    var r = c.getBoundingClientRect();
-    var p = Math.max(0,Math.min(100,(x-r.left)/r.width*100));
-    o.style.width=p+'%%'; h.style.left=p+'%%';
-    syncSize();
-  }}
-  h.onmousedown=function(e){{d=true;e.preventDefault()}};
-  document.onmousemove=function(e){{if(d)m(e.clientX)}};
-  document.onmouseup=function(){{d=false}};
-  h.ontouchstart=function(e){{d=true;e.preventDefault()}};
-  document.ontouchmove=function(e){{if(d)m(e.touches[0].clientX)}};
-  document.ontouchend=function(){{d=false}};
-}})();
-</script>
 """
 
 
@@ -1309,6 +1272,110 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         setTimeout(function(){ forceFullWidth(); forceDarkMode(); }, 200);
         setTimeout(function(){ forceFullWidth(); forceDarkMode(); }, 1000);
         setTimeout(function(){ forceFullWidth(); forceDarkMode(); }, 3000);
+
+        // Comparison Slider: drag handle + syncSize (delegated).
+        // NOTE: COMPARE_TPL's <script> cannot run because Gradio's gr.HTML
+        // injects the value via element.innerHTML, and HTML5 spec says
+        // scripts inserted that way are inert. So the drag/sync logic lives
+        // here and uses event delegation on document so listeners survive
+        // every innerHTML replacement.
+        (function() {
+            function findCmp(node) {
+                if (!node) return null;
+                if (node.id && node.id.indexOf('cmp-') === 0) return node;
+                var c = node.closest && node.closest('[id^="cmp-"]');
+                if (c) return c;
+                var byId = node.querySelector && node.querySelector('[id^="cmp-"]');
+                return byId || null;
+            }
+
+            function setupCmp(c) {
+                if (!c || c.__cmpInited) return;
+                c.__cmpInited = true;
+                var o = c.querySelector('.cmp-overlay');
+                var imgResult = c.children[0];
+                var imgOrig = o && o.children[0];
+                if (!o || !imgResult || !imgOrig) return;
+
+                function syncSize() {
+                    var rect = imgResult.getBoundingClientRect();
+                    if (rect.width > 0 && rect.height > 0) {
+                        imgOrig.style.width = rect.width + 'px';
+                        imgOrig.style.height = rect.height + 'px';
+                    }
+                }
+                if (imgResult.complete && imgResult.naturalWidth > 0) {
+                    syncSize();
+                } else {
+                    imgResult.addEventListener('load', syncSize);
+                }
+                window.addEventListener('resize', syncSize);
+                setTimeout(syncSize, 50);
+                setTimeout(syncSize, 200);
+                setTimeout(syncSize, 1000);
+            }
+
+            var activeDrag = null;
+
+            function beginDrag(handle, e) {
+                var c = findCmp(handle);
+                if (!c) return;
+                setupCmp(c);
+                var o = c.querySelector('.cmp-overlay');
+                var h = c.querySelector('.cmp-handle');
+                var imgResult = c.children[0];
+                var imgOrig = o.children[0];
+
+                function syncSize() {
+                    var rect = imgResult.getBoundingClientRect();
+                    if (rect.width > 0 && rect.height > 0) {
+                        imgOrig.style.width = rect.width + 'px';
+                        imgOrig.style.height = rect.height + 'px';
+                    }
+                }
+                function move(x) {
+                    var r = c.getBoundingClientRect();
+                    var p = Math.max(0, Math.min(100, (x - r.left) / r.width * 100));
+                    o.style.width = p + '%';
+                    h.style.left = p + '%';
+                    syncSize();
+                }
+                activeDrag = { move: move };
+                if (e && e.preventDefault) e.preventDefault();
+            }
+
+            document.addEventListener('mousedown', function(e) {
+                var handle = e.target.closest && e.target.closest('.cmp-handle');
+                if (handle) beginDrag(handle, e);
+            });
+            document.addEventListener('mousemove', function(e) {
+                if (activeDrag) activeDrag.move(e.clientX);
+            });
+            document.addEventListener('mouseup', function() { activeDrag = null; });
+
+            document.addEventListener('touchstart', function(e) {
+                var handle = e.target.closest && e.target.closest('.cmp-handle');
+                if (handle) beginDrag(handle, e);
+            }, { passive: false });
+            document.addEventListener('touchmove', function(e) {
+                if (activeDrag && e.touches[0]) activeDrag.move(e.touches[0].clientX);
+            }, { passive: false });
+            document.addEventListener('touchend', function() { activeDrag = null; });
+
+            // Auto-setup whenever a new comparison is inserted.
+            var mo = new MutationObserver(function(muts) {
+                for (var i = 0; i < muts.length; i++) {
+                    var added = muts[i].addedNodes;
+                    for (var j = 0; j < added.length; j++) {
+                        var n = added[j];
+                        if (n.nodeType !== 1) continue;
+                        var c = findCmp(n);
+                        if (c) setupCmp(c);
+                    }
+                }
+            });
+            mo.observe(document.body, { childList: true, subtree: true });
+        })();
     })();
     </script>
 """) as app:
