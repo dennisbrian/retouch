@@ -43,7 +43,7 @@ def recipe_defaults(recipe_name):
         "texture_opacity": rec["texture"].get("opacity", 1.0),
         "pore_synthesis": int(rec["texture"].get("pore_synthesis", 0.0) * 100),
         "nose_smooth": 0,
-        "whiten": int(rec["skin"].get("rosy", rec["skin"].get("porcelain", 0)) * 100),
+        "whiten": int(rec["skin"].get(("porcelain" if "porcelain" in rec["skin"] else "rosy"), 0) * 100),
         "equalize": int(rec["skin"].get("equalize", 0) * 100),
         "relight": int(rec.get("skin", {}).get("relight", rec.get("relight_strength", 0.0) / 100.0) * 100),
         "relight_azimuth": int(rec.get("skin", {}).get("relight_azimuth", rec.get("light_azimuth", 0.0))),
@@ -110,7 +110,7 @@ def get_custom_style_names():
     return [s["name"] for s in styles]
 
 
-def apply_custom_style(style_name):
+def apply_custom_style(style_name, current_recipe="natural"):
     if not style_name:
         return [gr.update()]*58
     
@@ -127,34 +127,35 @@ def apply_custom_style(style_name):
     p_dict = target["profile"]
     profile = StyleProfile(**p_dict)
     
-    smooth_val = int(np.clip(profile.skin_smooth_strength * 100.0, 0.0, 100.0))
-    whiten_val = int(np.clip(profile.skin_l_mean_delta * 4.0, -100.0, 100.0))
-    mid_red_val = float(np.clip(profile.skin_mid_reduction, 0.0, 1.0))
-    tex_op_val = float(np.clip(profile.skin_texture_opacity, 0.0, 1.0))
-    contrast_val = int(profile.contrast_delta)
-    brightness_val = int(np.clip(profile.brightness_delta * 2.0, -100.0, 100.0))
+    d = recipe_defaults(current_recipe)
+    
+    d["smooth"] = int(np.clip(profile.skin_smooth_strength * 100.0, 0.0, 100.0))
+    d["whiten"] = int(np.clip(profile.skin_l_mean_delta * 4.0, 0.0, 100.0))
+    d["mid_reduction"] = float(np.clip(profile.skin_mid_reduction, 0.0, 1.0))
+    d["texture_opacity"] = float(np.clip(profile.skin_texture_opacity, 0.0, 1.0))
+    d["contrast"] = int(profile.contrast_delta)
+    d["brightness"] = int(np.clip(profile.brightness_delta, -50.0, 50.0))
     
     return (
-        smooth_val, mid_red_val, tex_op_val, 0, 0,
-        whiten_val, 0, False,
-        0, 0, 30,
-        5, 5,
-        5, "none", 0, False, False,
-        5, 0, 0, 0, 210, 30, contrast_val, brightness_val,
-        0, 0, 0, 0,
-        # New params (28 defaults)
-        0, 0, "rosy", False,
-        0, 0, 0, "gloss",
-        0, 0,
-        0, 1.0, 0, 0, 0, "rosy",
-        "none", 0,
-        0, 0, 0, "none",
-        0, 0, 0, 0, 0, 0,
+        d["smooth"], d["mid_reduction"], d["texture_opacity"], d["pore_synthesis"], d["nose_smooth"],
+        d["whiten"], d["equalize"], d["white_costume_lift"],
+        d["relight"], d["relight_azimuth"], d["relight_elevation"],
+        d["eye_enhance"], d["teeth_whiten"],
+        d["lip_enhance"], d["lip_tint"], d["blush"], d["nose_blush"], d["under_eye_blush"],
+        d["hair_enhance"], d["dodge_burn"], d["specular_bloom"], d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["contrast"], d["brightness"],
+        d["highlights"], d["shadows"], d["whites"], d["blacks"],
+        d["blemish"], d["dark_circles"], d["whiten_tone"], d["auto_exposure"],
+        d["clarity"], d["vibrance"], d["saturation"], d["lip_finish"],
+        d["slimming"], d["impact"],
+        d["sharpen"], d["sharpen_radius"], d["glow"], d["vignette"], d["subject_separation"], d["specular_bloom_tone"],
+        d["color_grade"], d["grade_intensity"],
+        d["chromatic_aberration"], d["grain"], d["halation"], d["lut"],
+        d["shadow_hue"], d["shadow_sat"], d["midtone_hue"], d["midtone_sat"], d["highlight_hue"], d["highlight_sat"],
     )
 
 
 def on_save_style(style_name, author, tags_str,
-                  smooth, mid_reduction, texture_opacity, pore_synthesis,
+                  smooth, mid_reduction, texture_opacity,
                   whiten, contrast, brightness):
     if not style_name.strip():
         return gr.update(), gr.update(), "Error: Style name cannot be empty."
@@ -226,6 +227,7 @@ def on_process_folder(input_dir, output_dir, style_type, custom_style_name, reci
     style_val = recipe_name
     
     if style_type == "Use Custom Style":
+        style_val = ""
         if not custom_style_name:
             return None, None, "Error: Please select a custom style profile."
         styles = list_styles()
@@ -307,7 +309,7 @@ def process_image(img_paths, recipe,
         color_ref_bgr = imread_exif(color_ref_path)
 
     lip_tint_val = lip_tint if lip_tint != "none" else None
-    color_grade_val = color_grade if color_grade != "none" else ""
+    color_grade_val = color_grade if color_grade != "none" else None
     lut_val = lut if lut != "none" else None
     grade_intensity_val = grade_intensity / 100.0
     engine = get_engine()
@@ -628,7 +630,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         background: rgba(255, 255, 255, 0.9) !important;
         border-radius: 12px !important;
         margin-bottom: 12px !important;
-        overflow: hidden !important;
+        overflow: visible !important;
         box-shadow: 0 2px 8px rgba(0,0,0,0.02) !important;
         transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
     }
@@ -650,6 +652,39 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     /* Slider visual tuning */
     .gr-slider input[type=range] {
         accent-color: #6366f1 !important;
+    }
+    
+    /* Prevent parent layouts and groups from clipping absolute dropdown menus */
+    .gradio-container .group,
+    .gradio-container .form,
+    .gradio-container .row,
+    .gradio-container .col,
+    .gradio-container .tabitem {
+        overflow: visible !important;
+    }
+    
+    /* Ensure the dropdown menu popup list overlays on top of other controls */
+    ul.options {
+        z-index: 9999 !important;
+        position: absolute !important;
+    }
+    
+    /* Elegant and highly visible scrollbar for dropdown choices */
+    ul.options::-webkit-scrollbar {
+        width: 6px !important;
+        height: 6px !important;
+        display: block !important;
+    }
+    ul.options::-webkit-scrollbar-track {
+        background: rgba(0, 0, 0, 0.05) !important;
+        border-radius: 4px !important;
+    }
+    ul.options::-webkit-scrollbar-thumb {
+        background: rgba(99, 102, 241, 0.45) !important; /* Indigo primary theme color */
+        border-radius: 4px !important;
+    }
+    ul.options::-webkit-scrollbar-thumb:hover {
+        background: rgba(99, 102, 241, 0.75) !important;
     }
 """) as app:
     # Beautiful Glassmorphism Header
@@ -678,15 +713,15 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 info="Select an extracted style from your library"
                             )
 
-                        show_compare = gr.Checkbox(label="Show side-by-side comparison screen", value=True)
+                        show_compare = gr.Checkbox(label="Show side-by-side comparison screen", value=True, info="Split view: original | separator | retouched result")
 
                         with gr.Row():
                             fast = gr.Checkbox(label="Fast Preview (Recommended)", value=True,
-                                               info="Downsamples image to speed up interactive updates")
+                                               info="Process at half resolution for preview; final export always uses full quality")
                         
                         with gr.Row():
                             process_btn = gr.Button("Process Image(s) ⚡", variant="primary", size="lg", elem_classes=["primary-btn"])
-                            reset_btn = gr.Button("Reset Overrides 🔄", variant="secondary", size="lg", elem_classes=["secondary-btn"])
+                            reset_btn = gr.Button("Reload Recipe Defaults 🔄", variant="secondary", size="lg", elem_classes=["secondary-btn"])
 
                     with gr.Group():
                         gr.Markdown("### ⚙️ Manual Overrides")
@@ -694,10 +729,10 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         with gr.Accordion("✨ Skin Smoothing & Texture", open=True):
                             smooth = gr.Slider(0, 100, 30, step=1, label="Smooth", info="Strength of skin smoothing (blur/median blend)")
                             nose_smooth = gr.Slider(0, 100, 0, step=1, label="Nose Smooth (0 = follow face)", info="Additional smoothing for nose bridge highlights")
-                            mid_reduction = gr.Slider(0.0, 1.0, 0.4, step=0.05, label="Mid Frequency Reduction", info="Target mid-level skin blemishes while preserving high-frequency pores")
+                            mid_reduction = gr.Slider(0.0, 1.0, 0.45, step=0.05, label="Mid Frequency Reduction", info="Target mid-level skin blemishes while preserving high-frequency pores")
                             texture_opacity = gr.Slider(0.0, 1.0, 1.0, step=0.05, label="Texture Opacity", info="Control original pore structure opacity overlay")
                             pore_synthesis = gr.Slider(0, 100, 0, step=1, label="Pore Synthesis", info="Add micro-texture/synthesized pores to prevent artificial plastic skin")
-                            blemish = gr.Slider(0, 100, 0, step=1, label="Blemish Removal", info="AI blemish detection and inpainting for acne/spots")
+                            blemish = gr.Slider(0, 100, 30, step=1, label="Blemish Removal", info="AI blemish detection and inpainting for acne/spots")
 
                         with gr.Accordion("🎨 Skin & Tone", open=False):
                             whiten = gr.Slider(0, 100, 10, step=1, label="Whitening", info="Luminance boost and porcelain skin color match")
@@ -752,8 +787,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             subject_separation = gr.Slider(0, 100, 0, step=1, label="Subject-Background Separation", info="Brighten subject / darken background using person segmentation mask")
 
                         with gr.Accordion("🎬 Film Color Grading", open=False):
-                            color_grade = gr.Dropdown(choices=COLOR_GRADE_NAMES, value="none", label="Color Grade Preset", interactive=True, info="Apply a film/color grading preset from the presets library")
-                            grade_intensity = gr.Slider(0, 100, 100, step=1, label="Grade Intensity", info="Blend strength of the color grade (0-100%)")
+                            color_grade = gr.Dropdown(choices=COLOR_GRADE_NAMES, value="natural", label="Color Grade Preset", interactive=True, info="Apply a film/color grading preset from the presets library")
+                            grade_intensity = gr.Slider(0, 100, 0, step=1, label="Grade Intensity", info="Blend strength of the color grade (0-100%)")
 
                         with gr.Accordion("🎞️ Film & Analog Effects", open=False):
                             chromatic_aberration = gr.Slider(0, 20, 0, step=0.5, label="Chromatic Aberration", info="Lens fringing effect (RGB channel shift in pixels)")
@@ -785,7 +820,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                 with gr.Column(scale=1):
                     with gr.Group():
                         gr.Markdown("### 🖼️ Output Preview")
-                        img_output = gr.Image(label="Processed Result", height=540, show_label=False)
+                        img_output = gr.Image(height=540, show_label=False)
                         status = gr.Textbox(label="Status", interactive=False, placeholder="Upload an image and click Process to start...")
                         export_file = gr.File(label="📥 Download Exported Assets")
 
@@ -842,7 +877,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         with gr.Tab("🎨 Style Library & Learning"):
             with gr.Row():
                 with gr.Column(scale=1):
-                    gr.Markdown("### Save Current Settings as Custom Style")
+                    gr.Markdown("### Save Sliders as Custom Style")
                     save_name = gr.Textbox(label="Style Name", placeholder="e.g. Dennis Cosplay v4", info="Give your custom style preset a unique name.")
                     save_author = gr.Textbox(label="Author", value="Dennis")
                     save_tags = gr.Textbox(label="Tags (comma-separated)", placeholder="moody, cosplay, soft")
@@ -891,7 +926,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
 
     custom_style_preset.change(
         fn=apply_custom_style,
-        inputs=[custom_style_preset],
+        inputs=[custom_style_preset, recipe],
         outputs=_recipe_outputs,
     )
 
@@ -904,7 +939,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     save_style_btn.click(
         fn=on_save_style,
         inputs=[save_name, save_author, save_tags,
-                smooth, mid_reduction, texture_opacity, pore_synthesis,
+                smooth, mid_reduction, texture_opacity,
                 whiten, contrast, brightness],
         outputs=[custom_style_preset, batch_custom_style, save_status]
     )
