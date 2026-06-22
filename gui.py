@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 
 import base64
+import logging
 import sys
 import os
+import shutil
 import time
 import tempfile
+import threading
 import zipfile
 from pathlib import Path
 
@@ -22,6 +25,8 @@ from retouch.style_library import list_styles, save_style_profile, learn_dataset
 from retouch.batch_processor import BatchProcessor
 from retouch.style import StyleProfile
 
+_logger = logging.getLogger(__name__)
+
 RECIPE_NAMES = list(RECIPES.keys())
 COLOR_GRADE_NAMES = ["none"] + list_available_presets()
 LUT_CHOICES = ["none", "kodak", "fuji"]
@@ -33,11 +38,19 @@ EXPORT_RES_MAP = {"Original": None, "4K (3840px)": 3840, "2K (2048px)": 2048,
                   "Full HD (1920px)": 1920, "HD (1280px)": 1280, "720px": 720}
 EXT_MAP = {"JPEG": ".jpg", "PNG": ".png", "WebP": ".webp"}
 
+PREVIEW_MAX_HEIGHT = 900
+COMPARE_SEPARATOR_WIDTH = 4
+COMPARE_SEPARATOR_COLOR = 200
+TEMP_CLEANUP_AGE_SEC = 300
+
 _engine = None
+_engine_lock = threading.Lock()
 def get_engine():
     global _engine
     if _engine is None:
-        _engine = RetouchEngine()
+        with _engine_lock:
+            if _engine is None:
+                _engine = RetouchEngine()
     return _engine
 
 
@@ -122,17 +135,17 @@ def get_custom_style_names():
 
 def apply_custom_style(style_name, current_recipe="natural"):
     if not style_name:
-        return [gr.update()] * len(_recipe_outputs)
-    
+        return tuple([gr.update()] * len(_recipe_outputs))
+
     styles = list_styles()
     target = None
     for s in styles:
         if s["name"] == style_name:
             target = s
             break
-            
+
     if not target:
-        return [gr.update()] * len(_recipe_outputs)
+        return tuple([gr.update()] * len(_recipe_outputs))
         
     p_dict = target["profile"]
     profile = StyleProfile(**p_dict)
@@ -222,7 +235,7 @@ def on_learn_style(orig_dir, edit_dir, style_name, author, tags_str, prg=gr.Prog
         save_style_profile(
             name=style_name,
             profile=profile,
-            author=author or None,
+            author=author or "Dennis",
             tags=tags,
         )
         
@@ -292,7 +305,7 @@ PROCESS_INPUT_KEYS = [
     "lip_enhance", "lip_tint", "blush", "nose_blush", "under_eye_blush",
     "hair_enhance", "dodge_burn", "specular_bloom", "bloom", "bloom_threshold", "bloom_softness", "contrast", "brightness",
     "highlights", "shadows", "whites", "blacks",
-    "color_ref_path", "color_ref_strength",
+    "color_ref_img", "color_ref_strength",
     "show_compare", "fast",
     "export_fmt", "export_quality", "export_res",
     "blemish", "dark_circles", "catchlight", "whiten_tone", "auto_exposure",
@@ -339,7 +352,7 @@ def process_image(*args):
     shadows = params.get("shadows")
     whites = params.get("whites")
     blacks = params.get("blacks")
-    color_ref_path = params.get("color_ref_path")
+    color_ref_img = params.get("color_ref_img")
     color_ref_strength = params.get("color_ref_strength")
     show_compare = params.get("show_compare")
     fast = params.get("fast")
@@ -383,9 +396,6 @@ def process_image(*args):
     if not isinstance(img_paths, list):
         img_paths = [img_paths]
 
-    if len(img_paths) == 0:
-        return None, gr.update(visible=False), None, None, "Please upload at least one image.", None, gr.update(visible=False)
-
     gr.Info(f"Processing {len(img_paths)} image(s)...")
 
     exported_paths = []
@@ -393,13 +403,13 @@ def process_image(*args):
     first_combined = None
     first_original = None
     first_result = None
-    original = None
-    result = None
     debug_images = []
 
     color_ref_bgr = None
-    if color_ref_path is not None and color_ref_strength > 0:
-        color_ref_bgr = imread_exif(color_ref_path)
+    if color_ref_img is not None and color_ref_strength > 0:
+        if isinstance(color_ref_img, dict):
+            color_ref_img = color_ref_img.get("name") or color_ref_img.get("path")
+        color_ref_bgr = imread_exif(color_ref_img)
 
     lip_tint_val = lip_tint if lip_tint != "none" else None
     color_grade_val = color_grade if color_grade != "none" else None
@@ -409,21 +419,20 @@ def process_image(*args):
     start = time.time()
 
     # Clean up older temp directories and ZIPs from previous runs (older than 5 minutes)
-    import shutil
     try:
         temp_root = Path(tempfile.gettempdir())
         now = time.time()
         for p in temp_root.glob("retouch_tmp_*"):
-            if p.is_dir() and (now - p.stat().st_mtime > 300):
+            if p.is_dir() and (now - p.stat().st_mtime > TEMP_CLEANUP_AGE_SEC):
                 shutil.rmtree(p, ignore_errors=True)
         for p in temp_root.glob("retouch_export_*.zip"):
-            if p.is_file() and (now - p.stat().st_mtime > 300):
+            if p.is_file() and (now - p.stat().st_mtime > TEMP_CLEANUP_AGE_SEC):
                 try:
                     p.unlink()
                 except Exception:
                     pass
     except Exception as e:
-        print(f"Temp directory cleanup warning: {e}")
+        _logger.warning("Temp directory cleanup warning: %s", e)
 
     temp_dir = tempfile.mkdtemp(prefix="retouch_tmp_")
     debug_dir = os.path.join(temp_dir, "debug") if debug_mode else None
@@ -502,32 +511,30 @@ def process_image(*args):
                 color_ref=color_ref_bgr,
                 color_transfer_intensity=color_ref_strength,
                 fast=fast,
-                debug_dir=debug_dir if first_result_rgb is None else None,
+                debug_dir=debug_dir if (first_result_rgb is None and first_combined is None) else None,
             )
 
-            result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
-
-            if first_result_rgb is None:
-                first_result_rgb = result_rgb
+            if first_result_rgb is None and first_combined is None:
                 first_original = original
                 first_result = result
+                first_result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
                 if show_compare:
                     h = min(original.shape[0], result.shape[0])
-                    sep = np.full((h, 4, 3), 200, dtype=np.uint8)
+                    sep = np.full((h, COMPARE_SEPARATOR_WIDTH, 3), COMPARE_SEPARATOR_COLOR, dtype=np.uint8)
                     orig_rgb = cv2.cvtColor(original[:h], cv2.COLOR_BGR2RGB)
-                    res_rgb = result_rgb[:h]
+                    res_rgb = first_result_rgb[:h]
                     combined = np.hstack([orig_rgb, sep, res_rgb])
-                    max_h = 900
+                    max_h = PREVIEW_MAX_HEIGHT
                     if combined.shape[0] > max_h:
                         scale = max_h / combined.shape[0]
                         new_w = int(combined.shape[1] * scale)
                         combined = cv2.resize(combined, (new_w, max_h), interpolation=cv2.INTER_AREA)
                     first_combined = combined
                 else:
-                    if first_result_rgb.shape[0] > 900:
-                        scale = 900 / first_result_rgb.shape[0]
+                    if first_result_rgb.shape[0] > PREVIEW_MAX_HEIGHT:
+                        scale = PREVIEW_MAX_HEIGHT / first_result_rgb.shape[0]
                         new_w = int(first_result_rgb.shape[1] * scale)
-                        first_result_rgb = cv2.resize(first_result_rgb, (new_w, 900), interpolation=cv2.INTER_AREA)
+                        first_result_rgb = cv2.resize(first_result_rgb, (new_w, PREVIEW_MAX_HEIGHT), interpolation=cv2.INTER_AREA)
 
                 if debug_mode and debug_dir and os.path.isdir(debug_dir):
                     mask_files = [
@@ -558,7 +565,7 @@ def process_image(*args):
 
             ext = EXT_MAP.get(export_fmt, ".jpg")
             filename = Path(curr_path).stem
-            out_path = os.path.join(temp_dir, f"{filename}_retouched{ext}")
+            out_path = os.path.join(temp_dir, f"{filename}_{idx:03d}_retouched{ext}")
             write_params = []
             if export_fmt == "JPEG":
                 write_params = [cv2.IMWRITE_JPEG_QUALITY, export_quality]
@@ -568,7 +575,7 @@ def process_image(*args):
             exported_paths.append(out_path)
 
         except Exception as e:
-            print(f"Failed to process {path_item}: {e}")
+            _logger.exception("Failed to process %s", path_item)
             from retouch.utils import log_crash
             crash_path = log_crash(e, {
                 "recipe": recipe,
@@ -577,7 +584,7 @@ def process_image(*args):
                 "fast": fast
             })
             if crash_path:
-                print(f"Crash details saved to: {crash_path}")
+                _logger.info("Crash details saved to: %s", crash_path)
 
     if not exported_paths:
         gr.Warning("No images were successfully processed.")
@@ -588,6 +595,7 @@ def process_image(*args):
     debug_vis = gr.update(visible=bool(debug_images))
 
     elapsed = time.time() - start
+    slide_html = _make_comparison_html(first_original, first_result) if (first_original is not None and first_result is not None) else ""
     if len(exported_paths) > 1:
         zip_stamp = time.strftime("%Y%m%d_%H%M%S")
         zip_path = os.path.join(tempfile.gettempdir(), f"retouch_export_{zip_stamp}.zip")
@@ -597,14 +605,12 @@ def process_image(*args):
         gr.Info(f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s")
 
         if show_compare:
-            slide_html = _make_comparison_html(first_original, first_result) if (first_original is not None and first_result is not None) else ""
             return gr.update(visible=False), gr.update(value=slide_html, visible=True), first_original, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓", debug_gallery, debug_vis
         return preview, gr.update(visible=False), first_original, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓", debug_gallery, debug_vis
     else:
         gr.Info(f"Done in {elapsed:.1f}s")
 
         if show_compare:
-            slide_html = _make_comparison_html(first_original, first_result) if (first_original is not None and first_result is not None) else ""
             return gr.update(visible=False), gr.update(value=slide_html, visible=True), first_original, exported_paths[0], f"Done in {elapsed:.1f}s ✓", debug_gallery, debug_vis
         return preview, gr.update(visible=False), first_original, exported_paths[0], f"Done in {elapsed:.1f}s ✓", debug_gallery, debug_vis
 
