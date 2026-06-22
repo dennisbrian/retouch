@@ -105,7 +105,7 @@ class Relighter:
         # Gaussian blur to smooth the mesh depth triangles
         blur_k = int(face_width / 15.0) | 1
         blur_k = max(3, blur_k)
-        Z_blurred = cv2.GaussianBlur(Z_pixels, (blur_k, blur_k), 0)
+        Z_blurred = cv2.GaussianBlur(Z_pixels, (blur_k, blur_k), 0).astype(np.float32)
 
         # 3. Compute Surface Normals
         gx = cv2.Sobel(Z_blurred, cv2.CV_32F, 1, 0, ksize=3)
