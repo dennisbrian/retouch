@@ -13,6 +13,7 @@ The production engine lives in the `retouch/` package (`retouch/engine.py` and 2
 *   Features a **7-stage processing pipeline** split into local face retouching and global image styling. Handles advanced features like blemish inpainting, face-to-neck matching, specular lip gloss finishes, hair shine lifts, Dodge & Burn, parametric tonal adjustments, reference-based color transfer, stacked color grading, virtual studio relighting, and subject-background separation.
 *   **High-Resolution Proxy Optimization**: Processes high-resolution images (up to 24 MP and beyond) by downscaling to a 2048px proxy for detection/parsing/smoothing, then upscaling results and masks back to original resolution, reducing peak memory from **7.5 GB to 1.84 GB** and total runtime from **15.3s to 3.09s**.
 *   **FaceContext Caching**: Detection and parsing results can be cached and reused across multiple `process()` calls (e.g., for interactive slider tuning in the GUI), eliminating redundant inference.
+*   **Central Parameter Registry** (`retouch/params.py`): A single `ParamSpec` dataclass + `PROCESSING_PARAMS` list defines every tunable parameter in one place. The engine's `build_context()`, the GUI's `recipe_defaults()`, and the CLI's `build_params()` all auto-generate from this spec list. Adding a new parameter is one entry, not seven file edits.
 
 The CLI (`cli.py`), web GUI (`gui.py`), desktop wrapper (`desktop.py`), and benchmark (`benchmark.py`) all import from the `retouch` package via `from retouch import RetouchEngine`.
 
@@ -29,7 +30,7 @@ The workflow is divided into 7 stages:
 | **2** | Per-Face Processing | Portrait ROI crop, BiSeNet parsing, frequency separation, component enhancements (skin, blemish, eyes, lips, teeth, makeup, hair, dodge & burn). Parallelized via `FaceProcessorPool` or `ThreadPoolExecutor` for multi-face. |
 | **3** | Global Tonal Adjustments | Contrast, brightness (gamma), tonal curves (highlights, shadows, whites, blacks). |
 | **4** | Subject-Background Separation | Optional separation processing between subject and background. |
-| **5** | Color Grading | Split-toning, HSL, presets/stacking, reference-based color transfer, white costume pearl/lavender lift, chromatic aberration, halation, grain, LUT emulation. |
+| **5** | Color Grading | Split-toning, HSL, presets/stacking, reference-based color transfer, white costume pearl/lavender lift, atmospheric glow (`ctx.glow`), vignette (`ctx.vignette`), chromatic aberration, halation, grain, LUT emulation. |
 | **6** | Sharpening & Impact Finish | Selective final sharpening over face/hair edges + global high-impact finish (luminance curves, saturation, clarity, glow). |
 
 ```mermaid
@@ -86,6 +87,7 @@ graph TD
     subgraph Stage5["Stage 5: Color Grading & Post-Effects"]
         color_transfer["Subject-Aware Color Transfer<br/><small>Reference-based Skin, Hair, Background matching<br/>Reinhard ratio limits [0.3, 3.0]</small>"]:::finishing
         grading["Color Grading<br/><small>Split-toning, HSL, presets/stacking<br/>White costume pearl/lavender lift</small>"]:::finishing
+        glow_vignette["Glow + Vignette<br/><small>ctx.glow atmospheric bloom<br/>ctx.vignette radial darkening</small>"]:::finishing
         postfx["Post-effects<br/><small>Chromatic aberration, halation, grain, LUT</small>"]:::finishing
         bloom["Bloom / Orton Glow<br/><small>Smart bloom + optional glow</small>"]:::finishing
     end
@@ -127,7 +129,8 @@ graph TD
     tonal --> subjsep
     subjsep --> color_transfer
     color_transfer --> grading
-    grading --> postfx
+    grading --> glow_vignette
+    glow_vignette --> postfx
     postfx --> bloom
 
     bloom --> sharpening
@@ -160,6 +163,7 @@ graph TD
 *   **Batch Parsing**: `parse_batch()` processes multiple crops in a single ONNX run for efficiency.
 
 ### 3.4. Frequency Separation & Smoothing (`retouch/frequency.py` & `retouch/skin.py`)
+*   **`FrequencySeparator` Class**: The frequency operations (`separate()`, `combine()`) are encapsulated in a class that matches the pattern used by all other stage modules (`SkinProcessor`, `EyeEnhancer`, etc.). The engine instantiates `self._frequency = FrequencySeparator()` in `__init__`. Module-level `separate()` and `combine()` are kept as thin deprecated wrappers for backward compatibility.
 *   **3-Level Separation**: Splits the image into coarse (color/tonal flow), medium (minor skin structures), and fine (pore details/hair strands) frequency bands using Gaussian blur radius scaled to the face width.
 *   **Bilateral Filtering & Mid-Frequency Reduction**: Smooths low/medium bands to level out skin blotchiness while conserving high-frequency details. Performs bilateral filtering directly on the `float32` representation to prevent precision loss and preserve micro-contrast. Restricts the hybrid Gaussian blend factor to `smooth_strength * 0.25` (instead of `1.25`) to ensure bilateral filtering remains dominant and avoids washing out fine textures. Introduces the `mid_reduction` parameter to target minor skin structures and blemish anomalies without creating a plastic look.
 *   **Independent Nose Smoothing**: Supports a dedicated `nose_smooth` override to allow separate control over the nose bridge texture smoothing versus the rest of the face.
@@ -177,7 +181,7 @@ graph TD
 
 *   **Under-Eye Repair (`retouch/undereye.py`)**: Lightens dark circles using dedicated under-eye masks derived from the parsing output.
 
-*   **Eyes (`retouch/eyes.py`)**: Whitens the sclera (using LAB luminance boosts) and sharpens/saturates the iris. Boosts catchlights and reflections by up to 25%.
+*   **Eyes (`retouch/eyes.py`)**: Whitens the sclera (using LAB luminance boosts) and sharpens/saturates the iris. Boosts catchlights and reflections by up to 25%. The `catchlight` strength is independently controllable from `eye_enhance` — `EyeEnhancer.enhance()` accepts a `catchlight_strength=` parameter, falling back to the overall `eye_enhance` when not set. Recipe values are read from `eyes.catchlight` in the recipe dict.
 
 *   **Teeth (`retouch/teeth.py`)**: Segments the mouth interior and whitens/desaturates yellow-hued pixels in the LAB/HSV color space.
 
@@ -215,6 +219,7 @@ Implements directional 3D shading based on a FaceMesh depth map derived from Med
 *   **`_stage_subject_separation`**: Optional processing stage that applies distinct treatment to the subject (foreground) vs. background regions using the person segmentation mask. Controlled by the `subject_separation` parameter.
 
 ### 3.9. Portrait Style Cloning & Subject-Aware Matching (`retouch/style.py`)
+*   **No Circular Dependency**: `style.py` imports `FaceDetector` and `FaceParser` directly from `retouch.detection` and `retouch.parsing` — it does NOT import `RetouchEngine`. The previous `engine → style → engine` cycle was broken by giving `StyleAnalyzer` and `StyleApplier` optional `detector`/`parser` constructor parameters. The module uses a lazy `engine` property for backward compatibility.
 *   **`StyleProfile`**: A JSON-serializable dataclass representing extracted style parameters (global brightness delta, global contrast delta, global saturation delta, skin L/a/b color deltas, skin smoothness, mid-frequency reduction, and texture opacity). Includes `save()` and `load()` helpers.
 *   **`StyleAnalyzer`**: Extracts a style profile from an aligned Original vs. Edited image pair. Features:
     *   *Percentile-based Contrast*: Uses the `p95 - p5` LAB L range to isolate contrast from exposure shifts.
@@ -252,6 +257,16 @@ When multiple faces are detected, processing is parallelized through a two-tier 
 *   **Structured Presets**: Configures high-level presets (e.g., `natural`, `cosplay`, `scifi_cosplay`, `cyber_doll`, `fuji_porcelain`, etc.) by mapping component parameters to scaling factors.
 *   **Recipe Inheritance (`extends`)**: Allows a recipe to inherit from a base recipe (using the `extends` keyword), resolving deep overrides recursively through `resolve_recipe()` and `_deep_merge()`.
 *   **Specialized Behavior**: Defines sets of recipes that automatically trigger specific engine logic (e.g., `_NOSE_BLUSH_RECIPES`, `_SLIMMING_RECIPES`, `_WHITE_COSTUME_RECIPES`).
+
+### 3.11.1. Central Parameter Registry (`retouch/params.py`)
+*   **`ParamSpec` dataclass**: Defines every tunable parameter with its name, CLI flag, type, default value, recipe key path (e.g., `"frequency.smooth"`), and conversion formula (`recipe_pct`, `recipe_direct`, `gui_direct`, `engine_pct`, etc.).
+*   **`PROCESSING_PARAMS` list**: A list of 59 `ParamSpec` entries — one per tunable parameter. This is the single source of truth.
+*   **`recipe_to_params(recipe_name)`**: Given a recipe name, returns a dict of all UI-side (GUI-scale) values. Used by `gui.py:recipe_defaults()`.
+*   **`gui_values_to_engine_kwargs(gui_dict)`**: Converts a dict of GUI values to engine-scale kwargs. Used to bridge the GUI scale (0-100) to the engine scale (0.0-1.0).
+*   **How the engine uses it**: `engine.py:build_context()` iterates `PROCESSING_PARAMS` to resolve every recipe value into the `ProcessingContext`. The `_CALLER_ONLY` set marks params whose values are read directly from the engine call (e.g., `auto_exposure`, `color_ref`, `lut`) and not from the recipe.
+*   **How the GUI uses it**: `gui.py:recipe_defaults()` is a one-line wrapper around `recipe_to_params()`.
+*   **How the CLI uses it**: `cli.py` auto-generates argparse arguments from `PROCESSING_PARAMS`. Each spec's `cli_flag` becomes a `--<flag>` argument, with type and default from the spec.
+*   **Result**: Adding a new tunable parameter requires exactly one entry in `PROCESSING_PARAMS` plus (optionally) a CLI flag, GUI slider, and stage consumer. The 7-way sync problem is solved.
 
 ### 3.12. Batch Processor (`retouch/batch_processor.py`)
 Folder-based batch ingestion with descriptive grouping, persistent caching, and contact sheet generation:
@@ -312,7 +327,7 @@ Provides a decoupled, reusable I/O boundary that handles file read/write, format
 ### 3.18. Performance Optimizations (`retouch/perf_optimizations.py`)
 Performance-critical infrastructure shared across the engine:
 *   **`FaceProcessorPool`**: A `ProcessPoolExecutor`-based pool for true parallel per-face processing. Each worker holds its own `RetouchEngine` instance (lightweight, no model reloading required). Falls back gracefully to `ThreadPoolExecutor` on failure.
-*   **`detect_faces_downscaled`**: Runs face detection on a smaller copy of the image, then scales bounding boxes back to original resolution for a significant speedup on high-res inputs.
+*   **Picklable Helpers**: `_process_face_core`, `_norm_mask`, `_accum`, and `_FaceResult` live in this module (not `engine.py`) because they must be picklable for subprocess workers. They were moved from `engine.py` to break the `engine → parsing → perf_optimizations → engine` circular dependency.
 *   **`build_ort_providers`**: Builds the ONNX Runtime provider list preferring `CoreMLExecutionProvider` on Apple Silicon, falling back to CPU.
 *   **`warmup_jit_kernels`**: Triggers a dummy pipeline run to pre-compile JIT kernels and populate ONNX Runtime caches.
 
@@ -391,28 +406,29 @@ When `fast=True` is set, the image is downscaled to 800px before entering the pi
 
 | Module | Size | Responsibility |
 |--------|------|----------------|
-| `retouch/engine.py` | 78 KB | Pipeline orchestrator, `RetouchEngine`, `ProcessingContext`, `ProcessingResult` |
-| `retouch/grading.py` | 33 KB | Color grading, presets, color transfer, lens effects |
-| `retouch/parsing.py` | 25 KB | BiSeNet face region parsing, `FaceParser`, `FaceRegions` |
-| `retouch/perf_optimizations.py` | 22 KB | `FaceProcessorPool`, `warmup_jit_kernels`, `build_ort_providers` |
-| `retouch/style.py` | 18 KB | `StyleProfile`, `StyleAnalyzer`, `StyleApplier`, `subject_aware_transfer` |
-| `retouch/batch_processor.py` | 16 KB | `BatchProcessor`, batch caching, contact sheets |
-| `retouch/skin.py` | 13 KB | Skin whitening, equalization, dodge & burn, neck harmonization |
-| `retouch/detection.py` | 12 KB | `FaceDetector`, `FaceData`, `FaceContext`, person segmentation |
-| `retouch/recipes.py` | 12 KB | Recipe presets with `extends` inheritance |
-| `retouch/utils.py` | 12 KB | Mask utilities, curve transforms, crash logging |
-| `retouch/frequency.py` | 9 KB | 3-level frequency separation, pore synthesis |
-| `retouch/style_library.py` | 8 KB | Style save/load, dataset learning |
-| `retouch/eyes.py` | 8 KB | Eye enhancement (sclera, iris, catchlight) |
-| `retouch/relight.py` | 8 KB | Virtual studio relighting |
-| `retouch/lips.py` | 7 KB | Lip enhancement (matte/gloss/velvet) |
+| `retouch/params.py` | 47 KB | **NEW** Central parameter registry (`ParamSpec` + `PROCESSING_PARAMS`) — single source of truth for all tunables |
+| `retouch/engine.py` | 68 KB | Pipeline orchestrator, `RetouchEngine`, `ProcessingContext`, `ProcessingResult` (downsized by ~120 lines after the params.py refactor moved recipe→context translation to the spec list) |
+| `retouch/grading.py` | 28 KB | Color grading, presets, color transfer, lens effects (some functions removed in dead-code cleanup) |
+| `retouch/perf_optimizations.py` | 26 KB | `FaceProcessorPool`, `_process_face_core`, `_norm_mask`, warmup, ORT providers (now houses the picklable helpers that were moved from engine.py) |
+| `retouch/parsing.py` | 23 KB | BiSeNet face region parsing, `FaceParser`, `FaceRegions` |
+| `retouch/utils.py` | 19 KB | Mask utilities, curve transforms, crash logging, public `normalize_mask()` and `screen_blend()` |
+| `retouch/style.py` | 18 KB | `StyleProfile`, `StyleAnalyzer`, `StyleApplier`, `subject_aware_transfer` (no longer circular with engine) |
+| `retouch/batch_processor.py` | 17 KB | `BatchProcessor`, batch caching, contact sheets |
+| `retouch/skin.py` | 14 KB | Skin whitening, equalization, dodge & burn, neck harmonization |
+| `retouch/detection.py` | 13 KB | `FaceDetector`, `FaceData`, `FaceContext`, person segmentation |
+| `retouch/recipes.py` | 13 KB | Recipe presets with `extends` inheritance, standardized relight keys, `teeth_whiten` decoupled |
+| `retouch/frequency.py` | 11 KB | `FrequencySeparator` class + module-level wrappers (now class-based, matching all other stage modules) |
+| `retouch/eyes.py` | 9 KB | Eye enhancement (sclera, iris, catchlight) with independent `catchlight_strength` param |
+| `retouch/style_library.py` | 9 KB | Style save/load, dataset learning |
+| `retouch/lips.py` | 9 KB | Lip enhancement (matte/gloss/velvet) |
+| `retouch/relight.py` | 7 KB | Virtual studio relighting (retinex functions removed in dead-code cleanup) |
 | `retouch/blemish.py` | 7 KB | Blemish removal via inpainting |
 | `retouch/hair.py` | 5 KB | Hair shine enhancement |
 | `retouch/geometry.py` | 5 KB | Face reshaping / slimming |
+| `retouch/io.py` | 7 KB | Image I/O, EXIF, RAW support, shared `EXPORT_RES_MAP`/`EXT_MAP` |
 | `retouch/makeup.py` | 4 KB | Blush, nose blush, under-eye blush |
-| `retouch/io.py` | 4 KB | Image I/O, EXIF, RAW support |
-| `retouch/teeth.py` | 3 KB | Teeth whitening |
-| `retouch/undereye.py` | 3 KB | Under-eye dark circle repair |
+| `retouch/teeth.py` | 4 KB | Teeth whitening |
+| `retouch/undereye.py` | 4 KB | Under-eye dark circle repair |
 
 ---
 
@@ -447,3 +463,12 @@ When `fast=True` is set, the image is downscaled to 800px before entering the pi
 | ARCH-5 | `retouch/engine.py` | `_process_with_proxy` — automatic proxy down/upscaling for high-res inputs |
 | ARCH-6 | `retouch/engine.py` | FaceContext caching — skip detection + parsing on reuse |
 | ARCH-7 | `retouch/engine.py` | `_stage_subject_separation` — new stage 4 for subject-background processing |
+| ARCH-8 | `retouch/params.py` (NEW) | Central parameter registry — `ParamSpec` dataclass + `PROCESSING_PARAMS` list as single source of truth for all 59 tunables. Solved the 7-way parameter sync problem (engine signature, overrides dict, GUI keys, process_image params, recipe_defaults, CLI args, event binding). Adding a new param is now one entry. |
+| ARCH-9 | `retouch/engine.py` → `retouch/perf_optimizations.py` | Moved `_norm_mask`, `_accum`, `_FaceResult`, and `_process_face_core` from engine.py to perf_optimizations.py because they must be picklable for `ProcessPoolExecutor` workers. Broke the `engine → parsing → perf_optimizations → engine` circular dependency. |
+| ARCH-10 | `retouch/style.py` | Removed circular `engine → style → engine` dependency. `StyleAnalyzer` and `StyleApplier` now import `FaceDetector` and `FaceParser` directly instead of `RetouchEngine`. Uses lazy `engine` property for backward compat. |
+| ARCH-11 | `retouch/frequency.py` | Converted module-level `separate()` and `combine()` functions to a `FrequencySeparator` class, matching the pattern used by all other stage modules. Module-level functions kept as deprecated wrappers. |
+| ARCH-12 | `retouch/engine.py` | Wired `ctx.glow` and `ctx.vignette` to actual effect functions (`_add_glow` and `_add_vignette`). Both had been set in `ProcessingContext` but never consumed by any stage method (GUI sliders did nothing). |
+| ARCH-13 | `retouch/engine.py` | Wired `eyes.catchlight` recipe key through `ProcessingContext` → `eyes.enhance(catchlight_strength=)`. The recipe value was previously ignored — catchlight always used the same strength as `eye_enhance`. |
+| ARCH-14 | `retouch/recipes.py` | Standardized relight recipe keys: `relight_strength` → `relight`, `light_azimuth` → `relight_azimuth`, `light_elevation` → `relight_elevation`. Now matches ProcessingContext field names. |
+| ARCH-15 | `retouch/recipes.py` | Decoupled `eyes.teeth_whiten` from `eyes.whites` (which previously drove both eye enhancement AND teeth whitening). Added `teeth_whiten` key to 16 recipes. |
+| DEAD-1 | `retouch/skin.py` etc. | Removed 25 dead code instances: unused imports, constants (BILATERAL_D_*), functions (`retinex_msr`/`retinex_ssr`, `detect_color_patches`, etc.), classes (`RegionMasks`), and a deprecated `SkinProcessor.smooth()` no-op. |
