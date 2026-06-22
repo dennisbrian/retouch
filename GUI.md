@@ -4,9 +4,9 @@ This document details the architecture, layout structure, and styling specificat
 
 ---
 
-## 1. Architectural Layout (Adobe Lightroom Style)
+## 1. Architectural Layout (Liquid Glass Workspace)
 
-The Single Photo Editor workspace is designed as a **3-column grid layout** matching professional photo editing workspaces (such as Adobe Lightroom Classic).
+The Single Photo Editor workspace is designed as a **3-column grid layout** with a frosted glass aesthetic, matching professional photo editing workspaces.
 
 ```mermaid
 graph TD
@@ -28,6 +28,7 @@ graph TD
 
 ### 1.2 Column 2: Preview Canvas (Center Column, `scale=4.0`)
 * **Image Viewer**: Main preview frame (`img_output`) displaying the processed or side-by-side compared result at `600px` height.
+* **Before/After Slider**: Draggable HTML overlay (`retouch-compare`) with `ew-resize` cursor, toggled via `show_compare` checkbox. Embedded base64 to avoid temp file security restrictions in Gradio 4.x.
 * **Status Console**: Text input box displaying pipeline logs and execution results.
 * **Asset Downloader**: File download interface (`export_file`) to fetch finished images.
 * **Debug Console**: Hidden panel (`debug_panel` / `debug_gallery`) showing mask segmentations (Skin, Lips, Sharpen, Frequency Layers) when debug mode is checked.
@@ -48,54 +49,84 @@ Styled with class `.develop-panel` to **scroll independently** while the center 
 
 ## 2. Core Styling System (CSS)
 
-All stylesheets are injected inside [gui.py](file:///Applications/htdocs/retouch/gui.py). The styling forces a matte-charcoal workspace dark mode:
+All stylesheets are injected inside [gui.py](file:///Applications/htdocs/retouch/gui.py). The styling uses a **Liquid Glass** aesthetic inspired by Apple's glassmorphism design language — a deep purple gradient backdrop with frosted-glass panels.
 
-### 2.1 Design Tokens (Colors)
-| Token Name | Hex Value | Purpose |
+### 2.1 Design Tokens (Colors & Effects)
+| Token | Value | Purpose |
 | :--- | :--- | :--- |
-| **Workspace Backdrop** | `#121316` | Main body viewport background |
-| **Panel Card Background** | `#1a1c22` | Layout columns and groups |
-| **Header Accordion background** | `#24262d` | Collapsible Develop folder headers |
-| **Accent Active Highlight** | `#00a2ed` | Lightroom Light Blue for active buttons/selected text |
-| **Border Slate** | `#282b32` | Subtle layout divider line border |
-| **Subtle Label Grey** | `#b0b8c6` | Low-contrast descriptor and helper texts |
+| **Workspace Gradient** | `#0f0c29` → `#302b63` → `#24243e` | Deep purple gradient viewport background |
+| **Glass Panel BG** | `rgba(255,255,255,0.06)` | Frosted glass card surfaces |
+| **Glass Blur** | `blur(24px) saturate(180%)` | Backdrop blur for depth illusion |
+| **Accent Highlight** | `#60a5fa` (blue-400) | Active buttons, slider accent, selected presets |
+| **Glass Border** | `rgba(255,255,255,0.08)` | Subtle panel dividers |
+| **Glass Glow** | `inset 0 1px 0 rgba(255,255,255,0.06)` | Top-edge highlight simulating light refraction |
+| **Text Primary** | `rgba(255,255,255,0.9)` | High-contrast headings |
+| **Text Secondary** | `rgba(255,255,255,0.55)` | Labels and helper text |
 
 ### 2.2 Presets Scroll Sidebar
-To mimic Lightroom's left sidebar preset navigator, `gr.Radio` is formatted vertically with custom scroll properties:
+Presets use frosted glass chips with a blue active-state left border:
 ```css
-.preset-chips .wrap {
-    display: flex !important;
-    flex-direction: column !important;
-    max-height: 380px !important;
-    overflow-y: auto !important;
-    gap: 4px !important;
+.preset-chips label {
+    background: rgba(255, 255, 255, 0.04) !important;
+    backdrop-filter: blur(8px) !important;
+    border: 1px solid rgba(255, 255, 255, 0.06) !important;
+    border-radius: 8px !important;
 }
-/* Selected active preset state with vertical highlight bar */
 .preset-chips label.selected {
-    background: #252830 !important;
-    color: #00a2ed !important;
-    border-left: 3px solid #00a2ed !important;
-    border-radius: 0 4px 4px 0 !important;
+    background: rgba(96, 165, 250, 0.15) !important;
+    color: #93c5fd !important;
+    border-left: 3px solid #60a5fa !important;
+    border-radius: 0 8px 8px 0 !important;
 }
 ```
 
 ### 2.3 Develop Scroll Panel
-Ensures adjustments can be fine-tuned cleanly without scrolling the rest of the application layout:
+Transparent scroll container (glass inherits from parent panel):
 ```css
 .develop-panel {
     max-height: 84vh !important;
     overflow-y: auto !important;
-    padding-right: 6px !important;
-    background: #16181c !important;
+    background: transparent !important;
+    border: none !important;
 }
 ```
 
-### 2.4 Contrast Legibility Rules
-Standard heading and markdown outputs are forced to clean `#e2e8f0` text to prevent them from inheriting dark theme colors on charcoal background panels:
+### 2.4 Buttons & Controls
+Primary action button uses frosted glass with blue glow, secondary buttons use subtle glass:
+```css
+.primary-btn {
+    background: rgba(0, 162, 237, 0.7) !important;
+    backdrop-filter: blur(12px) !important;
+    border: 1px solid rgba(255, 255, 255, 0.15) !important;
+    border-radius: 10px !important;
+    box-shadow: 0 4px 16px rgba(0, 162, 237, 0.25) !important;
+}
+```
+Each Develop accordion section has a **per-section reset button** (↺) that restores only that section's sliders to defaults.
+
+### 2.5 Keyboard Shortcuts
+| Shortcut | Action |
+| :--- | :--- |
+| `Cmd+Enter` / `Ctrl+Enter` | Trigger processing |
+| `Cmd+R` / `Ctrl+R` | Reset current section sliders |
+
+### 2.6 Click-to-Zoom
+The output image (`#retouch-output`) uses `cursor: zoom-in`. A full-resolution overlay opens on click.
+
+### 2.7 Comparison Slider
+A draggable HTML overlay compares original vs processed halves:
+```css
+#retouch-compare {
+    cursor: ew-resize !important;
+}
+```
+
+### 2.8 Contrast Legibility Rules
+All typography forced to `#e8edf5` on the dark gradient backdrop:
 ```css
 .gradio-container h1, .gradio-container h2, .gradio-container h3, 
 .gradio-container p, .gradio-container strong, .gradio-container .prose h3 {
-    color: #e2e8f0 !important;
+    color: #e8edf5 !important;
 }
 ```
 
@@ -103,9 +134,15 @@ Standard heading and markdown outputs are forced to clean `#e2e8f0` text to prev
 
 ## 3. Running & Development
 
-Launch the interactive dashboard locally:
+Launch the interactive dashboard:
 ```bash
 python3 gui.py
 ```
+Or with auto-reload on file changes:
+```bash
+bash dev.sh
+```
+
 * **Default Port**: `7860` (accessible at `http://127.0.0.1:7860/`).
 * **Performance Note**: Enabling **Fast Preview** is highly recommended during slider adjustments to process downsampled images and maintain low latency round-trips.
+* **Auto-Reload**: Uses `watchfiles` — any edit to `gui.py` or `retouch/` triggers a restart.

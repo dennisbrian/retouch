@@ -1,17 +1,18 @@
-# Engineering Roadmap: Future Enhancements & Optimization
+# Roadmap
 
-This roadmap outlines planned features, structural refactoring, and performance goals.
+## Performance
 
-## 1. Performance & Hardware Acceleration
-- **Metal / MPS execution provider**: Compile custom MediaPipe and TFLite libraries to support native macOS Apple Silicon GPU acceleration (`GPUDelegate`), moving away from the default CPU execution delegate.
-- **WebGPU Gradio preview path**: Compile the 800px preview pipeline to WebAssembly/WebGPU, running the interactive slider adjustments completely clientside inside the browser to eliminate server network round-trips.
-- **Worker pool lazy-loading**: Optimize `FaceProcessorPool` spin-up latency by implementing dynamic lazy loading of the underlying ONNX models on workers only when multi-face tasks are actively dispatched.
+- Metal/MPS execution provider for MediaPipe/TFLite (GPUDelegate instead of CPU)
+- WebGPU Gradio preview — run 800px pipeline client-side, eliminate server round-trip
+- Dynamic lazy-load ONNX models in worker pool (only on multi-face dispatch)
 
-## 2. Retouch Engine Pipeline Features
-- **Neural Blemish Removal**: Replace the fast-marching OpenCV inpainting algorithm with a lightweight U-Net ONNX model to execute artifact-free blemish correction.
-- **Multi-Subject Independent Styles**: Enhance Stage 2 per-face loops to allow applying different recipes or style transfer references to different subjects within the same frame.
-- **Interactive Relighting Gizmo**: Develop a 3D spherical light-direction picker in the Gradio dashboard, mapping horizontal/vertical click coordinates directly to `azimuth` and `elevation` values.
+## Pipeline
 
-## 3. Architecture & Code Cleanliness
-- **Decouple GUI state**: Refactor [gui.py](file:///Applications/htdocs/retouch/gui.py) to extract layout definitions from interactive callbacks, separating view logic from engine invocation.
-- **ActiveQuery optimizations**: Restructure style caching to avoid file I/O operations by keeping active styles loaded in an in-memory dictionary.
+- Neural blemish removal: replace OpenCV fast-marching with lightweight U-Net ONNX
+- Multi-subject independent styles: different recipe/style per face in same frame
+- 3D relighting gizmo: spherical picker in Gradio → azimuth/elevation mapping
+
+## Architecture
+
+- Decouple `gui.py`: separate layout from callbacks
+- In-memory style cache: avoid file I/O for active style profiles
