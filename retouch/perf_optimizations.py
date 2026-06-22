@@ -125,25 +125,102 @@ class FaceData:
 # PROPOSAL 1 — Multi-processing (GIL bypass)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _process_single_face_worker(
-    canvas: np.ndarray,
-    regions_dict: dict[str, Any],
-    ied: float,
-    recipe: dict[str, Any],
-) -> np.ndarray:
+# Per-worker-process processor cache. Created lazily on first face processed
+# inside a child process, then reused for subsequent faces. These processors
+# are cheap (no ONNX models); only FaceParser loads ONNX and we never need it
+# here because region masks are pre-computed in the parent process.
+_WORKER_PROCESSORS: dict[str, Any] | None = None
+
+
+def _get_worker_processors() -> dict[str, Any]:
+    """Lazily build and cache the per-face processors in a worker process."""
+    global _WORKER_PROCESSORS
+    if _WORKER_PROCESSORS is None:
+        from retouch.skin import SkinProcessor
+        from retouch.blemish import BlemishRemover
+        from retouch.eyes import EyeEnhancer
+        from retouch.undereye import UnderEyeRepairer
+        from retouch.lips import LipEnhancer
+        from retouch.teeth import TeethWhitener
+        from retouch.makeup import MakeupEngine
+        from retouch.hair import HairEnhancer
+        from retouch.relight import Relighter
+        _WORKER_PROCESSORS = {
+            "skin": SkinProcessor(),
+            "relighter": Relighter(),
+            "blemish": BlemishRemover(),
+            "undereye": UnderEyeRepairer(),
+            "eyes": EyeEnhancer(),
+            "teeth": TeethWhitener(),
+            "lips": LipEnhancer(),
+            "makeup": MakeupEngine(),
+            "hair": HairEnhancer(),
+        }
+    return _WORKER_PROCESSORS
+
+
+def _process_single_face_worker(payload: tuple) -> dict:
+    """Process a single face crop inside a child process.
+
+    ``payload`` is a picklable tuple:
+        (canvas, regions, shifted_bbox, shifted_landmarks, ied, ctx,
+         roi_box, roi_person_mask, roi_h, roi_w)
+
+    All inputs are plain picklable Python objects (NumPy arrays, the
+    ``FaceRegions`` slots-object, the ``ProcessingContext`` dataclass,
+    the landmark compat object, floats/ints). No MediaPipe or ONNX
+    session objects cross the process boundary.
+
+    Returns a plain dict of NumPy arrays so the result is trivially
+    picklable for IPC back to the parent process.
     """
-    Process a single face crop inside a child process.
+    (
+        canvas,
+        regions,
+        shifted_bbox,
+        shifted_landmarks,
+        ied,
+        ctx,
+        roi_box,
+        roi_person_mask,
+        roi_h,
+        roi_w,
+    ) = payload
 
-    All inputs are plain picklable Python objects (NumPy arrays, dicts,
-    floats). No MediaPipe or ONNX objects are passed across the boundary.
+    # Late imports avoid a circular import at module load time
+    # (engine imports parsing imports perf_optimizations).
+    from retouch.engine import _process_face_core
+    from retouch.detection import FaceData
 
-    Returns the processed canvas as a NumPy array.
-    """
-    regions = RegionMasks.from_dict(regions_dict)
+    processors = _get_worker_processors()
+    shifted_face = FaceData(
+        bbox=shifted_bbox,
+        landmarks=shifted_landmarks,
+        ied=ied,
+    )
+    roi_x1, roi_y1 = roi_box[0], roi_box[1]
 
-    # Placeholder: replace with real pipeline calls when integrating.
-    processed_canvas = canvas.copy()
-    return processed_canvas
+    fr = _process_face_core(
+        canvas,
+        regions,
+        shifted_face,
+        ctx,
+        roi_x1,
+        roi_y1,
+        roi_h,
+        roi_w,
+        roi_person_mask,
+        processors,
+    )
+
+    return {
+        "canvas": fr.canvas,
+        "skin_mask": fr.skin_mask,
+        "skin_hair_mask": fr.skin_hair_mask,
+        "lips_mask": fr.lips_mask,
+        "sharpen_mask": fr.sharpen_mask,
+        "roi_box": fr.roi_box,
+    }
 
 
 class FaceProcessorPool:
@@ -188,43 +265,36 @@ class FaceProcessorPool:
 
     def process_faces(
         self,
-        prepared_faces: list[dict[str, Any]],
-        all_regions: list[RegionMasks],
-        recipe: dict[str, Any],
-    ) -> list[np.ndarray]:
+        payloads: list[tuple],
+    ) -> list[dict | None]:
         """
         Process all face crops in parallel. Falls back to sequential on error.
 
-        Returns a list of processed canvases in the same order as input.
+        Each entry in *payloads* is the picklable tuple expected by
+        ``_process_single_face_worker``. Returns a list of result dicts (or
+        ``None`` for a face whose worker failed) in the same order as input.
+        The caller is responsible for reconstructing ``_FaceResult`` objects
+        and for falling back to in-process processing when an entry is
+        ``None``.
         """
-        n = len(prepared_faces)
+        n = len(payloads)
 
         # ── fast path: single face — no IPC overhead ─────────────────────────
         if n == 1:
             logger.debug("Single face: bypassing IPC, processing inline")
-            return [
-                _process_single_face_worker(
-                    canvas=prepared_faces[0]["canvas"],
-                    regions_dict=all_regions[0].to_dict(),
-                    ied=prepared_faces[0]["ied"],
-                    recipe=recipe,
-                )
-            ]
+            return [_process_single_face_worker(payloads[0])]
 
         # ── multi-face: dispatch to worker pool ───────────────────────────────
+        if self._executor is None:
+            self.start()
+
         assert self._executor is not None, "Call .start() or use as context manager"
 
-        processed_crops: list[np.ndarray | None] = [None] * n
+        processed_crops: list[dict | None] = [None] * n
 
         futures = {
-            self._executor.submit(
-                _process_single_face_worker,
-                canvas=face_data["canvas"],
-                regions_dict=all_regions[i].to_dict(),
-                ied=face_data["ied"],
-                recipe=recipe,
-            ): i
-            for i, face_data in enumerate(prepared_faces)
+            self._executor.submit(_process_single_face_worker, payload): i
+            for i, payload in enumerate(payloads)
         }
 
         for future in as_completed(futures):
@@ -233,12 +303,12 @@ class FaceProcessorPool:
                 processed_crops[face_idx] = future.result()
             except Exception:
                 logger.exception(
-                    "Worker failed for face %d; using unprocessed canvas",
+                    "Worker failed for face %d; returning None for caller fallback",
                     face_idx,
                 )
-                processed_crops[face_idx] = prepared_faces[face_idx]["canvas"]
+                processed_crops[face_idx] = None
 
-        return processed_crops  # type: ignore[return-value]
+        return processed_crops
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -411,9 +481,9 @@ def init_mediapipe_with_gpu() -> Any:
         ),
         running_mode=RunningMode.IMAGE,
         num_faces=10,
-        min_face_detection_confidence=0.5,
-        min_face_presence_confidence=0.5,
-        min_tracking_confidence=0.5,
+        min_face_detection_confidence=0.4,
+        min_face_presence_confidence=0.4,
+        min_tracking_confidence=0.4,
         output_face_blendshapes=False,
         output_facial_transformation_matrixes=False,
     )

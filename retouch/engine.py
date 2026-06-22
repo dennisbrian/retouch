@@ -83,7 +83,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
-from .detection import FaceDetector, FaceData
+from .detection import FaceDetector, FaceData, FaceContext
 from .parsing import FaceParser, FaceRegions
 from .geometry import FaceReshaper
 from .makeup import MakeupEngine
@@ -105,6 +105,8 @@ from .utils import correct_exposure, apply_global_bloom
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
+
+PROXY_MAX_DIM = 2048
 
 # Anime cinematic variants get standard nose blush, no slimming
 # Mapped modularly in recipes config
@@ -210,6 +212,9 @@ class ProcessingContext:
     under_eye_blush: bool = False
     white_costume_lift: bool = False
 
+    # Cached per-face detection + parsing; None ⇒ engine detects/parses.
+    face_contexts: Optional[List["FaceContext"]] = None
+
 
 # ---------------------------------------------------------------------------
 # ProcessingResult — rich return value
@@ -232,6 +237,7 @@ class ProcessingResult(np.ndarray):
         face_count: int = 0,
         params: Optional[ProcessingContext] = None,
         timings: Optional[Dict[str, float]] = None,
+        face_contexts: Optional[List["FaceContext"]] = None,
     ):
         obj = np.asarray(image).view(cls)
         obj.image = image
@@ -242,6 +248,7 @@ class ProcessingResult(np.ndarray):
         obj.face_count = face_count
         obj.params = params
         obj.timings = timings or {}
+        obj.face_contexts = face_contexts
         return obj
 
     def __array_finalize__(self, obj):
@@ -255,6 +262,7 @@ class ProcessingResult(np.ndarray):
         self.face_count = getattr(obj, "face_count", 0)
         self.params = getattr(obj, "params", None)
         self.timings = getattr(obj, "timings", {})
+        self.face_contexts = getattr(obj, "face_contexts", None)
 
 
 # ---------------------------------------------------------------------------
@@ -500,6 +508,265 @@ class _FaceResult:
     roi_box: Tuple[int, int, int, int]
 
 
+@dataclass
+class _CoreResult:
+    """Output of the core pipeline (stages 0–6), returned by
+    ``_run_core_pipeline`` and upscaled by ``_process_with_proxy``."""
+    result: np.ndarray
+    acc_skin: Optional[np.ndarray]
+    acc_skin_hair: Optional[np.ndarray]
+    acc_lips: Optional[np.ndarray]
+    acc_sharpen: Optional[np.ndarray]
+    faces: list
+    person_mask: Optional[np.ndarray]
+    no_face: bool = False
+    face_contexts: Optional[List["FaceContext"]] = None
+
+
+# ---------------------------------------------------------------------------
+# Per-face core pipeline (module-level so it is picklable / callable from
+# worker processes without the RetouchEngine instance, which holds non-picklable
+# ONNX sessions and MediaPipe tasks).
+# ---------------------------------------------------------------------------
+
+def _process_face_core(
+    canvas: np.ndarray,
+    regions: FaceRegions,
+    shifted_face: FaceData,
+    ctx: ProcessingContext,
+    roi_x1: int,
+    roi_y1: int,
+    roi_h: int,
+    roi_w: int,
+    roi_person_mask: Optional[np.ndarray],
+    processors: Dict[str, Any],
+) -> _FaceResult:
+    """Run the per-face rendering pipeline on a private ROI canvas.
+
+    ``processors`` maps names to the processor instances used by the
+    pipeline ('skin', 'relighter', 'blemish', 'undereye', 'eyes',
+    'teeth', 'lips', 'makeup', 'hair'). This lets the same logic run
+    either inside the engine (passing ``self._xxx``) or inside a worker
+    process (passing freshly-instantiated processors).
+    """
+    skin = processors['skin']
+    relighter = processors['relighter']
+    blemish = processors['blemish']
+    undereye = processors['undereye']
+    eyes = processors['eyes']
+    teeth = processors['teeth']
+    lips = processors['lips']
+    makeup = processors['makeup']
+    hair = processors['hair']
+
+    face_width = shifted_face.ied * 2.5
+
+    # ---- Accumulate masks ----
+    skin_n = _norm_mask(regions.skin)
+    hair_n = _norm_mask(regions.hair)
+    lips_n = _norm_mask(regions.lips)
+    neck_n = _norm_mask(regions.neck)
+
+    acc_skin = np.zeros((roi_h, roi_w), dtype=np.float32)
+    acc_skin_hair = np.zeros((roi_h, roi_w), dtype=np.float32)
+    if skin_n is not None:
+        acc_skin = np.clip(acc_skin + skin_n, 0.0, 1.0)
+        acc_skin_hair = np.clip(acc_skin_hair + skin_n, 0.0, 1.0)
+    if hair_n is not None:
+        acc_skin_hair = np.clip(acc_skin_hair + hair_n, 0.0, 1.0)
+    if neck_n is not None:
+        acc_skin_hair = np.clip(acc_skin_hair + neck_n, 0.0, 1.0)
+
+    acc_lips = np.zeros((roi_h, roi_w), dtype=np.float32)
+    if lips_n is not None:
+        acc_lips = np.clip(acc_lips + lips_n, 0.0, 1.0)
+
+    # ---- Frequency separation ----
+    original_lab = cv2.cvtColor(canvas, cv2.COLOR_BGR2LAB)
+    layers = freq_separate(canvas, face_width)
+
+    # ---- Build smooth mask (protect eyes/brows/lips) ----
+    smooth_mask = skin_n.copy() if skin_n is not None else np.zeros((roi_h, roi_w), np.float32)
+
+    if shifted_face.ied > 0:
+        k_size = max(3, int(shifted_face.ied * 0.08) | 1)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
+        dilated_left_eye = cv2.dilate(regions.left_eye, kernel) if regions.left_eye is not None else None
+        dilated_right_eye = cv2.dilate(regions.right_eye, kernel) if regions.right_eye is not None else None
+    else:
+        dilated_left_eye = regions.left_eye
+        dilated_right_eye = regions.right_eye
+
+    for excl in (
+        dilated_left_eye, dilated_right_eye,
+        regions.left_under_eye, regions.right_under_eye,
+        regions.left_eyebrow, regions.right_eyebrow,
+        regions.lips,
+    ):
+        if excl is not None:
+            smooth_mask = np.clip(smooth_mask - excl.astype(np.float32), 0.0, 1.0)
+
+    # ---- Frequency-based smoothing ----
+    if ctx.nose_smooth is not None:
+        nose_mask = _norm_mask(regions.nose)
+        if nose_mask is not None:
+            face_without_nose = np.clip(smooth_mask - nose_mask * smooth_mask, 0.0, 1.0)
+            canvas = freq_combine(
+                layers,
+                skin_mask=face_without_nose,
+                smooth_strength=ctx.smooth / 100.0,
+                mid_reduction=ctx.mid_reduction,
+                texture_opacity=ctx.texture_opacity,
+                face_width=face_width,
+                pore_synthesis=ctx.pore_synthesis / 100.0,
+                roi_coords=(roi_x1, roi_y1),
+            )
+            nose_canvas = freq_combine(
+                layers,
+                skin_mask=nose_mask * smooth_mask,
+                smooth_strength=ctx.nose_smooth / 100.0,
+                mid_reduction=ctx.mid_reduction,
+                texture_opacity=ctx.texture_opacity,
+                face_width=face_width,
+                pore_synthesis=ctx.pore_synthesis / 100.0,
+                roi_coords=(roi_x1, roi_y1),
+            )
+            nose_alpha = (nose_mask * smooth_mask)[:, :, np.newaxis]
+            canvas = (
+                nose_canvas.astype(np.float32) * nose_alpha
+                + canvas.astype(np.float32) * (1.0 - nose_alpha)
+            ).astype(np.uint8)
+        else:
+            canvas = freq_combine(
+                layers,
+                skin_mask=smooth_mask,
+                smooth_strength=ctx.smooth / 100.0,
+                mid_reduction=ctx.mid_reduction,
+                texture_opacity=ctx.texture_opacity,
+                face_width=face_width,
+                pore_synthesis=ctx.pore_synthesis / 100.0,
+                roi_coords=(roi_x1, roi_y1),
+            )
+    else:
+        canvas = freq_combine(
+            layers,
+            skin_mask=smooth_mask,
+            smooth_strength=ctx.smooth / 100.0,
+            mid_reduction=ctx.mid_reduction,
+            texture_opacity=ctx.texture_opacity,
+            face_width=face_width,
+            pore_synthesis=ctx.pore_synthesis / 100.0,
+            roi_coords=(roi_x1, roi_y1),
+        )
+
+    # ---- Skin equalization ----
+    if ctx.equalize > 0:
+        canvas = skin.equalize(canvas, regions.skin, ctx.equalize, ref_lab=original_lab)
+
+    # ---- Foundation / whitening ----
+    if ctx.whiten != 0:
+        canvas = skin.whiten(canvas, regions.skin, ctx.whiten, tone=ctx.whiten_tone)
+
+    # ---- Virtual studio relighting ----
+    if ctx.relight > 0:
+        canvas = relighter.relight(
+            canvas,
+            shifted_face.landmarks,
+            regions.skin,
+            face_width=face_width,
+            strength=ctx.relight,
+            azimuth=ctx.relight_azimuth,
+            elevation=ctx.relight_elevation,
+        )
+
+    # ---- Specular bloom ----
+    if ctx.specular_bloom > 0:
+        canvas = skin.apply_specular_bloom(
+            canvas, regions.skin, ctx.specular_bloom, tone=ctx.specular_bloom_tone
+        )
+
+    # ---- Blemish removal ----
+    if ctx.blemish > 0:
+        canvas = blemish.remove(canvas, regions.skin, ctx.blemish)
+
+    # ---- Under-eye repair ----
+    if ctx.dark_circles > 0:
+        canvas = undereye.repair(canvas, regions, ctx.dark_circles)
+
+    # ---- Neck harmonisation ----
+    if ctx.whiten != 0 or ctx.equalize > 0:
+        canvas = skin.harmonize_neck(
+            canvas,
+            shifted_face.landmarks,
+            roi_person_mask,
+            regions.skin,
+            regions.neck,
+            strength=max(abs(ctx.whiten), ctx.equalize),
+        )
+
+    # ---- Eye enhancement ----
+    if ctx.eye_enhance > 0:
+        canvas = eyes.enhance(canvas, regions, ctx.eye_enhance)
+
+    # ---- Teeth whitening ----
+    if ctx.teeth_whiten > 0:
+        canvas = teeth.whiten(canvas, regions.mouth_interior, ctx.teeth_whiten)
+
+    # ---- Lip enhancement ----
+    if ctx.lip_enhance > 0:
+        canvas = lips.enhance(
+            canvas, regions.lips, ctx.lip_enhance,
+            tint=ctx.lip_tint, finish=ctx.lip_finish,
+        )
+
+    # ---- Blush ----
+    if ctx.blush > 0:
+        canvas = makeup.apply_blush(
+            canvas, shifted_face.landmarks, face_width, ctx.blush,
+            regions=regions,
+            nose_blush=ctx.nose_blush,
+            under_eye_blush=ctx.under_eye_blush,
+        )
+
+    # ---- Hair shine ----
+    if ctx.hair_enhance > 0:
+        canvas = hair.enhance(
+            canvas, roi_person_mask, regions.face_oval,
+            shifted_face.bbox, ctx.hair_enhance, regions.hair,
+        )
+
+    # ---- Dodge & burn ----
+    if ctx.dodge_burn > 0:
+        canvas = skin.dodge_burn(canvas, regions, ctx.dodge_burn)
+
+    # ---- Build sharpening mask ----
+    acc_sharpen = np.zeros((roi_h, roi_w), dtype=np.float32)
+    eye_sharpen = _accum(np.zeros((roi_h, roi_w), np.float32), regions.left_eye)
+    eye_sharpen = _accum(eye_sharpen, regions.right_eye)
+
+    other_sharpen = _accum(np.zeros((roi_h, roi_w), np.float32), regions.left_eyebrow)
+    other_sharpen = _accum(other_sharpen, regions.right_eyebrow)
+
+    if regions.hair is not None and _norm_mask(regions.hair).max() > 0.01:
+        hair_n_clean = _norm_mask(regions.hair)
+        eroded = cv2.erode(hair_n_clean, np.ones((5, 5), np.uint8))
+        hair_edges = np.clip(hair_n_clean - eroded, 0.0, 1.0)
+        other_sharpen = np.clip(other_sharpen + hair_edges, 0.0, 1.0)
+
+    acc_sharpen = np.clip(
+        np.maximum(eye_sharpen * 1.0, other_sharpen * 0.53), 0.0, 1.0
+    )
+
+    return _FaceResult(
+        canvas=canvas,
+        skin_mask=acc_skin,
+        skin_hair_mask=acc_skin_hair,
+        lips_mask=acc_lips,
+        sharpen_mask=acc_sharpen,
+        roi_box=(roi_x1, roi_y1, roi_x1 + roi_w, roi_y1 + roi_h)
+    )
+
+
 # ---------------------------------------------------------------------------
 # RetouchEngine
 # ---------------------------------------------------------------------------
@@ -522,7 +789,7 @@ class RetouchEngine:
     (``result.shape``, ``result[...]``, ``np.array(result)`` all work).
     """
 
-    def __init__(self, max_faces: int = 10, min_confidence: float = 0.5):
+    def __init__(self, max_faces: int = 10, min_confidence: float = 0.4):
         self._detector = FaceDetector(
             max_faces=max_faces,
             min_confidence=min_confidence,
@@ -540,6 +807,11 @@ class RetouchEngine:
         self._grader = ColorGrader()
         self._hair = HairEnhancer()
         self._relighter = Relighter()
+
+        # Persistent process pool for multi-face parallel processing.
+        # Lazily started on first multi-face call; shut down in close().
+        from .perf_optimizations import FaceProcessorPool
+        self._face_pool = FaceProcessorPool()
 
         # Warm up JIT kernels on engine startup (safe fallback if Numba is missing)
         from .perf_optimizations import warmup_jit_kernels
@@ -614,6 +886,7 @@ class RetouchEngine:
         style_profile: Optional[StyleProfile] = None,
         style_ref: Optional[np.ndarray] = None,
         debug_dir: Optional[str] = None,
+        face_contexts: Optional[List["FaceContext"]] = None,
     ) -> ProcessingResult:
         """Process a single image through the full Retouch pipeline.
 
@@ -702,6 +975,8 @@ class RetouchEngine:
         }
 
         ctx = build_context(active_recipe, rec, overrides)
+        if face_contexts is not None:
+            ctx.face_contexts = face_contexts
 
         if style_profile is not None:
             if overrides["contrast"] is None:
@@ -727,85 +1002,40 @@ class RetouchEngine:
                 ctx.saturation = np.clip(style_profile.saturation_delta, -100.0, 100.0)
 
         # ------------------------------------------------------------------
-        # Stage 0 — Detection + segmentation
+        # Core pipeline (stages 0–6) with automatic proxy down/upscaling
+        # for high-res inputs. The fast=True 800 px preview path is
+        # independent and applied above; the proxy path triggers when the
+        # (possibly already fast-downscaled) image still exceeds
+        # PROXY_MAX_DIM, regardless of the ``fast`` flag.
         # ------------------------------------------------------------------
-        t0 = time.perf_counter()
-        if ctx.auto_exposure:
-            faces = self._detector.detect(img_bgr)
-            bboxes = [f.bbox for f in faces] if faces else None
-            img_bgr, corrected = correct_exposure(img_bgr, face_bboxes=bboxes)
-            if corrected:
-                faces = self._detector.detect(img_bgr)
-        else:
-            faces = self._detector.detect(img_bgr)
-        person_mask = self._detector.segment_person(img_bgr)
-        timings["detection"] = (time.perf_counter() - t0) * 1000
+        core = self._process_with_proxy(img_bgr, ctx, style_ref, timings)
+
+        result = core.result
+        acc_skin = core.acc_skin
+        acc_skin_hair = core.acc_skin_hair
+        acc_lips = core.acc_lips
+        acc_sharpen = core.acc_sharpen
+        faces = core.faces
+        person_mask = core.person_mask
+        built_contexts = core.face_contexts
 
         # ------------------------------------------------------------------
         # No-face fallback: minimal global processing
         # ------------------------------------------------------------------
-        if not faces:
-            result = self._no_face_fallback(img_bgr, ctx, person_mask)
+        if core.no_face:
             if fast and scale < 1.0:
                 result = cv2.resize(result, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
+            timings["total"] = sum(timings.values())
             return ProcessingResult(
                 image=result,
                 face_count=0,
                 params=ctx,
                 timings=timings,
+                face_contexts=built_contexts,
             )
 
         # ------------------------------------------------------------------
-        # Stage 1 — Face reshaping (global, applied once before per-face work)
-        # ------------------------------------------------------------------
-        t1 = time.perf_counter()
-        result = self._stage_reshape(img_bgr, faces, ctx)
-        timings["reshape"] = (time.perf_counter() - t1) * 1000
-
-        # ------------------------------------------------------------------
-        # Stage 2 — Per-face processing (parallel when >1 face)
-        # ------------------------------------------------------------------
-        t2 = time.perf_counter()
-        h_img, w_img = result.shape[:2]
-        face_results = self._stage_per_face(result, faces, person_mask, ctx, h_img, w_img)
-        timings["per_face"] = (time.perf_counter() - t2) * 1000
-
-        # Composite per-face canvases back (or use single result directly)
-        result, acc_skin, acc_skin_hair, acc_lips, acc_sharpen = self._composite_faces(
-            result, face_results, h_img, w_img
-        )
-
-        # ------------------------------------------------------------------
-        # Stage 3 — Global tonal adjustments
-        # ------------------------------------------------------------------
-        t3 = time.perf_counter()
-        result = self._stage_global(result, ctx)
-        timings["global"] = (time.perf_counter() - t3) * 1000
-
-        # ------------------------------------------------------------------
-        # Stage 4 — Subject-background separation
-        # ------------------------------------------------------------------
-        t_subj = time.perf_counter()
-        if ctx.subject_separation > 0:
-            result = self._stage_subject_separation(result, person_mask, ctx)
-        timings["subject_separation"] = (time.perf_counter() - t_subj) * 1000
-
-        # ------------------------------------------------------------------
-        # Stage 5 — Colour grading
-        # ------------------------------------------------------------------
-        t4 = time.perf_counter()
-        result = self._stage_grade(result, ctx, acc_skin, acc_skin_hair, acc_lips, person_mask, style_ref=style_ref, faces=faces)
-        timings["grading"] = (time.perf_counter() - t4) * 1000
-
-        # ------------------------------------------------------------------
-        # Stage 6 — Selective sharpening + impact finish
-        # ------------------------------------------------------------------
-        t5 = time.perf_counter()
-        result = self._stage_finish(result, ctx, acc_sharpen, faces=faces)
-        timings["finish"] = (time.perf_counter() - t5) * 1000
-
-        # ------------------------------------------------------------------
-        # Upscale if fast preview
+        # Upscale if fast preview (result only — kept as-is for the 800px path)
         # ------------------------------------------------------------------
         if fast and scale < 1.0:
             result = cv2.resize(result, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
@@ -862,11 +1092,183 @@ class RetouchEngine:
             face_count=len(faces),
             params=ctx,
             timings=timings,
+            face_contexts=built_contexts,
         )
 
     # ------------------------------------------------------------------
     # Stage methods
     # ------------------------------------------------------------------
+
+    def _process_with_proxy(
+        self,
+        img_bgr: np.ndarray,
+        ctx: ProcessingContext,
+        style_ref: Optional[np.ndarray],
+        timings: Dict[str, float],
+    ) -> _CoreResult:
+        """Wrap the core pipeline with automatic proxy down/upscaling.
+
+        If the longest image side exceeds ``PROXY_MAX_DIM``, the image is
+        downscaled (INTER_AREA) before the expensive detection / parsing /
+        smoothing / grading stages, then the result and all accumulated
+        masks are upscaled (INTER_LINEAR) back to the pre-proxy resolution.
+        """
+        h, w = img_bgr.shape[:2]
+        proxy_scale = 1.0
+        if max(h, w) > PROXY_MAX_DIM:
+            proxy_scale = PROXY_MAX_DIM / float(max(h, w))
+            new_w = int(w * proxy_scale)
+            new_h = int(h * proxy_scale)
+            img_bgr = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+        core = self._run_core_pipeline(img_bgr, ctx, style_ref, timings)
+
+        if proxy_scale < 1.0:
+            core = self._upscale_core_result(core, h, w)
+
+        return core
+
+    @staticmethod
+    def _upscale_core_result(
+        core: _CoreResult, target_h: int, target_w: int
+    ) -> _CoreResult:
+        """Upscale a core result (image + masks + person mask) back to the
+        pre-proxy resolution."""
+        core.result = cv2.resize(
+            core.result, (target_w, target_h), interpolation=cv2.INTER_LINEAR
+        )
+        if core.person_mask is not None:
+            core.person_mask = cv2.resize(
+                core.person_mask, (target_w, target_h), interpolation=cv2.INTER_LINEAR
+            )
+        for attr in ("acc_skin", "acc_skin_hair", "acc_lips", "acc_sharpen"):
+            m = getattr(core, attr)
+            if m is not None:
+                setattr(core, attr, cv2.resize(
+                    m, (target_w, target_h), interpolation=cv2.INTER_LINEAR
+                ))
+        return core
+
+    def _run_core_pipeline(
+        self,
+        img_bgr: np.ndarray,
+        ctx: ProcessingContext,
+        style_ref: Optional[np.ndarray],
+        timings: Dict[str, float],
+    ) -> _CoreResult:
+        """Run stages 0–6 (detection → finish) at the given resolution.
+
+        Honours ``ctx.face_contexts``: when provided, detection and parsing
+        are skipped and the cached face data / regions are reused. Otherwise
+        detection + parsing run normally and ``FaceContext`` objects are
+        built and returned for caller caching.
+        """
+        # ------------------------------------------------------------------
+        # Stage 0 — Detection + segmentation (with FaceContext caching)
+        # ------------------------------------------------------------------
+        t0 = time.perf_counter()
+        cached_contexts = ctx.face_contexts
+        if cached_contexts is not None:
+            faces = [fc.face_data for fc in cached_contexts]
+            if ctx.auto_exposure:
+                bboxes = [f.bbox for f in faces] if faces else None
+                img_bgr, corrected = correct_exposure(img_bgr, face_bboxes=bboxes)
+        else:
+            if ctx.auto_exposure:
+                faces = self._detector.detect(img_bgr)
+                bboxes = [f.bbox for f in faces] if faces else None
+                img_bgr, corrected = correct_exposure(img_bgr, face_bboxes=bboxes)
+                if corrected:
+                    faces = self._detector.detect(img_bgr)
+            else:
+                faces = self._detector.detect(img_bgr)
+        person_mask = self._detector.segment_person(img_bgr)
+        timings["detection"] = (time.perf_counter() - t0) * 1000
+
+        # ------------------------------------------------------------------
+        # No-face fallback: minimal global processing
+        # ------------------------------------------------------------------
+        if not faces:
+            result = self._no_face_fallback(img_bgr, ctx, person_mask)
+            h_img, w_img = result.shape[:2]
+            return _CoreResult(
+                result=result,
+                acc_skin=np.zeros((h_img, w_img), dtype=np.float32),
+                acc_skin_hair=np.zeros((h_img, w_img), dtype=np.float32),
+                acc_lips=np.zeros((h_img, w_img), dtype=np.float32),
+                acc_sharpen=np.zeros((h_img, w_img), dtype=np.float32),
+                faces=[],
+                person_mask=person_mask,
+                no_face=True,
+                face_contexts=None,
+            )
+
+        # ------------------------------------------------------------------
+        # Stage 1 — Face reshaping (global, applied once before per-face work)
+        # ------------------------------------------------------------------
+        t1 = time.perf_counter()
+        result = self._stage_reshape(img_bgr, faces, ctx)
+        timings["reshape"] = (time.perf_counter() - t1) * 1000
+
+        # ------------------------------------------------------------------
+        # Stage 2 — Per-face processing (parallel when >1 face)
+        # ------------------------------------------------------------------
+        t2 = time.perf_counter()
+        h_img, w_img = result.shape[:2]
+        face_results, built_contexts = self._stage_per_face(
+            result, faces, person_mask, ctx, h_img, w_img
+        )
+        timings["per_face"] = (time.perf_counter() - t2) * 1000
+
+        # Composite per-face canvases back (or use single result directly)
+        result, acc_skin, acc_skin_hair, acc_lips, acc_sharpen = self._composite_faces(
+            result, face_results, h_img, w_img
+        )
+
+        # ------------------------------------------------------------------
+        # Stage 3 — Global tonal adjustments
+        # ------------------------------------------------------------------
+        t3 = time.perf_counter()
+        result = self._stage_global(result, ctx)
+        timings["global"] = (time.perf_counter() - t3) * 1000
+
+        # ------------------------------------------------------------------
+        # Stage 4 — Subject-background separation
+        # ------------------------------------------------------------------
+        t_subj = time.perf_counter()
+        if ctx.subject_separation > 0:
+            result = self._stage_subject_separation(result, person_mask, ctx)
+        timings["subject_separation"] = (time.perf_counter() - t_subj) * 1000
+
+        # ------------------------------------------------------------------
+        # Stage 5 — Colour grading
+        # ------------------------------------------------------------------
+        t4 = time.perf_counter()
+        result = self._stage_grade(
+            result, ctx, acc_skin, acc_skin_hair, acc_lips, person_mask,
+            style_ref=style_ref, faces=faces,
+        )
+        timings["grading"] = (time.perf_counter() - t4) * 1000
+
+        # ------------------------------------------------------------------
+        # Stage 6 — Selective sharpening + impact finish
+        # ------------------------------------------------------------------
+        t5 = time.perf_counter()
+        result = self._stage_finish(result, ctx, acc_sharpen, faces=faces)
+        timings["finish"] = (time.perf_counter() - t5) * 1000
+
+        final_contexts = built_contexts if built_contexts is not None else cached_contexts
+        return _CoreResult(
+            result=result,
+            acc_skin=acc_skin,
+            acc_skin_hair=acc_skin_hair,
+            acc_lips=acc_lips,
+            acc_sharpen=acc_sharpen,
+            faces=faces,
+            person_mask=person_mask,
+            no_face=False,
+            face_contexts=final_contexts,
+        )
 
     def _no_face_fallback(
         self,
@@ -930,9 +1332,17 @@ class RetouchEngine:
         ctx: ProcessingContext,
         h_img: int,
         w_img: int,
-    ) -> List[_FaceResult]:
+    ) -> Tuple[List[_FaceResult], Optional[List["FaceContext"]]]:
         """Process each face. Cropping and region parsing are batched first,
-        then smoothing and styling are parallelised in a thread pool."""
+        then smoothing and styling are parallelised.
+
+        When ``ctx.face_contexts`` is provided, detection + parsing are
+        skipped and the cached regions are reused; otherwise regions are
+        parsed and ``FaceContext`` objects are built for caller caching.
+
+        Returns ``(face_results, built_contexts)`` where ``built_contexts``
+        is the freshly-built ``FaceContext`` list, or ``None`` when cached
+        contexts were supplied (reuse path)."""
         crop_list = []
         landmarks_compat_list = []
         face_bbox_list = []
@@ -980,10 +1390,24 @@ class RetouchEngine:
                 'shifted_bbox': shifted_bbox
             })
 
-        # Batch parse all faces
-        all_regions = self._parser.parse_batch(
-            crop_list, landmarks_compat_list, face_bbox_list, person_masks, ieds
-        )
+        # Region parsing — or reuse cached regions from ctx.face_contexts
+        cached_contexts = ctx.face_contexts
+        if cached_contexts is not None:
+            all_regions = [fc.regions for fc in cached_contexts]
+            built_contexts: Optional[List["FaceContext"]] = None
+        else:
+            all_regions = self._parser.parse_batch(
+                crop_list, landmarks_compat_list, face_bbox_list, person_masks, ieds
+            )
+            built_contexts = [
+                FaceContext(
+                    face_data=faces[i],
+                    regions=all_regions[i],
+                    index=i,
+                    face_image=crop_list[i],
+                )
+                for i in range(len(faces))
+            ]
 
         results: List[Optional[_FaceResult]] = [None] * len(faces)
         if len(faces) == 1:
@@ -991,9 +1415,50 @@ class RetouchEngine:
                 img, faces[0], person_mask, ctx, h_img, w_img,
                 regions=all_regions[0], preprepared=prepared_faces[0]
             )
-            return results  # type: ignore[return-value]
+            return results, built_contexts  # type: ignore[return-value]
 
-        # ARCH-3: parallel per-face processing
+        # Multi-face: try ProcessPool (FaceProcessorPool) for true parallelism,
+        # falling back to ThreadPoolExecutor (shares memory + GIL-released ops).
+        proc_results: Optional[List[Optional[dict]]] = None
+        try:
+            payloads = [
+                (
+                    prepared_faces[i]['canvas'],
+                    all_regions[i],
+                    prepared_faces[i]['shifted_bbox'],
+                    prepared_faces[i]['shifted_landmarks'],
+                    ieds[i],
+                    ctx,
+                    prepared_faces[i]['roi_box'],
+                    prepared_faces[i]['roi_person_mask'],
+                    prepared_faces[i]['roi_box'][3] - prepared_faces[i]['roi_box'][1],
+                    prepared_faces[i]['roi_box'][2] - prepared_faces[i]['roi_box'][0],
+                )
+                for i in range(len(faces))
+            ]
+            proc_results = self._face_pool.process_faces(payloads)
+        except Exception:
+            proc_results = None
+
+        if proc_results is not None:
+            for i, pr in enumerate(proc_results):
+                if pr is None:
+                    results[i] = self._process_one_face(
+                        img, faces[i], person_mask, ctx, h_img, w_img,
+                        regions=all_regions[i], preprepared=prepared_faces[i]
+                    )
+                else:
+                    results[i] = _FaceResult(
+                        canvas=pr['canvas'],
+                        skin_mask=pr['skin_mask'],
+                        skin_hair_mask=pr['skin_hair_mask'],
+                        lips_mask=pr['lips_mask'],
+                        sharpen_mask=pr['sharpen_mask'],
+                        roi_box=pr['roi_box'],
+                    )
+            return results, built_contexts  # type: ignore[return-value]
+
+        # Fallback: ThreadPoolExecutor (engine instance shared via memory)
         with ThreadPoolExecutor(max_workers=min(len(faces), 4)) as pool:
             future_to_idx = {
                 pool.submit(
@@ -1006,7 +1471,7 @@ class RetouchEngine:
             for future in as_completed(future_to_idx):
                 idx = future_to_idx[future]
                 results[idx] = future.result()
-        return results  # type: ignore[return-value]
+        return results, built_contexts  # type: ignore[return-value]
 
     def _process_one_face(
         self,
@@ -1073,218 +1538,26 @@ class RetouchEngine:
             ied=face.ied
         )
 
-        face_width = shifted_face.ied * 2.5
-        active_recipe = ctx.active_recipe
-
-        # ---- Parse regions ----
+        # ---- Parse regions (only when not already provided by the batch path) ----
         if regions is None:
             regions = self._parser.parse(
                 shifted_face.landmarks, canvas, shifted_face.bbox, roi_person_mask, shifted_face.ied
             )
 
-        # ---- Accumulate masks ----
-        skin_n = _norm_mask(regions.skin)
-        hair_n = _norm_mask(regions.hair)
-        lips_n = _norm_mask(regions.lips)
-        neck_n = _norm_mask(regions.neck)
-
-        acc_skin = np.zeros((roi_h, roi_w), dtype=np.float32)
-        acc_skin_hair = np.zeros((roi_h, roi_w), dtype=np.float32)
-        if skin_n is not None:
-            acc_skin = np.clip(acc_skin + skin_n, 0.0, 1.0)
-            acc_skin_hair = np.clip(acc_skin_hair + skin_n, 0.0, 1.0)
-        if hair_n is not None:
-            acc_skin_hair = np.clip(acc_skin_hair + hair_n, 0.0, 1.0)
-        if neck_n is not None:
-            acc_skin_hair = np.clip(acc_skin_hair + neck_n, 0.0, 1.0)
-
-        acc_lips = np.zeros((roi_h, roi_w), dtype=np.float32)
-        if lips_n is not None:
-            acc_lips = np.clip(acc_lips + lips_n, 0.0, 1.0)
-
-        # ---- Frequency separation ----
-        original_lab = cv2.cvtColor(canvas, cv2.COLOR_BGR2LAB)
-        layers = freq_separate(canvas, face_width)
-
-        # ---- Build smooth mask (protect eyes/brows/lips) ----
-        smooth_mask = skin_n.copy() if skin_n is not None else np.zeros((roi_h, roi_w), np.float32)
-
-        if shifted_face.ied > 0:
-            k_size = max(3, int(shifted_face.ied * 0.08) | 1)
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
-            dilated_left_eye = cv2.dilate(regions.left_eye, kernel) if regions.left_eye is not None else None
-            dilated_right_eye = cv2.dilate(regions.right_eye, kernel) if regions.right_eye is not None else None
-        else:
-            dilated_left_eye = regions.left_eye
-            dilated_right_eye = regions.right_eye
-
-        for excl in (
-            dilated_left_eye, dilated_right_eye,
-            regions.left_under_eye, regions.right_under_eye,
-            regions.left_eyebrow, regions.right_eyebrow,
-            regions.lips,
-        ):
-            if excl is not None:
-                smooth_mask = np.clip(smooth_mask - excl.astype(np.float32), 0.0, 1.0)
-
-        # ---- Frequency-based smoothing ----
-        if ctx.nose_smooth is not None:
-            nose_mask = _norm_mask(regions.nose)
-            if nose_mask is not None:
-                face_without_nose = np.clip(smooth_mask - nose_mask * smooth_mask, 0.0, 1.0)
-                canvas = freq_combine(
-                    layers,
-                    skin_mask=face_without_nose,
-                    smooth_strength=ctx.smooth / 100.0,
-                    mid_reduction=ctx.mid_reduction,
-                    texture_opacity=ctx.texture_opacity,
-                    face_width=face_width,
-                    pore_synthesis=ctx.pore_synthesis / 100.0,
-                    roi_coords=(roi_x1, roi_y1),
-                )
-                nose_canvas = freq_combine(
-                    layers,
-                    skin_mask=nose_mask * smooth_mask,
-                    smooth_strength=ctx.nose_smooth / 100.0,
-                    mid_reduction=ctx.mid_reduction,
-                    texture_opacity=ctx.texture_opacity,
-                    face_width=face_width,
-                    pore_synthesis=ctx.pore_synthesis / 100.0,
-                    roi_coords=(roi_x1, roi_y1),
-                )
-                nose_alpha = (nose_mask * smooth_mask)[:, :, np.newaxis]
-                canvas = (
-                    nose_canvas.astype(np.float32) * nose_alpha
-                    + canvas.astype(np.float32) * (1.0 - nose_alpha)
-                ).astype(np.uint8)
-            else:
-                canvas = freq_combine(
-                    layers,
-                    skin_mask=smooth_mask,
-                    smooth_strength=ctx.smooth / 100.0,
-                    mid_reduction=ctx.mid_reduction,
-                    texture_opacity=ctx.texture_opacity,
-                    face_width=face_width,
-                    pore_synthesis=ctx.pore_synthesis / 100.0,
-                    roi_coords=(roi_x1, roi_y1),
-                )
-        else:
-            canvas = freq_combine(
-                layers,
-                skin_mask=smooth_mask,
-                smooth_strength=ctx.smooth / 100.0,
-                mid_reduction=ctx.mid_reduction,
-                texture_opacity=ctx.texture_opacity,
-                face_width=face_width,
-                pore_synthesis=ctx.pore_synthesis / 100.0,
-                roi_coords=(roi_x1, roi_y1),
-            )
-
-        # ---- Skin equalization ----
-        if ctx.equalize > 0:
-            canvas = self._skin.equalize(canvas, regions.skin, ctx.equalize, ref_lab=original_lab)
-
-        # ---- Foundation / whitening ----
-        if ctx.whiten != 0:
-            canvas = self._skin.whiten(canvas, regions.skin, ctx.whiten, tone=ctx.whiten_tone)
-
-        # ---- Virtual studio relighting ----
-        if ctx.relight > 0:
-            canvas = self._relighter.relight(
-                canvas,
-                shifted_face.landmarks,
-                regions.skin,
-                face_width=face_width,
-                strength=ctx.relight,
-                azimuth=ctx.relight_azimuth,
-                elevation=ctx.relight_elevation,
-            )
-
-        # ---- Specular bloom ----
-        if ctx.specular_bloom > 0:
-            canvas = self._skin.apply_specular_bloom(
-                canvas, regions.skin, ctx.specular_bloom, tone=ctx.specular_bloom_tone
-            )
-
-        # ---- Blemish removal ----
-        if ctx.blemish > 0:
-            canvas = self._blemish.remove(canvas, regions.skin, ctx.blemish)
-
-        # ---- Under-eye repair ----
-        if ctx.dark_circles > 0:
-            canvas = self._undereye.repair(canvas, regions, ctx.dark_circles)
-
-        # ---- Neck harmonisation ----
-        if ctx.whiten != 0 or ctx.equalize > 0:
-            canvas = self._skin.harmonize_neck(
-                canvas,
-                shifted_face.landmarks,
-                roi_person_mask,
-                regions.skin,
-                regions.neck,
-                strength=max(abs(ctx.whiten), ctx.equalize),
-            )
-
-        # ---- Eye enhancement ----
-        if ctx.eye_enhance > 0:
-            canvas = self._eyes.enhance(canvas, regions, ctx.eye_enhance)
-
-        # ---- Teeth whitening ----
-        if ctx.teeth_whiten > 0:
-            canvas = self._teeth.whiten(canvas, regions.mouth_interior, ctx.teeth_whiten)
-
-        # ---- Lip enhancement ----
-        if ctx.lip_enhance > 0:
-            canvas = self._lips.enhance(
-                canvas, regions.lips, ctx.lip_enhance,
-                tint=ctx.lip_tint, finish=ctx.lip_finish,
-            )
-
-        # ---- Blush ----
-        if ctx.blush > 0:
-            canvas = self._makeup.apply_blush(
-                canvas, shifted_face.landmarks, face_width, ctx.blush,
-                regions=regions,
-                nose_blush=ctx.nose_blush,
-                under_eye_blush=ctx.under_eye_blush,
-            )
-
-        # ---- Hair shine ----
-        if ctx.hair_enhance > 0:
-            canvas = self._hair.enhance(
-                canvas, roi_person_mask, regions.face_oval,
-                shifted_face.bbox, ctx.hair_enhance, regions.hair,
-            )
-
-        # ---- Dodge & burn ----
-        if ctx.dodge_burn > 0:
-            canvas = self._skin.dodge_burn(canvas, regions, ctx.dodge_burn)
-
-        # ---- Build sharpening mask ----
-        acc_sharpen = np.zeros((roi_h, roi_w), dtype=np.float32)
-        eye_sharpen = _accum(np.zeros((roi_h, roi_w), np.float32), regions.left_eye)
-        eye_sharpen = _accum(eye_sharpen, regions.right_eye)
-
-        other_sharpen = _accum(np.zeros((roi_h, roi_w), np.float32), regions.left_eyebrow)
-        other_sharpen = _accum(other_sharpen, regions.right_eyebrow)
-
-        if regions.hair is not None and _norm_mask(regions.hair).max() > 0.01:
-            hair_n_clean = _norm_mask(regions.hair)
-            eroded = cv2.erode(hair_n_clean, np.ones((5, 5), np.uint8))
-            hair_edges = np.clip(hair_n_clean - eroded, 0.0, 1.0)
-            other_sharpen = np.clip(other_sharpen + hair_edges, 0.0, 1.0)
-
-        acc_sharpen = np.clip(
-            np.maximum(eye_sharpen * 1.0, other_sharpen * 0.53), 0.0, 1.0
-        )
-
-        return _FaceResult(
-            canvas=canvas,
-            skin_mask=acc_skin,
-            skin_hair_mask=acc_skin_hair,
-            lips_mask=acc_lips,
-            sharpen_mask=acc_sharpen,
-            roi_box=(roi_x1, roi_y1, roi_x2, roi_y2)
+        processors = {
+            'skin': self._skin,
+            'relighter': self._relighter,
+            'blemish': self._blemish,
+            'undereye': self._undereye,
+            'eyes': self._eyes,
+            'teeth': self._teeth,
+            'lips': self._lips,
+            'makeup': self._makeup,
+            'hair': self._hair,
+        }
+        return _process_face_core(
+            canvas, regions, shifted_face, ctx,
+            roi_x1, roi_y1, roi_h, roi_w, roi_person_mask, processors,
         )
 
     def _composite_faces(
@@ -1553,7 +1826,11 @@ class RetouchEngine:
     # ------------------------------------------------------------------
 
     def close(self):
-        """Release detector resources."""
+        """Release detector and process-pool resources."""
+        try:
+            self._face_pool.shutdown()
+        except Exception:
+            pass
         self._detector.close()
 
     def __enter__(self):

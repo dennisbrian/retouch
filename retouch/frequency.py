@@ -207,3 +207,39 @@ def combine(layers, skin_mask=None, smooth_strength=0.5,
     full_result[y1:y2, x1:x2] = result_crop
 
     return full_result
+
+
+def combine_adaptive(image_bgr, skin_mask, quality_map, base_smooth=0.5,
+                     base_texture=0.25, smooth_boost=0.3, mid_reduction=0.5,
+                     pore_synthesis=None):
+    """Adaptive frequency combine that modulates smoothing based on skin quality.
+
+    Where quality_map is high (rough skin), increases smoothing strength.
+    Where quality_map is low (smooth skin), reduces smoothing to preserve detail.
+    """
+    y_indices, x_indices = np.where(skin_mask > 0.1)
+    if len(x_indices) == 0:
+        return image_bgr
+    face_width = float(x_indices.max() - x_indices.min())
+
+    layers = separate(image_bgr, face_width)
+
+    p_syn = pore_synthesis if pore_synthesis is not None else 0.0
+
+    weak = combine(layers, skin_mask=skin_mask, smooth_strength=base_smooth,
+                   mid_reduction=mid_reduction, texture_opacity=base_texture,
+                   face_width=face_width, pore_synthesis=p_syn)
+
+    strong_smooth = min(1.0, base_smooth + smooth_boost)
+    strong_texture = max(0.0, base_texture * (1.0 - smooth_boost * 0.5))
+    strong = combine(layers, skin_mask=skin_mask, smooth_strength=strong_smooth,
+                     mid_reduction=mid_reduction, texture_opacity=strong_texture,
+                     face_width=face_width, pore_synthesis=p_syn)
+
+    alpha = np.clip(quality_map, 0.0, 1.0).astype(np.float32)
+    k = max(5, int(face_width * 0.02)) | 1
+    alpha = cv2.GaussianBlur(alpha, (k, k), 0)
+    alpha = alpha[:, :, np.newaxis]
+
+    out = weak.astype(np.float32) * (1.0 - alpha) + strong.astype(np.float32) * alpha
+    return np.clip(out, 0, 255).astype(np.uint8)

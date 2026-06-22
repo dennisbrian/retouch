@@ -126,3 +126,41 @@ class BlemishRemover:
         result = cv2.dilate(result, dilate_kernel, iterations=1)
 
         return result
+
+
+def compute_skin_quality_map(image_bgr, skin_mask, patch_size=15):
+    """Compute a skin quality map from local variance.
+
+    Returns a float32 map (same HxW as image, single channel) where:
+    - High values = rough skin (acne, pores, blemishes) -> needs more smoothing
+    - Low values = smooth skin -> needs less smoothing
+
+    Uses local variance of luminance in a sliding window.
+    """
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+
+    ksize = max(3, patch_size) | 1
+
+    local_mean = cv2.boxFilter(gray, ddepth=-1, ksize=(ksize, ksize),
+                               borderType=cv2.BORDER_REFLECT)
+    local_sq_mean = cv2.boxFilter(gray * gray, ddepth=-1, ksize=(ksize, ksize),
+                                  borderType=cv2.BORDER_REFLECT)
+
+    local_var = np.clip(local_sq_mean - local_mean * local_mean, 0, None)
+
+    m = skin_mask.astype(np.float32)
+    skin_pixels = local_var[m > 0.05]
+    if skin_pixels.size == 0:
+        return np.zeros_like(gray, dtype=np.float32)
+
+    vmin = float(skin_pixels.min())
+    vmax = float(skin_pixels.max())
+    if vmax - vmin < 1e-6:
+        quality = np.zeros_like(local_var, dtype=np.float32)
+    else:
+        quality = ((local_var - vmin) / (vmax - vmin)).astype(np.float32)
+
+    k = max(5, patch_size // 3) | 1
+    m_blur = cv2.GaussianBlur(m, (k, k), 0)
+
+    return quality * m_blur

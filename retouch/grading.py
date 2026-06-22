@@ -625,3 +625,98 @@ class ColorGrader:
         sparkle_f = sparkle_overlay.astype(np.float32)
         screened = 255.0 - (255.0 - img_f) * (255.0 - sparkle_f * opacity) / 255.0
         return np.clip(screened, 0, 255).astype(np.uint8)
+
+
+# ---------------------------------------------------------------------------
+# Spatial red/yellow patch detection
+# ---------------------------------------------------------------------------
+
+def _skin_mean_std(channel, mask):
+    msum = float(mask.sum()) + 1e-6
+    mean = float((channel * mask).sum()) / msum
+    var = float(((channel - mean) ** 2 * mask).sum()) / msum
+    return mean, np.sqrt(var)
+
+
+def detect_color_patches(image_bgr, skin_mask, patch_type='red'):
+    """Detect spatial patches of abnormal skin color.
+
+    patch_type: 'red' (high a channel), 'yellow' (high b channel),
+                'green' (negative a), 'blue' (negative b)
+
+    Returns a float32 mask (same HxW) where 1.0 = patch detected, 0.0 = normal.
+    """
+    lab = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    a_channel = lab[:, :, 1]
+    b_channel = lab[:, :, 2]
+
+    m = skin_mask.astype(np.float32)
+    if m.max() > 1.0:
+        m = m / 255.0
+
+    k = 1.5
+    if patch_type == 'red':
+        mean_a, std_a = _skin_mean_std(a_channel, m)
+        mask = a_channel > (mean_a + k * std_a)
+    elif patch_type == 'green':
+        mean_a, std_a = _skin_mean_std(a_channel, m)
+        mask = a_channel < (mean_a - k * std_a)
+    elif patch_type == 'yellow':
+        mean_b, std_b = _skin_mean_std(b_channel, m)
+        mask = b_channel > (mean_b + k * std_b)
+    elif patch_type == 'blue':
+        mean_b, std_b = _skin_mean_std(b_channel, m)
+        mask = b_channel < (mean_b - k * std_b)
+    else:
+        raise ValueError(f"Unknown patch_type: {patch_type}")
+
+    mask = mask.astype(np.float32) * m
+    mask_u8 = (mask * 255.0).astype(np.uint8)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    mask_u8 = cv2.morphologyEx(mask_u8, cv2.MORPH_OPEN, kernel)
+    return mask_u8.astype(np.float32) / 255.0
+
+
+def correct_color_patches(image_bgr, skin_mask, red_mask=None, yellow_mask=None,
+                          correction_strength=0.5):
+    """Pull detected color patches toward local mean skin tone.
+
+    For red patches: reduce a channel toward mean_a
+    For yellow patches: reduce b channel toward mean_b
+    correction_strength: 0=no change, 1=fully pull to mean
+    """
+    red_ok = red_mask is not None and float(red_mask.max()) > 0.01
+    yellow_ok = yellow_mask is not None and float(yellow_mask.max()) > 0.01
+    if not red_ok and not yellow_ok:
+        return image_bgr
+
+    lab = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    a_channel = lab[:, :, 1].copy()
+    b_channel = lab[:, :, 2].copy()
+
+    m = skin_mask.astype(np.float32)
+    if m.max() > 1.0:
+        m = m / 255.0
+
+    mean_a, _ = _skin_mean_std(a_channel, m)
+    mean_b, _ = _skin_mean_std(b_channel, m)
+
+    if red_ok:
+        rm = red_mask.astype(np.float32)
+        if rm.max() > 1.0:
+            rm = rm / 255.0
+        w = rm * correction_strength
+        a_channel = a_channel * (1.0 - w) + mean_a * w
+
+    if yellow_ok:
+        ym = yellow_mask.astype(np.float32)
+        if ym.max() > 1.0:
+            ym = ym / 255.0
+        w = ym * correction_strength
+        b_channel = b_channel * (1.0 - w) + mean_b * w
+
+    lab[:, :, 1] = a_channel
+    lab[:, :, 2] = b_channel
+    corrected = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+
+    return blend_masked(image_bgr, corrected, skin_mask)

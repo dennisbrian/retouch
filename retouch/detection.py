@@ -11,12 +11,13 @@ import dataclasses
 import os
 os.environ["TF_USE_LEGACY_KERAS"] = "1"
 import sys
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import cv2
 import mediapipe as mp
 import numpy as np
 
+from .parsing import FaceRegions
 from .utils import inter_eye_distance
 
 # Resolve model paths relative to this package
@@ -42,6 +43,18 @@ class FaceData:
     confidence: float = 1.0
 
 
+@dataclasses.dataclass
+class FaceContext:
+    """Cached per-face detection + parsing results, carried through the
+    pipeline via ProcessingContext so re-detection / re-parsing can be
+    skipped. Picklable for ProcessPool IPC.
+    """
+    face_data: FaceData
+    regions: FaceRegions
+    index: int = 0
+    face_image: Optional[np.ndarray] = None
+
+
 class _LandmarkCompat:
     """Compatibility wrapper: makes the new FaceLandmarkerResult landmarks
     look like the old mp.solutions NormalizedLandmarkList so downstream
@@ -62,7 +75,7 @@ class FaceDetector:
     def __init__(
         self,
         max_faces: int = 10,
-        min_confidence: float = 0.5,
+        min_confidence: float = 0.4,
         refine_landmarks: bool = True,
     ):
         self.max_faces = max_faces
@@ -79,14 +92,32 @@ class FaceDetector:
         vision = mp.tasks.vision
         base = mp.tasks.BaseOptions
 
-        delegate = base.Delegate.CPU
+        delegate = self._resolve_delegate(base)
+        try:
+            self._landmarker, self._segmenter = self._create_tasks(
+                base, vision, delegate, max_faces, min_confidence
+            )
+        except Exception as exc:
+            if delegate is base.Delegate.GPU:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "MediaPipe GPU delegate failed (%s: %s); falling back to CPU",
+                    type(exc).__name__, exc,
+                )
+                self._landmarker, self._segmenter = self._create_tasks(
+                    base, vision, base.Delegate.CPU, max_faces, min_confidence
+                )
+            else:
+                raise
 
+    @staticmethod
+    def _create_tasks(base, vision, delegate, max_faces, min_confidence):
+        """Build the FaceLandmarker + ImageSegmenter for a given delegate."""
         base_options = base(
             model_asset_path=_FACE_LANDMARKER_MODEL,
             delegate=delegate,
         )
-
-        self._landmarker = vision.FaceLandmarker.create_from_options(
+        landmarker = vision.FaceLandmarker.create_from_options(
             vision.FaceLandmarkerOptions(
                 base_options=base_options,
                 num_faces=max_faces,
@@ -97,20 +128,20 @@ class FaceDetector:
             )
         )
 
-        # ---- Selfie segmenter ----
-        self._segmenter = None
+        segmenter = None
         if os.path.exists(_SELFIE_SEGMENTER_MODEL):
             segmenter_base_options = base(
                 model_asset_path=_SELFIE_SEGMENTER_MODEL,
                 delegate=delegate,
             )
-            self._segmenter = vision.ImageSegmenter.create_from_options(
+            segmenter = vision.ImageSegmenter.create_from_options(
                 vision.ImageSegmenterOptions(
                     base_options=segmenter_base_options,
                     output_category_mask=False,
                     output_confidence_masks=True,
                 )
             )
+        return landmarker, segmenter
 
     # ------------------------------------------------------------------
     # Public
@@ -262,6 +293,10 @@ class FaceDetector:
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_delegate(base):
+        return base.Delegate.CPU
 
     @staticmethod
     def _bbox_from_landmarks(landmarks_compat, w, h):
