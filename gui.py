@@ -15,11 +15,17 @@ from retouch import RetouchEngine
 from retouch.engine import resolve_recipe
 from retouch.io import imread_exif
 from retouch.recipes import RECIPES
+from retouch.grading import list_available_presets
 from retouch.style_library import list_styles, save_style_profile, learn_dataset_style
 from retouch.batch_processor import BatchProcessor
 from retouch.style import StyleProfile
 
 RECIPE_NAMES = list(RECIPES.keys())
+COLOR_GRADE_NAMES = ["none"] + list_available_presets()
+LUT_CHOICES = ["none", "kodak", "fuji"]
+WHITEN_TONE_CHOICES = ["rosy", "porcelain", "neutral"]
+LIP_FINISH_CHOICES = ["gloss", "matte", "velvet"]
+SPECULAR_BLOOM_TONE_CHOICES = ["rosy", "porcelain", "neutral"]
 
 _engine = None
 def get_engine():
@@ -44,7 +50,7 @@ def recipe_defaults(recipe_name):
         "relight_elevation": int(rec.get("skin", {}).get("relight_elevation", rec.get("light_elevation", 30.0))),
         "eye_enhance": int(rec["eyes"].get("whites", rec["eyes"].get("iris", 0)) * 100),
         "lip_enhance": int(rec["lips"].get("gloss", 0) * 100),
-        "lip_tint": rec["lips"].get("tint", "none"),
+        "lip_tint": rec["lips"].get("tint") or "none",
         "blush": int(rec.get("blush", 0.0)),
         "teeth_whiten": int(rec["eyes"].get("whites", 0) * 100),
         "hair_enhance": int(rec["hair"].get("shine", 0) * 100),
@@ -65,6 +71,37 @@ def recipe_defaults(recipe_name):
         "nose_blush": bool(rec.get("nose_blush", False)),
         "under_eye_blush": bool(rec.get("under_eye_blush", False)),
         "white_costume_lift": bool(rec.get("white_costume_lift", False)),
+        # --- CLI-parity params ---
+        "blemish": int(rec.get("frequency", {}).get("smooth", 0.30) * 100),
+        "dark_circles": int(rec.get("eyes", {}).get("dark_circles", 0.0) * 100),
+        "whiten_tone": ("porcelain" if "porcelain" in rec.get("skin", {}) else "rosy"),
+        "auto_exposure": False,
+        "lip_finish": rec.get("lip_finish", "gloss"),
+        "slimming": int(rec.get("slimming", 0.0)),
+        "impact": int(rec.get("finish", {}).get("impact", 0.0) * 100),
+        # --- Engine advanced params ---
+        "clarity": int(rec.get("clarity", 0.0)),
+        "vibrance": int(rec.get("vibrance", 0.0)),
+        "saturation": int(rec.get("saturation", 0.0)),
+        "glow": int(rec.get("glow", 0.0)),
+        "vignette": int(rec.get("vignette", 0.0)),
+        "sharpen": int(rec.get("sharpen", 0.0)),
+        "sharpen_radius": float(rec.get("sharpen_radius", 1.0)),
+        "subject_separation": int(rec.get("subject_separation", 0.0) if rec.get("subject_separation", 0.0) > 1.0 else rec.get("subject_separation", 0.0) * 100),
+        "specular_bloom_tone": rec.get("specular_bloom_tone", "rosy"),
+        "color_grade": rec.get("color_harmony", {}).get("preset", "none"),
+        "grade_intensity": int(rec.get("color_harmony", {}).get("amount", 0.0) * 100),
+        "chromatic_aberration": float(rec.get("chromatic_aberration", 0.0)),
+        "grain": float(rec.get("grain", 0.0)),
+        "halation": float(rec.get("halation", 0.0)),
+        "lut": rec.get("lut", "none"),
+        # --- Split toning ---
+        "shadow_hue": int(rec.get("shadow_hue", 0.0)),
+        "shadow_sat": int(rec.get("shadow_sat", 0.0)),
+        "midtone_hue": int(rec.get("midtone_hue", 0.0)),
+        "midtone_sat": int(rec.get("midtone_sat", 0.0)),
+        "highlight_hue": int(rec.get("highlight_hue", 0.0)),
+        "highlight_sat": int(rec.get("highlight_sat", 0.0)),
     }
 
 
@@ -75,7 +112,7 @@ def get_custom_style_names():
 
 def apply_custom_style(style_name):
     if not style_name:
-        return [gr.update()]*30
+        return [gr.update()]*58
     
     styles = list_styles()
     target = None
@@ -85,7 +122,7 @@ def apply_custom_style(style_name):
             break
             
     if not target:
-        return [gr.update()]*27
+        return [gr.update()]*58
         
     p_dict = target["profile"]
     profile = StyleProfile(**p_dict)
@@ -104,7 +141,15 @@ def apply_custom_style(style_name):
         5, 5,
         5, "none", 0, False, False,
         5, 0, 0, 0, 210, 30, contrast_val, brightness_val,
-        0, 0, 0, 0
+        0, 0, 0, 0,
+        # New params (28 defaults)
+        0, 0, "rosy", False,
+        0, 0, 0, "gloss",
+        0, 0,
+        0, 1.0, 0, 0, 0, "rosy",
+        "none", 0,
+        0, 0, 0, "none",
+        0, 0, 0, 0, 0, 0,
     )
 
 
@@ -225,19 +270,29 @@ def process_image(img_paths, recipe,
                   highlights, shadows, whites, blacks,
                   color_ref_path, color_ref_strength,
                   show_compare, fast,
-                  export_fmt, export_quality, export_res):
+                  export_fmt, export_quality, export_res,
+                  # New params
+                  blemish, dark_circles, whiten_tone, auto_exposure,
+                  clarity, vibrance, saturation, lip_finish,
+                  slimming, impact,
+                  sharpen, sharpen_radius, glow, vignette, subject_separation, specular_bloom_tone,
+                  color_grade, grade_intensity,
+                  chromatic_aberration, grain, halation, lut,
+                  shadow_hue, shadow_sat, midtone_hue, midtone_sat, highlight_hue, highlight_sat,
+                  debug_mode):
     if img_paths is None:
-        return None, None, "Please upload an image first."
+        return None, None, "Please upload an image first.", None, gr.update(visible=False)
 
     if not isinstance(img_paths, list):
         img_paths = [img_paths]
 
     if len(img_paths) == 0:
-        return None, None, "Please upload at least one image."
+        return None, None, "Please upload at least one image.", None, gr.update(visible=False)
 
     exported_paths = []
     first_result_rgb = None
     first_combined = None
+    debug_images = []
 
     color_ref_bgr = None
     if color_ref_path is not None:
@@ -252,9 +307,13 @@ def process_image(img_paths, recipe,
         color_ref_bgr = imread_exif(color_ref_path)
 
     lip_tint_val = lip_tint if lip_tint != "none" else None
+    color_grade_val = color_grade if color_grade != "none" else ""
+    lut_val = lut if lut != "none" else None
+    grade_intensity_val = grade_intensity / 100.0
     engine = get_engine()
 
     temp_dir = tempfile.mkdtemp()
+    debug_dir = os.path.join(temp_dir, "debug") if debug_mode else None
 
     for idx, path_item in enumerate(img_paths):
         try:
@@ -274,21 +333,28 @@ def process_image(img_paths, recipe,
                 pore_synthesis=pore_synthesis,
                 nose_smooth=nose_smooth if nose_smooth > 0 else None,
                 whiten=whiten,
+                whiten_tone=whiten_tone,
                 equalize=equalize,
+                blemish=blemish,
                 white_costume_lift=white_costume_lift,
                 relight=relight,
                 relight_azimuth=relight_azimuth,
                 relight_elevation=relight_elevation,
                 eye_enhance=eye_enhance,
+                dark_circles=dark_circles,
                 teeth_whiten=teeth_whiten,
                 lip_enhance=lip_enhance,
                 lip_tint=lip_tint_val,
+                lip_finish=lip_finish,
                 blush=blush,
                 nose_blush=nose_blush,
                 under_eye_blush=under_eye_blush,
                 hair_enhance=hair_enhance,
                 dodge_burn=dodge_burn,
+                slimming=slimming,
+                impact=impact,
                 specular_bloom=specular_bloom,
+                specular_bloom_tone=specular_bloom_tone,
                 bloom=bloom,
                 bloom_threshold=bloom_threshold,
                 bloom_softness=bloom_softness,
@@ -298,9 +364,31 @@ def process_image(img_paths, recipe,
                 shadows=shadows,
                 whites=whites,
                 blacks=blacks,
+                clarity=clarity,
+                vibrance=vibrance,
+                saturation=saturation,
+                glow=glow,
+                vignette=vignette,
+                sharpen=sharpen,
+                sharpen_radius=sharpen_radius,
+                subject_separation=subject_separation,
+                color_grade=color_grade_val,
+                grade_intensity=grade_intensity_val,
+                chromatic_aberration=chromatic_aberration if chromatic_aberration > 0 else None,
+                grain=grain if grain > 0 else None,
+                halation=halation if halation > 0 else None,
+                lut=lut_val,
+                shadow_hue=shadow_hue,
+                shadow_sat=shadow_sat,
+                midtone_hue=midtone_hue,
+                midtone_sat=midtone_sat,
+                highlight_hue=highlight_hue,
+                highlight_sat=highlight_sat,
+                auto_exposure=auto_exposure,
                 color_ref=color_ref_bgr,
                 color_transfer_intensity=color_ref_strength,
                 fast=fast,
+                debug_dir=debug_dir if idx == 0 else None,
             )
 
             result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
@@ -324,6 +412,24 @@ def process_image(img_paths, recipe,
                         scale = 900 / first_result_rgb.shape[0]
                         new_w = int(first_result_rgb.shape[1] * scale)
                         first_result_rgb = cv2.resize(first_result_rgb, (new_w, 900), interpolation=cv2.INTER_AREA)
+
+                if debug_mode and debug_dir and os.path.isdir(debug_dir):
+                    mask_files = [
+                        ("Skin Mask", "skin_mask.png"),
+                        ("Skin+Hair Mask", "skin_hair_mask.png"),
+                        ("Lips Mask", "lips_mask.png"),
+                        ("Sharpen Mask", "sharpen_mask.png"),
+                        ("Glow Mask", "glow_mask.png"),
+                        ("Freq Low", "freq_low.png"),
+                        ("Freq Mid", "freq_mid.png"),
+                        ("Freq High", "freq_high.png"),
+                    ]
+                    for label, fname in mask_files:
+                        mpath = os.path.join(debug_dir, fname)
+                        if os.path.exists(mpath):
+                            mask_img = cv2.imread(mpath)
+                            if mask_img is not None:
+                                debug_images.append((cv2.cvtColor(mask_img, cv2.COLOR_BGR2RGB), label))
 
             export_img = result
             export_max = {"Original": None, "4K (3840px)": 3840, "2K (2048px)": 2048,
@@ -359,18 +465,20 @@ def process_image(img_paths, recipe,
                 print(f"Crash details saved to: {crash_path}")
 
     if not exported_paths:
-        return None, None, "Error: No images were successfully processed."
+        return None, None, "Error: No images were successfully processed.", None, gr.update(visible=False)
 
     preview = first_combined if show_compare else first_result_rgb
+    debug_gallery = debug_images if debug_images else None
+    debug_vis = gr.update(visible=bool(debug_images))
 
     if len(exported_paths) > 1:
         zip_path = os.path.join(tempfile.gettempdir(), "retouch_batch_export.zip")
         with zipfile.ZipFile(zip_path, 'w') as zipf:
             for exp_path in exported_paths:
                 zipf.write(exp_path, arcname=os.path.basename(exp_path))
-        return preview, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images successfully ✓"
+        return preview, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images successfully ✓", debug_gallery, debug_vis
     else:
-        return preview, exported_paths[0], "Done ✓"
+        return preview, exported_paths[0], "Done ✓", debug_gallery, debug_vis
 
 
 def on_recipe_change(recipe):
@@ -383,6 +491,14 @@ def on_recipe_change(recipe):
         d["lip_enhance"], d["lip_tint"], d["blush"], d["nose_blush"], d["under_eye_blush"],
         d["hair_enhance"], d["dodge_burn"], d["specular_bloom"], d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["contrast"], d["brightness"],
         d["highlights"], d["shadows"], d["whites"], d["blacks"],
+        # New params (28)
+        d["blemish"], d["dark_circles"], d["whiten_tone"], d["auto_exposure"],
+        d["clarity"], d["vibrance"], d["saturation"], d["lip_finish"],
+        d["slimming"], d["impact"],
+        d["sharpen"], d["sharpen_radius"], d["glow"], d["vignette"], d["subject_separation"], d["specular_bloom_tone"],
+        d["color_grade"], d["grade_intensity"],
+        d["chromatic_aberration"], d["grain"], d["halation"], d["lut"],
+        d["shadow_hue"], d["shadow_sat"], d["midtone_hue"], d["midtone_sat"], d["highlight_hue"], d["highlight_sat"],
     )
 
 
@@ -558,7 +674,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 info="Select a preset recipe to auto-fill sliders"
                             )
                             custom_style_preset = gr.Dropdown(
-                                choices=custom_style_choices, label="Or Load Custom Style Profile",
+                                choices=custom_style_choices, value=None, label="Or Load Custom Style Profile", interactive=True,
                                 info="Select an extracted style from your library"
                             )
 
@@ -581,13 +697,19 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             mid_reduction = gr.Slider(0.0, 1.0, 0.4, step=0.05, label="Mid Frequency Reduction", info="Target mid-level skin blemishes while preserving high-frequency pores")
                             texture_opacity = gr.Slider(0.0, 1.0, 1.0, step=0.05, label="Texture Opacity", info="Control original pore structure opacity overlay")
                             pore_synthesis = gr.Slider(0, 100, 0, step=1, label="Pore Synthesis", info="Add micro-texture/synthesized pores to prevent artificial plastic skin")
+                            blemish = gr.Slider(0, 100, 0, step=1, label="Blemish Removal", info="AI blemish detection and inpainting for acne/spots")
 
                         with gr.Accordion("🎨 Skin & Tone", open=False):
                             whiten = gr.Slider(0, 100, 10, step=1, label="Whitening", info="Luminance boost and porcelain skin color match")
+                            whiten_tone = gr.Dropdown(choices=WHITEN_TONE_CHOICES, value="rosy", label="Whitening Tone", interactive=True, info="Tone direction: rosy (warm pink), porcelain (cool neutral), neutral")
                             equalize = gr.Slider(0, 100, 20, step=1, label="Equalize", info="Even out skin redness and regional color inconsistencies")
+                            auto_exposure = gr.Checkbox(label="Auto Exposure Correction", value=False, info="Automatically correct under/over-exposed images before processing")
                             white_costume_lift = gr.Checkbox(label="White Costume Lift", value=False, info="Selectively boost bright clothing to create separation")
                             contrast = gr.Slider(-50, 50, 0, step=1, label="Contrast", info="Adjust global image contrast")
                             brightness = gr.Slider(-50, 50, 0, step=1, label="Brightness", info="Adjust global image brightness")
+                            clarity = gr.Slider(-100, 100, 0, step=1, label="Clarity", info="Mid-tone contrast / local contrast enhancement (negative = soften)")
+                            vibrance = gr.Slider(-100, 100, 0, step=1, label="Vibrance", info="Smart saturation boost that protects skin tones")
+                            saturation = gr.Slider(-100, 100, 0, step=1, label="Saturation", info="Uniform global saturation adjustment")
                             gr.Markdown("**Tone Curve Controls**")
                             highlights = gr.Slider(-100, 100, 0, step=1, label="Highlights", info="Recover or boost bright highlight regions")
                             shadows = gr.Slider(-100, 100, 0, step=1, label="Shadows", info="Open up or deepen shadow regions")
@@ -601,26 +723,62 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
 
                         with gr.Accordion("👁️ Eyes & Lips", open=False):
                             eye_enhance = gr.Slider(0, 100, 5, step=1, label="Eye Enhance", info="Boost eye clarity, iris reflection details, and whites brightness")
+                            dark_circles = gr.Slider(0, 100, 0, step=1, label="Dark Circle Repair", info="Under-eye dark circle detection and repair")
                             teeth_whiten = gr.Slider(0, 100, 5, step=1, label="Teeth Whiten", info="Naturally whiten and brighten teeth enamel")
                             lip_enhance = gr.Slider(0, 100, 5, step=1, label="Lip Enhance", info="Enhance lip texture definition, gloss, and contour")
-                            lip_tint = gr.Dropdown(choices=LIP_TINTS, value="none", label="Lip Tint Color", info="Apply a natural cosmetic tint overlay")
+                            lip_tint = gr.Dropdown(choices=LIP_TINTS, value="none", label="Lip Tint Color", interactive=True, info="Apply a natural cosmetic tint overlay")
+                            lip_finish = gr.Dropdown(choices=LIP_FINISH_CHOICES, value="gloss", label="Lip Finish", interactive=True, info="Surface finish style: gloss (shiny), matte (flat), velvet (soft)")
                             blush = gr.Slider(0, 100, 0, step=1, label="Blush Strength", info="Intensity of virtual cosmetic blush on cheeks")
                             with gr.Row():
                                 nose_blush = gr.Checkbox(label="Nose Blush", value=False, info="Add cosmetic pink tone to nose tip")
                                 under_eye_blush = gr.Checkbox(label="Under-Eye Blush", value=False, info="Apply soft under-eye blush for a fresh/cosplay look")
 
+                        with gr.Accordion("🧬 Face Reshaping", open=False):
+                            slimming = gr.Slider(0, 100, 0, step=1, label="Face Slimming", info="Liquify-based face slimming/reshaping via landmark-driven warp")
+
                         with gr.Accordion("🌟 Structure & Effects", open=False):
                             hair_enhance = gr.Slider(0, 100, 5, step=1, label="Hair Shine", info="Boost highlight reflections and depth in hair strands")
                             dodge_burn = gr.Slider(0, 100, 0, step=1, label="Dodge & Burn", info="Sculpt face structure with local highlight/shadow contouring")
+                            impact = gr.Slider(0, 100, 0, step=1, label="Global Impact Finish", info="Final punch: combined clarity, sharpening, and micro-contrast boost")
                             specular_bloom = gr.Slider(0, 100, 0, step=1, label="Specular Bloom", info="Dreamy bloom glow applied specifically to skin highlight zones")
+                            specular_bloom_tone = gr.Dropdown(choices=SPECULAR_BLOOM_TONE_CHOICES, value="rosy", label="Specular Bloom Tone", interactive=True, info="Color tint of the specular bloom glow")
                             bloom = gr.Slider(0, 100, 0, step=1, label="Orton Bloom (Overall Glow)", info="High-key glow blending for high-fashion portraits")
                             bloom_threshold = gr.Slider(150, 250, 210, step=1, label="Bloom Threshold", info="Brightness threshold where the glow begins to bleed")
                             bloom_softness = gr.Slider(1, 100, 30, step=1, label="Bloom Softness", info="Softness blur radius of the bloom filter")
+                            sharpen = gr.Slider(0, 100, 0, step=1, label="Selective Sharpening", info="Sharpen eyes, eyebrows, and hair edges (mask-driven)")
+                            sharpen_radius = gr.Slider(0.1, 5.0, 1.0, step=0.1, label="Sharpen Radius", info="Blur radius for unsharp mask kernel")
+                            glow = gr.Slider(0, 100, 0, step=1, label="Atmospheric Glow", info="Multi-scale atmospheric glow/bloom effect")
+                            vignette = gr.Slider(0, 100, 0, step=1, label="Vignette", info="Darken image corners for a focused portrait look")
+                            subject_separation = gr.Slider(0, 100, 0, step=1, label="Subject-Background Separation", info="Brighten subject / darken background using person segmentation mask")
+
+                        with gr.Accordion("🎬 Film Color Grading", open=False):
+                            color_grade = gr.Dropdown(choices=COLOR_GRADE_NAMES, value="none", label="Color Grade Preset", interactive=True, info="Apply a film/color grading preset from the presets library")
+                            grade_intensity = gr.Slider(0, 100, 100, step=1, label="Grade Intensity", info="Blend strength of the color grade (0-100%)")
+
+                        with gr.Accordion("🎞️ Film & Analog Effects", open=False):
+                            chromatic_aberration = gr.Slider(0, 20, 0, step=0.5, label="Chromatic Aberration", info="Lens fringing effect (RGB channel shift in pixels)")
+                            grain = gr.Slider(0, 100, 0, step=1, label="Film Grain", info="Analog film grain noise overlay")
+                            halation = gr.Slider(0, 100, 0, step=1, label="Halation", info="Red light bloom around bright highlights (analog film artifact)")
+                            lut = gr.Dropdown(choices=LUT_CHOICES, value="none", label="Film Emulation LUT", interactive=True, info="Apply a film stock emulation LUT (Kodak / Fuji)")
+
+                        with gr.Accordion("🌈 Split Toning", open=False):
+                            gr.Markdown("**Shadows**")
+                            shadow_hue = gr.Slider(0, 360, 0, step=1, label="Shadow Hue", info="Hue shift applied to shadow tones (degrees)")
+                            shadow_sat = gr.Slider(0, 100, 0, step=1, label="Shadow Saturation", info="Saturation boost for shadow tones")
+                            gr.Markdown("**Midtones**")
+                            midtone_hue = gr.Slider(0, 360, 0, step=1, label="Midtone Hue", info="Hue shift applied to midtone tones (degrees)")
+                            midtone_sat = gr.Slider(0, 100, 0, step=1, label="Midtone Saturation", info="Saturation boost for midtone tones")
+                            gr.Markdown("**Highlights**")
+                            highlight_hue = gr.Slider(0, 360, 0, step=1, label="Highlight Hue", info="Hue shift applied to highlight tones (degrees)")
+                            highlight_sat = gr.Slider(0, 100, 0, step=1, label="Highlight Saturation", info="Saturation boost for highlight tones")
 
                         with gr.Accordion("🔮 Color Transfer", open=False):
                             gr.Markdown("Upload a reference image to match its color tone using CDF-based histogram transfer")
                             color_ref_img = gr.File(label="Reference Image (RAW supported)", file_types=["image"])
                             color_ref_strength = gr.Slider(0.0, 1.0, 1.0, step=0.05, label="Transfer Strength", info="Mix ratio between original grade and matched reference grade")
+
+                        with gr.Accordion("🔍 Debug & Mask Preview", open=False):
+                            debug_mode = gr.Checkbox(label="Generate Debug Masks", value=False, info="Save skin/lips/frequency-layer masks and display them for tuning")
 
                         process_btn_bottom = gr.Button("Apply Overrides & Process ⚡", variant="primary", size="lg", elem_classes=["primary-btn"])
 
@@ -630,7 +788,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         img_output = gr.Image(label="Processed Result", height=540, show_label=False)
                         status = gr.Textbox(label="Status", interactive=False, placeholder="Upload an image and click Process to start...")
                         export_file = gr.File(label="📥 Download Exported Assets")
-                    
+
                     with gr.Group():
                         gr.Markdown("### ⚙️ Export Settings")
                         with gr.Row():
@@ -642,6 +800,10 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             info="Downscales image if it exceeds target dimension while maintaining aspect ratio"
                         )
 
+                    with gr.Group(visible=False) as debug_panel:
+                        gr.Markdown("### 🔍 Debug Masks & Frequency Layers")
+                        debug_gallery = gr.Gallery(label="Masks (skin, skin+hair, lips, sharpen, glow, freq_low, freq_mid, freq_high)", columns=4, height=300)
+
         with gr.Tab("📁 Folder Automation & Ingestion"):
             with gr.Row():
                 with gr.Column(scale=1):
@@ -652,7 +814,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         gr.Markdown("### Style Mode")
                         batch_style_type = gr.Radio(choices=["Use Standard Recipe", "Use Custom Style"], value="Use Standard Recipe", label="Style Mode", info="Choose whether to apply a built-in recipe preset or a custom learned style profile.")
                         batch_recipe = gr.Dropdown(choices=RECIPE_NAMES, value="natural", label="Standard Recipe", info="Select standard built-in recipe preset.")
-                        batch_custom_style = gr.Dropdown(choices=custom_style_choices, label="Custom Style Profile", info="Select standard custom style profile.")
+                        batch_custom_style = gr.Dropdown(choices=custom_style_choices, value=None, label="Custom Style Profile", interactive=True, info="Select a custom style profile from your library.")
                     
                     with gr.Group():
                         gr.Markdown("### Export Formatting")
@@ -697,41 +859,46 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                     learn_style_btn = gr.Button("Extract & Learn Style from Dataset 🧠", variant="primary", elem_classes=["primary-btn"])
                     learn_status = gr.Textbox(label="Learning Status", lines=5, interactive=False)
 
+    def on_batch_style_change(style_type):
+        if style_type == "Use Custom Style":
+            return [gr.update(visible=False), gr.update(visible=True)]
+        else:
+            return [gr.update(visible=True), gr.update(visible=False)]
+
     # Event binding setup
+    _recipe_outputs = [
+        smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth,
+        whiten, equalize, white_costume_lift,
+        relight, relight_azimuth, relight_elevation,
+        eye_enhance, teeth_whiten,
+        lip_enhance, lip_tint, blush, nose_blush, under_eye_blush,
+        hair_enhance, dodge_burn, specular_bloom, bloom, bloom_threshold, bloom_softness, contrast, brightness,
+        highlights, shadows, whites, blacks,
+        blemish, dark_circles, whiten_tone, auto_exposure,
+        clarity, vibrance, saturation, lip_finish,
+        slimming, impact,
+        sharpen, sharpen_radius, glow, vignette, subject_separation, specular_bloom_tone,
+        color_grade, grade_intensity,
+        chromatic_aberration, grain, halation, lut,
+        shadow_hue, shadow_sat, midtone_hue, midtone_sat, highlight_hue, highlight_sat,
+    ]
+
     recipe.change(
         fn=on_recipe_change,
         inputs=[recipe],
-        outputs=[smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth,
-                 whiten, equalize, white_costume_lift,
-                 relight, relight_azimuth, relight_elevation,
-                 eye_enhance, teeth_whiten,
-                 lip_enhance, lip_tint, blush, nose_blush, under_eye_blush,
-                 hair_enhance, dodge_burn, specular_bloom, bloom, bloom_threshold, bloom_softness, contrast, brightness,
-                 highlights, shadows, whites, blacks],
+        outputs=_recipe_outputs,
     )
 
     custom_style_preset.change(
         fn=apply_custom_style,
         inputs=[custom_style_preset],
-        outputs=[smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth,
-                 whiten, equalize, white_costume_lift,
-                 relight, relight_azimuth, relight_elevation,
-                 eye_enhance, teeth_whiten,
-                 lip_enhance, lip_tint, blush, nose_blush, under_eye_blush,
-                 hair_enhance, dodge_burn, specular_bloom, bloom, bloom_threshold, bloom_softness, contrast, brightness,
-                 highlights, shadows, whites, blacks],
+        outputs=_recipe_outputs,
     )
 
     reset_btn.click(
         fn=on_recipe_change,
         inputs=[recipe],
-        outputs=[smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth,
-                 whiten, equalize, white_costume_lift,
-                 relight, relight_azimuth, relight_elevation,
-                 eye_enhance, teeth_whiten,
-                 lip_enhance, lip_tint, blush, nose_blush, under_eye_blush,
-                 hair_enhance, dodge_burn, specular_bloom, bloom, bloom_threshold, bloom_softness, contrast, brightness,
-                 highlights, shadows, whites, blacks],
+        outputs=_recipe_outputs,
     )
 
     save_style_btn.click(
@@ -748,6 +915,12 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         outputs=[custom_style_preset, batch_custom_style, learn_status]
     )
 
+    batch_style_type.change(
+        fn=on_batch_style_change,
+        inputs=[batch_style_type],
+        outputs=[batch_recipe, batch_custom_style],
+    )
+
     batch_btn.click(
         fn=on_process_folder,
         inputs=[folder_in, folder_out, batch_style_type, batch_custom_style, batch_recipe,
@@ -755,36 +928,39 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         outputs=[batch_sheet_out, batch_zip_out, batch_status]
     )
 
+    _process_inputs = [
+        img_input, recipe,
+        smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth,
+        whiten, equalize, white_costume_lift,
+        relight, relight_azimuth, relight_elevation,
+        eye_enhance, teeth_whiten,
+        lip_enhance, lip_tint, blush, nose_blush, under_eye_blush,
+        hair_enhance, dodge_burn, specular_bloom, bloom, bloom_threshold, bloom_softness, contrast, brightness,
+        highlights, shadows, whites, blacks,
+        color_ref_img, color_ref_strength,
+        show_compare, fast,
+        export_fmt, export_quality, export_res,
+        blemish, dark_circles, whiten_tone, auto_exposure,
+        clarity, vibrance, saturation, lip_finish,
+        slimming, impact,
+        sharpen, sharpen_radius, glow, vignette, subject_separation, specular_bloom_tone,
+        color_grade, grade_intensity,
+        chromatic_aberration, grain, halation, lut,
+        shadow_hue, shadow_sat, midtone_hue, midtone_sat, highlight_hue, highlight_sat,
+        debug_mode,
+    ]
+    _process_outputs = [img_output, export_file, status, debug_gallery, debug_panel]
+
     process_btn.click(
         fn=process_image,
-        inputs=[img_input, recipe,
-                smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth,
-                whiten, equalize, white_costume_lift,
-                relight, relight_azimuth, relight_elevation,
-                eye_enhance, teeth_whiten,
-                lip_enhance, lip_tint, blush, nose_blush, under_eye_blush,
-                hair_enhance, dodge_burn, specular_bloom, bloom, bloom_threshold, bloom_softness, contrast, brightness,
-                highlights, shadows, whites, blacks,
-                color_ref_img, color_ref_strength,
-                show_compare, fast,
-                export_fmt, export_quality, export_res],
-        outputs=[img_output, export_file, status],
+        inputs=_process_inputs,
+        outputs=_process_outputs,
     )
 
     process_btn_bottom.click(
         fn=process_image,
-        inputs=[img_input, recipe,
-                smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth,
-                whiten, equalize, white_costume_lift,
-                relight, relight_azimuth, relight_elevation,
-                eye_enhance, teeth_whiten,
-                lip_enhance, lip_tint, blush, nose_blush, under_eye_blush,
-                hair_enhance, dodge_burn, specular_bloom, bloom, bloom_threshold, bloom_softness, contrast, brightness,
-                highlights, shadows, whites, blacks,
-                color_ref_img, color_ref_strength,
-                show_compare, fast,
-                export_fmt, export_quality, export_res],
-        outputs=[img_output, export_file, status],
+        inputs=_process_inputs,
+        outputs=_process_outputs,
     )
 
 if __name__ == "__main__":
