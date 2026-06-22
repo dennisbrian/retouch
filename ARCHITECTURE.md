@@ -398,6 +398,26 @@ For images containing multiple faces:
 When `face_contexts` is supplied to `process()`, stages 0 (detection) and 2 (parsing) are skipped entirely. This enables instant re-processing when tuning sliders in the GUI without redundant inference.
 
 ### 6.5. Fast Preview Path
+When `fast=True` is set (default in the GUI), the image is downscaled to **800px** before entering the pipeline. The result is upscaled back to original dimensions before export. This provides low-latency interaction in the GUI. The output file dimensions are always preserved — only the internal processing resolution is reduced.
+
+### 6.6. Resolution & Quality Tradeoffs
+The pipeline has **three resolution layers** that affect detail preservation, not output dimensions:
+
+| Layer | When active | Effective resolution | Speed impact | Memory impact |
+|---|---|---|---|---|
+| Fast Preview | `fast=True` (GUI default) | 800px | ~3-5× faster | ~600 MB |
+| Proxy Resolution | Always, for inputs > 2048px | 2048px (`PROXY_MAX_DIM`) | 2× faster than no-proxy | 1.84 GB |
+| True Native | `fast=False` AND input ≤ 2048px | Full input resolution | Baseline | 1.2 GB |
+
+**Key insight**: Output file dimensions are always preserved (when `export_res = "Original"`, which is the GUI default). The internal resolution layers are memory/speed optimizations — they do NOT downscale the final image. However, the actual per-face work (BiSeNet parsing, frequency separation, smoothing) runs at the reduced resolution, so fine details (pores, individual hair strands) may be slightly softer when `fast=True` or when input > 2048px.
+
+**For high-res production workflows:**
+- Keep `fast=True` for interactive slider tuning
+- Turn off `fast` for final export (one-time cost) — gets you 800px→2048px effective detail
+- For inputs > 2048px, the 2048px proxy applies automatically — this is a memory optimization, not a quality loss
+- Use CLI with `--workers 8` for batch processing of 100+ high-res photos
+
+### 6.5. Fast Preview Path
 When `fast=True` is set, the image is downscaled to 800px before entering the pipeline. This provides low-latency interaction in the GUI. The result is upscaled back to original dimensions before display.
 
 ---
