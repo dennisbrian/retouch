@@ -9,7 +9,9 @@ from typing import Any, Dict, Optional, Tuple
 import cv2
 import numpy as np
 
+from .detection import FaceDetector
 from .frequency import separate as freq_separate
+from .parsing import FaceParser
 from .utils import normalize_mask
 
 
@@ -63,9 +65,35 @@ class StyleProfile:
 class StyleAnalyzer:
     """Analyze original vs. edited image differences to extract a StyleProfile."""
 
-    def __init__(self, engine=None):
-        from .engine import RetouchEngine
-        self.engine = engine or RetouchEngine()
+    def __init__(self, engine=None, detector: Optional[FaceDetector] = None, parser: Optional[FaceParser] = None):
+        # Prefer to depend on a face detector + parser (the analyzer only needs
+        # detection + parsing, not the full retouching pipeline). This breaks
+        # the engine→style→engine cycle at module load time. ``engine`` is
+        # still accepted (and stored) for backwards compatibility — it's only
+        # materialized lazily on first access to keep __init__ cheap.
+        self._engine = engine
+        if engine is not None:
+            self._detector = detector or getattr(engine, "_detector", None) or FaceDetector()
+            self._parser = parser or getattr(engine, "_parser", None) or FaceParser()
+        else:
+            self._detector = detector or FaceDetector()
+            self._parser = parser or FaceParser()
+
+    @property
+    def engine(self):
+        """Backwards-compatible accessor for the underlying engine.
+
+        Created lazily on first access so importing ``retouch.style`` does not
+        pull in ``retouch.engine`` at module load time.
+        """
+        if self._engine is None:
+            from .engine import RetouchEngine
+            self._engine = RetouchEngine()
+        return self._engine
+
+    @engine.setter
+    def engine(self, value):
+        self._engine = value
 
     def extract(self, original_img: np.ndarray, edited_img: np.ndarray) -> StyleProfile:
         """Measure difference between original and edited image to build StyleProfile.
@@ -105,7 +133,7 @@ class StyleAnalyzer:
         saturation_delta = float(np.mean(edit_hsv[:, :, 1]) - np.mean(orig_hsv[:, :, 1]))
 
         # Local skin statistics
-        faces = self.engine._detector.detect(original_img)
+        faces = self._detector.detect(original_img)
 
         skin_l_mean_delta = 0.0
         skin_a_mean_delta = 0.0
@@ -119,7 +147,7 @@ class StyleAnalyzer:
             faces = sorted(faces, key=lambda f: f.bbox[2] * f.bbox[3], reverse=True)
             h_img, w_img = original_img.shape[:2]
             combined_skin_mask = np.zeros((h_img, w_img), dtype=np.float32)
-            person_mask = self.engine._detector.segment_person(original_img)
+            person_mask = self._detector.segment_person(original_img)
 
             total_area = 0.0
             weighted_face_width = 0.0
@@ -129,7 +157,7 @@ class StyleAnalyzer:
                 total_area += area
                 weighted_face_width += (face.ied * 2.5) * area
 
-                regions = self.engine._parser.parse(
+                regions = self._parser.parse(
                     face.landmarks, original_img, face.bbox, person_mask, face.ied
                 )
                 if regions.skin is not None:
@@ -220,9 +248,41 @@ class StyleAnalyzer:
 class StyleApplier:
     """Apply style profile attributes or perform subject-aware color transfer."""
 
-    def __init__(self, engine=None):
-        from .engine import RetouchEngine
-        self.engine = engine or RetouchEngine()
+    def __init__(self, engine=None, detector: Optional[FaceDetector] = None, parser: Optional[FaceParser] = None):
+        # StyleApplier still needs the full engine for ``engine.process()``,
+        # but detection/parsing is done via the lighter detector+parser when
+        # given, avoiding reliance on the engine's private attributes. The
+        # engine is materialized lazily on first access to keep __init__ cheap
+        # and to avoid pulling ``retouch.engine`` in at module load time.
+        self._engine = engine
+        self._detector = detector or (getattr(engine, "_detector", None) if engine is not None else None)
+        self._parser = parser or (getattr(engine, "_parser", None) if engine is not None else None)
+
+    @property
+    def engine(self):
+        """Backwards-compatible accessor for the underlying engine.
+
+        Created lazily on first access so importing ``retouch.style`` does not
+        pull in ``retouch.engine`` at module load time.
+        """
+        if self._engine is None:
+            from .engine import RetouchEngine
+            self._engine = RetouchEngine()
+        return self._engine
+
+    @engine.setter
+    def engine(self, value):
+        self._engine = value
+
+    def _ensure_detector_and_parser(self) -> None:
+        """Lazily create a FaceDetector/FaceParser if neither was injected and
+        no engine is bound. Avoids the heavy default-detection at __init__ time
+        while still letting the class be used standalone.
+        """
+        if self._detector is None:
+            self._detector = FaceDetector()
+        if self._parser is None:
+            self._parser = FaceParser()
 
     def apply(self, target_img: np.ndarray, profile: StyleProfile) -> np.ndarray:
         """Process target_img using parameter values resolved from the StyleProfile."""
@@ -257,14 +317,15 @@ class StyleApplier:
 
         # 3. Direct LAB skin tone shift (preserves fine-grained A/B deltas)
         if abs(profile.skin_a_mean_delta) > 0.5 or abs(profile.skin_b_mean_delta) > 0.5:
-            faces = self.engine._detector.detect(result)
+            self._ensure_detector_and_parser()
+            faces = self._detector.detect(result)
             if faces:
                 faces = sorted(faces, key=lambda f: f.bbox[2] * f.bbox[3], reverse=True)
-                person = self.engine._detector.segment_person(result)
+                person = self._detector.segment_person(result)
                 person_f = normalize_mask(person)
                 if person_f.ndim == 3:
                     person_f = person_f[:, :, 0]
-                regions = self.engine._parser.parse(
+                regions = self._parser.parse(
                     faces[0].landmarks, result, faces[0].bbox, person_f, faces[0].ied
                 )
                 if regions.skin is not None:
