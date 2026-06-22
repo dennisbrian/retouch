@@ -330,8 +330,8 @@ class TestOnRecipeChange:
         result = gui.on_recipe_change("anime_cinematic_v1")
         d = gui.recipe_defaults("anime_cinematic_v1")
         assert d["clarity"] == 14
-        # clarity sits at index 35 in the on_recipe_change output tuple
-        clarity_index = 35
+        # clarity sits at index 34 in the on_recipe_change output tuple
+        clarity_index = 34
         assert result[clarity_index] == 14
 
 

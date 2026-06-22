@@ -430,9 +430,29 @@ def build_context(
     # Build the ProcessingContext.  Everything we resolved from the recipe
     # goes through the spec list; everything that comes purely from the
     # caller (color_ref, auto_exposure, …) is forwarded verbatim.
+    # The ``_CALLER_ONLY`` set lists spec names whose value is intentionally
+    # NOT taken from the recipe — the engine reads them from the override
+    # dict directly (with the recipe default as the implicit default).
+    _CALLER_ONLY = {
+        "nose_smooth",
+        "auto_exposure",
+        "chromatic_aberration",
+        "halation",
+        "grain",
+        "lut",
+        "color_grade_stack",
+        "color_ref",
+        "color_transfer_intensity",
+    }
+    spec_kwargs = {
+        spec.name: resolved[spec.name]
+        for spec in PROCESSING_PARAMS
+        if spec.name not in _CALLER_ONLY
+    }
     return ProcessingContext(
+        # Recipe-derived fields (data-driven) — the bulk of the context.
+        **spec_kwargs,
         # Caller-only fields (no recipe source)
-        nose_smooth=overrides.get("nose_smooth"),
         auto_exposure=overrides.get("auto_exposure", False),
         color_grade_stack=overrides.get("color_grade_stack"),
         # BUGFIX-2: color_ref comes only from the caller override, never None-initialised twice
@@ -442,8 +462,10 @@ def build_context(
         halation=overrides.get("halation"),
         grain=overrides.get("grain"),
         lut=overrides.get("lut"),
-        # Recipe-derived fields (data-driven)
-        **{spec.name: resolved[spec.name] for spec in PROCESSING_PARAMS},
+        # ``nose_smooth`` is recipe-static (always 0 in the spec default) and
+        # the only consumer of overrides is the engine call, so it lives
+        # outside the spec loop and is set straight from the override.
+        nose_smooth=overrides.get("nose_smooth"),
         # Final fixed values
         active_recipe=active_recipe,
     )
