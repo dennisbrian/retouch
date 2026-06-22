@@ -708,8 +708,48 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     input[type="checkbox"] {
         accent-color: #00a2ed !important;
     }
+
+    /* Markdown and Heading Typography contrast fixes for dark mode */
+    .gradio-container h1,
+    .gradio-container h2,
+    .gradio-container h3,
+    .gradio-container h4,
+    .gradio-container h5,
+    .gradio-container h6,
+    .gradio-container p,
+    .gradio-container strong,
+    .gradio-container .prose,
+    .gradio-container .prose h1,
+    .gradio-container .prose h2,
+    .gradio-container .prose h3,
+    .gradio-container .prose h4,
+    .gradio-container .prose p,
+    .gradio-container .markdown-text h1,
+    .gradio-container .markdown-text h2,
+    .gradio-container .markdown-text h3,
+    .gradio-container .markdown-text p,
+    .gradio-container div.markdown {
+        color: #e2e8f0 !important;
+    }
+
+    /* Clean, flat, elegant text labels (no chunky background shapes) */
+    .gradio-container label span, 
+    .gradio-container .form-label,
+    .gradio-container label .form-label-text,
+    .gradio-container .label-val {
+        background: transparent !important;
+        background-color: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        padding: 0 !important;
+        color: #b0b8c6 !important;
+        font-weight: 700 !important;
+        font-size: 0.82rem !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.05em !important;
+    }
     
-    /* Prescription selection tag chips */
+    /* Presets list container on the Left Panel (Lightroom style vertical scrolling panel) */
     .preset-chips {
         border: none !important;
         background: transparent !important;
@@ -718,47 +758,66 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     }
     .preset-chips .wrap {
         display: flex !important;
-        flex-wrap: wrap !important;
-        gap: 6px !important;
+        flex-direction: column !important;
+        max-height: 380px !important;
+        overflow-y: auto !important;
+        gap: 4px !important;
         background: transparent !important;
         border: none !important;
-        padding: 0 !important;
+        padding: 0 4px 0 0 !important;
+    }
+    .preset-chips .wrap::-webkit-scrollbar {
+        width: 4px !important;
+    }
+    .preset-chips .wrap::-webkit-scrollbar-track {
+        background: transparent !important;
+    }
+    .preset-chips .wrap::-webkit-scrollbar-thumb {
+        background: #2c2e35 !important;
+        border-radius: 2px !important;
     }
     .preset-chips label {
         display: flex !important;
         align-items: center !important;
-        justify-content: center !important;
-        background: #202328 !important;
-        border: 1px solid #303338 !important;
+        justify-content: flex-start !important; /* Left-aligned */
+        background: #1e2025 !important;
+        border: 1px solid #282b32 !important;
         border-radius: 4px !important; /* Lightroom crisp borders */
-        padding: 6px 12px !important;
+        padding: 8px 14px !important;
         cursor: pointer !important;
         transition: all 0.15s ease !important;
         font-weight: 600 !important;
-        font-size: 0.82rem !important;
-        color: #8c94a6 !important;
+        font-size: 0.85rem !important;
+        color: #b0b8c6 !important;
         box-shadow: none !important;
         user-select: none !important;
+        width: 100% !important;
     }
     .preset-chips label:hover {
-        border-color: #4c525d !important;
+        border-color: #3e424c !important;
         color: #cbd5e1 !important;
         transform: translateY(-1px) !important;
     }
+    /* Lightroom-styled active state with vertical highlight bar */
     .preset-chips label.selected {
-        background: #00a2ed !important;
-        color: #ffffff !important;
-        border-color: transparent !important;
-        box-shadow: 0 0 10px rgba(0, 162, 237, 0.25) !important;
+        background: #252830 !important;
+        color: #00a2ed !important;
+        border-left: 3px solid #00a2ed !important;
+        border-top-color: #282b32 !important;
+        border-right-color: #282b32 !important;
+        border-bottom-color: #282b32 !important;
+        border-radius: 0 4px 4px 0 !important;
+        box-shadow: none !important;
     }
     .dark .preset-chips label {
-        background: #202328 !important;
-        border: 1px solid #303338 !important;
-        color: #8c94a6 !important;
+        background: #1e2025 !important;
+        border: 1px solid #282b32 !important;
+        color: #b0b8c6 !important;
     }
     .dark .preset-chips label.selected {
-        background: #00a2ed !important;
-        color: #ffffff !important;
+        background: #252830 !important;
+        color: #00a2ed !important;
+        border-left: 3px solid #00a2ed !important;
     }
     
     /* Hide the default radio circles */
@@ -823,17 +882,22 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         overflow: visible !important;
     }
 """) as app:
-    # Beautiful Glassmorphism Header
-    with gr.Group():
-        gr.HTML("""
-        <div style="text-align: center; padding: 0.5rem 0; font-family: 'Outfit', sans-serif;">
-            <h1 style="margin: 0; font-size: 2.35rem; font-weight: 800; background: linear-gradient(90deg, #6366f1 0%, #06b6d4 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: -0.5px;">🪄 Retouch — AI Portrait Workflow Platform</h1>
-            <p style="font-size: 1.05rem; color: #64748b; margin-top: 0.4rem; font-weight: 500;">Professional high-fidelity skin retouching, virtual studio relighting, and custom style workflows</p>
+    # Professional Lightroom-style Header bar
+    gr.HTML("""
+    <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 1.5rem; background: #16181c; border-bottom: 1px solid #22252a; margin-bottom: 15px; font-family: -apple-system, sans-serif; border-radius: 6px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="background: #00a2ed; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-weight: 800; font-size: 0.9rem; letter-spacing: 0.5px;">Lr</span>
+            <span style="font-weight: 700; font-size: 1.05rem; color: #e2e8f0; letter-spacing: 0.5px; text-transform: uppercase;">Retouch Pro</span>
+            <span style="font-size: 0.75rem; color: #8c94a6; border-left: 1px solid #303338; padding-left: 8px; margin-left: 4px; font-weight: 500;">v2.0.0</span>
         </div>
-        """)
+        <div style="font-size: 0.8rem; color: #8c94a6; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em;">
+            Develop Workspace
+        </div>
+    </div>
+    """)
 
     with gr.Tabs():
-        with gr.Tab("📸 Single & Multi Photo Retouching"):
+        with gr.Tab("Single Photo Editor"):
             with gr.Row():
                 # Column 1: Presets & Library Panel (Left)
                 with gr.Column(scale=1.5, elem_classes=["library-panel"]):
@@ -979,7 +1043,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
 
                         process_btn_bottom = gr.Button("Apply Overrides & Process ⚡", variant="primary", size="lg", elem_classes=["primary-btn"])
 
-        with gr.Tab("📁 Folder Automation & Ingestion"):
+        with gr.Tab("Batch Library Ingestion"):
             with gr.Row():
                 with gr.Column(scale=1):
                     folder_in = gr.Textbox(label="Input Folder Path", placeholder="/path/to/photos", info="Absolute path to directory containing raw/jpeg source photos.")
@@ -1014,7 +1078,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         batch_zip_out = gr.File(label="Download Packaged ZIP")
                         batch_status = gr.Textbox(label="Execution Log & Statistics", lines=12, interactive=False, placeholder="Click 'Process Entire Folder' to start batch processing...")
 
-        with gr.Tab("🎨 Style Library & Learning"):
+        with gr.Tab("Custom Style Library"):
             with gr.Row():
                 with gr.Column(scale=1):
                     gr.Markdown("### Save Sliders as Custom Style")
