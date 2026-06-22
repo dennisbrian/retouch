@@ -106,6 +106,7 @@ from .grading import ColorGrader, PRESETS
 from .hair import HairEnhancer
 from .relight import Relighter
 from .recipes import RECIPES
+from .recipe_loader import load_user_recipes
 from .style import StyleProfile
 from .utils import correct_exposure, apply_global_bloom, vibrance as _vibrance_fn, squeeze_mask
 
@@ -541,6 +542,12 @@ class RetouchEngine:
         # Persistent process pool for multi-face parallel processing.
         # Lazily started on first multi-face call; shut down in close().
         self._face_pool = FaceProcessorPool()
+
+        # Load user-imported recipes from ~/.cache/retouch/user_recipes/
+        loaded = load_user_recipes()
+        if loaded:
+            import logging
+            logging.getLogger(__name__).info(f"Loaded {len(loaded)} user recipes: {loaded}")
 
         # Warm up JIT kernels on engine startup (safe fallback if Numba is missing)
         warmup_jit_kernels()

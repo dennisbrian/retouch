@@ -599,12 +599,12 @@ _LENS_PARAMS = [
     ParamSpec(
         name="bloom",
         cli_flag=None,
-        cli_type=None,
+        cli_type=float,
         default=0,
         recipe_key="bloom.opacity",
-        conversion="engine_pct",
-        min_val=0,
-        max_val=100,
+        conversion="recipe_direct",
+        min_val=0.0,
+        max_val=1.0,
     ),
     ParamSpec(
         name="bloom_threshold",
