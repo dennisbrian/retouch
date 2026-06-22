@@ -2,6 +2,7 @@
 
 import sys
 import os
+import time
 import tempfile
 import zipfile
 from pathlib import Path
@@ -27,6 +28,10 @@ WHITEN_TONE_CHOICES = ["rosy", "porcelain", "neutral"]
 LIP_FINISH_CHOICES = ["gloss", "matte", "velvet"]
 SPECULAR_BLOOM_TONE_CHOICES = ["rosy", "porcelain", "neutral"]
 
+EXPORT_RES_MAP = {"Original": None, "4K (3840px)": 3840, "2K (2048px)": 2048,
+                  "Full HD (1920px)": 1920, "HD (1280px)": 1280, "720px": 720}
+EXT_MAP = {"JPEG": ".jpg", "PNG": ".png", "WebP": ".webp"}
+
 _engine = None
 def get_engine():
     global _engine
@@ -38,22 +43,22 @@ def get_engine():
 def recipe_defaults(recipe_name):
     rec = resolve_recipe(recipe_name)
     return {
-        "smooth": int(rec["frequency"]["smooth"] * 100),
-        "mid_reduction": rec["frequency"].get("mid_reduction", 0.45),
-        "texture_opacity": rec["texture"].get("opacity", 1.0),
-        "pore_synthesis": int(rec["texture"].get("pore_synthesis", 0.0) * 100),
+        "smooth": int(rec.get("frequency", {}).get("smooth", 0.30) * 100),
+        "mid_reduction": rec.get("frequency", {}).get("mid_reduction", 0.45),
+        "texture_opacity": rec.get("texture", {}).get("opacity", 1.0),
+        "pore_synthesis": int(rec.get("texture", {}).get("pore_synthesis", 0.0) * 100),
         "nose_smooth": 0,
-        "whiten": int(rec["skin"].get(("porcelain" if "porcelain" in rec["skin"] else "rosy"), 0) * 100),
-        "equalize": int(rec["skin"].get("equalize", 0) * 100),
+        "whiten": int(rec.get("skin", {}).get(("porcelain" if "porcelain" in rec.get("skin", {}) else "rosy"), 0) * 100),
+        "equalize": int(rec.get("skin", {}).get("equalize", 0) * 100),
         "relight": int(rec.get("skin", {}).get("relight", rec.get("relight_strength", 0.0) / 100.0) * 100),
         "relight_azimuth": int(rec.get("skin", {}).get("relight_azimuth", rec.get("light_azimuth", 0.0))),
         "relight_elevation": int(rec.get("skin", {}).get("relight_elevation", rec.get("light_elevation", 30.0))),
-        "eye_enhance": int(rec["eyes"].get("whites", rec["eyes"].get("iris", 0)) * 100),
-        "lip_enhance": int(rec["lips"].get("gloss", 0) * 100),
-        "lip_tint": rec["lips"].get("tint") or "none",
+        "eye_enhance": int(rec.get("eyes", {}).get("whites", rec.get("eyes", {}).get("iris", 0)) * 100),
+        "lip_enhance": int(rec.get("lips", {}).get("gloss", 0) * 100),
+        "lip_tint": rec.get("lips", {}).get("tint") or "none",
         "blush": int(rec.get("blush", 0.0)),
-        "teeth_whiten": int(rec["eyes"].get("whites", 0) * 100),
-        "hair_enhance": int(rec["hair"].get("shine", 0) * 100),
+        "teeth_whiten": int(rec.get("eyes", {}).get("whites", 0) * 100),
+        "hair_enhance": int(rec.get("hair", {}).get("shine", 0) * 100),
         "dodge_burn": int(
             (rec.get("dodge_burn", {}).get("amount", 0.0) if isinstance(rec.get("dodge_burn"), dict)
              else rec.get("dodge_burn", 0.0) / 100.0) * 100
@@ -87,7 +92,7 @@ def recipe_defaults(recipe_name):
         "vignette": int(rec.get("vignette", 0.0)),
         "sharpen": int(rec.get("sharpen", 0.0)),
         "sharpen_radius": float(rec.get("sharpen_radius", 1.0)),
-        "subject_separation": int(rec.get("subject_separation", 0.0) if rec.get("subject_separation", 0.0) > 1.0 else rec.get("subject_separation", 0.0) * 100),
+        "subject_separation": int((lambda v: v if v > 1.0 else v * 100)(rec.get("subject_separation", 0.0))),
         "specular_bloom_tone": rec.get("specular_bloom_tone", "rosy"),
         "color_grade": rec.get("color_harmony", {}).get("preset", "none"),
         "grade_intensity": int(rec.get("color_harmony", {}).get("amount", 0.0) * 100),
@@ -112,7 +117,7 @@ def get_custom_style_names():
 
 def apply_custom_style(style_name, current_recipe="natural"):
     if not style_name:
-        return [gr.update()]*58
+        return [gr.update()] * len(_recipe_outputs)
     
     styles = list_styles()
     target = None
@@ -122,7 +127,7 @@ def apply_custom_style(style_name, current_recipe="natural"):
             break
             
     if not target:
-        return [gr.update()]*58
+        return [gr.update()] * len(_recipe_outputs)
         
     p_dict = target["profile"]
     profile = StyleProfile(**p_dict)
@@ -297,15 +302,7 @@ def process_image(img_paths, recipe,
     debug_images = []
 
     color_ref_bgr = None
-    if color_ref_path is not None:
-        if isinstance(color_ref_path, dict):
-            color_ref_path = color_ref_path.get("name") or color_ref_path.get("path")
-        elif isinstance(color_ref_path, list) and len(color_ref_path) > 0:
-            ref_item = color_ref_path[0]
-            if isinstance(ref_item, dict):
-                color_ref_path = ref_item.get("name") or ref_item.get("path")
-            else:
-                color_ref_path = ref_item
+    if color_ref_path is not None and color_ref_strength > 0:
         color_ref_bgr = imread_exif(color_ref_path)
 
     lip_tint_val = lip_tint if lip_tint != "none" else None
@@ -313,6 +310,7 @@ def process_image(img_paths, recipe,
     lut_val = lut if lut != "none" else None
     grade_intensity_val = grade_intensity / 100.0
     engine = get_engine()
+    start = time.time()
 
     temp_dir = tempfile.mkdtemp()
     debug_dir = os.path.join(temp_dir, "debug") if debug_mode else None
@@ -434,8 +432,7 @@ def process_image(img_paths, recipe,
                                 debug_images.append((cv2.cvtColor(mask_img, cv2.COLOR_BGR2RGB), label))
 
             export_img = result
-            export_max = {"Original": None, "4K (3840px)": 3840, "2K (2048px)": 2048,
-                          "Full HD (1920px)": 1920, "HD (1280px)": 1280, "720px": 720}.get(export_res)
+            export_max = EXPORT_RES_MAP.get(export_res)
             if export_max is not None:
                 h, w = export_img.shape[:2]
                 if max(h, w) > export_max:
@@ -443,7 +440,7 @@ def process_image(img_paths, recipe,
                     export_img = cv2.resize(export_img, (int(w * scale), int(h * scale)),
                                             interpolation=cv2.INTER_AREA)
 
-            ext = {"JPEG": ".jpg", "PNG": ".png", "WebP": ".webp"}.get(export_fmt, ".jpg")
+            ext = EXT_MAP.get(export_fmt, ".jpg")
             filename = Path(curr_path).stem
             out_path = os.path.join(temp_dir, f"{filename}_retouched{ext}")
             write_params = []
@@ -473,14 +470,15 @@ def process_image(img_paths, recipe,
     debug_gallery = debug_images if debug_images else None
     debug_vis = gr.update(visible=bool(debug_images))
 
+    elapsed = time.time() - start
     if len(exported_paths) > 1:
         zip_path = os.path.join(tempfile.gettempdir(), "retouch_batch_export.zip")
         with zipfile.ZipFile(zip_path, 'w') as zipf:
             for exp_path in exported_paths:
                 zipf.write(exp_path, arcname=os.path.basename(exp_path))
-        return preview, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images successfully ✓", debug_gallery, debug_vis
+        return preview, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓", debug_gallery, debug_vis
     else:
-        return preview, exported_paths[0], "Done ✓", debug_gallery, debug_vis
+        return preview, exported_paths[0], f"Done in {elapsed:.1f}s ✓", debug_gallery, debug_vis
 
 
 def on_recipe_change(recipe):
@@ -649,41 +647,75 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         border-color: rgba(255, 255, 255, 0.1) !important;
     }
     
+    /* Respect reduced motion preferences */
+    @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+            animation-duration: 0.01ms !important;
+            transition-duration: 0.01ms !important;
+        }
+        .primary-btn:hover, .secondary-btn:hover, .accordion:hover {
+            transform: none !important;
+        }
+    }
+
+    /* Respect reduced motion preferences */
+    @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+            animation-duration: 0.01ms !important;
+            transition-duration: 0.01ms !important;
+        }
+        .primary-btn:hover, .secondary-btn:hover, .accordion:hover {
+            transform: none !important;
+        }
+    }
+
     /* Slider visual tuning */
     .gr-slider input[type=range] {
         accent-color: #6366f1 !important;
     }
     
     /* Prevent parent layouts and groups from clipping absolute dropdown menus */
+    .gradio-container .block,
+    .gradio-container .wrap,
     .gradio-container .group,
     .gradio-container .form,
     .gradio-container .row,
     .gradio-container .col,
-    .gradio-container .tabitem {
+    .gradio-container .column,
+    .gradio-container .panel,
+    .gradio-container .padded,
+    .gradio-container .tabs,
+    .gradio-container .tabitem,
+    .gradio-container .dropdown,
+    .gradio-container .dropdown-container {
         overflow: visible !important;
     }
     
-    /* Ensure the dropdown menu popup list overlays on top of other controls */
-    ul.options {
+    /* Ensure the dropdown menu popup list overlays on top of other controls and is scrollable */
+    ul.options, .options {
         z-index: 9999 !important;
         position: absolute !important;
+        overflow-y: auto !important;
+        max-height: 280px !important;
+        scrollbar-width: thin !important;
+        scrollbar-color: rgba(99, 102, 241, 0.45) rgba(0, 0, 0, 0.05) !important;
     }
     
-    /* Elegant and highly visible scrollbar for dropdown choices */
-    ul.options::-webkit-scrollbar {
+    /* Elegant and highly visible scrollbar for dropdown choices (WebKit/Chrome/Safari/Edge) */
+    ul.options::-webkit-scrollbar, .options::-webkit-scrollbar {
         width: 6px !important;
         height: 6px !important;
         display: block !important;
     }
-    ul.options::-webkit-scrollbar-track {
+    ul.options::-webkit-scrollbar-track, .options::-webkit-scrollbar-track {
         background: rgba(0, 0, 0, 0.05) !important;
         border-radius: 4px !important;
     }
-    ul.options::-webkit-scrollbar-thumb {
+    ul.options::-webkit-scrollbar-thumb, .options::-webkit-scrollbar-thumb {
         background: rgba(99, 102, 241, 0.45) !important; /* Indigo primary theme color */
         border-radius: 4px !important;
     }
-    ul.options::-webkit-scrollbar-thumb:hover {
+    ul.options::-webkit-scrollbar-thumb:hover, .options::-webkit-scrollbar-thumb:hover {
         background: rgba(99, 102, 241, 0.75) !important;
     }
 """) as app:
@@ -849,15 +881,15 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         gr.Markdown("### Style Mode")
                         batch_style_type = gr.Radio(choices=["Use Standard Recipe", "Use Custom Style"], value="Use Standard Recipe", label="Style Mode", info="Choose whether to apply a built-in recipe preset or a custom learned style profile.")
                         batch_recipe = gr.Dropdown(choices=RECIPE_NAMES, value="natural", label="Standard Recipe", info="Select standard built-in recipe preset.")
-                        batch_custom_style = gr.Dropdown(choices=custom_style_choices, value=None, label="Custom Style Profile", interactive=True, info="Select a custom style profile from your library.")
+                        batch_custom_style = gr.Dropdown(choices=custom_style_choices, value=None, label="Custom Style Profile", interactive=True, visible=False, info="Select a custom style profile from your library.")
                     
                     with gr.Group():
                         gr.Markdown("### Export Formatting")
-                        batch_fmt = gr.Radio(choices=["JPEG", "PNG", "WebP"], value="JPEG", label="Format")
+                        batch_fmt = gr.Radio(choices=["JPEG", "PNG", "WebP"], value="JPEG", label="Format", interactive=True)
                         batch_quality = gr.Slider(10, 100, 95, step=1, label="Quality")
                         batch_res = gr.Dropdown(
                             choices=["Original", "4K (3840px)", "2K (2048px)", "Full HD (1920px)", "HD (1280px)", "720px"],
-                            value="Original", label="Export Resolution"
+                            value="Original", label="Export Resolution", interactive=True
                         )
                         
                     with gr.Row():

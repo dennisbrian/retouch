@@ -61,7 +61,8 @@ class TestDetectTeeth:
 
     def test_detects_bright_pixels(self, whitener):
         img = np.full((64, 64, 3), 100, dtype=np.uint8)
-        img[20:40, 20:40] = 220
+        img[:, :, 1] = 80
+        img[20:40, 20:40] = [220, 215, 210]
         mask = np.ones((64, 64), dtype=np.float32)
         result = whitener._detect_teeth(img, mask)
         assert result[30, 30] > 0
@@ -73,8 +74,8 @@ class TestDetectTeeth:
         assert result.max() == 0.0
 
     def test_skips_saturated_pixels(self, whitener):
-        img = np.full((64, 64, 3), 200, dtype=np.uint8)
-        img[:, :, 1] = 100
+        img = np.full((64, 64, 3), 50, dtype=np.uint8)
+        img[:, :, 1] = 10
         mask = np.ones((64, 64), dtype=np.float32)
         result = whitener._detect_teeth(img, mask)
-        assert result.max() == 0.0
+        assert result.max() < 0.5

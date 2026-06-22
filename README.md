@@ -90,6 +90,17 @@ pip install -r requirements-dev.txt
 python3 -m pytest tests/ -v
 ```
 
+## Development
+
+Auto-reload on file changes (requires `watchfiles`):
+
+```bash
+pip install watchfiles
+./dev.sh
+```
+
+The dev server watches `.` and `retouch/` for `.py` changes and restarts the Gradio GUI automatically.
+
 ## Documentation
 
 - [API.md](API.md) — Python API reference and parameter list

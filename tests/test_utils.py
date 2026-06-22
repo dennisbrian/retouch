@@ -4,10 +4,13 @@ import numpy as np
 import cv2
 import pytest
 
+from retouch.detection import _Landmark, _LandmarkCompat
 from retouch.utils import (
     feather_mask,
     blend_masked,
     create_polygon_mask,
+    get_points,
+    inter_eye_distance,
     vibrance,
     apply_curve,
     correct_exposure,
@@ -247,4 +250,54 @@ class TestLogCrash:
         # Clean up
         if crash_log_file.exists():
             crash_log_file.unlink()
+
+
+class TestGetPoints:
+    def test_extracts_coords(self):
+        lms = _LandmarkCompat([_Landmark(0.1, 0.2), _Landmark(0.5, 0.7)])
+        pts = get_points(lms, [0, 1], 200, 100)
+        assert pts.shape == (2, 2)
+        assert pts[0, 0] == 20
+        assert pts[1, 1] == 70
+
+    def test_single_index(self):
+        lms = _LandmarkCompat([_Landmark(0.3, 0.4)])
+        pts = get_points(lms, [0], 100, 100)
+        assert pts.shape == (1, 2)
+
+    def test_output_dtype_int32(self):
+        lms = _LandmarkCompat([_Landmark(0.5, 0.5)])
+        pts = get_points(lms, [0], 100, 100)
+        assert pts.dtype == np.int32
+
+    def test_empty_indices(self):
+        lms = _LandmarkCompat([])
+        pts = get_points(lms, [], 100, 100)
+        assert pts.shape == (0, 2)
+
+
+class TestInterEyeDistance:
+    def test_with_iris_landmarks(self):
+        lms = _LandmarkCompat([_Landmark(0.0, 0.0) for _ in range(478)])
+        lms.landmark[468] = _Landmark(0.3, 0.5)
+        lms.landmark[473] = _Landmark(0.7, 0.5)
+        d = inter_eye_distance(lms, 200, 200)
+        expected = (0.7 - 0.3) * 200
+        assert abs(d - expected) < 1.0
+
+    def test_fallback_no_iris_indices(self):
+        lms = _LandmarkCompat([_Landmark(0.0, 0.0) for _ in range(400)])
+        lms.landmark[33] = _Landmark(0.25, 0.4)
+        lms.landmark[133] = _Landmark(0.35, 0.5)
+        lms.landmark[263] = _Landmark(0.65, 0.5)
+        lms.landmark[362] = _Landmark(0.75, 0.4)
+        d = inter_eye_distance(lms, 200, 200)
+        assert d > 0
+
+    def test_positive_distance(self):
+        lms = _LandmarkCompat([_Landmark(0.0, 0.0) for _ in range(478)])
+        lms.landmark[468] = _Landmark(0.3, 0.5)
+        lms.landmark[473] = _Landmark(0.7, 0.5)
+        d = inter_eye_distance(lms, 200, 200)
+        assert d > 0
 

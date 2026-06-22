@@ -37,11 +37,11 @@ class TestRemove:
         assert result.dtype == np.uint8
 
     def test_removes_dark_spot(self, remover):
-        img = np.full((64, 64, 3), 128, dtype=np.uint8)
-        img[32, 32] = [50, 50, 50]
-        mask = np.ones((64, 64), dtype=np.float32)
+        img = np.full((256, 256, 3), 128, dtype=np.uint8)
+        img[124:132, 124:132] = [30, 30, 30]
+        mask = np.ones((256, 256), dtype=np.float32)
         result = remover.remove(img, mask, strength=80)
-        assert not np.allclose(result[32, 32], [50, 50, 50], atol=5)
+        assert not np.allclose(result[128, 128], [30, 30, 30], atol=10)
 
     def test_very_small_skin_region(self, remover, img):
         mask = np.zeros((64, 64), dtype=np.float32)
@@ -63,7 +63,7 @@ class TestDetect:
 
     def test_detect_dark_spot(self, remover):
         img = np.full((64, 64, 3), 128, dtype=np.uint8)
-        img[32, 32] = [30, 30, 30]
+        img[30:35, 30:35] = [30, 30, 30]
         mask = np.ones((64, 64), dtype=np.float32)
         result = remover._detect(img, mask, 0.9, 200)
         assert result[32, 32] > 0

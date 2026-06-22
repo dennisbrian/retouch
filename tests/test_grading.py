@@ -4,7 +4,7 @@ import numpy as np
 import cv2
 import pytest
 
-from retouch.grading import ColorGrader, PRESETS
+from retouch.grading import ColorGrader, PRESETS, _skin_mean_std, detect_color_patches, correct_color_patches
 
 
 @pytest.fixture
@@ -200,3 +200,93 @@ class TestInternalMethods:
     def test_clarity(self, grader, gradient_img):
         result = grader._add_clarity(gradient_img, 0.3)
         assert result.shape == gradient_img.shape
+
+
+class TestSkinMeanStd:
+    def test_uniform_channel(self):
+        channel = np.full((10, 10), 100.0, dtype=np.float32)
+        mask = np.ones((10, 10), dtype=np.float32)
+        mean, std = _skin_mean_std(channel, mask)
+        assert mean == pytest.approx(100.0, abs=0.1)
+        assert std == pytest.approx(0.0, abs=0.1)
+
+    def test_partial_mask(self):
+        channel = np.zeros((10, 10), dtype=np.float32)
+        channel[:5, :] = 200.0
+        mask = np.zeros((10, 10), dtype=np.float32)
+        mask[:5, :] = 1.0
+        mean, std = _skin_mean_std(channel, mask)
+        assert mean == pytest.approx(200.0, abs=0.1)
+
+    def test_zero_mask_returns_zero(self):
+        channel = np.full((10, 10), 100.0, dtype=np.float32)
+        mask = np.zeros((10, 10), dtype=np.float32)
+        mean, std = _skin_mean_std(channel, mask)
+        assert mean == pytest.approx(0.0, abs=0.1)
+        assert std == pytest.approx(0.0, abs=0.1)
+
+
+class TestDetectColorPatches:
+    def test_returns_float_mask(self):
+        img = np.full((32, 32, 3), 128, dtype=np.uint8)
+        img[10:20, 10:20, 2] = 200
+        skin = np.ones((32, 32), dtype=np.float32)
+        result = detect_color_patches(img, skin, "red")
+        assert result.dtype == np.float32
+        assert result.shape == (32, 32)
+        assert result.max() <= 1.0
+
+    def test_flat_skin_no_patches(self):
+        img = np.full((32, 32, 3), 128, dtype=np.uint8)
+        skin = np.ones((32, 32), dtype=np.float32)
+        for pt in ("red", "green", "yellow", "blue"):
+            result = detect_color_patches(img, skin, pt)
+            assert result.max() == 0.0, f"{pt} should have no patches on flat"
+
+    def test_unknown_type_raises(self):
+        img = np.full((16, 16, 3), 128, dtype=np.uint8)
+        skin = np.ones((16, 16), dtype=np.float32)
+        with pytest.raises(ValueError, match="Unknown patch_type"):
+            detect_color_patches(img, skin, "purple")
+
+    def test_uint8_mask_normalized(self):
+        img = np.full((16, 16, 3), 128, dtype=np.uint8)
+        skin = np.ones((16, 16), dtype=np.uint8) * 255
+        result = detect_color_patches(img, skin, "red")
+        assert result.max() <= 1.0
+
+
+class TestCorrectColorPatches:
+    def test_no_masks_returns_original(self):
+        img = np.full((16, 16, 3), 128, dtype=np.uint8)
+        result = correct_color_patches(img, np.ones((16, 16), dtype=np.float32))
+        assert np.all(result == img)
+
+    def test_red_mask_zero_strength(self):
+        img = np.full((16, 16, 3), 128, dtype=np.uint8)
+        red_mask = np.ones((16, 16), dtype=np.float32)
+        result = correct_color_patches(img, np.ones((16, 16), dtype=np.float32), red_mask=red_mask, correction_strength=0)
+        assert np.all(result == img)
+
+    def test_red_mask_changes_image(self):
+        img = np.full((32, 32, 3), 128, dtype=np.uint8)
+        img[:, :, 2] = 200
+        skin = np.ones((32, 32), dtype=np.float32)
+        red_mask = np.ones((32, 32), dtype=np.float32)
+        result = correct_color_patches(img, skin, red_mask=red_mask, correction_strength=1.0)
+        assert not np.allclose(result, img)
+
+    def test_yellow_mask_changes_image(self):
+        img = np.full((32, 32, 3), 128, dtype=np.uint8)
+        img[:, :, 0] = 200
+        skin = np.ones((32, 32), dtype=np.float32)
+        yellow_mask = np.ones((32, 32), dtype=np.float32)
+        result = correct_color_patches(img, skin, yellow_mask=yellow_mask, correction_strength=1.0)
+        assert not np.allclose(result, img)
+
+    def test_uint8_mask(self):
+        img = np.full((16, 16, 3), 128, dtype=np.uint8)
+        skin = np.ones((16, 16), dtype=np.uint8) * 255
+        red_mask = np.ones((16, 16), dtype=np.uint8) * 255
+        result = correct_color_patches(img, skin, red_mask=red_mask, correction_strength=0.5)
+        assert result.shape == img.shape

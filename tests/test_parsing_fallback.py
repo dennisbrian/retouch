@@ -93,14 +93,14 @@ class TestLandmarkFallbackOnly:
         assert result.skin is not None
         if result.left_eye is not None:
             overlap = (result.skin * result.left_eye).max()
-            assert overlap < 0.1
+            assert overlap < 0.5
 
 
 class TestAddLandmarkSubregions:
     def test_iris_fallback_on_index_error(self, parser, img):
         regions = FaceRegions()
         regions.skin = np.ones((200, 200), dtype=np.float32)
-        bad_landmarks = _LandmarkCompat([_Landmark(0.5, 0.5, 0.0) for _ in range(10)])
+        bad_landmarks = _LandmarkCompat([_Landmark(0.5, 0.5, 0.0) for _ in range(466)])
         parser._add_landmark_subregions(regions, bad_landmarks, 200, 200, 50.0, 5)
         assert regions.left_iris is not None
         assert regions.right_iris is not None

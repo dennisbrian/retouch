@@ -149,8 +149,8 @@ class TestApplySelectiveSharpening:
         assert np.allclose(result, img, atol=1)
 
     def test_sharpens_edges(self):
-        img = np.zeros((20, 20, 3), dtype=np.uint8)
-        img[:, 10:] = 255
+        img = np.full((20, 20, 3), 64, dtype=np.uint8)
+        img[:, 10:] = [192, 192, 192]
         mask = np.ones((20, 20), dtype=np.float32)
         result = _apply_selective_sharpening(img, mask, radius=0.8, amount=1.5, threshold=2)
         assert not np.allclose(result, img)

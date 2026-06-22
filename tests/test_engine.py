@@ -9,7 +9,9 @@ from retouch.engine import (
     ProcessingContext,
     ProcessingResult,
     _FaceResult,
+    _CoreResult,
     resolve_recipe,
+    _deep_merge,
     build_context,
     _adjust_contrast,
     _adjust_tonal,
@@ -102,6 +104,86 @@ class TestResolveRecipe:
         # Should have the override from anime_cinematic_soft
         assert rec["bloom"]["opacity"] == 0.22
 
+
+class TestDeepMerge:
+    def test_empty_overrides(self):
+        base = {"a": 1, "b": {"c": 2}}
+        result = base.copy()
+        _deep_merge(result, {})
+        assert result == {"a": 1, "b": {"c": 2}}
+
+    def test_simple_override(self):
+        base = {"a": 1, "b": 2}
+        result = base.copy()
+        _deep_merge(result, {"a": 10})
+        assert result["a"] == 10
+        assert result["b"] == 2
+
+    def test_nested_merge(self):
+        base = {"a": {"x": 1, "y": 2}}
+        result = base.copy()
+        _deep_merge(result, {"a": {"y": 99, "z": 3}})
+        assert result["a"]["x"] == 1
+        assert result["a"]["y"] == 99
+        assert result["a"]["z"] == 3
+
+    def test_preserves_unrelated_keys(self):
+        base = {"a": 1, "b": 2}
+        result = base.copy()
+        _deep_merge(result, {"c": 3})
+        assert "a" in result and "b" in result and "c" in result
+
+    def test_new_nested_key(self):
+        base = {"a": {"b": 1}}
+        result = base.copy()
+        _deep_merge(result, {"a": {"c": {"d": 2}}})
+        assert result["a"]["b"] == 1
+        assert result["a"]["c"]["d"] == 2
+
+
+class TestFaceResult:
+    def test_stores_data(self):
+        img = np.full((10, 10, 3), 128, dtype=np.uint8)
+        mask = np.ones((10, 10), dtype=np.float32)
+        fr = _FaceResult()
+        fr.canvas = img
+        fr.skin_mask = mask
+        fr.skin_hair_mask = mask
+        fr.lips_mask = mask
+        fr.sharpen_mask = mask
+        fr.roi_box = (0, 0, 10, 10)
+        assert fr.canvas is img
+        assert fr.roi_box == (0, 0, 10, 10)
+
+    def test_default_masks_none(self):
+        fr = _FaceResult()
+        assert fr.skin_mask is None
+        assert fr.lips_mask is None
+
+    def test_optional_fields_settable(self):
+        fr = _FaceResult()
+        fr.teeth_mask = np.ones((4, 4), dtype=np.float32)
+        fr.eye_whiten_mask = np.ones((4, 4), dtype=np.float32)
+        fr.iris_mask = np.ones((4, 4), dtype=np.float32)
+        assert fr.teeth_mask is not None
+        assert fr.eye_whiten_mask is not None
+        assert fr.iris_mask is not None
+
+
+class TestCoreResult:
+    def test_stores_values(self):
+        img = np.zeros((4, 4, 3), dtype=np.uint8)
+        mask = np.ones((4, 4), dtype=np.float32)
+        cr = _CoreResult(result=img, acc_skin=mask, acc_skin_hair=mask, acc_lips=mask, acc_sharpen=mask, faces=[], person_mask=mask)
+        assert cr.result is img
+        assert cr.acc_lips is mask
+        assert cr.acc_sharpen is mask
+        assert cr.faces == []
+        assert cr.no_face is False
+
+    def test_no_face_flag(self):
+        cr = _CoreResult(result=np.zeros((2, 2, 3), dtype=np.uint8), acc_skin=None, acc_skin_hair=None, acc_lips=None, acc_sharpen=None, faces=[], person_mask=None, no_face=True)
+        assert cr.no_face is True
 
 
 class TestBuildContext:

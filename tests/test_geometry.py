@@ -46,10 +46,12 @@ class TestReshape:
         assert result.shape == (400, 400, 3)
         assert result.dtype == np.uint8
 
-    def test_changes_image(self, reshaper, img):
+    def test_changes_image(self, reshaper):
+        grad = np.tile(np.linspace(0, 255, 400, dtype=np.uint8), (400, 1))
+        grad_img = np.stack([grad] * 3, axis=-1)
         face = _make_face_data(200, 200, 80, 100)
-        result = reshaper.reshape(img, [face], strength=80)
-        assert not np.allclose(result, img)
+        result = reshaper.reshape(grad_img, [face], strength=80)
+        assert not np.allclose(result, grad_img)
 
     def test_multiple_faces(self, reshaper, img):
         face1 = _make_face_data(150, 150, 60, 75)

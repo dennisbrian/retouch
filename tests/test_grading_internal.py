@@ -23,6 +23,15 @@ def varied_img():
     return img
 
 
+@pytest.fixture
+def colorful_img():
+    img = np.zeros((64, 64, 3), dtype=np.uint8)
+    img[:21, :, 2] = 200
+    img[21:43, :, 1] = 180
+    img[43:, :, 0] = 220
+    return img
+
+
 class TestRegisterAndListPresets:
     def test_list_available(self):
         presets = list_available_presets()
@@ -35,18 +44,21 @@ class TestAddGlow:
         result = grader._add_glow(img, 0)
         assert np.all(result == img)
 
-    def test_changes_varied_image(self, grader, varied_img):
-        result = grader._add_glow(varied_img, 0.5)
-        assert not np.allclose(result, varied_img)
+    def test_changes_bright_image(self, grader):
+        img = np.full((64, 64, 3), 235, dtype=np.uint8)
+        result = grader._add_glow(img, 0.5)
+        assert not np.allclose(result, img)
 
-    def test_with_tint(self, grader, varied_img):
-        result = grader._add_glow(varied_img, 0.5, tint=(200, 100, 150))
-        assert not np.allclose(result, varied_img)
+    def test_with_tint(self, grader):
+        img = np.full((64, 64, 3), 235, dtype=np.uint8)
+        result = grader._add_glow(img, 0.5, tint=(200, 100, 150))
+        assert not np.allclose(result, img)
 
-    def test_with_mask(self, grader, varied_img):
+    def test_with_mask(self, grader):
+        img = np.full((64, 64, 3), 235, dtype=np.uint8)
         mask = np.ones((64, 64), dtype=np.float32)
-        result = grader._add_glow(varied_img, 0.5, mask=mask)
-        assert not np.allclose(result, varied_img)
+        result = grader._add_glow(img, 0.5, mask=mask)
+        assert not np.allclose(result, img)
 
     def test_output_type(self, grader, img):
         result = grader._add_glow(img, 0.5)
@@ -55,12 +67,12 @@ class TestAddGlow:
 
 class TestSplitTone:
     def test_returns_image(self, grader, varied_img):
-        tones = {"shadows": [128, 135, 130], "highlights": [128, 125, 120]}
+        tones = {"shadows": [118, 130], "highlights": [138, 120]}
         result = grader._split_tone(varied_img, tones)
         assert result.shape == varied_img.shape
 
     def test_with_mask(self, grader, varied_img):
-        tones = {"shadows": [128, 135, 130], "highlights": [128, 125, 120]}
+        tones = {"shadows": [118, 130], "highlights": [138, 120]}
         mask = np.ones((64, 64), dtype=np.float32)
         result = grader._split_tone(varied_img, tones, mask=mask)
         assert result.shape == varied_img.shape
@@ -218,9 +230,9 @@ class TestHSlHueShift:
         result = grader._hsl_hue_shift(img, {})
         assert np.all(result == img)
 
-    def test_hue_shift_changes_varied(self, grader, varied_img):
-        result = grader._hsl_hue_shift(varied_img, {"red": 30})
-        assert not np.allclose(result, varied_img)
+    def test_hue_shift_changes_colorful(self, grader, colorful_img):
+        result = grader._hsl_hue_shift(colorful_img, {"red": 30})
+        assert not np.allclose(result, colorful_img)
 
 
 class TestApplyCalibration:
@@ -228,10 +240,10 @@ class TestApplyCalibration:
         result = grader._apply_calibration(img, {})
         assert np.all(result == img)
 
-    def test_calibration_changes_varied(self, grader, varied_img):
+    def test_calibration_changes_colorful(self, grader, colorful_img):
         cal = {"red": {"hue": 5, "sat": 3}, "green": {"hue": -2, "sat": 1}}
-        result = grader._apply_calibration(varied_img, cal)
-        assert not np.allclose(result, varied_img)
+        result = grader._apply_calibration(colorful_img, cal)
+        assert not np.allclose(result, colorful_img)
 
 
 class TestGuidedFilter:
@@ -267,10 +279,10 @@ class TestApplyHSLAdjustments:
         result = grader._apply_hsl_adjustments(img, {})
         assert np.all(result == img)
 
-    def test_hue_adjustment_changes_varied(self, grader, varied_img):
+    def test_hue_adjustment_changes_colorful(self, grader, colorful_img):
         adj = {"hue": {"red": 10, "blue": -5}}
-        result = grader._apply_hsl_adjustments(varied_img, adj)
-        assert not np.allclose(result, varied_img)
+        result = grader._apply_hsl_adjustments(colorful_img, adj)
+        assert not np.allclose(result, colorful_img)
 
     def test_sat_adjustment_changes(self, grader, varied_img):
         adj = {"saturation": {"red": 20, "green": -10}}

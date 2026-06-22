@@ -61,7 +61,7 @@ class TestEnhance:
         assert result.shape == (100, 100, 3)
 
     def test_tiny_bbox_returns_original(self, enhancer, img, person_mask, face_oval):
-        bbox = (0, 0, 3, 3)
+        bbox = (0, 0, 1, 1)
         result = enhancer.enhance(img, person_mask, face_oval, bbox, strength=50)
         assert np.all(result == img)
 
