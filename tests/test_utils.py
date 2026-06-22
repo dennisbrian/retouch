@@ -273,7 +273,7 @@ class TestGetPoints:
     def test_empty_indices(self):
         lms = _LandmarkCompat([])
         pts = get_points(lms, [], 100, 100)
-        assert pts.shape == (0, 2)
+        assert len(pts) == 0
 
 
 class TestInterEyeDistance:

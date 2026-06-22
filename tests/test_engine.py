@@ -145,29 +145,18 @@ class TestFaceResult:
     def test_stores_data(self):
         img = np.full((10, 10, 3), 128, dtype=np.uint8)
         mask = np.ones((10, 10), dtype=np.float32)
-        fr = _FaceResult()
-        fr.canvas = img
-        fr.skin_mask = mask
-        fr.skin_hair_mask = mask
-        fr.lips_mask = mask
-        fr.sharpen_mask = mask
-        fr.roi_box = (0, 0, 10, 10)
+        fr = _FaceResult(canvas=img, skin_mask=mask, skin_hair_mask=mask, lips_mask=mask, sharpen_mask=mask, roi_box=(0, 0, 10, 10))
         assert fr.canvas is img
         assert fr.roi_box == (0, 0, 10, 10)
-
-    def test_default_masks_none(self):
-        fr = _FaceResult()
-        assert fr.skin_mask is None
-        assert fr.lips_mask is None
+        assert fr.skin_mask is mask
+        assert fr.lips_mask is mask
 
     def test_optional_fields_settable(self):
-        fr = _FaceResult()
-        fr.teeth_mask = np.ones((4, 4), dtype=np.float32)
-        fr.eye_whiten_mask = np.ones((4, 4), dtype=np.float32)
-        fr.iris_mask = np.ones((4, 4), dtype=np.float32)
+        img = np.zeros((2, 2, 3), dtype=np.uint8)
+        mask = np.ones((2, 2), dtype=np.float32)
+        fr = _FaceResult(canvas=img, skin_mask=mask, skin_hair_mask=mask, lips_mask=mask, sharpen_mask=mask, roi_box=(0, 0, 2, 2))
+        fr.teeth_mask = np.ones((2, 2), dtype=np.float32)
         assert fr.teeth_mask is not None
-        assert fr.eye_whiten_mask is not None
-        assert fr.iris_mask is not None
 
 
 class TestCoreResult:

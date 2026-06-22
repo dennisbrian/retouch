@@ -162,8 +162,11 @@ def apply_custom_style(style_name, current_recipe="natural"):
 def on_save_style(style_name, author, tags_str,
                   smooth, mid_reduction, texture_opacity,
                   whiten, contrast, brightness):
-    if not style_name.strip():
+    style_name = style_name.strip()
+    if not style_name:
         return gr.update(), gr.update(), "Error: Style name cannot be empty."
+    if len(style_name) > 100:
+        return gr.update(), gr.update(), "Error: Style name must be 100 characters or less."
 
     tags = [t.strip() for t in tags_str.split(",") if t.strip()]
 
@@ -187,6 +190,7 @@ def on_save_style(style_name, author, tags_str,
             tags=tags,
         )
         choices = get_custom_style_names()
+        gr.Info(f"Style '{style_name}' saved!")
         return gr.update(choices=choices, value=style_name), gr.update(choices=choices, value=style_name), f"Style '{style_name}' saved successfully!"
     except Exception as e:
         return gr.update(), gr.update(), f"Failed to save style: {e}"
@@ -195,8 +199,11 @@ def on_save_style(style_name, author, tags_str,
 def on_learn_style(orig_dir, edit_dir, style_name, author, tags_str, prg=gr.Progress()):
     if not orig_dir or not edit_dir:
         return gr.update(), gr.update(), "Error: Original and Edited folders must be specified."
-    if not style_name.strip():
+    style_name = style_name.strip()
+    if not style_name:
         return gr.update(), gr.update(), "Error: Style name cannot be empty."
+    if len(style_name) > 100:
+        return gr.update(), gr.update(), "Error: Style name must be 100 characters or less."
 
     def prg_cb(progress, message):
         prg(progress, desc=message)
@@ -215,6 +222,7 @@ def on_learn_style(orig_dir, edit_dir, style_name, author, tags_str, prg=gr.Prog
         )
         
         choices = get_custom_style_names()
+        gr.Info(f"Learned style '{style_name}' from {count} pairs!")
         return gr.update(choices=choices, value=style_name), gr.update(choices=choices, value=style_name), f"Extracted & saved style '{style_name}' from {count} image pairs!"
     except Exception as e:
         return gr.update(), gr.update(), f"Error during dataset learning: {e}"
@@ -226,6 +234,7 @@ def on_process_folder(input_dir, output_dir, style_type, custom_style_name, reci
     if not input_dir or not output_dir:
         return None, None, "Error: Both Input and Output directories must be specified."
 
+    gr.Info("Batch processing started...")
     processor = BatchProcessor()
     
     profile = None
@@ -262,8 +271,10 @@ def on_process_folder(input_dir, output_dir, style_type, custom_style_name, reci
             progress_callback=prg_cb,
         )
         
+        gr.Info("Batch processing complete!")
         return sheet_path, zip_path, log
     except Exception as e:
+        gr.Warning(f"Batch processing failed: {e}")
         return None, None, f"Exception during batch processing: {e}"
 
 
@@ -287,7 +298,7 @@ def process_image(img_paths, recipe,
                   chromatic_aberration, grain, halation, lut,
                   shadow_hue, shadow_sat, midtone_hue, midtone_sat, highlight_hue, highlight_sat,
                   debug_mode):
-    if img_paths is None:
+    if not img_paths:
         return None, None, "Please upload an image first.", None, gr.update(visible=False)
 
     if not isinstance(img_paths, list):
@@ -295,6 +306,8 @@ def process_image(img_paths, recipe,
 
     if len(img_paths) == 0:
         return None, None, "Please upload at least one image.", None, gr.update(visible=False)
+
+    gr.Info(f"Processing {len(img_paths)} image(s)...")
 
     exported_paths = []
     first_result_rgb = None
@@ -464,6 +477,7 @@ def process_image(img_paths, recipe,
                 print(f"Crash details saved to: {crash_path}")
 
     if not exported_paths:
+        gr.Warning("No images were successfully processed.")
         return None, None, "Error: No images were successfully processed.", None, gr.update(visible=False)
 
     preview = first_combined if show_compare else first_result_rgb
@@ -472,12 +486,15 @@ def process_image(img_paths, recipe,
 
     elapsed = time.time() - start
     if len(exported_paths) > 1:
-        zip_path = os.path.join(tempfile.gettempdir(), "retouch_batch_export.zip")
+        zip_stamp = time.strftime("%Y%m%d_%H%M%S")
+        zip_path = os.path.join(tempfile.gettempdir(), f"retouch_export_{zip_stamp}.zip")
         with zipfile.ZipFile(zip_path, 'w') as zipf:
             for exp_path in exported_paths:
                 zipf.write(exp_path, arcname=os.path.basename(exp_path))
+        gr.Info(f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s")
         return preview, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓", debug_gallery, debug_vis
     else:
+        gr.Info(f"Done in {elapsed:.1f}s")
         return preview, exported_paths[0], f"Done in {elapsed:.1f}s ✓", debug_gallery, debug_vis
 
 
@@ -505,176 +522,291 @@ def on_recipe_change(recipe):
 LIP_TINTS = ["none", "cosplay", "rose", "pink", "coral", "natural", "berry"]
 custom_style_choices = get_custom_style_names()
 
-with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.themes.Soft(primary_hue="indigo", secondary_hue="cyan"), css="""
-    /* Premium font family import */
-    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
-    
-    body, input, button, select, textarea {
-        font-family: 'Outfit', -apple-system, sans-serif !important;
+with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.themes.Soft(primary_hue="sky", secondary_hue="slate"), css="""
+    /* Global font override */
+    body, input, button, select, textarea, span, p, div, label {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
+    }
+
+    /* Pitch Dark Lightroom Workspace */
+    :root, body, .gradio-container {
+        background-color: #121316 !important;
+        background: #121316 !important;
+        color: #e2e8f0 !important;
     }
     
-    /* Elegant background gradient */
-    .gradio-container {
-        background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%) !important;
-    }
-    .dark .gradio-container {
-        background: linear-gradient(135deg, #0f172a 0%, #020617 100%) !important;
+    /* Matte Charcoal layout panels */
+    .gr-group, .group, .form, .block, .panel, .padded {
+        background-color: #1a1c22 !important;
+        background: #1a1c22 !important;
+        border: 1px solid #282b32 !important;
+        border-radius: 6px !important;
+        box-shadow: none !important;
     }
     
-    /* Navigation Tabs Container */
+    /* Navigation tabs styled as Lightroom top bar */
     .tabs {
-        border-bottom: none !important;
-        background: rgba(255, 255, 255, 0.6) !important;
-        border-radius: 16px !important;
-        padding: 6px !important;
-        box-shadow: inset 0 2px 4px 0 rgba(0,0,0,0.04), 0 4px 20px -2px rgba(0,0,0,0.05) !important;
-        border: 1px solid rgba(255, 255, 255, 0.5) !important;
+        border-bottom: 1px solid #22252a !important;
+        background: #181a1f !important;
+        border-radius: 6px !important;
+        padding: 4px !important;
+        box-shadow: none !important;
+        border: 1px solid #22252a !important;
         margin-bottom: 20px !important;
-    }
-    .dark .tabs {
-        background: rgba(15, 23, 42, 0.4) !important;
-        border: 1px solid rgba(255, 255, 255, 0.05) !important;
-        box-shadow: inset 0 2px 4px 0 rgba(0,0,0,0.2) !important;
     }
     
     .tab-nav {
         border-bottom: none !important;
+        background: transparent !important;
         display: flex !important;
         gap: 6px !important;
     }
     
     .tab-nav button {
         border: none !important;
-        border-radius: 10px !important;
-        padding: 10px 20px !important;
-        font-weight: 600 !important;
-        color: #64748b !important;
+        border-radius: 4px !important;
+        padding: 8px 16px !important;
+        font-weight: 700 !important;
+        font-size: 0.82rem !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.05em !important;
+        color: #8a94a6 !important;
         background: transparent !important;
-        transition: all 0.2s ease-in-out !important;
-    }
-    .dark .tab-nav button {
-        color: #94a3b8 !important;
+        transition: all 0.15s ease !important;
     }
     
     .tab-nav button.selected {
-        background: linear-gradient(90deg, #6366f1 0%, #06b6d4 100%) !important;
-        color: white !important;
-        box-shadow: 0 4px 14px -2px rgba(99, 102, 241, 0.4) !important;
+        background: #252830 !important;
+        color: #00a2ed !important;
+        box-shadow: none !important;
+        border-bottom: 2px solid #00a2ed !important;
+        border-radius: 4px 4px 0 0 !important;
     }
     
-    /* Custom buttons with nice gradient and shadows */
+    /* Lightroom-styled Buttons */
     .primary-btn {
-        background: linear-gradient(90deg, #6366f1 0%, #06b6d4 100%) !important;
-        border: none !important;
-        color: white !important;
+        background: #00a2ed !important;
+        border: 1px solid #008cd1 !important;
+        color: #ffffff !important;
         font-weight: 700 !important;
-        box-shadow: 0 4px 14px 0 rgba(99, 102, 241, 0.4) !important;
-        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
-        border-radius: 12px !important;
+        font-size: 0.88rem !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.04em !important;
+        border-radius: 4px !important;
+        padding: 10px 20px !important;
         cursor: pointer !important;
+        transition: all 0.15s ease !important;
+        box-shadow: none !important;
     }
     .primary-btn:hover {
-        transform: translateY(-2px) !important;
-        box-shadow: 0 8px 24px 0 rgba(99, 102, 241, 0.5) !important;
+        background: #0091d6 !important;
+        border-color: #007bc2 !important;
+        transform: translateY(-1px) !important;
     }
     .primary-btn:active {
         transform: translateY(0px) !important;
     }
     
-    /* Secondary Action Button Styling */
     .secondary-btn {
-        border: 1px solid #cbd5e1 !important;
-        background: white !important;
-        color: #334155 !important;
-        font-weight: 600 !important;
-        border-radius: 12px !important;
-        transition: all 0.2s ease !important;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.02) !important;
-    }
-    .dark .secondary-btn {
-        border: 1px solid rgba(255, 255, 255, 0.1) !important;
-        background: #1e293b !important;
-        color: #f1f5f9 !important;
+        background: #282b30 !important;
+        border: 1px solid #383b40 !important;
+        color: #cbd5e1 !important;
+        font-weight: 700 !important;
+        font-size: 0.88rem !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.04em !important;
+        border-radius: 4px !important;
+        padding: 10px 20px !important;
+        transition: all 0.15s ease !important;
+        box-shadow: none !important;
     }
     .secondary-btn:hover {
-        background: #f8fafc !important;
-        border-color: #94a3b8 !important;
+        background: #33363c !important;
+        border-color: #484b50 !important;
+        color: #ffffff !important;
         transform: translateY(-1px) !important;
     }
-    .dark .secondary-btn:hover {
-        background: #334155 !important;
-        border-color: rgba(255, 255, 255, 0.2) !important;
+    .secondary-btn:active {
+        transform: translateY(0px) !important;
     }
     
-    /* Group panel/card styling */
-    .gr-group {
-        border: 1px solid rgba(226, 232, 240, 0.8) !important;
-        background: rgba(255, 255, 255, 0.7) !important;
-        backdrop-filter: blur(8px) !important;
-        border-radius: 16px !important;
-        padding: 18px !important;
-        box-shadow: 0 4px 18px -2px rgba(0,0,0,0.03) !important;
-        margin-bottom: 15px !important;
-    }
-    .dark .gr-group {
-        border: 1px solid rgba(255, 255, 255, 0.04) !important;
-        background: rgba(30, 41, 59, 0.5) !important;
-        box-shadow: 0 4px 18px -2px rgba(0,0,0,0.2) !important;
-    }
-    
-    /* Accordion styles */
+    /* Collapsible Adjustment Panels (Lightroom Accordions) */
     .accordion {
-        border: 1px solid #e2e8f0 !important;
-        background: rgba(255, 255, 255, 0.9) !important;
-        border-radius: 12px !important;
-        margin-bottom: 12px !important;
+        border: 1px solid #282b32 !important;
+        background: #1e2025 !important;
+        border-radius: 4px !important;
+        margin-bottom: 8px !important;
         overflow: visible !important;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.02) !important;
-        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
-    }
-    .dark .accordion {
-        border: 1px solid rgba(255, 255, 255, 0.05) !important;
-        background: #1e293b !important;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.2) !important;
+        box-shadow: none !important;
     }
     .accordion:hover {
-        transform: translateY(-1px) !important;
-        box-shadow: 0 6px 16px rgba(0,0,0,0.04) !important;
-        border-color: #cbd5e1 !important;
-    }
-    .dark .accordion:hover {
-        box-shadow: 0 6px 16px rgba(0,0,0,0.3) !important;
-        border-color: rgba(255, 255, 255, 0.1) !important;
+        border-color: #383b40 !important;
+        transform: none !important;
+        box-shadow: none !important;
     }
     
-    /* Respect reduced motion preferences */
-    @media (prefers-reduced-motion: reduce) {
-        *, *::before, *::after {
-            animation-duration: 0.01ms !important;
-            transition-duration: 0.01ms !important;
-        }
-        .primary-btn:hover, .secondary-btn:hover, .accordion:hover {
-            transform: none !important;
-        }
+    /* Accordion header text styling */
+    .accordion > summary, .accordion .label-wrap {
+        background: #24262d !important;
+        padding: 6px 12px !important;
+        color: #b0b8c6 !important;
+        font-size: 0.78rem !important;
+        font-weight: 800 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.06em !important;
+        border-bottom: 1px solid #181a1f !important;
     }
-
-    /* Respect reduced motion preferences */
-    @media (prefers-reduced-motion: reduce) {
-        *, *::before, *::after {
-            animation-duration: 0.01ms !important;
-            transition-duration: 0.01ms !important;
-        }
-        .primary-btn:hover, .secondary-btn:hover, .accordion:hover {
-            transform: none !important;
-        }
+    
+    /* Independent Develop settings panel scroll container (Right Column) */
+    .develop-panel {
+        max-height: 84vh !important;
+        overflow-y: auto !important;
+        padding-right: 6px !important;
+        background: #16181c !important;
+        border: none !important;
     }
-
-    /* Slider visual tuning */
+    
+    /* Clean Develop Panel scrollbar */
+    .develop-panel::-webkit-scrollbar {
+        width: 5px !important;
+    }
+    .develop-panel::-webkit-scrollbar-track {
+        background: #121316 !important;
+    }
+    .develop-panel::-webkit-scrollbar-thumb {
+        background: #383b40 !important;
+        border-radius: 3px !important;
+    }
+    .develop-panel::-webkit-scrollbar-thumb:hover {
+        background: #484b50 !important;
+    }
+    .develop-panel {
+        scrollbar-width: thin !important;
+        scrollbar-color: #383b40 #121316 !important;
+    }
+    
+    /* Sliders Visual tuning */
     .gr-slider input[type=range] {
-        accent-color: #6366f1 !important;
+        accent-color: #00a2ed !important;
+        background: #2c2e35 !important;
     }
     
-    /* Prevent parent layouts and groups from clipping absolute dropdown menus */
+    /* Textboxes / Inputs styling */
+    input[type="text"], input[type="number"], select, textarea {
+        background-color: #202328 !important;
+        color: #ffffff !important;
+        border: 1px solid #303338 !important;
+        border-radius: 4px !important;
+        padding: 6px 10px !important;
+    }
+    input[type="text"]:focus, input[type="number"]:focus, select:focus, textarea:focus {
+        border-color: #00a2ed !important;
+        box-shadow: 0 0 0 1px #00a2ed !important;
+    }
+    
+    /* Checkbox & Radio tinting */
+    input[type="checkbox"] {
+        accent-color: #00a2ed !important;
+    }
+    
+    /* Prescription selection tag chips */
+    .preset-chips {
+        border: none !important;
+        background: transparent !important;
+        box-shadow: none !important;
+        padding: 0 !important;
+    }
+    .preset-chips .wrap {
+        display: flex !important;
+        flex-wrap: wrap !important;
+        gap: 6px !important;
+        background: transparent !important;
+        border: none !important;
+        padding: 0 !important;
+    }
+    .preset-chips label {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        background: #202328 !important;
+        border: 1px solid #303338 !important;
+        border-radius: 4px !important; /* Lightroom crisp borders */
+        padding: 6px 12px !important;
+        cursor: pointer !important;
+        transition: all 0.15s ease !important;
+        font-weight: 600 !important;
+        font-size: 0.82rem !important;
+        color: #8c94a6 !important;
+        box-shadow: none !important;
+        user-select: none !important;
+    }
+    .preset-chips label:hover {
+        border-color: #4c525d !important;
+        color: #cbd5e1 !important;
+        transform: translateY(-1px) !important;
+    }
+    .preset-chips label.selected {
+        background: #00a2ed !important;
+        color: #ffffff !important;
+        border-color: transparent !important;
+        box-shadow: 0 0 10px rgba(0, 162, 237, 0.25) !important;
+    }
+    .dark .preset-chips label {
+        background: #202328 !important;
+        border: 1px solid #303338 !important;
+        color: #8c94a6 !important;
+    }
+    .dark .preset-chips label.selected {
+        background: #00a2ed !important;
+        color: #ffffff !important;
+    }
+    
+    /* Hide the default radio circles */
+    .preset-chips input[type="radio"] {
+        display: none !important;
+    }
+    .preset-chips label .radio-circle {
+        display: none !important;
+    }
+    
+    /* Dropdown options container */
+    ul.options, .options {
+        background-color: #202328 !important;
+        border: 1px solid #303338 !important;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.5) !important;
+        z-index: 9999 !important;
+        position: absolute !important;
+        overflow-y: auto !important;
+        max-height: 280px !important;
+        scrollbar-width: thin !important;
+        scrollbar-color: #383b40 #202328 !important;
+    }
+    ul.options > li, .options > li {
+        color: #cbd5e1 !important;
+        padding: 8px 14px !important;
+        transition: background 0.15s ease !important;
+        cursor: pointer !important;
+    }
+    ul.options > li:hover, .options > li:hover {
+        background: #303338 !important;
+        color: #ffffff !important;
+    }
+    ul.options > li.selected, .options > li.selected {
+        color: #00a2ed !important;
+        background: #252830 !important;
+    }
+    
+    /* File upload box styling */
+    .gr-file {
+        border: 1px dashed #303338 !important;
+        background: #1a1c22 !important;
+        border-radius: 6px !important;
+    }
+    .gr-file:hover {
+        border-color: #00a2ed !important;
+    }
+    
+    /* Prevent parent layout overflow problems */
     .gradio-container .block,
     .gradio-container .wrap,
     .gradio-container .group,
@@ -690,34 +822,6 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     .gradio-container .dropdown-container {
         overflow: visible !important;
     }
-    
-    /* Ensure the dropdown menu popup list overlays on top of other controls and is scrollable */
-    ul.options, .options {
-        z-index: 9999 !important;
-        position: absolute !important;
-        overflow-y: auto !important;
-        max-height: 280px !important;
-        scrollbar-width: thin !important;
-        scrollbar-color: rgba(99, 102, 241, 0.45) rgba(0, 0, 0, 0.05) !important;
-    }
-    
-    /* Elegant and highly visible scrollbar for dropdown choices (WebKit/Chrome/Safari/Edge) */
-    ul.options::-webkit-scrollbar, .options::-webkit-scrollbar {
-        width: 6px !important;
-        height: 6px !important;
-        display: block !important;
-    }
-    ul.options::-webkit-scrollbar-track, .options::-webkit-scrollbar-track {
-        background: rgba(0, 0, 0, 0.05) !important;
-        border-radius: 4px !important;
-    }
-    ul.options::-webkit-scrollbar-thumb, .options::-webkit-scrollbar-thumb {
-        background: rgba(99, 102, 241, 0.45) !important; /* Indigo primary theme color */
-        border-radius: 4px !important;
-    }
-    ul.options::-webkit-scrollbar-thumb:hover, .options::-webkit-scrollbar-thumb:hover {
-        background: rgba(99, 102, 241, 0.75) !important;
-    }
 """) as app:
     # Beautiful Glassmorphism Header
     with gr.Group():
@@ -731,19 +835,20 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     with gr.Tabs():
         with gr.Tab("📸 Single & Multi Photo Retouching"):
             with gr.Row():
-                with gr.Column(scale=1):
+                # Column 1: Presets & Library Panel (Left)
+                with gr.Column(scale=1.5, elem_classes=["library-panel"]):
                     img_input = gr.File(label="Input Image(s) (RAW supported)", file_types=["image"], file_count="multiple")
 
                     with gr.Group():
-                        with gr.Row():
-                            recipe = gr.Dropdown(
-                                choices=RECIPE_NAMES, value="natural", label="Base Preset Recipe",
-                                info="Select a preset recipe to auto-fill sliders"
-                            )
-                            custom_style_preset = gr.Dropdown(
-                                choices=custom_style_choices, value=None, label="Or Load Custom Style Profile", interactive=True,
-                                info="Select an extracted style from your library"
-                            )
+                        recipe = gr.Radio(
+                            choices=RECIPE_NAMES, value="natural", label="Base Preset Recipe",
+                            info="Select a preset recipe to auto-fill sliders",
+                            elem_classes=["preset-chips"]
+                        )
+                        custom_style_preset = gr.Dropdown(
+                            choices=custom_style_choices, value=None, label="Or Load Custom Style Profile", interactive=True,
+                            info="Select an extracted style from your library"
+                        )
 
                         show_compare = gr.Checkbox(label="Show side-by-side comparison screen", value=True, info="Split view: original | separator | retouched result")
 
@@ -756,7 +861,32 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             reset_btn = gr.Button("Reload Recipe Defaults 🔄", variant="secondary", size="lg", elem_classes=["secondary-btn"])
 
                     with gr.Group():
-                        gr.Markdown("### ⚙️ Manual Overrides")
+                        gr.Markdown("### ⚙️ Export Settings")
+                        with gr.Row():
+                            export_fmt = gr.Radio(choices=["JPEG", "PNG", "WebP"], value="JPEG", label="Format", interactive=True)
+                            export_quality = gr.Slider(10, 100, 95, step=1, label="Compression Quality", info="For JPEG/WebP formats")
+                        export_res = gr.Dropdown(
+                            choices=["Original", "4K (3840px)", "2K (2048px)", "Full HD (1920px)", "HD (1280px)", "720px"],
+                            value="Original", label="Resize / Limit Resolution", interactive=True,
+                            info="Downscales image if it exceeds target dimension while maintaining aspect ratio"
+                        )
+
+                # Column 2: Workspace Canvas (Center)
+                with gr.Column(scale=4, elem_classes=["viewer-panel"]):
+                    with gr.Group():
+                        gr.Markdown("### 🖼️ Preview Canvas")
+                        img_output = gr.Image(height=600, show_label=False)
+                        status = gr.Textbox(label="Status", interactive=False, placeholder="Upload an image and click Process to start...")
+                        export_file = gr.File(label="📥 Download Exported Assets")
+
+                    with gr.Group(visible=False) as debug_panel:
+                        gr.Markdown("### 🔍 Debug Masks & Frequency Layers")
+                        debug_gallery = gr.Gallery(label="Masks (skin, skin+hair, lips, sharpen, glow, freq_low, freq_mid, freq_high)", columns=4, height=300)
+
+                # Column 3: Adjustment Panel (Right)
+                with gr.Column(scale=2.5, elem_classes=["develop-panel"]):
+                    with gr.Group():
+                        gr.Markdown("### ⚙️ Develop Adjustments")
                         
                         with gr.Accordion("✨ Skin Smoothing & Texture", open=True):
                             smooth = gr.Slider(0, 100, 30, step=1, label="Smooth", info="Strength of skin smoothing (blur/median blend)")
@@ -841,35 +971,13 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
 
                         with gr.Accordion("🔮 Color Transfer", open=False):
                             gr.Markdown("Upload a reference image to match its color tone using CDF-based histogram transfer")
-                            color_ref_img = gr.File(label="Reference Image (RAW supported)", file_types=["image"])
+                            color_ref_img = gr.Image(type="filepath", label="Reference Image", show_label=True, height=160)
                             color_ref_strength = gr.Slider(0.0, 1.0, 1.0, step=0.05, label="Transfer Strength", info="Mix ratio between original grade and matched reference grade")
 
                         with gr.Accordion("🔍 Debug & Mask Preview", open=False):
                             debug_mode = gr.Checkbox(label="Generate Debug Masks", value=False, info="Save skin/lips/frequency-layer masks and display them for tuning")
 
                         process_btn_bottom = gr.Button("Apply Overrides & Process ⚡", variant="primary", size="lg", elem_classes=["primary-btn"])
-
-                with gr.Column(scale=1):
-                    with gr.Group():
-                        gr.Markdown("### 🖼️ Output Preview")
-                        img_output = gr.Image(height=540, show_label=False)
-                        status = gr.Textbox(label="Status", interactive=False, placeholder="Upload an image and click Process to start...")
-                        export_file = gr.File(label="📥 Download Exported Assets")
-
-                    with gr.Group():
-                        gr.Markdown("### ⚙️ Export Settings")
-                        with gr.Row():
-                            export_fmt = gr.Radio(choices=["JPEG", "PNG", "WebP"], value="JPEG", label="Format", interactive=True)
-                            export_quality = gr.Slider(10, 100, 95, step=1, label="Compression Quality", info="For JPEG/WebP formats")
-                        export_res = gr.Dropdown(
-                            choices=["Original", "4K (3840px)", "2K (2048px)", "Full HD (1920px)", "HD (1280px)", "720px"],
-                            value="Original", label="Resize / Limit Resolution", interactive=True,
-                            info="Downscales image if it exceeds target dimension while maintaining aspect ratio"
-                        )
-
-                    with gr.Group(visible=False) as debug_panel:
-                        gr.Markdown("### 🔍 Debug Masks & Frequency Layers")
-                        debug_gallery = gr.Gallery(label="Masks (skin, skin+hair, lips, sharpen, glow, freq_low, freq_mid, freq_high)", columns=4, height=300)
 
         with gr.Tab("📁 Folder Automation & Ingestion"):
             with gr.Row():
@@ -1022,13 +1130,15 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         fn=process_image,
         inputs=_process_inputs,
         outputs=_process_outputs,
+        concurrency_limit=1,
     )
 
     process_btn_bottom.click(
         fn=process_image,
         inputs=_process_inputs,
         outputs=_process_outputs,
+        concurrency_limit=1,
     )
 
 if __name__ == "__main__":
-    app.launch(server_name="127.0.0.1", server_port=7860)
+    app.queue(default_concurrency_limit=1).launch(server_name="127.0.0.1", server_port=7860)
