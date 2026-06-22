@@ -52,7 +52,10 @@ def recipe_defaults(recipe_name):
         "nose_smooth": 0,
         "whiten": int(rec.get("skin", {}).get(("porcelain" if "porcelain" in rec.get("skin", {}) else "rosy"), 0) * 100),
         "equalize": int(rec.get("skin", {}).get("equalize", 0) * 100),
-        "relight": int(rec.get("skin", {}).get("relight", rec.get("relight_strength", 0.0) / 100.0) * 100),
+        "relight": int(
+            (rec.get("skin", {}).get("relight") * 100.0) if rec.get("skin", {}).get("relight") is not None
+            else rec.get("relight_strength", 0.0)
+        ),
         "relight_azimuth": int(rec.get("skin", {}).get("relight_azimuth", rec.get("light_azimuth", 0.0))),
         "relight_elevation": int(rec.get("skin", {}).get("relight_elevation", rec.get("light_elevation", 30.0))),
         "eye_enhance": int(rec.get("eyes", {}).get("whites", rec.get("eyes", {}).get("iris", 0)) * 100),
@@ -81,6 +84,7 @@ def recipe_defaults(recipe_name):
         # --- CLI-parity params ---
         "blemish": int(rec.get("frequency", {}).get("smooth", 0.30) * 100),
         "dark_circles": int(rec.get("eyes", {}).get("dark_circles", 0.0) * 100),
+        "catchlight": int(rec.get("eyes", {}).get("catchlight", rec.get("eyes", {}).get("iris", 0.0)) * 100),
         "whiten_tone": ("porcelain" if "porcelain" in rec.get("skin", {}) else "rosy"),
         "auto_exposure": False,
         "lip_finish": rec.get("lip_finish", "gloss"),
@@ -99,8 +103,8 @@ def recipe_defaults(recipe_name):
         "color_grade": rec.get("color_harmony", {}).get("preset", "none"),
         "grade_intensity": int(rec.get("color_harmony", {}).get("amount", 0.0) * 100),
         "chromatic_aberration": float(rec.get("chromatic_aberration", 0.0)),
-        "grain": float(rec.get("grain", 0.0)),
-        "halation": float(rec.get("halation", 0.0)),
+        "grain": float(rec.get("grain", 0.0)) * 500,
+        "halation": float(rec.get("halation", 0.0)) * 100,
         "lut": rec.get("lut", "none"),
         # --- Split toning ---
         "shadow_hue": int(rec.get("shadow_hue", 0.0)),
@@ -150,8 +154,8 @@ def apply_custom_style(style_name, current_recipe="natural"):
         d["eye_enhance"], d["teeth_whiten"],
         d["lip_enhance"], d["lip_tint"], d["blush"], d["nose_blush"], d["under_eye_blush"],
         d["hair_enhance"], d["dodge_burn"], d["specular_bloom"], d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["contrast"], d["brightness"],
-        d["highlights"], d["shadows"], d["whites"], d["blacks"],
-        d["blemish"], d["dark_circles"], d["whiten_tone"], d["auto_exposure"],
+         d["highlights"], d["shadows"], d["whites"], d["blacks"],
+        d["blemish"], d["dark_circles"], d["catchlight"], d["whiten_tone"], d["auto_exposure"],
         d["clarity"], d["vibrance"], d["saturation"], d["lip_finish"],
         d["slimming"], d["impact"],
         d["sharpen"], d["sharpen_radius"], d["glow"], d["vignette"], d["subject_separation"], d["specular_bloom_tone"],
@@ -280,40 +284,118 @@ def on_process_folder(input_dir, output_dir, style_type, custom_style_name, reci
         return None, None, f"Exception during batch processing: {e}"
 
 
-def process_image(img_paths, recipe,
-                  smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth,
-                  whiten, equalize, white_costume_lift,
-                  relight, relight_azimuth, relight_elevation,
-                  eye_enhance, teeth_whiten,
-                  lip_enhance, lip_tint, blush, nose_blush, under_eye_blush,
-                  hair_enhance, dodge_burn, specular_bloom, bloom, bloom_threshold, bloom_softness, contrast, brightness,
-                  highlights, shadows, whites, blacks,
-                  color_ref_path, color_ref_strength,
-                  show_compare, fast,
-                  export_fmt, export_quality, export_res,
-                  # New params
-                  blemish, dark_circles, whiten_tone, auto_exposure,
-                  clarity, vibrance, saturation, lip_finish,
-                  slimming, impact,
-                  sharpen, sharpen_radius, glow, vignette, subject_separation, specular_bloom_tone,
-                  color_grade, grade_intensity,
-                  chromatic_aberration, grain, halation, lut,
-                  shadow_hue, shadow_sat, midtone_hue, midtone_sat, highlight_hue, highlight_sat,
-                  debug_mode):
+PROCESS_INPUT_KEYS = [
+    "img_paths", "recipe",
+    "smooth", "mid_reduction", "texture_opacity", "pore_synthesis", "nose_smooth",
+    "whiten", "equalize", "white_costume_lift",
+    "relight", "relight_azimuth", "relight_elevation",
+    "eye_enhance", "teeth_whiten",
+    "lip_enhance", "lip_tint", "blush", "nose_blush", "under_eye_blush",
+    "hair_enhance", "dodge_burn", "specular_bloom", "bloom", "bloom_threshold", "bloom_softness", "contrast", "brightness",
+    "highlights", "shadows", "whites", "blacks",
+    "color_ref_path", "color_ref_strength",
+    "show_compare", "fast",
+    "export_fmt", "export_quality", "export_res",
+    "blemish", "dark_circles", "catchlight", "whiten_tone", "auto_exposure",
+    "clarity", "vibrance", "saturation", "lip_finish",
+    "slimming", "impact",
+    "sharpen", "sharpen_radius", "glow", "vignette", "subject_separation", "specular_bloom_tone",
+    "color_grade", "grade_intensity",
+    "chromatic_aberration", "grain", "halation", "lut",
+    "shadow_hue", "shadow_sat", "midtone_hue", "midtone_sat", "highlight_hue", "highlight_sat",
+    "debug_mode",
+]
+
+def process_image(*args):
+    params = dict(zip(PROCESS_INPUT_KEYS, args))
+    img_paths = params.get("img_paths")
+    recipe = params.get("recipe")
+    smooth = params.get("smooth")
+    mid_reduction = params.get("mid_reduction")
+    texture_opacity = params.get("texture_opacity")
+    pore_synthesis = params.get("pore_synthesis")
+    nose_smooth = params.get("nose_smooth")
+    whiten = params.get("whiten")
+    equalize = params.get("equalize")
+    white_costume_lift = params.get("white_costume_lift")
+    relight = params.get("relight")
+    relight_azimuth = params.get("relight_azimuth")
+    relight_elevation = params.get("relight_elevation")
+    eye_enhance = params.get("eye_enhance")
+    teeth_whiten = params.get("teeth_whiten")
+    lip_enhance = params.get("lip_enhance")
+    lip_tint = params.get("lip_tint")
+    blush = params.get("blush")
+    nose_blush = params.get("nose_blush")
+    under_eye_blush = params.get("under_eye_blush")
+    hair_enhance = params.get("hair_enhance")
+    dodge_burn = params.get("dodge_burn")
+    specular_bloom = params.get("specular_bloom")
+    bloom = params.get("bloom")
+    bloom_threshold = params.get("bloom_threshold")
+    bloom_softness = params.get("bloom_softness")
+    contrast = params.get("contrast")
+    brightness = params.get("brightness")
+    highlights = params.get("highlights")
+    shadows = params.get("shadows")
+    whites = params.get("whites")
+    blacks = params.get("blacks")
+    color_ref_path = params.get("color_ref_path")
+    color_ref_strength = params.get("color_ref_strength")
+    show_compare = params.get("show_compare")
+    fast = params.get("fast")
+    export_fmt = params.get("export_fmt")
+    export_quality = params.get("export_quality")
+    export_res = params.get("export_res")
+    blemish = params.get("blemish")
+    dark_circles = params.get("dark_circles")
+    catchlight = params.get("catchlight")
+    whiten_tone = params.get("whiten_tone")
+    auto_exposure = params.get("auto_exposure")
+    clarity = params.get("clarity")
+    vibrance = params.get("vibrance")
+    saturation = params.get("saturation")
+    lip_finish = params.get("lip_finish")
+    slimming = params.get("slimming")
+    impact = params.get("impact")
+    sharpen = params.get("sharpen")
+    sharpen_radius = params.get("sharpen_radius")
+    glow = params.get("glow")
+    vignette = params.get("vignette")
+    subject_separation = params.get("subject_separation")
+    specular_bloom_tone = params.get("specular_bloom_tone")
+    color_grade = params.get("color_grade")
+    grade_intensity = params.get("grade_intensity")
+    chromatic_aberration = params.get("chromatic_aberration")
+    grain = params.get("grain")
+    halation = params.get("halation")
+    lut = params.get("lut")
+    shadow_hue = params.get("shadow_hue")
+    shadow_sat = params.get("shadow_sat")
+    midtone_hue = params.get("midtone_hue")
+    midtone_sat = params.get("midtone_sat")
+    highlight_hue = params.get("highlight_hue")
+    highlight_sat = params.get("highlight_sat")
+    debug_mode = params.get("debug_mode")
+
     if not img_paths:
-        return None, None, "Please upload an image first.", None, gr.update(visible=False)
+        return None, gr.update(visible=False), None, None, "Please upload an image first.", None, gr.update(visible=False)
 
     if not isinstance(img_paths, list):
         img_paths = [img_paths]
 
     if len(img_paths) == 0:
-        return None, None, "Please upload at least one image.", None, gr.update(visible=False)
+        return None, gr.update(visible=False), None, None, "Please upload at least one image.", None, gr.update(visible=False)
 
     gr.Info(f"Processing {len(img_paths)} image(s)...")
 
     exported_paths = []
     first_result_rgb = None
     first_combined = None
+    first_original = None
+    first_result = None
+    original = None
+    result = None
     debug_images = []
 
     color_ref_bgr = None
@@ -327,7 +409,24 @@ def process_image(img_paths, recipe,
     engine = get_engine()
     start = time.time()
 
-    temp_dir = tempfile.mkdtemp()
+    # Clean up older temp directories and ZIPs from previous runs (older than 5 minutes)
+    import shutil
+    try:
+        temp_root = Path(tempfile.gettempdir())
+        now = time.time()
+        for p in temp_root.glob("retouch_tmp_*"):
+            if p.is_dir() and (now - p.stat().st_mtime > 300):
+                shutil.rmtree(p, ignore_errors=True)
+        for p in temp_root.glob("retouch_export_*.zip"):
+            if p.is_file() and (now - p.stat().st_mtime > 300):
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"Temp directory cleanup warning: {e}")
+
+    temp_dir = tempfile.mkdtemp(prefix="retouch_tmp_")
     debug_dir = os.path.join(temp_dir, "debug") if debug_mode else None
 
     for idx, path_item in enumerate(img_paths):
@@ -357,6 +456,7 @@ def process_image(img_paths, recipe,
                 relight_elevation=relight_elevation,
                 eye_enhance=eye_enhance,
                 dark_circles=dark_circles,
+                catchlight=catchlight,
                 teeth_whiten=teeth_whiten,
                 lip_enhance=lip_enhance,
                 lip_tint=lip_tint_val,
@@ -390,8 +490,8 @@ def process_image(img_paths, recipe,
                 color_grade=color_grade_val,
                 grade_intensity=grade_intensity_val,
                 chromatic_aberration=chromatic_aberration if chromatic_aberration > 0 else None,
-                grain=grain if grain > 0 else None,
-                halation=halation if halation > 0 else None,
+                grain=(grain / 500.0) if grain > 0 else None,
+                halation=(halation / 100.0) if halation > 0 else None,
                 lut=lut_val,
                 shadow_hue=shadow_hue,
                 shadow_sat=shadow_sat,
@@ -403,13 +503,15 @@ def process_image(img_paths, recipe,
                 color_ref=color_ref_bgr,
                 color_transfer_intensity=color_ref_strength,
                 fast=fast,
-                debug_dir=debug_dir if idx == 0 else None,
+                debug_dir=debug_dir if first_result_rgb is None else None,
             )
 
             result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
 
-            if idx == 0:
+            if first_result_rgb is None:
                 first_result_rgb = result_rgb
+                first_original = original
+                first_result = result
                 if show_compare:
                     h = min(original.shape[0], result.shape[0])
                     sep = np.full((h, 4, 3), 200, dtype=np.uint8)
@@ -480,7 +582,7 @@ def process_image(img_paths, recipe,
 
     if not exported_paths:
         gr.Warning("No images were successfully processed.")
-        return None, None, "Error: No images were successfully processed.", None, gr.update(visible=False)
+        return None, gr.update(visible=False), None, None, "Error: No images were successfully processed.", None, gr.update(visible=False)
 
     preview = first_combined if show_compare else first_result_rgb
     debug_gallery = debug_images if debug_images else None
@@ -496,16 +598,16 @@ def process_image(img_paths, recipe,
         gr.Info(f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s")
 
         if show_compare:
-            slide_html = _make_comparison_html(original, result)
-            return gr.update(visible=False), slide_html, original, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓", debug_gallery, debug_vis
-        return preview, gr.update(visible=False), original, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓", debug_gallery, debug_vis
+            slide_html = _make_comparison_html(first_original, first_result) if (first_original is not None and first_result is not None) else ""
+            return gr.update(visible=False), slide_html, first_original, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓", debug_gallery, debug_vis
+        return preview, gr.update(visible=False), first_original, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓", debug_gallery, debug_vis
     else:
         gr.Info(f"Done in {elapsed:.1f}s")
 
         if show_compare:
-            slide_html = _make_comparison_html(original, result)
-            return gr.update(visible=False), slide_html, original, exported_paths[0], f"Done in {elapsed:.1f}s ✓", debug_gallery, debug_vis
-        return preview, gr.update(visible=False), original, exported_paths[0], f"Done in {elapsed:.1f}s ✓", debug_gallery, debug_vis
+            slide_html = _make_comparison_html(first_original, first_result) if (first_original is not None and first_result is not None) else ""
+            return gr.update(visible=False), slide_html, first_original, exported_paths[0], f"Done in {elapsed:.1f}s ✓", debug_gallery, debug_vis
+        return preview, gr.update(visible=False), first_original, exported_paths[0], f"Done in {elapsed:.1f}s ✓", debug_gallery, debug_vis
 
 
 def on_recipe_change(recipe):
@@ -518,8 +620,8 @@ def on_recipe_change(recipe):
         d["lip_enhance"], d["lip_tint"], d["blush"], d["nose_blush"], d["under_eye_blush"],
         d["hair_enhance"], d["dodge_burn"], d["specular_bloom"], d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["contrast"], d["brightness"],
         d["highlights"], d["shadows"], d["whites"], d["blacks"],
-        # New params (28)
-        d["blemish"], d["dark_circles"], d["whiten_tone"], d["auto_exposure"],
+         # New params (28)
+        d["blemish"], d["dark_circles"], d["catchlight"], d["whiten_tone"], d["auto_exposure"],
         d["clarity"], d["vibrance"], d["saturation"], d["lip_finish"],
         d["slimming"], d["impact"],
         d["sharpen"], d["sharpen_radius"], d["glow"], d["vignette"], d["subject_separation"], d["specular_bloom_tone"],
@@ -529,14 +631,66 @@ def on_recipe_change(recipe):
     )
 
 
+def reset_skin_smoothing(recipe_name):
+    d = recipe_defaults(recipe_name)
+    return d["smooth"], d["nose_smooth"], d["mid_reduction"], d["texture_opacity"], d["pore_synthesis"], d["blemish"]
+
+def reset_skin_tone(recipe_name):
+    d = recipe_defaults(recipe_name)
+    return d["whiten"], d["whiten_tone"], d["equalize"], d["auto_exposure"], d["white_costume_lift"]
+
+def reset_basic_tone(recipe_name):
+    d = recipe_defaults(recipe_name)
+    return d["contrast"], d["brightness"], d["clarity"], d["vibrance"], d["saturation"]
+
+def reset_tone_curve(recipe_name):
+    d = recipe_defaults(recipe_name)
+    return d["highlights"], d["shadows"], d["whites"], d["blacks"]
+
+def reset_relighting(recipe_name):
+    d = recipe_defaults(recipe_name)
+    return d["relight"], d["relight_azimuth"], d["relight_elevation"]
+
+def reset_eyes_lips(recipe_name):
+    d = recipe_defaults(recipe_name)
+    return d["eye_enhance"], d["catchlight"], d["dark_circles"], d["teeth_whiten"], d["lip_enhance"], d["lip_tint"], d["lip_finish"], d["blush"], d["nose_blush"], d["under_eye_blush"]
+
+def reset_face_reshaping(recipe_name):
+    d = recipe_defaults(recipe_name)
+    return d["slimming"]
+
+def reset_structure_effects(recipe_name):
+    d = recipe_defaults(recipe_name)
+    return d["hair_enhance"], d["dodge_burn"], d["impact"], d["specular_bloom"], d["specular_bloom_tone"], d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["sharpen"], d["sharpen_radius"], d["glow"], d["vignette"], d["subject_separation"]
+
+def reset_color_grading(recipe_name):
+    d = recipe_defaults(recipe_name)
+    return d["color_grade"], d["grade_intensity"]
+
+def reset_film_effects(recipe_name):
+    d = recipe_defaults(recipe_name)
+    return d["chromatic_aberration"], d["grain"], d["halation"], d["lut"]
+
+def reset_split_toning(recipe_name):
+    d = recipe_defaults(recipe_name)
+    return d["shadow_hue"], d["shadow_sat"], d["midtone_hue"], d["midtone_sat"], d["highlight_hue"], d["highlight_sat"]
+
+def reset_color_transfer():
+    return None, 1.0
+
+def reset_debug(recipe_name):
+    return False
+
+
+
 LIP_TINTS = ["none", "cosplay", "rose", "pink", "coral", "natural", "berry"]
 custom_style_choices = get_custom_style_names()
 
 COMPARE_TPL = """
 <div id="cmp-%(uid)s" style="position:relative;width:100%%;user-select:none;overflow:hidden;border-radius:4px">
-  <img src="%(orig)s" style="width:100%%;display:block;pointer-events:none">
+  <img src="%(result)s" style="width:100%%;display:block;pointer-events:none">
   <div class="cmp-overlay" style="position:absolute;top:0;left:0;width:50%%;height:100%%;overflow:hidden">
-    <img src="%(result)s" style="width:100%%;display:block;max-width:none;position:absolute;left:0;top:0;pointer-events:none">
+    <img src="%(orig)s" style="width:100%%;display:block;max-width:none;position:absolute;left:0;top:0;pointer-events:none">
   </div>
   <div class="cmp-handle" style="position:absolute;top:0;left:50%%;width:3px;height:100%%;background:#fff;cursor:ew-resize;z-index:10;box-shadow:0 0 6px rgba(0,0,0,0.4)"></div>
   <div class="cmp-label" style="position:absolute;top:10px;left:10px;background:rgba(0,0,0,0.55);color:#fff;padding:2px 10px;border-radius:3px;font-size:11px;letter-spacing:1px;pointer-events:none">BEFORE</div>
@@ -547,11 +701,29 @@ COMPARE_TPL = """
   var c = document.getElementById('cmp-%(uid)s');
   var o = c.querySelector('.cmp-overlay');
   var h = c.querySelector('.cmp-handle');
+  var imgResult = c.children[0];
+  var imgOrig = o.children[0];
+  
+  function syncSize() {{
+    var rect = imgResult.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) {{
+      imgOrig.style.width = rect.width + 'px';
+      imgOrig.style.height = rect.height + 'px';
+    }}
+  }}
+  
+  imgResult.onload = syncSize;
+  window.addEventListener('resize', syncSize);
+  setTimeout(syncSize, 100);
+  setTimeout(syncSize, 500);
+  setTimeout(syncSize, 1000);
+  
   var d = false;
   function m(x){{
     var r = c.getBoundingClientRect();
     var p = Math.max(0,Math.min(100,(x-r.left)/r.width*100));
     o.style.width=p+'%%'; h.style.left=p+'%%';
+    syncSize();
   }}
   h.onmousedown=function(e){{d=true;e.preventDefault()}};
   document.onmousemove=function(e){{if(d)m(e.clientX)}};
@@ -581,239 +753,259 @@ def _make_comparison_html(orig_bgr, result_bgr, max_height=600):
     }
 
 with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.themes.Soft(primary_hue="sky", secondary_hue="slate"), css="""
-    /* Global font override */
+    /* --- Liquid Glass Theme --- */
+    
+    /* Scoped under .dark to avoid light mode text visibility issues */
+    .dark.gradio-container, .dark .gradio-container {
+        --background-fill-primary: transparent !important;
+        --background-fill-primary-dark: transparent !important;
+        --block-background-fill: transparent !important;
+        --block-background-fill-dark: transparent !important;
+        --block-background-fill-light: transparent !important;
+        --input-background-fill: rgba(255,255,255,0.06) !important;
+        --input-background-fill-dark: rgba(255,255,255,0.06) !important;
+        --border-color-primary: rgba(255,255,255,0.08) !important;
+        --border-color-primary-dark: rgba(255,255,255,0.08) !important;
+        --body-text-color: #e8edf5 !important;
+        --body-text-color-dark: #e8edf5 !important;
+        --block-label-text-color: rgba(255,255,255,0.55) !important;
+        --block-label-text-color-dark: rgba(255,255,255,0.55) !important;
+        --button-primary-background-fill: rgba(0, 162, 237, 0.7) !important;
+        --button-primary-background-fill-dark: rgba(0, 162, 237, 0.7) !important;
+        --button-secondary-background-fill: rgba(255,255,255,0.06) !important;
+        --button-secondary-background-fill-dark: rgba(255,255,255,0.06) !important;
+        --slider-color: #60a5fa !important;
+        --slider-color-dark: #60a5fa !important;
+        --checkbox-background-color-selected: #60a5fa !important;
+        --checkbox-background-color-selected-dark: #60a5fa !important;
+        --shadow-drop: 0 8px 32px rgba(0,0,0,0.25) !important;
+        --shadow-drop-dark: 0 8px 32px rgba(0,0,0,0.25) !important;
+    }
+
+    /* Full-width container */
+    html, body {
+        max-width: 100vw !important;
+        overflow-x: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    body.dark {
+        background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%) !important;
+        background-attachment: fixed !important;
+    }
+    .gradio-container-outer {
+        max-width: 100vw !important;
+        width: 100vw !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    .gradio-container, .gradio-container .contain, .gradio-container .main-wrap {
+        max-width: 100vw !important;
+        width: 100vw !important;
+        padding-left: 12px !important;
+        padding-right: 12px !important;
+        background: transparent !important;
+    }
+    .dark .gradio-container, .dark .gradio-container .contain, .dark .gradio-container .main-wrap {
+        color: #e8edf5 !important;
+    }
+    
+    /* Global font */
     body, input, button, select, textarea, span, p, div, label {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
     }
-
-    /* Pitch Dark Lightroom Workspace */
-    :root, body, .gradio-container {
-        background-color: #121316 !important;
-        background: #121316 !important;
-        color: #e2e8f0 !important;
+    
+    /* Glass panels with frost effect (Dark Mode Only) */
+    .dark .gr-group, .dark .group, .dark .form, .dark .block, .dark .panel, .dark .padded {
+        background: rgba(255, 255, 255, 0.06) !important;
+        backdrop-filter: blur(24px) saturate(180%) !important;
+        -webkit-backdrop-filter: blur(24px) saturate(180%) !important;
+        border: 1px solid rgba(255, 255, 255, 0.08) !important;
+        border-radius: 14px !important;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
     }
     
-    /* Matte Charcoal layout panels */
-    .gr-group, .group, .form, .block, .panel, .padded {
-        background-color: #1a1c22 !important;
-        background: #1a1c22 !important;
-        border: 1px solid #282b32 !important;
-        border-radius: 6px !important;
-        box-shadow: none !important;
-    }
-    
-    /* Navigation tabs styled as Lightroom top bar */
-    .tabs {
-        border-bottom: 1px solid #22252a !important;
-        background: #181a1f !important;
-        border-radius: 6px !important;
+    /* Navigation tabs (Dark Mode Only) */
+    .dark .tabs {
+        background: rgba(255, 255, 255, 0.04) !important;
+        backdrop-filter: blur(20px) !important;
+        -webkit-backdrop-filter: blur(20px) !important;
+        border: 1px solid rgba(255, 255, 255, 0.06) !important;
+        border-radius: 12px !important;
         padding: 4px !important;
-        box-shadow: none !important;
-        border: 1px solid #22252a !important;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2) !important;
         margin-bottom: 20px !important;
     }
     
     .tab-nav {
         border-bottom: none !important;
-        background: transparent !important;
         display: flex !important;
-        gap: 6px !important;
+        gap: 4px !important;
     }
     
-    .tab-nav button {
+    .dark .tab-nav button {
         border: none !important;
-        border-radius: 4px !important;
-        padding: 8px 16px !important;
-        font-weight: 700 !important;
+        border-radius: 8px !important;
+        padding: 8px 18px !important;
+        font-weight: 600 !important;
         font-size: 0.82rem !important;
-        text-transform: uppercase !important;
-        letter-spacing: 0.05em !important;
-        color: #8a94a6 !important;
+        color: rgba(255, 255, 255, 0.5) !important;
         background: transparent !important;
-        transition: all 0.15s ease !important;
+        transition: all 0.2s ease !important;
+        letter-spacing: 0.03em !important;
     }
     
-    .tab-nav button.selected {
-        background: #252830 !important;
-        color: #00a2ed !important;
-        box-shadow: none !important;
-        border-bottom: 2px solid #00a2ed !important;
-        border-radius: 4px 4px 0 0 !important;
-    }
-    
-    /* Lightroom-styled Buttons */
-    .primary-btn {
-        background: #00a2ed !important;
-        border: 1px solid #008cd1 !important;
+    .dark .tab-nav button.selected {
+        background: rgba(255, 255, 255, 0.1) !important;
         color: #ffffff !important;
-        font-weight: 700 !important;
-        font-size: 0.88rem !important;
-        text-transform: uppercase !important;
+        box-shadow: 0 1px 8px rgba(0, 0, 0, 0.15) !important;
+    }
+    
+    /* Glass buttons */
+    .primary-btn {
+        background: rgba(0, 162, 237, 0.7) !important;
+        backdrop-filter: blur(12px) !important;
+        -webkit-backdrop-filter: blur(12px) !important;
+        border: 1px solid rgba(255, 255, 255, 0.15) !important;
+        color: #ffffff !important;
+        font-weight: 600 !important;
+        font-size: 0.85rem !important;
         letter-spacing: 0.04em !important;
-        border-radius: 4px !important;
-        padding: 10px 20px !important;
+        border-radius: 10px !important;
+        padding: 10px 22px !important;
         cursor: pointer !important;
-        transition: all 0.15s ease !important;
-        box-shadow: none !important;
+        transition: all 0.2s ease !important;
+        box-shadow: 0 4px 16px rgba(0, 162, 237, 0.25) !important;
     }
     .primary-btn:hover {
-        background: #0091d6 !important;
-        border-color: #007bc2 !important;
-        transform: translateY(-1px) !important;
+        background: rgba(0, 162, 237, 0.85) !important;
+        transform: translateY(-2px) !important;
+        box-shadow: 0 8px 24px rgba(0, 162, 237, 0.35) !important;
+        border-color: rgba(255, 255, 255, 0.25) !important;
     }
     .primary-btn:active {
         transform: translateY(0px) !important;
     }
     
-    .secondary-btn {
-        background: #282b30 !important;
-        border: 1px solid #383b40 !important;
-        color: #cbd5e1 !important;
-        font-weight: 700 !important;
-        font-size: 0.88rem !important;
-        text-transform: uppercase !important;
+    .dark .secondary-btn {
+        background: rgba(255, 255, 255, 0.06) !important;
+        backdrop-filter: blur(8px) !important;
+        -webkit-backdrop-filter: blur(8px) !important;
+        border: 1px solid rgba(255, 255, 255, 0.08) !important;
+        color: rgba(255, 255, 255, 0.7) !important;
+        font-weight: 600 !important;
+        font-size: 0.85rem !important;
         letter-spacing: 0.04em !important;
-        border-radius: 4px !important;
-        padding: 10px 20px !important;
-        transition: all 0.15s ease !important;
-        box-shadow: none !important;
+        border-radius: 10px !important;
+        padding: 10px 22px !important;
+        transition: all 0.2s ease !important;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1) !important;
     }
-    .secondary-btn:hover {
-        background: #33363c !important;
-        border-color: #484b50 !important;
+    .dark .secondary-btn:hover {
+        background: rgba(255, 255, 255, 0.1) !important;
         color: #ffffff !important;
-        transform: translateY(-1px) !important;
+        transform: translateY(-2px) !important;
+        border-color: rgba(255, 255, 255, 0.15) !important;
     }
-    .secondary-btn:active {
+    .dark .secondary-btn:active {
         transform: translateY(0px) !important;
     }
     
-    /* Collapsible Adjustment Panels (Lightroom Accordions) */
-    .accordion {
-        border: 1px solid #282b32 !important;
-        background: #1e2025 !important;
-        border-radius: 4px !important;
+    /* Glass accordions (Dark Mode Only) */
+    .dark .accordion {
+        border: 1px solid rgba(255, 255, 255, 0.06) !important;
+        background: rgba(255, 255, 255, 0.03) !important;
+        backdrop-filter: blur(12px) !important;
+        -webkit-backdrop-filter: blur(12px) !important;
+        border-radius: 10px !important;
         margin-bottom: 8px !important;
         overflow: visible !important;
-        box-shadow: none !important;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08) !important;
+        transition: border-color 0.2s ease !important;
     }
-    .accordion:hover {
-        border-color: #383b40 !important;
-        transform: none !important;
-        box-shadow: none !important;
-    }
-    
-    /* Accordion header text styling */
-    .accordion > summary, .accordion .label-wrap {
-        background: #24262d !important;
-        padding: 6px 12px !important;
-        color: #b0b8c6 !important;
-        font-size: 0.78rem !important;
-        font-weight: 800 !important;
-        text-transform: uppercase !important;
-        letter-spacing: 0.06em !important;
-        border-bottom: 1px solid #181a1f !important;
+    .dark .accordion:hover {
+        border-color: rgba(255, 255, 255, 0.12) !important;
     }
     
-    /* Independent Develop settings panel scroll container (Right Column) */
+    .dark .accordion > summary, .dark .accordion .label-wrap {
+        background: rgba(255, 255, 255, 0.04) !important;
+        padding: 8px 14px !important;
+        color: rgba(255, 255, 255, 0.7) !important;
+        font-size: 0.75rem !important;
+        font-weight: 700 !important;
+        letter-spacing: 0.05em !important;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.04) !important;
+        border-radius: 10px 10px 0 0 !important;
+    }
+    
+    /* Develop panel container */
     .develop-panel {
         max-height: 84vh !important;
         overflow-y: auto !important;
         padding-right: 6px !important;
-        background: #16181c !important;
+        background: transparent !important;
         border: none !important;
     }
     
-    /* Clean Develop Panel scrollbar */
-    .develop-panel::-webkit-scrollbar {
-        width: 5px !important;
-    }
-    .develop-panel::-webkit-scrollbar-track {
-        background: #121316 !important;
-    }
-    .develop-panel::-webkit-scrollbar-thumb {
-        background: #383b40 !important;
-        border-radius: 3px !important;
-    }
-    .develop-panel::-webkit-scrollbar-thumb:hover {
-        background: #484b50 !important;
-    }
-    .develop-panel {
-        scrollbar-width: thin !important;
-        scrollbar-color: #383b40 #121316 !important;
+    .develop-panel::-webkit-scrollbar { width: 4px !important; }
+    .develop-panel::-webkit-scrollbar-track { background: transparent !important; }
+    .develop-panel::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15) !important; border-radius: 2px !important; }
+    .develop-panel::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.25) !important; }
+    .develop-panel { scrollbar-width: thin !important; scrollbar-color: rgba(255,255,255,0.15) transparent !important; }
+    
+    /* Sliders */
+    .dark .gr-slider input[type=range] {
+        accent-color: #60a5fa !important;
+        background: rgba(255, 255, 255, 0.08) !important;
     }
     
-    /* Sliders Visual tuning */
-    .gr-slider input[type=range] {
-        accent-color: #00a2ed !important;
-        background: #2c2e35 !important;
+    /* Text inputs (Dark Mode Only) */
+    .dark input[type="text"], .dark input[type="number"], .dark select, .dark textarea {
+        background: rgba(255, 255, 255, 0.06) !important;
+        backdrop-filter: blur(8px) !important;
+        -webkit-backdrop-filter: blur(8px) !important;
+        color: #e8edf5 !important;
+        border: 1px solid rgba(255, 255, 255, 0.08) !important;
+        border-radius: 8px !important;
+        padding: 8px 12px !important;
+    }
+    .dark input[type="text"]:focus, .dark input[type="number"]:focus, .dark select:focus, .dark textarea:focus {
+        border-color: #60a5fa !important;
+        box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.2) !important;
     }
     
-    /* Textboxes / Inputs styling */
-    input[type="text"], input[type="number"], select, textarea {
-        background-color: #202328 !important;
-        color: #ffffff !important;
-        border: 1px solid #303338 !important;
-        border-radius: 4px !important;
-        padding: 6px 10px !important;
-    }
-    input[type="text"]:focus, input[type="number"]:focus, select:focus, textarea:focus {
-        border-color: #00a2ed !important;
-        box-shadow: 0 0 0 1px #00a2ed !important;
+    /* Checkbox & Radio */
+    input[type="checkbox"] { accent-color: #60a5fa !important; }
+    
+    /* Typography (Dark Mode Only) */
+    .dark h1, .dark h2, .dark h3,
+    .dark h4, .dark h5, .dark h6,
+    .dark p, .dark strong, .dark .prose,
+    .dark .prose h1, .dark .prose h2,
+    .dark .prose h3, .dark .prose h4,
+    .dark .prose p, .dark .markdown-text h1,
+    .dark .markdown-text h2, .dark .markdown-text h3,
+    .dark .markdown-text p, .dark div.markdown {
+        color: #e8edf5 !important;
     }
     
-    /* Checkbox & Radio tinting */
-    input[type="checkbox"] {
-        accent-color: #00a2ed !important;
-    }
-
-    /* Markdown and Heading Typography contrast fixes for dark mode */
-    .gradio-container h1,
-    .gradio-container h2,
-    .gradio-container h3,
-    .gradio-container h4,
-    .gradio-container h5,
-    .gradio-container h6,
-    .gradio-container p,
-    .gradio-container strong,
-    .gradio-container .prose,
-    .gradio-container .prose h1,
-    .gradio-container .prose h2,
-    .gradio-container .prose h3,
-    .gradio-container .prose h4,
-    .gradio-container .prose p,
-    .gradio-container .markdown-text h1,
-    .gradio-container .markdown-text h2,
-    .gradio-container .markdown-text h3,
-    .gradio-container .markdown-text p,
-    .gradio-container div.markdown {
-        color: #e2e8f0 !important;
-    }
-
-    /* Clean, flat, elegant text labels (no chunky background shapes) */
-    .gradio-container label span, 
-    .gradio-container .form-label,
-    .gradio-container label .form-label-text,
-    .gradio-container .label-val {
+    /* Form labels (Dark Mode Only) */
+    .dark label span,
+    .dark .form-label,
+    .dark label .form-label-text,
+    .dark .label-val {
         background: transparent !important;
-        background-color: transparent !important;
         border: none !important;
         box-shadow: none !important;
         padding: 0 !important;
-        color: #b0b8c6 !important;
-        font-weight: 700 !important;
-        font-size: 0.82rem !important;
-        text-transform: uppercase !important;
-        letter-spacing: 0.05em !important;
+        color: rgba(255, 255, 255, 0.55) !important;
+        font-weight: 600 !important;
+        font-size: 0.78rem !important;
+        letter-spacing: 0.04em !important;
     }
     
-    /* Presets list container on the Left Panel (Lightroom style vertical scrolling panel) */
-    .preset-chips {
-        border: none !important;
-        background: transparent !important;
-        box-shadow: none !important;
-        padding: 0 !important;
-    }
+    /* Preset chips (glass style - Dark Mode Only) */
+    .preset-chips { border: none !important; background: transparent !important; padding: 0 !important; }
     .preset-chips .wrap {
         display: flex !important;
         flex-direction: column !important;
@@ -824,149 +1016,312 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         border: none !important;
         padding: 0 4px 0 0 !important;
     }
-    .preset-chips .wrap::-webkit-scrollbar {
-        width: 4px !important;
-    }
-    .preset-chips .wrap::-webkit-scrollbar-track {
-        background: transparent !important;
-    }
-    .preset-chips .wrap::-webkit-scrollbar-thumb {
-        background: #2c2e35 !important;
-        border-radius: 2px !important;
-    }
-    .preset-chips label {
+    .preset-chips .wrap::-webkit-scrollbar { width: 3px !important; }
+    .preset-chips .wrap::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12) !important; border-radius: 2px !important; }
+    
+    .dark .preset-chips label {
         display: flex !important;
         align-items: center !important;
-        justify-content: flex-start !important; /* Left-aligned */
-        background: #1e2025 !important;
-        border: 1px solid #282b32 !important;
-        border-radius: 4px !important; /* Lightroom crisp borders */
+        justify-content: flex-start !important;
+        background: rgba(255, 255, 255, 0.04) !important;
+        backdrop-filter: blur(8px) !important;
+        -webkit-backdrop-filter: blur(8px) !important;
+        border: 1px solid rgba(255, 255, 255, 0.06) !important;
+        border-radius: 8px !important;
         padding: 8px 14px !important;
         cursor: pointer !important;
-        transition: all 0.15s ease !important;
-        font-weight: 600 !important;
-        font-size: 0.85rem !important;
-        color: #b0b8c6 !important;
-        box-shadow: none !important;
-        user-select: none !important;
+        transition: all 0.2s ease !important;
+        font-weight: 500 !important;
+        font-size: 0.82rem !important;
+        color: rgba(255, 255, 255, 0.6) !important;
         width: 100% !important;
     }
-    .preset-chips label:hover {
-        border-color: #3e424c !important;
-        color: #cbd5e1 !important;
+    .dark .preset-chips label:hover {
+        background: rgba(255, 255, 255, 0.08) !important;
+        color: rgba(255, 255, 255, 0.85) !important;
         transform: translateY(-1px) !important;
-    }
-    /* Lightroom-styled active state with vertical highlight bar */
-    .preset-chips label.selected {
-        background: #252830 !important;
-        color: #00a2ed !important;
-        border-left: 3px solid #00a2ed !important;
-        border-top-color: #282b32 !important;
-        border-right-color: #282b32 !important;
-        border-bottom-color: #282b32 !important;
-        border-radius: 0 4px 4px 0 !important;
-        box-shadow: none !important;
-    }
-    .dark .preset-chips label {
-        background: #1e2025 !important;
-        border: 1px solid #282b32 !important;
-        color: #b0b8c6 !important;
+        border-color: rgba(255, 255, 255, 0.12) !important;
     }
     .dark .preset-chips label.selected {
-        background: #252830 !important;
-        color: #00a2ed !important;
-        border-left: 3px solid #00a2ed !important;
+        background: rgba(96, 165, 250, 0.15) !important;
+        color: #93c5fd !important;
+        border-left: 3px solid #60a5fa !important;
+        border-radius: 0 8px 8px 0 !important;
     }
+    .preset-chips input[type="radio"] { display: none !important; }
+    .preset-chips label .radio-circle { display: none !important; }
     
-    /* Hide the default radio circles */
-    .preset-chips input[type="radio"] {
-        display: none !important;
-    }
-    .preset-chips label .radio-circle {
-        display: none !important;
-    }
-    
-    /* Dropdown options container */
-    ul.options, .options {
-        background-color: #202328 !important;
-        border: 1px solid #303338 !important;
-        box-shadow: 0 4px 16px rgba(0,0,0,0.5) !important;
+    /* Dropdown options (Dark Mode Only) */
+    .dark ul.options, .dark .options {
+        background: rgba(30, 27, 75, 0.95) !important;
+        backdrop-filter: blur(24px) saturate(180%) !important;
+        -webkit-backdrop-filter: blur(24px) saturate(180%) !important;
+        border: 1px solid rgba(255, 255, 255, 0.08) !important;
+        border-radius: 10px !important;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4) !important;
         z-index: 9999 !important;
         position: absolute !important;
         overflow-y: auto !important;
         max-height: 280px !important;
         scrollbar-width: thin !important;
-        scrollbar-color: #383b40 #202328 !important;
+        scrollbar-color: rgba(255,255,255,0.15) rgba(255,255,255,0.02) !important;
     }
-    ul.options > li, .options > li {
-        color: #cbd5e1 !important;
-        padding: 8px 14px !important;
-        transition: background 0.15s ease !important;
+    .dark ul.options > li, .dark .options > li {
+        color: rgba(255, 255, 255, 0.7) !important;
+        padding: 8px 16px !important;
+        transition: all 0.15s ease !important;
         cursor: pointer !important;
     }
-    ul.options > li:hover, .options > li:hover {
-        background: #303338 !important;
+    .dark ul.options > li:hover, .dark .options > li:hover {
+        background: rgba(255, 255, 255, 0.06) !important;
         color: #ffffff !important;
     }
-    ul.options > li.selected, .options > li.selected {
-        color: #00a2ed !important;
-        background: #252830 !important;
+    .dark ul.options > li.selected, .dark .options > li.selected {
+        color: #93c5fd !important;
+        background: rgba(96, 165, 250, 0.12) !important;
     }
     
-    /* Click-to-zoom cursor on preview */
-    #retouch-output {
-        cursor: zoom-in !important;
-    }
+    /* Click-to-zoom */
+    #retouch-output { cursor: zoom-in !important; }
+    .cmp-label { font-weight: 600 !important; }
+    #retouch-compare { cursor: ew-resize !important; }
     
-    /* Comparison slider container and labels */
-    .cmp-label {
-        font-weight: 600 !important;
-        text-transform: uppercase !important;
+    /* File upload */
+    .dark .gr-file {
+        background: rgba(255, 255, 255, 0.03) !important;
+        backdrop-filter: blur(8px) !important;
+        -webkit-backdrop-filter: blur(8px) !important;
+        border: 1px dashed rgba(255, 255, 255, 0.1) !important;
+        border-radius: 10px !important;
     }
-    #retouch-compare {
-        cursor: ew-resize !important;
-    }
+    .dark .gr-file:hover { border-color: rgba(96, 165, 250, 0.5) !important; }
     
-    /* File upload box styling */
-    .gr-file {
-        border: 1px dashed #303338 !important;
-        background: #1a1c22 !important;
-        border-radius: 6px !important;
-    }
-    .gr-file:hover {
-        border-color: #00a2ed !important;
-    }
-    
-    /* Prevent parent layout overflow problems */
-    .gradio-container .block,
-    .gradio-container .wrap,
-    .gradio-container .group,
-    .gradio-container .form,
-    .gradio-container .row,
-    .gradio-container .col,
-    .gradio-container .column,
-    .gradio-container .panel,
-    .gradio-container .padded,
-    .gradio-container .tabs,
-    .gradio-container .tabitem,
-    .gradio-container .dropdown,
+    /* Overflow fix */
+    .gradio-container .block, .gradio-container .wrap,
+    .gradio-container .group, .gradio-container .form,
+    .gradio-container .row, .gradio-container .col,
+    .gradio-container .column, .gradio-container .panel,
+    .gradio-container .padded, .gradio-container .tabs,
+    .gradio-container .tabitem, .gradio-container .dropdown,
     .gradio-container .dropdown-container {
         overflow: visible !important;
     }
+
+    /* Header Bar styling adapting to both Light and Dark mode */
+    .header-bar {
+        display: flex !important;
+        justify-content: space-between !important;
+        align-items: center !important;
+        padding: 0.6rem 1.5rem !important;
+        background: rgba(0, 0, 0, 0.03) !important;
+        backdrop-filter: blur(20px) !important;
+        -webkit-backdrop-filter: blur(20px) !important;
+        border: 1px solid rgba(0, 0, 0, 0.05) !important;
+        margin-bottom: 18px !important;
+        font-family: -apple-system, sans-serif !important;
+        border-radius: 14px !important;
+    }
+    .header-left {
+        display: flex !important;
+        align-items: center !important;
+        gap: 10px !important;
+    }
+    .header-badge {
+        background: linear-gradient(135deg, #3b82f6, #8b5cf6) !important;
+        color: #ffffff !important;
+        padding: 3px 8px !important;
+        border-radius: 6px !important;
+        font-weight: 700 !important;
+        font-size: 0.85rem !important;
+        letter-spacing: 0.3px !important;
+    }
+    .header-title {
+        font-weight: 600 !important;
+        font-size: 1rem !important;
+        color: rgba(15, 23, 42, 0.9) !important;
+        letter-spacing: 0.3px !important;
+    }
+    .header-version {
+        font-size: 0.7rem !important;
+        color: rgba(15, 23, 42, 0.4) !important;
+        border-left: 1px solid rgba(15, 23, 42, 0.1) !important;
+        padding-left: 10px !important;
+        margin-left: 2px !important;
+        font-weight: 500 !important;
+    }
+    .header-workspace {
+        font-size: 0.75rem !important;
+        color: rgba(15, 23, 42, 0.5) !important;
+        font-weight: 500 !important;
+        letter-spacing: 0.05em !important;
+    }
+
+    /* Dark mode overrides for Header Bar */
+    .dark .header-bar {
+        background: rgba(255, 255, 255, 0.04) !important;
+        border: 1px solid rgba(255, 255, 255, 0.06) !important;
+    }
+    .dark .header-badge {
+        background: linear-gradient(135deg, #60a5fa, #a78bfa) !important;
+        color: #ffffff !important;
+    }
+    .dark .header-title {
+        color: rgba(255, 255, 255, 0.9) !important;
+    }
+    .dark .header-version {
+        color: rgba(255, 255, 255, 0.3) !important;
+        border-left: 1px solid rgba(255, 255, 255, 0.08) !important;
+    }
+    .dark .header-workspace {
+        color: rgba(255, 255, 255, 0.35) !important;
+    }
+""", head="""
+    <script>
+    (function() {
+        // Keyboard Shortcuts
+        document.addEventListener('keydown', function(e) {
+            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                e.preventDefault();
+                var btn = document.querySelector('.primary-btn');
+                if (btn) btn.click();
+            }
+            if ((e.metaKey || e.ctrlKey) && e.key === 'r') {
+                e.preventDefault();
+                var openDetails = document.querySelector('.develop-panel details[open]');
+                if (openDetails) {
+                    var resetBtn = openDetails.querySelector('.section-reset-btn');
+                    if (resetBtn) resetBtn.click();
+                }
+            }
+        });
+
+        // Click-to-Zoom Modal
+        function openZoomModal(src) {
+            var overlay = document.createElement('div');
+            overlay.id = 'zoom-overlay';
+            overlay.style.position = 'fixed';
+            overlay.style.top = '0';
+            overlay.style.left = '0';
+            overlay.style.width = '100vw';
+            overlay.style.height = '100vh';
+            overlay.style.backgroundColor = 'rgba(10, 8, 25, 0.95)';
+            overlay.style.backdropFilter = 'blur(24px)';
+            overlay.style.webkitBackdropFilter = 'blur(24px)';
+            overlay.style.zIndex = '99999';
+            overlay.style.display = 'flex';
+            overlay.style.alignItems = 'center';
+            overlay.style.justifyContent = 'center';
+            overlay.style.cursor = 'zoom-out';
+            overlay.style.opacity = '0';
+            overlay.style.transition = 'opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1)';
+            
+            var img = document.createElement('img');
+            img.src = src;
+            img.style.maxHeight = '92vh';
+            img.style.maxWidth = '92vw';
+            img.style.objectFit = 'contain';
+            img.style.borderRadius = '8px';
+            img.style.boxShadow = '0 24px 60px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.1)';
+            img.style.transform = 'scale(0.95)';
+            img.style.transition = 'transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)';
+            
+            overlay.appendChild(img);
+            document.body.appendChild(overlay);
+            
+            setTimeout(function() {
+                overlay.style.opacity = '1';
+                img.style.transform = 'scale(1)';
+            }, 10);
+            
+            overlay.addEventListener('click', function() {
+                overlay.style.opacity = '0';
+                img.style.transform = 'scale(0.95)';
+                setTimeout(function() {
+                    overlay.remove();
+                }, 250);
+            });
+        }
+
+        document.addEventListener('click', function(e) {
+            var target = e.target;
+            if (target.tagName === 'IMG' && (target.closest('#retouch-output') || target.closest('#retouch-compare'))) {
+                e.preventDefault();
+                openZoomModal(target.src);
+            }
+        });
+
+        // Theme management and layout helpers
+        function forceFullWidth() {
+            document.querySelectorAll('.gradio-container-outer, .gradio-container').forEach(function(el){
+                if (el.style.maxWidth !== 'none') {
+                    el.style.setProperty('max-width', 'none', 'important');
+                }
+                if (el.style.width !== '100vw') {
+                    el.style.setProperty('width', '100vw', 'important');
+                }
+                if (el.style.minWidth !== '100vw') {
+                    el.style.setProperty('min-width', '100vw', 'important');
+                }
+            });
+        }
+        function forceDarkMode() {
+            var isDark = window.location.search.includes('__theme=dark') || localStorage.getItem('theme') === 'dark' || window.matchMedia('(prefers-color-scheme: dark)').matches;
+            if (isDark) {
+                if (!document.documentElement.classList.contains('dark')) {
+                    document.documentElement.classList.add('dark');
+                }
+                if (document.body && !document.body.classList.contains('dark')) {
+                    document.body.classList.add('dark');
+                }
+                document.querySelectorAll('.gradio-container, .gradio-container-outer').forEach(function(el){
+                    if (!el.classList.contains('dark')) {
+                        el.classList.add('dark');
+                    }
+                });
+            } else {
+                if (document.documentElement.classList.contains('dark')) {
+                    document.documentElement.classList.remove('dark');
+                }
+                if (document.body && document.body.classList.contains('dark')) {
+                    document.body.classList.remove('dark');
+                }
+                document.querySelectorAll('.gradio-container, .gradio-container-outer').forEach(function(el){
+                    if (el.classList.contains('dark')) {
+                        el.classList.remove('dark');
+                    }
+                });
+            }
+        }
+        
+        var observer = new MutationObserver(function(){
+            observer.disconnect();
+            forceFullWidth();
+            forceDarkMode();
+            observer.observe(document.documentElement, {attributes: true, subtree: true, attributeFilter: ['style', 'class']});
+        });
+        observer.observe(document.documentElement, {attributes: true, subtree: true, attributeFilter: ['style', 'class']});
+        ['load', 'DOMContentLoaded', 'gradio:ready'].forEach(function(e){ window.addEventListener(e, function(){ forceFullWidth(); forceDarkMode(); }); });
+        setTimeout(function(){ forceFullWidth(); forceDarkMode(); }, 200);
+        setTimeout(function(){ forceFullWidth(); forceDarkMode(); }, 1000);
+        setTimeout(function(){ forceFullWidth(); forceDarkMode(); }, 3000);
+    })();
+    </script>
 """) as app:
-    # Professional Lightroom-style Header bar
+
+    # Liquid Glass Header bar
     gr.HTML("""
-    <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 1.5rem; background: #16181c; border-bottom: 1px solid #22252a; margin-bottom: 15px; font-family: -apple-system, sans-serif; border-radius: 6px;">
-        <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="background: #00a2ed; color: #ffffff; padding: 2px 6px; border-radius: 3px; font-weight: 800; font-size: 0.9rem; letter-spacing: 0.5px;">Lr</span>
-            <span style="font-weight: 700; font-size: 1.05rem; color: #e2e8f0; letter-spacing: 0.5px; text-transform: uppercase;">Retouch Pro</span>
-            <span style="font-size: 0.75rem; color: #8c94a6; border-left: 1px solid #303338; padding-left: 8px; margin-left: 4px; font-weight: 500;">v2.0.0</span>
+    <div class="header-bar">
+        <div class="header-left">
+            <span class="header-badge">RP</span>
+            <span class="header-title">Retouch Pro</span>
+            <span class="header-version">v2.0.0</span>
         </div>
-        <div style="font-size: 0.8rem; color: #8c94a6; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em;">
-            Develop Workspace
+        <div class="header-workspace">
+            Liquid Glass Workspace
         </div>
     </div>
     """)
+
 
     with gr.Tabs():
         with gr.Tab("Single Photo Editor"):
@@ -1027,6 +1382,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         gr.Markdown("### ⚙️ Develop Adjustments")
                         
                         with gr.Accordion("✨ Skin Smoothing & Texture", open=True):
+                            reset_skin_smooth_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                             smooth = gr.Slider(0, 100, 30, step=1, label="Smooth", info="Strength of skin smoothing (blur/median blend)")
                             nose_smooth = gr.Slider(0, 100, 0, step=1, label="Nose Smooth (0 = follow face)", info="Additional smoothing for nose bridge highlights")
                             mid_reduction = gr.Slider(0.0, 1.0, 0.45, step=0.05, label="Mid Frequency Reduction", info="Target mid-level skin blemishes while preserving high-frequency pores")
@@ -1035,35 +1391,38 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             blemish = gr.Slider(0, 100, 30, step=1, label="Blemish Removal", info="AI blemish detection and inpainting for acne/spots")
 
                         with gr.Accordion("🎨 Skin Tone", open=False):
+                            reset_skin_tone_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                             whiten = gr.Slider(0, 100, 10, step=1, label="Whitening", info="Luminance boost and porcelain skin color match")
                             whiten_tone = gr.Dropdown(choices=WHITEN_TONE_CHOICES, value="rosy", label="Whitening Tone", interactive=True, info="Tone direction: rosy (warm pink), porcelain (cool neutral), neutral")
                             equalize = gr.Slider(0, 100, 20, step=1, label="Equalize", info="Even out skin redness and regional color inconsistencies")
                             auto_exposure = gr.Checkbox(label="Auto Exposure Correction", value=False, info="Automatically correct under/over-exposed images before processing")
                             white_costume_lift = gr.Checkbox(label="White Costume Lift", value=False, info="Selectively boost bright clothing to create separation")
-                            whiten_tone_reset = gr.Button("↺ Reset Skin Tone", size="sm", elem_classes=["reset-btn"], visible=False)
 
                         with gr.Accordion("📊 Basic Tone & Color", open=False):
+                            reset_basic_tone_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                             contrast = gr.Slider(-50, 50, 0, step=1, label="Contrast", info="Adjust global image contrast")
                             brightness = gr.Slider(-50, 50, 0, step=1, label="Brightness", info="Adjust global image brightness")
                             clarity = gr.Slider(-100, 100, 0, step=1, label="Clarity", info="Mid-tone contrast / local contrast enhancement (negative = soften)")
                             vibrance = gr.Slider(-100, 100, 0, step=1, label="Vibrance", info="Smart saturation boost that protects skin tones")
                             saturation = gr.Slider(-100, 100, 0, step=1, label="Saturation", info="Uniform global saturation adjustment")
-                            basic_tone_reset = gr.Button("↺ Reset Basic Tone", size="sm", elem_classes=["reset-btn"], visible=False)
 
                         with gr.Accordion("📈 Tone Curve", open=False):
+                            reset_tone_curve_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                             highlights = gr.Slider(-100, 100, 0, step=1, label="Highlights", info="Recover or boost bright highlight regions")
                             shadows = gr.Slider(-100, 100, 0, step=1, label="Shadows", info="Open up or deepen shadow regions")
                             whites = gr.Slider(-100, 100, 0, step=1, label="Whites", info="Control absolute white point ceiling")
                             blacks = gr.Slider(-100, 100, 0, step=1, label="Blacks", info="Control absolute black point floor")
-                            tone_curve_reset = gr.Button("↺ Reset Tone Curve", size="sm", elem_classes=["reset-btn"], visible=False)
 
                         with gr.Accordion("💡 Virtual Studio Relighting", open=False):
+                            reset_relighting_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                             relight = gr.Slider(0, 100, 0, step=1, label="Relight Strength", info="Intensity of 3D virtual studio light source redirection")
                             relight_azimuth = gr.Slider(-180, 180, 0, step=1, label="Light Azimuth", info="Horizontal light source direction angle (-180° to 180°)")
                             relight_elevation = gr.Slider(-90, 90, 30, step=1, label="Light Elevation", info="Vertical light source direction angle (-90° to 90°)")
 
                         with gr.Accordion("👁️ Eyes & Lips", open=False):
+                            reset_eyes_lips_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                             eye_enhance = gr.Slider(0, 100, 5, step=1, label="Eye Enhance", info="Boost eye clarity, iris reflection details, and whites brightness")
+                            catchlight = gr.Slider(0, 100, 0, step=1, label="Catchlight Boost", info="Amplify existing catchlight highlights in the iris (0 = follow Eye Enhance)")
                             dark_circles = gr.Slider(0, 100, 0, step=1, label="Dark Circle Repair", info="Under-eye dark circle detection and repair")
                             teeth_whiten = gr.Slider(0, 100, 5, step=1, label="Teeth Whiten", info="Naturally whiten and brighten teeth enamel")
                             lip_enhance = gr.Slider(0, 100, 5, step=1, label="Lip Enhance", info="Enhance lip texture definition, gloss, and contour")
@@ -1075,9 +1434,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 under_eye_blush = gr.Checkbox(label="Under-Eye Blush", value=False, info="Apply soft under-eye blush for a fresh/cosplay look")
 
                         with gr.Accordion("🧬 Face Reshaping", open=False):
+                            reset_face_reshaping_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                             slimming = gr.Slider(0, 100, 0, step=1, label="Face Slimming", info="Liquify-based face slimming/reshaping via landmark-driven warp")
 
                         with gr.Accordion("🌟 Structure & Effects", open=False):
+                            reset_structure_effects_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                             hair_enhance = gr.Slider(0, 100, 5, step=1, label="Hair Shine", info="Boost highlight reflections and depth in hair strands")
                             dodge_burn = gr.Slider(0, 100, 0, step=1, label="Dodge & Burn", info="Sculpt face structure with local highlight/shadow contouring")
                             impact = gr.Slider(0, 100, 0, step=1, label="Global Impact Finish", info="Final punch: combined clarity, sharpening, and micro-contrast boost")
@@ -1093,16 +1454,19 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             subject_separation = gr.Slider(0, 100, 0, step=1, label="Subject-Background Separation", info="Brighten subject / darken background using person segmentation mask")
 
                         with gr.Accordion("🎬 Film Color Grading", open=False):
+                            reset_color_grading_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                             color_grade = gr.Dropdown(choices=COLOR_GRADE_NAMES, value="natural", label="Color Grade Preset", interactive=True, info="Apply a film/color grading preset from the presets library")
                             grade_intensity = gr.Slider(0, 100, 0, step=1, label="Grade Intensity", info="Blend strength of the color grade (0-100%)")
 
                         with gr.Accordion("🎞️ Film & Analog Effects", open=False):
+                            reset_film_effects_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                             chromatic_aberration = gr.Slider(0, 20, 0, step=0.5, label="Chromatic Aberration", info="Lens fringing effect (RGB channel shift in pixels)")
-                            grain = gr.Slider(0, 100, 0, step=1, label="Film Grain", info="Analog film grain noise overlay")
-                            halation = gr.Slider(0, 100, 0, step=1, label="Halation", info="Red light bloom around bright highlights (analog film artifact)")
+                            grain = gr.Slider(0, 100, 0, step=1, label="Film Grain", info="Analog film grain noise overlay (0-100 maps to engine 0.0-0.2)")
+                            halation = gr.Slider(0, 100, 0, step=1, label="Halation", info="Red light bloom around bright highlights (0-100 maps to engine 0.0-1.0)")
                             lut = gr.Dropdown(choices=LUT_CHOICES, value="none", label="Film Emulation LUT", interactive=True, info="Apply a film stock emulation LUT (Kodak / Fuji)")
 
                         with gr.Accordion("🌈 Split Toning", open=False):
+                            reset_split_toning_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                             gr.Markdown("**Shadows**")
                             shadow_hue = gr.Slider(0, 360, 0, step=1, label="Shadow Hue", info="Hue shift applied to shadow tones (degrees)")
                             shadow_sat = gr.Slider(0, 100, 0, step=1, label="Shadow Saturation", info="Saturation boost for shadow tones")
@@ -1114,34 +1478,23 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             highlight_sat = gr.Slider(0, 100, 0, step=1, label="Highlight Saturation", info="Saturation boost for highlight tones")
 
                         with gr.Accordion("🔮 Color Transfer", open=False):
+                            reset_color_transfer_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                             gr.Markdown("Upload a reference image to match its color tone using CDF-based histogram transfer")
                             color_ref_img = gr.Image(type="filepath", label="Reference Image", show_label=True, height=160)
                             color_ref_strength = gr.Slider(0.0, 1.0, 1.0, step=0.05, label="Transfer Strength", info="Mix ratio between original grade and matched reference grade")
 
                         with gr.Accordion("🔍 Debug & Mask Preview", open=False):
+                            reset_debug_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                             debug_mode = gr.Checkbox(label="Generate Debug Masks", value=False, info="Save skin/lips/frequency-layer masks and display them for tuning")
 
                         process_btn_bottom = gr.Button("Apply Overrides & Process ⚡", variant="primary", size="lg", elem_classes=["primary-btn"])
 
                         gr.HTML("""
-                        <div style="margin-top:12px;text-align:center;font-size:0.7rem;color:#6b7280;border-top:1px solid #282b32;padding-top:10px">
+                        <div style="margin-top:12px;text-align:center;font-size:0.7rem;color:rgba(255,255,255,0.4);border-top:1px solid rgba(255,255,255,0.06);padding-top:10px">
                             <span>⌘+Enter Process · ⌘+R Reset · Click preview for full-size</span>
                         </div>
-                        <script>
-                        document.addEventListener('keydown', function(e) {
-                            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-                                e.preventDefault();
-                                var btn = document.querySelector('.primary-btn');
-                                if (btn) btn.click();
-                            }
-                            if ((e.metaKey || e.ctrlKey) && e.key === 'r') {
-                                e.preventDefault();
-                                var btn = document.getElementById('reset-btn');
-                                if (btn) btn.click();
-                            }
-                        });
-                        </script>
                         """)
+
 
         with gr.Tab("Batch Library Ingestion"):
             with gr.Row():
@@ -1212,8 +1565,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         eye_enhance, teeth_whiten,
         lip_enhance, lip_tint, blush, nose_blush, under_eye_blush,
         hair_enhance, dodge_burn, specular_bloom, bloom, bloom_threshold, bloom_softness, contrast, brightness,
-        highlights, shadows, whites, blacks,
-        blemish, dark_circles, whiten_tone, auto_exposure,
+         highlights, shadows, whites, blacks,
+        blemish, dark_circles, catchlight, whiten_tone, auto_exposure,
         clarity, vibrance, saturation, lip_finish,
         slimming, impact,
         sharpen, sharpen_radius, glow, vignette, subject_separation, specular_bloom_tone,
@@ -1239,6 +1592,85 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         inputs=[recipe],
         outputs=_recipe_outputs,
     )
+
+    reset_skin_smooth_btn.click(
+        fn=reset_skin_smoothing,
+        inputs=[recipe],
+        outputs=[smooth, nose_smooth, mid_reduction, texture_opacity, pore_synthesis, blemish]
+    )
+
+    reset_skin_tone_btn.click(
+        fn=reset_skin_tone,
+        inputs=[recipe],
+        outputs=[whiten, whiten_tone, equalize, auto_exposure, white_costume_lift]
+    )
+
+    reset_basic_tone_btn.click(
+        fn=reset_basic_tone,
+        inputs=[recipe],
+        outputs=[contrast, brightness, clarity, vibrance, saturation]
+    )
+
+    reset_tone_curve_btn.click(
+        fn=reset_tone_curve,
+        inputs=[recipe],
+        outputs=[highlights, shadows, whites, blacks]
+    )
+
+    reset_relighting_btn.click(
+        fn=reset_relighting,
+        inputs=[recipe],
+        outputs=[relight, relight_azimuth, relight_elevation]
+    )
+
+    reset_eyes_lips_btn.click(
+        fn=reset_eyes_lips,
+        inputs=[recipe],
+        outputs=[eye_enhance, catchlight, dark_circles, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, nose_blush, under_eye_blush]
+    )
+
+    reset_face_reshaping_btn.click(
+        fn=reset_face_reshaping,
+        inputs=[recipe],
+        outputs=[slimming]
+    )
+
+    reset_structure_effects_btn.click(
+        fn=reset_structure_effects,
+        inputs=[recipe],
+        outputs=[hair_enhance, dodge_burn, impact, specular_bloom, specular_bloom_tone, bloom, bloom_threshold, bloom_softness, sharpen, sharpen_radius, glow, vignette, subject_separation]
+    )
+
+    reset_color_grading_btn.click(
+        fn=reset_color_grading,
+        inputs=[recipe],
+        outputs=[color_grade, grade_intensity]
+    )
+
+    reset_film_effects_btn.click(
+        fn=reset_film_effects,
+        inputs=[recipe],
+        outputs=[chromatic_aberration, grain, halation, lut]
+    )
+
+    reset_split_toning_btn.click(
+        fn=reset_split_toning,
+        inputs=[recipe],
+        outputs=[shadow_hue, shadow_sat, midtone_hue, midtone_sat, highlight_hue, highlight_sat]
+    )
+
+    reset_color_transfer_btn.click(
+        fn=reset_color_transfer,
+        inputs=[],
+        outputs=[color_ref_img, color_ref_strength]
+    )
+
+    reset_debug_btn.click(
+        fn=reset_debug,
+        inputs=[recipe],
+        outputs=[debug_mode]
+    )
+
 
     save_style_btn.click(
         fn=on_save_style,
@@ -1278,8 +1710,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         highlights, shadows, whites, blacks,
         color_ref_img, color_ref_strength,
         show_compare, fast,
-        export_fmt, export_quality, export_res,
-        blemish, dark_circles, whiten_tone, auto_exposure,
+         export_fmt, export_quality, export_res,
+        blemish, dark_circles, catchlight, whiten_tone, auto_exposure,
         clarity, vibrance, saturation, lip_finish,
         slimming, impact,
         sharpen, sharpen_radius, glow, vignette, subject_separation, specular_bloom_tone,
