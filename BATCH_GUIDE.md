@@ -24,7 +24,7 @@ By default, this will:
 
 | Option | Shorthand | Default | Description |
 | :--- | :--- | :--- | :--- |
-| **`--preset`** / `--recipe` | | `natural` | Choose the retouch recipe: `cyber_doll`, `scifi_cosplay`, `cosplay_3d`, `cosplay_no_eq`, `cosplay`, `natural`, `portrait`, `beauty`, `anime`, `xiaohongshu`, `dreamy`, `magazine`. |
+| **`--preset`** / `--recipe` | | `natural` | Choose the retouch recipe: `natural`, `portrait`, `beauty`, `cosplay`, `cosplay_3d`, `cosplay_no_eq`, `cyber_doll`, `scifi_cosplay`, `anime_cosplay`, `anime_cinematic_v1`, `anime_cinematic_soft`, `anime_cinematic_action`, `anime_crystal_void`, `anime_cinematic_fantasy`, `xiaohongshu`, `xhs_ultrasoft`, `pink_dream`, `blue_dream`, `fantasy_goddess`, `fuji_porcelain`, `dreamy`, `magazine`, `korean_beauty`, `idol`, `wedding`. |
 | **`--impact`** | | Recipe default | Global punch/finish intensity from `0` to `100`. Useful when a result feels too weak after normal retouching. |
 | **`--global-only`** | | *Off* | Skip face detection and local skin/eye/lip edits. Use this for fast color, contrast, glow, and impact retouching, or when MediaPipe cannot run in the current environment. |
 | **`-o`** / `--output` | | *None* | Directory where output images and comparisons are saved. |
@@ -71,4 +71,35 @@ Check how many images are in a folder and verify options before running:
 
 ```bash
 python3 cli.py "/Users/dennis/Pictures/Photoshoot" --preset cosplay_3d --dry-run
+```
+
+### Example D: Anime Cinematic / Dreamy Recipes
+The engine ships with several specialised anime and dreamy recipes that work
+well on illustration-style or soft-light photoshoots. Pick one with
+`--recipe`/`--preset`:
+
+```bash
+# Bright, glossy anime key visual look
+python3 cli.py "/path/to/input" -o "/path/to/output" --recipe anime_cinematic_v1 --workers 6
+
+# Soft, low-contrast anime variant
+python3 cli.py "/path/to/input" -o "/path/to/output" --recipe anime_cinematic_soft --workers 6
+
+# High-contrast action shot
+python3 cli.py "/path/to/input" -o "/path/to/output" --recipe anime_cinematic_action --workers 6
+
+# Crystal-clear negative-space look
+python3 cli.py "/path/to/input" -o "/path/to/output" --recipe anime_crystal_void --workers 6
+
+# Fantasy anime palette
+python3 cli.py "/path/to/input" -o "/path/to/output" --recipe anime_cinematic_fantasy --workers 6
+
+# Soft Fuji-style porcelain skin finish
+python3 cli.py "/path/to/input" -o "/path/to/output" --recipe fuji_porcelain --workers 6
+
+# Cool blue dreamy palette
+python3 cli.py "/path/to/input" -o "/path/to/output" --recipe blue_dream --workers 6
+
+# Xiaohongshu ultra-soft beauty look
+python3 cli.py "/path/to/input" -o "/path/to/output" --recipe xhs_ultrasoft --workers 6
 ```

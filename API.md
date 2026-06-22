@@ -38,7 +38,7 @@ finally:
 ### `__init__` Parameters
 
 *   **`max_faces`** (`int`, default: `10`): Maximum number of faces to detect and process concurrently.
-*   **`min_confidence`** (`float`, default: `0.5`): Minimum detection confidence score for face landmarker.
+*   **`min_confidence`** (`float`, default: `0.4`): Minimum detection confidence score for face landmarker.
 
 ---
 
@@ -53,11 +53,67 @@ def process(
     recipe: Optional[str] = None,
     preset: Optional[str] = None,
     # Overrides (None -> fallback to recipe defaults)
-    ...
+    smooth: Optional[float] = None,
+    whiten: Optional[float] = None,
+    eye_enhance: Optional[float] = None,
+    dark_circles: Optional[float] = None,
+    catchlight: Optional[float] = None,
+    blemish: Optional[float] = None,
+    pore_synthesis: Optional[float] = None,
+    lip_enhance: Optional[float] = None,
+    teeth_whiten: Optional[float] = None,
+    equalize: Optional[float] = None,
+    contrast: Optional[float] = None,
+    brightness: Optional[float] = None,
+    highlights: Optional[float] = None,
+    shadows: Optional[float] = None,
+    whites: Optional[float] = None,
+    blacks: Optional[float] = None,
+    clarity: Optional[float] = None,
+    vibrance: Optional[float] = None,
+    saturation: Optional[float] = None,
+    glow: Optional[float] = None,
+    vignette: Optional[float] = None,
+    sharpen: Optional[float] = None,
+    sharpen_radius: Optional[float] = None,
+    subject_separation: Optional[float] = None,
+    relight: Optional[float] = None,
+    relight_azimuth: Optional[float] = None,
+    relight_elevation: Optional[float] = None,
+    slimming: Optional[float] = None,
+    blush: Optional[float] = None,
+    hair_enhance: Optional[float] = None,
+    specular_bloom: Optional[float] = None,
+    specular_bloom_tone: Optional[str] = None,
+    whiten_tone: Optional[str] = None,
+    nose_blush: Optional[bool] = None,
+    under_eye_blush: Optional[bool] = None,
+    white_costume_lift: Optional[bool] = None,
+    auto_exposure: bool = False,
+    bloom: Optional[float] = None,
+    bloom_threshold: Optional[float] = None,
+    bloom_softness: Optional[float] = None,
+    impact: Optional[float] = None,
+    grain: Optional[float] = None,
+    chromatic_aberration: Optional[float] = None,
+    halation: Optional[float] = None,
+    lut: Optional[str] = None,
+    color_grade: Optional[str] = None,
+    grade_intensity: Optional[float] = None,
+    color_grade_stack: Optional[list] = None,
+    color_ref: Optional[np.ndarray] = None,
+    color_transfer_intensity: float = 1.0,
+    shadow_hue: Optional[float] = None,
+    shadow_sat: Optional[float] = None,
+    midtone_hue: Optional[float] = None,
+    midtone_sat: Optional[float] = None,
+    highlight_hue: Optional[float] = None,
+    highlight_sat: Optional[float] = None,
     fast: bool = False,
     style_profile: Optional[StyleProfile] = None,
     style_ref: Optional[np.ndarray] = None,
     debug_dir: Optional[str] = None,
+    face_contexts: Optional[List["FaceContext"]] = None,
 ) -> ProcessingResult:
 ```
 
@@ -95,6 +151,7 @@ Passing an explicit value override to these parameters takes precedence over the
 ##### **Eyes & Lips**
 *   **`eye_enhance`** (`float`, `0` to `100`): Boost iris reflection contrast, clarity, and sclera brightness.
 *   **`dark_circles`** (`float`, `0` to `100`): Under-eye bag dark circles reduction.
+*   **`catchlight`** (`float`, `0` to `100`): Amplify the brightness of existing iris catchlights (no synthetic catchlights are inserted).
 *   **`teeth_whiten`** (`float`, `0` to `100`): Whiten and brighten teeth enamel.
 *   **`lip_enhance`** (`float`, `0` to `100`): Enhance lip texture definition, gloss, and contour.
 *   **`lip_tint`** (`str` or `None`, e.g. `"cosplay"`, `"rose"`, `"pink"`, `"coral"`, `"natural"`, `"berry"`): Apply a natural cosmetic color tone to the lips.
@@ -204,6 +261,7 @@ print(result.dtype)  # dtype('uint8')
 
 *   **`result.image`** (`np.ndarray`): The raw output BGR image array.
 *   **`result.face_count`** (`int`): Count of unique faces detected and processed.
+*   **`result.face_contexts`** (`Optional[List[FaceContext]]`): Cached per-face detection/parsing results (`None` when no faces were processed or when caching was disabled). Pass this list back into `process(..., face_contexts=...)` to skip detection/parsing on follow-up passes.
 *   **`result.skin_mask`** (`np.ndarray`): A normalized single-channel float32 mask `[0.0, 1.0]` of the processed skin regions.
 *   **`result.skin_hair_mask`** (`np.ndarray`): A combined float32 mask of the skin and hair regions.
 *   **`result.lips_mask`** (`np.ndarray`): A mask of the lips region.

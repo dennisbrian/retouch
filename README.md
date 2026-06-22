@@ -110,3 +110,5 @@ The dev server watches `.` and `retouch/` for `.py` changes and restarts the Gra
 - [API.md](API.md) — Python API reference and parameter list
 - [ARCHITECTURE.md](ARCHITECTURE.md) — pipeline design and module breakdown
 - [BATCH_GUIDE.md](BATCH_GUIDE.md) — batch processing examples
+- [GUI.md](GUI.md) — Gradio web UI layout, components, and styling
+- [RECIPE_GUIDE.md](RECIPE_GUIDE.md) — recipe authoring reference
