@@ -87,7 +87,15 @@ from .detection import FaceDetector, FaceData, FaceContext
 from .parsing import FaceParser, FaceRegions
 from .geometry import FaceReshaper
 from .makeup import MakeupEngine
-from .frequency import separate as freq_separate, combine as freq_combine
+from .frequency import FrequencySeparator
+from .perf_optimizations import (
+    FaceProcessorPool,
+    _accum,
+    _FaceResult,
+    _norm_mask,
+    _process_face_core,
+    warmup_jit_kernels,
+)
 from .skin import SkinProcessor
 from .blemish import BlemishRemover
 from .eyes import EyeEnhancer
@@ -338,13 +346,9 @@ def build_context(
         r_dodge_burn = _pct(r_dodge_burn_raw.get("amount", 0.0))
     else:
         r_dodge_burn = float(r_dodge_burn_raw)
-    r_relight_raw = rec.get("skin", {}).get("relight")
-    if r_relight_raw is not None:
-        r_relight = _pct(r_relight_raw)
-    else:
-        r_relight = float(rec.get("relight_strength", 0.0))
-    r_relight_azimuth = rec.get("skin", {}).get("relight_azimuth", rec.get("light_azimuth", 0.0))
-    r_relight_elevation = rec.get("skin", {}).get("relight_elevation", rec.get("light_elevation", 30.0))
+    r_relight = _pct(rec.get("relight", 0.0))
+    r_relight_azimuth = rec.get("relight_azimuth", 0.0)
+    r_relight_elevation = rec.get("relight_elevation", 30.0)
 
     # --- Eyes ---
     eyes = rec.get("eyes", {})
@@ -352,7 +356,7 @@ def build_context(
     # BUGFIX-3: dark-circle repair must not inherit teeth/eye-white strength.
     r_dark_circles = _pct(eyes.get("dark_circles", 0.0))
     r_catchlight = _pct(eyes.get("catchlight", eyes.get("iris", 0.0)))
-    r_teeth = _pct(eyes.get("whites", 0.0))
+    r_teeth = _pct(eyes.get("teeth_whiten", eyes.get("whites", 0.0)))
 
     # --- Lips ---
     lips = rec.get("lips", {})
@@ -477,38 +481,13 @@ def build_context(
 
 
 # ---------------------------------------------------------------------------
-# Mask utilities
+# Mask utilities & per-face processing result
+#
+# These helpers and the per-face core pipeline live in retouch.perf_optimizations
+# so the multiprocessing worker can call them without re-entering engine.py
+# (which would create a circular import). They are re-exported from there
+# at the top of this module.
 # ---------------------------------------------------------------------------
-
-def _norm_mask(mask: Optional[np.ndarray]) -> Optional[np.ndarray]:
-    """Return a float32 mask in [0, 1]. Returns None if input is None."""
-    if mask is None:
-        return None
-    m = mask.astype(np.float32)
-    if m.max() > 1.0:
-        m /= 255.0
-    return m
-
-
-def _accum(acc: np.ndarray, mask: Optional[np.ndarray]) -> np.ndarray:
-    """Add normalised mask into accumulator, clamped to 1."""
-    if mask is None:
-        return acc
-    return np.clip(acc + _norm_mask(mask), 0.0, 1.0)
-
-
-# ---------------------------------------------------------------------------
-# Per-face processing result
-# ---------------------------------------------------------------------------
-
-@dataclass
-class _FaceResult:
-    canvas: np.ndarray
-    skin_mask: np.ndarray
-    skin_hair_mask: np.ndarray
-    lips_mask: np.ndarray
-    sharpen_mask: np.ndarray
-    roi_box: Tuple[int, int, int, int]
 
 
 @dataclass
@@ -524,251 +503,6 @@ class _CoreResult:
     person_mask: Optional[np.ndarray]
     no_face: bool = False
     face_contexts: Optional[List["FaceContext"]] = None
-
-
-# ---------------------------------------------------------------------------
-# Per-face core pipeline (module-level so it is picklable / callable from
-# worker processes without the RetouchEngine instance, which holds non-picklable
-# ONNX sessions and MediaPipe tasks).
-# ---------------------------------------------------------------------------
-
-def _process_face_core(
-    canvas: np.ndarray,
-    regions: FaceRegions,
-    shifted_face: FaceData,
-    ctx: ProcessingContext,
-    roi_x1: int,
-    roi_y1: int,
-    roi_h: int,
-    roi_w: int,
-    roi_person_mask: Optional[np.ndarray],
-    processors: Dict[str, Any],
-) -> _FaceResult:
-    """Run the per-face rendering pipeline on a private ROI canvas.
-
-    ``processors`` maps names to the processor instances used by the
-    pipeline ('skin', 'relighter', 'blemish', 'undereye', 'eyes',
-    'teeth', 'lips', 'makeup', 'hair'). This lets the same logic run
-    either inside the engine (passing ``self._xxx``) or inside a worker
-    process (passing freshly-instantiated processors).
-    """
-    skin = processors['skin']
-    relighter = processors['relighter']
-    blemish = processors['blemish']
-    undereye = processors['undereye']
-    eyes = processors['eyes']
-    teeth = processors['teeth']
-    lips = processors['lips']
-    makeup = processors['makeup']
-    hair = processors['hair']
-
-    face_width = shifted_face.ied * 2.5
-
-    # ---- Accumulate masks ----
-    skin_n = _norm_mask(regions.skin)
-    hair_n = _norm_mask(regions.hair)
-    lips_n = _norm_mask(regions.lips)
-    neck_n = _norm_mask(regions.neck)
-
-    acc_skin = np.zeros((roi_h, roi_w), dtype=np.float32)
-    acc_skin_hair = np.zeros((roi_h, roi_w), dtype=np.float32)
-    if skin_n is not None:
-        acc_skin = np.clip(acc_skin + skin_n, 0.0, 1.0)
-        acc_skin_hair = np.clip(acc_skin_hair + skin_n, 0.0, 1.0)
-    if hair_n is not None:
-        acc_skin_hair = np.clip(acc_skin_hair + hair_n, 0.0, 1.0)
-    if neck_n is not None:
-        acc_skin_hair = np.clip(acc_skin_hair + neck_n, 0.0, 1.0)
-
-    acc_lips = np.zeros((roi_h, roi_w), dtype=np.float32)
-    if lips_n is not None:
-        acc_lips = np.clip(acc_lips + lips_n, 0.0, 1.0)
-
-    # ---- Frequency separation ----
-    original_lab = cv2.cvtColor(canvas, cv2.COLOR_BGR2LAB)
-    layers = freq_separate(canvas, face_width)
-
-    # ---- Build smooth mask (protect eyes/brows/lips) ----
-    smooth_mask = skin_n.copy() if skin_n is not None else np.zeros((roi_h, roi_w), np.float32)
-
-    if shifted_face.ied > 0:
-        k_size = max(3, int(shifted_face.ied * 0.08) | 1)
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
-        dilated_left_eye = cv2.dilate(regions.left_eye, kernel) if regions.left_eye is not None else None
-        dilated_right_eye = cv2.dilate(regions.right_eye, kernel) if regions.right_eye is not None else None
-    else:
-        dilated_left_eye = regions.left_eye
-        dilated_right_eye = regions.right_eye
-
-    for excl in (
-        dilated_left_eye, dilated_right_eye,
-        regions.left_under_eye, regions.right_under_eye,
-        regions.left_eyebrow, regions.right_eyebrow,
-        regions.lips,
-    ):
-        if excl is not None:
-            smooth_mask = np.clip(smooth_mask - excl.astype(np.float32), 0.0, 1.0)
-
-    # ---- Frequency-based smoothing ----
-    if ctx.nose_smooth is not None:
-        nose_mask = _norm_mask(regions.nose)
-        if nose_mask is not None:
-            face_without_nose = np.clip(smooth_mask - nose_mask * smooth_mask, 0.0, 1.0)
-            canvas = freq_combine(
-                layers,
-                skin_mask=face_without_nose,
-                smooth_strength=ctx.smooth / 100.0,
-                mid_reduction=ctx.mid_reduction,
-                texture_opacity=ctx.texture_opacity,
-                face_width=face_width,
-                pore_synthesis=ctx.pore_synthesis / 100.0,
-                roi_coords=(roi_x1, roi_y1),
-            )
-            nose_canvas = freq_combine(
-                layers,
-                skin_mask=nose_mask * smooth_mask,
-                smooth_strength=ctx.nose_smooth / 100.0,
-                mid_reduction=ctx.mid_reduction,
-                texture_opacity=ctx.texture_opacity,
-                face_width=face_width,
-                pore_synthesis=ctx.pore_synthesis / 100.0,
-                roi_coords=(roi_x1, roi_y1),
-            )
-            nose_alpha = (nose_mask * smooth_mask)[:, :, np.newaxis]
-            canvas = (
-                nose_canvas.astype(np.float32) * nose_alpha
-                + canvas.astype(np.float32) * (1.0 - nose_alpha)
-            ).astype(np.uint8)
-        else:
-            canvas = freq_combine(
-                layers,
-                skin_mask=smooth_mask,
-                smooth_strength=ctx.smooth / 100.0,
-                mid_reduction=ctx.mid_reduction,
-                texture_opacity=ctx.texture_opacity,
-                face_width=face_width,
-                pore_synthesis=ctx.pore_synthesis / 100.0,
-                roi_coords=(roi_x1, roi_y1),
-            )
-    else:
-        canvas = freq_combine(
-            layers,
-            skin_mask=smooth_mask,
-            smooth_strength=ctx.smooth / 100.0,
-            mid_reduction=ctx.mid_reduction,
-            texture_opacity=ctx.texture_opacity,
-            face_width=face_width,
-            pore_synthesis=ctx.pore_synthesis / 100.0,
-            roi_coords=(roi_x1, roi_y1),
-        )
-
-    # ---- Skin equalization ----
-    if ctx.equalize > 0:
-        canvas = skin.equalize(canvas, regions.skin, ctx.equalize, ref_lab=original_lab)
-
-    # ---- Foundation / whitening ----
-    if ctx.whiten != 0:
-        canvas = skin.whiten(canvas, regions.skin, ctx.whiten, tone=ctx.whiten_tone)
-
-    # ---- Virtual studio relighting ----
-    if ctx.relight > 0:
-        canvas = relighter.relight(
-            canvas,
-            shifted_face.landmarks,
-            regions.skin,
-            face_width=face_width,
-            strength=ctx.relight,
-            azimuth=ctx.relight_azimuth,
-            elevation=ctx.relight_elevation,
-        )
-
-    # ---- Specular bloom ----
-    if ctx.specular_bloom > 0:
-        canvas = skin.apply_specular_bloom(
-            canvas, regions.skin, ctx.specular_bloom, tone=ctx.specular_bloom_tone
-        )
-
-    # ---- Blemish removal ----
-    if ctx.blemish > 0:
-        canvas = blemish.remove(canvas, regions.skin, ctx.blemish)
-
-    # ---- Under-eye repair ----
-    if ctx.dark_circles > 0:
-        canvas = undereye.repair(canvas, regions, ctx.dark_circles)
-
-    # ---- Neck harmonisation ----
-    if ctx.whiten != 0 or ctx.equalize > 0:
-        canvas = skin.harmonize_neck(
-            canvas,
-            shifted_face.landmarks,
-            roi_person_mask,
-            regions.skin,
-            regions.neck,
-            strength=max(abs(ctx.whiten), ctx.equalize),
-        )
-
-    # ---- Eye enhancement ----
-    if ctx.eye_enhance > 0:
-        canvas = eyes.enhance(canvas, regions, ctx.eye_enhance,
-                              catchlight_strength=ctx.catchlight if ctx.catchlight > 0 else None)
-
-    # ---- Teeth whitening ----
-    if ctx.teeth_whiten > 0:
-        canvas = teeth.whiten(canvas, regions.mouth_interior, ctx.teeth_whiten)
-
-    # ---- Lip enhancement ----
-    if ctx.lip_enhance > 0:
-        canvas = lips.enhance(
-            canvas, regions.lips, ctx.lip_enhance,
-            tint=ctx.lip_tint, finish=ctx.lip_finish,
-        )
-
-    # ---- Blush ----
-    if ctx.blush > 0:
-        canvas = makeup.apply_blush(
-            canvas, shifted_face.landmarks, face_width, ctx.blush,
-            regions=regions,
-            nose_blush=ctx.nose_blush,
-            under_eye_blush=ctx.under_eye_blush,
-        )
-
-    # ---- Hair shine ----
-    if ctx.hair_enhance > 0:
-        canvas = hair.enhance(
-            canvas, roi_person_mask, regions.face_oval,
-            shifted_face.bbox, ctx.hair_enhance, regions.hair,
-        )
-
-    # ---- Dodge & burn ----
-    if ctx.dodge_burn > 0:
-        canvas = skin.dodge_burn(canvas, regions, ctx.dodge_burn)
-
-    # ---- Build sharpening mask ----
-    acc_sharpen = np.zeros((roi_h, roi_w), dtype=np.float32)
-    eye_sharpen = _accum(np.zeros((roi_h, roi_w), np.float32), regions.left_eye)
-    eye_sharpen = _accum(eye_sharpen, regions.right_eye)
-
-    other_sharpen = _accum(np.zeros((roi_h, roi_w), np.float32), regions.left_eyebrow)
-    other_sharpen = _accum(other_sharpen, regions.right_eyebrow)
-
-    if regions.hair is not None and _norm_mask(regions.hair).max() > 0.01:
-        hair_n_clean = _norm_mask(regions.hair)
-        eroded = cv2.erode(hair_n_clean, np.ones((5, 5), np.uint8))
-        hair_edges = np.clip(hair_n_clean - eroded, 0.0, 1.0)
-        other_sharpen = np.clip(other_sharpen + hair_edges, 0.0, 1.0)
-
-    acc_sharpen = np.clip(
-        np.maximum(eye_sharpen * 1.0, other_sharpen * 0.53), 0.0, 1.0
-    )
-
-    return _FaceResult(
-        canvas=canvas,
-        skin_mask=acc_skin,
-        skin_hair_mask=acc_skin_hair,
-        lips_mask=acc_lips,
-        sharpen_mask=acc_sharpen,
-        roi_box=(roi_x1, roi_y1, roi_x1 + roi_w, roi_y1 + roi_h)
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -802,6 +536,7 @@ class RetouchEngine:
         self._parser = FaceParser()
         self._reshaper = FaceReshaper()
         self._makeup = MakeupEngine()
+        self._frequency = FrequencySeparator()
         self._skin = SkinProcessor()
         self._blemish = BlemishRemover()
         self._eyes = EyeEnhancer()
@@ -814,11 +549,9 @@ class RetouchEngine:
 
         # Persistent process pool for multi-face parallel processing.
         # Lazily started on first multi-face call; shut down in close().
-        from .perf_optimizations import FaceProcessorPool
         self._face_pool = FaceProcessorPool()
 
         # Warm up JIT kernels on engine startup (safe fallback if Numba is missing)
-        from .perf_optimizations import warmup_jit_kernels
         warmup_jit_kernels()
 
     # ------------------------------------------------------------------
@@ -1096,7 +829,7 @@ class RetouchEngine:
             # Frequency layers of the primary face
             if faces:
                 face_width = faces[0].ied * 2.5
-                layers = freq_separate(result, face_width)
+                layers = self._frequency.separate(result, face_width)
                 cv2.imwrite(os.path.join(debug_dir, "freq_low.png"), np.clip(layers.low, 0, 255).astype(np.uint8))
                 cv2.imwrite(os.path.join(debug_dir, "freq_mid.png"), np.clip(layers.mid + 128, 0, 255).astype(np.uint8))
                 cv2.imwrite(os.path.join(debug_dir, "freq_high.png"), np.clip(layers.high + 128, 0, 255).astype(np.uint8))
@@ -1578,6 +1311,7 @@ class RetouchEngine:
             'lips': self._lips,
             'makeup': self._makeup,
             'hair': self._hair,
+            'frequency': self._frequency,
         }
         return _process_face_core(
             canvas, regions, shifted_face, ctx,
