@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 
+import base64
 import sys
 import os
 import time
 import tempfile
 import zipfile
+from io import BytesIO
 from pathlib import Path
 
 import cv2
@@ -492,10 +494,18 @@ def process_image(img_paths, recipe,
             for exp_path in exported_paths:
                 zipf.write(exp_path, arcname=os.path.basename(exp_path))
         gr.Info(f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s")
-        return preview, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓", debug_gallery, debug_vis
+
+        if show_compare:
+            slide_html = _make_comparison_html(original, result)
+            return gr.update(visible=False), slide_html, original, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓", debug_gallery, debug_vis
+        return preview, gr.update(visible=False), original, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓", debug_gallery, debug_vis
     else:
         gr.Info(f"Done in {elapsed:.1f}s")
-        return preview, exported_paths[0], f"Done in {elapsed:.1f}s ✓", debug_gallery, debug_vis
+
+        if show_compare:
+            slide_html = _make_comparison_html(original, result)
+            return gr.update(visible=False), slide_html, original, exported_paths[0], f"Done in {elapsed:.1f}s ✓", debug_gallery, debug_vis
+        return preview, gr.update(visible=False), original, exported_paths[0], f"Done in {elapsed:.1f}s ✓", debug_gallery, debug_vis
 
 
 def on_recipe_change(recipe):
@@ -521,6 +531,54 @@ def on_recipe_change(recipe):
 
 LIP_TINTS = ["none", "cosplay", "rose", "pink", "coral", "natural", "berry"]
 custom_style_choices = get_custom_style_names()
+
+COMPARE_TPL = """
+<div id="cmp-%(uid)s" style="position:relative;width:100%%;user-select:none;overflow:hidden;border-radius:4px">
+  <img src="%(orig)s" style="width:100%%;display:block;pointer-events:none">
+  <div class="cmp-overlay" style="position:absolute;top:0;left:0;width:50%%;height:100%%;overflow:hidden">
+    <img src="%(result)s" style="width:100%%;display:block;max-width:none;position:absolute;left:0;top:0;pointer-events:none">
+  </div>
+  <div class="cmp-handle" style="position:absolute;top:0;left:50%%;width:3px;height:100%%;background:#fff;cursor:ew-resize;z-index:10;box-shadow:0 0 6px rgba(0,0,0,0.4)"></div>
+  <div class="cmp-label" style="position:absolute;top:10px;left:10px;background:rgba(0,0,0,0.55);color:#fff;padding:2px 10px;border-radius:3px;font-size:11px;letter-spacing:1px;pointer-events:none">BEFORE</div>
+  <div class="cmp-label" style="position:absolute;top:10px;right:10px;background:rgba(0,0,0,0.55);color:#fff;padding:2px 10px;border-radius:3px;font-size:11px;letter-spacing:1px;pointer-events:none">AFTER</div>
+</div>
+<script>
+(function(){{
+  var c = document.getElementById('cmp-%(uid)s');
+  var o = c.querySelector('.cmp-overlay');
+  var h = c.querySelector('.cmp-handle');
+  var d = false;
+  function m(x){{
+    var r = c.getBoundingClientRect();
+    var p = Math.max(0,Math.min(100,(x-r.left)/r.width*100));
+    o.style.width=p+'%%'; h.style.left=p+'%%';
+  }}
+  h.onmousedown=function(e){{d=true;e.preventDefault()}};
+  document.onmousemove=function(e){{if(d)m(e.clientX)}};
+  document.onmouseup=function(){{d=false}};
+  h.ontouchstart=function(e){{d=true;e.preventDefault()}};
+  document.ontouchmove=function(e){{if(d)m(e.touches[0].clientX)}};
+  document.ontouchend=function(){{d=false}};
+}})();
+</script>
+"""
+
+
+def _make_comparison_html(orig_bgr, result_bgr, max_height=600):
+    scale = max_height / max(orig_bgr.shape[0], result_bgr.shape[0])
+    if scale < 1.0:
+        new_w = int(orig_bgr.shape[1] * scale)
+        new_h = int(orig_bgr.shape[0] * scale)
+        orig_bgr = cv2.resize(orig_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        result_bgr = cv2.resize(result_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    _, ob = cv2.imencode('.jpg', orig_bgr, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    _, rb = cv2.imencode('.jpg', result_bgr, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    uid = hex(int(time.time() * 1e6))[2:]
+    return COMPARE_TPL % {
+        "uid": uid,
+        "orig": f"data:image/jpeg;base64,{base64.b64encode(ob).decode()}",
+        "result": f"data:image/jpeg;base64,{base64.b64encode(rb).decode()}",
+    }
 
 with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.themes.Soft(primary_hue="sky", secondary_hue="slate"), css="""
     /* Global font override */
@@ -855,6 +913,20 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         background: #252830 !important;
     }
     
+    /* Click-to-zoom cursor on preview */
+    #retouch-output {
+        cursor: zoom-in !important;
+    }
+    
+    /* Comparison slider container and labels */
+    .cmp-label {
+        font-weight: 600 !important;
+        text-transform: uppercase !important;
+    }
+    #retouch-compare {
+        cursor: ew-resize !important;
+    }
+    
     /* File upload box styling */
     .gr-file {
         border: 1px dashed #303338 !important;
@@ -900,7 +972,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         with gr.Tab("Single Photo Editor"):
             with gr.Row():
                 # Column 1: Presets & Library Panel (Left)
-                with gr.Column(scale=1.5, elem_classes=["library-panel"]):
+                with gr.Column(scale=2, elem_classes=["library-panel"]):
                     img_input = gr.File(label="Input Image(s) (RAW supported)", file_types=["image"], file_count="multiple")
 
                     with gr.Group():
@@ -922,7 +994,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         
                         with gr.Row():
                             process_btn = gr.Button("Process Image(s) ⚡", variant="primary", size="lg", elem_classes=["primary-btn"])
-                            reset_btn = gr.Button("Reload Recipe Defaults 🔄", variant="secondary", size="lg", elem_classes=["secondary-btn"])
+                            reset_btn = gr.Button("Reload Recipe Defaults 🔄", variant="secondary", size="lg", elem_classes=["secondary-btn"], elem_id="reset-btn")
 
                     with gr.Group():
                         gr.Markdown("### ⚙️ Export Settings")
@@ -939,7 +1011,9 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                 with gr.Column(scale=4, elem_classes=["viewer-panel"]):
                     with gr.Group():
                         gr.Markdown("### 🖼️ Preview Canvas")
-                        img_output = gr.Image(height=600, show_label=False)
+                        img_output = gr.Image(height=600, show_label=False, elem_id="retouch-output")
+                        compare_viewer = gr.HTML(visible=False, elem_id="retouch-compare")
+                        _original_state = gr.State(value=None)
                         status = gr.Textbox(label="Status", interactive=False, placeholder="Upload an image and click Process to start...")
                         export_file = gr.File(label="📥 Download Exported Assets")
 
@@ -948,7 +1022,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         debug_gallery = gr.Gallery(label="Masks (skin, skin+hair, lips, sharpen, glow, freq_low, freq_mid, freq_high)", columns=4, height=300)
 
                 # Column 3: Adjustment Panel (Right)
-                with gr.Column(scale=2.5, elem_classes=["develop-panel"]):
+                with gr.Column(scale=3, elem_classes=["develop-panel"]):
                     with gr.Group():
                         gr.Markdown("### ⚙️ Develop Adjustments")
                         
@@ -960,22 +1034,28 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             pore_synthesis = gr.Slider(0, 100, 0, step=1, label="Pore Synthesis", info="Add micro-texture/synthesized pores to prevent artificial plastic skin")
                             blemish = gr.Slider(0, 100, 30, step=1, label="Blemish Removal", info="AI blemish detection and inpainting for acne/spots")
 
-                        with gr.Accordion("🎨 Skin & Tone", open=False):
+                        with gr.Accordion("🎨 Skin Tone", open=False):
                             whiten = gr.Slider(0, 100, 10, step=1, label="Whitening", info="Luminance boost and porcelain skin color match")
                             whiten_tone = gr.Dropdown(choices=WHITEN_TONE_CHOICES, value="rosy", label="Whitening Tone", interactive=True, info="Tone direction: rosy (warm pink), porcelain (cool neutral), neutral")
                             equalize = gr.Slider(0, 100, 20, step=1, label="Equalize", info="Even out skin redness and regional color inconsistencies")
                             auto_exposure = gr.Checkbox(label="Auto Exposure Correction", value=False, info="Automatically correct under/over-exposed images before processing")
                             white_costume_lift = gr.Checkbox(label="White Costume Lift", value=False, info="Selectively boost bright clothing to create separation")
+                            whiten_tone_reset = gr.Button("↺ Reset Skin Tone", size="sm", elem_classes=["reset-btn"], visible=False)
+
+                        with gr.Accordion("📊 Basic Tone & Color", open=False):
                             contrast = gr.Slider(-50, 50, 0, step=1, label="Contrast", info="Adjust global image contrast")
                             brightness = gr.Slider(-50, 50, 0, step=1, label="Brightness", info="Adjust global image brightness")
                             clarity = gr.Slider(-100, 100, 0, step=1, label="Clarity", info="Mid-tone contrast / local contrast enhancement (negative = soften)")
                             vibrance = gr.Slider(-100, 100, 0, step=1, label="Vibrance", info="Smart saturation boost that protects skin tones")
                             saturation = gr.Slider(-100, 100, 0, step=1, label="Saturation", info="Uniform global saturation adjustment")
-                            gr.Markdown("**Tone Curve Controls**")
+                            basic_tone_reset = gr.Button("↺ Reset Basic Tone", size="sm", elem_classes=["reset-btn"], visible=False)
+
+                        with gr.Accordion("📈 Tone Curve", open=False):
                             highlights = gr.Slider(-100, 100, 0, step=1, label="Highlights", info="Recover or boost bright highlight regions")
                             shadows = gr.Slider(-100, 100, 0, step=1, label="Shadows", info="Open up or deepen shadow regions")
                             whites = gr.Slider(-100, 100, 0, step=1, label="Whites", info="Control absolute white point ceiling")
                             blacks = gr.Slider(-100, 100, 0, step=1, label="Blacks", info="Control absolute black point floor")
+                            tone_curve_reset = gr.Button("↺ Reset Tone Curve", size="sm", elem_classes=["reset-btn"], visible=False)
 
                         with gr.Accordion("💡 Virtual Studio Relighting", open=False):
                             relight = gr.Slider(0, 100, 0, step=1, label="Relight Strength", info="Intensity of 3D virtual studio light source redirection")
@@ -1042,6 +1122,26 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             debug_mode = gr.Checkbox(label="Generate Debug Masks", value=False, info="Save skin/lips/frequency-layer masks and display them for tuning")
 
                         process_btn_bottom = gr.Button("Apply Overrides & Process ⚡", variant="primary", size="lg", elem_classes=["primary-btn"])
+
+                        gr.HTML("""
+                        <div style="margin-top:12px;text-align:center;font-size:0.7rem;color:#6b7280;border-top:1px solid #282b32;padding-top:10px">
+                            <span>⌘+Enter Process · ⌘+R Reset · Click preview for full-size</span>
+                        </div>
+                        <script>
+                        document.addEventListener('keydown', function(e) {
+                            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                                e.preventDefault();
+                                var btn = document.querySelector('.primary-btn');
+                                if (btn) btn.click();
+                            }
+                            if ((e.metaKey || e.ctrlKey) && e.key === 'r') {
+                                e.preventDefault();
+                                var btn = document.getElementById('reset-btn');
+                                if (btn) btn.click();
+                            }
+                        });
+                        </script>
+                        """)
 
         with gr.Tab("Batch Library Ingestion"):
             with gr.Row():
@@ -1188,7 +1288,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         shadow_hue, shadow_sat, midtone_hue, midtone_sat, highlight_hue, highlight_sat,
         debug_mode,
     ]
-    _process_outputs = [img_output, export_file, status, debug_gallery, debug_panel]
+    _process_outputs = [img_output, compare_viewer, _original_state, export_file, status, debug_gallery, debug_panel]
 
     process_btn.click(
         fn=process_image,
