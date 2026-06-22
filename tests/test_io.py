@@ -2,11 +2,14 @@
 from pathlib import Path
 import numpy as np
 import pytest
+from PIL import Image
+from PIL.ExifTags import Base as ExifBase
 from retouch.io import (
     resize_for_processing,
     output_format,
     encode_write_params,
     make_comparison,
+    copy_exif,
 )
 
 
@@ -139,6 +142,112 @@ class TestMakeComparison:
         out = tmp_path / "compare.png"
         make_comparison(orig, ret, out, "png", 95)
         assert out.exists()
+
+
+# ---------------------------------------------------------------------------
+# copy_exif
+# ---------------------------------------------------------------------------
+
+
+def _write_jpeg_with_exif(path, orientation=1, make="TestCam", model="T1"):
+    """Helper: write a small JPEG at *path* with EXIF metadata."""
+    arr = np.zeros((20, 20, 3), dtype=np.uint8)
+    arr[5:15, 5:15] = 200
+    img = Image.fromarray(arr)
+    exif = img.getexif()
+    exif[ExifBase.Make] = make
+    exif[ExifBase.Model] = model
+    exif[ExifBase.Orientation] = orientation
+    img.save(str(path), "JPEG", exif=exif.tobytes())
+
+
+def _write_jpeg_without_exif(path):
+    """Helper: write a small JPEG without any EXIF block."""
+    arr = np.zeros((20, 20, 3), dtype=np.uint8)
+    img = Image.fromarray(arr)
+    img.save(str(path), "JPEG")
+
+
+class TestCopyExif:
+    def test_copies_exif_tags(self, tmp_path):
+        src = tmp_path / "src.jpg"
+        dst = tmp_path / "dst.jpg"
+        _write_jpeg_with_exif(src)
+        _write_jpeg_without_exif(dst)
+
+        copy_exif(str(src), str(dst))
+
+        # Re-read the destination and check the EXIF tags are present
+        out = Image.open(str(dst))
+        exif = out.getexif()
+        assert exif.get(ExifBase.Make) == "TestCam"
+        assert exif.get(ExifBase.Model) == "T1"
+
+    def test_resets_orientation_to_normal(self, tmp_path):
+        src = tmp_path / "src.jpg"
+        dst = tmp_path / "dst.jpg"
+        # Source has orientation=6 (rotated 90° CCW)
+        _write_jpeg_with_exif(src, orientation=6)
+        _write_jpeg_without_exif(dst)
+
+        copy_exif(str(src), str(dst))
+
+        out = Image.open(str(dst))
+        exif = out.getexif()
+        # Orientation is rewritten to 1 (normal) — the destination has its
+        # own pixel orientation
+        assert exif.get(ExifBase.Orientation) == 1
+
+    def test_preserves_other_exif_tags(self, tmp_path):
+        src = tmp_path / "src.jpg"
+        dst = tmp_path / "dst.jpg"
+        _write_jpeg_with_exif(src, make="CamA", model="M-100")
+        _write_jpeg_without_exif(dst)
+
+        copy_exif(str(src), str(dst))
+
+        out = Image.open(str(dst))
+        exif = out.getexif()
+        # The destination is freshly written; tags that were explicitly
+        # set on the source are transferred.
+        assert exif.get(ExifBase.Make) == "CamA"
+        assert exif.get(ExifBase.Model) == "M-100"
+
+    def test_source_without_exif_is_silent_noop(self, tmp_path):
+        src = tmp_path / "src_no_exif.jpg"
+        dst = tmp_path / "dst.jpg"
+        _write_jpeg_without_exif(src)
+        _write_jpeg_without_exif(dst)
+
+        # Should not raise
+        copy_exif(str(src), str(dst))
+
+        # Destination remains valid
+        out = Image.open(str(dst))
+        assert out.size == (20, 20)
+
+    def test_handles_different_orientation_values(self, tmp_path):
+        for orig_orientation in (1, 3, 6, 8):
+            src = tmp_path / f"src_o{orig_orientation}.jpg"
+            dst = tmp_path / f"dst_o{orig_orientation}.jpg"
+            _write_jpeg_with_exif(src, orientation=orig_orientation)
+            _write_jpeg_without_exif(dst)
+
+            copy_exif(str(src), str(dst))
+
+            out = Image.open(str(dst))
+            exif = out.getexif()
+            # All orientations are normalised to 1
+            assert exif.get(ExifBase.Orientation) == 1
+
+    def test_does_not_raise_on_invalid_source(self, tmp_path):
+        # Source doesn't exist — should log a warning and return, not raise
+        src = tmp_path / "nonexistent.jpg"
+        dst = tmp_path / "dst.jpg"
+        _write_jpeg_without_exif(dst)
+
+        # Should not raise even when source is missing
+        copy_exif(str(src), str(dst))
 
 
 import cv2
