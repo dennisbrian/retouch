@@ -127,6 +127,14 @@ Passing an explicit value override to these parameters takes precedence over the
 *   **`grade_intensity`** (`float`, `0.0` to `1.0`): Opacity/intensity of the selected color grade preset.
 *   **`lut`** (`str`): Absolute filepath to a `.cube` or `.png` 3D Lookup Table file.
 *   **`color_grade_stack`** (`list` of `dict`, optional): List of dictionary objects to composite multiple color presets sequentially.
+
+##### **Split Toning (LAB 3-Way)**
+*   **`shadow_hue`** (`float`, `0` to `360`): Hue angle for shadow split-toning in LAB space.
+*   **`shadow_sat`** (`float`, `0` to `100`): Saturation strength of the shadow tone.
+*   **`midtone_hue`** (`float`, `0` to `360`): Hue angle for midtone split-toning.
+*   **`midtone_sat`** (`float`, `0` to `100`): Saturation strength of the midtone.
+*   **`highlight_hue`** (`float`, `0` to `360`): Hue angle for highlight split-toning.
+*   **`highlight_sat`** (`float`, `0` to `100`): Saturation strength of the highlight tone.
 *   **`color_ref`** (`np.ndarray`): Reference image array for matching color tone.
 *   **`color_transfer_intensity`** (`float`, `0.0` to `1.0`): Mix ratio of color transfer from `color_ref`.
 
