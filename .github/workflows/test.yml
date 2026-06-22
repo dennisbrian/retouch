@@ -32,6 +32,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
+      - name: Download model files
+        run: |
+          mkdir -p models
+          wget -q https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task -O models/face_landmarker.task
+          wget -q https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite -O models/selfie_segmenter.tflite
+
       - name: Unit and integration tests
         run: |
           python -m pytest tests/ -v --tb=short -x --ignore=tests/test_cli.py

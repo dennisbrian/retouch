@@ -138,6 +138,10 @@ def engine():
     """Shared RetouchEngine with guaranteed teardown."""
     from retouch.engine import RetouchEngine
 
+    models_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models")
+    landmarker_model = os.path.join(models_dir, "face_landmarker.task")
+    if not os.path.exists(landmarker_model):
+        pytest.skip("Face landmarker model not available")
     with RetouchEngine() as eng:
         yield eng
 
