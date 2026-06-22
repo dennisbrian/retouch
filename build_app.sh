@@ -5,12 +5,12 @@
 set -e
 
 echo "=== 1. Installing Desktop Dependencies ==="
-pip install -r requirements-gui.txt
+python3 -m pip install -r requirements-gui.txt
 
 echo "=== 2. Compiling Standalone Desktop Application ==="
 # On macOS, --windowed creates a double-clickable .app bundle
 # We copy package files and the models/ directory into the application bundle
-pyinstaller --windowed \
+python3 -m PyInstaller --windowed \
             --name "Pro Max Retouch Studio" \
             --add-data "retouch:retouch" \
             --add-data "models:models" \
