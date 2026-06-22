@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Dict, Optional
 
 import cv2
 import numpy as np
@@ -18,6 +19,21 @@ IMAGE_EXTENSIONS = {
 
 RAW_EXTENSIONS = {
     ".raf", ".cr2", ".cr3", ".nef", ".nrw", ".arw", ".dng", ".orf", ".rw2", ".pef", ".srw", ".x3f",
+}
+
+EXPORT_RES_MAP: Dict[str, Optional[int]] = {
+    "Original": None,
+    "4K (3840px)": 3840,
+    "2K (2048px)": 2048,
+    "Full HD (1920px)": 1920,
+    "HD (1280px)": 1280,
+    "720px": 720,
+}
+
+EXT_MAP: Dict[str, str] = {
+    "JPEG": ".jpg",
+    "PNG": ".png",
+    "WebP": ".webp",
 }
 
 

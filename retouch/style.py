@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 
 from .frequency import separate as freq_separate
+from .utils import normalize_mask
 
 
 @dataclass
@@ -132,9 +133,7 @@ class StyleAnalyzer:
                     face.landmarks, original_img, face.bbox, person_mask, face.ied
                 )
                 if regions.skin is not None:
-                    s_mask = regions.skin.copy().astype(np.float32)
-                    if s_mask.max() > 1.0:
-                        s_mask /= 255.0
+                    s_mask = normalize_mask(regions.skin.copy())
                     combined_skin_mask = np.maximum(combined_skin_mask, s_mask)
 
             if total_area > 0:
@@ -262,18 +261,14 @@ class StyleApplier:
             if faces:
                 faces = sorted(faces, key=lambda f: f.bbox[2] * f.bbox[3], reverse=True)
                 person = self.engine._detector.segment_person(result)
-                person_f = person.astype(np.float32)
-                if person_f.max() > 1.0:
-                    person_f /= 255.0
+                person_f = normalize_mask(person)
                 if person_f.ndim == 3:
                     person_f = person_f[:, :, 0]
                 regions = self.engine._parser.parse(
                     faces[0].landmarks, result, faces[0].bbox, person_f, faces[0].ied
                 )
                 if regions.skin is not None:
-                    s_mask = regions.skin.astype(np.float32)
-                    if s_mask.max() > 1.0:
-                        s_mask /= 255.0
+                    s_mask = normalize_mask(regions.skin)
                     lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB).astype(np.float32)
                     lab[:, :, 1] += profile.skin_a_mean_delta * s_mask
                     lab[:, :, 2] += profile.skin_b_mean_delta * s_mask
@@ -357,9 +352,7 @@ def subject_aware_transfer(
     if target_person is None:
         target_person = engine._detector.segment_person(target_img)
     
-    target_person_f = target_person.astype(np.float32)
-    if target_person_f.max() > 1.0:
-        target_person_f /= 255.0
+    target_person_f = normalize_mask(target_person)
     if target_person_f.ndim == 3:
         target_person_f = target_person_f[:, :, 0]
 
@@ -369,9 +362,7 @@ def subject_aware_transfer(
     ref_faces = engine._detector.detect(ref_img)
     ref_person = engine._detector.segment_person(ref_img)
     
-    ref_person_f = ref_person.astype(np.float32)
-    if ref_person_f.max() > 1.0:
-        ref_person_f /= 255.0
+    ref_person_f = normalize_mask(ref_person)
     if ref_person_f.ndim == 3:
         ref_person_f = ref_person_f[:, :, 0]
 
@@ -397,26 +388,18 @@ def subject_aware_transfer(
 
         # Skin transfer (matched from original target_img and blended back)
         if t_regions.skin is not None and r_regions.skin is not None:
-            t_skin = t_regions.skin.astype(np.float32)
-            if t_skin.max() > 1.0:
-                t_skin /= 255.0
-            r_skin = r_regions.skin.astype(np.float32)
-            if r_skin.max() > 1.0:
-                r_skin /= 255.0
-            
+            t_skin = normalize_mask(t_regions.skin)
+            r_skin = normalize_mask(r_regions.skin)
+
             skin_trans = reinhard_transfer_masked(target_img, ref_img, t_skin, r_skin)
             t_skin_3d = t_skin[:, :, np.newaxis]
             result = (result.astype(np.float32) * (1.0 - t_skin_3d) + skin_trans.astype(np.float32) * t_skin_3d).astype(np.uint8)
 
         # Hair transfer (matched from original target_img and blended back)
         if t_regions.hair is not None and r_regions.hair is not None:
-            t_hair = t_regions.hair.astype(np.float32)
-            if t_hair.max() > 1.0:
-                t_hair /= 255.0
-            r_hair = r_regions.hair.astype(np.float32)
-            if r_hair.max() > 1.0:
-                r_hair /= 255.0
-            
+            t_hair = normalize_mask(t_regions.hair)
+            r_hair = normalize_mask(r_regions.hair)
+
             hair_trans = reinhard_transfer_masked(target_img, ref_img, t_hair, r_hair)
             t_hair_3d = t_hair[:, :, np.newaxis]
             result = (result.astype(np.float32) * (1.0 - t_hair_3d) + hair_trans.astype(np.float32) * t_hair_3d).astype(np.uint8)

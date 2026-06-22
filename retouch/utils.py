@@ -1,5 +1,9 @@
 """Shared utilities for the face retouching pipeline."""
 
+from __future__ import annotations
+
+from typing import Optional
+
 import cv2
 import numpy as np
 
@@ -7,6 +11,31 @@ import numpy as np
 # ---------------------------------------------------------------------------
 # Mask utilities
 # ---------------------------------------------------------------------------
+
+def normalize_mask(mask: Optional[np.ndarray]) -> Optional[np.ndarray]:
+    """Return a float32 mask in [0, 1]. Returns None if input is None.
+
+    Accepts uint8 (0-255) or already-float (0-1) masks and normalizes
+    the former by dividing by 255.
+    """
+    if mask is None:
+        return None
+    m = mask.astype(np.float32)
+    if m.max() > 1.0:
+        m /= 255.0
+    return m
+
+
+def screen_blend(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Screen-blend two images in the 0-255 range.
+
+    screen = 255 - ((255 - a) * (255 - b) / 255)
+
+    This non-clipping blend lightens without saturating; equivalent to the
+    "Screen" layer mode in Photoshop.
+    """
+    return 255.0 - ((255.0 - a) * (255.0 - b) / 255.0)
+
 
 def feather_mask(mask, radius=None, sigma=None):
     """Apply Gaussian feathering to a mask for soft edges.
@@ -22,9 +51,7 @@ def feather_mask(mask, radius=None, sigma=None):
     if mask is None or mask.size == 0:
         return mask
 
-    mask_f = mask.astype(np.float32)
-    if mask_f.max() > 1.0:
-        mask_f /= 255.0
+    mask_f = normalize_mask(mask)
 
     if sigma is None and radius is None:
         return mask_f
@@ -320,7 +347,7 @@ def apply_global_bloom(
     # Screen blend to avoid clipping:
     # screen = 255 - ((255 - img) * (255 - glow) / 255)
     img_f = img_bgr.astype(np.float32)
-    screen = 255.0 - ((255.0 - img_f) * (255.0 - glow) / 255.0)
+    screen = screen_blend(img_f, glow)
 
     # Linearly interpolate between original BGR and Screened BGR based on strength factor
     s_factor = strength / 100.0

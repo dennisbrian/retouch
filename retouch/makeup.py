@@ -6,6 +6,8 @@ Performs makeup enhancements in LAB space for optimal, natural blending.
 import cv2
 import numpy as np
 
+from .utils import normalize_mask
+
 
 class MakeupEngine:
     """Professional portrait makeup engine."""
@@ -71,9 +73,7 @@ class MakeupEngine:
 
         # Exclude lips from blush mask to prevent blush from altering lip color
         if regions is not None and regions.lips is not None:
-            lips_f = regions.lips.astype(np.float32)
-            if lips_f.max() > 1.0:
-                lips_f = lips_f / 255.0
+            lips_f = normalize_mask(regions.lips)
             blush_mask = np.clip(blush_mask - lips_f, 0.0, 1.0)
 
         # Apply in LAB space

@@ -7,6 +7,8 @@ their specular brightness and local contrast to create a silky, premium look.
 import cv2
 import numpy as np
 
+from .utils import normalize_mask
+
 
 class HairEnhancer:
     """Enhance hair/wig highlights and local contrast."""
@@ -57,9 +59,7 @@ class HairEnhancer:
             near_head = cv2.GaussianBlur(near_head, (k_blur, k_blur), 0)
 
             # Squeeze person mask if it is 3D
-            pm = person_mask.astype(np.float32)
-            if pm.max() > 1.0:
-                pm /= 255.0
+            pm = normalize_mask(person_mask)
             if pm.ndim == 3:
                 pm = pm.squeeze(-1)
 
