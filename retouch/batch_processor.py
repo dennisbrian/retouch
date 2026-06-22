@@ -128,9 +128,6 @@ def analyze_and_group(
                 # Use engine detector to find faces
                 detected_faces = engine._detector.detect(img)
                 faces = len(detected_faces)
-                face_width = 0
-                if faces > 0:
-                    face_width = int(detected_faces[0].ied * 2.5)
 
                 # Segment subject/person if detector supports it
                 person_mask = None
@@ -143,7 +140,6 @@ def analyze_and_group(
 
                 info = {
                     "faces": faces,
-                    "face_width": face_width,
                     "mean_s": mean_s,
                     "mean_v": mean_v,
                 }

@@ -16,12 +16,9 @@ from __future__ import annotations
 import logging
 import multiprocessing as mp
 import os
-import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass, field
 from typing import Any
 
-import cv2
 import numpy as np
 import onnxruntime as ort
 
@@ -49,79 +46,6 @@ logger = logging.getLogger(__name__)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Shared data structures (must be importable by worker processes)
-# ──────────────────────────────────────────────────────────────────────────────
-
-@dataclass
-class RegionMasks:
-    """
-    Holds per-face region mask coordinates as plain Python / NumPy objects
-    so they are always picklable for IPC.
-
-    All coordinate arrays are in pixel space relative to the crop canvas,
-    NOT normalized floats.
-    """
-    skin: np.ndarray | None = None        # uint8 mask, same HxW as canvas
-    lips: np.ndarray | None = None
-    eyes: np.ndarray | None = None
-    # Add more regions as the engine grows.
-
-    def to_dict(self) -> dict[str, Any]:
-        """
-        Serialize to a plain dict of (possibly None) NumPy arrays.
-        NumPy arrays are natively picklable — no special handling needed.
-        """
-        return {
-            "skin": self.skin,
-            "lips": self.lips,
-            "eyes": self.eyes,
-        }
-
-    @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "RegionMasks":
-        return cls(skin=d["skin"], lips=d["lips"], eyes=d["eyes"])
-
-
-@dataclass
-class FaceData:
-    """
-    Stores landmarks already remapped to original-resolution pixel coordinates.
-
-    IMPORTANT: pixel_landmarks stores (x, y) in the original image's pixel
-    space. Normalized [0,1] values from MediaPipe are converted at
-    construction time so that no call site can accidentally use the wrong
-    scale.
-    """
-    # Shape: (N, 2) array of (x_px, y_orig_px) coordinates
-    pixel_landmarks: np.ndarray
-
-    original_width: int
-    original_height: int
-
-    @classmethod
-    def from_normalized(
-        cls,
-        normalized_landmarks: list,          # MediaPipe landmark list
-        original_width: int,
-        original_height: int,
-    ) -> "FaceData":
-        """
-        Convert MediaPipe normalized [0,1] landmarks to absolute pixel coords
-        immediately on construction, eliminating any ambiguity downstream.
-        """
-        coords = np.array(
-            [(lm.x * original_width, lm.y * original_height)
-             for lm in normalized_landmarks],
-            dtype=np.float32,
-        )
-        return cls(
-            pixel_landmarks=coords,
-            original_width=original_width,
-            original_height=original_height,
-        )
-
-
-# ──────────────────────────────────────────────────────────────────────────────
 # PROPOSAL 1 — Multi-processing (GIL bypass)
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -136,15 +60,15 @@ def _get_worker_processors() -> dict[str, Any]:
     """Lazily build and cache the per-face processors in a worker process."""
     global _WORKER_PROCESSORS
     if _WORKER_PROCESSORS is None:
-        from retouch.skin import SkinProcessor
-        from retouch.blemish import BlemishRemover
-        from retouch.eyes import EyeEnhancer
-        from retouch.undereye import UnderEyeRepairer
-        from retouch.lips import LipEnhancer
-        from retouch.teeth import TeethWhitener
-        from retouch.makeup import MakeupEngine
-        from retouch.hair import HairEnhancer
-        from retouch.relight import Relighter
+        from .skin import SkinProcessor
+        from .blemish import BlemishRemover
+        from .eyes import EyeEnhancer
+        from .undereye import UnderEyeRepairer
+        from .lips import LipEnhancer
+        from .teeth import TeethWhitener
+        from .makeup import MakeupEngine
+        from .hair import HairEnhancer
+        from .relight import Relighter
         _WORKER_PROCESSORS = {
             "skin": SkinProcessor(),
             "relighter": Relighter(),
@@ -189,8 +113,8 @@ def _process_single_face_worker(payload: tuple) -> dict:
 
     # Late imports avoid a circular import at module load time
     # (engine imports parsing imports perf_optimizations).
-    from retouch.engine import _process_face_core
-    from retouch.detection import FaceData
+    from .engine import _process_face_core
+    from .detection import FaceData
 
     processors = _get_worker_processors()
     shifted_face = FaceData(
@@ -312,81 +236,6 @@ class FaceProcessorPool:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# PROPOSAL 2 — Downscaled MediaPipe inference
-# ──────────────────────────────────────────────────────────────────────────────
-
-_MIN_FACE_SHORT_SIDE_PX = 64
-
-
-def detect_faces_downscaled(
-    landmarker: Any,          # mediapipe FaceLandmarker (or your wrapper)
-    img_bgr: np.ndarray,
-    max_dim: int = 1024,
-) -> list[FaceData]:
-    """
-    Run face landmark detection on a downscaled copy of the image, then
-    remap results to original-resolution pixel coordinates.
-
-    Args:
-        landmarker:  MediaPipe FaceLandmarker instance (lives in parent process).
-        img_bgr:     Original BGR image at full resolution.
-        max_dim:     Maximum dimension (px) for detection input.
-
-    Returns:
-        List of FaceData with pixel_landmarks in original-image coordinates.
-    """
-    h_orig, w_orig = img_bgr.shape[:2]
-
-    # ── downscale if needed ───────────────────────────────────────────────────
-    if max(h_orig, w_orig) > max_dim:
-        scale = max_dim / float(max(h_orig, w_orig))
-        w_down = int(w_orig * scale)
-        h_down = int(h_orig * scale)
-        img_detect = cv2.resize(
-            img_bgr, (w_down, h_down), interpolation=cv2.INTER_AREA
-        )
-        logger.debug(
-            "Detection downscaled: (%d,%d) → (%d,%d)", w_orig, h_orig, w_down, h_down
-        )
-    else:
-        img_detect = img_bgr.copy()
-        scale = 1.0
-
-    # ── run landmark detection ────────────────────────────────────────────────
-    raw_results = landmarker.detect(img_detect)
-
-    if not raw_results:
-        return []
-
-    # ── small-face guard ──────────────────────────────────────────────────────
-    if scale < 1.0:
-        for face_lms in raw_results:
-            xs = [lm.x * w_orig for lm in face_lms]
-            ys = [lm.y * h_orig for lm in face_lms]
-            bbox_w = (max(xs) - min(xs))
-            bbox_h = (max(ys) - min(ys))
-            short_side = min(bbox_w, bbox_h)
-            if short_side < _MIN_FACE_SHORT_SIDE_PX:
-                logger.debug(
-                    "Small face detected (short side %.1fpx); "
-                    "re-running detection at full resolution",
-                    short_side,
-                )
-                img_full_copy = img_bgr.copy()
-                raw_results = landmarker.detect(img_full_copy)
-                break
-
-    return [
-        FaceData.from_normalized(
-            normalized_landmarks=face_lms,
-            original_width=w_orig,
-            original_height=h_orig,
-        )
-        for face_lms in raw_results
-    ]
-
-
-# ──────────────────────────────────────────────────────────────────────────────
 # PROPOSAL 3 — CoreML / Metal GPU ONNX execution providers
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -439,57 +288,6 @@ def build_ort_providers() -> list[str | tuple[str, dict]]:
     return providers
 
 
-def init_onnx_session(model_path: str) -> ort.InferenceSession:
-    """
-    Create an ONNX Runtime InferenceSession with the best available provider.
-    """
-    opts = ort.SessionOptions()
-    opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    opts.enable_profiling = False
-
-    if sys.platform == "darwin":
-        opts.inter_op_num_threads = 1
-
-    providers = build_ort_providers()
-    logger.info("Loading ONNX model: %s  providers=%s", model_path, providers)
-
-    return ort.InferenceSession(model_path, sess_options=opts, providers=providers)
-
-
-def init_mediapipe_with_gpu() -> Any:
-    """
-    Initialize a MediaPipe FaceLandmarker with GPU delegation on Apple Silicon.
-    """
-    import mediapipe as mp
-
-    BaseOptions = mp.tasks.BaseOptions
-    FaceLandmarker = mp.tasks.vision.FaceLandmarker
-    FaceLandmarkerOptions = mp.tasks.vision.FaceLandmarkerOptions
-    RunningMode = mp.tasks.vision.RunningMode
-
-    if sys.platform == "darwin":
-        delegate = BaseOptions.Delegate.GPU
-        logger.info("MediaPipe FaceLandmarker: GPU delegate (Metal)")
-    else:
-        delegate = BaseOptions.Delegate.CPU
-        logger.info("MediaPipe FaceLandmarker: CPU delegate")
-
-    options = FaceLandmarkerOptions(
-        base_options=BaseOptions(
-            model_asset_path="face_landmarker.task",
-            delegate=delegate,
-        ),
-        running_mode=RunningMode.IMAGE,
-        num_faces=10,
-        min_face_detection_confidence=0.4,
-        min_face_presence_confidence=0.4,
-        min_tracking_confidence=0.4,
-        output_face_blendshapes=False,
-        output_facial_transformation_matrixes=False,
-    )
-    return FaceLandmarker.create_from_options(options)
-
-
 # ──────────────────────────────────────────────────────────────────────────────
 # PROPOSAL 4 — Numba JIT pixel loops
 # ──────────────────────────────────────────────────────────────────────────────
@@ -535,29 +333,6 @@ def _apply_tonal_lut(img_f: np.ndarray, y_lut: np.ndarray) -> np.ndarray:
             out[y, x, 2] = y_lut[i2]
 
     return out
-
-
-def apply_tonal_lut(img: np.ndarray, lut: np.ndarray) -> np.ndarray:
-    """
-    Public wrapper: normalizes inputs, guards against NaN, calls the JIT kernel.
-    """
-    if img.dtype == np.uint8:
-        img_f = img.astype(np.float32)
-    elif img.dtype == np.float32:
-        if img.max() <= 1.0:
-            img_f = img * 255.0
-        else:
-            img_f = img
-    else:
-        img_f = img.astype(np.float32)
-        if img_f.max() <= 1.0:
-            img_f = img_f * 255.0
-
-    lut_f = np.nan_to_num(lut.astype(np.float32), nan=0.0, posinf=255.0, neginf=0.0)
-    if lut_f.shape[0] != 256:
-        raise ValueError(f"LUT must have exactly 256 entries; got {lut_f.shape[0]}")
-
-    return _apply_tonal_lut(img_f, lut_f)
 
 
 @numba.jit(

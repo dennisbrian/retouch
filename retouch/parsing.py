@@ -10,6 +10,7 @@ All masks are float32 (H, W) in [0, 1] with soft feathered edges.
 """
 
 import cv2
+import logging
 import numpy as np
 import os
 import onnxruntime as ort
@@ -215,8 +216,8 @@ class FaceParser:
                     for excl_k in ['left_eyebrow', 'right_eyebrow', 'left_eye', 'right_eye', 'lips', 'mouth_interior']:
                         if excl_k in bisenet_masks and bisenet_masks[excl_k] is not None:
                             bisenet_masks['skin'] = np.clip(bisenet_masks['skin'] - bisenet_masks[excl_k], 0.0, 1.0)
-            except Exception:
-                pass
+            except Exception as e:
+                logging.getLogger(__name__).warning(f"Face parsing failed: {e}")
 
         # Populate regions from BiSeNet masks
         regions.skin = bisenet_masks.get('skin')
@@ -305,7 +306,8 @@ class FaceParser:
                     results[i] = self._landmark_fallback_only(
                         landmarks_compat_list[i], img_bgr, person_masks[i], ieds[i]
                     )
-            except Exception:
+            except Exception as e:
+                logging.getLogger(__name__).warning(f"Face parsing failed: {e}")
                 results[i] = self._landmark_fallback_only(
                     landmarks_compat_list[i], img_bgr, person_masks[i], ieds[i]
                 )

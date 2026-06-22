@@ -3,7 +3,6 @@
 All operations work within the skin mask to never affect hair, eyes, or background.
 """
 
-import warnings
 import cv2
 import numpy as np
 
@@ -14,14 +13,6 @@ class SkinProcessor:
     """Skin smoothing, whitening, and tone equalization."""
 
     MEDIAPIPE_CHIN_IDX = 152
-
-    def smooth(self, img_bgr, skin_mask, strength=50):
-        """Deprecated: use FrequencySeparator.combine() instead."""
-        warnings.warn(
-            "SkinProcessor.smooth() is a no-op. Use frequency.combine() directly.",
-            DeprecationWarning, stacklevel=2,
-        )
-        return img_bgr
 
     def whiten(self, img_bgr, skin_mask, strength=30, tone="rosy"):
         """Adaptive Rosy Foundation: LAB-based skin whitening and rosy/porcelain cosmetic shift."""
@@ -290,13 +281,3 @@ class SkinProcessor:
         l_val = lab[:, :, 0]
         protection = np.clip(1.0 - (l_val - 220.0) / 30.0, 0.0, 1.0)
         return protection
-
-
-def adaptive_smooth(image_bgr, skin_mask, base_smooth=0.5, base_texture=0.25, smooth_boost=0.3):
-    """Skin smoothing with quality-adaptive strength."""
-    from .blemish import compute_skin_quality_map
-    from .frequency import combine_adaptive
-    quality_map = compute_skin_quality_map(image_bgr, skin_mask)
-    return combine_adaptive(image_bgr, skin_mask, quality_map,
-                            base_smooth=base_smooth, base_texture=base_texture,
-                            smooth_boost=smooth_boost)

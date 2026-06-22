@@ -31,8 +31,6 @@ DEFAULT_FEATHER_MIN = 5
 APPROX_FACE_WIDTH_RATIO = 0.4
 SMOOTH_K_FACTOR = 0.22
 SMOOTH_K_MIN = 9
-BILATERAL_D_FACTOR = 0.006
-BILATERAL_D_MIN = 9
 SIGMA_BASE = 20.0
 SIGMA_STRENGTH_FACTOR = 60.0
 GAUSSIAN_BLEND_FACTOR = 0.25
@@ -110,7 +108,7 @@ def combine(layers, skin_mask=None, smooth_strength=0.5,
     m_raw = skin_mask.astype(np.float32)
 
     # --- Bounding Box Optimization ---
-    # Crop to the mask region to avoid running heavy ops (like bilateral filter) 
+    # Crop to the mask region to avoid running heavy ops (like bilateral filter)
     # on the entire image when the skin only covers a small fraction.
     ys, xs = np.where(m_raw > 0.01)
     if len(xs) == 0:
@@ -209,37 +207,27 @@ def combine(layers, skin_mask=None, smooth_strength=0.5,
     return full_result
 
 
-def combine_adaptive(image_bgr, skin_mask, quality_map, base_smooth=0.5,
-                     base_texture=0.25, smooth_boost=0.3, mid_reduction=0.5,
-                     pore_synthesis=None):
-    """Adaptive frequency combine that modulates smoothing based on skin quality.
+class FrequencySeparator:
+    """Class-based wrapper around ``separate()`` / ``combine()`` for engine use.
 
-    Where quality_map is high (rough skin), increases smoothing strength.
-    Where quality_map is low (smooth skin), reduces smoothing to preserve detail.
+    Provides the same behavior as the module-level functions; the class
+    shape exists so it matches the rest of the stage modules in the engine
+    (e.g. ``SkinProcessor``, ``BlemishRemover``).
     """
-    y_indices, x_indices = np.where(skin_mask > 0.1)
-    if len(x_indices) == 0:
-        return image_bgr
-    face_width = float(x_indices.max() - x_indices.min())
 
-    layers = separate(image_bgr, face_width)
+    def separate(self, img_bgr, face_width):
+        return separate(img_bgr, face_width)
 
-    p_syn = pore_synthesis if pore_synthesis is not None else 0.0
-
-    weak = combine(layers, skin_mask=skin_mask, smooth_strength=base_smooth,
-                   mid_reduction=mid_reduction, texture_opacity=base_texture,
-                   face_width=face_width, pore_synthesis=p_syn)
-
-    strong_smooth = min(1.0, base_smooth + smooth_boost)
-    strong_texture = max(0.0, base_texture * (1.0 - smooth_boost * 0.5))
-    strong = combine(layers, skin_mask=skin_mask, smooth_strength=strong_smooth,
-                     mid_reduction=mid_reduction, texture_opacity=strong_texture,
-                     face_width=face_width, pore_synthesis=p_syn)
-
-    alpha = np.clip(quality_map, 0.0, 1.0).astype(np.float32)
-    k = max(5, int(face_width * 0.02)) | 1
-    alpha = cv2.GaussianBlur(alpha, (k, k), 0)
-    alpha = alpha[:, :, np.newaxis]
-
-    out = weak.astype(np.float32) * (1.0 - alpha) + strong.astype(np.float32) * alpha
-    return np.clip(out, 0, 255).astype(np.uint8)
+    def combine(self, layers, skin_mask=None, smooth_strength=0.5,
+                mid_reduction=0.4, texture_opacity=1.0, face_width=None,
+                pore_synthesis=0.0, roi_coords=None):
+        return combine(
+            layers,
+            skin_mask=skin_mask,
+            smooth_strength=smooth_strength,
+            mid_reduction=mid_reduction,
+            texture_opacity=texture_opacity,
+            face_width=face_width,
+            pore_synthesis=pore_synthesis,
+            roi_coords=roi_coords,
+        )

@@ -10,7 +10,6 @@ The detector returns a list of FaceData objects that downstream modules consume.
 import dataclasses
 import os
 os.environ["TF_USE_LEGACY_KERAS"] = "1"
-import sys
 from typing import List, Optional, Tuple
 
 import cv2
