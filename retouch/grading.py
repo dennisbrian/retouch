@@ -632,7 +632,9 @@ class ColorGrader:
 # ---------------------------------------------------------------------------
 
 def _skin_mean_std(channel, mask):
-    msum = float(mask.sum()) + 1e-6
+    msum = float(mask.sum())
+    if msum < 1e-6:
+        return 0.0, 0.0
     mean = float((channel * mask).sum()) / msum
     var = float(((channel - mean) ** 2 * mask).sum()) / msum
     return mean, np.sqrt(var)
