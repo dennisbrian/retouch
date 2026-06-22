@@ -6,7 +6,6 @@ import os
 import time
 import tempfile
 import zipfile
-from io import BytesIO
 from pathlib import Path
 
 import cv2
@@ -599,14 +598,14 @@ def process_image(*args):
 
         if show_compare:
             slide_html = _make_comparison_html(first_original, first_result) if (first_original is not None and first_result is not None) else ""
-            return gr.update(visible=False), slide_html, first_original, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓", debug_gallery, debug_vis
+            return gr.update(visible=False), gr.update(value=slide_html, visible=True), first_original, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓", debug_gallery, debug_vis
         return preview, gr.update(visible=False), first_original, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓", debug_gallery, debug_vis
     else:
         gr.Info(f"Done in {elapsed:.1f}s")
 
         if show_compare:
             slide_html = _make_comparison_html(first_original, first_result) if (first_original is not None and first_result is not None) else ""
-            return gr.update(visible=False), slide_html, first_original, exported_paths[0], f"Done in {elapsed:.1f}s ✓", debug_gallery, debug_vis
+            return gr.update(visible=False), gr.update(value=slide_html, visible=True), first_original, exported_paths[0], f"Done in {elapsed:.1f}s ✓", debug_gallery, debug_vis
         return preview, gr.update(visible=False), first_original, exported_paths[0], f"Done in {elapsed:.1f}s ✓", debug_gallery, debug_vis
 
 
