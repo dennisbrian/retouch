@@ -73,7 +73,11 @@ pip install -r requirements-gui.txt
 python3 gui.py
 ```
 
-Opens at `http://127.0.0.1:7860`.
+Opens at `http://127.0.0.1:7860`. Restart after updating:
+
+```bash
+pkill -f "python3 -u gui.py" && python3 gui.py
+```
 
 ## Recipes
 
