@@ -6,7 +6,7 @@ import os
 import re
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Callable
 
@@ -81,7 +81,7 @@ def save_style_profile(
         "name": name,
         "author": resolved_author,
         "version": resolved_version,
-        "created_at": datetime.utcnow().isoformat() + "Z",
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "tags": tags or [],
         "profile": profile_dict,
     }
