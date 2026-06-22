@@ -140,6 +140,7 @@ class ProcessingContext:
     # --- Eyes ---
     eye_enhance: float = 0.0
     dark_circles: float = 0.0
+    catchlight: float = 0.0
 
     # --- Lips ---
     lip_enhance: float = 0.0
@@ -350,6 +351,7 @@ def build_context(
     r_eye = _pct(eyes.get("iris", eyes.get("whites", 0.0)))
     # BUGFIX-3: dark-circle repair must not inherit teeth/eye-white strength.
     r_dark_circles = _pct(eyes.get("dark_circles", 0.0))
+    r_catchlight = _pct(eyes.get("catchlight", eyes.get("iris", 0.0)))
     r_teeth = _pct(eyes.get("whites", 0.0))
 
     # --- Lips ---
@@ -424,6 +426,7 @@ def build_context(
         relight_elevation=_ov("relight_elevation", r_relight_elevation),
         eye_enhance=_ov("eye_enhance", r_eye),
         dark_circles=_ov("dark_circles", r_dark_circles),
+        catchlight=_ov("catchlight", r_catchlight),
         lip_enhance=_ov("lip_enhance", r_lip),
         lip_tint=_ov("lip_tint", r_lip_tint),
         lip_finish=_ov("lip_finish", r_lip_finish),
@@ -706,7 +709,8 @@ def _process_face_core(
 
     # ---- Eye enhancement ----
     if ctx.eye_enhance > 0:
-        canvas = eyes.enhance(canvas, regions, ctx.eye_enhance)
+        canvas = eyes.enhance(canvas, regions, ctx.eye_enhance,
+                              catchlight_strength=ctx.catchlight if ctx.catchlight > 0 else None)
 
     # ---- Teeth whitening ----
     if ctx.teeth_whiten > 0:
@@ -831,6 +835,7 @@ class RetouchEngine:
         whiten: Optional[float] = None,
         eye_enhance: Optional[float] = None,
         dark_circles: Optional[float] = None,
+        catchlight: Optional[float] = None,
         blemish: Optional[float] = None,
         lip_enhance: Optional[float] = None,
         lip_tint: Optional[Any] = None,
@@ -927,6 +932,7 @@ class RetouchEngine:
             "whiten": whiten,
             "eye_enhance": eye_enhance,
             "dark_circles": dark_circles,
+            "catchlight": catchlight,
             "blemish": blemish,
             "lip_enhance": lip_enhance,
             "lip_tint": lip_tint,
@@ -1324,8 +1330,14 @@ class RetouchEngine:
                 softness=ctx.bloom_softness,
             )
 
+        if ctx.glow > 0:
+            result = self._grader._add_glow(result, ctx.glow / 100.0)
+
         if post_effects:
             result = self._grader.grade(result, post_effects, 1.0)
+
+        if ctx.vignette > 0:
+            result = self._grader._add_vignette(result, ctx.vignette / 100.0)
 
         if ctx.impact > 0:
             result = self._grader.add_impact_finish(result, ctx.impact)
@@ -1771,6 +1783,10 @@ class RetouchEngine:
                 softness=ctx.bloom_softness,
             )
 
+        # Apply ctx-level atmospheric glow (separate from preset glow)
+        if ctx.glow > 0:
+            result = self._grader._add_glow(result, ctx.glow / 100.0, mask=g_mask)
+
         # Apply post-effects (halation, lut, grain, chromatic aberration)
         if post_effects:
             result = self._grader.grade(
@@ -1781,6 +1797,10 @@ class RetouchEngine:
         # White costume pearl/lavender lift
         if ctx.white_costume_lift:
             result = self._apply_white_costume_lift(result, acc_skin, acc_lips, ctx.grade_intensity)
+
+        # Apply ctx-level vignette (last, after all other effects)
+        if ctx.vignette > 0:
+            result = self._grader._add_vignette(result, ctx.vignette / 100.0)
 
         return result
 

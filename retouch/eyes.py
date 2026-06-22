@@ -15,13 +15,15 @@ from .utils import blend_masked, feather_mask
 class EyeEnhancer:
     """Professional eye enhancement pipeline."""
 
-    def enhance(self, img_bgr, regions, strength=40):
+    def enhance(self, img_bgr, regions, strength=40, catchlight_strength=None):
         """Run the full eye enhancement pipeline.
 
         Args:
             img_bgr: (H, W, 3) uint8 BGR image.
             regions: FaceRegions from the parser.
             strength: 0–100 overall intensity.
+            catchlight_strength: 0–100 catchlight-specific intensity. If None,
+                falls back to ``strength`` (backward compatible).
 
         Returns:
             (H, W, 3) uint8 result.
@@ -46,7 +48,8 @@ class EyeEnhancer:
 
         # Catchlights — detect and amplify existing highlights
         iris_mask = np.clip(regions.left_iris + regions.right_iris, 0, 1)
-        result = self._enhance_catchlights(result, iris_mask, s)
+        cl_s = catchlight_strength if catchlight_strength is not None else strength
+        result = self._enhance_catchlights(result, iris_mask, cl_s / 100.0)
 
         return result
 

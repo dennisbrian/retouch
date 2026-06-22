@@ -13,6 +13,7 @@ from tqdm import tqdm
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from retouch import RetouchEngine
+from retouch.engine import _adjust_contrast
 from retouch.grading import PRESETS, ColorGrader, list_available_presets
 from retouch.io import (
     IMAGE_EXTENSIONS,
@@ -127,7 +128,7 @@ def _apply_global_finish(img_bgr, params):
     grader = ColorGrader()
 
     if params.get("contrast"):
-        result = RetouchEngine._adjust_contrast(result, params["contrast"])
+        result = _adjust_contrast(result, params["contrast"])
 
     color_grade = params.get("color_grade", defaults["color_grade"])
     grade_intensity = params.get(
@@ -179,6 +180,7 @@ def build_params(args):
         "nose_smooth": args.nose_smooth,
         "whiten": args.whiten,
         "eye_enhance": args.eye_enhance,
+        "catchlight": args.catchlight,
         "dark_circles": args.dark_circles,
         "blemish": args.blemish,
         "lip_enhance": args.lip_enhance,
@@ -271,6 +273,8 @@ def main():
                         help="Skin whitening 0-100")
     parser.add_argument("--eye-enhance", type=int, default=None,
                         help="Eye enhancement 0-100")
+    parser.add_argument("--catchlight", type=int, default=None,
+                        help="Catchlight boost 0-100 (0 = follow --eye-enhance)")
     parser.add_argument("--dark-circles", type=int, default=None,
                         help="Under-eye brightening 0-100")
     parser.add_argument("--blemish", type=int, default=None,
