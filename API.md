@@ -124,6 +124,7 @@ def process(
 *   **`style_profile`** (`StyleProfile`, optional): Active custom style overrides loaded from json/library.
 *   **`style_ref`** (`np.ndarray`, optional): Reference image used to extract style dynamics on-the-fly.
 *   **`debug_dir`** (`str`, optional): Directory path where intermediate masks and stages will be written for debugging.
+*   **`face_contexts`** (`Optional[List[FaceContext]]`, optional): Reuse cached per-face detection/parsing data from a previous `process()` call. When provided, the detection and parsing stages are skipped and the cached face data is used directly. Pass back `result.face_contexts` from a prior call to skip expensive re-detection on follow-up passes.
 
 #### Parameter Overrides (grouped logically)
 Passing an explicit value override to these parameters takes precedence over the active recipe's defaults. Pass `None` to fallback.

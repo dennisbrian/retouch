@@ -4,6 +4,10 @@ Uses MediaPipe mouth landmarks to isolate teeth.  Detects teeth pixels by
 brightness + low-saturation within the mouth-interior region.
 """
 
+from __future__ import annotations
+
+from typing import Optional
+
 import cv2
 import numpy as np
 
@@ -13,7 +17,12 @@ from .utils import blend_masked, feather_mask
 class TeethWhitener:
     """Detect and whiten visible teeth."""
 
-    def whiten(self, img_bgr, mouth_interior_mask, strength=30):
+    def whiten(
+        self,
+        img_bgr: np.ndarray,
+        mouth_interior_mask: Optional[np.ndarray],
+        strength: int = 30,
+    ) -> np.ndarray:
         """Whiten teeth within the mouth interior.
 
         Args:
@@ -54,7 +63,7 @@ class TeethWhitener:
         whitened = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
         return whitened
 
-    def _detect_teeth(self, img_bgr, mouth_mask):
+    def _detect_teeth(self, img_bgr: np.ndarray, mouth_mask: np.ndarray) -> np.ndarray:
         """Detect teeth pixels within mouth interior.
 
         Teeth characteristics in LAB/HSV:

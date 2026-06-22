@@ -4,6 +4,7 @@ import argparse
 import sys
 import os
 import time
+import warnings
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import cpu_count
@@ -12,9 +13,10 @@ import cv2
 from tqdm import tqdm
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from retouch import RetouchEngine
 from retouch.engine import _adjust_contrast
-from retouch.grading import PRESETS, ColorGrader, list_available_presets
+from retouch.grading import PRESETS, ColorGrader
 from retouch.io import (
     IMAGE_EXTENSIONS,
     copy_exif,
@@ -25,10 +27,34 @@ from retouch.io import (
     resize_for_processing,
 )
 from retouch.recipes import RECIPES
+from retouch.params import PROCESSING_PARAMS, recipe_to_params
+
+
+class _DeprecatedAliasAction(argparse.Action):
+    """Argparse action for a deprecated flag aliased to a newer flag.
+
+    Stores the value into ``dest`` (a separate "legacy" attribute) and emits a
+    ``DeprecationWarning`` pointing the user at the replacement option. The
+    build_params() step is responsible for picking the new flag's value over
+    the legacy one when both are set.
+    """
+
+    def __init__(self, option_strings, dest, deprecated_to, **kwargs):
+        kwargs.setdefault("default", None)
+        self.deprecated_to = deprecated_to
+        super().__init__(option_strings=option_strings, dest=dest, **kwargs)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        warnings.warn(
+            f"'{option_string}' is deprecated and will be removed in a future"
+            f" release; please use '{self.deprecated_to}' instead.",
+            DeprecationWarning,
+            stacklevel=1,
+        )
+        setattr(namespace, self.dest, values)
 
 RECIPE_CHOICES = sorted(RECIPES.keys())
 PRESET_CHOICES = RECIPE_CHOICES
-COLOR_GRADE_CHOICES = list_available_presets()
 
 
 def _finalize_params(params):
@@ -113,12 +139,21 @@ def _process_single(args):
 
 
 def _recipe_defaults(recipe_name):
-    recipe = RECIPES.get(recipe_name or "natural", RECIPES["natural"])
-    return {
-        "color_grade": recipe["color_harmony"].get("preset"),
-        "grade_intensity": recipe["color_harmony"].get("amount", 0.0),
-        "impact": int(recipe.get("finish", {}).get("impact", 0.0) * 100),
-    }
+    """Return the recipe-derived defaults for the global-finish path.
+
+    Delegates to ``retouch.params.recipe_to_params`` (the canonical spec
+    shared with the engine and the GUI) and converts the GUI-scale
+    values it returns into the engine-scale values that
+    ``_apply_global_finish`` consumes.  ``grade_intensity`` is stored
+    0-100 in the GUI scale but ``grader.grade`` expects 0.0-1.0, and
+    ``color_grade`` uses ``None`` (not ``"none"``) to mean "no grade".
+    """
+    d = recipe_to_params(recipe_name or "natural")
+    if d.get("grade_intensity") is not None:
+        d["grade_intensity"] = float(d["grade_intensity"]) / 100.0
+    if d.get("color_grade") == "none":
+        d["color_grade"] = None
+    return d
 
 
 def _apply_global_finish(img_bgr, params):
@@ -168,6 +203,39 @@ def find_images(input_path, recursive):
     return sorted(files)
 
 
+def _add_processing_arg(parser, spec):
+    """Add an argparse argument for a single ``PROCESSING_PARAMS`` entry.
+
+    Booleans get both ``--{flag}`` and ``--no-{flag}`` variants so the
+    user can explicitly enable or disable a toggle.  Non-boolean args
+    use ``type=cli_type, default=None``; argparse converts hyphens in
+    the flag to underscores in the dest, which matches ``spec.name``.
+    """
+    if spec.cli_flag is None:
+        return
+    if spec.cli_type is bool:
+        parser.add_argument(
+            f"--{spec.cli_flag}",
+            action="store_true",
+            default=None,
+            help=f"Enable {spec.name}",
+        )
+        parser.add_argument(
+            f"--no-{spec.cli_flag}",
+            action="store_false",
+            dest=spec.name,
+            default=None,
+            help=f"Disable {spec.name}",
+        )
+        return
+    parser.add_argument(
+        f"--{spec.cli_flag}",
+        type=spec.cli_type,
+        default=None,
+        help=f"{spec.name} parameter",
+    )
+
+
 def build_params(args):
     params = {}
     if getattr(args, "recipe", None):
@@ -175,37 +243,34 @@ def build_params(args):
     elif getattr(args, "preset", None):
         params["recipe"] = args.preset
 
-    scalars = {
-        "smooth": args.smooth,
-        "nose_smooth": args.nose_smooth,
-        "whiten": args.whiten,
-        "eye_enhance": args.eye_enhance,
-        "catchlight": args.catchlight,
-        "dark_circles": args.dark_circles,
-        "blemish": args.blemish,
-        "lip_enhance": args.lip_enhance,
-        "teeth_whiten": args.teeth_whiten,
-        "equalize": args.equalize,
-        "contrast": args.contrast,
-        "brightness": args.brightness,
-        "highlights": args.highlights,
-        "shadows": args.shadows,
-        "whites": args.whites,
-        "blacks": args.blacks,
-        "grade_intensity": args.grade_intensity,
-        "texture_opacity": args.texture_opacity,
-        "mid_reduction": args.mid_reduction,
-        "hair_enhance": args.hair_enhance,
-        "dodge_burn": args.dodge_burn,
-        "slimming": args.slimming,
-        "blush": args.blush,
-        "impact": args.impact,
-        "specular_bloom": args.specular_bloom,
-        "nose_blush": getattr(args, "nose_blush", None),
-        "under_eye_blush": getattr(args, "under_eye_blush", None),
-        "white_costume_lift": getattr(args, "white_costume_lift", None),
-    }
-    params.update({k: v for k, v in scalars.items() if v is not None})
+    # Process the simple scalar/int/float parameters from the spec list.
+    # Each spec maps a CLI flag (e.g. "--smooth") to the engine kwarg name
+    # ("smooth").  When a flag is not provided on the command line we leave
+    # the engine kwarg unset (None) so the recipe default takes over.
+    for spec in PROCESSING_PARAMS:
+        if spec.cli_flag is None:
+            continue
+        # Translate the CLI flag to the argparse attribute name.
+        attr = spec.cli_flag.replace("-", "_")
+        if not hasattr(args, attr):
+            continue
+        val = getattr(args, attr)
+        if val is None:
+            continue
+        # auto_exposure uses ``store_true`` semantics: only ``True`` is
+        # forwarded (the explicit ``--no-auto-exposure`` sets ``False``,
+        # which is the default and should be dropped).
+        if spec.name == "auto_exposure":
+            if val:
+                params[spec.name] = True
+            continue
+        # For other boolean flags (nose_blush, under_eye_blush,
+        # white_costume_lift) the caller can explicitly set ``False`` to
+        # override the recipe.  Forward both ``True`` and ``False``.
+        if spec.cli_type is bool:
+            params[spec.name] = bool(val)
+            continue
+        params[spec.name] = val
 
     if args.color_grade:
         params["color_grade"] = args.color_grade
@@ -226,18 +291,38 @@ def build_params(args):
         params["grain"] = args.grain
     if getattr(args, "lut", None) is not None:
         params["lut"] = args.lut
-    if getattr(args, "halation", None) is not None:
-        params["halation"] = {"threshold": 210, "radius": 21, "intensity": args.halation}
+
+    halation_intensity = getattr(args, "halation_intensity", None)
+    if halation_intensity is None:
+        halation_intensity = getattr(args, "halation", None)
+    if halation_intensity is not None:
+        threshold = getattr(args, "halation_threshold", None)
+        radius = getattr(args, "halation_radius", None)
+        params["halation"] = {
+            "intensity": float(halation_intensity),
+            "threshold": int(threshold) if threshold is not None else 210,
+            "radius": int(radius) if radius is not None else 21,
+        }
 
     if args.color_ref:
         params["color_ref_path"] = args.color_ref
-    if args.color_ref_strength is not None:
-        params["color_transfer_intensity"] = args.color_ref_strength
+
+    color_transfer_intensity = getattr(args, "color_transfer_intensity", None)
+    if color_transfer_intensity is None:
+        color_transfer_intensity = getattr(args, "color_ref_strength", None)
+    if color_transfer_intensity is not None:
+        params["color_transfer_intensity"] = float(color_transfer_intensity)
 
     return params
 
 
 def main():
+    warnings.filterwarnings(
+        "always",
+        category=DeprecationWarning,
+        module=r"^(cli|__main__)(\.|$)",
+    )
+
     parser = argparse.ArgumentParser(
         description="Professional batch face retouching tool"
     )
@@ -255,8 +340,6 @@ def main():
                         help="Overwrite existing files")
     parser.add_argument("--dry-run", action="store_true",
                         help="Preview without processing")
-    parser.add_argument("--auto-exposure", action="store_true",
-                        help="Automatically normalize overexposed/underexposed photos")
     parser.add_argument("--global-only", action="store_true",
                         help="Skip face detection and apply only global color/impact retouch")
 
@@ -265,90 +348,32 @@ def main():
                         help="Retouch recipe name")
     parser.add_argument("--preset", choices=PRESET_CHOICES,
                         help="Quick parameter preset (legacy alias)")
-    parser.add_argument("--smooth", type=int, default=None,
-                        help="Skin smoothing 0-100")
-    parser.add_argument("--nose-smooth", type=int, default=None,
-                        help="Nose-specific smoothing 0-100 (independent from face)")
-    parser.add_argument("--whiten", type=int, default=None,
-                        help="Skin whitening 0-100")
-    parser.add_argument("--eye-enhance", type=int, default=None,
-                        help="Eye enhancement 0-100")
-    parser.add_argument("--catchlight", type=int, default=None,
-                        help="Catchlight boost 0-100 (0 = follow --eye-enhance)")
-    parser.add_argument("--dark-circles", type=int, default=None,
-                        help="Under-eye brightening 0-100")
-    parser.add_argument("--blemish", type=int, default=None,
-                        help="Blemish removal 0-100")
-    parser.add_argument("--lip-enhance", type=int, default=None,
-                        help="Lip enhancement 0-100")
-    parser.add_argument("--lip-tint", type=str, default=None,
-                        help="Lip tint preset name")
-    parser.add_argument("--teeth-whiten", type=int, default=None,
-                        help="Teeth whitening 0-100")
-    parser.add_argument("--equalize", type=int, default=None,
-                        help="Skin tone equalization 0-100")
-    parser.add_argument("--contrast", type=int, default=None,
-                        help="Contrast -50 to 50")
-    parser.add_argument("--brightness", type=int, default=None,
-                        help="Brightness -50 to 50")
-    parser.add_argument("--highlights", type=int, default=None,
-                        help="Highlights -100 to 100")
-    parser.add_argument("--shadows", type=int, default=None,
-                        help="Shadows -100 to 100")
-    parser.add_argument("--whites", type=int, default=None,
-                        help="Whites -100 to 100")
-    parser.add_argument("--blacks", type=int, default=None,
-                        help="Blacks -100 to 100")
     parser.add_argument("--color-ref", type=str, default=None,
                         help="Reference image path for colour transfer")
-    parser.add_argument("--color-ref-strength", type=float, default=1.0,
-                        help="Colour transfer blend intensity 0-1")
-    parser.add_argument("--color-grade", choices=COLOR_GRADE_CHOICES, default=None,
-                        help="Colour grading preset")
-    parser.add_argument("--grade-intensity", type=float, default=None,
-                        help="Grading blend intensity 0-1")
-    parser.add_argument("--hair-enhance", type=int, default=None,
-                        help="Hair highlight enhancement 0-100")
-    parser.add_argument("--dodge-burn", type=int, default=None,
-                        help="Dodge & Burn facial sculpting 0-100")
-    parser.add_argument("--slimming", type=int, default=None,
-                        help="Face slimming 0-100")
-    parser.add_argument("--blush", type=int, default=None,
-                        help="Blush intensity 0-100")
-    parser.add_argument("--impact", type=int, default=None,
-                        help="Global punch/finish intensity 0-100")
-    parser.add_argument("--lip-finish", choices=["matte", "gloss", "velvet"], default=None,
-                        help="Lip finish type")
-    parser.add_argument("--chromatic-aberration", type=float, default=None,
-                        help="Radial chromatic aberration displacement in pixels")
-    parser.add_argument("--grain", type=float, default=None,
-                        help="Luminance-weighted film grain strength (0.0 - 0.2)")
-    parser.add_argument("--lut", choices=["kodak", "fuji"], default=None,
-                        help="3D LUT color emulation preset")
-    parser.add_argument("--halation", type=float, default=None,
+    parser.add_argument("--color-transfer-intensity", type=float, default=None,
+                        help="Colour transfer blend intensity 0-1 (default: 1.0)")
+    parser.add_argument("--color-ref-strength", type=float, default=None,
+                        action=_DeprecatedAliasAction,
+                        deprecated_to="--color-transfer-intensity",
+                        dest="color_ref_strength",
+                        help="[DEPRECATED, use --color-transfer-intensity] "
+                             "Colour transfer blend intensity 0-1")
+    parser.add_argument("--halation-intensity", type=float, default=None,
                         help="Film halation bleed intensity (0.0 - 1.0)")
-    parser.add_argument("--specular-bloom", type=int, default=None,
-                        help="Specular pink/lavender highlight bloom 0-100")
-    parser.add_argument("--whiten-tone", choices=["rosy", "porcelain", "neutral"], default=None,
-                        help="Skin whitening undertone preset")
-    parser.add_argument("--nose-blush", action="store_true", default=None,
-                        help="Enable nose blush override")
-    parser.add_argument("--no-nose-blush", action="store_false", dest="nose_blush",
-                        help="Disable nose blush override")
-    parser.add_argument("--under-eye-blush", action="store_true", default=None,
-                        help="Enable under-eye blush override")
-    parser.add_argument("--no-under-eye-blush", action="store_false", dest="under_eye_blush",
-                        help="Disable under-eye blush override")
-    parser.add_argument("--white-costume-lift", action="store_true", default=None,
-                        help="Enable white costume lift override")
-    parser.add_argument("--no-white-costume-lift", action="store_false", dest="white_costume_lift",
-                        help="Disable white costume lift override")
+    parser.add_argument("--halation-threshold", type=int, default=None,
+                        help="Halation highlight threshold 0-255 (default: 210)")
+    parser.add_argument("--halation-radius", type=int, default=None,
+                        help="Halation blur radius in pixels (default: 21)")
+    parser.add_argument("--halation", type=float, default=None,
+                        action=_DeprecatedAliasAction,
+                        deprecated_to="--halation-intensity",
+                        dest="halation",
+                        help="[DEPRECATED, use --halation-intensity] "
+                             "Film halation bleed intensity (0.0 - 1.0)")
 
-    # Advanced
-    parser.add_argument("--texture-opacity", type=float, default=None,
-                        help="Texture reprojection opacity 0-1")
-    parser.add_argument("--mid-reduction", type=float, default=None,
-                        help="Mid-frequency reduction 0-1")
+    # Auto-generate processing parameter arguments from PROCESSING_PARAMS
+    for spec in PROCESSING_PARAMS:
+        _add_processing_arg(parser, spec)
 
     # Batch
     parser.add_argument("--workers", type=int, default=max(1, cpu_count() // 2),

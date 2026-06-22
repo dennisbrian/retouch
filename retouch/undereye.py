@@ -4,6 +4,10 @@ Goes beyond simple brightening by detecting the *colour* of dark circles
 (purple, blue, or brown) and applying targeted colour + brightness correction.
 """
 
+from __future__ import annotations
+
+from typing import Any, Optional
+
 import cv2
 import numpy as np
 
@@ -13,7 +17,12 @@ from .utils import blend_masked
 class UnderEyeRepairer:
     """Detect and repair under-eye dark circles."""
 
-    def repair(self, img_bgr, regions, strength=40):
+    def repair(
+        self,
+        img_bgr: np.ndarray,
+        regions: Any,
+        strength: int = 40,
+    ) -> np.ndarray:
         """Repair dark circles under both eyes.
 
         Args:
@@ -36,7 +45,12 @@ class UnderEyeRepairer:
 
         return result
 
-    def _repair_region(self, img_bgr, mask, strength):
+    def _repair_region(
+        self,
+        img_bgr: np.ndarray,
+        mask: np.ndarray,
+        strength: float,
+    ) -> np.ndarray:
         """Repair dark circles in one under-eye region.
 
         Strategy:

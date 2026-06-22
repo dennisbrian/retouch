@@ -1,6 +1,7 @@
 models/
 *.task
 test_output/
+benchmark_results.json
 __pycache__/
 *.pyc
 .DS_Store

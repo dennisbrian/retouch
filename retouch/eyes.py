@@ -6,6 +6,10 @@ Three independent sub-modules:
     3. Catchlight: detect and amplify existing highlights (never create fakes).
 """
 
+from __future__ import annotations
+
+from typing import Any, Optional
+
 import cv2
 import numpy as np
 
@@ -15,7 +19,13 @@ from .utils import blend_masked, feather_mask
 class EyeEnhancer:
     """Professional eye enhancement pipeline."""
 
-    def enhance(self, img_bgr, regions, strength=40, catchlight_strength=None):
+    def enhance(
+        self,
+        img_bgr: np.ndarray,
+        regions: Any,
+        strength: int = 40,
+        catchlight_strength: Optional[int] = None,
+    ) -> np.ndarray:
         """Run the full eye enhancement pipeline.
 
         Args:
@@ -53,7 +63,12 @@ class EyeEnhancer:
 
         return result
 
-    def _enhance_whites(self, img_bgr, whites_mask, strength):
+    def _enhance_whites(
+        self,
+        img_bgr: np.ndarray,
+        whites_mask: Optional[np.ndarray],
+        strength: float,
+    ) -> np.ndarray:
         """Remove redness and yellowness from eye whites.
 
         Works in LAB space:
@@ -83,7 +98,12 @@ class EyeEnhancer:
         result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
         return result
 
-    def _sculpt_iris(self, img_bgr, iris_mask, strength):
+    def _sculpt_iris(
+        self,
+        img_bgr: np.ndarray,
+        iris_mask: Optional[np.ndarray],
+        strength: float,
+    ) -> np.ndarray:
         """Perform 3D iris sculpting: darken pupil & limbal ring, brighten iris body,
         and boost micro-contrast and saturation.
         """
@@ -161,7 +181,12 @@ class EyeEnhancer:
 
         return img_bgr_out
 
-    def _enhance_catchlights(self, img_bgr, iris_mask, strength):
+    def _enhance_catchlights(
+        self,
+        img_bgr: np.ndarray,
+        iris_mask: Optional[np.ndarray],
+        strength: float,
+    ) -> np.ndarray:
         """Detect and amplify existing catchlights. Never create fakes.
 
         Catchlights are small, bright specular highlights in the iris.

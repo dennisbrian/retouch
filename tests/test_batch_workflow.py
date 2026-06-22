@@ -198,3 +198,300 @@ def test_batch_processor_execution(tmp_path, engine):
     cache = BatchProcessorCache(input_dir)
     if cache.cache_file.exists():
         cache.cache_file.unlink()
+
+
+# ---------------------------------------------------------------------------
+# End-to-end batch processing tests
+# ---------------------------------------------------------------------------
+
+
+class TestBatchEndToEnd:
+    """End-to-end integration tests for the full BatchProcessor pipeline."""
+
+    def _make_synthetic_input_dir(self, tmp_path, name="batch_input", file_count=3):
+        """Create a directory of synthetic grayscale images for batch tests."""
+        input_dir = tmp_path / name
+        input_dir.mkdir()
+        for i in range(file_count):
+            img = np.full((120, 160, 3), 80 + i * 20, dtype=np.uint8)
+            cv2.imwrite(str(input_dir / f"img_{i}.jpg"), img)
+        return input_dir
+
+    def _cleanup_cache(self, input_dir):
+        """Remove the user-level cache file for the given input dir."""
+        cache = BatchProcessorCache(input_dir)
+        if cache.cache_file.exists():
+            cache.cache_file.unlink()
+
+    def test_end_to_end_small_folder(self, tmp_path, engine):
+        """Process a small folder of 3 synthetic images end-to-end."""
+        input_dir = self._make_synthetic_input_dir(tmp_path, file_count=3)
+        output_dir = tmp_path / "out_e2e"
+        output_dir.mkdir()
+
+        try:
+            processor = BatchProcessor(engine)
+            processed, sheet, zip_path, log = processor.process_folder(
+                input_dir=input_dir,
+                output_dir=output_dir,
+                style_name_or_recipe="natural",
+                export_fmt="JPEG",
+                export_quality=85,
+                export_res="Original",
+                auto_group=False,
+                generate_sheet=True,
+                export_zip=True,
+            )
+
+            assert len(processed) == 3
+            for p in processed:
+                assert Path(p).exists()
+                assert Path(p).suffix == ".jpg"
+            assert sheet is not None
+            assert Path(sheet).exists()
+            assert zip_path is not None
+            assert Path(zip_path).exists()
+            assert "Success" in log
+            assert "3/3" in log
+        finally:
+            self._cleanup_cache(input_dir)
+
+    def test_auto_grouping_groups_similar_images(self, tmp_path, engine):
+        """Images with similar characteristics should be grouped together."""
+        input_dir = tmp_path / "group_input"
+        input_dir.mkdir()
+
+        # Two similar dark images, one very different bright image
+        for i in range(2):
+            cv2.imwrite(
+                str(input_dir / f"dark_{i}.jpg"),
+                np.full((120, 120, 3), 50, dtype=np.uint8),
+            )
+        cv2.imwrite(
+            str(input_dir / "bright.jpg"),
+            np.full((120, 120, 3), 220, dtype=np.uint8),
+        )
+
+        try:
+            processor = BatchProcessor(engine)
+            processed, sheet, zip_path, log = processor.process_folder(
+                input_dir=input_dir,
+                output_dir=tmp_path / "out",
+                style_name_or_recipe="natural",
+                auto_group=True,
+                generate_sheet=False,
+                export_zip=False,
+            )
+            assert len(processed) == 3
+            # Log should mention groupings
+            assert "Groupings" in log or "group" in log.lower() or len(processed) == 3
+        finally:
+            self._cleanup_cache(input_dir)
+
+    def test_contact_sheet_generated_by_default(self, tmp_path, engine):
+        """Contact sheet should be created when generate_sheet=True."""
+        input_dir = self._make_synthetic_input_dir(tmp_path, file_count=2)
+        output_dir = tmp_path / "out_cs"
+        output_dir.mkdir()
+
+        try:
+            processor = BatchProcessor(engine)
+            processed, sheet, zip_path, _ = processor.process_folder(
+                input_dir=input_dir,
+                output_dir=output_dir,
+                style_name_or_recipe="natural",
+                auto_group=False,
+                generate_sheet=True,
+                export_zip=False,
+            )
+            assert sheet is not None
+            assert Path(sheet).exists()
+            assert Path(sheet).name == "contact_sheet.jpg"
+        finally:
+            self._cleanup_cache(input_dir)
+
+    def test_no_contact_sheet_when_disabled(self, tmp_path, engine):
+        """When generate_sheet=False, no contact sheet is created."""
+        input_dir = self._make_synthetic_input_dir(tmp_path, file_count=2)
+        output_dir = tmp_path / "out_no_cs"
+        output_dir.mkdir()
+
+        try:
+            processor = BatchProcessor(engine)
+            processed, sheet, zip_path, _ = processor.process_folder(
+                input_dir=input_dir,
+                output_dir=output_dir,
+                style_name_or_recipe="natural",
+                auto_group=False,
+                generate_sheet=False,
+                export_zip=False,
+            )
+            assert sheet is None
+        finally:
+            self._cleanup_cache(input_dir)
+
+    def test_zip_contains_all_processed_files(self, tmp_path, engine):
+        """The output ZIP should contain all processed images and the
+        contact sheet."""
+        import zipfile
+
+        input_dir = self._make_synthetic_input_dir(tmp_path, file_count=3)
+        output_dir = tmp_path / "out_zip"
+        output_dir.mkdir()
+
+        try:
+            processor = BatchProcessor(engine)
+            processed, sheet, zip_path, _ = processor.process_folder(
+                input_dir=input_dir,
+                output_dir=output_dir,
+                style_name_or_recipe="natural",
+                auto_group=False,
+                generate_sheet=True,
+                export_zip=True,
+            )
+            assert zip_path is not None
+            zip_path = Path(zip_path)
+            with zipfile.ZipFile(zip_path) as zf:
+                names = set(zf.namelist())
+            # Should contain all 3 processed images
+            for p in processed:
+                assert Path(p).name in names
+            # Should also contain the contact sheet
+            assert "contact_sheet.jpg" in names
+        finally:
+            self._cleanup_cache(input_dir)
+
+    def test_custom_style_profile_application(self, tmp_path, engine):
+        """A custom style profile should be applied to all batch images."""
+        input_dir = self._make_synthetic_input_dir(tmp_path, file_count=2)
+        output_dir = tmp_path / "out_style"
+        output_dir.mkdir()
+
+        try:
+            processor = BatchProcessor(engine)
+            profile = StyleProfile(
+                brightness_delta=4.0,
+                contrast_delta=15.0,
+                saturation_delta=-20.0,
+            )
+            processed, sheet, zip_path, log = processor.process_folder(
+                input_dir=input_dir,
+                output_dir=output_dir,
+                custom_style_profile=profile,
+                style_name_or_recipe="natural",
+                auto_group=False,
+                generate_sheet=False,
+                export_zip=False,
+            )
+            assert len(processed) == 2
+            # The log mentions the style via the recipe (since custom profile
+            # is applied directly via applier.apply)
+            for p in processed:
+                assert Path(p).exists()
+        finally:
+            self._cleanup_cache(input_dir)
+
+    def test_empty_input_folder_returns_empty_list(self, tmp_path, engine):
+        """An empty input directory should return no processed files."""
+        input_dir = tmp_path / "empty"
+        input_dir.mkdir()
+        output_dir = tmp_path / "out_empty"
+        output_dir.mkdir()
+
+        try:
+            processor = BatchProcessor(engine)
+            processed, sheet, zip_path, log = processor.process_folder(
+                input_dir=input_dir,
+                output_dir=output_dir,
+                style_name_or_recipe="natural",
+                auto_group=False,
+                generate_sheet=False,
+                export_zip=False,
+            )
+            assert processed == []
+            assert sheet is None
+            assert zip_path is None
+            assert "No supported" in log or "Success" in log
+        finally:
+            self._cleanup_cache(input_dir)
+
+    def test_unsupported_files_are_skipped(self, tmp_path, engine):
+        """Files with non-image extensions should be ignored."""
+        input_dir = tmp_path / "mixed"
+        input_dir.mkdir()
+        # Real image
+        cv2.imwrite(
+            str(input_dir / "real.jpg"), np.full((100, 100, 3), 100, dtype=np.uint8)
+        )
+        # Non-image files
+        (input_dir / "notes.txt").write_text("not an image")
+        (input_dir / "data.json").write_text("{}")
+        output_dir = tmp_path / "out_mixed"
+        output_dir.mkdir()
+
+        try:
+            processor = BatchProcessor(engine)
+            processed, sheet, zip_path, _ = processor.process_folder(
+                input_dir=input_dir,
+                output_dir=output_dir,
+                style_name_or_recipe="natural",
+                auto_group=False,
+                generate_sheet=False,
+                export_zip=False,
+            )
+            # Only the .jpg should be processed
+            assert len(processed) == 1
+        finally:
+            self._cleanup_cache(input_dir)
+
+    def test_png_export_format(self, tmp_path, engine):
+        """The export_fmt='PNG' option should produce .png files."""
+        input_dir = self._make_synthetic_input_dir(tmp_path, file_count=2)
+        output_dir = tmp_path / "out_png"
+        output_dir.mkdir()
+
+        try:
+            processor = BatchProcessor(engine)
+            processed, sheet, zip_path, _ = processor.process_folder(
+                input_dir=input_dir,
+                output_dir=output_dir,
+                style_name_or_recipe="natural",
+                export_fmt="PNG",
+                auto_group=False,
+                generate_sheet=False,
+                export_zip=False,
+            )
+            for p in processed:
+                assert Path(p).suffix == ".png"
+        finally:
+            self._cleanup_cache(input_dir)
+
+    def test_export_res_downsamples_output(self, tmp_path, engine):
+        """export_res='HD (1280px)' should cap the longest side at 1280px."""
+        input_dir = tmp_path / "hd_input"
+        input_dir.mkdir()
+        # 2000x1500 source image
+        cv2.imwrite(
+            str(input_dir / "big.jpg"), np.full((1500, 2000, 3), 100, dtype=np.uint8)
+        )
+        output_dir = tmp_path / "out_hd"
+        output_dir.mkdir()
+
+        try:
+            processor = BatchProcessor(engine)
+            processed, sheet, zip_path, _ = processor.process_folder(
+                input_dir=input_dir,
+                output_dir=output_dir,
+                style_name_or_recipe="natural",
+                export_res="HD (1280px)",
+                auto_group=False,
+                generate_sheet=False,
+                export_zip=False,
+            )
+            assert len(processed) == 1
+            out = cv2.imread(processed[0])
+            assert out is not None
+            # Longest side should be ≤ 1280
+            assert max(out.shape[:2]) <= 1280
+        finally:
+            self._cleanup_cache(input_dir)

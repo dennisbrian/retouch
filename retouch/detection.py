@@ -7,10 +7,12 @@ Optional:  insightface RetinaFace (better side-profiles) — wired but not prima
 The detector returns a list of FaceData objects that downstream modules consume.
 """
 
+from __future__ import annotations
+
 import dataclasses
 import os
 os.environ["TF_USE_LEGACY_KERAS"] = "1"
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 import cv2
 import mediapipe as mp
@@ -110,7 +112,13 @@ class FaceDetector:
                 raise
 
     @staticmethod
-    def _create_tasks(base, vision, delegate, max_faces, min_confidence):
+    def _create_tasks(
+        base: Any,
+        vision: Any,
+        delegate: Any,
+        max_faces: int,
+        min_confidence: float,
+    ) -> Tuple[Any, Any]:
         """Build the FaceLandmarker + ImageSegmenter for a given delegate."""
         base_options = base(
             model_asset_path=_FACE_LANDMARKER_MODEL,
@@ -294,11 +302,15 @@ class FaceDetector:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _resolve_delegate(base):
+    def _resolve_delegate(base: Any) -> Any:
         return base.Delegate.CPU
 
     @staticmethod
-    def _bbox_from_landmarks(landmarks_compat, w, h):
+    def _bbox_from_landmarks(
+        landmarks_compat: Any,
+        w: int,
+        h: int,
+    ) -> Tuple[int, int, int, int]:
         """Compute tight bounding box from landmarks."""
         xs, ys = [], []
         for lm in landmarks_compat.landmark:
@@ -311,7 +323,15 @@ class FaceDetector:
         return (x1, y1, x2 - x1, y2 - y1)
 
     @staticmethod
-    def _remap_landmarks(landmarks, ox, oy, cw, ch, full_w, full_h):
+    def _remap_landmarks(
+        landmarks: List[Any],
+        ox: int,
+        oy: int,
+        cw: int,
+        ch: int,
+        full_w: int,
+        full_h: int,
+    ) -> List["_Landmark"]:
         """Remap crop-relative landmarks to full-image coordinates."""
         remapped = []
         for lm in landmarks:

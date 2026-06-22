@@ -3,10 +3,14 @@
 All operations work within the skin mask to never affect hair, eyes, or background.
 """
 
+from __future__ import annotations
+
+from typing import Any, Optional
+
 import cv2
 import numpy as np
 
-from .utils import blend_masked
+from .utils import blend_masked, normalize_mask
 
 
 class SkinProcessor:
@@ -14,8 +18,25 @@ class SkinProcessor:
 
     MEDIAPIPE_CHIN_IDX = 152
 
-    def whiten(self, img_bgr, skin_mask, strength=30, tone="rosy"):
-        """Adaptive Rosy Foundation: LAB-based skin whitening and rosy/porcelain cosmetic shift."""
+    def whiten(
+        self,
+        img_bgr: np.ndarray,
+        skin_mask: Optional[np.ndarray],
+        strength: int = 30,
+        tone: str = "rosy",
+    ) -> np.ndarray:
+        """Adaptive Rosy Foundation: LAB-based skin whitening and rosy/porcelain cosmetic shift.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR image.
+            skin_mask: (H, W) float mask 0–1. May be None to skip processing.
+            strength: -100–100 signed whitening strength. Positive lifts, negative
+                deepens shadows. 0 returns the input unchanged.
+            tone: Cosmetic tone: "rosy", "porcelain", or "neutral".
+
+        Returns:
+            (H, W, 3) uint8 BGR image.
+        """
         if strength == 0 or skin_mask is None:
             return img_bgr
 
@@ -67,8 +88,25 @@ class SkinProcessor:
         whitened = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
         return blend_masked(img_bgr, whitened, skin_mask)
 
-    def equalize(self, img_bgr, skin_mask, strength=40, ref_lab=None):
-        """CLAHE + local average color equalization to unify skin tone."""
+    def equalize(
+        self,
+        img_bgr: np.ndarray,
+        skin_mask: Optional[np.ndarray],
+        strength: int = 40,
+        ref_lab: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """CLAHE + local average color equalization to unify skin tone.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR image.
+            skin_mask: (H, W) float mask 0–1.
+            strength: 0–100 equalization intensity.
+            ref_lab: Optional reference LAB image whose a/b statistics
+                are used as the colour target.
+
+        Returns:
+            (H, W, 3) uint8 BGR image.
+        """
         if strength <= 0:
             return img_bgr
 
@@ -103,9 +141,17 @@ class SkinProcessor:
         equalized = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
         return blend_masked(img_bgr, equalized, skin_mask * s)
 
-    def dodge_burn(self, img_bgr, regions, strength=40):
+    def dodge_burn(self, img_bgr: np.ndarray, regions: Any, strength: int = 40) -> np.ndarray:
         """Subtle 3-5% sculpting (brighten nose bridge, forehead center, cheeks;
         darken jawline/edges), scaled by highlight protection.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR image.
+            regions: FaceRegions object with brightening/darkening sub-masks.
+            strength: 0–100 dodge & burn intensity.
+
+        Returns:
+            (H, W, 3) uint8 BGR image.
         """
         if strength <= 0:
             return img_bgr
@@ -132,8 +178,28 @@ class SkinProcessor:
         result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
         return blend_masked(img_bgr, result, regions.skin)
 
-    def harmonize_neck(self, img_bgr, face_landmarks, person_mask, face_skin_mask, neck_mask=None, strength=40):
-        """Unify the neck and chest skin color and brightness with the face skin."""
+    def harmonize_neck(
+        self,
+        img_bgr: np.ndarray,
+        face_landmarks: Any,
+        person_mask: Optional[np.ndarray],
+        face_skin_mask: Optional[np.ndarray],
+        neck_mask: Optional[np.ndarray] = None,
+        strength: int = 40,
+    ) -> np.ndarray:
+        """Unify the neck and chest skin color and brightness with the face skin.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR image.
+            face_landmarks: MediaPipe NormalizedLandmarkList.
+            person_mask: (H, W) float person segmentation mask. May be None.
+            face_skin_mask: (H, W) float skin mask of the face.
+            neck_mask: Optional pre-computed neck mask.
+            strength: 0–100 harmonization intensity.
+
+        Returns:
+            (H, W, 3) uint8 BGR image.
+        """
         if strength <= 0 or person_mask is None or face_skin_mask is None:
             return img_bgr
 
@@ -170,9 +236,7 @@ class SkinProcessor:
             if neck_y2 <= neck_y1 or neck_x2 <= neck_x1:
                 return img_bgr
 
-            pm = person_mask.astype(np.float32)
-            if pm.max() > 1.0:
-                pm /= 255.0
+            pm = normalize_mask(person_mask)
             if pm.ndim == 3:
                 pm = pm[..., 0]
 
@@ -234,8 +298,24 @@ class SkinProcessor:
 
         return cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
 
-    def apply_specular_bloom(self, img_bgr, skin_mask, strength=40, tone="rosy"):
-        """Generates a soft pink/lavender or neutral halo around skin highlights where L > 220."""
+    def apply_specular_bloom(
+        self,
+        img_bgr: np.ndarray,
+        skin_mask: Optional[np.ndarray],
+        strength: int = 40,
+        tone: str = "rosy",
+    ) -> np.ndarray:
+        """Generates a soft pink/lavender or neutral halo around skin highlights where L > 220.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR image.
+            skin_mask: (H, W) float skin mask 0–1.
+            strength: 0–100 bloom intensity.
+            tone: Cosmetic tone shift: "rosy", "porcelain", or "neutral".
+
+        Returns:
+            (H, W, 3) uint8 BGR image.
+        """
         if strength <= 0 or skin_mask is None:
             return img_bgr
 
@@ -276,8 +356,15 @@ class SkinProcessor:
         return blend_masked(img_bgr, img_shifted_bgr, highlight_mask * s)
 
     @staticmethod
-    def _get_highlight_protection(lab):
-        """Linearly decays adjustments for bright pixels (L > 220) to prevent specular clipping."""
+    def _get_highlight_protection(lab: np.ndarray) -> np.ndarray:
+        """Linearly decays adjustments for bright pixels (L > 220) to prevent specular clipping.
+
+        Args:
+            lab: (H, W, 3) float32 LAB image.
+
+        Returns:
+            (H, W) float32 protection mask in [0, 1].
+        """
         l_val = lab[:, :, 0]
         protection = np.clip(1.0 - (l_val - 220.0) / 30.0, 0.0, 1.0)
         return protection

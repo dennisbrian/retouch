@@ -1,0 +1,1134 @@
+"""Central parameter specifications for the retouch pipeline.
+
+This module is the single source of truth for every processing parameter that
+flows through the engine, the GUI, and the CLI. Adding a new tunable means
+adding one ``ParamSpec`` entry here — no more 7-way edits across the codebase.
+
+Conversion semantics
+--------------------
+Each ``ParamSpec`` carries a ``conversion`` code that controls how values are
+translated between three representation spaces:
+
+* **Recipe dict** (0.0–1.0 ratios, the human-editable values in ``recipes.py``)
+* **GUI / sliders** (0–100, the integer scale used by the Gradio controls and
+  the ``--flag`` CLI arguments)
+* **Engine** (the actual numeric values consumed by ``ProcessingContext`` and
+  the per-stage retouch code — sometimes 0–100, sometimes 0.0–1.0, sometimes
+  raw recipe ratios, depending on what the stage was historically written to
+  expect)
+
+The supported ``conversion`` codes are:
+
+* ``"recipe_pct"`` — recipe ratio × 100 in BOTH the GUI and the engine
+  (e.g. ``smooth``, ``whiten``, ``equalize``).  Recipe 0.30 → GUI 30 → engine 30.
+* ``"engine_pct"`` — recipe ratio × 100 for the GUI; the engine expects the
+  percentage form (e.g. ``bloom``, ``impact``, ``pore_synthesis``).  Recipe
+  0.05 → GUI 5 → engine 5.
+* ``"recipe_direct"`` — recipe ratio passes through unchanged; GUI also
+  receives the recipe value (e.g. ``mid_reduction``, ``texture_opacity``).
+* ``"recipe_int_pct"`` — same as ``recipe_pct`` but truncated to ``int`` for
+  the GUI sliders that only accept integers (e.g. ``catchlight``).
+* ``"gui_mul500"`` — GUI stores the value × 500; the engine divides by 500
+  (e.g. ``grain``).  Recipe 0.05 → GUI 25 → engine 0.05.
+* ``"gui_div100"`` — GUI stores the value × 100; the engine divides by 100
+  (e.g. ``halation``).  Recipe 0.10 → GUI 10 → engine 0.10.
+* ``"gui_direct"`` — no recipe path; the value is GUI-only (engine reads it
+  raw, e.g. ``chromatic_aberration``, ``lut``).
+* ``"static"`` — no recipe path; the value is hard-coded in the engine
+  default.  The GUI just initialises to the engine default (e.g.
+  ``relight_azimuth``, ``bloom_threshold``).
+* ``"alias"`` — derives from another parameter (used when two GUI sliders
+  share the same recipe source, like ``blemish`` mirroring ``smooth``).
+* ``"dropdown"`` — string-typed parameter (e.g. ``lip_tint``, ``whiten_tone``,
+  ``color_grade``).  Uses the recipe value verbatim and falls back to the
+  engine default when the recipe has no entry.
+* ``"bool_flag"`` — boolean toggle (e.g. ``nose_blush``).  Uses the recipe
+  value verbatim.
+
+The conversion is applied automatically by ``recipe_to_params()`` when
+populating the GUI-side dictionary, and by ``build_context()`` when populating
+the engine ``ProcessingContext``.  CLI arguments are mapped by
+``build_params()`` based on the same spec.
+"""
+
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional, Union
+
+
+# ---------------------------------------------------------------------------
+# ParamSpec — the canonical parameter declaration
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ParamSpec:
+    """One retouch processing parameter.
+
+    Attributes
+    ----------
+    name:
+        Python attribute name on ``ProcessingContext`` AND the dictionary key
+        in the GUI defaults dict.  Must be a valid Python identifier.
+    cli_flag:
+        The CLI argument for this parameter, *without* the leading dashes
+        (e.g. ``"smooth"`` → ``--smooth``).  ``None`` for parameters that
+        have no direct CLI flag (alias/static/internal-only parameters).
+    cli_type:
+        The ``argparse`` ``type=`` to use, or ``None`` for boolean flag
+        arguments.  ``bool`` here means "store_true / store_false".
+    default:
+        The engine-side default value, used both as the ``ProcessingContext``
+        field default and as the GUI initialisation value when the recipe
+        supplies no override.  ``None`` is allowed for "leave at engine
+        default" parameters (e.g. ``nose_smooth``, ``chromatic_aberration``).
+    gui_default:
+        Optional override for the value the GUI uses when the recipe has no
+        entry.  Falls back to ``default`` when unset.  Some parameters
+        (e.g. ``brightness``, ``highlights``) want ``None`` on the engine
+        side but ``0`` on the GUI side; the two fields let us express that.
+    recipe_key:
+        Dot-separated path inside the resolved recipe dict (e.g.
+        ``"frequency.smooth"``, ``"eyes.catchlight"``, ``"color_harmony.preset"``).
+        ``None`` for parameters that are not derived from the recipe.
+    gui_recipe_key:
+        Optional override — when the GUI and the engine read the value from
+        *different* recipe locations, the GUI uses this key and the engine
+        uses ``recipe_key``.  When unset, both lookups use ``recipe_key``.
+    engine_recipe_key:
+        Optional override for the engine-side lookup path.  When set, the
+        engine uses this key while the GUI uses ``recipe_key`` (or
+        ``gui_recipe_key``).  Used for parameters where the historical
+        engine and GUI recipes lived at different paths.
+    conversion:
+        One of the conversion codes documented in the module docstring.
+    min_val / max_val:
+        Optional inclusive bounds for slider rendering and CLI validation.
+    alias_of:
+        For ``"alias"`` conversion — the name of the parameter to mirror
+        (e.g. ``blemish`` mirrors ``smooth``).
+    fallback_default:
+        For ``"alias"`` conversion — what to fall back to when the alias
+        source recipe value is missing.
+    """
+
+    name: str
+    cli_flag: Optional[str] = None
+    cli_type: Optional[type] = None
+    default: Any = None
+    gui_default: Any = None
+    recipe_key: Optional[str] = None
+    gui_recipe_key: Optional[str] = None
+    engine_recipe_key: Optional[str] = None
+    conversion: str = "static"
+    min_val: Optional[float] = None
+    max_val: Optional[float] = None
+    alias_of: Optional[str] = None
+    fallback_default: Any = None
+
+
+# ---------------------------------------------------------------------------
+# Conversion helpers
+# ---------------------------------------------------------------------------
+
+
+def _lookup_recipe(recipe: Dict[str, Any], path: str) -> Any:
+    """Walk a dot-separated path inside a recipe dict.
+
+    Returns ``None`` if any segment is missing.
+    """
+    node: Any = recipe
+    for segment in path.split("."):
+        if not isinstance(node, dict) or segment not in node:
+            return None
+        node = node[segment]
+    return node
+
+
+def _gui_for_recipe_value(conversion: str, recipe_value: Any) -> Any:
+    """Translate a recipe value into the value the GUI slider expects.
+
+    ``recipe_value`` may be ``None``; callers that want a guaranteed non-``None``
+    GUI value should pass ``default`` separately.
+    """
+    if recipe_value is None:
+        return None
+    if conversion == "recipe_pct":
+        return int(round(float(recipe_value) * 100.0))
+    if conversion == "recipe_int_pct":
+        return int(round(float(recipe_value) * 100.0))
+    if conversion == "engine_pct":
+        return int(round(float(recipe_value) * 100.0))
+    if conversion == "recipe_direct":
+        return float(recipe_value)
+    if conversion == "dropdown":
+        return str(recipe_value) if recipe_value else "none"
+    if conversion == "bool_flag":
+        return bool(recipe_value)
+    if conversion in ("gui_direct", "static", "alias", "dodge_burn_pct",
+                      "lip_tint_direct"):
+        return recipe_value
+    if conversion == "relight_pct":
+        return int(round(float(recipe_value) * 100.0))
+    if conversion == "gui_mul500":
+        return int(round(float(recipe_value) * 500.0))
+    if conversion == "gui_div100":
+        return int(round(float(recipe_value) * 100.0))
+    raise ValueError(f"Unknown conversion code: {conversion!r}")
+
+
+def _engine_for_recipe_value(conversion: str, recipe_value: Any) -> Any:
+    """Translate a recipe value into the value the engine expects.
+
+    This is the same as the GUI translation for the percentage conversions
+    (the engine reads percentages too) and identical for direct/dropdown/bool
+    conversions.  ``gui_mul500`` and ``gui_div100`` need their own translation
+    because the recipe stores the engine-side value, not the GUI-side.
+    """
+    if recipe_value is None:
+        return None
+    if conversion in (
+        "recipe_pct",
+        "recipe_int_pct",
+        "engine_pct",
+    ):
+        return float(recipe_value) * 100.0
+    if conversion == "recipe_direct":
+        return float(recipe_value)
+    if conversion == "dropdown":
+        return recipe_value
+    if conversion == "bool_flag":
+        return bool(recipe_value)
+    if conversion == "gui_mul500":
+        return float(recipe_value)
+    if conversion == "gui_div100":
+        return float(recipe_value)
+    if conversion in ("gui_direct", "static", "alias"):
+        return recipe_value
+    raise ValueError(f"Unknown conversion code: {conversion!r}")
+
+
+# ---------------------------------------------------------------------------
+# PROCESSING_PARAMS — the canonical list
+# ---------------------------------------------------------------------------
+
+
+# Skin / smoothing
+_SKIN_PARAMS = [
+    ParamSpec(
+        name="smooth",
+        cli_flag="smooth",
+        cli_type=int,
+        default=30,
+        recipe_key="frequency.smooth",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="mid_reduction",
+        cli_flag="mid-reduction",
+        cli_type=float,
+        default=0.35,
+        recipe_key="frequency.mid_reduction",
+        conversion="recipe_direct",
+        min_val=0.0,
+        max_val=1.0,
+    ),
+    ParamSpec(
+        name="texture_opacity",
+        cli_flag="texture-opacity",
+        cli_type=float,
+        default=1.0,
+        recipe_key="texture.opacity",
+        conversion="recipe_direct",
+        min_val=0.0,
+        max_val=1.0,
+    ),
+    ParamSpec(
+        name="pore_synthesis",
+        cli_flag=None,
+        cli_type=None,
+        default=0,
+        recipe_key="texture.pore_synthesis",
+        conversion="engine_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="nose_smooth",
+        cli_flag="nose-smooth",
+        cli_type=int,
+        default=0,
+        recipe_key=None,
+        conversion="gui_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="whiten",
+        cli_flag="whiten",
+        cli_type=int,
+        default=10,
+        recipe_key="skin.rosy",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="equalize",
+        cli_flag="equalize",
+        cli_type=int,
+        default=0,
+        recipe_key="skin.equalize",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="blemish",
+        cli_flag="blemish",
+        cli_type=int,
+        default=30,
+        recipe_key=None,
+        conversion="alias",
+        alias_of="smooth",
+    ),
+    ParamSpec(
+        name="whiten_tone",
+        cli_flag="whiten-tone",
+        cli_type=str,
+        default="rosy",
+        recipe_key="skin.porcelain",
+        conversion="dropdown",
+    ),
+    ParamSpec(
+        name="nose_blush",
+        cli_flag="nose-blush",
+        cli_type=bool,
+        default=False,
+        recipe_key="nose_blush",
+        conversion="bool_flag",
+    ),
+    ParamSpec(
+        name="under_eye_blush",
+        cli_flag="under-eye-blush",
+        cli_type=bool,
+        default=False,
+        recipe_key="under_eye_blush",
+        conversion="bool_flag",
+    ),
+    ParamSpec(
+        name="white_costume_lift",
+        cli_flag="white-costume-lift",
+        cli_type=bool,
+        default=False,
+        recipe_key="white_costume_lift",
+        conversion="bool_flag",
+    ),
+    ParamSpec(
+        name="dodge_burn",
+        cli_flag="dodge-burn",
+        cli_type=int,
+        default=0,
+        recipe_key="dodge_burn",
+        conversion="dodge_burn_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="relight",
+        cli_flag=None,
+        cli_type=None,
+        default=0,
+        recipe_key="skin.relight",
+        conversion="relight_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="relight_azimuth",
+        cli_flag=None,
+        cli_type=None,
+        default=0.0,
+        recipe_key="skin.relight_azimuth",
+        engine_recipe_key="relight_azimuth",
+        conversion="gui_direct",
+    ),
+    ParamSpec(
+        name="relight_elevation",
+        cli_flag=None,
+        cli_type=None,
+        default=30.0,
+        recipe_key="skin.relight_elevation",
+        engine_recipe_key="relight_elevation",
+        conversion="gui_direct",
+    ),
+    ParamSpec(
+        name="specular_bloom",
+        cli_flag="specular-bloom",
+        cli_type=int,
+        default=0,
+        recipe_key="specular_bloom",
+        conversion="gui_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="specular_bloom_tone",
+        cli_flag="specular-bloom-tone",
+        cli_type=str,
+        default="rosy",
+        recipe_key="specular_bloom_tone",
+        conversion="dropdown",
+    ),
+]
+
+
+# Eyes / lips / teeth / hair
+_FACE_FEATURE_PARAMS = [
+    ParamSpec(
+        name="eye_enhance",
+        cli_flag="eye-enhance",
+        cli_type=int,
+        default=5,
+        recipe_key="eyes.whites",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="catchlight",
+        cli_flag="catchlight",
+        cli_type=int,
+        default=5,
+        recipe_key="eyes.catchlight",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="dark_circles",
+        cli_flag="dark-circles",
+        cli_type=int,
+        default=0,
+        recipe_key="eyes.dark_circles",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="teeth_whiten",
+        cli_flag="teeth-whiten",
+        cli_type=int,
+        default=5,
+        recipe_key="eyes.whites",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="lip_enhance",
+        cli_flag="lip-enhance",
+        cli_type=int,
+        default=5,
+        recipe_key="lips.gloss",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="lip_tint",
+        cli_flag="lip-tint",
+        cli_type=str,
+        default=None,
+        gui_default="none",
+        recipe_key="lips.tint",
+        conversion="lip_tint_direct",
+    ),
+    ParamSpec(
+        name="lip_finish",
+        cli_flag="lip-finish",
+        cli_type=str,
+        default="gloss",
+        recipe_key="lip_finish",
+        conversion="dropdown",
+    ),
+    ParamSpec(
+        name="blush",
+        cli_flag="blush",
+        cli_type=int,
+        default=0,
+        recipe_key="blush",
+        conversion="gui_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="slimming",
+        cli_flag="slimming",
+        cli_type=int,
+        default=0,
+        recipe_key="slimming",
+        conversion="gui_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="hair_enhance",
+        cli_flag="hair-enhance",
+        cli_type=int,
+        default=5,
+        recipe_key="hair.shine",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+]
+
+
+# Tonal / global
+_TONAL_PARAMS = [
+    ParamSpec(
+        name="contrast",
+        cli_flag="contrast",
+        cli_type=int,
+        default=0,
+        recipe_key="contrast",
+        conversion="gui_direct",
+        min_val=-50,
+        max_val=50,
+    ),
+    ParamSpec(
+        name="brightness",
+        cli_flag="brightness",
+        cli_type=int,
+        default=None,
+        gui_default=0,
+        recipe_key="brightness",
+        conversion="gui_direct",
+        min_val=-50,
+        max_val=50,
+    ),
+    ParamSpec(
+        name="highlights",
+        cli_flag="highlights",
+        cli_type=int,
+        default=None,
+        gui_default=0,
+        recipe_key="highlights",
+        conversion="gui_direct",
+        min_val=-100,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="shadows",
+        cli_flag="shadows",
+        cli_type=int,
+        default=None,
+        gui_default=0,
+        recipe_key="shadows",
+        conversion="gui_direct",
+        min_val=-100,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="whites",
+        cli_flag="whites",
+        cli_type=int,
+        default=None,
+        gui_default=0,
+        recipe_key="whites",
+        conversion="gui_direct",
+        min_val=-100,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="blacks",
+        cli_flag="blacks",
+        cli_type=int,
+        default=None,
+        gui_default=0,
+        recipe_key="blacks",
+        conversion="gui_direct",
+        min_val=-100,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="clarity",
+        cli_flag=None,
+        cli_type=None,
+        default=0,
+        recipe_key="clarity",
+        conversion="gui_direct",
+        min_val=-50,
+        max_val=50,
+    ),
+    ParamSpec(
+        name="vibrance",
+        cli_flag=None,
+        cli_type=None,
+        default=0,
+        recipe_key="vibrance",
+        conversion="gui_direct",
+        min_val=-100,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="saturation",
+        cli_flag=None,
+        cli_type=None,
+        default=0,
+        recipe_key="saturation",
+        conversion="gui_direct",
+        min_val=-100,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="auto_exposure",
+        cli_flag="auto-exposure",
+        cli_type=bool,
+        default=False,
+        recipe_key=None,
+        conversion="bool_flag",
+    ),
+]
+
+
+# Bloom / lens / finish
+_LENS_PARAMS = [
+    ParamSpec(
+        name="bloom",
+        cli_flag=None,
+        cli_type=None,
+        default=0,
+        recipe_key="bloom.opacity",
+        conversion="engine_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="bloom_threshold",
+        cli_flag=None,
+        cli_type=None,
+        default=210.0,
+        recipe_key="bloom.threshold",
+        conversion="gui_direct",
+    ),
+    ParamSpec(
+        name="bloom_softness",
+        cli_flag=None,
+        cli_type=None,
+        default=30.0,
+        recipe_key="bloom.softness",
+        conversion="gui_direct",
+    ),
+    ParamSpec(
+        name="glow",
+        cli_flag=None,
+        cli_type=None,
+        default=0,
+        recipe_key="glow",
+        conversion="gui_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="vignette",
+        cli_flag=None,
+        cli_type=None,
+        default=0,
+        recipe_key="vignette",
+        conversion="gui_direct",
+        min_val=-100,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="sharpen",
+        cli_flag=None,
+        cli_type=None,
+        default=0,
+        recipe_key="sharpen",
+        conversion="gui_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="sharpen_radius",
+        cli_flag=None,
+        cli_type=None,
+        default=1.0,
+        recipe_key="sharpen_radius",
+        conversion="gui_direct",
+    ),
+    ParamSpec(
+        name="subject_separation",
+        cli_flag=None,
+        cli_type=None,
+        default=0,
+        recipe_key="subject_separation",
+        conversion="gui_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="impact",
+        cli_flag="impact",
+        cli_type=int,
+        default=0,
+        recipe_key="finish.impact",
+        conversion="engine_pct",
+        min_val=0,
+        max_val=100,
+    ),
+]
+
+
+# Color grading / film effects
+_GRADING_PARAMS = [
+    ParamSpec(
+        name="color_grade",
+        cli_flag="color-grade",
+        cli_type=str,
+        default="none",
+        recipe_key="color_harmony.preset",
+        conversion="dropdown",
+    ),
+    ParamSpec(
+        name="grade_intensity",
+        cli_flag="grade-intensity",
+        cli_type=float,
+        default=0.0,
+        recipe_key="color_harmony.amount",
+        conversion="gui_div100",
+    ),
+    ParamSpec(
+        name="chromatic_aberration",
+        cli_flag="chromatic-aberration",
+        cli_type=float,
+        default=0.0,
+        recipe_key="chromatic_aberration",
+        conversion="gui_direct",
+    ),
+    ParamSpec(
+        name="grain",
+        cli_flag="grain",
+        cli_type=float,
+        default=0.0,
+        recipe_key="grain",
+        conversion="gui_mul500",
+    ),
+    ParamSpec(
+        name="halation",
+        cli_flag=None,
+        cli_type=float,
+        default=0.0,
+        recipe_key="halation",
+        conversion="gui_div100",
+    ),
+    ParamSpec(
+        name="lut",
+        cli_flag="lut",
+        cli_type=str,
+        default="none",
+        recipe_key="lut",
+        conversion="dropdown",
+    ),
+]
+
+
+# Split toning
+_SPLIT_TONING_PARAMS = [
+    ParamSpec(
+        name="shadow_hue",
+        cli_flag=None,
+        cli_type=None,
+        default=0.0,
+        recipe_key="shadow_hue",
+        conversion="gui_direct",
+    ),
+    ParamSpec(
+        name="shadow_sat",
+        cli_flag=None,
+        cli_type=None,
+        default=0.0,
+        recipe_key="shadow_sat",
+        conversion="gui_direct",
+    ),
+    ParamSpec(
+        name="midtone_hue",
+        cli_flag=None,
+        cli_type=None,
+        default=0.0,
+        recipe_key="midtone_hue",
+        conversion="gui_direct",
+    ),
+    ParamSpec(
+        name="midtone_sat",
+        cli_flag=None,
+        cli_type=None,
+        default=0.0,
+        recipe_key="midtone_sat",
+        conversion="gui_direct",
+    ),
+    ParamSpec(
+        name="highlight_hue",
+        cli_flag=None,
+        cli_type=None,
+        default=0.0,
+        recipe_key="highlight_hue",
+        conversion="gui_direct",
+    ),
+    ParamSpec(
+        name="highlight_sat",
+        cli_flag=None,
+        cli_type=None,
+        default=0.0,
+        recipe_key="highlight_sat",
+        conversion="gui_direct",
+    ),
+]
+
+
+PROCESSING_PARAMS: List[ParamSpec] = (
+    _SKIN_PARAMS
+    + _FACE_FEATURE_PARAMS
+    + _TONAL_PARAMS
+    + _LENS_PARAMS
+    + _GRADING_PARAMS
+    + _SPLIT_TONING_PARAMS
+)
+
+
+# ParamSpec lookup by name (lazy-built)
+_BY_NAME: Dict[str, ParamSpec] = {p.name: p for p in PROCESSING_PARAMS}
+
+
+# ---------------------------------------------------------------------------
+# Lookup helpers
+# ---------------------------------------------------------------------------
+
+
+def get_param(name: str) -> ParamSpec:
+    """Return the ``ParamSpec`` for *name*.  Raises ``KeyError`` if unknown."""
+    return _BY_NAME[name]
+
+
+def param_names() -> List[str]:
+    """Return the ordered list of all parameter names."""
+    return [p.name for p in PROCESSING_PARAMS]
+
+
+# ---------------------------------------------------------------------------
+# Recipe → params
+# ---------------------------------------------------------------------------
+
+
+def _resolve_dodge_burn(rec: Dict[str, Any]) -> Any:
+    """``dodge_burn`` in a recipe can be a dict or a raw number.
+
+    The engine expects a percentage; the GUI does too.  We also support the
+    "raw float that already looks like a percent" form that some recipes
+    use (e.g. ``anime_cinematic_v1`` writes 18.0 directly).
+    """
+    raw = rec.get("dodge_burn", 0.0)
+    if isinstance(raw, dict):
+        amount = raw.get("amount", 0.0)
+    else:
+        amount = float(raw)
+    if amount <= 1.0:
+        return amount * 100.0
+    return amount
+
+
+def _resolve_recipe_value(
+    spec: ParamSpec,
+    rec: Dict[str, Any],
+    *,
+    use_engine_key: bool = False,
+) -> Any:
+    """Apply the spec's ``conversion`` to a recipe dict and return the engine-side value.
+
+    Returns the spec's ``default`` if no recipe source is available.
+
+    This is the *generic* converter used by ``build_context()`` for the
+    ~50 parameters that follow a simple ``recipe_key → conversion`` shape.
+    The handful of parameters that need bespoke lookups (e.g. ``whiten``,
+    which falls back from ``porcelain`` to ``rosy``) are handled by
+    ``build_context()`` directly before falling back to this function.
+
+    Set ``use_engine_key=True`` to honour ``engine_recipe_key`` (used by
+    the engine side) rather than ``recipe_key`` (used by the GUI side).
+    """
+    if use_engine_key and spec.engine_recipe_key is not None:
+        recipe_key = spec.engine_recipe_key
+    elif (not use_engine_key) and spec.gui_recipe_key is not None:
+        recipe_key = spec.gui_recipe_key
+    else:
+        recipe_key = spec.recipe_key
+
+    if spec.conversion == "static":
+        return spec.default
+    if spec.conversion in ("alias", "dodge_burn_pct", "relight_pct",
+                          "whiten_pct", "whiten_tone_dropdown",
+                          "catchlight_pct", "teeth_whiten_pct",
+                          "eye_enhance_pct", "lip_enhance_pct",
+                          "lip_tint_direct", "hair_enhance_pct",
+                          "color_grade_direct"):
+        # Handled by build_context(); this function is never called for
+        # these names.  Return the default for safety.
+        return spec.default
+    if spec.conversion == "gui_direct":
+        if recipe_key is None:
+            return spec.default
+        val = _lookup_recipe(rec, recipe_key)
+        return spec.default if val is None else val
+    if spec.conversion == "dropdown":
+        if recipe_key is None:
+            return spec.default
+        val = _lookup_recipe(rec, recipe_key)
+        if val is None or val == "":
+            return spec.default
+        return val
+    if spec.conversion == "bool_flag":
+        if recipe_key is None:
+            return spec.default
+        val = _lookup_recipe(rec, recipe_key)
+        return spec.default if val is None else bool(val)
+    if recipe_key is None:
+        return spec.default
+    raw = _lookup_recipe(rec, recipe_key)
+    if raw is None:
+        return spec.default
+    return _engine_for_recipe_value(spec.conversion, raw)
+
+
+def _resolve_gui_value(spec: ParamSpec, rec: Dict[str, Any]) -> Any:
+    """Resolve a spec to a GUI-side value from a recipe dict.
+
+    Returns the engine ``default`` when the recipe has no information and the
+    GUI should fall back to the engine default.
+
+    The returned value is coerced to ``int`` when ``cli_type`` is ``int`` so
+    the GUI sliders see the same type they always have (the test suite in
+    particular is sensitive to ``nose_smooth`` being an int).
+    """
+    # The GUI may use a different recipe path than the engine (e.g. relight).
+    lookup_key = spec.gui_recipe_key or spec.recipe_key
+    # The GUI may have its own default distinct from the engine's.  This is
+    # useful for parameters that want ``None`` on the engine side but a
+    # numeric slider default on the GUI side.
+    fallback = spec.gui_default if spec.gui_default is not None else spec.default
+
+    val: Any
+    if spec.conversion == "static":
+        val = spec.default
+    elif spec.conversion == "alias":
+        # Mirror the alias source's GUI value
+        if spec.alias_of is None:
+            val = spec.default
+        else:
+            src = _BY_NAME.get(spec.alias_of)
+            if src is None:
+                val = spec.default
+            else:
+                val = _resolve_gui_value(src, rec)
+    elif spec.conversion == "dodge_burn_pct":
+        if "dodge_burn" not in rec:
+            val = spec.default
+        else:
+            val = int(round(_resolve_dodge_burn(rec)))
+    elif spec.conversion == "relight_pct":
+        if "skin" in rec and "relight" in rec["skin"]:
+            val = int(round(float(rec["skin"]["relight"]) * 100.0))
+        else:
+            val = int(round(float(rec.get("relight_strength", 0.0))))
+    elif spec.conversion == "dropdown":
+        if lookup_key is None:
+            val = spec.default
+        else:
+            v = _lookup_recipe(rec, lookup_key)
+            val = spec.default if v is None or v == "" else v
+            if val is None:
+                val = "none"
+    elif spec.conversion == "lip_tint_direct":
+        if lookup_key is None:
+            val = fallback
+        else:
+            v = _lookup_recipe(rec, lookup_key)
+            if v is None or v == "":
+                val = fallback if fallback is not None else "none"
+            else:
+                val = v
+    elif spec.conversion == "bool_flag":
+        if lookup_key is None:
+            val = spec.default
+        else:
+            v = _lookup_recipe(rec, lookup_key)
+            val = spec.default if v is None else bool(v)
+    elif spec.conversion == "gui_direct":
+        if lookup_key is None:
+            val = fallback
+        else:
+            v = _lookup_recipe(rec, lookup_key)
+            val = fallback if v is None else v
+    elif lookup_key is None:
+        val = spec.default
+    else:
+        raw = _lookup_recipe(rec, lookup_key)
+        if raw is None:
+            val = spec.default
+        else:
+            val = _gui_for_recipe_value(spec.conversion, raw)
+
+    # Coerce to the expected GUI type
+    if spec.cli_type is int and val is not None and not isinstance(val, bool):
+        try:
+            val = int(val)
+        except (TypeError, ValueError):
+            pass
+    elif spec.cli_type is float and val is not None and not isinstance(val, bool):
+        try:
+            val = float(val)
+        except (TypeError, ValueError):
+            pass
+    elif spec.cli_type is bool and val is not None:
+        val = bool(val)
+    return val
+
+
+def _special_cases_gui(spec: ParamSpec, rec: Dict[str, Any]) -> Any:
+    """Apply recipe-specific quirks that the generic conversion cannot express.
+
+    These are the *documented* differences between the recipe and what the GUI
+    had been hard-coding.  Centralising them here means the GUI and the
+    engine can agree on a single source of truth.
+    """
+    name = spec.name
+    if name == "whiten":
+        # Engine `whiten` is the recipe's "rosy" or "porcelain" tone, × 100
+        skin = rec.get("skin", {})
+        if "porcelain" in skin:
+            return int(round(float(skin["porcelain"]) * 100.0))
+        return int(round(float(skin.get("rosy", 0.0)) * 100.0))
+    if name == "whiten_tone":
+        return "porcelain" if "porcelain" in rec.get("skin", {}) else "rosy"
+    if name == "blemish":
+        # Historically mirrored `smooth` in the GUI
+        return int(round(float(rec.get("frequency", {}).get("smooth", 0.30)) * 100.0))
+    if name == "catchlight":
+        eyes = rec.get("eyes", {})
+        if "catchlight" in eyes:
+            return int(round(float(eyes["catchlight"]) * 100.0))
+        if "iris" in eyes:
+            return int(round(float(eyes["iris"]) * 100.0))
+        return spec.default
+    if name == "teeth_whiten":
+        eyes = rec.get("eyes", {})
+        if "teeth_whiten" in eyes:
+            return int(round(float(eyes["teeth_whiten"]) * 100.0))
+        if "whites" in eyes:
+            return int(round(float(eyes["whites"]) * 100.0))
+        return spec.default
+    if name == "subject_separation":
+        v = rec.get("subject_separation", 0.0) or 0.0
+        return int(v if v > 1.0 else v * 100.0)
+    return None
+
+
+def recipe_to_params(recipe_name: str) -> Dict[str, Any]:
+    """Return a {param_name: gui_value} dict for a given recipe.
+
+    This is the single canonical function the GUI uses to populate its
+    default values; the engine's ``build_context()`` uses the same spec
+    list (via a different conversion path) to build the
+    ``ProcessingContext``.
+
+    Falls back to the ``"natural"`` recipe for unknown names, matching
+    the behaviour of ``engine.resolve_recipe``.
+    """
+    from .recipes import RECIPES
+    from .engine import resolve_recipe
+
+    name = recipe_name if recipe_name in RECIPES else "natural"
+    rec = resolve_recipe(name)
+    out: Dict[str, Any] = {}
+    for spec in PROCESSING_PARAMS:
+        special = _special_cases_gui(spec, rec)
+        if special is not None:
+            out[spec.name] = special
+            continue
+        out[spec.name] = _resolve_gui_value(spec, rec)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# GUI → engine kwarg translation
+# ---------------------------------------------------------------------------
+
+# A handful of GUI controls encode "no value" as a non-``None`` sentinel
+# string (e.g. ``"none"``) or as a 0.  The engine wants ``None`` for those
+# cases so it can fall through to the recipe default.  This set lists the
+# param names that need the ``"none"`` → ``None`` swap.
+_GUI_NONE_SENTINELS = {"lip_tint", "color_grade", "lut"}
+
+# Params whose GUI value of 0 should be forwarded to the engine as ``None``
+# (i.e. "leave at recipe default").  ``nose_smooth`` and the film effects
+# are the canonical examples.
+_GUI_ZERO_IS_NONE = {"nose_smooth", "chromatic_aberration"}
+
+
+def _gui_to_engine_value(spec: ParamSpec, gui_value: Any) -> Any:
+    """Convert a single GUI value into the value ``engine.process`` expects.
+
+    Handles the dropdown sentinels, the zero-as-None mappings, and the
+    inverse of the ``gui_mul500`` / ``gui_div100`` GUI scaling.
+    """
+    if gui_value is None:
+        return None
+    if spec.name in _GUI_NONE_SENTINELS and gui_value == "none":
+        return None
+    if spec.name in _GUI_ZERO_IS_NONE and gui_value == 0:
+        return None
+    if spec.conversion == "gui_mul500":
+        return float(gui_value) / 500.0
+    if spec.conversion == "gui_div100":
+        return float(gui_value) / 100.0
+    if spec.name == "grade_intensity":
+        # The GUI stores grade_intensity as 0-100; the engine reads 0-1.
+        return float(gui_value) / 100.0
+    if spec.name == "subject_separation":
+        # The GUI stores subject_separation as 0-100; the engine reads the
+        # raw recipe value (0-1) — so divide.
+        return float(gui_value) / 100.0
+    return gui_value
+
+
+def gui_values_to_engine_kwargs(
+    gui_values: Dict[str, Any],
+    *,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Translate a flat ``{param_name: gui_value}`` dict into the kwargs
+    ``RetouchEngine.process`` expects.
+
+    Unknown keys are passed through unchanged so callers can mix in
+    transport keys (``color_ref``, ``fast``, ``debug_dir``, ...) without
+    having to list them all here.
+    """
+    out: Dict[str, Any] = {}
+    for spec in PROCESSING_PARAMS:
+        if spec.name in gui_values:
+            out[spec.name] = _gui_to_engine_value(spec, gui_values[spec.name])
+    if extra:
+        out.update(extra)
+    return out
+
+
+__all__ = [
+    "ParamSpec",
+    "PROCESSING_PARAMS",
+    "get_param",
+    "param_names",
+    "recipe_to_params",
+    "gui_values_to_engine_kwargs",
+]

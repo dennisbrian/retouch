@@ -1,16 +1,21 @@
-"""Colour grading presets — final output tone and mood."""
+"""Colour grading presets — final output tone and mood.
+
+Provides the :class:`ColorGrader` class with a wide collection of cinematic,
+analog, and corrective effects, plus preset loading from the bundled JSON
+library.
+"""
 
 from __future__ import annotations
 
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import cv2
 import numpy as np
 
-from .utils import apply_curve, blend_masked
+from .utils import apply_curve, blend_masked, normalize_mask, screen_blend, squeeze_mask
 
 # ---------------------------------------------------------------------------
 # Preset loading
@@ -34,6 +39,17 @@ def _find_preset_file(name: str) -> Optional[Path]:
 
 
 def load_preset(name: str) -> Dict[str, Any]:
+    """Load a single preset JSON file by name.
+
+    Args:
+        name: Preset name (without extension).
+
+    Returns:
+        Decoded preset settings dictionary.
+
+    Raises:
+        FileNotFoundError: If the preset cannot be located in any search dir.
+    """
     fpath = _find_preset_file(name)
     if fpath is None:
         raise FileNotFoundError(f"Preset '{name}' not found")
@@ -99,15 +115,31 @@ class ColorGrader:
 
     def grade(
         self,
-        img_bgr,
-        preset="natural",
-        intensity=1.0,
-        split_tone_mask=None,
-        glow_mask=None,
-        haze_mask=None,
-        skip_glows=False,
-        skip_post_effects=False,
-    ):
+        img_bgr: np.ndarray,
+        preset: Union[str, Dict[str, Any]] = "natural",
+        intensity: float = 1.0,
+        split_tone_mask: Optional[np.ndarray] = None,
+        glow_mask: Optional[np.ndarray] = None,
+        haze_mask: Optional[np.ndarray] = None,
+        skip_glows: bool = False,
+        skip_post_effects: bool = False,
+    ) -> np.ndarray:
+        """Apply a colour grading preset to an image.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR image.
+            preset: Preset name (loaded from JSON) or a settings dict.
+            intensity: 0.0–1.0 blend strength against the original.
+            split_tone_mask: Optional mask to restrict split-toning.
+            glow_mask: Optional mask to restrict glow effects.
+            haze_mask: Optional mask to restrict haze effect.
+            skip_glows: Skip glow/orton effects for batch blending.
+            skip_post_effects: Skip halation, chromatic aberration, LUT and grain
+                for batch blending.
+
+        Returns:
+            (H, W, 3) uint8 BGR image.
+        """
         if isinstance(preset, str):
             settings = PRESETS.get(preset)
             if settings is None:
@@ -188,7 +220,16 @@ class ColorGrader:
 
         return result
 
-    def add_impact_finish(self, img_bgr, strength):
+    def add_impact_finish(self, img_bgr: np.ndarray, strength: float) -> np.ndarray:
+        """Apply a punchy "impact" finish — contrast + clarity + glow composite.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR image.
+            strength: 0–100 intensity of the finish.
+
+        Returns:
+            (H, W, 3) uint8 BGR image.
+        """
         if strength <= 0:
             return img_bgr
         s = np.clip(strength / 100.0, 0.0, 1.0)
@@ -204,8 +245,20 @@ class ColorGrader:
 
         return cv2.addWeighted(original, 1.0 - s, result, s, 0)
 
-    def grade_stack(self, img_bgr, preset_weights):
-        """Blend multiple presets with custom weights — true independent mixing."""
+    def grade_stack(
+        self,
+        img_bgr: np.ndarray,
+        preset_weights: Dict[str, float],
+    ) -> np.ndarray:
+        """Blend multiple presets with custom weights — true independent mixing.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR image.
+            preset_weights: Mapping of preset name to weight.
+
+        Returns:
+            (H, W, 3) uint8 BGR image.
+        """
         if not preset_weights:
             return img_bgr
         total_w = sum(preset_weights.values())
@@ -229,7 +282,13 @@ class ColorGrader:
     # Internal
     # ------------------------------------------------------------------
 
-    def _add_glow(self, img_bgr, opacity, tint=None, mask=None):
+    def _add_glow(
+        self,
+        img_bgr: np.ndarray,
+        opacity: float,
+        tint: Optional[Tuple[int, int, int]] = None,
+        mask: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
         if opacity <= 0:
             return img_bgr
         img_f = img_bgr.astype(np.float32)
@@ -243,46 +302,54 @@ class ColorGrader:
             tint_layer = np.ones_like(blurred) * tint_arr
             blurred = cv2.addWeighted(blurred, 0.7, tint_layer, 0.3, 0)
 
-        screen = 255.0 - (255.0 - img_f) * (255.0 - blurred) / 255.0
+        screen = screen_blend(img_f, blurred)
         lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
         l_chan = lab[:, :, 0].astype(np.float32)
         highlight_mask = np.clip((l_chan - 225.0) / 20.0, 0, 1)[:, :, np.newaxis]
 
         if mask is not None:
-            m_f = mask.astype(np.float32)
-            if m_f.max() > 1.0: m_f = m_f / 255.0
+            m_f = normalize_mask(mask)
             if m_f.ndim == 2: m_f = m_f[:, :, np.newaxis]
             highlight_mask = highlight_mask * m_f
 
         result = img_f * (1.0 - highlight_mask * opacity) + screen * (highlight_mask * opacity)
         return np.clip(result, 0, 255).astype(np.uint8)
 
-    def _apply_luminance_curve(self, img, curve_points):
+    def _apply_luminance_curve(
+        self,
+        img: np.ndarray,
+        curve_points: Sequence[Tuple[int, int]],
+    ) -> np.ndarray:
         lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
         lab[:, :, 0] = apply_curve(lab[:, :, 0], curve_points)
         return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
-    def _lift_shadows(self, img, lift):
+    def _lift_shadows(self, img: np.ndarray, lift: float) -> np.ndarray:
         lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
         l = lab[:, :, 0]
         shadow_mask = np.clip(1.0 - l / 128.0, 0, 1)
         lab[:, :, 0] = np.clip(l + shadow_mask * lift, 0, 255)
         return cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
-    def _adjust_warmth(self, img, warmth):
+    def _adjust_warmth(self, img: np.ndarray, warmth: float) -> np.ndarray:
         lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
         lab[:, :, 2] = np.clip(lab[:, :, 2] + warmth * 30, 0, 255)
         lab[:, :, 1] = np.clip(lab[:, :, 1] + warmth * 10, 0, 255)
         return cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
-    def _adjust_saturation(self, img, boost):
+    def _adjust_saturation(self, img: np.ndarray, boost: float) -> np.ndarray:
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV).astype(np.float32)
         s = hsv[:, :, 1]
         factor = 1.0 + boost * (1.0 - s / 255.0)
         hsv[:, :, 1] = np.clip(s * factor, 0, 255)
         return cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
-    def _split_tone(self, img, tones, mask=None):
+    def _split_tone(
+        self,
+        img: np.ndarray,
+        tones: Dict[str, Tuple[int, int]],
+        mask: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
         lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
         l = lab[:, :, 0]
         shadow_weight = np.clip(1.0 - l / 128.0, 0, 1)[:, :, np.newaxis]
@@ -297,7 +364,13 @@ class ColorGrader:
         if mask is not None: return blend_masked(img, split_toned, mask)
         return split_toned
 
-    def _guided_filter(self, guide, src, r, eps):
+    def _guided_filter(
+        self,
+        guide: np.ndarray,
+        src: np.ndarray,
+        r: int,
+        eps: float,
+    ) -> np.ndarray:
         mean_I = cv2.boxFilter(guide, -1, (r, r))
         mean_p = cv2.boxFilter(src, -1, (r, r))
         mean_Ip = cv2.boxFilter(guide * src, -1, (r, r))
@@ -310,7 +383,7 @@ class ColorGrader:
         mean_b = cv2.boxFilter(b, -1, (r, r))
         return mean_a * guide + mean_b
 
-    def _add_clarity(self, img, strength):
+    def _add_clarity(self, img: np.ndarray, strength: float) -> np.ndarray:
         if strength == 0:
             return img
         lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
@@ -329,7 +402,7 @@ class ColorGrader:
         lab[:, :, 0] = l_new.astype(np.uint8)
         return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
-    def _add_vignette(self, img, strength):
+    def _add_vignette(self, img: np.ndarray, strength: float) -> np.ndarray:
         h, w = img.shape[:2]
         y, x = np.mgrid[0:h, 0:w].astype(np.float32)
         cx, cy = w / 2, h / 2
@@ -339,14 +412,22 @@ class ColorGrader:
         vignette = np.clip(vignette, 0, 1)[:, :, np.newaxis]
         return np.clip(img.astype(np.float32) * vignette, 0, 255).astype(np.uint8)
 
-    def _apply_rgb_curves(self, img_bgr, curves_dict):
+    def _apply_rgb_curves(
+        self,
+        img_bgr: np.ndarray,
+        curves_dict: Dict[str, Sequence[Tuple[int, int]]],
+    ) -> np.ndarray:
         b, g, r = cv2.split(img_bgr)
         if "R" in curves_dict: r = apply_curve(r, curves_dict["R"])
         if "G" in curves_dict: g = apply_curve(g, curves_dict["G"])
         if "B" in curves_dict: b = apply_curve(b, curves_dict["B"])
         return cv2.merge([b, g, r])
 
-    def _hsl_hue_shift(self, img_bgr, shifts_dict):
+    def _hsl_hue_shift(
+        self,
+        img_bgr: np.ndarray,
+        shifts_dict: Dict[str, float],
+    ) -> np.ndarray:
         hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
         h = hsv[:, :, 0]
         ranges = {"red": [(0, 10), (170, 180)], "orange": [(10, 25)], "yellow": [(25, 35)],
@@ -359,7 +440,7 @@ class ColorGrader:
             hsv[:, :, 0] = np.where(mask, (h + shift_cv) % 180, h)
         return cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
-    def _add_chromatic_aberration(self, img_bgr, max_disp):
+    def _add_chromatic_aberration(self, img_bgr: np.ndarray, max_disp: float) -> np.ndarray:
         if max_disp <= 0: return img_bgr
         h, w = img_bgr.shape[:2]
         cx, cy = w / 2.0, h / 2.0
@@ -377,7 +458,13 @@ class ColorGrader:
         b_new = cv2.remap(b, map_x_b, map_y_b, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
         return cv2.merge([b_new, g, r_new])
 
-    def _add_halation(self, img_bgr, threshold=200, radius=15, intensity=0.3):
+    def _add_halation(
+        self,
+        img_bgr: np.ndarray,
+        threshold: int = 200,
+        radius: int = 15,
+        intensity: float = 0.3,
+    ) -> np.ndarray:
         if intensity <= 0: return img_bgr
         gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
         _, thresh = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
@@ -387,10 +474,10 @@ class ColorGrader:
         ksize = radius | 1
         blurred_halation = cv2.GaussianBlur(halation_color, (ksize, ksize), 0).astype(np.float32)
         img_f = img_bgr.astype(np.float32)
-        screen = 255.0 - (255.0 - img_f) * (255.0 - blurred_halation * intensity) / 255.0
+        screen = screen_blend(img_f, blurred_halation * intensity)
         return np.clip(screen, 0, 255).astype(np.uint8)
 
-    def _add_grain(self, img_bgr, strength):
+    def _add_grain(self, img_bgr: np.ndarray, strength: float) -> np.ndarray:
         if strength <= 0: return img_bgr
         h, w = img_bgr.shape[:2]
         gw, gh = max(w // 2, 64), max(h // 2, 64)
@@ -404,7 +491,11 @@ class ColorGrader:
         img_f = img_bgr.astype(np.float32)
         return np.clip(img_f + weighted_noise, 0, 255).astype(np.uint8)
 
-    def _adjust_white_balance(self, img_bgr, multipliers):
+    def _adjust_white_balance(
+        self,
+        img_bgr: np.ndarray,
+        multipliers: Dict[str, float],
+    ) -> np.ndarray:
         b_mult = multipliers.get("B", 1.0)
         g_mult = multipliers.get("G", 1.0)
         r_mult = multipliers.get("R", 1.0)
@@ -422,7 +513,11 @@ class ColorGrader:
         lab[:, :, 2] = np.clip(lab[:, :, 2] + b_off, 0, 255)
         return cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
-    def _apply_calibration(self, img_bgr, calibration):
+    def _apply_calibration(
+        self,
+        img_bgr: np.ndarray,
+        calibration: Dict[str, Dict[str, float]],
+    ) -> np.ndarray:
         if not calibration: return img_bgr
         hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
         h = hsv[:, :, 0]; s = hsv[:, :, 1]
@@ -446,7 +541,13 @@ class ColorGrader:
         hsv[:, :, 0] = h_new; hsv[:, :, 1] = s_new
         return cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
-    def _add_orton_glow(self, img_bgr, opacity, blur_radius=35, mask=None):
+    def _add_orton_glow(
+        self,
+        img_bgr: np.ndarray,
+        opacity: float,
+        blur_radius: int = 35,
+        mask: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
         if opacity <= 0: return img_bgr
         h, w = img_bgr.shape[:2]
         img_f = img_bgr.astype(np.float32) / 255.0
@@ -458,7 +559,12 @@ class ColorGrader:
         if mask is not None: return blend_masked(img_bgr, orton_img, mask)
         return orton_img
 
-    def _split_tone_three_way(self, img_bgr, tones, mask=None):
+    def _split_tone_three_way(
+        self,
+        img_bgr: np.ndarray,
+        tones: Dict[str, Any],
+        mask: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
         if not tones: return img_bgr
         shadows = tones.get("shadows", {}); midtones = tones.get("midtones", {}); highlights = tones.get("highlights", {})
         balance = tones.get("balance", 0.0)
@@ -489,7 +595,7 @@ class ColorGrader:
         if mask is not None: return blend_masked(img_bgr, split_toned, mask)
         return split_toned
 
-    def _add_film_emulation(self, img_bgr, lut_preset):
+    def _add_film_emulation(self, img_bgr: np.ndarray, lut_preset: str) -> np.ndarray:
         if lut_preset not in self._FILM_LUTS:
             return img_bgr
         b, g, r = cv2.split(img_bgr)
@@ -499,7 +605,11 @@ class ColorGrader:
         r = cv2.LUT(r, lut_data["R"])
         return cv2.merge([b, g, r])
 
-    def _apply_hsl_adjustments(self, img_bgr, adjustments):
+    def _apply_hsl_adjustments(
+        self,
+        img_bgr: np.ndarray,
+        adjustments: Dict[str, Dict[str, float]],
+    ) -> np.ndarray:
         hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
         h = hsv[:, :, 0]; s = hsv[:, :, 1]; v = hsv[:, :, 2]
         color_centers = {"red": 0.0, "orange": 14.0, "yellow": 27.0, "green": 57.0, 
@@ -523,7 +633,13 @@ class ColorGrader:
         hsv[:, :, 0] = h; hsv[:, :, 1] = s; hsv[:, :, 2] = v
         return cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
-    def color_transfer(self, img_bgr, ref_bgr, intensity=1.0, mask=None):
+    def color_transfer(
+        self,
+        img_bgr: np.ndarray,
+        ref_bgr: Optional[np.ndarray],
+        intensity: float = 1.0,
+        mask: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
         if ref_bgr is None: return img_bgr
         lab_src = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
         lab_ref = cv2.cvtColor(ref_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
@@ -542,7 +658,12 @@ class ColorGrader:
         if mask is not None: return blend_masked(img_bgr, result, mask)
         return result
 
-    def _add_haze(self, img_bgr, strength, mask=None):
+    def _add_haze(
+        self,
+        img_bgr: np.ndarray,
+        strength: float,
+        mask: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
         if strength <= 0: return img_bgr
         h, w = img_bgr.shape[:2]
         img_f = img_bgr.astype(np.float32)
@@ -550,10 +671,9 @@ class ColorGrader:
         blurred = cv2.GaussianBlur(img_f, (ksize, ksize), 0)
         haze_tint = np.array([245.0, 230.0, 240.0], dtype=np.float32) / 255.0
         haze_layer = blurred * haze_tint
-        screen = 255.0 - (255.0 - img_f) * (255.0 - haze_layer) / 255.0
+        screen = screen_blend(img_f, haze_layer)
         if mask is not None:
-            m_f = mask.astype(np.float32)
-            if m_f.max() > 1.0: m_f = m_f / 255.0
+            m_f = normalize_mask(mask)
             if m_f.ndim == 2: m_f = m_f[:, :, np.newaxis]
             haze_factor = m_f * strength
         else:
@@ -564,13 +684,13 @@ class ColorGrader:
         shadow_lift = 25.0 * strength
         shadow_mask = np.clip(1.0 - l / 128.0, 0, 1)
         if mask is not None:
-            m_2d = m_f.squeeze(-1) if m_f.ndim == 3 else m_f
+            m_2d = squeeze_mask(m_f)
             lab[:, :, 0] = np.clip(l + shadow_mask * (shadow_lift * m_2d), 0, 255)
         else:
             lab[:, :, 0] = np.clip(l + shadow_mask * shadow_lift, 0, 255)
         return cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
-    def _add_sparkles(self, img_bgr, opacity):
+    def _add_sparkles(self, img_bgr: np.ndarray, opacity: float) -> np.ndarray:
         if opacity <= 0: return img_bgr
         h, w = img_bgr.shape[:2]
         gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
@@ -596,5 +716,5 @@ class ColorGrader:
         sparkle_overlay = cv2.GaussianBlur(sparkle_overlay, (3, 3), 0)
         img_f = img_bgr.astype(np.float32)
         sparkle_f = sparkle_overlay.astype(np.float32)
-        screened = 255.0 - (255.0 - img_f) * (255.0 - sparkle_f * opacity) / 255.0
+        screened = screen_blend(img_f, sparkle_f * opacity)
         return np.clip(screened, 0, 255).astype(np.uint8)

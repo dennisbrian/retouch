@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, asdict
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -65,7 +65,12 @@ class StyleProfile:
 class StyleAnalyzer:
     """Analyze original vs. edited image differences to extract a StyleProfile."""
 
-    def __init__(self, engine=None, detector: Optional[FaceDetector] = None, parser: Optional[FaceParser] = None):
+    def __init__(
+        self,
+        engine: Optional[Any] = None,
+        detector: Optional[FaceDetector] = None,
+        parser: Optional[FaceParser] = None,
+    ) -> None:
         # Prefer to depend on a face detector + parser (the analyzer only needs
         # detection + parsing, not the full retouching pipeline). This breaks
         # the engine→style→engine cycle at module load time. ``engine`` is
@@ -248,7 +253,12 @@ class StyleAnalyzer:
 class StyleApplier:
     """Apply style profile attributes or perform subject-aware color transfer."""
 
-    def __init__(self, engine=None, detector: Optional[FaceDetector] = None, parser: Optional[FaceParser] = None):
+    def __init__(
+        self,
+        engine: Optional[Any] = None,
+        detector: Optional[FaceDetector] = None,
+        parser: Optional[FaceParser] = None,
+    ) -> None:
         # StyleApplier still needs the full engine for ``engine.process()``,
         # but detection/parsing is done via the lighter detector+parser when
         # given, avoiding reliance on the engine's private attributes. The
@@ -398,11 +408,11 @@ def reinhard_transfer_masked(
 
 
 def subject_aware_transfer(
-    engine,
+    engine: Any,
     target_img: np.ndarray,
     ref_img: np.ndarray,
-    target_faces=None,
-    target_person=None,
+    target_faces: Optional[List[Any]] = None,
+    target_person: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Segment and match skin, hair, and background color statistics independently from the source image.
 

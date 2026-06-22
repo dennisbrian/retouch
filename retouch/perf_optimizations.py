@@ -372,7 +372,7 @@ def _get_worker_processors() -> dict[str, Any]:
     return _WORKER_PROCESSORS
 
 
-def _process_single_face_worker(payload: tuple) -> dict:
+def _process_single_face_worker(payload: tuple) -> Dict[str, Any]:
     """Process a single face crop inside a child process.
 
     ``payload`` is a picklable tuple:
@@ -475,8 +475,8 @@ class FaceProcessorPool:
 
     def process_faces(
         self,
-        payloads: list[tuple],
-    ) -> list[dict | None]:
+        payloads: List[Tuple[Any, ...]],
+    ) -> List[Optional[Dict[str, Any]]]:
         """
         Process all face crops in parallel. Falls back to sequential on error.
 

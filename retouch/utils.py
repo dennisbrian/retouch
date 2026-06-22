@@ -1,8 +1,12 @@
-"""Shared utilities for the face retouching pipeline."""
+"""Shared utilities for the face retouching pipeline.
+
+Provides mask normalization, blending helpers, landmark extraction utilities,
+and colour/tone primitives used across the retouch modules.
+"""
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
@@ -26,6 +30,56 @@ def normalize_mask(mask: Optional[np.ndarray]) -> Optional[np.ndarray]:
     return m
 
 
+def squeeze_mask(mask: np.ndarray) -> np.ndarray:
+    """Squeeze trailing singleton dim from a mask array.
+
+    Masks are often stored as (H, W, 1) for broadcasting with (H, W, 3) images.
+    This converts them to (H, W) for stage-internal use.
+
+    Args:
+        mask: Array of shape (H, W) or (H, W, 1).
+
+    Returns:
+        Array of shape (H, W). Pass-through if already 2D.
+    """
+    if mask.ndim == 3 and mask.shape[-1] == 1:
+        return mask.squeeze(-1)
+    return mask
+
+
+def estimate_face_width(
+    skin_mask: Optional[np.ndarray] = None,
+    lip_mask: Optional[np.ndarray] = None,
+    img_shape: Optional[Tuple[int, int]] = None,
+    fallback_ratio: float = 0.25,
+) -> int:
+    """Estimate face width in pixels from facial region masks.
+
+    Tries the most reliable signal first (skin mask x-extent), then falls back
+    to lip-mask-derived width, then to image-shape x ratio.
+
+    Args:
+        skin_mask: Full-image skin mask in [0, 1] or [0, 255].
+        lip_mask: Lip region mask, used as fallback (x 3.3 heuristic).
+        img_shape: (height, width) used as final fallback.
+        fallback_ratio: Fraction of image width to use as last-resort estimate.
+
+    Returns:
+        Face width in pixels, clamped to a minimum of 32.
+    """
+    if skin_mask is not None:
+        cols = np.where(skin_mask.max(axis=0) > 0.5)[0]
+        if len(cols) > 0:
+            return max(32, int(cols[-1] - cols[0]))
+    if lip_mask is not None:
+        cols = np.where(lip_mask.max(axis=0) > 0.5)[0]
+        if len(cols) > 0:
+            return max(32, int((cols[-1] - cols[0]) * 3.3))
+    if img_shape is not None:
+        return max(32, int(img_shape[1] * fallback_ratio))
+    return 64
+
+
 def screen_blend(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """Screen-blend two images in the 0-255 range.
 
@@ -33,20 +87,32 @@ def screen_blend(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
     This non-clipping blend lightens without saturating; equivalent to the
     "Screen" layer mode in Photoshop.
+
+    Args:
+        a: First image or scalar in [0, 255].
+        b: Second image or scalar in [0, 255].
+
+    Returns:
+        Screen-blended result with the broadcast shape.
     """
     return 255.0 - ((255.0 - a) * (255.0 - b) / 255.0)
 
 
-def feather_mask(mask, radius=None, sigma=None):
+def feather_mask(
+    mask: Optional[np.ndarray],
+    radius: Optional[int] = None,
+    sigma: Optional[float] = None,
+) -> Optional[np.ndarray]:
     """Apply Gaussian feathering to a mask for soft edges.
 
     Args:
-        mask: Float mask (H, W), values 0.0–1.0.
+        mask: Float mask (H, W), values 0.0–1.0. May be None.
         radius: Feather radius in pixels.
         sigma: Gaussian sigma. Derived from radius if not given.
 
     Returns:
-        Feathered float mask (H, W), values 0.0–1.0.
+        Feathered float mask (H, W), values 0.0–1.0. Returns the input as-is
+        if it is None or empty.
     """
     if mask is None or mask.size == 0:
         return mask
@@ -65,13 +131,17 @@ def feather_mask(mask, radius=None, sigma=None):
     return cv2.GaussianBlur(mask_f, (ksize, ksize), sigma)
 
 
-def blend_masked(original, processed, mask):
+def blend_masked(
+    original: np.ndarray,
+    processed: np.ndarray,
+    mask: Optional[np.ndarray],
+) -> np.ndarray:
     """Alpha-blend *processed* onto *original* using a soft mask.
 
     Args:
         original: (H, W, C) uint8 image.
         processed: (H, W, C) uint8 image.
-        mask: (H, W) float mask, 0.0–1.0.
+        mask: (H, W) float mask, 0.0–1.0. If None, ``processed`` is returned.
 
     Returns:
         Blended (H, W, C) uint8 image.
@@ -87,7 +157,11 @@ def blend_masked(original, processed, mask):
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
-def create_polygon_mask(points, img_shape, feather_radius=0):
+def create_polygon_mask(
+    points: np.ndarray,
+    img_shape: Tuple[int, ...],
+    feather_radius: int = 0,
+) -> np.ndarray:
     """Create a filled-polygon mask from an ordered set of (x, y) points.
 
     Args:
@@ -111,16 +185,22 @@ def create_polygon_mask(points, img_shape, feather_radius=0):
 # Landmark helpers
 # ---------------------------------------------------------------------------
 
-def get_points(landmarks, indices, w, h):
+def get_points(
+    landmarks: Any,
+    indices: Sequence[int],
+    w: int,
+    h: int,
+) -> np.ndarray:
     """Extract pixel (x, y) coords from MediaPipe landmarks.
 
     Args:
         landmarks: MediaPipe NormalizedLandmarkList.
         indices: List[int] of landmark indices.
-        w, h: Image width and height.
+        w: Image width in pixels.
+        h: Image height in pixels.
 
     Returns:
-        (N, 2) int32 numpy array.
+        (N, 2) int32 numpy array of pixel coordinates.
     """
     pts = []
     for idx in indices:
@@ -129,10 +209,16 @@ def get_points(landmarks, indices, w, h):
     return np.array(pts, dtype=np.int32)
 
 
-def inter_eye_distance(landmarks, w, h):
+def inter_eye_distance(landmarks: Any, w: int, h: int) -> float:
     """Distance between iris centers (or eye-corner midpoints as fallback).
 
-    Returns distance in pixels.
+    Args:
+        landmarks: MediaPipe NormalizedLandmarkList.
+        w: Image width in pixels.
+        h: Image height in pixels.
+
+    Returns:
+        Inter-eye distance in pixels.
     """
     try:
         left = landmarks.landmark[468]   # left iris center
@@ -144,15 +230,24 @@ def inter_eye_distance(landmarks, w, h):
         lx, ly = (li.x + lo.x) / 2, (li.y + lo.y) / 2
         rx, ry = (ri.x + ro.x) / 2, (ri.y + ro.y) / 2
         dx, dy = (rx - lx) * w, (ry - ly) * h
-        return np.sqrt(dx * dx + dy * dy)
+        return float(np.sqrt(dx * dx + dy * dy))
 
     dx = (right.x - left.x) * w
     dy = (right.y - left.y) * h
-    return np.sqrt(dx * dx + dy * dy)
+    return float(np.sqrt(dx * dx + dy * dy))
 
 
-def adaptive_ksize(face_width, factor=0.1, minimum=3):
-    """Odd kernel size proportional to face width."""
+def adaptive_ksize(face_width: float, factor: float = 0.1, minimum: int = 3) -> int:
+    """Return an odd kernel size proportional to face width.
+
+    Args:
+        face_width: Approximate face width in pixels.
+        factor: Scaling factor for kernel size.
+        minimum: Lower bound for the kernel size.
+
+    Returns:
+        Odd integer kernel size.
+    """
     size = max(int(face_width * factor), minimum)
     return size | 1  # ensure odd
 
@@ -161,34 +256,49 @@ def adaptive_ksize(face_width, factor=0.1, minimum=3):
 # Colour helpers
 # ---------------------------------------------------------------------------
 
-def vibrance(img_bgr, mask, strength):
+def vibrance(
+    img_bgr: np.ndarray,
+    mask: Optional[np.ndarray],
+    strength: float,
+) -> np.ndarray:
     """Smart saturation: boosts under-saturated pixels more.
+
+    When *mask* is None (full-image mode), red-orange skin hues are
+    protected from over-saturation. *strength* is the raw intensity in
+    [-1.0, 1.0]; 1.0 corresponds to the engine's vibrance=100 parameter.
 
     Args:
         img_bgr: (H, W, 3) uint8 BGR image.
-        mask: (H, W) float mask 0–1.
-        strength: 0.0–1.0.
+        mask: (H, W) float mask 0–1. None applies the effect to the full image.
+        strength: -1.0–1.0 intensity (0 is a no-op).
 
     Returns:
         (H, W, 3) uint8 BGR image.
     """
-    if strength <= 0:
+    if strength == 0:
         return img_bgr
 
     hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
-    s = hsv[:, :, 1]
+    h, s = hsv[:, :, 0], hsv[:, :, 1]
     factor = 1.0 + strength * (1.0 - s / 255.0)
+    if mask is None:
+        skin_hue = ((h > 0) & (h < 25)) | (h > 160)
+        skin_factor = np.clip(1.0 - strength * 0.5, 0.5, 1.0)
+        factor = np.where(skin_hue, np.minimum(factor, skin_factor), factor)
     hsv[:, :, 1] = np.clip(s * factor, 0, 255)
     result = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
     return blend_masked(img_bgr, result, mask)
 
 
-def apply_curve(channel, curve_points):
+def apply_curve(
+    channel: np.ndarray,
+    curve_points: Sequence[Tuple[int, int]],
+) -> np.ndarray:
     """Apply a piecewise-linear tone curve via LUT.
 
     Args:
         channel: Single-channel uint8 array.
-        curve_points: list of (input, output) in 0–255.
+        curve_points: Sequence of (input, output) sample points in 0–255.
 
     Returns:
         Tone-mapped channel (same shape), uint8.
@@ -200,15 +310,15 @@ def apply_curve(channel, curve_points):
 
 
 def correct_exposure(
-    img_bgr,
-    face_bboxes=None,
-    target_mean=120,
-    min_threshold=95,
-    max_threshold=165,
-    face_target_mean=145,
-    face_min_threshold=105,
-    face_max_threshold=185
-):
+    img_bgr: np.ndarray,
+    face_bboxes: Optional[Sequence[Tuple[int, int, int, int]]] = None,
+    target_mean: float = 120,
+    min_threshold: float = 95,
+    max_threshold: float = 165,
+    face_target_mean: float = 145,
+    face_min_threshold: float = 105,
+    face_max_threshold: float = 185,
+) -> Tuple[np.ndarray, bool]:
     """Normalize the image exposure using LAB space and a bounded Gamma curve.
     Prioritizes face luminance if face_bboxes are provided.
 
@@ -355,8 +465,16 @@ def apply_global_bloom(
     return np.clip(result, 0, 255).astype(np.uint8)
 
 
-def log_crash(exc: Exception, context_info: dict = None) -> str:
-    """Log details of a crash (traceback, timestamp, context params) to ~/.cache/retouch/crash.log."""
+def log_crash(exc: Exception, context_info: Optional[dict] = None) -> str:
+    """Log details of a crash (traceback, timestamp, context params) to ``~/.cache/retouch/crash.log``.
+
+    Args:
+        exc: The exception instance to log.
+        context_info: Optional dict of contextual metadata to include in the log.
+
+    Returns:
+        The path of the crash log file, or an empty string if writing failed.
+    """
     import os
     import sys
     import traceback

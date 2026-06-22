@@ -15,6 +15,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from .style import StyleProfile
 from .io import imread_exif, IMAGE_EXTENSIONS
+from .utils import normalize_mask
 
 logger = logging.getLogger(__name__)
 
@@ -70,9 +71,7 @@ def compute_hsv_stats(img_bgr: np.ndarray, mask: Optional[np.ndarray] = None) ->
     v = hsv[:, :, 2]
 
     if mask is not None:
-        mask_f = mask.astype(np.float32)
-        if mask_f.max() > 1.0:
-            mask_f /= 255.0
+        mask_f = normalize_mask(mask)
         if mask_f.ndim == 3:
             mask_f = mask_f[:, :, 0]
             
@@ -133,8 +132,11 @@ def analyze_and_group(
                 person_mask = None
                 try:
                     person_mask = engine._detector.segment_person(img)
-                except Exception:
-                    pass
+                except Exception as seg_err:
+                    logger.warning(
+                        "Person segmentation failed for %s: %s. Continuing without person mask.",
+                        path, seg_err
+                    )
 
                 mean_s, mean_v = compute_hsv_stats(img, person_mask)
 
@@ -183,7 +185,11 @@ def generate_contact_sheet(
         try:
             font = ImageFont.truetype(font_name, 14)
             break
-        except Exception:
+        except Exception as font_err:
+            logger.debug(
+                "Tried font %s but unavailable: %s. Continuing to next font candidate.",
+                font_name, font_err
+            )
             continue
     if font is None:
         font = ImageFont.load_default()
@@ -229,7 +235,11 @@ def generate_contact_sheet(
                     bbox = draw.textbbox((0, 0), filename, font=font)
                     text_w = bbox[2] - bbox[0]
                     text_h = bbox[3] - bbox[1]
-                except Exception:
+                except Exception as text_err:
+                    logger.debug(
+                        "draw.textbbox failed for filename label (font=%s): %s. Falling back to legacy draw.textsize.",
+                        getattr(font, 'path', font), text_err
+                    )
                     text_w, text_h = draw.textsize(filename, font=font)
 
                 text_x = (cell_size - text_w) // 2
@@ -248,7 +258,11 @@ def generate_contact_sheet(
                 bbox = draw.textbbox((0, 0), placeholder_text, font=font)
                 text_w = bbox[2] - bbox[0]
                 text_h = bbox[3] - bbox[1]
-            except Exception:
+            except Exception as text_err:
+                logger.debug(
+                    "draw.textbbox failed for placeholder text (font=%s): %s. Falling back to legacy draw.textsize.",
+                    getattr(font, 'path', font), text_err
+                )
                 text_w, text_h = draw.textsize(placeholder_text, font=font)
 
             text_x = (cell_size - text_w) // 2
@@ -265,7 +279,7 @@ def generate_contact_sheet(
 class BatchProcessor:
     """Ingests a folder of images, classifies/groups them, processes using a style, and exports results."""
 
-    def __init__(self, engine: Any = None):
+    def __init__(self, engine: Optional[Any] = None) -> None:
         from .engine import RetouchEngine
         self.engine = engine or RetouchEngine()
 

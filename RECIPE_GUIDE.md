@@ -110,6 +110,7 @@ filename (without the `.json` extension) as the preset name.
 "dark_circles": 22.0,        # 0–100
 "blemish": 30.0,             # 0–100
 "pore_synthesis": 0.0,       # 0–100
+"eye_enhance": 30.0,         # 0–100  (overrides `eyes.iris` / `eyes.whites`)
 "background_blur": 0.55,     # 0.0–1.0
 "background_desaturation": 0.40, # 0.0–1.0
 "light_wrap": 0.25,          # 0.0–1.0
@@ -143,10 +144,14 @@ explicit:
 | Blemish Removal (0–100) | `blemish` | ÷ 100 |
 | Whitening (0–100) | `skin.rosy` or `skin.porcelain` | ÷ 100 |
 | Equalize (0–100) | `skin.equalize` | ÷ 100 |
+| Nose Smooth (0–100) | `skin.nose_smooth` | ÷ 100 |
+| Whiten Tone (dropdown) | `skin.porcelain` (chooses) / `whiten_tone` (override) | direct (string) |
 | Eye Enhance (0–100) | `eyes.whites` / `eyes.iris` | ÷ 100 |
 | Catchlight (0–100) | `eyes.catchlight` | ÷ 100 |
 | Dark Circles (0–100) | `eyes.dark_circles` | ÷ 100 |
+| Teeth Whiten (0–100) | `eyes.teeth_whiten` or `eyes.whites` | ÷ 100 |
 | Lip Enhance (0–100) | `lips.gloss` | ÷ 100 |
+| Lip Tint (dropdown) | `lips.tint` | direct (string) |
 | Hair Shine (0–100) | `hair.shine` | ÷ 100 |
 | Dodge & Burn (0–100) | `dodge_burn.amount` | ÷ 100 |
 | Specular Bloom (0–100) | `specular_bloom` | ÷ 100 |
@@ -183,6 +188,13 @@ explicit:
 | Highlight Saturation (0–100) | `highlight_sat` | ÷ 100 |
 | Color Harmony Preset (dropdown) | `color_harmony.preset` | direct (string) |
 | Color Harmony Amount (0–100) | `color_harmony.amount` | ÷ 100 |
+| Background Blur (0.0–1.0) | `background_blur` | direct |
+| Background Desaturation (0.0–1.0) | `background_desaturation` | direct |
+| Light Wrap (0.0–1.0) | `light_wrap` | direct |
+| Blue Shadow Grade (0.0–1.0) | `blue_shadow_grade` | direct |
+| Cyan Midtone Grade (0.0–1.0) | `cyan_midtone_grade` | direct |
+| Subject Sharpen (0.0–1.0) | `subject_sharpen` | direct |
+| Matte Black (0.0–1.0) | `matte_black` | direct |
 | Slimming (0–100) | `slimming` | direct |
 | Blush (0–100) | `blush` | direct |
 | Lip Finish (dropdown) | `lip_finish` | direct (string) |

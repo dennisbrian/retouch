@@ -18,11 +18,15 @@ feathered mask boundaries where different layers have been modified
 by different amounts.
 """
 
+from __future__ import annotations
+
 import os
+from typing import Optional, Tuple
+
 import cv2
 import numpy as np
 
-from .utils import adaptive_ksize, blend_masked
+from .utils import adaptive_ksize, blend_masked, estimate_face_width
 
 # Constants for adaptive sizing and parameters
 DEFAULT_FEATHER_FACTOR = 0.015
@@ -40,13 +44,17 @@ class FrequencyLayers:
     """Container for the three frequency bands."""
     __slots__ = ["low", "mid", "high"]
 
-    def __init__(self, low, mid, high):
+    def __init__(self, low: np.ndarray, mid: np.ndarray, high: np.ndarray) -> None:
         self.low = low    # float32, [0, 255]
         self.mid = mid    # float32, can be negative
         self.high = high  # float32, can be negative
 
-    def reconstruct(self):
-        """Return low + mid + high as uint8."""
+    def reconstruct(self) -> np.ndarray:
+        """Return low + mid + high as uint8.
+
+        Returns:
+            (H, W, 3) uint8 BGR image.
+        """
         return np.clip(self.low + self.mid + self.high, 0, 255).astype(np.uint8)
 
 
@@ -74,7 +82,7 @@ class FrequencySeparator:
     across threads safely.
     """
 
-    def separate(self, img_bgr, face_width):
+    def separate(self, img_bgr: np.ndarray, face_width: float) -> "FrequencyLayers":
         """Split image into low / mid / high frequency layers.
 
         Args:
@@ -103,9 +111,17 @@ class FrequencySeparator:
 
         return FrequencyLayers(low, mid, high)
 
-    def combine(self, layers, skin_mask=None, smooth_strength=0.5,
-                mid_reduction=0.4, texture_opacity=1.0, face_width=None,
-                pore_synthesis=0.0, roi_coords=None):
+    def combine(
+        self,
+        layers: "FrequencyLayers",
+        skin_mask: Optional[np.ndarray] = None,
+        smooth_strength: float = 0.5,
+        mid_reduction: float = 0.4,
+        texture_opacity: float = 1.0,
+        face_width: Optional[float] = None,
+        pore_synthesis: float = 0.0,
+        roi_coords: Optional[Tuple[int, int]] = None,
+    ) -> np.ndarray:
         """Re-combine layers after selective processing.
 
         Compositing is done on final pixel values to avoid tonal discontinuities
@@ -137,7 +153,7 @@ class FrequencySeparator:
         if len(xs) == 0:
             return layers.reconstruct()
 
-        fw_approx = face_width if face_width else (min(layers.low.shape[:2]) * APPROX_FACE_WIDTH_RATIO)
+        fw_approx = face_width if face_width else estimate_face_width(img_shape=layers.low.shape[:2], fallback_ratio=APPROX_FACE_WIDTH_RATIO)
         pad = max(10, int(fw_approx * 0.1))
         x1, x2 = max(0, xs.min() - pad), min(m_raw.shape[1], xs.max() + pad + 1)
         y1, y2 = max(0, ys.min() - pad), min(m_raw.shape[0], ys.max() + pad + 1)
@@ -234,14 +250,21 @@ class FrequencySeparator:
 # Module-level convenience wrappers (DEPRECATED — use FrequencySeparator)
 # ---------------------------------------------------------------------------
 
-def separate(img_bgr, face_width):
+def separate(img_bgr: np.ndarray, face_width: float) -> "FrequencyLayers":
     """Deprecated. Use ``FrequencySeparator().separate()`` instead."""
     return FrequencySeparator().separate(img_bgr, face_width)
 
 
-def combine(layers, skin_mask=None, smooth_strength=0.5,
-            mid_reduction=0.4, texture_opacity=1.0, face_width=None,
-            pore_synthesis=0.0, roi_coords=None):
+def combine(
+    layers: "FrequencyLayers",
+    skin_mask: Optional[np.ndarray] = None,
+    smooth_strength: float = 0.5,
+    mid_reduction: float = 0.4,
+    texture_opacity: float = 1.0,
+    face_width: Optional[float] = None,
+    pore_synthesis: float = 0.0,
+    roi_coords: Optional[Tuple[int, int]] = None,
+) -> np.ndarray:
     """Deprecated. Use ``FrequencySeparator().combine()`` instead."""
     return FrequencySeparator().combine(
         layers,

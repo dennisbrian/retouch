@@ -20,6 +20,7 @@ from retouch import RetouchEngine
 from retouch.engine import resolve_recipe
 from retouch.io import imread_exif
 from retouch.recipes import RECIPES
+from retouch.params import recipe_to_params, PROCESSING_PARAMS, param_names, gui_values_to_engine_kwargs
 from retouch.grading import list_available_presets
 from retouch.style_library import list_styles, save_style_profile, learn_dataset_style
 from retouch.batch_processor import BatchProcessor
@@ -55,77 +56,14 @@ def get_engine():
 
 
 def recipe_defaults(recipe_name):
-    rec = resolve_recipe(recipe_name)
-    return {
-        "smooth": int(rec.get("frequency", {}).get("smooth", 0.30) * 100),
-        "mid_reduction": rec.get("frequency", {}).get("mid_reduction", 0.45),
-        "texture_opacity": rec.get("texture", {}).get("opacity", 1.0),
-        "pore_synthesis": int(rec.get("texture", {}).get("pore_synthesis", 0.0) * 100),
-        "nose_smooth": 0,
-        "whiten": int(rec.get("skin", {}).get(("porcelain" if "porcelain" in rec.get("skin", {}) else "rosy"), 0) * 100),
-        "equalize": int(rec.get("skin", {}).get("equalize", 0) * 100),
-        "relight": int(
-            (rec.get("skin", {}).get("relight") * 100.0) if rec.get("skin", {}).get("relight") is not None
-            else rec.get("relight_strength", 0.0)
-        ),
-        "relight_azimuth": int(rec.get("skin", {}).get("relight_azimuth", rec.get("light_azimuth", 0.0))),
-        "relight_elevation": int(rec.get("skin", {}).get("relight_elevation", rec.get("light_elevation", 30.0))),
-        "eye_enhance": int(rec.get("eyes", {}).get("whites", rec.get("eyes", {}).get("iris", 0)) * 100),
-        "lip_enhance": int(rec.get("lips", {}).get("gloss", 0) * 100),
-        "lip_tint": rec.get("lips", {}).get("tint") or "none",
-        "blush": int(rec.get("blush", 0.0)),
-        "teeth_whiten": int(rec.get("eyes", {}).get("whites", 0) * 100),
-        "hair_enhance": int(rec.get("hair", {}).get("shine", 0) * 100),
-        "dodge_burn": int(
-            (rec.get("dodge_burn", {}).get("amount", 0.0) if isinstance(rec.get("dodge_burn"), dict)
-             else rec.get("dodge_burn", 0.0) / 100.0) * 100
-        ),
-        "specular_bloom": rec.get("specular_bloom", 0),
-        "bloom": int(rec.get("bloom", {}).get("opacity", 0.0) * 100),
-        "bloom_threshold": int(rec.get("bloom", {}).get("threshold", 210.0)),
-        "bloom_softness": int(rec.get("bloom", {}).get("softness", 30.0)),
-        "contrast": rec.get("contrast", 0),
-        "brightness": int(rec.get("brightness", 0.0)),
-        "highlights": int(rec.get("highlights", 0.0)),
-        "shadows": int(rec.get("shadows", 0.0)),
-        "whites": int(rec.get("whites", 0.0)),
-        "blacks": int(rec.get("blacks", 0.0)),
-        "nose_blush": bool(rec.get("nose_blush", False)),
-        "under_eye_blush": bool(rec.get("under_eye_blush", False)),
-        "white_costume_lift": bool(rec.get("white_costume_lift", False)),
-        # --- CLI-parity params ---
-        "blemish": int(rec.get("frequency", {}).get("smooth", 0.30) * 100),
-        "dark_circles": int(rec.get("eyes", {}).get("dark_circles", 0.0) * 100),
-        "catchlight": int(rec.get("eyes", {}).get("catchlight", rec.get("eyes", {}).get("iris", 0.0)) * 100),
-        "whiten_tone": ("porcelain" if "porcelain" in rec.get("skin", {}) else "rosy"),
-        "auto_exposure": False,
-        "lip_finish": rec.get("lip_finish", "gloss"),
-        "slimming": int(rec.get("slimming", 0.0)),
-        "impact": int(rec.get("finish", {}).get("impact", 0.0) * 100),
-        # --- Engine advanced params ---
-        "clarity": int(rec.get("clarity", 0.0)),
-        "vibrance": int(rec.get("vibrance", 0.0)),
-        "saturation": int(rec.get("saturation", 0.0)),
-        "glow": int(rec.get("glow", 0.0)),
-        "vignette": int(rec.get("vignette", 0.0)),
-        "sharpen": int(rec.get("sharpen", 0.0)),
-        "sharpen_radius": float(rec.get("sharpen_radius", 1.0)),
-        "subject_separation": int((lambda v: v if v > 1.0 else v * 100)(rec.get("subject_separation", 0.0))),
-        "specular_bloom_tone": rec.get("specular_bloom_tone", "rosy"),
-        "color_grade": rec.get("color_harmony", {}).get("preset", "none"),
-        "grade_intensity": int(rec.get("color_harmony", {}).get("amount", 0.0) * 100),
-        "chromatic_aberration": float(rec.get("chromatic_aberration", 0.0)),
-        "grain": float(rec.get("grain", 0.0)) * 500,
-        "halation": float(rec.get("halation", 0.0)) * 100,
-        "lut": rec.get("lut", "none"),
-        # --- Split toning ---
-        "shadow_hue": int(rec.get("shadow_hue", 0.0)),
-        "shadow_sat": int(rec.get("shadow_sat", 0.0)),
-        "midtone_hue": int(rec.get("midtone_hue", 0.0)),
-        "midtone_sat": int(rec.get("midtone_sat", 0.0)),
-        "highlight_hue": int(rec.get("highlight_hue", 0.0)),
-        "highlight_sat": int(rec.get("highlight_sat", 0.0)),
-    }
+    """Return the per-slider defaults for a recipe.
+
+    Delegates to ``retouch.params.recipe_to_params`` so there is exactly
+    one place that knows how to turn a recipe dict into a UI-side values
+    bag.  The engine uses the same spec list from a different code path
+    (``engine.build_context``).
+    """
+    return recipe_to_params(recipe_name)
 
 
 def get_custom_style_names():
@@ -161,16 +99,11 @@ def apply_custom_style(style_name, current_recipe="natural"):
     
     return (
         d["smooth"], d["mid_reduction"], d["texture_opacity"], d["pore_synthesis"], d["nose_smooth"],
-        d["whiten"], d["equalize"], d["white_costume_lift"],
-        d["relight"], d["relight_azimuth"], d["relight_elevation"],
-        d["eye_enhance"], d["teeth_whiten"],
-        d["lip_enhance"], d["lip_tint"], d["blush"], d["nose_blush"], d["under_eye_blush"],
-        d["hair_enhance"], d["dodge_burn"], d["specular_bloom"], d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["contrast"], d["brightness"],
-         d["highlights"], d["shadows"], d["whites"], d["blacks"],
-        d["blemish"], d["dark_circles"], d["catchlight"], d["whiten_tone"], d["auto_exposure"],
-        d["clarity"], d["vibrance"], d["saturation"], d["lip_finish"],
-        d["slimming"], d["impact"],
-        d["sharpen"], d["sharpen_radius"], d["glow"], d["vignette"], d["subject_separation"], d["specular_bloom_tone"],
+        d["whiten"], d["equalize"], d["blemish"], d["whiten_tone"], d["nose_blush"], d["under_eye_blush"], d["white_costume_lift"],
+        d["dodge_burn"], d["relight"], d["relight_azimuth"], d["relight_elevation"], d["specular_bloom"], d["specular_bloom_tone"],
+        d["eye_enhance"], d["catchlight"], d["dark_circles"], d["teeth_whiten"], d["lip_enhance"], d["lip_tint"], d["lip_finish"], d["blush"], d["slimming"], d["hair_enhance"],
+        d["contrast"], d["brightness"], d["highlights"], d["shadows"], d["whites"], d["blacks"], d["clarity"], d["vibrance"], d["saturation"], d["auto_exposure"],
+        d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["glow"], d["vignette"], d["sharpen"], d["sharpen_radius"], d["subject_separation"], d["impact"],
         d["color_grade"], d["grade_intensity"],
         d["chromatic_aberration"], d["grain"], d["halation"], d["lut"],
         d["shadow_hue"], d["shadow_sat"], d["midtone_hue"], d["midtone_sat"], d["highlight_hue"], d["highlight_sat"],
@@ -296,62 +229,25 @@ def on_process_folder(input_dir, output_dir, style_type, custom_style_name, reci
         return None, None, f"Exception during batch processing: {e}"
 
 
-PROCESS_INPUT_KEYS = [
-    "img_paths", "recipe",
-    "smooth", "mid_reduction", "texture_opacity", "pore_synthesis", "nose_smooth",
-    "whiten", "equalize", "white_costume_lift",
-    "relight", "relight_azimuth", "relight_elevation",
-    "eye_enhance", "teeth_whiten",
-    "lip_enhance", "lip_tint", "blush", "nose_blush", "under_eye_blush",
-    "hair_enhance", "dodge_burn", "specular_bloom", "bloom", "bloom_threshold", "bloom_softness", "contrast", "brightness",
-    "highlights", "shadows", "whites", "blacks",
-    "color_ref_img", "color_ref_strength",
-    "show_compare", "fast",
-    "export_fmt", "export_quality", "export_res",
-    "blemish", "dark_circles", "catchlight", "whiten_tone", "auto_exposure",
-    "clarity", "vibrance", "saturation", "lip_finish",
-    "slimming", "impact",
-    "sharpen", "sharpen_radius", "glow", "vignette", "subject_separation", "specular_bloom_tone",
-    "color_grade", "grade_intensity",
-    "chromatic_aberration", "grain", "halation", "lut",
-    "shadow_hue", "shadow_sat", "midtone_hue", "midtone_sat", "highlight_hue", "highlight_sat",
-    "debug_mode",
-]
+# PROCESS_INPUT_KEYS — the ordered list of inputs the process_image() Gradio
+# event handler expects.  Generated from PROCESSING_PARAMS (in declaration
+# order) so the slider order stays in lock-step with the spec, plus the
+# fixed-prefix transport / session keys at the end.
+PROCESS_INPUT_KEYS = (
+    ["img_paths", "recipe"]
+    + param_names()
+    + [
+        "color_ref_img", "color_ref_strength",
+        "show_compare", "fast",
+        "export_fmt", "export_quality", "export_res",
+        "debug_mode",
+    ]
+)
 
 def process_image(*args):
     params = dict(zip(PROCESS_INPUT_KEYS, args))
     img_paths = params.get("img_paths")
     recipe = params.get("recipe")
-    smooth = params.get("smooth")
-    mid_reduction = params.get("mid_reduction")
-    texture_opacity = params.get("texture_opacity")
-    pore_synthesis = params.get("pore_synthesis")
-    nose_smooth = params.get("nose_smooth")
-    whiten = params.get("whiten")
-    equalize = params.get("equalize")
-    white_costume_lift = params.get("white_costume_lift")
-    relight = params.get("relight")
-    relight_azimuth = params.get("relight_azimuth")
-    relight_elevation = params.get("relight_elevation")
-    eye_enhance = params.get("eye_enhance")
-    teeth_whiten = params.get("teeth_whiten")
-    lip_enhance = params.get("lip_enhance")
-    lip_tint = params.get("lip_tint")
-    blush = params.get("blush")
-    nose_blush = params.get("nose_blush")
-    under_eye_blush = params.get("under_eye_blush")
-    hair_enhance = params.get("hair_enhance")
-    dodge_burn = params.get("dodge_burn")
-    specular_bloom = params.get("specular_bloom")
-    bloom = params.get("bloom")
-    bloom_threshold = params.get("bloom_threshold")
-    bloom_softness = params.get("bloom_softness")
-    contrast = params.get("contrast")
-    brightness = params.get("brightness")
-    highlights = params.get("highlights")
-    shadows = params.get("shadows")
-    whites = params.get("whites")
-    blacks = params.get("blacks")
     color_ref_img = params.get("color_ref_img")
     color_ref_strength = params.get("color_ref_strength")
     show_compare = params.get("show_compare")
@@ -359,35 +255,6 @@ def process_image(*args):
     export_fmt = params.get("export_fmt")
     export_quality = params.get("export_quality")
     export_res = params.get("export_res")
-    blemish = params.get("blemish")
-    dark_circles = params.get("dark_circles")
-    catchlight = params.get("catchlight")
-    whiten_tone = params.get("whiten_tone")
-    auto_exposure = params.get("auto_exposure")
-    clarity = params.get("clarity")
-    vibrance = params.get("vibrance")
-    saturation = params.get("saturation")
-    lip_finish = params.get("lip_finish")
-    slimming = params.get("slimming")
-    impact = params.get("impact")
-    sharpen = params.get("sharpen")
-    sharpen_radius = params.get("sharpen_radius")
-    glow = params.get("glow")
-    vignette = params.get("vignette")
-    subject_separation = params.get("subject_separation")
-    specular_bloom_tone = params.get("specular_bloom_tone")
-    color_grade = params.get("color_grade")
-    grade_intensity = params.get("grade_intensity")
-    chromatic_aberration = params.get("chromatic_aberration")
-    grain = params.get("grain")
-    halation = params.get("halation")
-    lut = params.get("lut")
-    shadow_hue = params.get("shadow_hue")
-    shadow_sat = params.get("shadow_sat")
-    midtone_hue = params.get("midtone_hue")
-    midtone_sat = params.get("midtone_sat")
-    highlight_hue = params.get("highlight_hue")
-    highlight_sat = params.get("highlight_sat")
     debug_mode = params.get("debug_mode")
 
     if not img_paths:
@@ -411,10 +278,6 @@ def process_image(*args):
             color_ref_img = color_ref_img.get("name") or color_ref_img.get("path")
         color_ref_bgr = imread_exif(color_ref_img)
 
-    lip_tint_val = lip_tint if lip_tint != "none" else None
-    color_grade_val = color_grade if color_grade != "none" else None
-    lut_val = lut if lut != "none" else None
-    grade_intensity_val = grade_intensity / 100.0
     engine = get_engine()
     start = time.time()
 
@@ -437,6 +300,21 @@ def process_image(*args):
     temp_dir = tempfile.mkdtemp(prefix="retouch_tmp_")
     debug_dir = os.path.join(temp_dir, "debug") if debug_mode else None
 
+    # Translate the GUI-side values dict into the engine-side kwargs dict.
+    # The spec list (in retouch.params) is the source of truth for the
+    # unit conversions (e.g. grain × 500 → grain / 500, "none" → None,
+    # grade_intensity / 100, etc.).
+    engine_kwargs = gui_values_to_engine_kwargs(
+        params,
+        extra={
+            "recipe": recipe,
+            "color_ref": color_ref_bgr,
+            "color_transfer_intensity": color_ref_strength,
+            "fast": fast,
+            "debug_dir": None,  # set per-image below
+        },
+    )
+
     for idx, path_item in enumerate(img_paths):
         try:
             curr_path = path_item
@@ -446,73 +324,11 @@ def process_image(*args):
             img_bgr = imread_exif(curr_path)
             original = img_bgr.copy()
 
-            result = engine.process(
-                img_bgr,
-                recipe=recipe,
-                smooth=smooth,
-                mid_reduction=mid_reduction,
-                texture_opacity=texture_opacity,
-                pore_synthesis=pore_synthesis,
-                nose_smooth=nose_smooth if nose_smooth > 0 else None,
-                whiten=whiten,
-                whiten_tone=whiten_tone,
-                equalize=equalize,
-                blemish=blemish,
-                white_costume_lift=white_costume_lift,
-                relight=relight,
-                relight_azimuth=relight_azimuth,
-                relight_elevation=relight_elevation,
-                eye_enhance=eye_enhance,
-                dark_circles=dark_circles,
-                catchlight=catchlight,
-                teeth_whiten=teeth_whiten,
-                lip_enhance=lip_enhance,
-                lip_tint=lip_tint_val,
-                lip_finish=lip_finish,
-                blush=blush,
-                nose_blush=nose_blush,
-                under_eye_blush=under_eye_blush,
-                hair_enhance=hair_enhance,
-                dodge_burn=dodge_burn,
-                slimming=slimming,
-                impact=impact,
-                specular_bloom=specular_bloom,
-                specular_bloom_tone=specular_bloom_tone,
-                bloom=bloom,
-                bloom_threshold=bloom_threshold,
-                bloom_softness=bloom_softness,
-                contrast=contrast,
-                brightness=brightness,
-                highlights=highlights,
-                shadows=shadows,
-                whites=whites,
-                blacks=blacks,
-                clarity=clarity,
-                vibrance=vibrance,
-                saturation=saturation,
-                glow=glow,
-                vignette=vignette,
-                sharpen=sharpen,
-                sharpen_radius=sharpen_radius,
-                subject_separation=subject_separation,
-                color_grade=color_grade_val,
-                grade_intensity=grade_intensity_val,
-                chromatic_aberration=chromatic_aberration if chromatic_aberration > 0 else None,
-                grain=(grain / 500.0) if grain > 0 else None,
-                halation=(halation / 100.0) if halation > 0 else None,
-                lut=lut_val,
-                shadow_hue=shadow_hue,
-                shadow_sat=shadow_sat,
-                midtone_hue=midtone_hue,
-                midtone_sat=midtone_sat,
-                highlight_hue=highlight_hue,
-                highlight_sat=highlight_sat,
-                auto_exposure=auto_exposure,
-                color_ref=color_ref_bgr,
-                color_transfer_intensity=color_ref_strength,
-                fast=fast,
-                debug_dir=debug_dir if (first_result_rgb is None and first_combined is None) else None,
+            engine_kwargs["debug_dir"] = (
+                debug_dir if (first_result_rgb is None and first_combined is None) else None
             )
+
+            result = engine.process(img_bgr, **engine_kwargs)
 
             if first_result_rgb is None and first_combined is None:
                 first_original = original
@@ -619,17 +435,11 @@ def on_recipe_change(recipe):
     d = recipe_defaults(recipe)
     return (
         d["smooth"], d["mid_reduction"], d["texture_opacity"], d["pore_synthesis"], d["nose_smooth"],
-        d["whiten"], d["equalize"], d["white_costume_lift"],
-        d["relight"], d["relight_azimuth"], d["relight_elevation"],
-        d["eye_enhance"], d["teeth_whiten"],
-        d["lip_enhance"], d["lip_tint"], d["blush"], d["nose_blush"], d["under_eye_blush"],
-        d["hair_enhance"], d["dodge_burn"], d["specular_bloom"], d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["contrast"], d["brightness"],
-        d["highlights"], d["shadows"], d["whites"], d["blacks"],
-         # New params (28)
-        d["blemish"], d["dark_circles"], d["catchlight"], d["whiten_tone"], d["auto_exposure"],
-        d["clarity"], d["vibrance"], d["saturation"], d["lip_finish"],
-        d["slimming"], d["impact"],
-        d["sharpen"], d["sharpen_radius"], d["glow"], d["vignette"], d["subject_separation"], d["specular_bloom_tone"],
+        d["whiten"], d["equalize"], d["blemish"], d["whiten_tone"], d["nose_blush"], d["under_eye_blush"], d["white_costume_lift"],
+        d["dodge_burn"], d["relight"], d["relight_azimuth"], d["relight_elevation"], d["specular_bloom"], d["specular_bloom_tone"],
+        d["eye_enhance"], d["catchlight"], d["dark_circles"], d["teeth_whiten"], d["lip_enhance"], d["lip_tint"], d["lip_finish"], d["blush"], d["slimming"], d["hair_enhance"],
+        d["contrast"], d["brightness"], d["highlights"], d["shadows"], d["whites"], d["blacks"], d["clarity"], d["vibrance"], d["saturation"], d["auto_exposure"],
+        d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["glow"], d["vignette"], d["sharpen"], d["sharpen_radius"], d["subject_separation"], d["impact"],
         d["color_grade"], d["grade_intensity"],
         d["chromatic_aberration"], d["grain"], d["halation"], d["lut"],
         d["shadow_hue"], d["shadow_sat"], d["midtone_hue"], d["midtone_sat"], d["highlight_hue"], d["highlight_sat"],
@@ -1632,16 +1442,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     # Event binding setup
     _recipe_outputs = [
         smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth,
-        whiten, equalize, white_costume_lift,
-        relight, relight_azimuth, relight_elevation,
-        eye_enhance, teeth_whiten,
-        lip_enhance, lip_tint, blush, nose_blush, under_eye_blush,
-        hair_enhance, dodge_burn, specular_bloom, bloom, bloom_threshold, bloom_softness, contrast, brightness,
-         highlights, shadows, whites, blacks,
-        blemish, dark_circles, catchlight, whiten_tone, auto_exposure,
-        clarity, vibrance, saturation, lip_finish,
-        slimming, impact,
-        sharpen, sharpen_radius, glow, vignette, subject_separation, specular_bloom_tone,
+        whiten, equalize, blemish, whiten_tone, nose_blush, under_eye_blush, white_costume_lift,
+        dodge_burn, relight, relight_azimuth, relight_elevation, specular_bloom, specular_bloom_tone,
+        eye_enhance, catchlight, dark_circles, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, slimming, hair_enhance,
+        contrast, brightness, highlights, shadows, whites, blacks, clarity, vibrance, saturation, auto_exposure,
+        bloom, bloom_threshold, bloom_softness, glow, vignette, sharpen, sharpen_radius, subject_separation, impact,
         color_grade, grade_intensity,
         chromatic_aberration, grain, halation, lut,
         shadow_hue, shadow_sat, midtone_hue, midtone_sat, highlight_hue, highlight_sat,
@@ -1774,22 +1579,16 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     _process_inputs = [
         img_input, recipe,
         smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth,
-        whiten, equalize, white_costume_lift,
-        relight, relight_azimuth, relight_elevation,
-        eye_enhance, teeth_whiten,
-        lip_enhance, lip_tint, blush, nose_blush, under_eye_blush,
-        hair_enhance, dodge_burn, specular_bloom, bloom, bloom_threshold, bloom_softness, contrast, brightness,
-        highlights, shadows, whites, blacks,
+        whiten, equalize, blemish, whiten_tone, nose_blush, under_eye_blush, white_costume_lift,
+        dodge_burn, relight, relight_azimuth, relight_elevation, specular_bloom, specular_bloom_tone,
+        eye_enhance, catchlight, dark_circles, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, slimming, hair_enhance,
+        contrast, brightness, highlights, shadows, whites, blacks, clarity, vibrance, saturation, auto_exposure,
+        bloom, bloom_threshold, bloom_softness, glow, vignette, sharpen, sharpen_radius, subject_separation, impact,
+        color_grade, grade_intensity, chromatic_aberration, grain, halation, lut,
+        shadow_hue, shadow_sat, midtone_hue, midtone_sat, highlight_hue, highlight_sat,
         color_ref_img, color_ref_strength,
         show_compare, fast,
-         export_fmt, export_quality, export_res,
-        blemish, dark_circles, catchlight, whiten_tone, auto_exposure,
-        clarity, vibrance, saturation, lip_finish,
-        slimming, impact,
-        sharpen, sharpen_radius, glow, vignette, subject_separation, specular_bloom_tone,
-        color_grade, grade_intensity,
-        chromatic_aberration, grain, halation, lut,
-        shadow_hue, shadow_sat, midtone_hue, midtone_sat, highlight_hue, highlight_sat,
+        export_fmt, export_quality, export_res,
         debug_mode,
     ]
     _process_outputs = [img_output, compare_viewer, _original_state, export_file, status, debug_gallery, debug_panel]

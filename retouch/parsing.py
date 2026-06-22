@@ -9,6 +9,10 @@ Regions produced:
 All masks are float32 (H, W) in [0, 1] with soft feathered edges.
 """
 
+from __future__ import annotations
+
+from typing import Any, List, Optional, Sequence, Tuple
+
 import cv2
 import logging
 import numpy as np
@@ -16,7 +20,9 @@ import os
 import onnxruntime as ort
 from .perf_optimizations import build_ort_providers
 
-from .utils import get_points, create_polygon_mask, feather_mask
+from .utils import create_polygon_mask, feather_mask, get_points, normalize_mask
+
+logger = logging.getLogger(__name__)
 
 # =====================================================================
 # MediaPipe Face Mesh landmark indices (stable across versions)
@@ -133,7 +139,14 @@ class FaceParser:
                 except Exception as fallback_err:
                     logger.error("ONNX Runtime failed completely: %s", fallback_err)
 
-    def parse(self, landmarks, img_bgr, face_bbox, person_mask=None, ied=100.0):
+    def parse(
+        self,
+        landmarks: Any,
+        img_bgr: np.ndarray,
+        face_bbox: Tuple[int, int, int, int],
+        person_mask: Optional[np.ndarray] = None,
+        ied: float = 100.0,
+    ) -> "FaceRegions":
         """Parse a single face into region masks.
 
         Args:
@@ -217,7 +230,11 @@ class FaceParser:
                         if excl_k in bisenet_masks and bisenet_masks[excl_k] is not None:
                             bisenet_masks['skin'] = np.clip(bisenet_masks['skin'] - bisenet_masks[excl_k], 0.0, 1.0)
             except Exception as e:
-                logging.getLogger(__name__).warning(f"Face parsing failed: {e}")
+                input_shape = crop_input.shape if 'crop_input' in locals() else None
+                logger.warning(
+                    "BiSeNet face parsing failed for face_bbox=%s on image shape=%s (model=%s, input_shape=%s): %s. Falling back to landmark-only regions.",
+                    face_bbox, img_bgr.shape, self._model_path, input_shape, e
+                )
 
         # Populate regions from BiSeNet masks
         regions.skin = bisenet_masks.get('skin')
@@ -239,7 +256,14 @@ class FaceParser:
 
         return regions
 
-    def parse_batch(self, crop_list, landmarks_compat_list, face_bbox_list, person_masks, ieds):
+    def parse_batch(
+        self,
+        crop_list: List[np.ndarray],
+        landmarks_compat_list: List[Any],
+        face_bbox_list: List[Tuple[int, int, int, int]],
+        person_masks: List[Optional[np.ndarray]],
+        ieds: List[float],
+    ) -> List["FaceRegions"]:
         """Parse multiple face crops in a single batch ONNX call.
 
         Args:
@@ -307,7 +331,11 @@ class FaceParser:
                         landmarks_compat_list[i], img_bgr, person_masks[i], ieds[i]
                     )
             except Exception as e:
-                logging.getLogger(__name__).warning(f"Face parsing failed: {e}")
+                crop_shape = getattr(img_bgr, 'shape', None)
+                logger.warning(
+                    "BiSeNet preprocessing failed for face index=%d (face_bbox=%s, crop_shape=%s, model=%s): %s. Using landmark fallback.",
+                    i, face_bbox, crop_shape, self._model_path, e
+                )
                 results[i] = self._landmark_fallback_only(
                     landmarks_compat_list[i], img_bgr, person_masks[i], ieds[i]
                 )
@@ -328,10 +356,10 @@ class FaceParser:
                     for b in range(len(sub_inputs)):
                         logits_list.append(logits[b])
                 except Exception as e:
-                    import logging
-                    logging.getLogger(__name__).warning(
-                        "Batch inference failed (likely due to CoreML dynamic batch limits): %s. "
-                        "Falling back to sequential inference (batch size 1).", e
+                    logger.warning(
+                        "Batch BiSeNet inference failed (likely due to CoreML dynamic batch limits) for sub_batch shape=%s, batch_size=%d (model=%s): %s. "
+                        "Falling back to sequential inference (batch size 1).",
+                        sub_batch.shape, len(sub_inputs), self._model_path, e
                     )
                     for b_in in sub_inputs:
                         single_batch = b_in[np.newaxis, :, :, :]
@@ -402,10 +430,9 @@ class FaceParser:
 
                 results[idx_face] = regions
         except Exception as batch_err:
-            import logging
-            logging.getLogger(__name__).error(
-                "Critical failure in batch parsing pipeline: %s. Falling back to sequential single-face parse.",
-                batch_err
+            logger.error(
+                "Critical failure in batch parsing pipeline for %d faces (model=%s): %s. Falling back to sequential single-face parse.",
+                num_faces, self._model_path, batch_err
             )
             for i in range(num_faces):
                 try:
@@ -417,9 +444,10 @@ class FaceParser:
                         ieds[i]
                     )
                 except Exception as parse_err:
-                    logging.getLogger(__name__).error(
-                        "Sequential single-face fallback also failed for face %d: %s. Using landmark fallback.",
-                        i, parse_err
+                    crop_shape = getattr(crop_list[i], 'shape', None)
+                    logger.error(
+                        "Sequential single-face fallback also failed for face %d/%d (face_bbox=%s, crop_shape=%s, model=%s): %s. Using landmark fallback.",
+                        i, num_faces, face_bbox_list[i], crop_shape, self._model_path, parse_err
                     )
                     results[i] = self._landmark_fallback_only(
                         landmarks_compat_list[i], crop_list[i], person_masks[i], ieds[i]
@@ -427,7 +455,13 @@ class FaceParser:
 
         return results
 
-    def _landmark_fallback_only(self, landmarks, img_bgr, person_mask, ied):
+    def _landmark_fallback_only(
+        self,
+        landmarks: Any,
+        img_bgr: np.ndarray,
+        person_mask: Optional[np.ndarray],
+        ied: float,
+    ) -> "FaceRegions":
         """Construct face region masks using landmarks when BiSeNet fails or is bypassed."""
         h_img, w_img = img_bgr.shape[:2]
         feather = max(int(ied * 0.08), 3)
@@ -451,9 +485,7 @@ class FaceParser:
             skin = np.clip(skin - exclusion, 0, 1)
 
         if person_mask is not None:
-            pm = person_mask.astype(np.float32)
-            if pm.max() > 1.0:
-                pm /= 255.0
+            pm = normalize_mask(person_mask)
             if pm.ndim == 3:
                 pm = pm[:, :, 0]
             skin *= pm
@@ -464,7 +496,15 @@ class FaceParser:
         self._add_landmark_subregions(regions, landmarks, h_img, w_img, ied, feather)
         return regions
 
-    def _add_landmark_subregions(self, regions, landmarks, h_img, w_img, ied, feather):
+    def _add_landmark_subregions(
+        self,
+        regions: "FaceRegions",
+        landmarks: Any,
+        h_img: int,
+        w_img: int,
+        ied: float,
+        feather: int,
+    ) -> None:
         """Construct internal/sub-region masks using landmarks."""
         try:
             regions.left_iris = self._iris_mask(landmarks, LEFT_IRIS, w_img, h_img, ied)
@@ -500,11 +540,26 @@ class FaceParser:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _mask(self, landmarks, indices, w, h, feather):
+    def _mask(
+        self,
+        landmarks: Any,
+        indices: Sequence[int],
+        w: int,
+        h: int,
+        feather: int,
+    ) -> np.ndarray:
         pts = get_points(landmarks, indices, w, h)
         return create_polygon_mask(pts, (h, w), feather_radius=feather)
 
-    def _circle_mask(self, landmarks, index, radius_px, w, h, feather):
+    def _circle_mask(
+        self,
+        landmarks: Any,
+        index: int,
+        radius_px: float,
+        w: int,
+        h: int,
+        feather: int,
+    ) -> np.ndarray:
         """Create a circular feathered mask around a single landmark."""
         lm = landmarks.landmark[index]
         cx, cy = int(lm.x * w), int(lm.y * h)
@@ -512,7 +567,14 @@ class FaceParser:
         cv2.circle(mask, (cx, cy), int(radius_px), 1.0, -1)
         return feather_mask(mask, radius=feather)
 
-    def _iris_mask(self, landmarks, indices, w, h, ied):
+    def _iris_mask(
+        self,
+        landmarks: Any,
+        indices: Sequence[int],
+        w: int,
+        h: int,
+        ied: float,
+    ) -> np.ndarray:
         """Circle mask for iris based on iris landmarks."""
         pts = get_points(landmarks, indices, w, h)
         center = pts.mean(axis=0).astype(int)
@@ -521,7 +583,13 @@ class FaceParser:
         cv2.circle(mask, tuple(center), radius, 1.0, -1)
         return feather_mask(mask, radius=max(radius // 3, 2))
 
-    def _forehead_mask(self, landmarks, w, h, feather):
+    def _forehead_mask(
+        self,
+        landmarks: Any,
+        w: int,
+        h: int,
+        feather: int,
+    ) -> np.ndarray:
         """Forehead: area between face oval top and eyebrow line."""
         top_pts = get_points(landmarks, FOREHEAD_TOP, w, h)
         bot_pts = get_points(landmarks, FOREHEAD_BOTTOM, w, h)

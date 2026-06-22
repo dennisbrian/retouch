@@ -1,8 +1,17 @@
 """Tests for retouch/grading.py — internal/private methods of ColorGrader."""
+import json
+
 import cv2
 import numpy as np
 import pytest
-from retouch.grading import ColorGrader, register_presets_dir, list_available_presets
+from retouch.grading import (
+    ColorGrader,
+    _USER_PRESETS_DIRS,
+    list_available_presets,
+    load_all_presets,
+    load_preset,
+    register_presets_dir,
+)
 
 
 @pytest.fixture
@@ -30,6 +39,16 @@ def colorful_img():
     img[21:43, :, 1] = 180
     img[43:, :, 0] = 220
     return img
+
+
+@pytest.fixture
+def isolated_user_dirs():
+    """Snapshot and restore ``_USER_PRESETS_DIRS`` so test cases don't pollute it."""
+    original = list(_USER_PRESETS_DIRS)
+    _USER_PRESETS_DIRS.clear()
+    yield
+    _USER_PRESETS_DIRS.clear()
+    _USER_PRESETS_DIRS.extend(original)
 
 
 class TestRegisterAndListPresets:
@@ -309,3 +328,77 @@ class TestAddSparkles:
     def test_output_shape(self, grader, img):
         result = grader._add_sparkles(img, 0.5)
         assert result.shape == img.shape
+
+
+class TestModuleLevelPresetFunctions:
+    """Tests for module-level functions: register_presets_dir, load_preset,
+    load_all_presets, list_available_presets."""
+
+    def test_register_presets_dir_adds_directory(
+        self, tmp_path, isolated_user_dirs
+    ):
+        """register_presets_dir() appends the directory and its presets become
+        discoverable through list_available_presets()."""
+        preset_file = tmp_path / "custom_look.json"
+        preset_file.write_text(json.dumps({"description": "custom test preset"}))
+        register_presets_dir(tmp_path)
+        assert tmp_path.resolve() in [p.resolve() for p in _USER_PRESETS_DIRS]
+        assert "custom_look" in list_available_presets()
+
+    def test_register_presets_dir_does_not_create_directory(
+        self, tmp_path, isolated_user_dirs
+    ):
+        """register_presets_dir() only appends the path to the user list; it
+        does NOT create the directory on disk."""
+        nonexistent = tmp_path / "does_not_exist"
+        assert not nonexistent.exists()
+        register_presets_dir(nonexistent)
+        assert not nonexistent.exists()
+        assert nonexistent.resolve() in [p.resolve() for p in _USER_PRESETS_DIRS]
+
+    def test_load_preset_existing(self):
+        """load_preset() returns a dict with the expected top-level keys for
+        a real preset shipped with the package."""
+        result = load_preset("natural")
+        assert isinstance(result, dict)
+        assert "description" in result
+        assert "curves" in result
+        assert isinstance(result["description"], str)
+        assert len(result["description"]) > 0
+
+    def test_load_preset_nonexistent_raises(self):
+        """load_preset() raises FileNotFoundError when the preset is missing
+        (the implementation does not return None)."""
+        with pytest.raises(FileNotFoundError):
+            load_preset("nonexistent_preset_xyz_9999")
+
+    def test_load_preset_with_invalid_json_raises(
+        self, tmp_path, isolated_user_dirs
+    ):
+        """load_preset() propagates ``json.JSONDecodeError`` when the preset
+        file is malformed (the implementation does not catch & warn; the
+        warn-and-skip path lives in ``load_all_presets``)."""
+        bad = tmp_path / "broken.json"
+        bad.write_text("{ this is not valid json")
+        register_presets_dir(tmp_path)
+        with pytest.raises(json.JSONDecodeError):
+            load_preset("broken")
+
+    def test_load_all_presets_returns_dict(self):
+        """load_all_presets() returns a dict of name -> settings for every
+        default preset on disk."""
+        result = load_all_presets()
+        assert isinstance(result, dict)
+        assert len(result) > 0
+        assert "natural" in result
+        assert all(isinstance(v, dict) for v in result.values())
+        assert all(isinstance(k, str) for k in result.keys())
+
+    def test_list_available_presets_returns_list(self):
+        """list_available_presets() returns a list of strings containing all
+        default preset names."""
+        result = list_available_presets()
+        assert isinstance(result, list)
+        assert all(isinstance(name, str) for name in result)
+        assert len(result) > 0
+        assert "natural" in result

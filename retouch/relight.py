@@ -1,5 +1,9 @@
 """Virtual studio relighting — directional 3D shading based on FaceMesh depth map."""
 
+from __future__ import annotations
+
+from typing import Any, Optional
+
 import cv2
 import numpy as np
 
@@ -8,7 +12,8 @@ class Relighter:
     """Estimates a 3D depth map and normal map from face landmarks to apply directional relighting."""
 
     def __init__(self, alpha: float = 32.0):
-        """
+        """Initialize the relighter.
+
         Args:
             alpha: Specular roughness exponent for Blinn-Phong shading.
         """
@@ -17,8 +22,8 @@ class Relighter:
     def relight(
         self,
         canvas: np.ndarray,
-        landmarks,
-        skin_mask: np.ndarray,
+        landmarks: Any,
+        skin_mask: Optional[np.ndarray],
         face_width: float,
         strength: float = 0.0,
         azimuth: float = 0.0,

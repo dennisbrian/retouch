@@ -4,6 +4,10 @@ Applies local translation warping (liquid warp) on specific jaw, cheek, and chin
 landmarks to perform non-destructive, subtle reshaping.
 """
 
+from __future__ import annotations
+
+from typing import Any, List
+
 import cv2
 import numpy as np
 
@@ -11,7 +15,12 @@ import numpy as np
 class FaceReshaper:
     """Photographer-grade face slimming and reshaping using local translation warping."""
 
-    def reshape(self, img_bgr, faces, strength=30):
+    def reshape(
+        self,
+        img_bgr: np.ndarray,
+        faces: List[Any],
+        strength: int = 30,
+    ) -> np.ndarray:
         """Perform face slimming (jaw, cheeks, chin) for all detected faces.
 
         Args:

@@ -4,14 +4,25 @@ Detects acne, small spots, and temporary blemishes by finding local contrast
 anomalies in the skin region, then removes them with OpenCV inpainting.
 """
 
+from __future__ import annotations
+
+from typing import Optional
+
 import cv2
 import numpy as np
+
+from .utils import estimate_face_width
 
 
 class BlemishRemover:
     """Detect and remove skin blemishes via inpainting."""
 
-    def remove(self, img_bgr, skin_mask, strength=50):
+    def remove(
+        self,
+        img_bgr: np.ndarray,
+        skin_mask: Optional[np.ndarray],
+        strength: int = 50,
+    ) -> np.ndarray:
         """Detect blemishes and inpaint them.
 
         Args:
@@ -26,11 +37,7 @@ class BlemishRemover:
             return img_bgr
 
         # Estimate face width from skin mask
-        y_indices, x_indices = np.where(skin_mask > 0.1)
-        if len(x_indices) > 0:
-            face_width = float(x_indices.max() - x_indices.min())
-        else:
-            face_width = float(img_bgr.shape[1] * 0.25)
+        face_width = estimate_face_width(skin_mask=skin_mask, img_shape=img_bgr.shape[:2])
 
         s = strength / 100.0
         blemish_mask = self._detect(img_bgr, skin_mask, s, face_width)
@@ -52,7 +59,13 @@ class BlemishRemover:
         result = img_bgr.astype(np.float32) * (1 - blend_mask) + inpainted.astype(np.float32) * blend_mask
         return np.clip(result, 0, 255).astype(np.uint8)
 
-    def _detect(self, img_bgr, skin_mask, sensitivity, face_width):
+    def _detect(
+        self,
+        img_bgr: np.ndarray,
+        skin_mask: np.ndarray,
+        sensitivity: float,
+        face_width: float,
+    ) -> np.ndarray:
         """Detect blemishes via local contrast anomalies.
 
         Strategy:
@@ -128,7 +141,11 @@ class BlemishRemover:
         return result
 
 
-def compute_skin_quality_map(image_bgr, skin_mask, patch_size=15):
+def compute_skin_quality_map(
+    image_bgr: np.ndarray,
+    skin_mask: np.ndarray,
+    patch_size: int = 15,
+) -> np.ndarray:
     """Compute a skin quality map from local variance.
 
     Returns a float32 map (same HxW as image, single channel) where:

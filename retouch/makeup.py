@@ -3,6 +3,10 @@
 Performs makeup enhancements in LAB space for optimal, natural blending.
 """
 
+from __future__ import annotations
+
+from typing import Any, Optional
+
 import cv2
 import numpy as np
 
@@ -12,7 +16,16 @@ from .utils import normalize_mask
 class MakeupEngine:
     """Professional portrait makeup engine."""
 
-    def apply_blush(self, img_bgr, face_landmarks, face_width, strength=30, regions=None, nose_blush=False, under_eye_blush=False):
+    def apply_blush(
+        self,
+        img_bgr: np.ndarray,
+        face_landmarks: Any,
+        face_width: float,
+        strength: int = 30,
+        regions: Optional[Any] = None,
+        nose_blush: bool = False,
+        under_eye_blush: bool = False,
+    ) -> np.ndarray:
         """Apply a natural rosy/pink blush wash to the cheeks, nose tip, and under-eye area.
 
         Works by generating soft radial feathered masks on cheek highlights (landmarks

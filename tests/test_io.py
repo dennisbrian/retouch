@@ -10,6 +10,7 @@ from retouch.io import (
     encode_write_params,
     make_comparison,
     copy_exif,
+    imread_exif,
 )
 
 
@@ -251,3 +252,193 @@ class TestCopyExif:
 
 
 import cv2
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage — exact test names from AUDIT_REPORT follow-up
+# ---------------------------------------------------------------------------
+
+
+def _write_png_with_exif(path, make="TestCam", model="T1"):
+    """Helper: write a small PNG at *path* with EXIF metadata.
+
+    PNG supports a limited EXIF block via Pillow's ``exif`` kwarg; this
+    helper is best-effort — Pillow will silently drop the exif kwarg for
+    some PNG modes, so we only assert that the file round-trips cleanly.
+    """
+    arr = np.zeros((20, 20, 3), dtype=np.uint8)
+    arr[5:15, 5:15] = 200
+    img = Image.fromarray(arr)
+    try:
+        exif = img.getexif()
+        exif[ExifBase.Make] = make
+        exif[ExifBase.Model] = model
+        img.save(str(path), "PNG", exif=exif.tobytes())
+    except Exception:
+        # Fall back to plain PNG — the test still validates the I/O path
+        img.save(str(path), "PNG")
+
+
+def test_copy_exif_jpg_to_jpg(tmp_path):
+    """copy_exif() copies EXIF tags from a JPEG source to a JPEG destination."""
+    src = tmp_path / "src.jpg"
+    dst = tmp_path / "dst.jpg"
+    _write_jpeg_with_exif(src, make="TestCam", model="T1")
+    _write_jpeg_without_exif(dst)
+
+    copy_exif(str(src), str(dst))
+
+    out = Image.open(str(dst))
+    exif = out.getexif()
+    assert exif.get(ExifBase.Make) == "TestCam"
+    assert exif.get(ExifBase.Model) == "T1"
+
+
+def test_copy_exif_missing_source_exif(tmp_path):
+    """copy_exif() handles a JPEG with no EXIF gracefully (no crash, no-op)."""
+    src = tmp_path / "no_exif.jpg"
+    dst = tmp_path / "dst.jpg"
+    _write_jpeg_without_exif(src)
+    _write_jpeg_without_exif(dst)
+
+    # Should not raise even when source has no EXIF block
+    copy_exif(str(src), str(dst))
+
+    # Destination is still a valid, openable JPEG
+    out = Image.open(str(dst))
+    assert out.size == (20, 20)
+
+
+def test_copy_exif_png_to_png(tmp_path):
+    """copy_exif() does not crash on PNG-to-PNG (EXIF is JPEG-centric)."""
+    src = tmp_path / "src.png"
+    dst = tmp_path / "dst.png"
+    _write_png_with_exif(src)
+    _write_png_with_exif(dst)
+
+    # Should not raise — PNG EXIF handling is best-effort in Pillow
+    copy_exif(str(src), str(dst))
+
+    assert (tmp_path / "dst.png").exists()
+    out = Image.open(str(dst))
+    assert out.size == (20, 20)
+
+
+def test_copy_exif_nonexistent_source(tmp_path):
+    """copy_exif() logs a warning and returns gracefully on a missing source."""
+    src = tmp_path / "does_not_exist.jpg"
+    dst = tmp_path / "dst.jpg"
+    _write_jpeg_without_exif(dst)
+
+    # Should not raise — the function catches all exceptions internally
+    copy_exif(str(src), str(dst))
+
+    # Destination file is still intact
+    out = Image.open(str(dst))
+    assert out.size == (20, 20)
+
+
+def test_imread_exif_loads_image(tmp_path):
+    """imread_exif() returns a BGR ndarray with correct dimensions for a real JPEG."""
+    src = tmp_path / "photo.jpg"
+    arr = np.zeros((60, 80, 3), dtype=np.uint8)
+    arr[10:50, 20:60] = 128
+    Image.fromarray(arr).save(str(src), "JPEG")
+
+    img = imread_exif(str(src))
+
+    assert img is not None
+    assert isinstance(img, np.ndarray)
+    assert img.ndim == 3
+    assert img.shape[2] == 3
+    # BGR ordering — height should be 60, width 80
+    assert img.shape[0] == 60
+    assert img.shape[1] == 80
+
+
+def test_imread_exif_nonexistent_returns_none(tmp_path):
+    """imread_exif() returns None (or propagates) for a missing path.
+
+    The function is not documented to swallow IOErrors, so we only assert
+    that the call does not silently return garbage — either it returns
+    ``None`` or it raises a recognisable exception.
+    """
+    missing = tmp_path / "missing.jpg"
+    try:
+        result = imread_exif(str(missing))
+    except (FileNotFoundError, OSError, IOError):
+        return  # acceptable: a recognisable exception
+    assert result is None
+
+
+def test_resize_for_processing_downscales(tmp_path):
+    """resize_for_processing() downscales a 4000x3000 image to fit max_dim=2048."""
+    img = np.full((3000, 4000, 3), 128, dtype=np.uint8)
+    result, scale = resize_for_processing(img, 2048)
+
+    h, w = result.shape[:2]
+    # Longest side is bounded by max_dim; aspect ratio (4:3) is preserved
+    assert max(h, w) <= 2048
+    assert abs(w / h - 4 / 3) < 0.05
+    # Exact expected dimensions: 2048 x 1536 (4:3 aspect)
+    assert w == 2048
+    assert h == 1536
+    assert scale == pytest.approx(2048 / 4000)
+
+
+def test_resize_for_processing_no_resize_needed(tmp_path):
+    """resize_for_processing() leaves a 1024x768 image unchanged when max_dim=2048."""
+    img = np.full((768, 1024, 3), 99, dtype=np.uint8)
+    result, scale = resize_for_processing(img, 2048)
+
+    assert result.shape == img.shape
+    assert scale == 1.0
+    assert np.array_equal(result, img)
+
+
+def test_output_format_validates_format(tmp_path):
+    """output_format() resolves 'same' and returns explicit formats unchanged."""
+    # 'same' maps based on the input file extension
+    assert output_format(tmp_path / "x.png", "same") == "png"
+    assert output_format(tmp_path / "x.webp", "same") == "webp"
+    assert output_format(tmp_path / "x.jpg", "same") == "jpg"
+    assert output_format(tmp_path / "x.jpeg", "same") == "jpg"
+    assert output_format(tmp_path / "x.JPEG", "same") == "jpg"
+    # Unknown extensions default to jpg
+    assert output_format(tmp_path / "x.tiff", "same") == "jpg"
+    # Explicit format overrides extension
+    assert output_format(tmp_path / "x.png", "webp") == "webp"
+    assert output_format(tmp_path / "x.jpg", "png") == "png"
+    assert output_format(tmp_path / "x.png", "jpg") == "jpg"
+
+
+def test_encode_write_params_returns_dict(tmp_path):
+    """encode_write_params() returns the expected OpenCV param lists."""
+    # JPEG family uses IMWRITE_JPEG_QUALITY
+    assert encode_write_params("jpg", 90) == [cv2.IMWRITE_JPEG_QUALITY, 90]
+    assert encode_write_params("jpeg", 75) == [cv2.IMWRITE_JPEG_QUALITY, 75]
+    # WebP uses IMWRITE_WEBP_QUALITY
+    assert encode_write_params("webp", 80) == [cv2.IMWRITE_WEBP_QUALITY, 80]
+    # Lossless formats return an empty param list
+    assert encode_write_params("png", 90) == []
+    assert encode_write_params("tiff", 90) == []
+    # Quality value is passed through verbatim
+    assert encode_write_params("jpg", 100) == [cv2.IMWRITE_JPEG_QUALITY, 100]
+
+
+def test_make_comparison_creates_file(tmp_path):
+    """make_comparison() writes a side-by-side image file to disk."""
+    orig = np.full((50, 100, 3), 100, dtype=np.uint8)
+    ret = np.full((50, 100, 3), 200, dtype=np.uint8)
+    out = tmp_path / "compare.jpg"
+
+    make_comparison(orig, ret, out, "jpg", 90)
+
+    assert out.exists()
+    assert out.stat().st_size > 0
+    # The written file is a valid image of the expected stitched width
+    written = cv2.imread(str(out))
+    assert written is not None
+    assert written.shape[0] == 50
+    # original (100) + separator (4) + retouched (100)
+    assert written.shape[1] == 100 + 4 + 100

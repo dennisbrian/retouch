@@ -107,7 +107,7 @@ from .hair import HairEnhancer
 from .relight import Relighter
 from .recipes import RECIPES
 from .style import StyleProfile
-from .utils import correct_exposure, apply_global_bloom
+from .utils import correct_exposure, apply_global_bloom, vibrance as _vibrance_fn, squeeze_mask
 
 
 # ---------------------------------------------------------------------------
@@ -317,150 +317,123 @@ def build_context(
     """Translate a recipe dict + caller overrides into a ProcessingContext.
 
     Recipe values are treated as defaults; any non-None override wins.
+
+    The per-parameter recipe lookup and unit conversion is data-driven from
+    ``retouch.params.PROCESSING_PARAMS`` — see that module for the canonical
+    list of every parameter the engine understands.
     """
 
-    def _pct(val: float) -> float:
-        return float(val) * 100.0
+    from .params import PROCESSING_PARAMS, _resolve_recipe_value
+    from .params import _resolve_dodge_burn
 
     def _ov(key, recipe_val):
         v = overrides.get(key)
         return v if v is not None else recipe_val
 
-    # --- Skin ---
-    r_smooth = _pct(rec.get("frequency", {}).get("smooth", 0.5))
-    r_equalize = _pct(rec.get("skin", {}).get("equalize", 0.0))
-    r_rosy = rec.get("skin", {}).get("rosy", rec.get("skin", {}).get("porcelain", 0.0))
-    r_whiten = _pct(r_rosy)
-    r_blemish = r_smooth
-    r_mid = rec.get("frequency", {}).get("mid_reduction", 0.35 if r_smooth < 50 else 0.45)
-    r_texture = rec.get("texture", {}).get("opacity", 1.0)
-    r_pore = _pct(rec.get("texture", {}).get("pore_synthesis", 0.0))
-    r_specular_bloom = rec.get("specular_bloom", 0.0)
-    r_specular_bloom_tone = rec.get("specular_bloom_tone", "rosy")
-    if "porcelain" in rec.get("skin", {}):
-        r_whiten_tone = "porcelain"
-    else:
-        r_whiten_tone = "rosy"
-    r_dodge_burn_raw = rec.get("dodge_burn", {})
-    if isinstance(r_dodge_burn_raw, dict):
-        r_dodge_burn = _pct(r_dodge_burn_raw.get("amount", 0.0))
-    else:
-        r_dodge_burn = float(r_dodge_burn_raw)
-    r_relight = _pct(rec.get("relight", 0.0))
-    r_relight_azimuth = rec.get("relight_azimuth", 0.0)
-    r_relight_elevation = rec.get("relight_elevation", 30.0)
+    # A handful of parameters have engine-side quirks that the data-driven
+    # converter cannot express on its own.  These are the only hand-written
+    # lookups remaining — the other 50+ come from PROCESSING_PARAMS.
+    def _resolve_engine_value(spec) -> Any:
+        # Specs that need a hand-written recipe lookup.  Each branch matches
+        # the *spec name* (which is unique) rather than the conversion code
+        # (which is shared with the GUI-side path).  Adding a new quirk is a
+        # one-liner here plus one name in _ENGINE_QUIRK_CONVERSIONS.
+        if spec.name == "dodge_burn":
+            if "dodge_burn" not in rec:
+                return spec.default
+            return _resolve_dodge_burn(rec)
+        if spec.name == "relight":
+            return float(rec.get("relight", 0.0)) * 100.0
+        if spec.name == "whiten":
+            # Historical engine quirk: ``rosy`` always wins if it is in the
+            # recipe, even when ``porcelain`` is also set.  Reproduce that
+            # exactly to keep behaviour identical.
+            skin = rec.get("skin", {})
+            r_rosy = skin.get("rosy", skin.get("porcelain", 0.0))
+            return float(r_rosy) * 100.0
+        if spec.name == "whiten_tone":
+            return "porcelain" if "porcelain" in rec.get("skin", {}) else "rosy"
+        if spec.name == "blemish":
+            # Engine mirrors the recipe's ``frequency.smooth`` (the GUI does
+            # the same and that is what the alias spec handles separately).
+            return float(rec.get("frequency", {}).get("smooth", 0.5)) * 100.0
+        if spec.name == "catchlight":
+            eyes = rec.get("eyes", {})
+            if "catchlight" in eyes:
+                return float(eyes["catchlight"]) * 100.0
+            if "iris" in eyes:
+                return float(eyes["iris"]) * 100.0
+            return spec.default
+        if spec.name == "teeth_whiten":
+            eyes = rec.get("eyes", {})
+            if "teeth_whiten" in eyes:
+                return float(eyes["teeth_whiten"]) * 100.0
+            if "whites" in eyes:
+                return float(eyes["whites"]) * 100.0
+            return spec.default
+        if spec.name == "eye_enhance":
+            eyes = rec.get("eyes", {})
+            val = eyes.get("iris", eyes.get("whites", 0.0))
+            return float(val) * 100.0
+        if spec.name == "lip_enhance":
+            return float(rec.get("lips", {}).get("gloss", 0.0)) * 100.0
+        if spec.name == "lip_tint":
+            return rec.get("lips", {}).get("tint", None)
+        if spec.name == "hair_enhance":
+            return float(rec.get("hair", {}).get("shine", 0.0)) * 100.0
+        if spec.name == "color_grade":
+            return rec.get("color_harmony", {}).get("preset", None)
+        if spec.name == "mid_reduction":
+            # The default depends on the recipe's smooth value.
+            rec_smooth_pct = float(rec.get("frequency", {}).get("smooth", 0.5)) * 100.0
+            return float(rec.get("frequency", {}).get(
+                "mid_reduction", 0.35 if rec_smooth_pct < 50 else 0.45))
+        return _resolve_recipe_value(spec, rec)
 
-    # --- Eyes ---
-    eyes = rec.get("eyes", {})
-    r_eye = _pct(eyes.get("iris", eyes.get("whites", 0.0)))
-    # BUGFIX-3: dark-circle repair must not inherit teeth/eye-white strength.
-    r_dark_circles = _pct(eyes.get("dark_circles", 0.0))
-    r_catchlight = _pct(eyes.get("catchlight", eyes.get("iris", 0.0)))
-    r_teeth = _pct(eyes.get("teeth_whiten", eyes.get("whites", 0.0)))
+    # Map spec names to their engine-side quirks.  Specs that need
+    # spec-specific lookup logic land here; everything else uses the
+    # generic converter via _resolve_recipe_value.
+    _ENGINE_QUIRK_CONVERSIONS = {
+        "dodge_burn",
+        "relight",
+        "whiten",
+        "whiten_tone",
+        "blemish",
+        "catchlight",
+        "teeth_whiten",
+        "eye_enhance",
+        "lip_enhance",
+        "lip_tint",
+        "hair_enhance",
+        "color_grade",
+        "mid_reduction",
+    }
 
-    # --- Lips ---
-    lips = rec.get("lips", {})
-    r_lip = _pct(lips.get("gloss", 0.0))
-    r_lip_tint = lips.get("tint", None)
+    # Compute every parameter's recipe-derived engine value, then apply
+    # caller overrides on top.
+    resolved: Dict[str, Any] = {}
+    for spec in PROCESSING_PARAMS:
+        if spec.name in _ENGINE_QUIRK_CONVERSIONS:
+            recipe_val = _resolve_engine_value(spec)
+        else:
+            recipe_val = _resolve_recipe_value(spec, rec, use_engine_key=True)
+        resolved[spec.name] = _ov(spec.name, recipe_val)
 
-    # --- Hair ---
-    r_hair = _pct(rec.get("hair", {}).get("shine", 0.0))
-
-    # --- Colour grading ---
-    harmony = rec.get("color_harmony", {})
-    r_color_grade = harmony.get("preset", None)
-    r_grade_intensity = harmony.get("amount", 0.0)
-
-    # If caller supplied color_grade override, default intensity to 1.0
+    # Default intensity to 1.0 when the caller supplies color_grade
     caller_grade = overrides.get("color_grade")
     caller_intensity = overrides.get("grade_intensity")
-    resolved_intensity = (
+    resolved["grade_intensity"] = (
         caller_intensity if caller_intensity is not None
-        else (1.0 if caller_grade is not None else r_grade_intensity)
+        else (1.0 if caller_grade is not None else resolved["grade_intensity"])
     )
 
-    r_contrast = rec.get("contrast", 0.0)
-    r_brightness = rec.get("brightness", None)
-    r_highlights = rec.get("highlights", None)
-    r_shadows = rec.get("shadows", None)
-    r_whites = rec.get("whites", None)
-    r_blacks = rec.get("blacks", None)
-    r_clarity = rec.get("clarity", 0.0)
-    r_vibrance = rec.get("vibrance", 0.0)
-    r_saturation = rec.get("saturation", 0.0)
-    r_shadow_hue = rec.get("shadow_hue", 0.0)
-    r_shadow_sat = rec.get("shadow_sat", 0.0)
-    r_midtone_hue = rec.get("midtone_hue", 0.0)
-    r_midtone_sat = rec.get("midtone_sat", 0.0)
-    r_highlight_hue = rec.get("highlight_hue", 0.0)
-    r_highlight_sat = rec.get("highlight_sat", 0.0)
-    r_glow = rec.get("glow", 0.0)
-    r_vignette = rec.get("vignette", 0.0)
-    r_sharpen = rec.get("sharpen", 0.0)
-    r_sharpen_radius = rec.get("sharpen_radius", 1.0)
-    r_subject_sep = rec.get("subject_separation", 0.0)
-    r_impact = _pct(rec.get("finish", {}).get("impact", 0.0))
-    r_bloom = _pct(rec.get("bloom", {}).get("opacity", 0.0))
-    r_bloom_threshold = rec.get("bloom", {}).get("threshold", 210.0)
-    r_bloom_softness = rec.get("bloom", {}).get("softness", 30.0)
-
-    # --- Reshaping / makeup defaults ---
-    r_slimming = rec.get("slimming", 0.0)
-    r_blush = rec.get("blush", 0.0)
-    r_lip_finish = rec.get("lip_finish", "gloss")
-    r_nose_blush = rec.get("nose_blush", False)
-    r_under_eye_blush = rec.get("under_eye_blush", False)
-    r_white_costume_lift = rec.get("white_costume_lift", False)
-
+    # Build the ProcessingContext.  Everything we resolved from the recipe
+    # goes through the spec list; everything that comes purely from the
+    # caller (color_ref, auto_exposure, …) is forwarded verbatim.
     return ProcessingContext(
-        smooth=_ov("smooth", r_smooth),
-        whiten=_ov("whiten", r_whiten),
-        whiten_tone=_ov("whiten_tone", r_whiten_tone),
-        equalize=_ov("equalize", r_equalize),
-        blemish=_ov("blemish", r_blemish),
+        # Caller-only fields (no recipe source)
         nose_smooth=overrides.get("nose_smooth"),
-        mid_reduction=_ov("mid_reduction", r_mid),
-        texture_opacity=_ov("texture_opacity", r_texture),
-        pore_synthesis=_ov("pore_synthesis", r_pore),
-        specular_bloom=_ov("specular_bloom", r_specular_bloom),
-        specular_bloom_tone=_ov("specular_bloom_tone", r_specular_bloom_tone),
-        dodge_burn=_ov("dodge_burn", r_dodge_burn),
-        relight=_ov("relight", r_relight),
-        relight_azimuth=_ov("relight_azimuth", r_relight_azimuth),
-        relight_elevation=_ov("relight_elevation", r_relight_elevation),
-        eye_enhance=_ov("eye_enhance", r_eye),
-        dark_circles=_ov("dark_circles", r_dark_circles),
-        catchlight=_ov("catchlight", r_catchlight),
-        lip_enhance=_ov("lip_enhance", r_lip),
-        lip_tint=_ov("lip_tint", r_lip_tint),
-        lip_finish=_ov("lip_finish", r_lip_finish),
-        teeth_whiten=_ov("teeth_whiten", r_teeth),
-        blush=_ov("blush", r_blush),
-        slimming=_ov("slimming", r_slimming),
-        hair_enhance=_ov("hair_enhance", r_hair),
-        contrast=_ov("contrast", r_contrast),
-        brightness=_ov("brightness", r_brightness),
-        highlights=_ov("highlights", r_highlights),
-        shadows=_ov("shadows", r_shadows),
-        whites=_ov("whites", r_whites),
-        blacks=_ov("blacks", r_blacks),
-        clarity=_ov("clarity", r_clarity),
-        vibrance=_ov("vibrance", r_vibrance),
-        saturation=_ov("saturation", r_saturation),
-        shadow_hue=_ov("shadow_hue", r_shadow_hue),
-        shadow_sat=_ov("shadow_sat", r_shadow_sat),
-        midtone_hue=_ov("midtone_hue", r_midtone_hue),
-        midtone_sat=_ov("midtone_sat", r_midtone_sat),
-        highlight_hue=_ov("highlight_hue", r_highlight_hue),
-        highlight_sat=_ov("highlight_sat", r_highlight_sat),
-        glow=_ov("glow", r_glow),
-        vignette=_ov("vignette", r_vignette),
-        sharpen=_ov("sharpen", r_sharpen),
-        sharpen_radius=_ov("sharpen_radius", r_sharpen_radius),
-        subject_separation=_ov("subject_separation", r_subject_sep),
         auto_exposure=overrides.get("auto_exposure", False),
-        color_grade=_ov("color_grade", r_color_grade),
-        grade_intensity=resolved_intensity,
         color_grade_stack=overrides.get("color_grade_stack"),
         # BUGFIX-2: color_ref comes only from the caller override, never None-initialised twice
         color_ref=overrides.get("color_ref"),
@@ -469,14 +442,10 @@ def build_context(
         halation=overrides.get("halation"),
         grain=overrides.get("grain"),
         lut=overrides.get("lut"),
-        impact=_ov("impact", r_impact),
-        bloom=_ov("bloom", r_bloom),
-        bloom_threshold=_ov("bloom_threshold", r_bloom_threshold),
-        bloom_softness=_ov("bloom_softness", r_bloom_softness),
+        # Recipe-derived fields (data-driven)
+        **{spec.name: resolved[spec.name] for spec in PROCESSING_PARAMS},
+        # Final fixed values
         active_recipe=active_recipe,
-        nose_blush=_ov("nose_blush", r_nose_blush),
-        under_eye_blush=_ov("under_eye_blush", r_under_eye_blush),
-        white_costume_lift=_ov("white_costume_lift", r_white_costume_lift),
     )
 
 
@@ -818,8 +787,7 @@ class RetouchEngine:
             # Glow mask visualization
             pm_norm = _norm_mask(person_mask)
             if pm_norm is not None:
-                if pm_norm.ndim == 3:
-                    pm_norm = pm_norm.squeeze(-1)
+                pm_norm = squeeze_mask(pm_norm)
                 sharp_fg = np.clip(pm_norm - acc_skin, 0.0, 1.0)
                 g_mask = 1.0 - sharp_fg
             else:
@@ -1376,8 +1344,7 @@ class RetouchEngine:
             return img
 
         pm = person_mask.astype(np.float32)
-        if pm.ndim == 3:
-            pm = pm.squeeze(-1)
+        pm = squeeze_mask(pm)
         if pm.max() > 1.0:
             pm /= 255.0
 
@@ -1461,8 +1428,7 @@ class RetouchEngine:
         # BUGFIX-1: use accumulated acc_skin (all faces) instead of loop-scoped s_mask
         pm_norm = _norm_mask(person_mask)
         if pm_norm is not None:
-            if pm_norm.ndim == 3:
-                pm_norm = pm_norm.squeeze(-1)
+            pm_norm = squeeze_mask(pm_norm)
             sharp_fg = np.clip(pm_norm - acc_skin, 0.0, 1.0)
             g_mask = 1.0 - sharp_fg
         else:
@@ -1612,17 +1578,7 @@ class RetouchEngine:
 
 def _adjust_vibrance(img: np.ndarray, vibrance: float) -> np.ndarray:
     """Smart saturation boost — protects skin tones, boosts unsaturated areas more."""
-    if vibrance == 0:
-        return img
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV).astype(np.float32)
-    h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
-    factor = 1.0 + (vibrance / 100.0) * (1.0 - s / 255.0)
-    # Optimized skin hue mask: red-orange hues (keep h > 0 to match original intent, only drop redundant h < 180)
-    skin_hue = ((h > 0) & (h < 25)) | (h > 160)
-    skin_factor = np.clip(1.0 - (vibrance / 100.0) * 0.5, 0.5, 1.0)
-    factor = np.where(skin_hue, np.minimum(factor, skin_factor), factor)
-    hsv[:, :, 1] = np.clip(s * factor, 0, 255)
-    return cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+    return _vibrance_fn(img, None, vibrance / 100.0)
 
 
 def _adjust_saturation(img: np.ndarray, saturation: float) -> np.ndarray:

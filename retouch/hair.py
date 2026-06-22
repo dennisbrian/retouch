@@ -4,16 +4,28 @@ Detects shiny highlights on wigs/hair in the near-head region and boosts
 their specular brightness and local contrast to create a silky, premium look.
 """
 
+from __future__ import annotations
+
+from typing import Optional, Tuple
+
 import cv2
 import numpy as np
 
-from .utils import normalize_mask
+from .utils import normalize_mask, squeeze_mask
 
 
 class HairEnhancer:
     """Enhance hair/wig highlights and local contrast."""
 
-    def enhance(self, img_bgr, person_mask, face_oval_mask, bbox, strength=40, hair_mask=None):
+    def enhance(
+        self,
+        img_bgr: np.ndarray,
+        person_mask: Optional[np.ndarray],
+        face_oval_mask: Optional[np.ndarray],
+        bbox: Tuple[int, int, int, int],
+        strength: int = 40,
+        hair_mask: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
         """Enhance hair shine within the hair region.
 
         Args:
@@ -60,8 +72,7 @@ class HairEnhancer:
 
             # Squeeze person mask if it is 3D
             pm = normalize_mask(person_mask)
-            if pm.ndim == 3:
-                pm = pm.squeeze(-1)
+            pm = squeeze_mask(pm)
 
             # Hair mask = (person_mask - face_oval) * near_head
             h_mask = np.clip(pm - face_oval_mask, 0, 1) * near_head
