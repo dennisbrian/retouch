@@ -17,15 +17,9 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .params import PROCESSING_PARAMS, ParamSpec
+from .params import PROCESSING_PARAMS, ParamSpec, resolve_recipe
 from .recipe_schema import validate_recipe
 from .recipes import RECIPES
-
-
-def _resolve_recipe_lazy(name: str):
-    """Lazy import of engine.resolve_recipe to avoid circular import."""
-    from .engine import resolve_recipe
-    return resolve_recipe(name)
 
 
 def _user_recipes_dir() -> Path:
@@ -127,7 +121,7 @@ def _flat_to_engine_recipe(flat: Dict[str, Any]) -> Dict[str, Any]:
     if "bloom" in flat or "bloom_threshold" in flat or "bloom_softness" in flat:
         bloom_dict = engine.setdefault("bloom", {})
         if "bloom" in flat:
-            bloom_dict["opacity"] = _convert_param_to_engine("bloom", flat["bloom"])
+            bloom_dict["opacity"] = flat["bloom"]
         if "bloom_threshold" in flat:
             bloom_dict["threshold"] = flat["bloom_threshold"]
         if "bloom_softness" in flat:
@@ -283,7 +277,7 @@ def export_recipe(recipe_name: str) -> Dict[str, Any]:
     if recipe_name not in RECIPES:
         raise ValueError(f"Recipe '{recipe_name}' not found.")
 
-    engine_recipe = _resolve_recipe_lazy(recipe_name)
+    engine_recipe = resolve_recipe(recipe_name)
     flat = _engine_to_flat_recipe(engine_recipe)
 
     return {

@@ -78,7 +78,7 @@ import copy
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import cv2
 import numpy as np
@@ -103,12 +103,15 @@ from .undereye import UnderEyeRepairer
 from .lips import LipEnhancer
 from .teeth import TeethWhitener
 from .grading import ColorGrader, PRESETS
+from . import grain, highlight, tonal
 from .hair import HairEnhancer
 from .relight import Relighter
 from .recipes import RECIPES
 from .recipe_loader import load_user_recipes
 from .style import StyleProfile
+from .style_transfer import subject_aware_transfer
 from .utils import correct_exposure, apply_global_bloom, vibrance as _vibrance_fn, squeeze_mask
+from .params import resolve_recipe, _deep_merge, PROCESSING_PARAMS  # noqa: F401  (re-export for backward compat)
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +128,12 @@ PROXY_MAX_DIM = 2048
 # ProcessingContext — typed parameter bag (replaces raw dict)
 # ---------------------------------------------------------------------------
 
+# Single source of truth for the 26 fields whose dataclass default matches
+# ``ParamSpec.default``.  Mismatches (33 fields) and caller-only fields
+# (5 fields) keep their hardcoded defaults until resolved by the user.
+_DEFAULTS: Dict[str, Any] = {spec.name: spec.default for spec in PROCESSING_PARAMS}
+
+
 @dataclass
 class ProcessingContext:
     """Fully-resolved, typed processing parameters for one engine.process() call."""
@@ -132,19 +141,19 @@ class ProcessingContext:
     # --- Skin ---
     smooth: float = 50.0
     whiten: float = 0.0
-    whiten_tone: str = "rosy"
+    whiten_tone: str = _DEFAULTS["whiten_tone"]
     equalize: float = 0.0
     blemish: float = 0.0
     nose_smooth: Optional[float] = None
     mid_reduction: float = 0.40
-    texture_opacity: float = 1.0
+    texture_opacity: float = _DEFAULTS["texture_opacity"]
     pore_synthesis: float = 0.0
     specular_bloom: float = 0.0
-    specular_bloom_tone: str = "rosy"
+    specular_bloom_tone: str = _DEFAULTS["specular_bloom_tone"]
     dodge_burn: float = 0.0
     relight: float = 0.0
-    relight_azimuth: float = 0.0
-    relight_elevation: float = 30.0
+    relight_azimuth: float = _DEFAULTS["relight_azimuth"]
+    relight_elevation: float = _DEFAULTS["relight_elevation"]
 
     # --- Eyes ---
     eye_enhance: float = 0.0
@@ -153,8 +162,8 @@ class ProcessingContext:
 
     # --- Lips ---
     lip_enhance: float = 0.0
-    lip_tint: Optional[Any] = None
-    lip_finish: str = "gloss"
+    lip_tint: Optional[Any] = _DEFAULTS["lip_tint"]
+    lip_finish: str = _DEFAULTS["lip_finish"]
 
     # --- Teeth ---
     teeth_whiten: float = 0.0
@@ -168,45 +177,49 @@ class ProcessingContext:
 
     # --- Tonal / global ---
     contrast: float = 0.0
-    brightness: Optional[float] = None
-    highlights: Optional[float] = None
-    shadows: Optional[float] = None
-    whites: Optional[float] = None
-    blacks: Optional[float] = None
+    brightness: Optional[float] = _DEFAULTS["brightness"]
+    highlights: Optional[float] = _DEFAULTS["highlights"]
+    shadows: Optional[float] = _DEFAULTS["shadows"]
+    whites: Optional[float] = _DEFAULTS["whites"]
+    blacks: Optional[float] = _DEFAULTS["blacks"]
     clarity: float = 0.0
     vibrance: float = 0.0
     saturation: float = 0.0
-    auto_exposure: bool = False
+    auto_exposure: bool = _DEFAULTS["auto_exposure"]
 
     # --- Colour grading ---
     color_grade: Optional[str] = None
-    grade_intensity: float = 0.0
+    grade_intensity: float = _DEFAULTS["grade_intensity"]
     color_grade_stack: Optional[List[Dict]] = None
     color_ref: Optional[np.ndarray] = None
     color_transfer_intensity: float = 1.0
     chromatic_aberration: Optional[float] = None
-    halation: Optional[float] = None
+    halation: Optional[Union[float, Dict[str, Any]]] = None
     grain: Optional[float] = None
     lut: Optional[str] = None
+    tonal_curve_strength: float = _DEFAULTS["tonal_curve_strength"]
+    skin_protect_strength: float = _DEFAULTS["skin_protect_strength"]
+    grain_strength: float = _DEFAULTS["grain_strength"]
+    highlight_rolloff_strength: float = _DEFAULTS["highlight_rolloff_strength"]
 
     # --- Split toning ---
-    shadow_hue: float = 0.0
-    shadow_sat: float = 0.0
-    midtone_hue: float = 0.0
-    midtone_sat: float = 0.0
-    highlight_hue: float = 0.0
-    highlight_sat: float = 0.0
+    shadow_hue: float = _DEFAULTS["shadow_hue"]
+    shadow_sat: float = _DEFAULTS["shadow_sat"]
+    midtone_hue: float = _DEFAULTS["midtone_hue"]
+    midtone_sat: float = _DEFAULTS["midtone_sat"]
+    highlight_hue: float = _DEFAULTS["highlight_hue"]
+    highlight_sat: float = _DEFAULTS["highlight_sat"]
 
     # --- Global Bloom (Oniric-Style Glow) ---
     bloom: float = 0.0
-    bloom_threshold: float = 210.0
-    bloom_softness: float = 30.0
+    bloom_threshold: float = _DEFAULTS["bloom_threshold"]
+    bloom_softness: float = _DEFAULTS["bloom_softness"]
     glow: float = 0.0
 
     # --- Lens effects ---
     vignette: float = 0.0
     sharpen: float = 0.0
-    sharpen_radius: float = 1.0
+    sharpen_radius: float = _DEFAULTS["sharpen_radius"]
 
     # --- Subject separation ---
     subject_separation: float = 0.0
@@ -218,9 +231,9 @@ class ProcessingContext:
     active_recipe: str = "natural"
 
     # --- Modular flags ---
-    nose_blush: bool = False
-    under_eye_blush: bool = False
-    white_costume_lift: bool = False
+    nose_blush: bool = _DEFAULTS["nose_blush"]
+    under_eye_blush: bool = _DEFAULTS["under_eye_blush"]
+    white_costume_lift: bool = _DEFAULTS["white_costume_lift"]
 
     # Cached per-face detection + parsing; None ⇒ engine detects/parses.
     face_contexts: Optional[List["FaceContext"]] = None
@@ -278,36 +291,6 @@ class ProcessingResult(np.ndarray):
 # ---------------------------------------------------------------------------
 # Recipe helpers
 # ---------------------------------------------------------------------------
-
-def resolve_recipe(name: str, _seen: Optional[set] = None) -> Dict:
-    """Return a fully-merged recipe dict, resolving 'extends' recursively."""
-    if _seen is None:
-        _seen = set()
-    if name in _seen:
-        return RECIPES.get("natural", {})
-    _seen.add(name)
-    rec = RECIPES.get(name)
-    if rec is None:
-        rec = RECIPES.get("natural", {})
-    parent_name = rec.get("extends")
-    if parent_name and parent_name in RECIPES:
-        resolved_parent = resolve_recipe(parent_name, _seen)
-        merged = copy.deepcopy(resolved_parent)
-        _deep_merge(merged, rec)
-        return merged
-    return rec
-
-
-
-def _deep_merge(base: Dict, override: Dict) -> None:
-    """Merge *override* into *base* in-place, recursing into nested dicts."""
-    for key, val in override.items():
-        if key == "extends":
-            continue
-        if isinstance(val, dict) and isinstance(base.get(key), dict):
-            _deep_merge(base[key], val)
-        else:
-            base[key] = val
 
 
 def build_context(
@@ -612,9 +595,13 @@ class RetouchEngine:
         bloom_softness: Optional[float] = None,
         impact: Optional[float] = None,
         chromatic_aberration: Optional[float] = None,
-        halation: Optional[float] = None,
+        halation: Optional[Union[float, Dict[str, Any]]] = None,
         grain: Optional[float] = None,
         lut: Optional[str] = None,
+        tonal_curve_strength: Optional[float] = None,
+        skin_protect_strength: Optional[float] = None,
+        grain_strength: Optional[float] = None,
+        highlight_rolloff_strength: Optional[float] = None,
         shadow_hue: Optional[float] = None,
         shadow_sat: Optional[float] = None,
         midtone_hue: Optional[float] = None,
@@ -704,6 +691,10 @@ class RetouchEngine:
             "halation": halation,
             "grain": grain,
             "lut": lut,
+            "tonal_curve_strength": tonal_curve_strength,
+            "skin_protect_strength": skin_protect_strength,
+            "grain_strength": grain_strength,
+            "highlight_rolloff_strength": highlight_rolloff_strength,
             "shadow_hue": shadow_hue,
             "shadow_sat": shadow_sat,
             "midtone_hue": midtone_hue,
@@ -993,7 +984,7 @@ class RetouchEngine:
         # ------------------------------------------------------------------
         t4 = time.perf_counter()
         result = self._stage_grade(
-            result, ctx, acc_skin, acc_skin_hair, acc_lips, person_mask,
+            result, ctx, acc_skin, acc_lips, person_mask,
             style_ref=style_ref, faces=faces,
         )
         timings["grading"] = (time.perf_counter() - t4) * 1000
@@ -1018,6 +1009,19 @@ class RetouchEngine:
             face_contexts=final_contexts,
         )
 
+    @staticmethod
+    def _assemble_post_effects(ctx: ProcessingContext) -> Dict[str, Any]:
+        post_effects: Dict[str, Any] = {}
+        if ctx.chromatic_aberration is not None:
+            post_effects["chromatic_aberration"] = ctx.chromatic_aberration
+        if ctx.halation is not None:
+            post_effects["halation"] = ctx.halation
+        if ctx.grain is not None:
+            post_effects["grain"] = ctx.grain
+        if ctx.lut is not None:
+            post_effects["lut"] = ctx.lut
+        return post_effects
+
     def _no_face_fallback(
         self,
         img: np.ndarray,
@@ -1029,17 +1033,10 @@ class RetouchEngine:
             result = self._stage_subject_separation(result, person_mask, ctx)
         result = self._stage_global(result, ctx)
 
-        # Assemble post-effects settings
-        post_effects: Dict[str, Any] = {}
-        if ctx.chromatic_aberration is not None:
-            post_effects["chromatic_aberration"] = ctx.chromatic_aberration
-        if ctx.halation is not None:
-            post_effects["halation"] = ctx.halation
-        if ctx.grain is not None:
-            post_effects["grain"] = ctx.grain
-        if ctx.lut is not None:
-            post_effects["lut"] = ctx.lut
+        if ctx.tonal_curve_strength > 0:
+            result = tonal.apply_hd_curve(result, strength=ctx.tonal_curve_strength)
 
+        post_effects = self._assemble_post_effects(ctx)
         skip_glows = ctx.bloom > 0.0
 
         if ctx.color_grade:
@@ -1049,8 +1046,12 @@ class RetouchEngine:
                     post_effects[k] = settings[k]
             result = self._grader.grade(
                 result, settings, ctx.grade_intensity,
-                skip_glows=skip_glows, skip_post_effects=True
+                skip_glows=skip_glows, skip_post_effects=True,
+                skin_protect_strength=ctx.skin_protect_strength,
             )
+
+        if ctx.highlight_rolloff_strength > 0:
+            result = highlight.apply_highlight_rolloff(result, ctx.highlight_rolloff_strength)
 
         if ctx.bloom > 0.0:
             result = apply_global_bloom(
@@ -1064,19 +1065,37 @@ class RetouchEngine:
             result = self._grader._add_glow(result, ctx.glow / 100.0)
 
         if post_effects:
-            result = self._grader.grade(result, post_effects, 1.0)
+            result = self._grader.grade(
+                result, post_effects, 1.0,
+                skin_protect_strength=ctx.skin_protect_strength,
+            )
 
         if ctx.vignette > 0:
             result = self._grader._add_vignette(result, ctx.vignette / 100.0)
 
         if ctx.impact > 0:
             result = self._grader.add_impact_finish(result, ctx.impact)
+
+        if ctx.grain_strength > 0:
+            result = grain.apply_film_grain(result, ctx.grain_strength)
+
         return result
 
     def _stage_reshape(self, img: np.ndarray, faces, ctx: ProcessingContext) -> np.ndarray:
         if ctx.slimming > 0:
             return self._reshaper.reshape(img, faces, ctx.slimming)
         return img.copy()
+
+    @staticmethod
+    def _compute_face_roi_padding(
+        face_w: int, face_h: int
+    ) -> Tuple[int, int, int, int]:
+        return (
+            int(face_h * 0.8),
+            int(face_h * 1.8),
+            int(face_w * 0.6),
+            int(face_w * 0.6),
+        )
 
     def _stage_per_face(
         self,
@@ -1106,10 +1125,7 @@ class RetouchEngine:
 
         for face in faces:
             face_x, face_y, face_w, face_h = face.bbox
-            pad_t = int(face_h * 0.8)
-            pad_b = int(face_h * 1.8)
-            pad_l = int(face_w * 0.6)
-            pad_r = int(face_w * 0.6)
+            pad_t, pad_b, pad_l, pad_r = self._compute_face_roi_padding(face_w, face_h)
 
             roi_y1 = max(0, face_y - pad_t)
             roi_y2 = min(h_img, face_y + face_h + pad_b)
@@ -1257,10 +1273,7 @@ class RetouchEngine:
             face_x, face_y, face_w, face_h = face.bbox
 
             # Safe expanded padding to cover hair (top) and neck/chest (bottom)
-            pad_t = int(face_h * 0.8)
-            pad_b = int(face_h * 1.8)
-            pad_l = int(face_w * 0.6)
-            pad_r = int(face_w * 0.6)
+            pad_t, pad_b, pad_l, pad_r = self._compute_face_roi_padding(face_w, face_h)
 
             roi_y1 = max(0, face_y - pad_t)
             roi_y2 = min(h_img, face_y + face_h + pad_b)
@@ -1424,7 +1437,7 @@ class RetouchEngine:
             result = _adjust_vibrance(result, ctx.vibrance)
 
         if ctx.saturation:
-            result = _adjust_saturation(result, ctx.saturation)
+            result = _apply_uniform_saturation(result, ctx.saturation)
 
         return result
 
@@ -1433,7 +1446,6 @@ class RetouchEngine:
         img: np.ndarray,
         ctx: ProcessingContext,
         acc_skin: np.ndarray,
-        acc_skin_hair: np.ndarray,
         acc_lips: np.ndarray,
         person_mask: Optional[np.ndarray],
         style_ref: Optional[np.ndarray] = None,
@@ -1444,7 +1456,6 @@ class RetouchEngine:
 
         # Subject-Aware Color Transfer (Meitu/Xingtu-style portrait match)
         if style_ref is not None:
-            from .style import subject_aware_transfer
             result = subject_aware_transfer(self, result, style_ref, target_faces=faces, target_person=person_mask)
 
         # Colour transfer (reference-based)
@@ -1468,15 +1479,10 @@ class RetouchEngine:
         skip_glows = ctx.bloom > 0.0
 
         # Assemble post-effects settings (to run after bloom)
-        post_effects: Dict[str, Any] = {}
-        if ctx.chromatic_aberration is not None:
-            post_effects["chromatic_aberration"] = ctx.chromatic_aberration
-        if ctx.halation is not None:
-            post_effects["halation"] = ctx.halation
-        if ctx.grain is not None:
-            post_effects["grain"] = ctx.grain
-        if ctx.lut is not None:
-            post_effects["lut"] = ctx.lut
+        post_effects = self._assemble_post_effects(ctx)
+
+        if ctx.tonal_curve_strength > 0:
+            result = tonal.apply_hd_curve(result, strength=ctx.tonal_curve_strength)
 
         # Run core color grading
         if ctx.color_grade_stack:
@@ -1487,11 +1493,12 @@ class RetouchEngine:
             for k in ["halation", "grain", "chromatic_aberration", "lut"]:
                 if k in settings and k not in post_effects:
                     post_effects[k] = settings[k]
-            
+
             result = self._grader.grade(
                 result, settings, ctx.grade_intensity,
                 split_tone_mask=acc_skin, glow_mask=g_mask, haze_mask=g_mask,
                 skip_glows=skip_glows, skip_post_effects=True,
+                skin_protect_strength=ctx.skin_protect_strength,
             )
 
         # Apply recipe-level split toning (from ProcessingContext, not preset)
@@ -1502,6 +1509,9 @@ class RetouchEngine:
                 "highlights": {"hue": ctx.highlight_hue, "sat": ctx.highlight_sat},
             }
             result = self._grader._split_tone_three_way(result, tones, mask=acc_skin)
+
+        if ctx.highlight_rolloff_strength > 0:
+            result = highlight.apply_highlight_rolloff(result, ctx.highlight_rolloff_strength)
 
         # Apply Global Cinematic Bloom (runs after color grading, but before halation/grain)
         if ctx.bloom > 0.0:
@@ -1521,6 +1531,7 @@ class RetouchEngine:
             result = self._grader.grade(
                 result, post_effects, 1.0,
                 split_tone_mask=acc_skin, glow_mask=g_mask, haze_mask=g_mask,
+                skin_protect_strength=ctx.skin_protect_strength,
             )
 
         # White costume pearl/lavender lift
@@ -1530,6 +1541,9 @@ class RetouchEngine:
         # Apply ctx-level vignette (last, after all other effects)
         if ctx.vignette > 0:
             result = self._grader._add_vignette(result, ctx.vignette / 100.0)
+
+        if ctx.grain_strength > 0:
+            result = grain.apply_film_grain(result, ctx.grain_strength)
 
         return result
 
@@ -1610,7 +1624,7 @@ def _adjust_vibrance(img: np.ndarray, vibrance: float) -> np.ndarray:
     return _vibrance_fn(img, None, vibrance / 100.0)
 
 
-def _adjust_saturation(img: np.ndarray, saturation: float) -> np.ndarray:
+def _apply_uniform_saturation(img: np.ndarray, saturation: float) -> np.ndarray:
     """Uniform saturation adjustment."""
     if saturation == 0:
         return img

@@ -54,6 +54,10 @@ the engine ``ProcessingContext``.  CLI arguments are mapped by
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Union
 
+import copy
+
+from .recipes import RECIPES
+
 
 # ---------------------------------------------------------------------------
 # ParamSpec — the canonical parameter declaration
@@ -492,7 +496,7 @@ _TONAL_PARAMS = [
         name="contrast",
         cli_flag="contrast",
         cli_type=int,
-        default=0,
+        default=0.0,
         recipe_key="contrast",
         conversion="gui_direct",
         min_val=-50,
@@ -557,7 +561,7 @@ _TONAL_PARAMS = [
         name="clarity",
         cli_flag=None,
         cli_type=None,
-        default=0,
+        default=0.0,
         recipe_key="clarity",
         conversion="gui_direct",
         min_val=-50,
@@ -567,7 +571,7 @@ _TONAL_PARAMS = [
         name="vibrance",
         cli_flag=None,
         cli_type=None,
-        default=0,
+        default=0.0,
         recipe_key="vibrance",
         conversion="gui_direct",
         min_val=-100,
@@ -577,7 +581,7 @@ _TONAL_PARAMS = [
         name="saturation",
         cli_flag=None,
         cli_type=None,
-        default=0,
+        default=0.0,
         recipe_key="saturation",
         conversion="gui_direct",
         min_val=-100,
@@ -600,11 +604,11 @@ _LENS_PARAMS = [
         name="bloom",
         cli_flag=None,
         cli_type=float,
-        default=0,
+        default=0.0,
         recipe_key="bloom.opacity",
-        conversion="recipe_direct",
+        conversion="recipe_pct",
         min_val=0.0,
-        max_val=1.0,
+        max_val=100.0,
     ),
     ParamSpec(
         name="bloom_threshold",
@@ -626,7 +630,7 @@ _LENS_PARAMS = [
         name="glow",
         cli_flag=None,
         cli_type=None,
-        default=0,
+        default=0.0,
         recipe_key="glow",
         conversion="gui_direct",
         min_val=0,
@@ -636,7 +640,7 @@ _LENS_PARAMS = [
         name="vignette",
         cli_flag=None,
         cli_type=None,
-        default=0,
+        default=0.0,
         recipe_key="vignette",
         conversion="gui_direct",
         min_val=-100,
@@ -646,7 +650,7 @@ _LENS_PARAMS = [
         name="sharpen",
         cli_flag=None,
         cli_type=None,
-        default=0,
+        default=0.0,
         recipe_key="sharpen",
         conversion="gui_direct",
         min_val=0,
@@ -664,7 +668,7 @@ _LENS_PARAMS = [
         name="subject_separation",
         cli_flag=None,
         cli_type=None,
-        default=0,
+        default=0.0,
         recipe_key="subject_separation",
         conversion="gui_direct",
         min_val=0,
@@ -674,7 +678,7 @@ _LENS_PARAMS = [
         name="impact",
         cli_flag="impact",
         cli_type=int,
-        default=0,
+        default=0.0,
         recipe_key="finish.impact",
         conversion="engine_pct",
         min_val=0,
@@ -732,6 +736,56 @@ _GRADING_PARAMS = [
         default="none",
         recipe_key="lut",
         conversion="dropdown",
+    ),
+    ParamSpec(
+        name="color_transfer_intensity",
+        cli_flag="color-transfer-intensity",
+        cli_type=float,
+        default=1.0,
+        recipe_key=None,
+        conversion="gui_direct",
+        min_val=0.0,
+        max_val=1.0,
+    ),
+    ParamSpec(
+        name="tonal_curve_strength",
+        cli_flag="tonal-curve-strength",
+        cli_type=float,
+        default=0.0,
+        recipe_key="tonal_curve_strength",
+        conversion="gui_direct",
+        min_val=0.0,
+        max_val=1.0,
+    ),
+    ParamSpec(
+        name="skin_protect_strength",
+        cli_flag="skin-protect",
+        cli_type=float,
+        default=0.0,
+        recipe_key="skin_protect",
+        conversion="gui_direct",
+        min_val=0.0,
+        max_val=1.0,
+    ),
+    ParamSpec(
+        name="grain_strength",
+        cli_flag="film-grain",
+        cli_type=float,
+        default=0.0,
+        recipe_key="grain_strength",
+        conversion="gui_direct",
+        min_val=0.0,
+        max_val=1.0,
+    ),
+    ParamSpec(
+        name="highlight_rolloff_strength",
+        cli_flag="highlight-rolloff",
+        cli_type=float,
+        default=0.0,
+        recipe_key="highlight_rolloff",
+        conversion="gui_direct",
+        min_val=0.0,
+        max_val=1.0,
     ),
 ]
 
@@ -821,6 +875,43 @@ def param_names() -> List[str]:
 # ---------------------------------------------------------------------------
 # Recipe → params
 # ---------------------------------------------------------------------------
+
+
+def resolve_recipe(name: str, _seen: Optional[set] = None) -> Dict[str, Any]:
+    """Return a fully-merged recipe dict, resolving 'extends' recursively.
+
+    This is the single source of truth for recipe resolution.  It lives in
+    ``retouch.params`` (not ``retouch.engine``) because it is pure data
+    manipulation over the ``RECIPES`` table and has no engine dependencies —
+    that placement keeps both the engine and the recipe loader free of
+    circular imports.
+    """
+    if _seen is None:
+        _seen = set()
+    if name in _seen:
+        return RECIPES.get("natural", {})
+    _seen.add(name)
+    rec = RECIPES.get(name)
+    if rec is None:
+        rec = RECIPES.get("natural", {})
+    parent_name = rec.get("extends")
+    if parent_name and parent_name in RECIPES:
+        resolved_parent = resolve_recipe(parent_name, _seen)
+        merged = copy.deepcopy(resolved_parent)
+        _deep_merge(merged, rec)
+        return merged
+    return rec
+
+
+def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> None:
+    """Merge *override* into *base* in-place, recursing into nested dicts."""
+    for key, val in override.items():
+        if key == "extends":
+            continue
+        if isinstance(val, dict) and isinstance(base.get(key), dict):
+            _deep_merge(base[key], val)
+        else:
+            base[key] = val
 
 
 def _resolve_dodge_burn(rec: Dict[str, Any]) -> Any:
@@ -1046,9 +1137,6 @@ def recipe_to_params(recipe_name: str) -> Dict[str, Any]:
     Falls back to the ``"natural"`` recipe for unknown names, matching
     the behaviour of ``engine.resolve_recipe``.
     """
-    from .recipes import RECIPES
-    from .engine import resolve_recipe
-
     name = recipe_name if recipe_name in RECIPES else "natural"
     rec = resolve_recipe(name)
     out: Dict[str, Any] = {}

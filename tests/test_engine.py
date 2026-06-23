@@ -261,6 +261,64 @@ class TestCompositeFaces:
         assert acc_sharpen[2, 1] == 1.0
 
 
+class TestApplyWhiteCostumeLift:
+    """Unit tests for ``RetouchEngine._apply_white_costume_lift``.
+
+    The method boosts L (and slightly a/b) in LAB space for pixels that
+    are simultaneously bright and chromatically neutral *and* outside the
+    skin+lip region. With a zero ``grade_intensity`` the lift amount
+    collapses to zero; with a full skin+lip mask the white mask is empty
+    and the method short-circuits to the input image.
+    """
+
+    @staticmethod
+    def _engine():
+        return RetouchEngine.__new__(RetouchEngine)
+
+    def test_returns_same_shape_and_dtype(self):
+        engine = self._engine()
+        img = np.full((20, 20, 3), 240, dtype=np.uint8)
+        skin_hair = np.zeros((20, 20), dtype=np.float32)
+        lips = np.zeros((20, 20), dtype=np.float32)
+        result = engine._apply_white_costume_lift(img, skin_hair, lips, 1.0)
+        assert result.shape == img.shape
+        assert result.dtype == np.uint8
+
+    def test_zero_grade_intensity_returns_input_unchanged(self):
+        engine = self._engine()
+        img = np.full((20, 20, 3), 240, dtype=np.uint8)
+        skin_hair = np.zeros((20, 20), dtype=np.float32)
+        lips = np.zeros((20, 20), dtype=np.float32)
+        result = engine._apply_white_costume_lift(img, skin_hair, lips, 0.0)
+        assert np.array_equal(result, img)
+
+    def test_full_face_mask_short_circuits(self):
+        engine = self._engine()
+        img = np.full((20, 20, 3), 240, dtype=np.uint8)
+        skin_hair = np.ones((20, 20), dtype=np.float32)
+        lips = np.ones((20, 20), dtype=np.float32)
+        result = engine._apply_white_costume_lift(img, skin_hair, lips, 1.0)
+        assert np.array_equal(result, img)
+
+    def test_lifts_white_regions(self):
+        engine = self._engine()
+        img = np.full((20, 20, 3), 240, dtype=np.uint8)
+        skin_hair = np.zeros((20, 20), dtype=np.float32)
+        lips = np.zeros((20, 20), dtype=np.float32)
+        result = engine._apply_white_costume_lift(img, skin_hair, lips, 1.0)
+        lab_in = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        lab_out = cv2.cvtColor(result, cv2.COLOR_BGR2LAB)
+        assert lab_out[:, :, 0].mean() > lab_in[:, :, 0].mean()
+
+    def test_does_not_affect_dark_pixels(self):
+        engine = self._engine()
+        img = np.full((20, 20, 3), 30, dtype=np.uint8)
+        skin_hair = np.zeros((20, 20), dtype=np.float32)
+        lips = np.zeros((20, 20), dtype=np.float32)
+        result = engine._apply_white_costume_lift(img, skin_hair, lips, 1.0)
+        assert np.array_equal(result, img)
+
+
 class TestAdjustContrast:
     def test_zero_returns_same(self):
         img = np.full((10, 10, 3), 128, dtype=np.uint8)
