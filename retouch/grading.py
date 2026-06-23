@@ -15,7 +15,32 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 import cv2
 import numpy as np
 
+from . import lut as _lut_mod
+from .lut import CubeLUT, list_available_luts, load_cube, luts_dir
 from .utils import apply_curve, blend_masked, normalize_mask, screen_blend, squeeze_mask
+
+from . import skin_protect
+from .precision import PrecisionContext, ensure_float, to_float, to_uint8
+
+
+def _apply_curve_f(channel: np.ndarray, curve_points: Sequence[Tuple[int, int]]) -> np.ndarray:
+    """Float counterpart of ``apply_curve`` for use inside float pipelines.
+
+    Interpolates ``channel`` (float, range [0, 255]) through the piecewise
+    linear curve defined by ``curve_points`` (in 0-255 sample space) and
+    returns a float32 result. Used by ``_F_apply_luminance_curve`` so the
+    curve is applied without an intermediate uint8 LUT.
+
+    Args:
+        channel: Single-channel float32 array with values in [0, 255].
+        curve_points: Sequence of (input, output) sample points in 0-255.
+
+    Returns:
+        Float32 array, same shape as ``channel``, values in [0, 255].
+    """
+    xs = np.array([p[0] for p in curve_points], dtype=np.float32)
+    ys = np.array([p[1] for p in curve_points], dtype=np.float32)
+    return np.clip(np.interp(channel, xs, ys), 0.0, 255.0).astype(np.float32)
 
 # ---------------------------------------------------------------------------
 # Preset loading
@@ -95,23 +120,8 @@ PRESETS: Dict[str, Dict[str, Any]] = load_all_presets()
 class ColorGrader:
     """Apply colour grading presets to finalise image tone/mood."""
 
-    # PERF: Precompute film emulation LUTs at class level so they aren't 
-    # recalculated on every single frame/process call.
-    _FILM_LUTS = {
-        "kodak": {
-            "R": np.clip([0.00001 * (x**2) + 0.8 * x for x in range(256)], 0, 255).astype(np.uint8),
-            "G": np.clip([0.95 * x for x in range(256)], 0, 255).astype(np.uint8),
-            "B": np.clip([-0.00002 * (x**2) + 1.1 * x for x in range(256)], 0, 255).astype(np.uint8),
-        },
-        "fuji": {
-            "R": np.clip([0.9 * x for x in range(256)], 0, 255).astype(np.uint8),
-            "G": np.clip([0.000015 * (x**2) + 0.85 * x for x in range(256)], 0, 255).astype(np.uint8),
-            "B": np.clip([1.05 * x for x in range(256)], 0, 255).astype(np.uint8),
-        }
-    }
-
     def __init__(self):
-        pass
+        self._lut_cache: Dict[str, CubeLUT] = {}
 
     def grade(
         self,
@@ -123,6 +133,7 @@ class ColorGrader:
         haze_mask: Optional[np.ndarray] = None,
         skip_glows: bool = False,
         skip_post_effects: bool = False,
+        skin_protect_strength: float = 0.0,
     ) -> np.ndarray:
         """Apply a colour grading preset to an image.
 
@@ -136,6 +147,10 @@ class ColorGrader:
             skip_glows: Skip glow/orton effects for batch blending.
             skip_post_effects: Skip halation, chromatic aberration, LUT and grain
                 for batch blending.
+            skin_protect_strength: 0.0–1.0 strength of skin-tone protection during
+                the color operations. Other Fuji foundation effects (tonal curve,
+                highlight rolloff, film grain) are now applied as global stages in
+                ``engine.py``, not as kwargs to ``grade()``.
 
         Returns:
             (H, W, 3) uint8 BGR image.
@@ -150,45 +165,55 @@ class ColorGrader:
         else:
             settings = preset
 
+        original_u8 = img_bgr
         result = img_bgr.copy()
 
-        if "white_balance" in settings:
-            result = self._adjust_white_balance(result, settings["white_balance"])
-        if "curves" in settings and "L" in settings["curves"]:
-            result = self._apply_luminance_curve(result, settings["curves"]["L"])
-        if "rgb_curves" in settings:
-            result = self._apply_rgb_curves(result, settings["rgb_curves"])
+        def _color_ops(img: np.ndarray) -> np.ndarray:
+            r = img
+            if "white_balance" in settings:
+                r = self._adjust_white_balance(r, settings["white_balance"])
+            if "curves" in settings and "L" in settings["curves"]:
+                r = self._apply_luminance_curve(r, settings["curves"]["L"])
+            if "rgb_curves" in settings:
+                r = self._apply_rgb_curves(r, settings["rgb_curves"])
 
-        tone_rgb = {}
-        if "tone_curve_red" in settings: tone_rgb["R"] = settings["tone_curve_red"]
-        if "tone_curve_green" in settings: tone_rgb["G"] = settings["tone_curve_green"]
-        if "tone_curve_blue" in settings: tone_rgb["B"] = settings["tone_curve_blue"]
-        if tone_rgb:
-            result = self._apply_rgb_curves(result, tone_rgb)
+            tone_rgb = {}
+            if "tone_curve_red" in settings: tone_rgb["R"] = settings["tone_curve_red"]
+            if "tone_curve_green" in settings: tone_rgb["G"] = settings["tone_curve_green"]
+            if "tone_curve_blue" in settings: tone_rgb["B"] = settings["tone_curve_blue"]
+            if tone_rgb:
+                r = self._apply_rgb_curves(r, tone_rgb)
 
-        if settings.get("shadow_lift", 0) > 0:
-            result = self._lift_shadows(result, settings["shadow_lift"])
-        if "calibration" in settings:
-            result = self._apply_calibration(result, settings["calibration"])
-        if abs(settings.get("warmth", 0)) > 0.001:
-            result = self._adjust_warmth(result, settings["warmth"])
-        if abs(settings.get("saturation_boost", 0)) > 0.001:
-            result = self._adjust_saturation(result, settings["saturation_boost"])
+            if settings.get("shadow_lift", 0) > 0:
+                r = self._lift_shadows(r, settings["shadow_lift"])
+            if "calibration" in settings:
+                r = self._apply_calibration(r, settings["calibration"])
+            if abs(settings.get("warmth", 0)) > 0.001:
+                r = self._adjust_warmth(r, settings["warmth"])
+            if abs(settings.get("saturation_boost", 0)) > 0.001:
+                r = self._adjust_saturation(r, settings["saturation_boost"])
 
-        if "hsl_adjustments" in settings:
-            result = self._apply_hsl_adjustments(result, settings["hsl_adjustments"])
-        elif "hsl_hue_shift" in settings:
-            result = self._hsl_hue_shift(result, settings["hsl_hue_shift"])
+            if "hsl_adjustments" in settings:
+                r = self._apply_hsl_adjustments(r, settings["hsl_adjustments"])
+            elif "hsl_hue_shift" in settings:
+                r = self._hsl_hue_shift(r, settings["hsl_hue_shift"])
 
-        if "split_tone_three_way" in settings:
-            result = self._split_tone_three_way(result, settings["split_tone_three_way"], split_tone_mask)
-        elif "split_tone" in settings:
-            result = self._split_tone(result, settings["split_tone"], split_tone_mask)
+            if "split_tone_three_way" in settings:
+                r = self._split_tone_three_way(r, settings["split_tone_three_way"], split_tone_mask)
+            elif "split_tone" in settings:
+                r = self._split_tone(r, settings["split_tone"], split_tone_mask)
 
-        if settings.get("clarity", 0) != 0:
-            result = self._add_clarity(result, settings["clarity"])
-        if settings.get("haze", 0) > 0:
-            result = self._add_haze(result, settings["haze"], mask=haze_mask)
+            if settings.get("clarity", 0) != 0:
+                r = self._add_clarity(r, settings["clarity"])
+            if settings.get("haze", 0) > 0:
+                r = self._add_haze(r, settings["haze"], mask=haze_mask)
+            return r
+
+        if skin_protect_strength > 0:
+            result = skin_protect.protect_skin(result, _color_ops, skin_protect_strength)
+        else:
+            with PrecisionContext(bit_depth="16"):
+                result = _color_ops(result)
 
         if "halation" in settings and not skip_post_effects:
             h_conf = settings["halation"]
@@ -216,7 +241,7 @@ class ColorGrader:
             result = self._add_grain(result, settings["grain"])
 
         if intensity < 1.0:
-            result = cv2.addWeighted(img_bgr, 1.0 - intensity, result, intensity, 0)
+            result = cv2.addWeighted(original_u8, 1.0 - intensity, result, intensity, 0)
 
         return result
 
@@ -270,9 +295,12 @@ class ColorGrader:
         for preset_name, weight in preset_weights.items():
             if weight <= 0:
                 continue
-            # CRITICAL FIX: Skip glows and post-effects during blending to prevent 
+            # CRITICAL FIX: Skip glows and post-effects during blending to prevent
             # compounding noise, grain, and bloom artifacts.
-            graded = self.grade(img_bgr, preset_name, 1.0, skip_glows=True, skip_post_effects=True)
+            graded = self.grade(
+                img_bgr, preset_name, 1.0,
+                skip_glows=True, skip_post_effects=True,
+            )
             accum += graded.astype(np.float32) * weight
 
         result = accum / total_w
@@ -320,9 +348,34 @@ class ColorGrader:
         img: np.ndarray,
         curve_points: Sequence[Tuple[int, int]],
     ) -> np.ndarray:
-        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-        lab[:, :, 0] = apply_curve(lab[:, :, 0], curve_points)
-        return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+        out_f = self._F_apply_luminance_curve(ensure_float(img), curve_points)
+        return to_uint8(out_f)
+
+    def _F_apply_luminance_curve(
+        self,
+        img_f: np.ndarray,
+        curve_points: Sequence[Tuple[int, int]],
+    ) -> np.ndarray:
+        """Float version of :meth:`_apply_luminance_curve`.
+
+        Operates entirely in float32 [0, 1] in/out; the curve is applied
+        via linear interpolation on the L* channel (no uint8 LUT step),
+        which avoids the ``apply_curve`` -> ``cv2.LUT`` -> ``astype(uint8)``
+        quantization that the uint8 path goes through.
+
+        Args:
+            img_f: (H, W, 3) float32 BGR image with values in [0, 1].
+            curve_points: Sequence of (input, output) sample points in
+                0-255 sample space.
+
+        Returns:
+            (H, W, 3) float32 BGR image in [0, 1].
+        """
+        bgr_u8 = np.clip(img_f * 255.0, 0, 255).astype(np.uint8)
+        lab = cv2.cvtColor(bgr_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
+        lab[:, :, 0] = _apply_curve_f(lab[:, :, 0], curve_points)
+        out_u8 = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        return out_u8.astype(np.float32) / 255.0
 
     def _lift_shadows(self, img: np.ndarray, lift: float) -> np.ndarray:
         lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
@@ -518,17 +571,44 @@ class ColorGrader:
         img_bgr: np.ndarray,
         calibration: Dict[str, Dict[str, float]],
     ) -> np.ndarray:
-        if not calibration: return img_bgr
-        hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
-        h = hsv[:, :, 0]; s = hsv[:, :, 1]
+        out_f = self._F_apply_calibration(ensure_float(img_bgr), calibration)
+        return to_uint8(out_f)
+
+    def _F_apply_calibration(
+        self,
+        img_f: np.ndarray,
+        calibration: Dict[str, Dict[str, float]],
+    ) -> np.ndarray:
+        """Float version of :meth:`_apply_calibration`.
+
+        Performs the per-hue calibration math in float32, avoiding the
+        intermediate ``astype(uint8)`` clipping on H/S that the uint8
+        path applies. Operates in HSV space; H is in [0, 180] and S in
+        [0, 255] (OpenCV conventions).
+
+        Args:
+            img_f: (H, W, 3) float32 BGR image with values in [0, 1].
+            calibration: Dict keyed by color name (``"red"``, ``"green"``,
+                ``"blue"``) with ``hue`` and ``sat`` shifts.
+
+        Returns:
+            (H, W, 3) float32 BGR image in [0, 1].
+        """
+        if not calibration:
+            return img_f
+        bgr_u8 = np.clip(img_f * 255.0, 0, 255).astype(np.uint8)
+        hsv = cv2.cvtColor(bgr_u8, cv2.COLOR_BGR2HSV).astype(np.float32)
+        h = hsv[:, :, 0]
+        s = hsv[:, :, 1]
         r_hue_shift = calibration.get("red", {}).get("hue", 0) * 0.15 / 2.0
         r_sat_shift = calibration.get("red", {}).get("sat", 0) * 0.005
         g_hue_shift = calibration.get("green", {}).get("hue", 0) * 0.15 / 2.0
         g_sat_shift = calibration.get("green", {}).get("sat", 0) * 0.005
         b_hue_shift = calibration.get("blue", {}).get("hue", 0) * 0.15 / 2.0
         b_sat_shift = calibration.get("blue", {}).get("sat", 0) * 0.005
-        if r_hue_shift == 0 and r_sat_shift == 0 and g_hue_shift == 0 and g_sat_shift == 0 and b_hue_shift == 0 and b_sat_shift == 0:
-            return img_bgr
+        if (r_hue_shift == 0 and r_sat_shift == 0 and g_hue_shift == 0
+                and g_sat_shift == 0 and b_hue_shift == 0 and b_sat_shift == 0):
+            return img_f
         sigma = 15.0
         dist_r = np.minimum(np.abs(h - 0.0), np.abs(h - 180.0))
         w_r = np.exp(-(dist_r ** 2) / (2.0 * sigma ** 2))
@@ -538,8 +618,10 @@ class ColorGrader:
         w_b = np.exp(-(dist_b ** 2) / (2.0 * sigma ** 2))
         h_new = (h + w_r * r_hue_shift + w_g * g_hue_shift + w_b * b_hue_shift) % 180.0
         s_new = np.clip(s * (1.0 + w_r * r_sat_shift + w_g * g_sat_shift + w_b * b_sat_shift), 0, 255)
-        hsv[:, :, 0] = h_new; hsv[:, :, 1] = s_new
-        return cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+        hsv[:, :, 0] = h_new
+        hsv[:, :, 1] = s_new
+        out_u8 = cv2.cvtColor(np.clip(hsv, 0, 255).astype(np.uint8), cv2.COLOR_HSV2BGR)
+        return out_u8.astype(np.float32) / 255.0
 
     def _add_orton_glow(
         self,
@@ -565,22 +647,57 @@ class ColorGrader:
         tones: Dict[str, Any],
         mask: Optional[np.ndarray] = None,
     ) -> np.ndarray:
-        if not tones: return img_bgr
-        shadows = tones.get("shadows", {}); midtones = tones.get("midtones", {}); highlights = tones.get("highlights", {})
-        balance = tones.get("balance", 0.0)
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
-        l_val = lab[:, :, 0]; l_norm = l_val / 255.0
+        out_f = self._F_split_tone_three_way(ensure_float(img_bgr), tones, mask)
+        return to_uint8(out_f)
 
-        def hsl_to_lab_offsets(hue, sat):
-            if hue is None or sat is None or sat == 0: return 0.0, 0.0
-            theta = np.radians(hue); chroma = (sat / 100.0) * 25.0
+    def _F_split_tone_three_way(
+        self,
+        img_f: np.ndarray,
+        tones: Dict[str, Any],
+        mask: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """Float version of :meth:`_split_tone_three_way`.
+
+        The shadow / midtone / highlight sigmoid weights and the
+        a/b channel offsets are computed in float32 [0, 1]; the
+        per-pixel ``np.clip(ab, 0, 255)`` that the uint8 path applies
+        inside the ab channels is deferred to the final BGR conversion,
+        so cumulative offsets don't prematurely quantize.
+
+        Args:
+            img_f: (H, W, 3) float32 BGR image with values in [0, 1].
+            tones: Dict with ``shadows``, ``midtones``, ``highlights``
+                (each ``{hue, sat}``) and optional ``balance``.
+            mask: Optional (H, W) or (H, W, 1) float mask in [0, 1]
+                restricting the effect.
+
+        Returns:
+            (H, W, 3) float32 BGR image in [0, 1].
+        """
+        if not tones:
+            return img_f
+        shadows = tones.get("shadows", {})
+        midtones = tones.get("midtones", {})
+        highlights = tones.get("highlights", {})
+        balance = tones.get("balance", 0.0)
+        bgr_u8 = np.clip(img_f * 255.0, 0, 255).astype(np.uint8)
+        lab = cv2.cvtColor(bgr_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
+        l_val = lab[:, :, 0]
+        l_norm = l_val / 255.0
+
+        def hsl_to_lab_offsets(hue: Optional[float], sat: Optional[float]) -> Tuple[float, float]:
+            if hue is None or sat is None or sat == 0:
+                return 0.0, 0.0
+            theta = np.radians(hue)
+            chroma = (sat / 100.0) * 25.0
             return chroma * np.cos(theta), chroma * np.sin(theta)
 
         s_a, s_b = hsl_to_lab_offsets(shadows.get("hue"), shadows.get("sat"))
         m_a, m_b = hsl_to_lab_offsets(midtones.get("hue"), midtones.get("sat"))
         h_a, h_b = hsl_to_lab_offsets(highlights.get("hue"), highlights.get("sat"))
-        if abs(s_a) < 0.01 and abs(s_b) < 0.01 and abs(m_a) < 0.01 and abs(m_b) < 0.01 and abs(h_a) < 0.01 and abs(h_b) < 0.01:
-            return img_bgr
+        if (abs(s_a) < 0.01 and abs(s_b) < 0.01 and abs(m_a) < 0.01
+                and abs(m_b) < 0.01 and abs(h_a) < 0.01 and abs(h_b) < 0.01):
+            return img_f
 
         shift = (balance / 100.0) * 0.2
         w_shadow = 1.0 - 1.0 / (1.0 + np.exp(-(l_norm - (0.3 + shift)) * 10.0))
@@ -590,20 +707,66 @@ class ColorGrader:
         ab = lab[:, :, 1:3].copy()
         ab[:, :, 0] += (s_a * w_shadow + m_a * w_midtone + h_a * w_highlight)
         ab[:, :, 1] += (s_b * w_shadow + m_b * w_midtone + h_b * w_highlight)
-        lab[:, :, 1:3] = np.clip(ab, 0, 255)
-        split_toned = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
-        if mask is not None: return blend_masked(img_bgr, split_toned, mask)
-        return split_toned
+        lab[:, :, 1:3] = ab
+        out_u8 = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        out_f = out_u8.astype(np.float32) / 255.0
+        if mask is not None:
+            m = ensure_float(mask)
+            if m.ndim == 2:
+                m = m[:, :, np.newaxis]
+            out_f = img_f * (1.0 - m) + out_f * m
+            out_f = np.clip(out_f, 0.0, 1.0)
+        return out_f
 
-    def _add_film_emulation(self, img_bgr: np.ndarray, lut_preset: str) -> np.ndarray:
-        if lut_preset not in self._FILM_LUTS:
+    def _add_film_emulation(
+        self,
+        img_bgr: np.ndarray,
+        lut_input: Optional[Union[str, Path, CubeLUT]] = None,
+        strength: float = 1.0,
+    ) -> np.ndarray:
+        if lut_input is None:
             return img_bgr
-        b, g, r = cv2.split(img_bgr)
-        lut_data = self._FILM_LUTS[lut_preset]
-        b = cv2.LUT(b, lut_data["B"])
-        g = cv2.LUT(g, lut_data["G"])
-        r = cv2.LUT(r, lut_data["R"])
-        return cv2.merge([b, g, r])
+        if isinstance(lut_input, CubeLUT):
+            cube = lut_input
+        else:
+            text = str(lut_input).strip()
+            if not text or text.lower() == "none":
+                return img_bgr
+            cube = self._resolve_cube_lut(text)
+        if strength <= 0.0:
+            return img_bgr
+        out = cube.apply(img_bgr)
+        if strength >= 1.0:
+            return out
+        return cv2.addWeighted(img_bgr, 1.0 - strength, out, strength, 0)
+
+    def _resolve_cube_lut(self, lut_input: str) -> CubeLUT:
+        p = Path(lut_input)
+        candidates: List[Path] = [p]
+        if p.suffix.lower() != ".cube":
+            candidates.append(_lut_mod.luts_dir() / f"{p.name}.cube")
+        chosen: Optional[Path] = None
+        for c in candidates:
+            if c.exists():
+                chosen = c
+                break
+        if chosen is None:
+            available = ", ".join(list_available_luts()) or "<none>"
+            raise FileNotFoundError(
+                f"LUT {lut_input!r} not found. Searched: "
+                + ", ".join(str(c) for c in candidates)
+                + f". Available LUTs in luts/: {available}"
+            )
+        return self._get_cached_lut(chosen)
+
+    def _get_cached_lut(self, path: Path) -> CubeLUT:
+        key = str(path.resolve())
+        cached = self._lut_cache.get(key)
+        if cached is not None:
+            return cached
+        cube = load_cube(path)
+        self._lut_cache[key] = cube
+        return cube
 
     def _apply_hsl_adjustments(
         self,
