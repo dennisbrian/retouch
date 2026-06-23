@@ -269,6 +269,16 @@ _SKIN_PARAMS = [
         max_val=100,
     ),
     ParamSpec(
+        name="micro_restore",
+        cli_flag="micro-restore",
+        cli_type=int,
+        default=20,
+        recipe_key="micro_restore",
+        conversion="gui_direct",
+        min_val=0,
+        max_val=50,
+    ),
+    ParamSpec(
         name="whiten",
         cli_flag="whiten",
         cli_type=int,
@@ -736,16 +746,6 @@ _GRADING_PARAMS = [
         default="none",
         recipe_key="lut",
         conversion="dropdown",
-    ),
-    ParamSpec(
-        name="color_transfer_intensity",
-        cli_flag="color-transfer-intensity",
-        cli_type=float,
-        default=1.0,
-        recipe_key=None,
-        conversion="gui_direct",
-        min_val=0.0,
-        max_val=1.0,
     ),
     ParamSpec(
         name="tonal_curve_strength",

@@ -96,7 +96,7 @@ def apply_custom_style(style_name, current_recipe="natural"):
     d["brightness"] = int(np.clip(profile.brightness_delta, -50.0, 50.0))
     
     return (
-        d["smooth"], d["mid_reduction"], d["texture_opacity"], d["pore_synthesis"], d["nose_smooth"],
+        d["smooth"], d["mid_reduction"], d["texture_opacity"], d["pore_synthesis"], d["nose_smooth"], d["micro_restore"],
         d["whiten"], d["equalize"], d["blemish"], d["whiten_tone"], d["nose_blush"], d["under_eye_blush"], d["white_costume_lift"],
         d["dodge_burn"], d["relight"], d["relight_azimuth"], d["relight_elevation"], d["specular_bloom"], d["specular_bloom_tone"],
         d["eye_enhance"], d["catchlight"], d["dark_circles"], d["teeth_whiten"], d["lip_enhance"], d["lip_tint"], d["lip_finish"], d["blush"], d["slimming"], d["hair_enhance"],
@@ -104,6 +104,7 @@ def apply_custom_style(style_name, current_recipe="natural"):
         d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["glow"], d["vignette"], d["sharpen"], d["sharpen_radius"], d["subject_separation"], d["impact"],
         d["color_grade"], d["grade_intensity"],
         d["chromatic_aberration"], d["grain"], d["halation"], d["lut"],
+        d["tonal_curve_strength"], d["skin_protect_strength"], d["grain_strength"], d["highlight_rolloff_strength"],
         d["shadow_hue"], d["shadow_sat"], d["midtone_hue"], d["midtone_sat"], d["highlight_hue"], d["highlight_sat"],
     )
 
@@ -242,12 +243,33 @@ PROCESS_INPUT_KEYS = (
     ]
 )
 
+def _coerce_float(value: object, default: float = 0.0) -> float:
+    """Safely coerce an arbitrary Gradio value to float, falling back on parse failure.
+
+    Slider components always return ``float``, but transient states (watchfiles
+    reload races, empty Form payloads, deprecated field names mapped onto the
+    same key) can deliver strings or ``None`` here.  Prefer the numeric value
+    if one can be parsed; otherwise fall back to *default* rather than 500-ing
+    the whole request.
+    """
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return default
+    if value is None:
+        return default
+    return default
+
+
 def process_image(*args):
     params = dict(zip(PROCESS_INPUT_KEYS, args))
     img_paths = params.get("img_paths")
     recipe = params.get("recipe")
     color_ref_img = params.get("color_ref_img")
-    color_ref_strength = params.get("color_ref_strength")
+    color_ref_strength = _coerce_float(params.get("color_ref_strength"))
     show_compare = params.get("show_compare")
     fast = params.get("fast")
     export_fmt = params.get("export_fmt")
@@ -432,7 +454,7 @@ def process_image(*args):
 def on_recipe_change(recipe):
     d = recipe_defaults(recipe)
     return (
-        d["smooth"], d["mid_reduction"], d["texture_opacity"], d["pore_synthesis"], d["nose_smooth"],
+        d["smooth"], d["mid_reduction"], d["texture_opacity"], d["pore_synthesis"], d["nose_smooth"], d["micro_restore"],
         d["whiten"], d["equalize"], d["blemish"], d["whiten_tone"], d["nose_blush"], d["under_eye_blush"], d["white_costume_lift"],
         d["dodge_burn"], d["relight"], d["relight_azimuth"], d["relight_elevation"], d["specular_bloom"], d["specular_bloom_tone"],
         d["eye_enhance"], d["catchlight"], d["dark_circles"], d["teeth_whiten"], d["lip_enhance"], d["lip_tint"], d["lip_finish"], d["blush"], d["slimming"], d["hair_enhance"],
@@ -440,13 +462,14 @@ def on_recipe_change(recipe):
         d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["glow"], d["vignette"], d["sharpen"], d["sharpen_radius"], d["subject_separation"], d["impact"],
         d["color_grade"], d["grade_intensity"],
         d["chromatic_aberration"], d["grain"], d["halation"], d["lut"],
+        d["tonal_curve_strength"], d["skin_protect_strength"], d["grain_strength"], d["highlight_rolloff_strength"],
         d["shadow_hue"], d["shadow_sat"], d["midtone_hue"], d["midtone_sat"], d["highlight_hue"], d["highlight_sat"],
     )
 
 
 def reset_skin_smoothing(recipe_name):
     d = recipe_defaults(recipe_name)
-    return d["smooth"], d["nose_smooth"], d["mid_reduction"], d["texture_opacity"], d["pore_synthesis"], d["blemish"]
+    return d["smooth"], d["nose_smooth"], d["mid_reduction"], d["texture_opacity"], d["micro_restore"], d["pore_synthesis"], d["blemish"]
 
 def reset_skin_tone(recipe_name):
     d = recipe_defaults(recipe_name)
@@ -482,7 +505,7 @@ def reset_color_grading(recipe_name):
 
 def reset_film_effects(recipe_name):
     d = recipe_defaults(recipe_name)
-    return d["chromatic_aberration"], d["grain"], d["halation"], d["lut"]
+    return d["chromatic_aberration"], d["grain"], d["halation"], d["lut"], d["tonal_curve_strength"], d["skin_protect_strength"], d["grain_strength"], d["highlight_rolloff_strength"]
 
 def reset_split_toning(recipe_name):
     d = recipe_defaults(recipe_name)
@@ -1267,6 +1290,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             nose_smooth = gr.Slider(0, 100, 0, step=1, label="Nose Smooth (0 = follow face)", info="Additional smoothing for nose bridge highlights")
                             mid_reduction = gr.Slider(0.0, 1.0, 0.45, step=0.05, label="Mid Frequency Reduction", info="Target mid-level skin blemishes while preserving high-frequency pores")
                             texture_opacity = gr.Slider(0.0, 1.0, 1.0, step=0.05, label="Texture Opacity", info="Control original pore structure opacity overlay")
+                            micro_restore = gr.Slider(0, 50, 20, step=1, label="Micro-Texture Restore", info="Re-inject dimensional micro-contrast in cheek/nose/under-eye zones after smoothing (0 = off, 25 = subtle, 50 = strong)")
                             pore_synthesis = gr.Slider(0, 100, 0, step=1, label="Pore Synthesis", info="Add micro-texture/synthesized pores to prevent artificial plastic skin")
                             blemish = gr.Slider(0, 100, 30, step=1, label="Blemish Removal", info="AI blemish detection and inpainting for acne/spots")
 
@@ -1343,6 +1367,10 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             chromatic_aberration = gr.Slider(0, 20, 0, step=0.5, label="Chromatic Aberration", info="Lens fringing effect (RGB channel shift in pixels)")
                             grain = gr.Slider(0, 100, 0, step=1, label="Film Grain", info="Analog film grain noise overlay (0-100 maps to engine 0.0-0.2)")
                             halation = gr.Slider(0, 100, 0, step=1, label="Halation", info="Red light bloom around bright highlights (0-100 maps to engine 0.0-1.0)")
+                            tonal_curve_strength = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Tonal Curve", info="Film H&D tonal curve strength (lifted blacks + S-curve)")
+                            skin_protect_strength = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Skin Protection", info="Preserve skin hues during color grading ops")
+                            grain_strength = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Organic Grain", info="Clumped luminance-correlated film grain (Fuji-style)")
+                            highlight_rolloff_strength = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Highlight Rolloff", info="Soft C¹-continuous highlight compression")
                             lut = gr.Dropdown(choices=LUT_CHOICES, value="none", label="Film Emulation LUT", interactive=True, info="Apply a film stock emulation LUT (Kodak / Fuji)")
 
                         with gr.Accordion("🌈 Split Toning", open=False):
@@ -1361,7 +1389,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             reset_color_transfer_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                             gr.Markdown("Upload a reference image to match its color tone using CDF-based histogram transfer")
                             color_ref_img = gr.Image(type="filepath", label="Reference Image", show_label=True, height=160)
-                            color_ref_strength = gr.Slider(0.0, 1.0, 1.0, step=0.05, label="Transfer Strength", info="Mix ratio between original grade and matched reference grade")
+                            color_ref_strength = gr.Slider(0.0, 1.0, 1.0, step=0.05, label="Transfer Strength", info="Mix ratio between original grade and matched reference grade (1.0 = full transfer, 0.0 = no transfer)")
 
                         with gr.Accordion("🔍 Debug & Mask Preview", open=False):
                             reset_debug_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
@@ -1439,7 +1467,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
 
     # Event binding setup
     _recipe_outputs = [
-        smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth,
+        smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth, micro_restore,
         whiten, equalize, blemish, whiten_tone, nose_blush, under_eye_blush, white_costume_lift,
         dodge_burn, relight, relight_azimuth, relight_elevation, specular_bloom, specular_bloom_tone,
         eye_enhance, catchlight, dark_circles, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, slimming, hair_enhance,
@@ -1447,6 +1475,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         bloom, bloom_threshold, bloom_softness, glow, vignette, sharpen, sharpen_radius, subject_separation, impact,
         color_grade, grade_intensity,
         chromatic_aberration, grain, halation, lut,
+        tonal_curve_strength, skin_protect_strength, grain_strength, highlight_rolloff_strength,
         shadow_hue, shadow_sat, midtone_hue, midtone_sat, highlight_hue, highlight_sat,
     ]
 
@@ -1471,7 +1500,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     reset_skin_smooth_btn.click(
         fn=reset_skin_smoothing,
         inputs=[recipe],
-        outputs=[smooth, nose_smooth, mid_reduction, texture_opacity, pore_synthesis, blemish]
+        outputs=[smooth, nose_smooth, mid_reduction, texture_opacity, micro_restore, pore_synthesis, blemish]
     )
 
     reset_skin_tone_btn.click(
@@ -1525,7 +1554,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     reset_film_effects_btn.click(
         fn=reset_film_effects,
         inputs=[recipe],
-        outputs=[chromatic_aberration, grain, halation, lut]
+        outputs=[chromatic_aberration, grain, halation, lut, tonal_curve_strength, skin_protect_strength, grain_strength, highlight_rolloff_strength]
     )
 
     reset_split_toning_btn.click(
@@ -1576,13 +1605,14 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
 
     _process_inputs = [
         img_input, recipe,
-        smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth,
+        smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth, micro_restore,
         whiten, equalize, blemish, whiten_tone, nose_blush, under_eye_blush, white_costume_lift,
         dodge_burn, relight, relight_azimuth, relight_elevation, specular_bloom, specular_bloom_tone,
         eye_enhance, catchlight, dark_circles, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, slimming, hair_enhance,
         contrast, brightness, highlights, shadows, whites, blacks, clarity, vibrance, saturation, auto_exposure,
         bloom, bloom_threshold, bloom_softness, glow, vignette, sharpen, sharpen_radius, subject_separation, impact,
         color_grade, grade_intensity, chromatic_aberration, grain, halation, lut,
+        tonal_curve_strength, skin_protect_strength, grain_strength, highlight_rolloff_strength,
         shadow_hue, shadow_sat, midtone_hue, midtone_sat, highlight_hue, highlight_sat,
         color_ref_img, color_ref_strength,
         show_compare, fast,
