@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -9,6 +10,14 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import cv2
 import numpy as np
 from PIL import Image
+
+try:
+    from PIL import ImageCms
+
+    _HAS_IMAGECMS = True
+except ImportError:
+    ImageCms = None  # type: ignore[assignment,misc]
+    _HAS_IMAGECMS = False
 
 logger = logging.getLogger(__name__)
 
@@ -174,3 +183,147 @@ def make_comparison(
         cv2.imwrite(str(compare_path), combined, encode_write_params(fmt, quality))
     except Exception as exc:
         logger.warning("Failed to write comparison image %s: %s", compare_path, exc)
+
+
+# ---------------------------------------------------------------------------
+# ICC profile support
+# ---------------------------------------------------------------------------
+
+_ICC_WRITE_FORMAT_MAP: Dict[str, str] = {
+    ".jpg": "JPEG",
+    ".jpeg": "JPEG",
+    ".jpe": "JPEG",
+    ".png": "PNG",
+    ".tif": "TIFF",
+    ".tiff": "TIFF",
+    ".webp": "WEBP",
+}
+
+
+def read_icc_profile(path: Union[str, Path]) -> Optional[bytes]:
+    """Return the raw embedded ICC profile bytes from *path*, or ``None``.
+
+    Args:
+        path: Filesystem path to a JPEG/PNG/TIFF/WebP image.
+
+    Returns:
+        Raw ICC profile bytes when present, otherwise ``None``. Non-image
+        files, missing files, and corrupt images all yield ``None``.
+    """
+    try:
+        with Image.open(str(path)) as pil_img:
+            icc = pil_img.info.get("icc_profile")
+    except (FileNotFoundError, OSError, Image.UnidentifiedImageError, Image.DecompressionBombError):
+        return None
+    if not icc:
+        return None
+    return bytes(icc)
+
+
+def image_has_icc(path: Union[str, Path]) -> bool:
+    """Return ``True`` if *path* is an image that embeds an ICC profile."""
+    return read_icc_profile(path) is not None
+
+
+def _bgr_to_pil(img: np.ndarray) -> Image.Image:
+    if img.ndim == 2:
+        return Image.fromarray(img)
+    if img.ndim != 3 or img.shape[2] not in (3, 4):
+        raise ValueError(f"Expected HxW, HxWx3 or HxWx4 image, got shape {img.shape}")
+    if img.dtype != np.uint8:
+        if img.dtype == np.float32 or img.dtype == np.float64:
+            clipped = np.clip(img, 0.0, 1.0)
+            img = (clipped * 255.0 + 0.5).astype(np.uint8)
+        else:
+            img = img.astype(np.uint8)
+    if img.shape[2] == 3:
+        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        return Image.fromarray(rgb, mode="RGB")
+    rgba = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
+    return Image.fromarray(rgba, mode="RGBA")
+
+
+def _icc_to_profile(icc_profile: bytes) -> "ImageCms.core.CmsProfile":  # type: ignore[name-defined]
+    return ImageCms.getOpenProfile(io.BytesIO(icc_profile))
+
+
+def write_image_with_icc(
+    path: Union[str, Path],
+    img: np.ndarray,
+    icc_profile: Optional[bytes] = None,
+    **kwargs: Any,
+) -> None:
+    """Write *img* (BGR ndarray) to *path* with an optional embedded ICC profile.
+
+    Args:
+        path: Destination filesystem path. Format is inferred from extension
+            (``.jpg``/``.jpeg``/``.png``/``.tif``/``.tiff``/``.webp``).
+        img: Source image. Accepts ``HxW`` grayscale, ``HxWx3`` BGR, or
+            ``HxWx4`` BGRA uint8 (or float in [0, 1]). Channel order is
+            converted to RGB/RGBA for PIL.
+        icc_profile: Raw ICC profile bytes to embed. If ``None`` or empty,
+            the image is saved without an embedded profile.
+        **kwargs: ``quality`` (int, default ``95``) and ``format`` (str) are
+            consumed; all remaining kwargs are forwarded to ``PIL.Image.save``.
+
+    Falls back to ``cv2.imwrite`` (which never embeds ICC) when PIL or the
+    destination format is unavailable.
+    """
+    path = Path(path)
+    ext = path.suffix.lower()
+    pil_format = kwargs.pop("format", _ICC_WRITE_FORMAT_MAP.get(ext))
+    quality = int(kwargs.pop("quality", 95))
+
+    if pil_format is None:
+        cv2.imwrite(str(path), img, encode_write_params(ext.lstrip("."), quality))
+        return
+
+    pil_img = _bgr_to_pil(img)
+    save_kwargs: Dict[str, Any] = {"format": pil_format}
+    if pil_format in ("JPEG", "WEBP"):
+        save_kwargs["quality"] = quality
+    if icc_profile:
+        save_kwargs["icc_profile"] = icc_profile
+    save_kwargs.update(kwargs)
+    pil_img.save(str(path), **save_kwargs)
+
+
+def convert_image_colorspace(
+    img: np.ndarray,
+    src_icc: bytes,
+    dst_icc: bytes,
+) -> np.ndarray:
+    """Convert *img* (BGR) from *src_icc* to *dst_icc* using LittleCMS2.
+
+    Args:
+        img: ``HxWx3`` BGR image (uint8 or float in [0, 1]).
+        src_icc: Raw ICC profile bytes describing the source pixels.
+        dst_icc: Raw ICC profile bytes describing the destination space.
+
+    Returns:
+        BGR ``float32`` image in ``[0, 1]``. Out-of-gamut pixels are clipped
+        to the destination gamut by LittleCMS2.
+
+    Raises:
+        RuntimeError: If ``PIL.ImageCms`` is not available in this build.
+    """
+    if not _HAS_IMAGECMS:
+        raise RuntimeError(
+            "PIL.ImageCms is not available; install Pillow with lcms2 support "
+            "to enable ICC colorspace conversion."
+        )
+
+    was_float = img.dtype == np.float32 or img.dtype == np.float64
+    pil_img = _bgr_to_pil(img)
+    if pil_img.mode == "RGBA":
+        pil_img = pil_img.convert("RGB")
+
+    src_profile = _icc_to_profile(src_icc)
+    dst_profile = _icc_to_profile(dst_icc)
+    transformed = ImageCms.profileToProfile(pil_img, src_profile, dst_profile)
+    out_rgb = np.asarray(transformed)
+    out_bgr = cv2.cvtColor(out_rgb, cv2.COLOR_RGB2BGR)
+    out = out_bgr.astype(np.float32) / 255.0
+    if was_float:
+        return out
+    return out
