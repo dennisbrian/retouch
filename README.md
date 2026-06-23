@@ -1,5 +1,8 @@
 # Pro Max Face Retouch Engine
 
+[![Tests](https://github.com/USERNAME/REPO/actions/workflows/test.yml/badge.svg)](https://github.com/USERNAME/REPO/actions/workflows/test.yml)
+[![Benchmarks](https://github.com/USERNAME/REPO/actions/workflows/benchmarks.yml/badge.svg)](https://github.com/USERNAME/REPO/actions/workflows/benchmarks.yml)
+
 Professional automated face retouching for portraits, cosplay, and batch workflows. Combines MediaPipe landmarks, BiSeNet semantic segmentation, frequency-separation skin work, and global color grading.
 
 ## Requirements

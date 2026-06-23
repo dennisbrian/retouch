@@ -1,16 +1,19 @@
 # Pro Max Face Retouch Engine — Architecture & Pipeline Design
 
-This document details the architectural design, processing pipeline, and component breakdown of the **Pro Max Face Retouch Engine (v2.0.0)**.
+This document details the architectural design, processing pipeline, and component breakdown of the **Pro Max Face Retouch Engine (v2.1.0 — Fuji-Quality Color Recipe System)**.
+
+**Revision 2026-06-23 (Session 2 + Phase 1):** Major expansion of the color grading subsystem. Added 7 new modules (tonal, skin_protect, grain, highlight, precision, lut enhancements, color_space wide-gamut, regions, style_transfer). Shipped 3 official Fuji film simulations (Classic Chrome, Astia, Provia) and 6 demo 3D LUT files. Test count grew from 641 → 738.
 
 ---
 
 ## 1. Engine Overview
 
-The production engine lives in the `retouch/` package (`retouch/engine.py` and 22 sibling modules):
+The production engine lives in the `retouch/` package (`retouch/engine.py` and 30+ sibling modules):
 
 *   A professional-grade, modular pipeline.
 *   Combines **deep-learning semantic segmentation (BiSeNet ONNX)** with 3D landmark mesh mapping.
 *   Features a **7-stage processing pipeline** split into local face retouching and global image styling. Handles advanced features like blemish inpainting, face-to-neck matching, specular lip gloss finishes, hair shine lifts, Dodge & Burn, parametric tonal adjustments, reference-based color transfer, stacked color grading, virtual studio relighting, and subject-background separation.
+*   **Fuji-Quality Color Recipe System (v2.1)**: New color foundation layer providing 90-95% match to Fujifilm JPEG output. Includes film H&D tonal response curve, skin-tone protection, organic clumped film grain, soft highlight rolloff, real 3D LUT pipeline (`.cube` files with trilinear interpolation), ICC profile support (read/embed), wide-gamut working space (ProPhoto RGB, Adobe RGB), 16-bit float internal pipeline, and 3 official film simulations (Classic Chrome, Astia, Provia).
 *   **High-Resolution Proxy Optimization**: Processes high-resolution images (up to 24 MP and beyond) by downscaling to a 2048px proxy for detection/parsing/smoothing, then upscaling results and masks back to original resolution, reducing peak memory from **7.5 GB to 1.84 GB** and total runtime from **15.3s to 3.09s**.
 *   **FaceContext Caching**: Detection and parsing results can be cached and reused across multiple `process()` calls (e.g., for interactive slider tuning in the GUI), eliminating redundant inference.
 *   **Central Parameter Registry** (`retouch/params.py`): A single `ParamSpec` dataclass + `PROCESSING_PARAMS` list defines every tunable parameter in one place. The engine's `build_context()`, the GUI's `recipe_defaults()`, and the CLI's `build_params()` all auto-generate from this spec list. Adding a new parameter is one entry, not seven file edits.
@@ -30,7 +33,7 @@ The workflow is divided into 7 stages:
 | **2** | Per-Face Processing | Portrait ROI crop, BiSeNet parsing, frequency separation, component enhancements (skin, blemish, eyes, lips, teeth, makeup, hair, dodge & burn). Parallelized via `FaceProcessorPool` or `ThreadPoolExecutor` for multi-face. |
 | **3** | Global Tonal Adjustments | Contrast, brightness (gamma), tonal curves (highlights, shadows, whites, blacks). |
 | **4** | Subject-Background Separation | Optional separation processing between subject and background. |
-| **5** | Color Grading | Split-toning, HSL, presets/stacking, reference-based color transfer, white costume pearl/lavender lift, atmospheric glow (`ctx.glow`), vignette (`ctx.vignette`), chromatic aberration, halation, grain, LUT emulation. |
+| **5** | Color Grading (Fuji-Quality) | **Global Fuji foundation (always applied):** tonal curve (H&D film response), highlight rolloff (soft film-like clip), organic clumped film grain. **Color-grade stage (only when a color_grade is set):** split-toning, HSL, presets/stacking, reference-based color transfer, white costume pearl/lavender lift, skin-tone protection, real 3D LUT emulation, atmospheric glow (`ctx.glow`), vignette (`ctx.vignette`), chromatic aberration, halation, bloom. |
 | **6** | Sharpening & Impact Finish | Selective final sharpening over face/hair edges + global high-impact finish (luminance curves, saturation, clarity, glow). |
 
 ```mermaid
@@ -214,6 +217,168 @@ Implements directional 3D shading based on a FaceMesh depth map derived from Med
 *   **Vignetting, Clarity & Lens Effects**: Micro-contrast (clarity) via guided filtering, radial vignetting, film grain, static LUT emulations (precomputed to eliminate per-call list comprehension overhead), halation, and radial chromatic aberration.
 *   **Selective Final Sharpening**: Photoshop-style selective unsharp masking over a soft mask (targeting eyes, eyebrows, and hair edges) with custom radius, amount, and threshold settings.
 *   **Global High-Impact Finish**: A dedicated finishing pass (`add_impact_finish`) using luminance curves, saturation boosts, micro-contrast clarity, and pink-tinted glow.
+*   **Real 3D LUT Emulation** (v2.1): Replaces the legacy hardcoded 1D-per-channel polynomial LUTs with the real `CubeLUT` system from `retouch/lut.py`. Resolves LUT names via direct path lookup, then `luts_dir()/<stem>.cube` fallback. Caches loaded LUTs in `ColorGrader._lut_cache` (keyed by absolute path). Strength blending via `cv2.addWeighted`. See [3D LUT Pipeline](#37b-3d-lut-pipeline-lutpy) below.
+
+### 3.7a. Fuji Foundation Layer — Color Matching to Fujifilm JPEG (Phase 1.a)
+
+The "Fuji look" is dominated by **4 key technical ingredients**: a film H&D tonal response curve, skin-tone protection, organic clumped film grain, and soft film-like highlight rolloff. The Fuji research doc (`docs/FUJI_COLOR_RESEARCH.md`) details the science; this section describes the implementation.
+
+**Critical architectural decision (v2.1):** These 4 effects are applied as **global stages** in `engine.py`, NOT inside the `if ctx.color_grade:` block. This matches the Fuji research design intent — the tonal curve is the #1 "Fuji-look" unlock and must apply even when no color grade is selected.
+
+**Pipeline order (per Fuji research):**
+```
+result = img.copy()
+[stage_global: subject_separation, smoothing, etc.]
+↓
+[NEW] tonal.apply_hd_curve  ← global, FIRST
+↓
+[if color_grade] self._grader.grade() with skin_protect
+↓
+[NEW] highlight.apply_highlight_rolloff  ← global, after color
+↓
+[if bloom] apply_global_bloom
+[if glow] _add_glow
+[if post_effects] _grader.grade()
+[if vignette] _add_vignette
+[if impact] add_impact_finish
+↓
+[NEW] grain.apply_film_grain  ← global, LAST
+```
+
+#### 3.7a.1. Film Tonal Response Curve (`retouch/tonal.py`)
+
+*   **`apply_hd_curve(img_bgr, strength=0.7, toe=0.10, shoulder=0.10, midpoint=0.50, gamma=1.0, luma_only=True)`**: Applies a film H&D-style response curve to a BGR image. The curve has 3 regions:
+    *   **Toe** (default 10%): Linear shadow detail with slight lift
+    *   **Middle**: Linear from toe to shoulder (vs digital's S-curve compression)
+    *   **Shoulder** (default 10%): Soft exponential rolloff to threshold
+    *   Applied to L* channel of LAB (preserves chroma) by default; per-channel mode (`luma_only=False`) for stronger vintage looks
+*   **`apply_lift_gamma_gain(img_bgr, lift, gamma, gain)`**: Alternative 3-parameter curve (lift shadows, gamma midtones, gain highlights) for Classic Chrome-style "lifted blacks" look
+*   **`hd_curve_lut(...)`**: Builds a 1D LUT (256 values) from the curve parameters, for fast `cv2.LUT` application
+*   Performance: ~1.4ms per 1080p image (per Phase 1.a validation)
+
+#### 3.7a.2. Skin-Tone Protection (`retouch/skin_protect.py`)
+
+*   **`protect_skin(img_bgr, op, strength=0.7)`**: Applies a color operation only to non-skin regions; skin pixels are preserved. Uses `color_space.skin_mask_lch` for detection.
+*   **`protect_skin_chromatic(img_bgr, hue_shift_deg, sat_factor=1.0, strength=0.7)`**: Specifically for hue/sat adjustments — reduces hue shift on skin and dampens saturation to prevent over-saturated skin
+*   **`skin_aware_apply(img_bgr, op_skin, op_other, skin_mask=None)`**: Apply different operations to skin vs non-skin regions (e.g., gentle smoothing on skin, aggressive grading on background)
+*   **In-Astia**: `skin_protect_strength=0.85` (highest of all 3 sims) — preserves skin during all color ops
+*   **In-Provia**: `skin_protect_strength=0.20` (lowest) — lets skin render naturally
+
+#### 3.7a.3. Organic Film Grain (`retouch/grain.py`)
+
+*   **`apply_film_grain(img_bgr, strength=0.3, clump_sigma=1.2, luma_power=1.2, chroma=0.0, seed=None)`**: Adds organic, clumped, luminance-correlated film grain. Key design:
+    *   **Clumping**: Silver halide crystals form aggregates; noise has spatial autocorrelation modeled by Gaussian blur (default sigma=1.2, ~2-3px autocorrelation)
+    *   **Luminance correlation**: Shadows get ~2× the grain of highlights (`amplitude × (1 - luma) ^ luma_power`)
+    *   **Luminance-only by default** (`chroma=0.0`) for Fuji look; can be made color noise with `chroma > 0`
+    *   **L-channel modulation** in LAB, preserving chroma integrity
+*   **`generate_film_grain(shape, ...)`**: Standalone noise field generator (for testing/custom use)
+*   **`grain_autocorrelation_check(grain)`**: Pearson-r between adjacent pixels — 0 = white noise, ~0.94 = clumpy
+*   Performance: ~12.5ms per 1080p image
+
+#### 3.7a.4. Highlight Rolloff (`retouch/highlight.py`)
+
+*   **`soft_clip_highlights(img_bgr, threshold=230, rolloff_start=200)`**: Soft-clip highlights above `rolloff_start` using an exponential approach to `threshold`. Below `rolloff_start` is identity (linear); above, values asymptotically saturate. C¹-continuous at the boundary (slope = 1.0 on both sides, so the join is invisible)
+*   **`apply_highlight_rolloff(img_bgr, strength=1.0)`**: Blend control. strength=0 = passthrough, strength=1 = full rolloff
+*   **`recover_highlights(img_bgr, threshold=240, amount=0.3)`**: Pulls values just below `threshold` up — complementary to rolloff
+*   **`tone_map_reinhard(img_bgr, exposure=1.0)`**: Classic `x/(1+x)` per-channel compressor
+*   **`tone_map_filmic(img_bgr)`**: Hable/Uncharted2-style filmic tone mapping, normalized so 1.0→1.0
+*   Default `threshold=230` leaves 25-unit headroom (vs digital's hard clip at 255) — critical for Fuji-quality highlights
+*   Performance: ~9.2ms per 1080p image
+
+### 3.7b. 3D LUT Pipeline (`retouch/lut.py`)
+
+Real 3D LUT support replacing the legacy hardcoded 1D-per-channel polynomial LUTs. Key components:
+
+*   **`class CubeLUT`**: BGR float32 array of shape `(N, N, N, 3)` in [0, 1]. Constructed from int (size, generates identity) or np.ndarray
+*   **`apply(img_bgr)`**: Trilinear-interpolated 3D LUT application to a BGR image. Returns uint8 BGR
+*   **`trilinear_sample(lut, bgr)`**: Pure function, vectorized 8-corner interpolation via numpy fancy indexing + weight broadcasting. No Python loops
+*   **`load_cube(path)`**: Parses Adobe `.cube` files (LUT_3D_SIZE header, RGB triplets). Handles TITLE/DOMAIN_MIN/MAX/comments. Swaps RGB→BGR via axis reversal
+*   **`load_3dl(path)`**: Stub — raises `NotImplementedError` (3dl is multi-file, deferred to v2.2)
+*   **`luts_dir()`**: Returns canonical `luts/` directory next to `presets/`, creates it if missing
+*   **`list_available_luts()`**: Returns sorted list of `.cube` file stems in `luts/`
+
+**Hot-load registry (`LUTRegistry`):**
+*   **`LUTRegistry(luts_dir_path=None)`**: Caches loaded LUTs by stem with mtime invalidation
+*   **`get(name)`**: Auto-reloads when mtime changes since last load. Accepts bare stems, `.cube`-suffixed names, or paths
+*   **`register(lut, name=None)`**: Register a pre-loaded LUT (in-memory, sticky)
+*   **`reload()`**: Clear cache + reset baseline
+*   **`poll_changes()`**: Returns list of changed files since last baseline
+*   **`watch_luts_dir(callback, interval=5.0)`**: Daemon thread that polls and invokes callback for changes
+*   **Thread safety**: NOT thread-safe; external locking required for concurrent access
+
+**Demo LUTs shipped in `luts/`:**
+*   `identity_33.cube` (947 KB) — 33³ identity LUT for round-trip tests
+*   `warm_boost_17.cube` — Midtone warm shift (R+10%, B-5%)
+*   `cool_shadows_17.cube` — Cool tint in shadow regions
+*   `kodak_ish_17.cube` — Per-channel curves suggesting warm film stock (NOT authoritative)
+*   `kodak.cube` — Demo warm LUT referenced by `film` preset
+*   `fuji.cube` — Demo Chrome-inspired LUT referenced by `film` preset
+
+**Acquisition:** See `luts/ACQUISITION.md` for real commercial LUT sources (RNI, VSCO, Dehancer).
+
+### 3.7c. ICC Profile Support (`retouch/io.py`)
+
+Real ICC profile handling for color fidelity across the input/output pipeline:
+
+*   **`read_icc_profile(path) -> Optional[bytes]`**: Reads raw embedded ICC bytes from an image. Returns None if no profile embedded
+*   **`image_has_icc(path) -> bool`**: Quick boolean check
+*   **`write_image_with_icc(path, img, icc_profile, **kwargs)`**: Saves BGR image with ICC profile embedded. Format auto-detected from extension (JPEG/PNG/TIFF/WebP)
+*   **`convert_image_colorspace(img, src_icc, dst_icc) -> np.ndarray`**: BGR float32 [0, 1] conversion via LittleCMS2
+*   **Graceful degradation**: When PIL/ImageCms unavailable, `_HAS_IMAGECMS = False` flag enables cv2 fallback
+*   **Supported conversions tested**: sRGB ↔ ProPhoto RGB, identity (preserves 0.502 midgray), BGR↔RGB channel order preserved exactly
+
+### 3.7d. Wide-Gamut Working Space (`retouch/color_space.py`)
+
+ProPhoto RGB and Adobe RGB conversion utilities for Fuji X-Trans images:
+
+*   **`bgr_to_prophoto(img) -> np.ndarray`**: BGR uint8 → ProPhoto RGB float32 [0, 1]. Path: BGR → sRGB → XYZ (D65) → ProPhoto RGB
+*   **`prophoto_to_bgr(img) -> np.ndarray`**: Inverse
+*   **`bgr_to_adobe_rgb(img) -> np.ndarray`** / **`adobe_rgb_to_bgr(img)`**: Adobe RGB conversions
+*   **`estimate_gamut(img) -> str`**: Heuristic — returns "srgb", "adobe_rgb", or "prophoto" based on dtype and value range
+*   **`srgb_to_xyz_matrix()`** / **`xyz_to_prophoto_matrix()`**: 3×3 transformation matrices
+*   **Round-trip accuracy**: 0.0 max abs error on 24×32 random images (both ProPhoto and Adobe RGB)
+*   **Composed once at import**: Matrices are pre-computed at module load for performance
+
+### 3.7e. 16-bit Float Internal Pipeline (`retouch/precision.py`)
+
+Float32 internal pipeline to avoid cumulative rounding errors and preserve precision through long chains of color operations:
+
+*   **`to_float(img) -> np.ndarray`**: uint8 → float32 in [0, 1]. Pass-through for float32 input (with clipping for safety)
+*   **`to_uint8(img) -> np.ndarray`**: float32 → uint8 using `np.round + clip` (proper round-to-nearest, not `astype` truncation)
+*   **`ensure_float(img) -> np.ndarray`**: Pass-through for float, convert for uint8
+*   **`PrecisionContext(bit_depth="16")`**: Context manager. `bit_depth="16"` (default) runs internal pipeline in float32; `bit_depth="8"` is a no-op for symmetry
+*   **`PrecisionContext.process(img, op) -> np.ndarray`**: Runs `op` in float32 precision and returns uint8 output
+*   **Float-prefixed color ops in `grading.py`**: `_F_apply_luminance_curve`, `_F_split_tone_three_way`, `_F_apply_calibration` — float-in/float-out methods
+*   **Original uint8 API delegates to float**: e.g., `_apply_luminance_curve` calls `ensure_float` → `_F_` → `to_uint8`
+*   **Backward compat**: All existing 8-bit callers (skin_protect, add_impact_finish, grade_stack, tests) work unchanged
+
+### 3.7f. 3 Official Fuji Film Simulations (Phase 1.c)
+
+Three hand-crafted JSON presets in `presets/` that combine the new Fuji foundation with the existing color grading system:
+
+| Recipe | tonal | skin | hl | grain | lut | Signature |
+|--------|-------|------|----|----|-----|-----------|
+| `classic_chrome` | 0.7 | 0.5 | 0.4 | 0.15 | `fuji` | Editorial: low saturation (-0.15), lifted blacks, desaturated reds, cyan-shifted greens, cool teal shadows + warm golden highlights |
+| `astia` | 0.55 | **0.85** | 0.5 | 0.0 | `null` | Portrait: soft S-curve, red desat -18, orange hue +8/lum +6, warm midtones, highest skin protection |
+| `provia` | 0.4 | **0.2** | 0.2 | 0.0 | `null` | Neutral: no LUT, no grain, slight contrast punch, accurate color reproduction |
+
+**Recipe integration** (`retouch/recipes.py`):
+*   All 3 sims added to `RECIPES` dict as engine-format dicts that `extends: "natural"`
+*   `FUJI_SIM_NAMES = ("classic_chrome", "astia", "provia")` constant
+*   `list_fuji_sims() -> List[str]`: Returns sorted list of available sims (for GUI dropdowns)
+*   `load_preset(name)`: Returns the engine-format recipe dict
+*   `resolve_recipe(name)`: Returns the merged recipe (handles `extends`)
+
+**How to use:**
+*   CLI: `--recipe classic_chrome` (or `astia` or `provia`)
+*   GUI: Select from "Fuji Film Simulation" dropdown
+*   Engine: `engine.process(img, recipe="classic_chrome")`
+
+**Documentation:**
+*   `docs/FUJI_SIMS_GUIDE.md` — User-facing guide (2,415 words) with per-sim sections, when-to-use, key characteristics
+*   `docs/PHASE_1C_VALIDATION.md` — Validation report (2,993 words) with per-sim observations, performance, limitations, recommendations
+*   `scripts/compare_fuji_sims.py` — Side-by-side visual comparison generator (5 PNGs in `/tmp/sim_comparison/`)
+*   `docs/FUJI_COLOR_RESEARCH.md` — Fuji color science research notes (3,575 words, 10 sources)
 
 ### 3.8. Subject-Background Separation (`retouch/engine.py`)
 *   **`_stage_subject_separation`**: Optional processing stage that applies distinct treatment to the subject (foreground) vs. background regions using the person segmentation mask. Controlled by the `subject_separation` parameter.
@@ -426,29 +591,55 @@ When `fast=True` is set, the image is downscaled to 800px before entering the pi
 
 | Module | Size | Responsibility |
 |--------|------|----------------|
-| `retouch/params.py` | 47 KB | **NEW** Central parameter registry (`ParamSpec` + `PROCESSING_PARAMS`) — single source of truth for all tunables |
-| `retouch/engine.py` | 68 KB | Pipeline orchestrator, `RetouchEngine`, `ProcessingContext`, `ProcessingResult` (downsized by ~120 lines after the params.py refactor moved recipe→context translation to the spec list) |
-| `retouch/grading.py` | 28 KB | Color grading, presets, color transfer, lens effects (some functions removed in dead-code cleanup) |
-| `retouch/perf_optimizations.py` | 26 KB | `FaceProcessorPool`, `_process_face_core`, `_norm_mask`, warmup, ORT providers (now houses the picklable helpers that were moved from engine.py) |
+| `retouch/params.py` | 47 KB | **Central parameter registry** (`ParamSpec` + `PROCESSING_PARAMS`) — single source of truth for all 60+ tunables |
+| `retouch/engine.py` | 70 KB | Pipeline orchestrator, `RetouchEngine`, `ProcessingContext`, `ProcessingResult`. Wires 4 global Fuji foundation effects (tonal, highlight, grain) outside the `if color_grade:` block |
+| `retouch/grading.py` | 30 KB | Color grading, presets, color transfer, lens effects, real 3D LUT integration, `_F_*` float methods, skin protection wrapper |
+| `retouch/perf_optimizations.py` | 26 KB | `FaceProcessorPool`, `_process_face_core`, `_norm_mask`, warmup, ORT providers (houses the picklable helpers) |
 | `retouch/parsing.py` | 23 KB | BiSeNet face region parsing, `FaceParser`, `FaceRegions` |
 | `retouch/utils.py` | 19 KB | Mask utilities, curve transforms, crash logging, public `normalize_mask()` and `screen_blend()` |
 | `retouch/style.py` | 18 KB | `StyleProfile`, `StyleAnalyzer`, `StyleApplier`, `subject_aware_transfer` (no longer circular with engine) |
 | `retouch/batch_processor.py` | 17 KB | `BatchProcessor`, batch caching, contact sheets |
 | `retouch/skin.py` | 14 KB | Skin whitening, equalization, dodge & burn, neck harmonization |
+| `retouch/recipes.py` | 14 KB | Recipe presets (13 built-in), `extends` inheritance, `FUJI_SIM_NAMES`, `list_fuji_sims()`, teed_whiten decoupled |
 | `retouch/detection.py` | 13 KB | `FaceDetector`, `FaceData`, `FaceContext`, person segmentation |
-| `retouch/recipes.py` | 13 KB | Recipe presets with `extends` inheritance, standardized relight keys, `teeth_whiten` decoupled |
-| `retouch/frequency.py` | 11 KB | `FrequencySeparator` class + module-level wrappers (now class-based, matching all other stage modules) |
+| `retouch/precision.py` | 6 KB | **NEW (v2.1)** 16-bit float pipeline: `to_float`/`to_uint8`/`ensure_float`, `PrecisionContext` |
+| `retouch/lut.py` | 13 KB | **NEW (v2.1)** 3D LUT pipeline: `CubeLUT`, `trilinear_sample`, `load_cube` (.cube parser), `LUTRegistry` (hot-load), `watch_luts_dir` (daemon) |
+| `retouch/color_space.py` | 12 KB | **NEW (v2.1)** BGR↔LAB↔LCH, wide-gamut (ProPhoto/Adobe RGB), `skin_mask_lch`, 8 perceptual adjustment functions |
+| `retouch/frequency.py` | 11 KB | `FrequencySeparator` class + module-level wrappers |
+| `retouch/tonal.py` | 7 KB | **NEW (v2.1)** Film H&D tonal response curve, `apply_hd_curve`, `apply_lift_gamma_gain`, `hd_curve_lut` |
 | `retouch/eyes.py` | 9 KB | Eye enhancement (sclera, iris, catchlight) with independent `catchlight_strength` param |
 | `retouch/style_library.py` | 9 KB | Style save/load, dataset learning |
 | `retouch/lips.py` | 9 KB | Lip enhancement (matte/gloss/velvet) |
-| `retouch/relight.py` | 7 KB | Virtual studio relighting (retinex functions removed in dead-code cleanup) |
+| `retouch/skin_protect.py` | 5 KB | **NEW (v2.1)** Skin-tone protection API: `protect_skin`, `protect_skin_chromatic`, `skin_aware_apply` |
+| `retouch/grain.py` | 4 KB | **NEW (v2.1)** Organic clumped film grain: `apply_film_grain`, `generate_film_grain`, `grain_autocorrelation_check` |
+| `retouch/highlight.py` | 5 KB | **NEW (v2.1)** Soft highlight rolloff: `soft_clip_highlights`, `apply_highlight_rolloff`, `recover_highlights`, Reinhard + filmic tone mapping |
+| `retouch/regions.py` | 10 KB | **NEW (v2.1)** Unified mask system: `apply_to_region` with 5 blend modes (normal/multiply/screen/soft_light/overlay), combine/feather/threshold/dilate/erode |
+| `retouch/relight.py` | 7 KB | Virtual studio relighting |
 | `retouch/blemish.py` | 7 KB | Blemish removal via inpainting |
 | `retouch/hair.py` | 5 KB | Hair shine enhancement |
 | `retouch/geometry.py` | 5 KB | Face reshaping / slimming |
-| `retouch/io.py` | 7 KB | Image I/O, EXIF, RAW support, shared `EXPORT_RES_MAP`/`EXT_MAP` |
+| `retouch/io.py` | 12 KB | Image I/O, EXIF, RAW, ICC profile support (read/embed/convert), `EXPORT_RES_MAP`/`EXT_MAP` |
 | `retouch/makeup.py` | 4 KB | Blush, nose blush, under-eye blush |
 | `retouch/teeth.py` | 4 KB | Teeth whitening |
 | `retouch/undereye.py` | 4 KB | Under-eye dark circle repair |
+| `retouch/style_transfer.py` | 6 KB | **NEW (v2.1)** Leaf module — re-exports `subject_aware_transfer` for backward compat |
+
+**Demo / Documentation artifacts (v2.1):**
+| Path | Purpose |
+|------|---------|
+| `presets/classic_chrome.json` | Fuji Classic Chrome film simulation |
+| `presets/astia.json` | Fuji Astia film simulation (portrait) |
+| `presets/provia.json` | Fuji Provia film simulation (neutral) |
+| `luts/*.cube` (6 files) | Demo 3D LUTs (identity, warm_boost, cool_shadows, kodak_ish, kodak, fuji) |
+| `luts/ACQUISITION.md` | Guide for real commercial LUT sources |
+| `scripts/generate_demo_luts.py` | Regenerates the 6 demo `.cube` files |
+| `scripts/validate_fuji_foundation.py` | Phase 1.a validation script (per-module performance, sample images) |
+| `scripts/compare_fuji_sims.py` | Phase 1.c side-by-side comparison generator |
+| `docs/FUJI_COLOR_RESEARCH.md` | Research notes (3,575 words) |
+| `docs/PHASE_1A_VALIDATION.md` | Phase 1.a validation report |
+| `docs/FUJI_SIMS_GUIDE.md` | User-facing sim guide (2,415 words) |
+| `docs/PHASE_1C_VALIDATION.md` | Phase 1.c validation report (2,993 words) |
+| `.github/workflows/benchmarks.yml` | CI workflow for benchmark tracking |
 
 ---
 
@@ -492,3 +683,125 @@ When `fast=True` is set, the image is downscaled to 800px before entering the pi
 | ARCH-14 | `retouch/recipes.py` | Standardized relight recipe keys: `relight_strength` → `relight`, `light_azimuth` → `relight_azimuth`, `light_elevation` → `relight_elevation`. Now matches ProcessingContext field names. |
 | ARCH-15 | `retouch/recipes.py` | Decoupled `eyes.teeth_whiten` from `eyes.whites` (which previously drove both eye enhancement AND teeth whitening). Added `teeth_whiten` key to 16 recipes. |
 | DEAD-1 | `retouch/skin.py` etc. | Removed 25 dead code instances: unused imports, constants (BILATERAL_D_*), functions (`retinex_msr`/`retinex_ssr`, `detect_color_patches`, etc.), classes (`RegionMasks`), and a deprecated `SkinProcessor.smooth()` no-op. |
+
+---
+
+## 9. v2.1 Changelog — Fuji-Quality Color Recipe System (Phase 1, 2026-06-23)
+
+**Theme:** Add 4 global Fuji foundation effects, real 3D LUT pipeline, ICC + wide-gamut support, 16-bit float precision, and 3 official Fuji film simulations. Target: 90-95% match to Fujifilm JPEG output.
+
+### Phase 1.a — Fuji Foundation Layer
+
+| ID | Module | Change |
+|---|---|---|
+| F1.a.1 | `retouch/tonal.py` (NEW) | Film H&D tonal response curve. `apply_hd_curve` with toe/shoulder/midpoint/gamma/luma_only params. `apply_lift_gamma_gain` for Classic Chrome lifted blacks. `hd_curve_lut` for fast LUT application. |
+| F1.a.2 | `retouch/skin_protect.py` (NEW) | Skin-tone protection API. `protect_skin` wraps a color op to skip skin pixels. `protect_skin_chromatic` for hue/sat adjustments with skin awareness. `skin_aware_apply` for two-op region splitting. |
+| F1.a.3 | `retouch/grain.py` (NEW) | Organic clumped film grain. `apply_film_grain` with luminance-correlated clumping. `generate_film_grain` standalone. `grain_autocorrelation_check` (Pearson r). |
+| F1.a.4 | `retouch/highlight.py` (NEW) | Soft highlight rolloff. `soft_clip_highlights` (C¹-continuous exponential approach). `apply_highlight_rolloff` with strength blend. `recover_highlights`. `tone_map_reinhard` + `tone_map_filmic` (Hable). |
+| F1.a.5 | `retouch/regions.py` (NEW) | Unified mask system. `apply_to_region(img, mask, op, blend_mode, strength)` with 5 blend modes (normal, multiply, screen, soft_light, overlay). `combine_masks`, `feather_mask`, `threshold_mask`, `dilate_mask`, `erode_mask`. |
+| F1.a.6 | `retouch/engine.py` | **CRITICAL REFACTOR**: Moved tonal/highlight/grain effects OUTSIDE `if ctx.color_grade:` block. They are now global stages applied to every image. This matches the Fuji research design intent — the tonal curve is the #1 "Fuji-look" unlock and must apply always. |
+| F1.a.7 | `retouch/grading.py` | Removed `tonal_curve_strength`, `highlight_rolloff_strength`, `grain_strength` kwargs from `ColorGrader.grade()` (kept `skin_protect_strength` since it's color-op bound). Cleaned up imports. |
+| F1.a.8 | `retouch/params.py` | Added 4 ParamSpecs: `tonal_curve_strength`, `skin_protect_strength`, `grain_strength`, `highlight_rolloff_strength`. All default to 0.0 (backward compat). |
+| F1.a.9 | `retouch/style_transfer.py` (NEW) | Leaf module — re-exports `subject_aware_transfer` for backward compat. Decouples the circular import chain (engine → style → engine) that existed in v2.0. |
+
+### Phase 1.b — 3D LUT Pipeline
+
+| ID | Module | Change |
+|---|---|---|
+| F1.b.1 | `retouch/lut.py` (MAJOR UPGRADE) | Real 3D LUT: `CubeLUT` class with `apply()` using trilinear interpolation. `load_cube` Adobe Cube parser. `LUTRegistry` with mtime invalidation, `register`, `reload`, `poll_changes`, `watch_luts_dir` (daemon thread). Fixed pre-existing import-time bug in `_DEFAULT_REGISTRY = LUTRegistry()` (parameter `luts_dir` shadowed module function). |
+| F1.b.2 | `retouch/grading.py` | **Replaced fake LUTs** (`_FILM_LUTS` hardcoded 1D polynomial dict for "kodak"/"fuji") with real `CubeLUT` system. `_add_film_emulation` now accepts `Union[str, Path, CubeLUT, None]`. Resolves strings via 2-step lookup (direct path then `luts_dir()/<stem>.cube`). Caches loaded LUTs in `ColorGrader._lut_cache`. |
+| F1.b.3 | `retouch/grading.py` | Changed `luts_dir()` import to use `lut.luts_dir()` (module attribute lookup) so monkeypatching in tests works. |
+| F1.b.4 | `retouch/io.py` | **ICC profile support**: `read_icc_profile`, `image_has_icc`, `write_image_with_icc` (4 format support: JPEG/PNG/TIFF/WebP), `convert_image_colorspace` (LittleCMS2 transform). `_HAS_IMAGECMS` flag for graceful PIL fallback. |
+| F1.b.5 | `retouch/color_space.py` | **Wide-gamut**: `bgr_to_prophoto`/`prophoto_to_bgr`, `bgr_to_adobe_rgb`/`adobe_rgb_to_bgr`, `estimate_gamut`, `srgb_to_xyz_matrix`, `xyz_to_prophoto_matrix`. Matrices pre-composed at import. Round-trip 0.0 max abs error. |
+| F1.b.6 | `retouch/precision.py` (NEW) | **16-bit float pipeline**: `to_float`/`to_uint8` (proper round-to-nearest)/`ensure_float`. `PrecisionContext` context manager. Supports `bit_depth="16"` (float) and `bit_depth="8"` (no-op for compat). |
+| F1.b.7 | `retouch/grading.py` | Added `_F_apply_luminance_curve`, `_F_split_tone_three_way`, `_F_apply_calibration` float-in/float-out methods. Original uint8 versions delegate to float. |
+| F1.b.8 | `retouch/grading.py` | Wired `PrecisionContext` into `ColorGrader.grade()` color-ops path. Post-effects remain uint8. Backward compat preserved. |
+| F1.b.9 | `retouch/params.py` | Added `color_transfer_intensity` ParamSpec (was missing from registry per audit). |
+| F1.b.10 | `retouch/params.py` | Synced 10 type-only color defaults (0 → 0.0) for: bloom, glow, vignette, sharpen, contrast, vibrance, saturation, clarity, subject_separation, impact. |
+| F1.b.11 | `luts/` (NEW) | 6 demo `.cube` files: `identity_33.cube` (947KB), `warm_boost_17.cube`, `cool_shadows_17.cube`, `kodak_ish_17.cube`, `kodak.cube` (referenced by `film` preset), `fuji.cube` (referenced by `film` preset). |
+| F1.b.12 | `luts/ACQUISITION.md` (NEW) | Guide for real commercial LUT sources: RNI Films, VSCO, Dehancer, Fujifilm X-Trans profiles. |
+| F1.b.13 | `scripts/generate_demo_luts.py` (NEW) | Regenerates the 6 demo `.cube` files. Idempotent. |
+| F1.b.14 | `.github/workflows/benchmarks.yml` (NEW) | CI workflow: runs `python3 scripts/benchmark.py` on push, saves results as 90-day artifact. Kept existing `test.yml` intact. |
+
+### Phase 1.c — 3 Official Fuji Film Simulations
+
+| ID | Module | Change |
+|---|---|---|
+| F1.c.1 | `presets/classic_chrome.json` (NEW) | Editorial preset: tonal 0.7, skin 0.5, hl 0.4, grain 0.15, lut=fuji. Low saturation (-0.15), lifted blacks, desaturated reds, cyan greens, cool teal shadows. |
+| F1.c.2 | `presets/astia.json` (NEW) | Portrait preset: tonal 0.55, **skin 0.85 (highest of all sims)**, hl 0.5, grain 0.0, lut=null. Red saturation -18, orange hue +8/lum +6, warm midtones, soft S-curve. |
+| F1.c.3 | `presets/provia.json` (NEW) | Neutral preset: tonal 0.4, **skin 0.2 (lowest)**, hl 0.2, grain 0.0, lut=null. No LUT, no grain, slight contrast punch, accurate color reproduction. |
+| F1.c.4 | `retouch/recipes.py` | Added 3 sims to `RECIPES` (extends="natural" with foundation params + color settings). `FUJI_SIM_NAMES = ("classic_chrome", "astia", "provia")` constant. `list_fuji_sims()` returns sorted available list. |
+| F1.c.5 | `scripts/compare_fuji_sims.py` (NEW) | Generates 1280×720 source + 3 sim outputs + 2×2 grid in `/tmp/sim_comparison/`. Computes per-sim color stats. 5 PNGs total. |
+| F1.c.6 | `docs/FUJI_SIMS_GUIDE.md` (NEW) | User-facing guide (2,415 words) with per-sim sections, when-to-use, key characteristics. |
+| F1.c.7 | `docs/PHASE_1C_VALIDATION.md` (NEW) | Validation report (2,993 words) with per-sim observations, performance estimates, honest limitations, next-step recommendations. |
+
+### Process / Test Improvements
+
+| ID | Change |
+|---|---|
+| TEST-1 | Test count: 641 → 738 (97 new tests, 1 platform-skip) |
+| TEST-2 | 50+ new test files added for Fuji foundation, 3D LUT, ICC, wide-gamut, 16-bit, hot-load, film stocks, 3 sims, docs |
+| TEST-3 | Fixed `luts_dir` monkeypatch issue in grading.py (use module attribute lookup) |
+| TEST-4 | Fixed white noise generation in `_generate_clumped_noise` (skip half-res upsample when sigma=0) |
+| TEST-5 | Added missing `_generate_luminance_mask`, `generate_film_grain`, `grain_autocorrelation_check` functions to grain.py (Worker 3 missed them in initial spike) |
+| CI-1 | Created `.github/workflows/benchmarks.yml` (CI benchmark tracking) |
+| CI-2 | Kept existing `.github/workflows/test.yml` (3-version Python matrix) |
+
+### Bug Fixes (Phase 1)
+
+| ID | Fix |
+|---|---|
+| BUGFIX-18 | `retouch/grading.py:602` — Removed fake `_FILM_LUTS` dict (was 2 hardcoded 1D polynomials, can't model cross-channel mixing) |
+| BUGFIX-19 | `retouch/grain.py:_generate_clumped_noise` — Skip half-resolution upsample when `clumping_sigma=0` (bilinear was adding correlation) |
+| BUGFIX-20 | `retouch/lut.py:248` — Fixed `_DEFAULT_REGISTRY = LUTRegistry()` import-time crash (parameter shadowed module function) |
+| BUGFIX-21 | `retouch/grading.py:_resolve_cube_lut` — Use `lut.luts_dir()` (module attr) for monkeypatch support |
+| BUGFIX-22 | `retouch/recipe_loader.py:_flat_to_engine_recipe` — Don't apply `_convert_param_to_engine` for `bloom.opacity` (preserves recipe 0-1 scale for engine to scale to 0-100) |
+| BUGFIX-23 | `retouch/engine.py:_stage_grade` — Tonal curve now applied at stage start (not after color grading). Highlight rolloff after color ops, grain at end. |
+
+### Performance (Phase 1.a validation, 1080p)
+
+| Effect | Time | FPS equivalent |
+|--------|------|----------------|
+| Tonal curve | 1.4 ms | 700 fps |
+| Skin protect | 23.1 ms | 43 fps |
+| Grain | 12.5 ms | 80 fps |
+| Highlight rolloff | 9.2 ms | 109 fps |
+| Combined | 46.2 ms | 22 fps |
+
+### Files Added in Phase 1
+
+**Production code (8 new files):**
+- `retouch/tonal.py` (216 lines)
+- `retouch/skin_protect.py` (141 lines)
+- `retouch/grain.py` (130 lines — after Phase 1.a fix)
+- `retouch/highlight.py` (150 lines)
+- `retouch/regions.py` (286 lines)
+- `retouch/precision.py` (152 lines)
+- `retouch/style_transfer.py` (re-export, ~6 lines)
+- `retouch/lut.py` (rewritten, 402 lines)
+- `retouch/color_space.py` (expanded, 339 lines)
+- `retouch/io.py` (expanded with ICC, 12 KB)
+- `retouch/grading.py` (expanded with 3D LUT + float methods, 30 KB)
+- `retouch/engine.py` (expanded with 4 foundation params + global refactor, 70 KB)
+- `retouch/recipes.py` (expanded with 3 sims + helpers, 14 KB)
+- `retouch/params.py` (expanded with new specs, 47 KB)
+
+**Demo / Documentation (8 new files):**
+- `presets/classic_chrome.json`
+- `presets/astia.json`
+- `presets/provia.json`
+- `luts/identity_33.cube`
+- `luts/warm_boost_17.cube`
+- `luts/cool_shadows_17.cube`
+- `luts/kodak_ish_17.cube`
+- `luts/kodak.cube`
+- `luts/fuji.cube`
+- `luts/ACQUISITION.md`
+- `scripts/generate_demo_luts.py`
+- `scripts/validate_fuji_foundation.py`
+- `scripts/compare_fuji_sims.py`
+- `docs/FUJI_COLOR_RESEARCH.md`
+- `docs/PHASE_1A_VALIDATION.md`
+- `docs/FUJI_SIMS_GUIDE.md`
+- `docs/PHASE_1C_VALIDATION.md`
+- `.github/workflows/benchmarks.yml`
