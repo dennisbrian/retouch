@@ -25,6 +25,7 @@ LIP_TINTS = {
     "red":     (80, 80, 210),
     "cosplay": (180, 130, 220),
 }
+LIP_TINT_NAMES = list(LIP_TINTS.keys())
 
 
 class LipEnhancer:

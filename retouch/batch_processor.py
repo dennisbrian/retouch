@@ -14,7 +14,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from .style import StyleProfile
-from .io import imread_exif, IMAGE_EXTENSIONS
+from .io import imread_exif, IMAGE_EXTENSIONS, EXPORT_RES_MAP, EXT_MAP
 from .utils import normalize_mask
 
 logger = logging.getLogger(__name__)
@@ -347,14 +347,7 @@ class BatchProcessor:
                     result = self.engine.process(img_bgr, recipe=style_name_or_recipe)
 
                 # Resolution resizing
-                export_max = {
-                    "Original": None,
-                    "4K (3840px)": 3840,
-                    "2K (2048px)": 2048,
-                    "Full HD (1920px)": 1920,
-                    "HD (1280px)": 1280,
-                    "720px": 720,
-                }.get(export_res)
+                export_max = EXPORT_RES_MAP.get(export_res)
                 
                 if export_max is not None:
                     h, w = result.shape[:2]
@@ -363,7 +356,7 @@ class BatchProcessor:
                         result = cv2.resize(result, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
 
                 # Output filename
-                ext = {"JPEG": ".jpg", "PNG": ".png", "WebP": ".webp"}.get(export_fmt, ".jpg")
+                ext = EXT_MAP.get(export_fmt, ".jpg")
                 out_name = f"{file_path.stem}_retouched{ext}"
                 out_file_path = output_path / out_name
 

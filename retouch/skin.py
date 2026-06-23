@@ -237,8 +237,8 @@ class SkinProcessor:
                 return img_bgr
 
             pm = normalize_mask(person_mask)
-            if pm.ndim == 3:
-                pm = pm[..., 0]
+            from .utils import squeeze_mask
+            pm = squeeze_mask(pm)
 
             neck_mask_est = np.zeros((h_img, w_img), dtype=np.float32)
             neck_mask_est[neck_y1:neck_y2, neck_x1:neck_x2] = pm[neck_y1:neck_y2, neck_x1:neck_x2]

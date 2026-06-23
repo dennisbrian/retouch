@@ -1,5 +1,6 @@
 """Tests for retouch/detection.py — data classes and helpers only (no model)."""
 
+import sys
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -620,3 +621,232 @@ class TestCreateTasks:
         from retouch import detection as det_mod
         kwargs = mock_base.call_args_list[0].kwargs
         assert kwargs.get("model_asset_path") == det_mod._FACE_LANDMARKER_MODEL
+
+
+# ---------------------------------------------------------------------------
+# FaceDetector.detect  (end-to-end with MediaPipe mocked)
+# ---------------------------------------------------------------------------
+
+
+def _build_mock_landmarks(count: int = 478, eye_sep: float = 0.2) -> list:
+    """Return a list of ``count`` MagicMock landmarks shaped like MediaPipe's
+    ``NormalizedLandmark`` (``.x``, ``.y``, ``.z`` attributes).
+
+    The iris centres are seeded at indices 468 and 473 with a known
+    horizontal separation so ``inter_eye_distance`` has reproducible data
+    to read. All other landmarks are placed at the image centre.
+    """
+    landmarks = []
+    for i in range(count):
+        if i == 468:  # left iris centre
+            lm = MagicMock(x=0.5 - eye_sep / 2.0, y=0.5, z=0.0)
+        elif i == 473:  # right iris centre
+            lm = MagicMock(x=0.5 + eye_sep / 2.0, y=0.5, z=0.0)
+        else:
+            lm = MagicMock(x=0.5, y=0.5, z=0.0)
+        landmarks.append(lm)
+    return landmarks
+
+
+class TestFaceDetectorDetect:
+    """Direct tests for ``FaceDetector.detect()`` with the underlying
+    MediaPipe task objects replaced by ``MagicMock`` instances.
+
+    ``retinaface`` is forced to ``None`` in ``sys.modules`` so the
+    RetinaFace import raises ``ImportError`` and ``detect()`` reliably
+    exercises its full-image MediaPipe fallback — making these tests
+    independent of whether the optional ``retinaface`` package is
+    installed in the CI environment.
+    """
+
+    def _make_detector(self, face_landmarks, segmenter=None):
+        """Build a FaceDetector with a mocked landmarker/segmenter pair.
+
+        Returns:
+            tuple: ``(detector, mock_landmarker, mock_segmenter)``.
+        """
+        mock_landmarker = MagicMock()
+        mock_result = MagicMock()
+        mock_result.face_landmarks = face_landmarks
+        mock_landmarker.detect.return_value = mock_result
+        mock_segmenter = segmenter if segmenter is not None else MagicMock()
+
+        with patch.object(
+            FaceDetector, "_create_tasks",
+            return_value=(mock_landmarker, mock_segmenter),
+        ), patch.dict(sys.modules, {"retinaface": None}):
+            detector = FaceDetector()
+        return detector, mock_landmarker, mock_segmenter
+
+    def test_detect_with_face_returns_face_data_list(self):
+        """A successful detection must yield a single ``FaceData`` with
+        well-formed ``bbox``, ``ied``, and a wrapped landmark list."""
+        img = np.zeros((200, 200, 3), dtype=np.uint8)
+        landmarks = _build_mock_landmarks(eye_sep=0.2)
+
+        detector, mock_landmarker, _ = self._make_detector([landmarks])
+        try:
+            faces = detector.detect(img)
+        finally:
+            detector.close()
+
+        assert isinstance(faces, list)
+        assert len(faces) == 1
+        fd = faces[0]
+        assert isinstance(fd, FaceData)
+        assert isinstance(fd.bbox, tuple) and len(fd.bbox) == 4
+        x, y, w, h = fd.bbox
+        assert 0 <= x < 200 and 0 <= y < 200
+        assert w >= 0 and h >= 0
+        # inter_eye_distance in pixels = eye_sep * image_width = 0.2 * 200 = 40
+        assert fd.ied == pytest.approx(40.0)
+        # landmarks are wrapped via _LandmarkCompat
+        assert hasattr(fd.landmarks, "landmark")
+        assert len(fd.landmarks.landmark) == 478
+        # landmarker must have been called at least once (full-image path)
+        assert mock_landmarker.detect.called
+
+    def test_detect_no_faces_returns_empty_list(self):
+        """When the landmarker reports no faces, ``detect()`` returns ``[]``
+        without raising."""
+        img = np.zeros((100, 100, 3), dtype=np.uint8)
+
+        detector, _, _ = self._make_detector(face_landmarks=[])
+        try:
+            faces = detector.detect(img)
+        finally:
+            detector.close()
+
+        assert faces == []
+
+    def test_detect_invokes_underlying_landmarker(self):
+        """``detect()`` must delegate to the underlying MediaPipe landmarker
+        at least once per call (full-image or downscale-then-full)."""
+        img = np.zeros((100, 100, 3), dtype=np.uint8)
+
+        detector, mock_landmarker, _ = self._make_detector(face_landmarks=[])
+        try:
+            detector.detect(img)
+        finally:
+            detector.close()
+
+        # The function may invoke .detect() 1x (small image) or 2x
+        # (downscale + full-resolution fallback) — only >= 1 is guaranteed.
+        assert mock_landmarker.detect.call_count >= 1
+
+    def test_detect_multiple_faces(self):
+        """A result with two face landmark sets must produce two ``FaceData``."""
+        img = np.zeros((200, 200, 3), dtype=np.uint8)
+        lm_left = _build_mock_landmarks(eye_sep=0.1)
+        lm_right = _build_mock_landmarks(eye_sep=0.1)
+        # shift the right face so bbox dedup doesn't collapse them
+        for lm in lm_right:
+            lm.x = min(0.99, lm.x + 0.4)
+
+        detector, _, _ = self._make_detector([lm_left, lm_right])
+        try:
+            faces = detector.detect(img)
+        finally:
+            detector.close()
+
+        assert len(faces) == 2
+        assert all(isinstance(f, FaceData) for f in faces)
+
+
+# ---------------------------------------------------------------------------
+# FaceDetector.segment_person  (MediaPipe segmenter mocked)
+# ---------------------------------------------------------------------------
+
+
+class TestFaceDetectorSegmentPerson:
+    """Direct tests for ``FaceDetector.segment_person()``.
+
+    The MediaPipe segmenter is replaced with a ``MagicMock`` so we can
+    exercise both the success path (confidence mask returned) and the
+    fallback paths (no segmenter loaded / empty confidence list).
+    """
+
+    def test_segment_person_with_confidence_mask_returns_float32(self):
+        """When the segmenter returns a confidence mask, the result must
+        be a 2D float32 array matching the input image's spatial shape."""
+        h, w = 100, 200
+        img = np.zeros((h, w, 3), dtype=np.uint8)
+
+        mask_array = np.full((h, w), 0.7, dtype=np.float32)
+        mock_mask = MagicMock()
+        mock_mask.numpy_view.return_value = mask_array
+        mock_result = MagicMock()
+        mock_result.confidence_masks = [mock_mask]
+
+        mock_landmarker = MagicMock()
+        mock_segmenter = MagicMock()
+        mock_segmenter.segment.return_value = mock_result
+
+        with patch.object(
+            FaceDetector, "_create_tasks",
+            return_value=(mock_landmarker, mock_segmenter),
+        ):
+            detector = FaceDetector()
+            try:
+                mask = detector.segment_person(img)
+            finally:
+                detector.close()
+
+        assert isinstance(mask, np.ndarray)
+        assert mask.shape == (h, w)
+        assert mask.dtype == np.float32
+        # The mask was passed through np.squeeze + astype(float32), so
+        # all values should still equal 0.7.
+        assert mask.min() == pytest.approx(0.7)
+        assert mask.max() == pytest.approx(0.7)
+        assert mock_segmenter.segment.called
+
+    def test_segment_person_with_no_segmenter_returns_ones(self):
+        """When the segmenter was not loaded (model file missing),
+        ``segment_person`` must short-circuit and return a full-ones
+        float32 mask of the right shape."""
+        h, w = 100, 200
+        img = np.zeros((h, w, 3), dtype=np.uint8)
+        mock_landmarker = MagicMock()
+
+        with patch.object(
+            FaceDetector, "_create_tasks",
+            return_value=(mock_landmarker, None),
+        ):
+            detector = FaceDetector()
+            try:
+                mask = detector.segment_person(img)
+            finally:
+                detector.close()
+
+        assert isinstance(mask, np.ndarray)
+        assert mask.shape == (h, w)
+        assert mask.dtype == np.float32
+        assert np.all(mask == 1.0)
+
+    def test_segment_person_with_empty_confidence_masks_returns_ones(self):
+        """If the segmenter ran but produced no confidence masks, the
+        function must fall back to a full-ones mask rather than crash."""
+        h, w = 100, 200
+        img = np.zeros((h, w, 3), dtype=np.uint8)
+
+        mock_result = MagicMock()
+        mock_result.confidence_masks = []  # empty
+
+        mock_landmarker = MagicMock()
+        mock_segmenter = MagicMock()
+        mock_segmenter.segment.return_value = mock_result
+
+        with patch.object(
+            FaceDetector, "_create_tasks",
+            return_value=(mock_landmarker, mock_segmenter),
+        ):
+            detector = FaceDetector()
+            try:
+                mask = detector.segment_person(img)
+            finally:
+                detector.close()
+
+        assert mask.shape == (h, w)
+        assert np.all(mask == 1.0)
+

@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from retouch.engine import (
     _adjust_vibrance,
-    _adjust_saturation,
+    _apply_uniform_saturation,
     _adjust_contrast,
     _adjust_tonal,
     _apply_selective_sharpening,
@@ -49,26 +49,26 @@ class TestAdjustVibrance:
 class TestAdjustSaturation:
     def test_zero_returns_original(self):
         img = np.full((20, 20, 3), 128, dtype=np.uint8)
-        result = _adjust_saturation(img, 0)
+        result = _apply_uniform_saturation(img, 0)
         assert np.all(result == img)
 
     def test_positive_saturation(self):
         img = np.full((20, 20, 3), 128, dtype=np.uint8)
         img[:, :, 1] = 50
-        result = _adjust_saturation(img, 50)
+        result = _apply_uniform_saturation(img, 50)
         hsv = cv2.cvtColor(result, cv2.COLOR_BGR2HSV)
         assert hsv[:, :, 1].mean() > 50
 
     def test_negative_saturation(self):
         img = np.full((20, 20, 3), 128, dtype=np.uint8)
         img[:, :, 1] = 200
-        result = _adjust_saturation(img, -50)
+        result = _apply_uniform_saturation(img, -50)
         hsv = cv2.cvtColor(result, cv2.COLOR_BGR2HSV)
         assert hsv[:, :, 1].mean() < 200
 
     def test_output_type(self):
         img = np.full((20, 20, 3), 128, dtype=np.uint8)
-        result = _adjust_saturation(img, 30)
+        result = _apply_uniform_saturation(img, 30)
         assert result.dtype == np.uint8
 
 

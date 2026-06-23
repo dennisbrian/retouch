@@ -486,8 +486,8 @@ class FaceParser:
 
         if person_mask is not None:
             pm = normalize_mask(person_mask)
-            if pm.ndim == 3:
-                pm = pm[:, :, 0]
+            from .utils import squeeze_mask
+            pm = squeeze_mask(pm)
             skin *= pm
         regions.skin = skin
         regions.hair = np.clip(person_mask - regions.face_oval, 0, 1) if person_mask is not None else np.zeros((h_img, w_img), dtype=np.float32)
