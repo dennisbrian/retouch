@@ -350,8 +350,6 @@ def main():
                         help="Quick parameter preset (legacy alias)")
     parser.add_argument("--color-ref", type=str, default=None,
                         help="Reference image path for colour transfer")
-    parser.add_argument("--color-transfer-intensity", type=float, default=None,
-                        help="Colour transfer blend intensity 0-1 (default: 1.0)")
     parser.add_argument("--color-ref-strength", type=float, default=None,
                         action=_DeprecatedAliasAction,
                         deprecated_to="--color-transfer-intensity",

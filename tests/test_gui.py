@@ -65,8 +65,11 @@ EXPECTED_RECIPE_KEYS = [
     "chromatic_aberration", "grain", "halation", "lut",
     "shadow_hue", "shadow_sat", "midtone_hue", "midtone_sat",
     "highlight_hue", "highlight_sat",
+    "tonal_curve_strength", "skin_protect_strength",
+    "highlight_rolloff_strength", "grain_strength",
+    "color_transfer_intensity",
 ]
-EXPECTED_RECIPE_KEY_COUNT = 59
+EXPECTED_RECIPE_KEY_COUNT = 64
 EXPECTED_UI_OUTPUT_COUNT = 59
 
 
@@ -550,7 +553,7 @@ class TestProcessInputKeys:
         import inspect
         sig = inspect.signature(gui.process_image)
         # process_image takes *args — but PROCESS_INPUT_KEYS is the canonical list
-        assert len(gui.PROCESS_INPUT_KEYS) == 69
+        assert len(gui.PROCESS_INPUT_KEYS) == 74
 
     def test_first_key_is_img_paths(self):
         assert gui.PROCESS_INPUT_KEYS[0] == "img_paths"
@@ -934,6 +937,9 @@ class TestProcessImageValidation:
             "color_grade": "none", "grade_intensity": 0,
             "chromatic_aberration": 0.0, "grain": 0.0, "halation": 0.0,
             "lut": "none",
+            "tonal_curve_strength": 0.0, "skin_protect_strength": 0.0,
+            "highlight_rolloff_strength": 0.0, "grain_strength": 0.0,
+            "color_transfer_intensity": 0.0,
             "shadow_hue": 0, "shadow_sat": 0,
             "midtone_hue": 0, "midtone_sat": 0,
             "highlight_hue": 0, "highlight_sat": 0,
