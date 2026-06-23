@@ -18,7 +18,8 @@ import gradio as gr
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from retouch import RetouchEngine
 from retouch.engine import resolve_recipe
-from retouch.io import imread_exif
+from retouch.io import imread_exif, EXPORT_RES_MAP, EXT_MAP
+from retouch.lips import LIP_TINT_NAMES
 from retouch.recipes import RECIPES
 from retouch.params import recipe_to_params, PROCESSING_PARAMS, param_names, gui_values_to_engine_kwargs
 from retouch.grading import list_available_presets
@@ -31,13 +32,10 @@ _logger = logging.getLogger(__name__)
 RECIPE_NAMES = list(RECIPES.keys())
 COLOR_GRADE_NAMES = ["none"] + list_available_presets()
 LUT_CHOICES = ["none", "kodak", "fuji"]
-WHITEN_TONE_CHOICES = ["rosy", "porcelain", "neutral"]
+_TONE_CHOICES = ["rosy", "porcelain", "neutral"]
+WHITEN_TONE_CHOICES = _TONE_CHOICES
 LIP_FINISH_CHOICES = ["gloss", "matte", "velvet"]
-SPECULAR_BLOOM_TONE_CHOICES = ["rosy", "porcelain", "neutral"]
-
-EXPORT_RES_MAP = {"Original": None, "4K (3840px)": 3840, "2K (2048px)": 2048,
-                  "Full HD (1920px)": 1920, "HD (1280px)": 1280, "720px": 720}
-EXT_MAP = {"JPEG": ".jpg", "PNG": ".png", "WebP": ".webp"}
+SPECULAR_BLOOM_TONE_CHOICES = _TONE_CHOICES
 
 PREVIEW_MAX_HEIGHT = 900
 COMPARE_SEPARATOR_WIDTH = 4
@@ -498,7 +496,7 @@ def reset_debug(recipe_name):
 
 
 
-LIP_TINTS = ["none", "cosplay", "rose", "pink", "coral", "natural", "berry"]
+LIP_TINTS = ["none"] + LIP_TINT_NAMES
 custom_style_choices = get_custom_style_names()
 
 COMPARE_TPL = """

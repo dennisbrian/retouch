@@ -3,6 +3,9 @@
 Maps high-level recipe names to float/int ratios.
 """
 
+from typing import List
+
+
 RECIPES = {
     "natural": {
         "frequency": {"smooth": 0.30},
@@ -344,3 +347,116 @@ RECIPES = {
 RECIPES["soft"] = RECIPES["anime_cinematic_soft"]
 RECIPES["action"] = RECIPES["anime_cinematic_action"]
 RECIPES["fantasy"] = RECIPES["anime_cinematic_fantasy"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 1.c — Official Fuji Film Simulations
+# ---------------------------------------------------------------------------
+# Three canonical Fuji film simulations. Each recipe combines the new
+# Phase 1.a foundation primitives (tonal_curve_strength, skin_protect,
+# highlight_rolloff, grain_strength) with the standard recipe sections.
+# Source: docs/FUJI_COLOR_RESEARCH.md (Worker H, P0.9).
+#
+# For end-user consumption, prefer the JSON files in presets/ as the
+# single source of truth for the descriptive metadata (curves, calibration,
+# HSL adjustments). These in-Python entries are the engine-side execution
+# form (flat scalars consumed by build_context).
+
+RECIPES["provia"] = {
+    "extends": "natural",
+    "frequency": {"smooth": 0.30, "mid_reduction": 0.35},
+    "skin": {"equalize": 0.20, "rosy": 0.15},
+    "eyes": {"whites": 0.10, "teeth_whiten": 0.10, "iris": 0.10, "catchlight": 0.10},
+    "lips": {"tint": None, "gloss": 0.10},
+    "hair": {"shine": 0.10},
+    "dodge_burn": {"amount": 0.05},
+    "color_harmony": {"preset": "natural", "amount": 0.10},
+    "bloom": {"opacity": 0.02},
+    "texture": {"opacity": 0.95},
+    "tonal_curve_strength": 0.40,
+    "skin_protect": 0.20,
+    "highlight_rolloff": 0.20,
+    "grain_strength": 0.00,
+    "saturation": 5.0,
+    "contrast": 0.0,
+    "highlights": 0.0,
+    "shadows": 0.0,
+    "sharpen": 40.0,
+    "sharpen_radius": 1.2,
+    "vignette": 0.0,
+}
+
+RECIPES["astia"] = {
+    "extends": "natural",
+    "frequency": {"smooth": 0.50, "mid_reduction": 0.45},
+    "skin": {"equalize": 0.30, "rosy": 0.35},
+    "eyes": {"whites": 0.15, "teeth_whiten": 0.15, "iris": 0.20, "catchlight": 0.15},
+    "lips": {"tint": "pink", "gloss": 0.15},
+    "hair": {"shine": 0.10},
+    "dodge_burn": {"amount": 0.10},
+    "color_harmony": {"preset": "natural", "amount": 0.20},
+    "bloom": {"opacity": 0.04},
+    "texture": {"opacity": 0.90},
+    "tonal_curve_strength": 0.55,
+    "skin_protect": 0.85,
+    "highlight_rolloff": 0.50,
+    "grain_strength": 0.00,
+    "saturation": 2.0,
+    "contrast": 8.0,
+    "highlights": -3.0,
+    "shadows": 0.0,
+    "sharpen": 25.0,
+    "sharpen_radius": 1.2,
+    "vignette": 0.0,
+    "midtone_hue": 35.0,
+    "midtone_sat": 4.0,
+    "shadow_hue": 30.0,
+    "shadow_sat": 6.0,
+    "highlight_hue": 40.0,
+    "highlight_sat": 4.0,
+}
+
+RECIPES["classic_chrome"] = {
+    "extends": "natural",
+    "frequency": {"smooth": 0.45, "mid_reduction": 0.40},
+    "skin": {"equalize": 0.25, "rosy": 0.20},
+    "eyes": {"whites": 0.10, "teeth_whiten": 0.10, "iris": 0.15, "catchlight": 0.10},
+    "lips": {"tint": None, "gloss": 0.10},
+    "hair": {"shine": 0.10},
+    "dodge_burn": {"amount": 0.15},
+    "color_harmony": {"preset": "natural", "amount": 0.15},
+    "bloom": {"opacity": 0.05},
+    "texture": {"opacity": 0.90},
+    "tonal_curve_strength": 0.85,
+    "skin_protect": 0.30,
+    "highlight_rolloff": 0.60,
+    "grain_strength": 0.30,
+    "saturation": -15.0,
+    "contrast": 24.0,
+    "highlights": -20.0,
+    "shadows": -20.0,
+    "sharpen": 20.0,
+    "sharpen_radius": 1.0,
+    "vignette": 6.0,
+    "midtone_hue": 40.0,
+    "midtone_sat": 4.0,
+    "shadow_hue": 145.0,
+    "shadow_sat": 14.0,
+    "highlight_hue": 200.0,
+    "highlight_sat": 6.0,
+}
+
+
+# Canonical name list for the three official Fuji film simulations.
+# Used by the GUI dropdown, CLI helpers, and integration tests.
+FUJI_SIM_NAMES: List[str] = ["classic_chrome", "astia", "provia"]
+
+
+def list_fuji_sims() -> List[str]:
+    """Return the names of the three official Fuji film simulations.
+
+    These are the recipes that exist in :data:`RECIPES` and match the
+    JSON files shipped in ``presets/``. Useful for populating a GUI
+    dropdown or a CLI helper.
+    """
+    return sorted(name for name in FUJI_SIM_NAMES if name in RECIPES)

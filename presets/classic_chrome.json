@@ -1,0 +1,39 @@
+{
+  "description": "Fuji Classic Chrome: editorial preset with low saturation, lifted blacks, cyan-shifted greens, and subtle fine grain. The 'Fuji look' most people mean — muted, magazine-grade color rendering.",
+  "name": "Classic Chrome",
+  "tonal_curve_strength": 0.7,
+  "skin_protect_strength": 0.5,
+  "highlight_rolloff_strength": 0.4,
+  "grain_strength": 0.15,
+  "lut": "fuji",
+  "color_grade": null,
+  "color_harmony": {
+    "preset": "natural",
+    "amount": 0.0
+  },
+  "curves": {
+    "L": [[0, 8], [32, 30], [128, 132], [224, 218], [255, 245]]
+  },
+  "calibration": {
+    "red": {"hue": 178, "sat": -15, "lum": 0},
+    "green": {"hue": 195, "sat": -10, "lum": 0},
+    "blue": {"hue": 220, "sat": 5, "lum": 0}
+  },
+  "hsl_adjustments": {
+    "red": {"hue_shift": 0, "sat_shift": -20, "lum_shift": 0},
+    "orange": {"hue_shift": 0, "sat_shift": -15, "lum_shift": 0},
+    "yellow": {"hue_shift": -5, "sat_shift": -10, "lum_shift": 5},
+    "green": {"hue_shift": 15, "sat_shift": -10, "lum_shift": 0},
+    "blue": {"hue_shift": 0, "sat_shift": -5, "lum_shift": 0}
+  },
+  "saturation_boost": -0.15,
+  "warmth": -0.02,
+  "split_tone_three_way": {
+    "shadows": {"hue": 215, "sat": 8},
+    "midtones": {"hue": 0, "sat": 0},
+    "highlights": {"hue": 30, "sat": 5}
+  },
+  "shadow_lift": 5,
+  "vignette": 0.10,
+  "sharpness": 0.3
+}
