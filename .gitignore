@@ -4,6 +4,8 @@ test_output/
 benchmark_results.json
 __pycache__/
 *.pyc
+.coverage
+htmlcov/
 .DS_Store
 *.egg-info/
 dist/
