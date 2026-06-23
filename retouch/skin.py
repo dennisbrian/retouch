@@ -355,6 +355,83 @@ class SkinProcessor:
         s = strength / 100.0
         return blend_masked(img_bgr, img_shifted_bgr, highlight_mask * s)
 
+    def restore_micro_texture(
+        self,
+        smoothed_bgr: np.ndarray,
+        original_bgr: np.ndarray,
+        regions: Any,
+        strength: int = 20,
+        smooth_strength: float = 0.5,
+    ) -> np.ndarray:
+        """Re-inject dimensional micro-contrast lost during frequency-based smoothing.
+
+        Computes the per-pixel difference between the original and smoothed
+        canvases and adds it back selectively in dimensional face zones
+        (nose bridge, cheek highlights, under-eye transition). This keeps
+        the skin looking "naturally good" rather than "retouched" — the
+        subtle micro-contrast that gives a face its dimensionality.
+
+        Args:
+            smoothed_bgr: (H, W, 3) uint8 BGR canvas after frequency-based
+                smoothing (output of ``FrequencySeparator.combine``).
+            original_bgr: (H, W, 3) uint8 BGR canvas before smoothing.
+            regions: ``FaceRegions`` with ``nose_bridge``, ``cheek_highlights_l``,
+                ``cheek_highlights_r``, ``left_under_eye``, ``right_under_eye``
+                sub-masks.
+            strength: 0–50 restore amount. 0 = off, 25 = subtle, 50 = strong.
+            smooth_strength: 0–1 strength of the smoothing that was applied.
+                Restoration scales with this so it has zero effect at
+                ``smooth_strength=0`` (no smoothing ⇒ no lost detail to
+                restore).
+
+        Returns:
+            (H, W, 3) uint8 BGR canvas with restored micro-contrast.
+        """
+        if strength <= 0 or smooth_strength <= 0:
+            return smoothed_bgr
+
+        h, w = smoothed_bgr.shape[:2]
+
+        # Build a dimensional mask: where micro-contrast actually matters
+        # (cheek highlights, nose bridge, under-eye transition). These are
+        # the zones the bilateral+mid_reduction step is most likely to
+        # flatten, and where restoration is perceptually most valuable.
+        dim_mask = np.zeros((h, w), dtype=np.float32)
+        for attr in (
+            "nose_bridge",
+            "cheek_highlights_l",
+            "cheek_highlights_r",
+            "left_under_eye",
+            "right_under_eye",
+        ):
+            m = getattr(regions, attr, None)
+            if m is None:
+                continue
+            m_f = m.astype(np.float32) if m.dtype != np.float32 else m
+            dim_mask = np.clip(dim_mask + m_f, 0.0, 1.0)
+
+        if dim_mask.max() < 0.01:
+            return smoothed_bgr
+
+        feather = max(3, int(min(h, w) * 0.01)) | 1
+        dim_mask = cv2.GaussianBlur(dim_mask, (feather, feather), 0)
+
+        # Detail = what smoothing killed (signed).
+        detail = original_bgr.astype(np.float32) - smoothed_bgr.astype(np.float32)
+
+        # Effective restore amount:
+        #   strength/100  → 0..0.5 for the GUI's 0..50 range
+        #   * smooth_strength  → tapers to 0 when smoothing was off
+        #   * dim_mask         → confined to dimensional zones
+        # At default (strength=20, smooth_strength=0.5): 0.10 × dim_mask,
+        # which is right in the 0.15–0.25 sweet spot the user asked for
+        # when smoothing is heavier.
+        restore_amount = (strength / 100.0) * float(smooth_strength)
+        dim_mask_3d = dim_mask[:, :, np.newaxis]
+
+        restored = smoothed_bgr.astype(np.float32) + detail * restore_amount * dim_mask_3d
+        return np.clip(restored, 0, 255).astype(np.uint8)
+
     @staticmethod
     def _get_highlight_protection(lab: np.ndarray) -> np.ndarray:
         """Linearly decays adjustments for bright pixels (L > 220) to prevent specular clipping.

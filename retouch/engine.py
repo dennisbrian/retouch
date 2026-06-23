@@ -145,6 +145,7 @@ class ProcessingContext:
     equalize: float = 0.0
     blemish: float = 0.0
     nose_smooth: Optional[float] = None
+    micro_restore: float = _DEFAULTS["micro_restore"]
     mid_reduction: float = 0.40
     texture_opacity: float = _DEFAULTS["texture_opacity"]
     pore_synthesis: float = 0.0
@@ -307,7 +308,7 @@ def build_context(
     list of every parameter the engine understands.
     """
 
-    from .params import PROCESSING_PARAMS, _resolve_recipe_value
+    from .params import PROCESSING_PARAMS, _resolve_recipe_value, _lookup_recipe
     from .params import _resolve_dodge_burn
 
     def _ov(key, recipe_val):
@@ -327,7 +328,11 @@ def build_context(
                 return spec.default
             return _resolve_dodge_burn(rec)
         if spec.name == "relight":
-            return float(rec.get("relight", 0.0)) * 100.0
+            # Engine mirrors the recipe's ``skin.relight`` (same path the GUI
+            # uses, defined in ParamSpec.recipe_key). Returns 0 when the
+            # recipe has no relight information.
+            v = _lookup_recipe(rec, spec.recipe_key) if spec.recipe_key else None
+            return 0.0 if v is None else float(v) * 100.0
         if spec.name == "whiten":
             # Historical engine quirk: ``rosy`` always wins if it is in the
             # recipe, even when ``porcelain`` is also set.  Reproduce that
@@ -575,6 +580,7 @@ class RetouchEngine:
         pore_synthesis: Optional[float] = None,
         mid_reduction: Optional[float] = None,
         nose_smooth: Optional[float] = None,
+        micro_restore: Optional[float] = None,
         hair_enhance: Optional[float] = None,
         dodge_burn: Optional[float] = None,
         relight: Optional[float] = None,
@@ -668,6 +674,7 @@ class RetouchEngine:
             "pore_synthesis": pore_synthesis,
             "mid_reduction": mid_reduction,
             "nose_smooth": nose_smooth,
+            "micro_restore": micro_restore,
             "hair_enhance": hair_enhance,
             "dodge_burn": dodge_burn,
             "relight": relight,

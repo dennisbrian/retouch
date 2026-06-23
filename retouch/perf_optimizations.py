@@ -149,6 +149,10 @@ def _process_face_core(
 
     # ---- Frequency separation ----
     original_lab = cv2.cvtColor(canvas, cv2.COLOR_BGR2LAB)
+    # Snapshot pre-smoothing canvas for adaptive micro-texture restoration.
+    # The restoration step compares the smoothed result against this original
+    # to recover dimensional detail the bilateral+mid_reduction can wash out.
+    pre_smooth_canvas = canvas.copy()
     layers = frequency.separate(canvas, face_width)
 
     # ---- Build smooth mask (protect eyes/brows/lips) ----
@@ -223,6 +227,19 @@ def _process_face_core(
             face_width=face_width,
             pore_synthesis=ctx.pore_synthesis / 100.0,
             roi_coords=(roi_x1, roi_y1),
+        )
+
+    # ---- Adaptive micro-texture restoration ----
+    # Re-injects dimensional micro-contrast in cheek / nose / under-eye zones
+    # that the bilateral+mid_reduction step washed out. Modulated by
+    # smooth_strength so this is a no-op when smoothing is off.
+    if ctx.micro_restore > 0:
+        canvas = skin.restore_micro_texture(
+            canvas,
+            pre_smooth_canvas,
+            regions,
+            strength=ctx.micro_restore,
+            smooth_strength=ctx.smooth / 100.0,
         )
 
     # ---- Skin equalization ----
