@@ -2,7 +2,17 @@
 
 This document details the architectural design, processing pipeline, and component breakdown of the **Pro Max Face Retouch Engine (v2.1.0 — Fuji-Quality Color Recipe System)**.
 
-**Revision 2026-06-23 (Session 2 + Phase 1):** Major expansion of the color grading subsystem. Added 7 new modules (tonal, skin_protect, grain, highlight, precision, lut enhancements, color_space wide-gamut, regions, style_transfer). Shipped 3 official Fuji film simulations (Classic Chrome, Astia, Provia) and 6 demo 3D LUT files. Test count grew from 641 → 738.
+**Current release: `v2.1.0-fuji-quality` (tagged 2026-06-23).** Merged to `main` via `phase-1-fuji-quality-color` branch. 10 commits, +4,422 / -557 LOC.
+
+**Revision 2026-06-23 (Session 2 + Phase 1):** Major expansion of the color grading subsystem. Added 7 new modules (tonal, skin_protect, grain, highlight, precision, lut enhancements, color_space wide-gamut, regions, style_transfer). Shipped 3 official Fuji film simulations (Classic Chrome, Astia, Provia) and 6 demo 3D LUT files. Test count grew from 641 → 1459 (1 platform-skip).
+
+### Release History
+
+| Tag | Date | Summary | Tests |
+|-----|------|---------|-------|
+| `v2.1.0-fuji-quality` | 2026-06-23 | Fuji-quality color recipe system: 4 global foundation effects (tonal curve, skin protection, film grain, highlight rolloff), real 3D LUT pipeline (`.cube` w/ trilinear), ICC profile support (read/embed), wide-gamut (ProPhoto/Adobe RGB), 16-bit float precision, 3 official Fuji sims (Classic Chrome, Astia, Provia). 10 atomic commits. **Git tag for the v2.1 milestone.** | 1459 |
+| (pre-tag) | 2026-06-22 | Session 1: Param registry refactor (7-way sync → single source of truth), 7-stage pipeline decomposition, dead code removal, test count 641. | 641 |
+| `v2.0.0` (presumed) | 2026-06-22 | Production engine: BiSeNet parsing, MediaPipe landmarks, full face retouching pipeline, subject separation, style cloning, 8 presets. | ~475 |
 
 ---
 
@@ -687,6 +697,32 @@ When `fast=True` is set, the image is downscaled to 800px before entering the pi
 ---
 
 ## 9. v2.1 Changelog — Fuji-Quality Color Recipe System (Phase 1, 2026-06-23)
+
+**Tagged `v2.1.0-fuji-quality`.** Released via `phase-1-fuji-quality-color` branch → `main` (10 commits). Test count 641 → 1459.
+
+### Release Verification
+
+| Check | Result |
+|-------|--------|
+| `pytest tests/` | 1459 passed, 1 skipped (sRGB→LAB platform limit), 0 failed |
+| `python3 -m py_compile retouch/*.py` | all modules clean |
+| `git log --oneline main` | linear history, 10 atomic commits |
+| Tag pushed to origin | `v2.1.0-fuji-quality` reachable |
+
+### Atomic Commits
+
+```
+17c3148 fix(tests): update GUI/CLI test constants for new Phase 1 params
+0d34aa7 docs(phase-1): planning, research, validation, architecture, CI
+682abd2 chore: extract style_transfer module and dedup pass
+9075fac feat(sims): 3 official Fuji film simulations
+cae7399 feat(io): ICC profile support (read/embed/convert)
+cd05332 feat(lut): real 3D LUT pipeline with hot-load + 6 demo LUTs
+814e74e feat(foundation): add Fuji foundation layer
+0b77626 feat(color): LCH, wide-gamut, 16-bit float, unified masks
+6d3a563 fix(audit): resolve remaining P0 audit items
+9eb0f99 chore: ignore .coverage and htmlcov artifacts
+```
 
 **Theme:** Add 4 global Fuji foundation effects, real 3D LUT pipeline, ICC + wide-gamut support, 16-bit float precision, and 3 official Fuji film simulations. Target: 90-95% match to Fujifilm JPEG output.
 
