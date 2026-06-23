@@ -67,15 +67,25 @@ RECIPES = {
     "xiaohongshu": {
         "extends": "natural",
         "frequency": {"smooth": 0.50},
-        "skin": {"equalize": 0.40, "rosy": 0.50},
+        "skin": {"equalize": 0.40, "rosy": 0.50, "relight": 0.40},
         "eyes": {"whites": 0.25, "teeth_whiten": 0.25, "iris": 0.25, "catchlight": 0.20},
         "lips": {"tint": "rose", "gloss": 0.20},
         "hair": {"shine": 0.25},
-        "dodge_burn": {"amount": 0.10},
+        "dodge_burn": {"amount": 0.20},
         "color_harmony": {"preset": "fantasy", "amount": 0.35},
-        "bloom": {"opacity": 0.08},
+        "bloom": {"opacity": 0.15},
         "texture": {"opacity": 0.90},
-        
+        # Xiaohongshu look: light sculpting + dreamy glow + warm/cool separation
+        "specular_bloom": 30,
+        "tonal_curve_strength": 0.25,
+        "highlight_rolloff": 0.30,
+        "skin_protect": 0.50,
+        "shadow_hue": 220, "shadow_sat": 25,
+        "midtone_hue": 30, "midtone_sat": 15,
+        "micro_restore": 25,
+        "grain_strength": 0.20,
+        "finish": {"impact": 0.20},
+
         # Modular overrides
         "slimming": 30.0,
         "blush": 25.0,
@@ -227,20 +237,62 @@ RECIPES = {
     "xhs_ultrasoft": {
         "extends": "natural",
         "frequency": {"smooth": 0.85, "mid_reduction": 0.75},
-        "skin": {"equalize": 0.30, "rosy": 0.50},
+        "skin": {"equalize": 0.30, "rosy": 0.50, "relight": 0.55},
         "eyes": {"whites": 0.25, "teeth_whiten": 0.25, "iris": 0.30, "catchlight": 0.25},
         "lips": {"tint": "rose", "gloss": 0.25},
         "hair": {"shine": 0.25},
-        "dodge_burn": {"amount": 0.15},
+        "dodge_burn": {"amount": 0.25},
         "color_harmony": {"preset": "xhs_ultrasoft", "amount": 0.90},
-        "bloom": {"opacity": 0.15},
+        "bloom": {"opacity": 0.20},
         "texture": {"opacity": 0.20},
         "finish": {"impact": 0.40},
-        
+        # Aggressive light sculpting + dreamy glow + soft tonal compression
+        "specular_bloom": 40,
+        "tonal_curve_strength": 0.35,
+        "highlight_rolloff": 0.45,
+        "skin_protect": 0.65,
+        "shadow_hue": 220, "shadow_sat": 35,
+        "midtone_hue": 30, "midtone_sat": 20,
+        "highlight_hue": 50, "highlight_sat": 10,
+        "micro_restore": 30,
+        "grain_strength": 0.30,
+
         # Modular overrides
         "slimming": 30.0,
         "blush": 25.0,
         "lip_finish": "velvet",
+    },
+    "xhs_soft_glow": {
+        "extends": "natural",
+        "frequency": {"smooth": 0.70, "mid_reduction": 0.55},
+        "skin": {"equalize": 0.40, "rosy": 0.55, "relight": 0.65},
+        "eyes": {"whites": 0.30, "teeth_whiten": 0.30, "iris": 0.32, "catchlight": 0.28},
+        "lips": {"tint": "rose", "gloss": 0.30},
+        "hair": {"shine": 0.30},
+        "dodge_burn": {"amount": 0.30},
+        "color_harmony": {"preset": "xhs_ultrasoft", "amount": 0.95},
+        "bloom": {"opacity": 0.25},
+        "texture": {"opacity": 0.50},
+        "finish": {"impact": 0.30},
+        # The strongest Xiaohongshu preset — full light sculpting stack:
+        # face-relight + specular bloom + tonal curve + highlight rolloff
+        # + cool/warm split-toning + restored micro-texture + organic grain.
+        "specular_bloom": 50,
+        "tonal_curve_strength": 0.45,
+        "highlight_rolloff": 0.55,
+        "skin_protect": 0.75,
+        "shadow_hue": 220, "shadow_sat": 40,
+        "midtone_hue": 30, "midtone_sat": 25,
+        "highlight_hue": 50, "highlight_sat": 15,
+        "micro_restore": 35,
+        "grain_strength": 0.35,
+
+        # Modular overrides
+        "slimming": 30.0,
+        "blush": 30.0,
+        "lip_finish": "velvet",
+        "nose_blush": True,
+        "under_eye_blush": True,
     },
     "fuji_porcelain": {
         "extends": "natural",
