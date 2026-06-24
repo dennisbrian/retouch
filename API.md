@@ -119,7 +119,7 @@ def process(
 
 #### Inputs
 *   **`img_bgr`** (`np.ndarray`): Input portrait image, expected in standard BGR format (e.g. from `cv2.imread`).
-*   **`recipe` / `preset`** (`str`, optional): Built-in preset recipe key (e.g. `"natural"`, `"cosplay"`, `"cyber_doll"`, `"portrait"`, `"pink_dream"`, `"meitu_clone"`). Preset is a backward-compatible alias.
+*   **`recipe` / `preset`** (`str`, optional): Built-in preset recipe key (e.g. `"natural"`, `"cosplay"`, `"cyber_doll"`, `"portrait"`, `"pink_dream"`, `"meitu_clone"`, `"xiaohongshu"`, `"xhs_ultrasoft"`, `"xhs_soft_glow"`). Preset is a backward-compatible alias.
 *   **`fast`** (`bool`, default: `False`): Fast-preview path. Downsamples the input image to a maximum dimension of 800px *before* landmarker and segmenter runs, saving ~40% overhead on high-res photos.
 *   **`style_profile`** (`StyleProfile`, optional): Active custom style overrides loaded from json/library.
 *   **`style_ref`** (`np.ndarray`, optional): Reference image used to extract style dynamics on-the-fly.
@@ -135,6 +135,7 @@ Passing an explicit value override to these parameters takes precedence over the
 *   **`mid_reduction`** (`float`, `0.0` to `1.0`): Suppression amount of mid-frequency details (blemishes, redness) while keeping pores intact.
 *   **`texture_opacity`** (`float`, `0.0` to `1.0`): Visibility opacity of high-frequency skin pore detail overlays.
 *   **`pore_synthesis`** (`float`, `0` to `100`): Added micro-pores amount to prevent an artificial plastic skin look.
+*   **`micro_restore`** (`float`, `0` to `50`, default: `20`): Re-inject dimensional micro-contrast in the cheek/nose/under-eye zones after smoothing. `0` disables restoration, `25` is subtle, `50` is strong. The effective restore amount scales with `smooth` so the call is a free no-op when no smoothing was applied. See also: `SkinProcessor.restore_micro_texture()`.
 *   **`blemish`** (`float`, `0` to `100`): Blemish/spot inpainting strength.
 
 ##### **Skin Tone & Color**
@@ -347,3 +348,14 @@ def learn_dataset_style(
 ) -> Tuple[StyleProfile, int]:
 ```
 Performs machine learning over a folder pair. It matches image filenames, filters invalid outliers using a trimmed mean, ignores failed face detections, and averages color and skin texture parameters. Returns the final averaged `StyleProfile` and the count of successfully processed image pairs.
+
+---
+
+## 6. Changelog
+
+### 2026-06-23 — Micro-Texture Restore & Xiaohongshu Light-Sculpting
+
+*   **New parameter `micro_restore`** (`0`–`50`, default `20`): re-injects dimensional micro-contrast in cheek/nose/under-eye zones after frequency-based smoothing. Backed by `SkinProcessor.restore_micro_texture()`. Exposed in the GUI as the **Micro-Texture Restore** slider and on the CLI as `--micro-restore`. See `SkinProcessor.restore_micro_texture()` for the underlying algorithm.
+*   **New recipe `xhs_soft_glow`**: the strongest Xiaohongshu preset — full light-sculpting stack (face relight, specular bloom, tonal curve, highlight rolloff, cool/warm split-toning) plus restored micro-texture and organic grain.
+*   **Updated recipes `xiaohongshu` and `xhs_ultrasoft`**: now wire the full light-sculpting stack (`relight`, `specular_bloom`, `tonal_curve_strength`, `highlight_rolloff`, `skin_protect`, split-toning, `micro_restore`, `grain_strength`).
+*   **`relight` resolver fix** (`retouch/engine.py`): the engine now respects `spec.recipe_key` for the `relight` parameter instead of hard-coding the top-level key. Previously, every recipe that set `skin.relight` had its value silently dropped (e.g. `xiaohongshu` and `xhs_ultrasoft` resolved to `relight=0`). The fix is data-driven: any future spec that adds a nested `recipe_key` will Just Work without engine-side changes. As a side benefit, every existing recipe that already set `skin.relight` (`cosplay`, `portrait`, `idol`, `korean_beauty`, `wedding`, `fuji_porcelain`, the Fuji sims) now receives its intended light-sculpting treatment.

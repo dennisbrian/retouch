@@ -20,7 +20,7 @@ graph TD
 
 ### 1.1 Column 1: Library & Presets (Left Column, `scale=1.5`)
 * **Inputs**: Image file upload zone (`img_input`) with multi-file and RAW support.
-* **Style Presets**: Vertical scrollable presets sidebar listing all 25 built-in recipes (custom `gr.Radio` chips).
+* **Style Presets**: Vertical scrollable presets sidebar listing all built-in recipes (custom `gr.Radio` chips), including the three Xiaohongshu presets — `xiaohongshu`, `xhs_ultrasoft`, and `xhs_soft_glow` (the strongest of the three).
 * **Library Styles**: Dropdown to load learned custom style profiles (`custom_style_preset`).
 * **Preferences**: Checkboxes for side-by-side split comparison (`show_compare`) and fast preview downsampling (`fast`).
 * **Export Menu**: Compact options for format (JPEG, PNG, WebP), compression quality, and resolution limits.
@@ -35,7 +35,7 @@ graph TD
 
 ### 1.3 Column 3: Develop Adjustments (Right Column, `scale=2.5`)
 Styled with class `.develop-panel` to **scroll independently** while the center image preview remains fixed on screen.
-* **Skin Smoothing & Texture**: Sliders for smoothing, mid-frequency blemish reduction, pore synthesis, and AI blemish removal.
+* **Skin Smoothing & Texture**: Sliders for smoothing, mid-frequency blemish reduction, pore synthesis, **Micro-Texture Restore** (`micro_restore`, 0–50, default 20) — "Re-inject dimensional micro-contrast in cheek/nose/under-eye zones after smoothing (0 = off, 25 = subtle, 50 = strong)" — and AI blemish removal.
 * **Skin & Tone**: CLAHE controls, skin whitening tones (Rosy, Porcelain, Neutral), contrast, brightness, and raw tone curves (Highlights, Shadows, Whites, Blacks).
 * **Virtual Studio Relighting**: 3D Blinn-Phong lighting strengths, light azimuth, and light elevation angles.
 * **Eyes & Lips**: Eye clarity, dark circles repair, teeth whitening, lip gloss/matte finishes, cosmetic lip tints, and cheek blush values.

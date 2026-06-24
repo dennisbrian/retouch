@@ -66,6 +66,7 @@ presets are:
 - `pink_dream`
 - `blue_dream`
 - `xhs_ultrasoft`
+- `xiaohongshu`
 - `fuji_porcelain`
 - `film`
 - `bw_noir`
@@ -110,6 +111,7 @@ filename (without the `.json` extension) as the preset name.
 "dark_circles": 22.0,        # 0–100
 "blemish": 30.0,             # 0–100
 "pore_synthesis": 0.0,       # 0–100
+"micro_restore": 20,         # 0–50  (default 20; re-injects dimensional micro-contrast after smoothing)
 "eye_enhance": 30.0,         # 0–100  (overrides `eyes.iris` / `eyes.whites`)
 "background_blur": 0.55,     # 0.0–1.0
 "background_desaturation": 0.40, # 0.0–1.0
@@ -141,6 +143,7 @@ explicit:
 | Mid Reduction (0.0–1.0) | `frequency.mid_reduction` | direct |
 | Texture Opacity (0.0–1.0) | `texture.opacity` | direct |
 | Pore Synthesis (0–100) | `pore_synthesis` | ÷ 100 |
+| Micro-Texture Restore (0–50) | `micro_restore` | direct |
 | Blemish Removal (0–100) | `blemish` | ÷ 100 |
 | Whitening (0–100) | `skin.rosy` or `skin.porcelain` | ÷ 100 |
 | Equalize (0–100) | `skin.equalize` | ÷ 100 |
@@ -223,6 +226,24 @@ A recipe with `"extends": "natural"` inherits all fields from `natural` and you 
     "bloom": {"opacity": 0.15},           # override bloom
 },
 ```
+
+## Xiaohongshu (XHS) Recipe Family
+
+Three presets target the Xiaohongshu light-and-air look. They share the same
+`extends: "natural"` parent and a light-sculpting stack (`relight`,
+`specular_bloom`, `tonal_curve_strength`, `highlight_rolloff`, `skin_protect`,
+cool/warm split-toning, `micro_restore`, `grain_strength`) but tune it with
+different intensity:
+
+| Recipe | Strength | `relight` | `specular_bloom` | `micro_restore` | `tonal_curve_strength` |
+|---|---|---:|---:|---:|---:|
+| `xiaohongshu` | Baseline | 40 | 30 | 25 | 0.25 |
+| `xhs_ultrasoft` | Stronger | 55 | 40 | 30 | 0.35 |
+| `xhs_soft_glow` | Strongest — full light-sculpting stack with bloom + rolloff + grain | 65 | 50 | 35 | 0.45 |
+
+`xiaohongshu` and `xhs_ultrasoft` were updated to activate the dormant
+light-sculpting stack; `xhs_soft_glow` is new and the strongest preset of the
+three.
 
 ## Adding a Recipe
 

@@ -76,6 +76,7 @@ Recipes are **self-documenting JSON files** with three sections:
     "mid_reduction": 0.45,
     "texture_opacity": 0.85,
     "pore_synthesis": 0.30,
+    "micro_restore": 0.20,
     "whiten": 0.55,
     "whiten_tone": "porcelain",
     "equalize": 0.50,
@@ -474,6 +475,14 @@ python3 -m retouch.recipe_loader schema
 ## GUI Integration
 
 The GUI's recipe dropdown should auto-populate with both built-in recipes (from `retouch/recipes.py`) and user-imported recipes (from `~/.cache/retouch/user_recipes/`). User recipes show a 🤖 icon or "(user)" tag to distinguish them.
+
+## Available Recipes (built-in)
+
+The shipped recipe family includes three Xiaohongshu presets at increasing
+intensity — `xiaohongshu` (baseline), `xhs_ultrasoft` (stronger), and
+`xhs_soft_glow` (strongest, full light-sculpting stack with bloom + rolloff
++ grain). They all use the `micro_restore` (0–50, default 20) parameter to
+keep micro-contrast in cheek/nose/under-eye zones after smoothing.
 
 ---
 
