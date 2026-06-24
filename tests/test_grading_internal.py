@@ -799,3 +799,74 @@ class TestFloatGradingFunctions:
         out_half = grader.grade(img, "natural", 0.5, skip_post_effects=True)
         assert out_half.dtype == np.uint8
         assert not np.array_equal(out_full, out_half)
+
+
+class TestWarmthSkinClamp:
+    """Skin-aware white-balance clamp on the b-channel warmth shift.
+
+    The clamp prevents the warmth setting from pushing the b-channel on skin
+    pixels too far from neutral. Full warmth is still applied to non-skin
+    pixels.
+    """
+
+    def test_warmth_clamped_on_skin(self, grader):
+        img = np.full((64, 64, 3), 128, dtype=np.uint8)
+        skin_mask = np.zeros((64, 64), dtype=np.float32)
+        skin_mask[:32, :] = 1.0
+        result = grader.grade(
+            img, {"warmth": 0.5}, 1.0,
+            skin_mask=skin_mask, skip_post_effects=True,
+        )
+        orig_lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
+        result_lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB).astype(np.float32)
+        skin_b_shift = float(
+            result_lab[:32, :, 2].mean() - orig_lab[:32, :, 2].mean()
+        )
+        assert abs(skin_b_shift - 10.0) <= 1.0
+        assert abs(skin_b_shift) <= 11.0
+
+    def test_warmth_unclamped_off_skin(self, grader):
+        img = np.full((64, 64, 3), 128, dtype=np.uint8)
+        skin_mask = np.zeros((64, 64), dtype=np.float32)
+        skin_mask[:32, :] = 1.0
+        skin_mask[32:, :] = 0.0
+        result = grader.grade(
+            img, {"warmth": 0.5}, 1.0,
+            skin_mask=skin_mask, skip_post_effects=True,
+        )
+        orig_lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
+        result_lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB).astype(np.float32)
+        non_skin_b_shift = float(
+            result_lab[32:, :, 2].mean() - orig_lab[32:, :, 2].mean()
+        )
+        assert abs(non_skin_b_shift - 15.0) <= 1.0
+
+    def test_warmth_no_clamp_below_threshold(self, grader):
+        """Warmth values that produce a shift within ±10 should not be touched
+        on skin (the clamp is a no-op)."""
+        img = np.full((64, 64, 3), 128, dtype=np.uint8)
+        skin_mask = np.ones((64, 64), dtype=np.float32)
+        result = grader.grade(
+            img, {"warmth": 0.2}, 1.0,
+            skin_mask=skin_mask, skip_post_effects=True,
+        )
+        orig_lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
+        result_lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB).astype(np.float32)
+        b_shift = float(
+            result_lab[:, :, 2].mean() - orig_lab[:, :, 2].mean()
+        )
+        assert abs(b_shift - 6.0) <= 1.0
+
+    def test_warmth_clamp_with_no_skin_mask_is_full_shift(self, grader):
+        """When no skin mask is provided the warmth shift is the full
+        ``warmth * 30`` everywhere."""
+        img = np.full((64, 64, 3), 128, dtype=np.uint8)
+        result = grader.grade(
+            img, {"warmth": 0.5}, 1.0, skip_post_effects=True,
+        )
+        orig_lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
+        result_lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB).astype(np.float32)
+        b_shift = float(
+            result_lab[:, :, 2].mean() - orig_lab[:, :, 2].mean()
+        )
+        assert abs(b_shift - 15.0) <= 1.0

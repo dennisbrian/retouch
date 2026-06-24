@@ -1504,6 +1504,7 @@ class RetouchEngine:
             result = self._grader.grade(
                 result, settings, ctx.grade_intensity,
                 split_tone_mask=acc_skin, glow_mask=g_mask, haze_mask=g_mask,
+                skin_mask=acc_skin,
                 skip_glows=skip_glows, skip_post_effects=True,
                 skin_protect_strength=ctx.skin_protect_strength,
             )
@@ -1538,6 +1539,7 @@ class RetouchEngine:
             result = self._grader.grade(
                 result, post_effects, 1.0,
                 split_tone_mask=acc_skin, glow_mask=g_mask, haze_mask=g_mask,
+                skin_mask=acc_skin,
                 skin_protect_strength=ctx.skin_protect_strength,
             )
 
