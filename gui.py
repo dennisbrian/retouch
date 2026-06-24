@@ -906,6 +906,15 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         overflow: visible !important;
     }
 
+    /* Re-enable internal scroll on develop-panel after the overflow fix above.
+       The .gradio-container .column rule (specificity 0,2,0) overrides
+       .develop-panel (0,1,0), killing overflow-y:auto and clipping content
+       past max-height:84vh. This higher-specificity rule restores it. */
+    .gradio-container .column.develop-panel {
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+    }
+
     /* Header Bar styling adapting to both Light and Dark mode */
     .header-bar {
         display: flex !important;

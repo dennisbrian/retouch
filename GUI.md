@@ -91,6 +91,20 @@ Transparent scroll container (glass inherits from parent panel):
 }
 ```
 
+> **Specificity note (2026-06-24):** A blanket "Overflow fix" rule higher in the stylesheet sets
+> `.gradio-container .column { overflow: visible !important; }` with specificity (0,2,0), which
+> would override the single-class `.develop-panel` rule (0,1,0) and silently disable the panel's
+> internal scrollbar — clipping every accordion section beyond 84vh with no way to reach them.
+> To guarantee the scroll survives, a follow-up rule re-asserts the intent at higher specificity:
+> ```css
+> .gradio-container .column.develop-panel {
+>     overflow-y: auto !important;
+>     overflow-x: hidden !important;
+> }
+> ```
+> Do not remove or reorder this rule. If you add new selectors that set `overflow` on columns,
+> match or exceed specificity (0,3,0).
+
 ### 2.4 Buttons & Controls
 Primary action button uses frosted glass with blue glow, secondary buttons use subtle glass:
 ```css
