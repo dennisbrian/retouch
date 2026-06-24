@@ -466,3 +466,142 @@ class TestBuildDimensionalMask:
         assert mask.dtype == np.float32
         assert mask.max() > 0.0
 
+
+class _FakeRestoreMicroTextureRegions:
+    """Minimal stub matching the FaceRegions attrs read by restore_micro_texture."""
+
+    def __init__(self, h: int = 200, w: int = 200, with_masks: bool = True) -> None:
+        if with_masks:
+            self.nose_bridge = np.zeros((h, w), dtype=np.float32)
+            self.nose_bridge[h // 3:h * 2 // 3, w // 2 - 10:w // 2 + 10] = 1.0
+            self.cheek_highlights_l = np.zeros((h, w), dtype=np.float32)
+            self.cheek_highlights_l[h // 2:h * 2 // 3, w // 4:w // 4 + 30] = 0.8
+            self.cheek_highlights_r = np.zeros((h, w), dtype=np.float32)
+            self.cheek_highlights_r[h // 2:h * 2 // 3, 3 * w // 4 - 30:3 * w // 4] = 0.8
+            self.left_under_eye = None
+            self.right_under_eye = None
+        else:
+            self.nose_bridge = None
+            self.cheek_highlights_l = None
+            self.cheek_highlights_r = None
+            self.left_under_eye = None
+            self.right_under_eye = None
+
+
+class TestRestoreMicroTexture:
+    @staticmethod
+    def _build_test_pair(h: int = 200, w: int = 200):
+        rng = np.random.default_rng(42)
+        original = rng.integers(80, 180, (h, w, 3), dtype=np.uint8)
+        original = np.clip(
+            original.astype(np.float32)
+            + rng.standard_normal((h, w, 3)).astype(np.float32) * 20,
+            0, 255,
+        ).astype(np.uint8)
+        smoothed = cv2.GaussianBlur(original, (15, 15), 0)
+        return original, smoothed
+
+    def test_no_op_when_strength_zero(self):
+        proc = SkinProcessor()
+        original, smoothed = self._build_test_pair()
+        regions = _FakeRestoreMicroTextureRegions()
+        result = proc.restore_micro_texture(
+            smoothed, original, regions, strength=0, smooth_strength=0.5
+        )
+        assert np.array_equal(result, smoothed)
+
+    def test_no_op_when_smooth_strength_zero(self):
+        proc = SkinProcessor()
+        original, smoothed = self._build_test_pair()
+        regions = _FakeRestoreMicroTextureRegions()
+        result = proc.restore_micro_texture(
+            smoothed, original, regions, strength=20, smooth_strength=0.0
+        )
+        assert np.array_equal(result, smoothed)
+
+    def test_no_op_when_all_regions_none(self):
+        proc = SkinProcessor()
+        original, smoothed = self._build_test_pair()
+        regions = _FakeRestoreMicroTextureRegions(with_masks=False)
+        result = proc.restore_micro_texture(
+            smoothed, original, regions, strength=20, smooth_strength=0.5
+        )
+        assert np.array_equal(result, smoothed)
+
+    def test_dimensional_mask_concentrates_restoration(self):
+        proc = SkinProcessor()
+        original, smoothed = self._build_test_pair()
+        regions = _FakeRestoreMicroTextureRegions()
+        result = proc.restore_micro_texture(
+            smoothed, original, regions, strength=40, smooth_strength=0.5
+        )
+
+        diff = np.abs(result.astype(np.float32) - smoothed.astype(np.float32))
+        # Inside: nose_bridge central area (mask == 1.0)
+        inside = diff[regions.nose_bridge == 1.0].mean()
+        # Outside: top-left corner, far from any region (dim_mask == 0)
+        outside = diff[0:50, 0:50].mean()
+
+        assert inside > 1.0, f"expected restoration inside nose region; inside={inside:.3f}"
+        assert outside < 0.1, f"expected no restoration outside mask; outside={outside:.3f}"
+        assert inside > outside * 5, (
+            f"expected restoration concentrated in nose region; "
+            f"inside={inside:.3f} outside={outside:.3f}"
+        )
+
+    def test_restoration_proportional_to_strength(self):
+        proc = SkinProcessor()
+        original, smoothed = self._build_test_pair()
+        regions = _FakeRestoreMicroTextureRegions()
+        # Use the high-mask core of the nose_bridge (well inside the 3px feather zone)
+        inside_mask = np.zeros_like(regions.nose_bridge, dtype=bool)
+        inside_mask[80:120, 95:105] = True
+
+        diffs = []
+        for s in (10, 25, 50):
+            result = proc.restore_micro_texture(
+                smoothed, original, regions, strength=s, smooth_strength=0.5
+            )
+            d = np.abs(result.astype(np.float32) - smoothed.astype(np.float32))[inside_mask].mean()
+            diffs.append(d)
+
+        # Linear in strength: 25/10 = 2.5, 50/10 = 5.0 (±20%)
+        assert diffs[1] == pytest.approx(diffs[0] * 2.5, rel=0.20)
+        assert diffs[2] == pytest.approx(diffs[0] * 5.0, rel=0.20)
+
+    def test_restoration_proportional_to_smooth_strength(self):
+        proc = SkinProcessor()
+        original, smoothed = self._build_test_pair()
+        regions = _FakeRestoreMicroTextureRegions()
+        inside_mask = np.zeros_like(regions.nose_bridge, dtype=bool)
+        inside_mask[80:120, 95:105] = True
+
+        def mean_diff(smooth_strength: float) -> float:
+            result = proc.restore_micro_texture(
+                smoothed, original, regions, strength=20, smooth_strength=smooth_strength
+            )
+            return float(
+                np.abs(result.astype(np.float32) - smoothed.astype(np.float32))[inside_mask].mean()
+            )
+
+        d_zero = mean_diff(0.0)
+        d_03 = mean_diff(0.3)
+        d_07 = mean_diff(0.7)
+
+        # smooth_strength=0.0 is a no-op (returns smoothed)
+        assert d_zero == 0.0
+        assert d_03 > 0.0
+        assert d_07 > d_03
+        # Linear in smooth_strength: 0.7/0.3 ≈ 2.33 (±20%)
+        assert d_07 == pytest.approx(d_03 * (0.7 / 0.3), rel=0.20)
+
+    def test_returns_uint8_with_correct_shape(self):
+        proc = SkinProcessor()
+        original, smoothed = self._build_test_pair()
+        regions = _FakeRestoreMicroTextureRegions()
+        result = proc.restore_micro_texture(
+            smoothed, original, regions, strength=25, smooth_strength=0.5
+        )
+        assert result.dtype == np.uint8
+        assert result.shape == original.shape
+
