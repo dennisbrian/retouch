@@ -392,3 +392,77 @@ class TestLocalClarity:
         regions = _FakeLocalClarityRegions()
         result = proc.local_clarity(img, regions, strength=0.30, radius=5)
         assert np.array_equal(result, img)
+
+
+class TestBuildDimensionalMask:
+    def test_all_none_returns_zeros(self):
+        class FakeRegions:
+            nose_bridge = None
+            cheek_highlights_l = None
+            cheek_highlights_r = None
+        mask = SkinProcessor._build_dimensional_mask(FakeRegions())
+        assert mask.shape == (200, 200)
+        assert mask.dtype == np.float32
+        assert mask.max() == 0.0
+
+    def test_single_attr_uses_its_shape(self):
+        class FakeRegions:
+            nose_bridge = np.ones((50, 70), dtype=np.float32) * 0.4
+            cheek_highlights_l = None
+            cheek_highlights_r = None
+        mask = SkinProcessor._build_dimensional_mask(FakeRegions())
+        assert mask.shape == (50, 70)
+        assert mask.dtype == np.float32
+        assert mask.max() == pytest.approx(0.4)
+
+    def test_union_clips_to_one(self):
+        class FakeRegions:
+            nose_bridge = np.ones((10, 10), dtype=np.float32) * 0.7
+            cheek_highlights_l = np.ones((10, 10), dtype=np.float32) * 0.7
+            cheek_highlights_r = None
+        mask = SkinProcessor._build_dimensional_mask(FakeRegions())
+        assert mask.shape == (10, 10)
+        assert mask.max() == pytest.approx(1.0)
+
+    def test_custom_attrs(self):
+        class FakeRegions:
+            nose_bridge = None
+            cheek_highlights_l = None
+            cheek_highlights_r = None
+            forehead_center = np.ones((8, 8), dtype=np.float32) * 0.3
+        mask = SkinProcessor._build_dimensional_mask(
+            FakeRegions(),
+            attrs=("forehead_center",),
+        )
+        assert mask.shape == (8, 8)
+        assert mask.max() == pytest.approx(0.3)
+
+    def test_feather_zero_is_identity(self):
+        class FakeRegions:
+            nose_bridge = np.ones((20, 20), dtype=np.float32) * 0.5
+            cheek_highlights_l = None
+            cheek_highlights_r = None
+        mask = SkinProcessor._build_dimensional_mask(FakeRegions(), feather=0)
+        assert mask.max() == pytest.approx(0.5)
+
+    def test_feather_smooths_peak(self):
+        class FakeRegions:
+            nose_bridge = np.zeros((40, 40), dtype=np.float32)
+            nose_bridge[18:22, 18:22] = 1.0
+            cheek_highlights_l = None
+            cheek_highlights_r = None
+        mask_plain = SkinProcessor._build_dimensional_mask(FakeRegions(), feather=0)
+        mask_feather = SkinProcessor._build_dimensional_mask(FakeRegions(), feather=5)
+        assert mask_plain.max() == pytest.approx(1.0)
+        assert mask_feather.max() < 1.0
+        assert mask_feather.max() > 0.0
+
+    def test_uint8_attr_is_promoted(self):
+        class FakeRegions:
+            nose_bridge = (np.ones((5, 5), dtype=np.uint8) * 200)
+            cheek_highlights_l = None
+            cheek_highlights_r = None
+        mask = SkinProcessor._build_dimensional_mask(FakeRegions())
+        assert mask.dtype == np.float32
+        assert mask.max() > 0.0
+

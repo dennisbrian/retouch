@@ -5,7 +5,7 @@ All operations work within the skin mask to never affect hair, eyes, or backgrou
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -17,6 +17,38 @@ class SkinProcessor:
     """Skin smoothing, whitening, and tone equalization."""
 
     MEDIAPIPE_CHIN_IDX = 152
+
+    @staticmethod
+    def _build_dimensional_mask(
+        regions: Any,
+        attrs: Tuple[str, ...] = (
+            "nose_bridge", "cheek_highlights_l", "cheek_highlights_r",
+        ),
+        feather: int = 0,
+    ) -> np.ndarray:
+        """Union of the named FaceRegions attrs, with optional Gaussian feather.
+
+        Returns a float32 mask in [0, 1] with the same shape as the regions.
+        Feather is the Gaussian kernel size (odd int). 0 = no feather.
+        """
+        dim_mask: Optional[np.ndarray] = None
+        for attr in attrs:
+            m = getattr(regions, attr, None)
+            if m is None:
+                continue
+            m_f = m.astype(np.float32, copy=False) if m.dtype != np.float32 else m
+            if dim_mask is None:
+                dim_mask = m_f.copy()
+                continue
+            dim_mask = np.clip(dim_mask + m_f, 0.0, 1.0)
+
+        if dim_mask is None:
+            return np.zeros((200, 200), dtype=np.float32)
+
+        if feather > 0:
+            dim_mask = cv2.GaussianBlur(dim_mask, (feather, feather), 0)
+
+        return dim_mask
 
     def whiten(
         self,
@@ -160,11 +192,13 @@ class SkinProcessor:
         lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
         protection = self._get_highlight_protection(lab)
 
-        brighten_mask = np.zeros(regions.skin.shape, dtype=np.float32)
-        for mask in (regions.nose_bridge, regions.forehead_center,
-                     regions.cheek_highlights_l, regions.cheek_highlights_r):
-            if mask is not None:
-                brighten_mask = np.clip(brighten_mask + mask, 0, 1)
+        brighten_mask = self._build_dimensional_mask(
+            regions,
+            attrs=(
+                "nose_bridge", "forehead_center",
+                "cheek_highlights_l", "cheek_highlights_r",
+            ),
+        )
 
         darken_mask = (regions.jawline_contour.astype(np.float32, copy=False)
                        if regions.jawline_contour is not None
@@ -405,30 +439,26 @@ class SkinProcessor:
             return smoothed_bgr
 
         h, w = smoothed_bgr.shape[:2]
+        feather = max(3, int(min(h, w) * 0.01)) | 1
 
         # Build a dimensional mask: where micro-contrast actually matters
         # (cheek highlights, nose bridge, under-eye transition). These are
         # the zones the bilateral+mid_reduction step is most likely to
         # flatten, and where restoration is perceptually most valuable.
-        dim_mask = np.zeros((h, w), dtype=np.float32)
-        for attr in (
-            "nose_bridge",
-            "cheek_highlights_l",
-            "cheek_highlights_r",
-            "left_under_eye",
-            "right_under_eye",
-        ):
-            m = getattr(regions, attr, None)
-            if m is None:
-                continue
-            m_f = m.astype(np.float32) if m.dtype != np.float32 else m
-            dim_mask = np.clip(dim_mask + m_f, 0.0, 1.0)
+        dim_mask = self._build_dimensional_mask(
+            regions,
+            attrs=(
+                "nose_bridge",
+                "cheek_highlights_l",
+                "cheek_highlights_r",
+                "left_under_eye",
+                "right_under_eye",
+            ),
+            feather=feather,
+        )
 
         if dim_mask.max() < 0.01:
             return smoothed_bgr
-
-        feather = max(3, int(min(h, w) * 0.01)) | 1
-        dim_mask = cv2.GaussianBlur(dim_mask, (feather, feather), 0)
 
         # Detail = what smoothing killed (signed).
         detail = original_bgr.astype(np.float32) - smoothed_bgr.astype(np.float32)
