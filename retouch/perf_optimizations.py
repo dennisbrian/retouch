@@ -26,6 +26,41 @@ import onnxruntime as ort
 
 from .frequency import FrequencySeparator
 
+
+def _build_smooth_mask(
+    skin: Optional[np.ndarray],
+    exclusions: Tuple[Optional[np.ndarray], ...],
+    out_shape: Optional[Tuple[int, int]] = None,
+) -> np.ndarray:
+    """Build the per-face smooth mask by subtracting exclusion masks from skin.
+
+    The smooth mask tells the bilateral/median pipeline which pixels may be
+    smoothed. Eyes, brows, lips, under-eyes and hair roots must be excluded
+    so retouching never crosses those boundaries.
+
+    Args:
+        skin: ``(H, W)`` float32 skin mask, or ``None`` to zero-init.
+        exclusions: Tuple of optional ``(H, W)`` masks to subtract. ``None``
+            entries are skipped. Non-float dtypes are cast to float32.
+        out_shape: Optional ``(H, W)`` shape. Required when ``skin`` is ``None``.
+
+    Returns:
+        ``(H, W)`` float32 mask clipped to ``[0, 1]``.
+    """
+    if skin is not None:
+        smooth_mask = skin.copy()
+    elif out_shape is not None:
+        smooth_mask = np.zeros(out_shape, dtype=np.float32)
+    else:
+        raise ValueError("Either `skin` or `out_shape` must be provided")
+
+    for excl in exclusions:
+        if excl is not None:
+            smooth_mask = np.clip(
+                smooth_mask - excl.astype(np.float32), 0.0, 1.0
+            )
+    return smooth_mask
+
 try:
     import numba
     HAS_NUMBA = True
@@ -155,8 +190,12 @@ def _process_face_core(
     pre_smooth_canvas = canvas.copy()
     layers = frequency.separate(canvas, face_width)
 
-    # ---- Build smooth mask (protect eyes/brows/lips) ----
-    smooth_mask = skin_n.copy() if skin_n is not None else np.zeros((roi_h, roi_w), np.float32)
+    # ---- Build smooth mask (protect eyes/brows/lips/hair) ----
+    smooth_mask = _build_smooth_mask(
+        skin_n,
+        exclusions=(),
+        out_shape=(roi_h, roi_w),
+    )
 
     if shifted_face.ied > 0:
         k_size = max(3, int(shifted_face.ied * 0.08) | 1)
@@ -167,14 +206,16 @@ def _process_face_core(
         dilated_left_eye = regions.left_eye
         dilated_right_eye = regions.right_eye
 
-    for excl in (
-        dilated_left_eye, dilated_right_eye,
-        regions.left_under_eye, regions.right_under_eye,
-        regions.left_eyebrow, regions.right_eyebrow,
-        regions.lips,
-    ):
-        if excl is not None:
-            smooth_mask = np.clip(smooth_mask - excl.astype(np.float32), 0.0, 1.0)
+    smooth_mask = _build_smooth_mask(
+        smooth_mask,
+        exclusions=(
+            dilated_left_eye, dilated_right_eye,
+            regions.left_under_eye, regions.right_under_eye,
+            regions.left_eyebrow, regions.right_eyebrow,
+            regions.lips,
+            regions.hair,
+        ),
+    )
 
     # ---- Frequency-based smoothing ----
     if ctx.nose_smooth is not None:
@@ -322,6 +363,14 @@ def _process_face_core(
     # ---- Dodge & burn ----
     if ctx.dodge_burn > 0:
         canvas = skin.dodge_burn(canvas, regions, ctx.dodge_burn)
+
+    # ---- Local clarity (nose/lips/eyes pop) ----
+    if ctx.clarity > 0:
+        canvas = skin.local_clarity(
+            canvas, regions,
+            strength=ctx.clarity / 100.0 * 0.20,
+            radius=20,
+        )
 
     # ---- Build sharpening mask ----
     acc_sharpen = np.zeros((roi_h, roi_w), dtype=np.float32)

@@ -10,7 +10,7 @@ from typing import Any, Optional
 import cv2
 import numpy as np
 
-from .utils import blend_masked, normalize_mask
+from .utils import blend_masked, normalize_mask, squeeze_mask
 
 
 class SkinProcessor:
@@ -176,7 +176,21 @@ class SkinProcessor:
         lab[:, :, 0] = np.clip(lab[:, :, 0] - lab[:, :, 0] * darken_mask * 0.04 * s, 0, 255)
 
         result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
-        return blend_masked(img_bgr, result, regions.skin)
+
+        # Exclude hair and eyebrows from dodge/burn output so we never
+        # sculpt inside hair roots or scrub pigment off brow hairs.
+        blend = regions.skin
+        if blend is not None:
+            for excl_attr in ("hair", "left_eyebrow", "right_eyebrow"):
+                excl = getattr(regions, excl_attr, None)
+                if excl is not None:
+                    blend = np.clip(
+                        blend.astype(np.float32, copy=False)
+                        - excl.astype(np.float32),
+                        0.0,
+                        1.0,
+                    )
+        return blend_masked(img_bgr, result, blend)
 
     def harmonize_neck(
         self,
@@ -431,6 +445,64 @@ class SkinProcessor:
 
         restored = smoothed_bgr.astype(np.float32) + detail * restore_amount * dim_mask_3d
         return np.clip(restored, 0, 255).astype(np.uint8)
+
+    def local_clarity(
+        self,
+        img_bgr: np.ndarray,
+        regions: Any,
+        strength: float = 0.10,
+        radius: int = 20,
+    ) -> np.ndarray:
+        """Local clarity — apply a high-pass boost only to nose/lips/eyes.
+
+        High-pass = original - GaussianBlur(original, radius).
+        Result = original + high_pass * strength * local_mask.
+
+        This gives "pop" to dimensional features (nose, lips, eye area) without
+        the global clarity side effect of accentuating skin texture everywhere.
+        Modulated by the global clarity slider in the engine (0-100 → 0.0-0.3).
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR canvas.
+            regions: ``FaceRegions`` with ``nose``, ``lips``, ``left_eye``,
+                ``right_eye``, ``nose_bridge`` sub-masks. Missing entries are
+                skipped.
+            strength: 0.0–0.3 boost factor on the high-pass signal. 0 = no-op.
+            radius: Gaussian radius (in pixels) used to extract the
+                low-frequency base for the high-pass.
+
+        Returns:
+            (H, W, 3) uint8 BGR canvas with localized clarity applied.
+        """
+        if strength <= 0:
+            return img_bgr
+
+        h, w = img_bgr.shape[:2]
+
+        local_mask = np.zeros((h, w), dtype=np.float32)
+        for attr in ("nose", "lips", "left_eye", "right_eye", "nose_bridge"):
+            m = getattr(regions, attr, None)
+            if m is None:
+                continue
+            m_f = m.astype(np.float32) if m.dtype != np.float32 else m
+            m_f = squeeze_mask(m_f)
+            local_mask = np.clip(local_mask + m_f, 0.0, 1.0)
+
+        if local_mask.max() < 0.01:
+            return img_bgr
+
+        feather = max(3, int(min(h, w) * 0.01)) | 1
+        local_mask = cv2.GaussianBlur(local_mask, (feather, feather), 0)
+        local_mask = np.clip(local_mask, 0.0, 1.0)
+
+        ksize = max(radius * 2 + 1, 3)
+        img_f = img_bgr.astype(np.float32)
+        low = cv2.GaussianBlur(img_f, (ksize, ksize), 0)
+        high = img_f - low
+
+        mask_3d = local_mask[:, :, np.newaxis]
+        boosted = img_f + high * float(strength) * mask_3d
+        return np.clip(boosted, 0, 255).astype(np.uint8)
 
     @staticmethod
     def _get_highlight_protection(lab: np.ndarray) -> np.ndarray:

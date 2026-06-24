@@ -4,6 +4,7 @@ import numpy as np
 import cv2
 import pytest
 
+from retouch.perf_optimizations import _build_smooth_mask
 from retouch.skin import SkinProcessor
 
 
@@ -118,6 +119,46 @@ class TestDodgeBurn:
         result = proc.dodge_burn(img, FakeRegions(), strength=50)
         assert not np.allclose(result, img)
 
+    def test_dodge_burn_excludes_hair(self, proc):
+        # Build a 64x64 image with a non-trivial gradient so dodge/burn
+        # produces a measurable change. Mark the top half as hair and the
+        # bottom half as skin. A strong nose_bridge mask forces a real edit
+        # inside skin; the hair half must remain pixel-identical to input.
+        h, w = 64, 64
+        img = np.zeros((h, w, 3), dtype=np.uint8)
+        for y in range(h):
+            img[y, :, 0] = y * 4
+            img[y, :, 1] = 128
+            img[y, :, 2] = 64
+
+        skin = np.zeros((h, w), dtype=np.float32)
+        skin[:] = 1.0
+        hair = np.zeros((h, w), dtype=np.float32)
+        hair[:h // 2, :] = 1.0
+        nose_bridge = np.zeros((h, w), dtype=np.float32)
+        nose_bridge[h // 2:, :] = 1.0  # only below hair, inside skin
+
+        class FakeRegions:
+            pass
+
+        regions = FakeRegions()
+        regions.skin = skin
+        regions.hair = hair
+        regions.left_eyebrow = None
+        regions.right_eyebrow = None
+        regions.nose_bridge = nose_bridge
+        regions.forehead_center = np.zeros((h, w), dtype=np.float32)
+        regions.cheek_highlights_l = np.zeros((h, w), dtype=np.float32)
+        regions.cheek_highlights_r = np.zeros((h, w), dtype=np.float32)
+        regions.jawline_contour = np.zeros((h, w), dtype=np.float32)
+
+        result = proc.dodge_burn(img, regions, strength=80)
+
+        # Hair half must be byte-identical to the input — no smoothing, no sculpt.
+        assert np.array_equal(result[:h // 2, :], img[:h // 2, :])
+        # Sanity: skin half (below hair) actually changed.
+        assert not np.array_equal(result[h // 2:, :], img[h // 2:, :])
+
 
 class TestHarmonizeNeck:
     def test_no_person_mask_returns_original(self, proc, img):
@@ -203,3 +244,151 @@ class TestHighlightProtection:
         lab[:, :, 0] = 255
         prot = proc._get_highlight_protection(lab)
         assert prot.max() == 0.0
+
+
+class TestBuildSmoothMask:
+    def test_skin_alone(self):
+        skin = np.ones((4, 4), dtype=np.float32)
+        out = _build_smooth_mask(skin, exclusions=())
+        assert np.array_equal(out, skin)
+
+    def test_skin_none_requires_shape(self):
+        out = _build_smooth_mask(None, exclusions=(), out_shape=(3, 5))
+        assert out.shape == (3, 5)
+        assert out.dtype == np.float32
+        assert np.all(out == 0.0)
+
+    def test_skin_none_without_shape_raises(self):
+        with pytest.raises(ValueError):
+            _build_smooth_mask(None, exclusions=())
+
+    def test_excludes_hair(self):
+        h, w = 64, 64
+        skin = np.ones((h, w), dtype=np.float32)
+        hair = np.zeros((h, w), dtype=np.float32)
+        hair[: h // 2, :] = 1.0  # top half is hair
+
+        out = _build_smooth_mask(skin, exclusions=(hair,))
+        # Hair region must be fully excluded.
+        assert np.all(out[: h // 2, :] == 0.0)
+        # Skin-only region must be untouched.
+        assert np.all(out[h // 2:, :] == 1.0)
+
+    def test_excludes_multiple_regions(self):
+        h, w = 32, 32
+        skin = np.ones((h, w), dtype=np.float32)
+        hair = np.zeros((h, w), dtype=np.float32)
+        hair[0:8, :] = 1.0
+        left_eye = np.zeros((h, w), dtype=np.float32)
+        left_eye[10:18, 4:12] = 1.0
+        lips = np.zeros((h, w), dtype=np.float32)
+        lips[24:30, 10:22] = 1.0
+
+        out = _build_smooth_mask(
+            skin, exclusions=(hair, left_eye, lips)
+        )
+        assert np.all(out[0:8, :] == 0.0)
+        assert np.all(out[10:18, 4:12] == 0.0)
+        assert np.all(out[24:30, 10:22] == 0.0)
+        # Pixels not in any exclusion remain at 1.0.
+        assert np.all(out[20:23, 0:4] == 1.0)
+
+    def test_none_exclusion_is_skipped(self):
+        skin = np.ones((4, 4), dtype=np.float32)
+        hair = np.zeros((4, 4), dtype=np.float32)
+        hair[:2, :] = 1.0
+        out = _build_smooth_mask(
+            skin, exclusions=(None, hair, None)
+        )
+        assert np.all(out[:2, :] == 0.0)
+        assert np.all(out[2:, :] == 1.0)
+
+    def test_output_is_clipped_to_unit_range(self):
+        skin = np.ones((4, 4), dtype=np.float32)
+        # Exclusion larger than skin would underflow without clipping.
+        excl = np.full((4, 4), 0.5, dtype=np.float32)
+        out = _build_smooth_mask(skin, exclusions=(excl,))
+        assert out.min() >= 0.0
+        assert out.max() <= 1.0
+        assert np.allclose(out, 0.5)
+
+
+class _FakeLocalClarityRegions:
+    """Minimal stub matching the FaceRegions attrs read by local_clarity."""
+
+    def __init__(self, nose=None, lips=None, left_eye=None, right_eye=None, nose_bridge=None):
+        self.nose = nose
+        self.lips = lips
+        self.left_eye = left_eye
+        self.right_eye = right_eye
+        self.nose_bridge = nose_bridge
+
+
+class TestLocalClarity:
+    def test_local_clarity_no_op_at_zero(self, proc):
+        # Constant mid-gray image with a bright bar in the centre would
+        # normally get sharpened, so any change here is a true signal.
+        img = np.full((64, 64, 3), 128, dtype=np.uint8)
+        img[24:40, 24:40] = 220
+        regions = _FakeLocalClarityRegions(
+            nose=np.ones((64, 64), dtype=np.float32)
+        )
+        result = proc.local_clarity(img, regions, strength=0.0, radius=5)
+        assert np.array_equal(result, img)
+
+    def test_local_clarity_boosts_in_mask_regions(self, proc):
+        # Build a 64x64 image with a sharp vertical bar (edge) inside the
+        # nose region. After local_clarity, the gradient magnitude of the
+        # edge inside the mask must increase (high-frequency content is
+        # amplified).
+        img = np.full((64, 64, 3), 100, dtype=np.uint8)
+        img[8:56, 28:36] = 220
+
+        nose_mask = np.zeros((64, 64), dtype=np.float32)
+        nose_mask[8:56, 24:40] = 1.0
+        regions = _FakeLocalClarityRegions(nose=nose_mask)
+
+        def edge_gradient(canvas: np.ndarray) -> float:
+            gray = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY)
+            gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+            gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+            mag = cv2.magnitude(gx, gy)
+            return float(mag[nose_mask > 0.5].mean())
+
+        before = edge_gradient(img)
+        result = proc.local_clarity(img, regions, strength=0.30, radius=5)
+        after = edge_gradient(result)
+
+        assert after > before * 1.05, (
+            f"expected gradient inside mask to grow; before={before:.3f} after={after:.3f}"
+        )
+
+    def test_local_clarity_does_not_touch_outside_mask(self, proc):
+        # Small inner mask, all other region attrs None. Pixels far from
+        # the mask (e.g. the four corners) must be returned exactly — the
+        # feathering only spreads ~3px from the mask boundary.
+        img = np.full((64, 64, 3), 128, dtype=np.uint8)
+        # Drop distinctive markers into the corners so any leak shows up.
+        img[0:4, 0:4] = 10
+        img[0:4, 60:64] = 20
+        img[60:64, 0:4] = 30
+        img[60:64, 60:64] = 40
+
+        nose_mask = np.zeros((64, 64), dtype=np.float32)
+        nose_mask[28:36, 28:36] = 1.0
+        regions = _FakeLocalClarityRegions(nose=nose_mask)
+
+        result = proc.local_clarity(img, regions, strength=0.30, radius=5)
+
+        # All four corner blocks must be byte-identical to the input.
+        assert np.array_equal(result[0:4, 0:4], img[0:4, 0:4])
+        assert np.array_equal(result[0:4, 60:64], img[0:4, 60:64])
+        assert np.array_equal(result[60:64, 0:4], img[60:64, 0:4])
+        assert np.array_equal(result[60:64, 60:64], img[60:64, 60:64])
+
+    def test_local_clarity_all_regions_none_is_noop(self, proc):
+        img = np.full((64, 64, 3), 128, dtype=np.uint8)
+        img[20:30, 20:30] = 240
+        regions = _FakeLocalClarityRegions()
+        result = proc.local_clarity(img, regions, strength=0.30, radius=5)
+        assert np.array_equal(result, img)
