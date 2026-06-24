@@ -61,6 +61,24 @@ class EyeEnhancer:
         cl_s = catchlight_strength if catchlight_strength is not None else strength
         result = self._enhance_catchlights(result, iris_mask, cl_s / 100.0)
 
+        # Specular catchlight boost — small +10% on detected iris specular pixels
+        if catchlight_strength and catchlight_strength > 0:
+            s_spec = catchlight_strength / 100.0
+            boost = 0.10 * s_spec
+            for iris_mask in (regions.left_iris, regions.right_iris):
+                if iris_mask is None or iris_mask.max() < 0.01:
+                    continue
+                lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB).astype(np.float32)
+                l_chan = lab[:, :, 0]
+                specular = np.clip((l_chan - 220.0) / 20.0, 0.0, 1.0) * (iris_mask > 0.1).astype(np.float32)
+                if specular.max() < 0.01:
+                    continue
+                h, w = l_chan.shape
+                k = max(3, int(min(h, w) * 0.005)) | 1
+                specular = cv2.GaussianBlur(specular, (k, k), 0)
+                lab[:, :, 0] = np.minimum(l_chan + 255.0 * boost * specular, 255.0)
+                result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+
         return result
 
     def _enhance_whites(
