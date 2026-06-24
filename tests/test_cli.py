@@ -173,4 +173,94 @@ class TestEdgeCases:
         assert len(out_files) >= 2
 
 
+# ---------------------------------------------------------------------------
+# --micro-restore flag smoke test
+# ---------------------------------------------------------------------------
+
+class TestMicroRestoreFlag:
+    """End-to-end smoke test for the --micro-restore CLI flag.
+
+    The flag is auto-derived from ``ParamSpec(cli_flag="micro-restore")`` in
+    ``retouch/params.py`` and is exposed on the CLI as ``--micro-restore``.
+    argparse converts the hyphen to an underscore, so the parsed attribute
+    is ``args.micro_restore`` and it flows into ``engine.process(micro_restore=...)``.
+    """
+
+    def _run_with_micro_restore(self, value, image_path, tmp_path):
+        """Invoke the CLI with --micro-restore=<value> and return (rc, out_path)."""
+        cv2 = pytest.importorskip("cv2")
+
+        input_path = Path(str(image_path))
+        assert input_path.exists(), f"Test image missing: {input_path}"
+
+        output_dir = tmp_path / "out"
+        output_dir.mkdir()
+        out_path = output_dir / f"{input_path.stem}.jpg"
+
+        args = [
+            str(input_path),
+            "-o", str(output_dir),
+            "--max-dim", "400",
+            "--no-compare",
+            "--force",
+        ]
+        if value is not None:
+            args.extend(["--micro-restore", str(value)])
+
+        rc, out, err = _run_cli(*args, timeout=120)
+        return rc, out, err, out_path
+
+    def test_cli_accepts_micro_restore_flag(self, natural_image_path, tmp_path):
+        """--micro-restore=25 must succeed end-to-end and produce a valid JPEG."""
+        if natural_image_path is None:
+            pytest.skip("No natural test image available in test_output/")
+
+        rc, out, err, out_path = self._run_with_micro_restore(
+            25, natural_image_path, tmp_path,
+        )
+        assert rc == 0, f"CLI failed (rc={rc}): {err}\nstdout: {out}"
+
+        assert out_path.exists(), f"Output file not created: {out_path}"
+        assert out_path.stat().st_size > 0, "Output file is empty"
+
+        cv2 = pytest.importorskip("cv2")
+        img = cv2.imread(str(out_path))
+        assert img is not None, f"Output is not a valid readable JPEG: {out_path}"
+        assert img.ndim == 3 and img.shape[2] == 3, (
+            f"Output has unexpected shape: {img.shape}"
+        )
+
+    def test_cli_micro_restore_zero_is_valid(self, natural_image_path, tmp_path):
+        """--micro-restore=0 should be accepted (treated as off) and succeed."""
+        if natural_image_path is None:
+            pytest.skip("No natural test image available in test_output/")
+
+        rc, out, err, out_path = self._run_with_micro_restore(
+            0, natural_image_path, tmp_path,
+        )
+        assert rc == 0, f"CLI failed (rc={rc}): {err}\nstdout: {out}"
+        assert out_path.exists(), f"Output file not created: {out_path}"
+        assert out_path.stat().st_size > 0, "Output file is empty"
+
+        cv2 = pytest.importorskip("cv2")
+        img = cv2.imread(str(out_path))
+        assert img is not None, f"Output is not a valid readable JPEG: {out_path}"
+
+    def test_cli_micro_restore_default_is_twenty(self, natural_image_path, tmp_path):
+        """Invoking without --micro-restore should succeed using the spec default (20)."""
+        if natural_image_path is None:
+            pytest.skip("No natural test image available in test_output/")
+
+        rc, out, err, out_path = self._run_with_micro_restore(
+            None, natural_image_path, tmp_path,
+        )
+        assert rc == 0, f"CLI failed (rc={rc}): {err}\nstdout: {out}"
+        assert out_path.exists(), f"Output file not created: {out_path}"
+        assert out_path.stat().st_size > 0, "Output file is empty"
+
+        cv2 = pytest.importorskip("cv2")
+        img = cv2.imread(str(out_path))
+        assert img is not None, f"Output is not a valid readable JPEG: {out_path}"
+
+
 import numpy as np
