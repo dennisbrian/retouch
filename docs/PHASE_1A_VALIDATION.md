@@ -76,7 +76,7 @@ test machine: macOS, Python 3.9, OpenCV headless.
 project's "interactive preview" budget; for a 4K master this scales
 roughly linearly to ~180 ms / frame, which is fine for an offline pass.
 
-The performance budget from AGENTS.md Appendix F is "+10% runtime". The
+The performance budget from AGENTS.md Appendix C is "+10% runtime". The
 4 new modules, when *all enabled*, add ~46 ms to a single image. The
 existing engine on a 1080p image is in the 200–400 ms range (dominated
 by MediaPipe + the BiSeNet face parser + frequency separation), so 46 ms

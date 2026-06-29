@@ -20,7 +20,7 @@
 * Each sim applies ~10–15 ms of additional processing on top of
   the foundation layer (`tonal` + `skin_protect` + `highlight` +
   `grain`) for a 1080p image. Well under the +10% per-image budget
-  in AGENTS.md Appendix F.
+  in AGENTS.md Appendix C.
 * The sims reference the foundation layer from Phase 1.a — the
   H&D curve, skin-hue protection, highlight rolloff, and grain
   primitives — and add per-sim colour grading on top.
@@ -264,7 +264,7 @@ For reference, the foundation layer benchmark from Phase 1.a:
 | **Combined foundation** | **46.24** | **~22** |
 
 The combined sims are within the +10% per-image budget defined
-in AGENTS.md Appendix F. With default strength=0 on every
+in AGENTS.md Appendix C. With default strength=0 on every
 foundation module, the sims are *zero* cost over the input.
 
 Performance numbers are estimates pending re-benchmark with
