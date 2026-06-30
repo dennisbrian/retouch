@@ -2,6 +2,15 @@
 RGB (ProPhoto, Adobe RGB) conversions for Fuji X-Trans and other wide-gamut
 camera sources.
 
+Public API:
+    Conversion:  bgr_to_lch / lch_to_bgr / lab_to_lch / lch_to_lab
+    Adjustment:  adjust_luminance / adjust_chroma / adjust_hue
+    Range edits: hue_range_mask / adjust_hue_range / adjust_chroma_range / adjust_luminance_range
+    Tone-based:  split_tone_lch / color_balance_lch
+    Skin:        skin_mask_lch
+    Wide-gamut:  bgr_to_prophoto / prophoto_to_bgr / bgr_to_adobe_rgb / adobe_rgb_to_bgr
+    Utility:     estimate_gamut / srgb_to_xyz_matrix / xyz_to_prophoto_matrix
+
 All matrix-based conversions use the simple linear-matrix path
 (BGR -> sRGB float -> XYZ D65 -> wide-gamut RGB) without gamma
 linearization. This is fast and round-trip stable, but the resulting
@@ -151,6 +160,254 @@ def adjust_hue(lch: np.ndarray, delta_deg: float) -> np.ndarray:
     """
     out = lch.copy()
     out[:, :, 2] = np.mod(out[:, :, 2] + delta_deg, 360.0)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Perceptual HSL range-editing primitives (LCH-based)
+#
+# These are the building blocks for a Lightroom-style HSL panel that
+# operates in perceptually-uniform LCH space instead of device-centric
+# HSV/HSL.  All functions accept and return float32 LCH arrays.
+# ---------------------------------------------------------------------------
+
+
+def hue_range_mask(
+    lch: np.ndarray,
+    hue_center: float = 0.0,
+    hue_width: float = 30.0,
+    falloff: float = 15.0,
+) -> np.ndarray:
+    """Soft symmetric mask around a hue center in [0, 360).
+
+    The mask is cos²-falloff for natural blending — sharp at the edges of
+    everyday colour sliders, but never creating a visible seam.
+
+    Args:
+        lch: (H, W, 3) float32 LCH.
+        hue_center: Hue centre in degrees. 0=red, 120=green, 240=blue.
+        hue_width: Half-width of the hue range in degrees. Default 30
+            covers ±30° around hue_center.
+        falloff: Additional falloff width in degrees (cos² ramp). Default
+            15° gives a smooth blend at the range edges.
+
+    Returns:
+        (H, W) float32 mask in [0, 1].
+    """
+    d = np.abs(lch[:, :, 2] - hue_center)
+    d = np.minimum(d, 360.0 - d)
+    inner = hue_width
+    outer = hue_width + falloff
+    if outer <= inner:
+        return (d <= inner).astype(np.float32)
+    t = np.clip((d - inner) / (outer - inner), 0.0, 1.0)
+    return (np.cos(t * np.pi * 0.5) ** 2).astype(np.float32)
+
+
+def adjust_hue_range(
+    lch: np.ndarray,
+    hue_center: float,
+    hue_width: float = 30.0,
+    delta_deg: float = 0.0,
+    falloff: float = 15.0,
+) -> np.ndarray:
+    """Shift hue *within* a hue range using a soft mask.
+
+    This is the Lightroom "Hue" slider for a colour band: reds shift
+    toward orange or magenta, blues toward cyan or purple, etc.
+
+    Args:
+        lch: (H, W, 3) float32 LCH.
+        hue_center: Hue range centre in degrees.
+        hue_width: Half-width in degrees.
+        delta_deg: Hue shift in degrees within the range.
+        falloff: Falloff width in degrees.
+
+    Returns:
+        New (H, W, 3) float32 LCH.
+    """
+    mask = hue_range_mask(lch, hue_center, hue_width, falloff)
+    out = lch.copy()
+    shift = delta_deg * mask
+    out[:, :, 2] = np.mod(out[:, :, 2] + shift, 360.0)
+    return out
+
+
+def adjust_chroma_range(
+    lch: np.ndarray,
+    hue_center: float,
+    hue_width: float = 30.0,
+    factor: float = 1.0,
+    falloff: float = 15.0,
+) -> np.ndarray:
+    """Scale chroma (perceptual saturation) *within* a hue range.
+
+    This is the Lightroom "Saturation" slider for a colour band.
+    ``factor=1.0`` is no-op, ``2.0`` doubles saturation, ``0.5`` halves it.
+
+    Args:
+        lch: (H, W, 3) float32 LCH.
+        hue_center: Hue range centre in degrees.
+        hue_width: Half-width in degrees.
+        factor: Chroma scale factor (1.0 = no change).
+        falloff: Falloff width in degrees.
+
+    Returns:
+        New (H, W, 3) float32 LCH.
+    """
+    mask = hue_range_mask(lch, hue_center, hue_width, falloff)
+    out = lch.copy()
+    blend = 1.0 + (factor - 1.0) * mask
+    out[:, :, 1] = out[:, :, 1] * blend
+    return out
+
+
+def adjust_luminance_range(
+    lch: np.ndarray,
+    hue_center: float,
+    hue_width: float = 30.0,
+    delta: float = 0.0,
+    falloff: float = 15.0,
+) -> np.ndarray:
+    """Shift lightness *within* a hue range.
+
+    This is the Lightroom "Luminance" slider for a colour band.
+
+    Args:
+        lch: (H, W, 3) float32 LCH.
+        hue_center: Hue range centre in degrees.
+        hue_width: Half-width in degrees.
+        delta: L* shift in [-100, 100].
+        falloff: Falloff width in degrees.
+
+    Returns:
+        New (H, W, 3) float32 LCH.
+    """
+    mask = hue_range_mask(lch, hue_center, hue_width, falloff)
+    out = lch.copy()
+    out[:, :, 0] = np.clip(out[:, :, 0] + delta * mask, 0.0, 100.0)
+    return out
+
+
+def split_tone_lch(
+    lch: np.ndarray,
+    shadow_hue: float = 0.0,
+    shadow_sat: float = 0.0,
+    highlight_hue: float = 0.0,
+    highlight_sat: float = 0.0,
+    balance: float = 0.0,
+) -> np.ndarray:
+    """Perceptual split toning in LCH space.
+
+    Uses the L* channel as the blend key (low L* → shadows, high L* →
+    highlights) rather than an HSV value channel.  This gives a
+    perceptually uniform transition: the split point at L*=50 separates
+    regions the eye perceives as dark vs light.
+
+    ``balance`` shifts the crossover point: negative favours shadows,
+    positive favours highlights.  Range: [-100, 100].
+
+    Args:
+        lch: (H, W, 3) float32 LCH.
+        shadow_hue: Hue to push shadow tones toward (degrees, 0–360).
+        shadow_sat: Saturation strength for shadows (0=no tint, 1=full).
+        highlight_hue: Hue for highlight tones.
+        highlight_sat: Saturation strength for highlights.
+        balance: Crossover shift in [-100, 100].
+
+    Returns:
+        New (H, W, 3) float32 LCH.
+    """
+    if shadow_sat <= 1e-6 and highlight_sat <= 1e-6:
+        return lch.copy()
+
+    l_norm = lch[:, :, 0] / 100.0
+    midpoint = 0.5 + balance / 200.0
+    midpoint = np.clip(midpoint, 0.05, 0.95)
+
+    shadow_weight = np.clip((midpoint - l_norm) / max(midpoint, 0.05), 0.0, 1.0)
+    highlight_weight = np.clip((l_norm - midpoint) / max(1.0 - midpoint, 0.05), 0.0, 1.0)
+
+    out = lch.copy()
+    if shadow_sat > 1e-6:
+        shadow_h = np.full_like(out[:, :, 2], shadow_hue)
+        blend_s = shadow_weight[:, :, np.newaxis] * shadow_sat
+        out[:, :, 1] = out[:, :, 1] * (1.0 - blend_s[:, :, 0]) + shadow_sat * 60.0 * blend_s[:, :, 0]
+        out[:, :, 2] = out[:, :, 2] * (1.0 - blend_s[:, :, 0]) + shadow_h * blend_s[:, :, 0]
+
+    if highlight_sat > 1e-6:
+        highlight_h = np.full_like(out[:, :, 2], highlight_hue)
+        blend_h = highlight_weight[:, :, np.newaxis] * highlight_sat
+        out[:, :, 1] = out[:, :, 1] * (1.0 - blend_h[:, :, 0]) + highlight_sat * 60.0 * blend_h[:, :, 0]
+        out[:, :, 2] = out[:, :, 2] * (1.0 - blend_h[:, :, 0]) + highlight_h * blend_h[:, :, 0]
+
+    return out
+
+
+def color_balance_lch(
+    lch: np.ndarray,
+    cyan_red: float = 0.0,
+    magenta_green: float = 0.0,
+    yellow_blue: float = 0.0,
+    preserve_luminosity: bool = True,
+) -> np.ndarray:
+    """Classic 3-way colour balance in LCH space.
+
+    Maps the Photoshop / DaVinci colour-balance axes onto LCH primitives:
+        - cyan_red:   shifts hue toward cyan (−) or red (+)  (hue ~180° vs ~0°)
+        - magenta_green: shifts toward magenta (−) or green (+)  (hue ~300° vs ~120°)
+        - yellow_blue:   shifts toward yellow (−) or blue (+)  (hue ~60° vs ~240°)
+
+    Each axis range is [-1, 1] mapped to a nominal 30° hue-shift.
+
+    Args:
+        lch: (H, W, 3) float32 LCH.
+        cyan_red: Cyan-red balance in [-1, 1].
+        magenta_green: Magenta-green balance in [-1, 1].
+        yellow_blue: Yellow-blue balance in [-1, 1].
+        preserve_luminosity: If True (default), leave L* unchanged.
+
+    Returns:
+        New (H, W, 3) float32 LCH.
+    """
+    if abs(cyan_red) < 1e-6 and abs(magenta_green) < 1e-6 and abs(yellow_blue) < 1e-6:
+        return lch.copy()
+
+    MAX_SHIFT = 30.0
+    c_red = np.clip(cyan_red, -1.0, 1.0) * MAX_SHIFT
+    m_green = np.clip(magenta_green, -1.0, 1.0) * MAX_SHIFT
+    y_blue = np.clip(yellow_blue, -1.0, 1.0) * MAX_SHIFT
+
+    out = lch.copy()
+
+    h = out[:, :, 2]
+    c = out[:, :, 1]
+
+    # Reduce shift for near-zero chroma (grey pixels stay grey)
+    chroma_weight = np.clip(c / 10.0, 0.0, 1.0)
+
+    # Red axis: push hue toward 0° (positive) or 180° (negative)
+    red_weight = np.where(c_red >= 0, 1.0 - np.abs(h - 0.0) / 180.0, 0.0)
+    cyan_weight = np.where(c_red < 0, 1.0 - np.abs(h - 180.0) / 180.0, 0.0)
+    h += (c_red * red_weight - c_red * cyan_weight) * chroma_weight
+
+    # Green axis: push hue toward 120° (positive) or 300°=magenta (negative)
+    green_weight = np.where(m_green >= 0, 1.0 - np.abs(h - 120.0) / 180.0, 0.0)
+    magenta_weight = np.where(m_green < 0, 1.0 - np.abs(h - 300.0) / 180.0, 0.0)
+    h += (m_green * green_weight - m_green * magenta_weight) * chroma_weight
+
+    # Blue axis: push hue toward 240° (positive) or 60°=yellow (negative)
+    blue_weight = np.where(y_blue >= 0, 1.0 - np.abs(h - 240.0) / 180.0, 0.0)
+    yellow_weight = np.where(y_blue < 0, 1.0 - np.abs(h - 60.0) / 180.0, 0.0)
+    h += (y_blue * blue_weight - y_blue * yellow_weight) * chroma_weight
+
+    out[:, :, 2] = np.mod(h, 360.0)
+
+    if not preserve_luminosity:
+        # Lightness shift follows the balance direction (named after print convention)
+        l_shift = (cyan_red + magenta_green + yellow_blue) / 3.0 * 5.0
+        out[:, :, 0] = np.clip(out[:, :, 0] + l_shift * chroma_weight, 0.0, 100.0)
+
     return out
 
 
