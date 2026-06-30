@@ -19,6 +19,9 @@ from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
+import logging
+logger = logging.getLogger(__name__)
+
 
 __all__ = [
     "CubeLUT",
@@ -238,10 +241,11 @@ class LUTRegistry:
     via :meth:`register` are stored with a sentinel mtime and are not
     subject to disk invalidation until :meth:`reload` is called.
 
-    Thread safety: This class is NOT thread-safe. External locking is
-    required if it is accessed concurrently from multiple threads. The
-    companion helper :func:`watch_luts_dir` runs in a background thread
-    and invokes a user callback for each detected change.
+    Thread safety: This class is safe for concurrent access from multiple
+    threads. All reads and writes of the internal cache and mtime index are
+    protected by an internal :class:`threading.Lock`. The companion helper
+    :func:`watch_luts_dir` runs in a background thread and invokes a user
+    callback for each detected change.
     """
 
     def __init__(self, luts_dir_path: Optional[Path] = None) -> None:
@@ -250,6 +254,7 @@ class LUTRegistry:
         )
         self._cache: Dict[str, Tuple[CubeLUT, float]] = {}
         self._known_mtimes: Optional[Dict[str, float]] = None
+        self._lock: threading.Lock = threading.Lock()
 
     @property
     def luts_dir(self) -> Path:
@@ -257,7 +262,8 @@ class LUTRegistry:
 
     @property
     def cache_size(self) -> int:
-        return len(self._cache)
+        with self._lock:
+            return len(self._cache)
 
     def _resolve_stem(self, name: str) -> str:
         p = Path(name)
@@ -287,25 +293,26 @@ class LUTRegistry:
         separators — the path is resolved relative to this registry's
         :attr:`luts_dir`.
         """
-        stem = self._resolve_stem(name)
-        disk_path = self._disk_path(stem)
-        cached = self._cache.get(stem)
-        if cached is not None:
-            lut, cached_mtime = cached
-            if cached_mtime == _REGISTERED_MTIME:
-                return lut
-            if disk_path.exists() and self._read_mtime(disk_path) == cached_mtime:
-                return lut
-        if not disk_path.exists():
+        with self._lock:
+            stem = self._resolve_stem(name)
+            disk_path = self._disk_path(stem)
+            cached = self._cache.get(stem)
             if cached is not None:
-                return cached[0]
-            raise FileNotFoundError(
-                f"LUT {stem!r} not found in {self._dir}"
-            )
-        current_mtime = self._read_mtime(disk_path)
-        lut = load_cube(disk_path)
-        self._cache[stem] = (lut, current_mtime)
-        return lut
+                lut, cached_mtime = cached
+                if cached_mtime == _REGISTERED_MTIME:
+                    return lut
+                if disk_path.exists() and self._read_mtime(disk_path) == cached_mtime:
+                    return lut
+            if not disk_path.exists():
+                if cached is not None:
+                    return cached[0]
+                raise FileNotFoundError(
+                    f"LUT {stem!r} not found in {self._dir}"
+                )
+            current_mtime = self._read_mtime(disk_path)
+            lut = load_cube(disk_path)
+            self._cache[stem] = (lut, current_mtime)
+            return lut
 
     def list_available(self) -> List[str]:
         """Return the sorted list of available LUT stems. Re-scans dir."""
@@ -315,8 +322,9 @@ class LUTRegistry:
 
     def reload(self) -> None:
         """Clear the cache and reset the change-tracking baseline."""
-        self._cache.clear()
-        self._known_mtimes = None
+        with self._lock:
+            self._cache.clear()
+            self._known_mtimes = None
 
     def register(self, lut: CubeLUT, name: Optional[str] = None) -> str:
         """Register a pre-loaded LUT in the registry. Returns the stem.
@@ -325,11 +333,12 @@ class LUTRegistry:
         returned by :meth:`get` without consulting the disk. They are
         cleared on :meth:`reload`.
         """
-        if name is None:
-            name = f"lut_{len(self._cache)}"
-        stem = self._resolve_stem(name)
-        self._cache[stem] = (lut, _REGISTERED_MTIME)
-        return stem
+        with self._lock:
+            if name is None:
+                name = f"lut_{len(self._cache)}"
+            stem = self._resolve_stem(name)
+            self._cache[stem] = (lut, _REGISTERED_MTIME)
+            return stem
 
     def poll_changes(self) -> List[str]:
         """Return a sorted list of changed stems (added, removed, or modified).
@@ -338,27 +347,28 @@ class LUTRegistry:
         Subsequent calls return stems whose presence or mtime has changed
         since the previous call, and evict them from the cache.
         """
-        current: Dict[str, float] = {}
-        if self._dir.exists():
-            for p in self._dir.glob("*.cube"):
-                mtime = self._read_mtime(p)
-                if mtime >= 0.0:
-                    current[p.stem] = mtime
-        if self._known_mtimes is None:
+        with self._lock:
+            current: Dict[str, float] = {}
+            if self._dir.exists():
+                for p in self._dir.glob("*.cube"):
+                    mtime = self._read_mtime(p)
+                    if mtime >= 0.0:
+                        current[p.stem] = mtime
+            if self._known_mtimes is None:
+                self._known_mtimes = current
+                return []
+            prev = self._known_mtimes
+            added = set(current) - set(prev)
+            removed = set(prev) - set(current)
+            modified = {
+                stem for stem in current
+                if stem in prev and current[stem] != prev[stem]
+            }
+            changed = sorted(added | removed | modified)
+            for stem in changed:
+                self._cache.pop(stem, None)
             self._known_mtimes = current
-            return []
-        prev = self._known_mtimes
-        added = set(current) - set(prev)
-        removed = set(prev) - set(current)
-        modified = {
-            stem for stem in current
-            if stem in prev and current[stem] != prev[stem]
-        }
-        changed = sorted(added | removed | modified)
-        for stem in changed:
-            self._cache.pop(stem, None)
-        self._known_mtimes = current
-        return changed
+            return changed
 
 
 _DEFAULT_REGISTRY = LUTRegistry()
@@ -394,7 +404,7 @@ def watch_luts_dir(
                 for stem in registry.poll_changes():
                     callback(stem)
             except (OSError, ValueError) as exc:
-                print(f"lut watcher error: {exc}")
+                logger.warning("lut watcher error: %s", exc)
             time.sleep(interval)
 
     t = threading.Thread(target=_loop, daemon=True, name="lut-watcher")

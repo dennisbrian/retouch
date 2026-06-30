@@ -143,6 +143,7 @@ def on_save_style(style_name, author, tags_str,
         gr.Info(f"Style '{style_name}' saved!")
         return gr.update(choices=choices, value=style_name), gr.update(choices=choices, value=style_name), f"Style '{style_name}' saved successfully!"
     except Exception as e:
+        _logger.exception("Failed to save style: %s", e)
         return gr.update(), gr.update(), f"Failed to save style: {e}"
 
 
@@ -175,6 +176,7 @@ def on_learn_style(orig_dir, edit_dir, style_name, author, tags_str, prg=gr.Prog
         gr.Info(f"Learned style '{style_name}' from {count} pairs!")
         return gr.update(choices=choices, value=style_name), gr.update(choices=choices, value=style_name), f"Extracted & saved style '{style_name}' from {count} image pairs!"
     except Exception as e:
+        _logger.exception("Error during dataset learning: %s", e)
         return gr.update(), gr.update(), f"Error during dataset learning: {e}"
 
 
@@ -224,6 +226,7 @@ def on_process_folder(input_dir, output_dir, style_type, custom_style_name, reci
         gr.Info("Batch processing complete!")
         return sheet_path, zip_path, log
     except Exception as e:
+        _logger.exception("Batch processing failed: %s", e)
         gr.Warning(f"Batch processing failed: {e}")
         return None, None, f"Exception during batch processing: {e}"
 

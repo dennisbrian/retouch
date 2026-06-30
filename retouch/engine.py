@@ -83,6 +83,10 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import cv2
 import numpy as np
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 from .detection import FaceDetector, FaceData, FaceContext
 from .parsing import FaceParser, FaceRegions
 from .geometry import FaceReshaper
@@ -1000,7 +1004,7 @@ class RetouchEngine:
         # Stage 6 — Selective sharpening + impact finish
         # ------------------------------------------------------------------
         t5 = time.perf_counter()
-        result = self._stage_finish(result, ctx, acc_sharpen, faces=faces)
+        result = self._stage_finish(result, ctx, acc_sharpen, faces=faces, person_mask=person_mask)
         timings["finish"] = (time.perf_counter() - t5) * 1000
 
         final_contexts = built_contexts if built_contexts is not None else cached_contexts
@@ -1081,7 +1085,7 @@ class RetouchEngine:
             result = self._grader._add_vignette(result, ctx.vignette / 100.0)
 
         if ctx.impact > 0:
-            result = self._grader.add_impact_finish(result, ctx.impact)
+            result = self._grader.add_impact_finish(result, ctx.impact, subject_mask=person_mask)
 
         if ctx.grain_strength > 0:
             result = grain.apply_film_grain(result, ctx.grain_strength)
@@ -1215,6 +1219,7 @@ class RetouchEngine:
             ]
             proc_results = self._face_pool.process_faces(payloads)
         except Exception:
+            logger.exception("FaceProcessorPool failed; falling back to ThreadPoolExecutor")
             proc_results = None
 
         if proc_results is not None:
@@ -1397,6 +1402,10 @@ class RetouchEngine:
         if pm.max() > 1.0:
             pm /= 255.0
 
+        h_img, w_img = img.shape[:2]
+        feather = max(3, int(min(h_img, w_img) * 0.02) | 1)
+        pm = cv2.GaussianBlur(pm, (feather, feather), 0)
+
         lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
         L = lab[:, :, 0]
 
@@ -1562,23 +1571,24 @@ class RetouchEngine:
         ctx: ProcessingContext,
         acc_sharpen: np.ndarray,
         faces=None,
+        person_mask: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         result = img
         sharpen_mask = acc_sharpen
         if ctx.sharpen > 0 and sharpen_mask.max() <= 0.01:
             sharpen_mask = np.ones_like(sharpen_mask)
-        if ctx.sharpen > 0 or acc_sharpen.max() > 0.01:
+        if ctx.sharpen > 0:
             radius = ctx.sharpen_radius
             if faces:
                 avg_ied = np.mean([f.ied for f in faces])
                 radius = ctx.sharpen_radius * (avg_ied / 80.0)
                 radius = max(0.5, min(4.0, radius))
-            amount = max(1.2, ctx.sharpen / 100.0 * 2.0) if ctx.sharpen > 0 else 1.2
+            amount = max(1.2, ctx.sharpen / 100.0 * 2.0)
             result = _apply_selective_sharpening(
                 result, sharpen_mask, radius=radius, amount=amount, threshold=2
             )
         if ctx.impact > 0:
-            result = self._grader.add_impact_finish(result, ctx.impact)
+            result = self._grader.add_impact_finish(result, ctx.impact, subject_mask=person_mask)
         return result
 
     @staticmethod
@@ -1614,7 +1624,7 @@ class RetouchEngine:
         try:
             self._face_pool.shutdown()
         except Exception:
-            pass
+            logger.warning("FaceProcessorPool shutdown raised", exc_info=True)
         self._detector.close()
 
     def __enter__(self):
