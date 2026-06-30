@@ -8,7 +8,9 @@ library.
 from __future__ import annotations
 
 import json
+import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
@@ -21,6 +23,8 @@ from .utils import apply_curve, blend_masked, normalize_mask, screen_blend, sque
 
 from . import skin_protect
 from .precision import ensure_float, to_uint8
+
+logger = logging.getLogger(__name__)
 
 
 def _apply_curve_f(channel: np.ndarray, curve_points: Sequence[Tuple[int, int]]) -> np.ndarray:
@@ -122,6 +126,7 @@ class ColorGrader:
 
     def __init__(self):
         self._lut_cache: Dict[str, CubeLUT] = {}
+        self._lock: threading.Lock = threading.Lock()
 
     def grade(
         self,
@@ -265,12 +270,20 @@ class ColorGrader:
 
         return result
 
-    def add_impact_finish(self, img_bgr: np.ndarray, strength: float) -> np.ndarray:
+    def add_impact_finish(
+        self,
+        img_bgr: np.ndarray,
+        strength: float,
+        subject_mask: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
         """Apply a punchy "impact" finish — contrast + clarity + glow composite.
 
         Args:
             img_bgr: (H, W, 3) uint8 BGR image.
             strength: 0–100 intensity of the finish.
+            subject_mask: Optional (H, W) float32 mask in [0, 1]. When provided,
+                the clarity/contrast effects are restricted to the subject so the
+                background does not get noisy.
 
         Returns:
             (H, W, 3) uint8 BGR image.
@@ -288,7 +301,14 @@ class ColorGrader:
         result = self._add_clarity(result, 0.18 * s)
         result = self._add_glow(result, 0.06 * s, tint=(235, 140, 210))
 
-        return cv2.addWeighted(original, 1.0 - s, result, s, 0)
+        blended = cv2.addWeighted(original, 1.0 - s, result, s, 0)
+
+        if subject_mask is not None:
+            mask_3d = subject_mask[:, :, np.newaxis].astype(np.float32)
+            blended = (blended.astype(np.float32) * mask_3d
+                       + original.astype(np.float32) * (1.0 - mask_3d)).astype(np.uint8)
+
+        return blended
 
     def grade_stack(
         self,
@@ -908,11 +928,13 @@ class ColorGrader:
 
     def _get_cached_lut(self, path: Path) -> CubeLUT:
         key = str(path.resolve())
-        cached = self._lut_cache.get(key)
+        with self._lock:
+            cached = self._lut_cache.get(key)
         if cached is not None:
             return cached
         cube = load_cube(path)
-        self._lut_cache[key] = cube
+        with self._lock:
+            self._lut_cache[key] = cube
         return cube
 
     def _apply_hsl_adjustments(
@@ -972,6 +994,224 @@ class ColorGrader:
         hsv[:, :, 0] = h; hsv[:, :, 1] = s; hsv[:, :, 2] = v
         out_u8 = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
         return out_u8.astype(np.float32) / 255.0
+
+    # ------------------------------------------------------------------
+    # LCH HSL panel methods (Phase 1.d — perceptual uniformity replaces HSV)
+    # ------------------------------------------------------------------
+
+    _HSL_CHANNELS: Dict[str, Tuple[float, float]] = {
+        "red":       (0.0, 30.0),
+        "orange":    (30.0, 30.0),
+        "yellow":    (60.0, 30.0),
+        "green":     (120.0, 30.0),
+        "aqua":      (180.0, 30.0),
+        "blue":      (240.0, 30.0),
+        "purple":    (280.0, 30.0),
+        "magenta":   (320.0, 30.0),
+    }
+
+    def adjust_hsl_lch(
+        self,
+        img_bgr: np.ndarray,
+        hue_shift: float = 0.0,
+        sat_scale: float = 1.0,
+        lum_shift: float = 0.0,
+    ) -> np.ndarray:
+        """Global perceptual HSL adjustment in LCH space.
+
+        Unlike HSV (where equal numeric sat/lum steps don't equal
+        perceived changes), LCH gives perceptually uniform results.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR.
+            hue_shift: Hue rotation in degrees (-180 to 180).
+            sat_scale: Saturation multiplier (1.0 = no change,
+                       0.0 = desaturate, 2.0 = double saturation).
+            lum_shift: Lightness shift in [-100, 100] L* units.
+                       Positive brightens, negative darkens.
+
+        Returns:
+            (H, W, 3) uint8 BGR.
+        """
+        if abs(hue_shift) < 1e-4 and abs(sat_scale - 1.0) < 1e-4 and abs(lum_shift) < 1e-4:
+            return img_bgr
+        from .color_space import bgr_to_lch, lch_to_bgr
+        lch = bgr_to_lch(img_bgr)
+        if abs(hue_shift) > 1e-4:
+            lch[:, :, 2] = np.mod(lch[:, :, 2] + hue_shift, 360.0)
+        if abs(sat_scale - 1.0) > 1e-4:
+            lch[:, :, 1] = lch[:, :, 1] * sat_scale
+        if abs(lum_shift) > 1e-4:
+            lch[:, :, 0] = np.clip(lch[:, :, 0] + lum_shift, 0.0, 100.0)
+        return lch_to_bgr(lch)
+
+    def adjust_per_channel_lch(
+        self,
+        img_bgr: np.ndarray,
+        channel: str,
+        hue_shift: float = 0.0,
+        sat_scale: float = 1.0,
+        lum_shift: float = 0.0,
+    ) -> np.ndarray:
+        """Perceptual HSL adjustment for a single colour channel.
+
+        Operates on a soft hue range (e.g. ``"red"`` = hues near 0°,
+        ``"blue"`` = hues near 240°).  This is the L*‑keyed equivalent
+        of the Lightroom HSL/Color panel.
+
+        Valid channel names: red, orange, yellow, green, aqua, blue,
+        purple, magenta.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR.
+            channel: Colour channel name.
+            hue_shift: Hue shift within the range (-60 to 60 typical).
+            sat_scale: Chroma scale for pixels in the range.
+            lum_shift: L* shift for pixels in the range.
+
+        Returns:
+            (H, W, 3) uint8 BGR.
+        """
+        if channel not in self._HSL_CHANNELS:
+            raise ValueError(
+                f"Unknown channel {channel!r}. Valid: {list(self._HSL_CHANNELS)}"
+            )
+        if abs(hue_shift) < 1e-4 and abs(sat_scale - 1.0) < 1e-4 and abs(lum_shift) < 1e-4:
+            return img_bgr
+        from .color_space import (
+            bgr_to_lch,
+            lch_to_bgr,
+            adjust_hue_range,
+            adjust_chroma_range,
+            adjust_luminance_range,
+        )
+        hue_center, hue_width = self._HSL_CHANNELS[channel]
+        lch = bgr_to_lch(img_bgr)
+        if abs(hue_shift) > 1e-4:
+            lch = adjust_hue_range(lch, hue_center, hue_width, hue_shift)
+        if abs(sat_scale - 1.0) > 1e-4:
+            lch = adjust_chroma_range(lch, hue_center, hue_width, sat_scale)
+        if abs(lum_shift) > 1e-4:
+            lch = adjust_luminance_range(lch, hue_center, hue_width, lum_shift)
+        return lch_to_bgr(lch)
+
+    def split_tone_lch(
+        self,
+        img_bgr: np.ndarray,
+        shadow_hue: float = 0.0,
+        shadow_sat: float = 0.0,
+        highlight_hue: float = 0.0,
+        highlight_sat: float = 0.0,
+        balance: float = 0.0,
+    ) -> np.ndarray:
+        """L*‑keyed split toning — perceptually uniform shadow/highlight tint.
+
+        Shadows and highlights are separated by the L* channel (not HSV
+        Value), so the boundary matches where the eye sees dark vs light.
+        This produces more natural transitions than HSV‑based split toning.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR.
+            shadow_hue: Hue for shadows (degrees, 0–360).
+            shadow_sat: Saturation strength for shadows (0–1).
+            highlight_hue: Hue for highlights.
+            highlight_sat: Saturation strength for highlights.
+            balance: Crossover shift in [-100, 100].
+
+        Returns:
+            (H, W, 3) uint8 BGR.
+        """
+        if shadow_sat <= 1e-6 and highlight_sat <= 1e-6:
+            return img_bgr
+        from .color_space import bgr_to_lch, lch_to_bgr, split_tone_lch as _st
+        lch = bgr_to_lch(img_bgr)
+        toned = _st(lch, shadow_hue, shadow_sat, highlight_hue, highlight_sat, balance)
+        return lch_to_bgr(toned)
+
+    def white_balance_lch(
+        self,
+        img_bgr: np.ndarray,
+        temperature: float = 6500.0,
+        tint: float = 0.0,
+    ) -> np.ndarray:
+        """White balance via LCH hue-shift on near‑neutral pixels.
+
+        Maps Kelvin temperature to a warm/cool hue shift and applies
+        ``tint`` as a green‑magenta axis shift. Operates primarily on
+        low‑chroma pixels so saturated areas are not over‑corrected.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR.
+            temperature: Kelvin colour temperature (2000–50000).
+                         6500 = neutral daylight. Lower = warmer.
+            tint: Green‑magenta shift in [-100, 100]. Negative = green,
+                  positive = magenta.
+
+        Returns:
+            (H, W, 3) uint8 BGR.
+        """
+        if abs(temperature - 6500.0) < 1e-3 and abs(tint) < 1e-4:
+            return img_bgr
+        from .color_space import bgr_to_lch, lch_to_bgr
+        lch = bgr_to_lch(img_bgr)
+        t = float(np.clip(temperature, 2000.0, 50000.0))
+        tint_val = float(np.clip(tint, -100.0, 100.0))
+        kelvin_hue = 60.0 - (t - 2000.0) / 48000.0 * 90.0
+        kelvin_hue = np.mod(kelvin_hue, 360.0)
+        chroma = lch[:, :, 1]
+        chroma_weight = np.clip(1.0 - chroma / 60.0, 0.0, 1.0)
+        hue_delta = (kelvin_hue - 30.0) * chroma_weight * 0.3
+        lch[:, :, 2] = np.mod(lch[:, :, 2] + hue_delta, 360.0)
+        if abs(tint_val) > 1e-4:
+            tint_hue = 150.0 if tint_val < 0 else 330.0
+            tint_strength = abs(tint_val) / 100.0 * chroma_weight * 0.2
+            lch[:, :, 2] = np.mod(
+                lch[:, :, 2] + (tint_hue - lch[:, :, 2]) * tint_strength, 360.0
+            )
+        return lch_to_bgr(lch)
+
+    def channel_mixer_bw(
+        self,
+        img_bgr: np.ndarray,
+        r_weight: float = 0.3,
+        g_weight: float = 0.59,
+        b_weight: float = 0.11,
+        brightness: float = 0.0,
+        contrast: float = 0.0,
+    ) -> np.ndarray:
+        """Per‑channel black & white conversion with luminance controls.
+
+        Standard luminance weights: R=0.299, G=0.587, B=0.114 (BT.601).
+        Adjustable for creative B&W — boost reds for darker skies, boost
+        green for lighter foliage.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR.
+            r_weight: Red weight (BGR channel 2). Default 0.30.
+            g_weight: Green weight (BGR channel 1). Default 0.59.
+            b_weight: Blue weight (BGR channel 0). Default 0.11.
+            brightness: Additive luminance shift in [-50, 50].
+            contrast: Multiplicative contrast in [-50, 50].
+
+        Returns:
+            (H, W, 3) uint8 BGR (grayscale tri‑channel for compatibility).
+        """
+        f = img_bgr.astype(np.float32)
+        total = r_weight + g_weight + b_weight
+        if total < 1e-6:
+            return np.zeros_like(img_bgr)
+        r_w, g_w, b_w = r_weight / total, g_weight / total, b_weight / total
+        gray = f[:, :, 2] * r_w + f[:, :, 1] * g_w + f[:, :, 0] * b_w
+        if contrast != 0.0:
+            c = float(np.clip(contrast, -50.0, 50.0)) / 50.0
+            mid = 128.0
+            gray = mid + (gray - mid) * (1.0 + c)
+        gray = np.clip(gray + brightness, 0, 255)
+        return np.stack([gray, gray, gray], axis=-1).astype(np.uint8)
+
+    # ------------------------------------------------------------------
+    # Color transfer
+    # ------------------------------------------------------------------
 
     def color_transfer(
         self,
