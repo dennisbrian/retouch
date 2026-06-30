@@ -10,6 +10,8 @@ import pytest
 import retouch.lut as lut_mod
 from retouch.lut import (
     CubeLUT,
+    generate_contrast_lut,
+    generate_tint_lut,
     list_available_luts,
     load_3dl,
     load_cube,
@@ -267,8 +269,156 @@ class TestListAvailableLuts:
 
 
 class TestLoad3dl:
-    def test_raises_not_implemented(self, tmp_path):
-        p = tmp_path / "x.3dl"
-        p.write_text("dummy")
-        with pytest.raises(NotImplementedError):
+    def test_loads_minimal_3dl(self, tmp_path):
+        p = tmp_path / "test.3dl"
+        p.write_text(
+            "3DLUTSIZE 2\n"
+            "0.0 0.0 0.0\n"
+            "0.2 0.0 0.0\n"
+            "0.0 0.3 0.0\n"
+            "0.2 0.3 0.0\n"
+            "0.0 0.0 0.5\n"
+            "0.2 0.0 0.5\n"
+            "0.0 0.3 0.5\n"
+            "0.2 0.3 0.5\n"
+        )
+        lut = load_3dl(p)
+        assert lut.size == 2
+        assert lut.array.shape == (2, 2, 2, 3)
+        assert lut.array.dtype == np.float32
+
+    def test_ignores_header_fields(self, tmp_path):
+        p = tmp_path / "header.3dl"
+        p.write_text(
+            "TITLE \"My LUT\"\n"
+            "DESCRIPTION \"Test\"\n"
+            "2DLUTSIZE 256\n"
+            "3DLUTSIZE 2\n"
+            "# comment\n"
+            "0.0 0.0 0.0\n"
+            "0.2 0.0 0.0\n"
+            "0.0 0.3 0.0\n"
+            "0.2 0.3 0.0\n"
+            "0.0 0.0 0.5\n"
+            "0.2 0.0 0.5\n"
+            "0.0 0.3 0.5\n"
+            "0.2 0.3 0.5\n"
+        )
+        lut = load_3dl(p)
+        assert lut.size == 2
+
+    def test_missing_size_raises(self, tmp_path):
+        p = tmp_path / "nosize.3dl"
+        p.write_text("0.0 0.0 0.0\n")
+        with pytest.raises(ValueError):
             load_3dl(p)
+
+    def test_file_not_found(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            load_3dl(tmp_path / "nope.3dl")
+
+
+class TestApplyBlended:
+    def test_intensity_zero_returns_original(self):
+        lut = CubeLUT(17)
+        img = np.random.randint(0, 255, (8, 8, 3), dtype=np.uint8)
+        result = lut.apply_blended(img, intensity=0.0)
+        assert np.array_equal(result, img)
+
+    def test_intensity_one_matches_full_apply(self):
+        lut = CubeLUT(17)
+        img = np.random.randint(0, 255, (8, 8, 3), dtype=np.uint8)
+        blended = lut.apply_blended(img, intensity=1.0)
+        full = lut.apply(img)
+        np.testing.assert_allclose(blended, full, atol=1)
+
+    def test_intensity_half_is_different(self):
+        lut = generate_tint_lut(size=8, r_gain=2.0)
+        img = np.full((8, 8, 3), 128, dtype=np.uint8)
+        half = lut.apply_blended(img, intensity=0.5)
+        full = lut.apply(img)
+        assert not np.array_equal(half, img)
+        assert not np.array_equal(half, full)
+
+    def test_clamped_below_zero(self):
+        lut = CubeLUT(17)
+        img = np.random.randint(0, 255, (4, 4, 3), dtype=np.uint8)
+        result = lut.apply_blended(img, intensity=-0.5)
+        assert np.array_equal(result, img)
+
+    def test_clamped_above_one(self):
+        lut = CubeLUT(17)
+        img = np.full((4, 4, 3), 128, dtype=np.uint8)
+        blended = lut.apply_blended(img, intensity=2.0)
+        full = lut.apply(img)
+        np.testing.assert_allclose(blended, full, atol=1)
+
+
+class TestGenerateTintLUT:
+    def test_neutral_is_identity(self):
+        lut = generate_tint_lut(size=4, temperature=0.0)
+        assert lut.size == 4
+        img = np.random.randint(0, 255, (8, 8, 3), dtype=np.uint8)
+        out = lut.apply(img)
+        np.testing.assert_allclose(out, img, atol=1)
+
+    def test_warm_adds_red(self):
+        lut = generate_tint_lut(size=8, temperature=0.8)
+        img = np.full((4, 4, 3), [100, 100, 100], dtype=np.uint8)
+        out = lut.apply(img)
+        assert out[:, :, 2].mean() > out[:, :, 0].mean()
+
+    def test_cool_adds_blue(self):
+        lut = generate_tint_lut(size=8, temperature=-0.8)
+        img = np.full((4, 4, 3), [100, 100, 100], dtype=np.uint8)
+        out = lut.apply(img)
+        assert out[:, :, 0].mean() > out[:, :, 2].mean()
+
+    def test_channel_gains_work(self):
+        lut = generate_tint_lut(size=4, r_gain=1.5, g_gain=0.5, b_gain=1.0)
+        img = np.full((4, 4, 3), [100, 100, 100], dtype=np.uint8)
+        out = lut.apply(img)
+        assert out[:, :, 2].mean() > 100
+        assert out[:, :, 1].mean() < 100
+
+    def test_output_is_uint8(self):
+        lut = generate_tint_lut(size=8, temperature=0.5, r_gain=1.2)
+        img = np.random.randint(0, 255, (16, 16, 3), dtype=np.uint8)
+        out = lut.apply(img)
+        assert out.dtype == np.uint8
+
+
+class TestGenerateContrastLUT:
+    def test_zero_contrast_is_identity(self):
+        lut = generate_contrast_lut(size=8, contrast=0.0)
+        img = np.random.randint(0, 255, (8, 8, 3), dtype=np.uint8)
+        out = lut.apply(img)
+        np.testing.assert_allclose(out, img, atol=1)
+
+    def test_positive_contrast_stretches(self):
+        lut = generate_contrast_lut(size=8, contrast=0.8)
+        img = np.full((4, 4, 3), 128, dtype=np.uint8)
+        out = lut.apply(img)
+        assert out.min() < img.min() + 5
+        assert out.max() > img.max() - 5
+
+    def test_negative_contrast_flattens(self):
+        lut = generate_contrast_lut(size=8, contrast=-0.5)
+        img = np.full((4, 4, 3), 128, dtype=np.uint8)
+        out = lut.apply(img)
+        assert out.min() >= 120
+        assert out.max() <= 135
+
+    def test_pivot_affects_result(self):
+        img = np.full((4, 4, 3), 128, dtype=np.uint8)
+        lut_lo = generate_contrast_lut(size=8, contrast=0.8, pivot=0.3)
+        lut_hi = generate_contrast_lut(size=8, contrast=0.8, pivot=0.7)
+        out_lo = lut_lo.apply(img)
+        out_hi = lut_hi.apply(img)
+        assert not np.allclose(out_lo, out_hi, atol=2)
+
+    def test_output_is_uint8(self):
+        lut = generate_contrast_lut(size=8, contrast=0.5)
+        img = np.random.randint(0, 255, (16, 16, 3), dtype=np.uint8)
+        out = lut.apply(img)
+        assert out.dtype == np.uint8

@@ -1,9 +1,15 @@
-"""3D colour lookup tables — Adobe Cube loader and trilinear interpolation.
+"""3D colour lookup tables — Adobe Cube / Iridas .3dl loader, trilinear
+interpolation, and programmatic LUT generation.
 
-Provides :class:`CubeLUT` (a BGR float32 3D LUT) and pure-function
-:func:`trilinear_sample` for vectorized 3D LUT application. Includes an
-Adobe ``.cube`` parser and a canonical ``luts/`` directory resolver that
-sits next to :mod:`retouch.presets`.
+Provides :class:`CubeLUT` (a BGR float32 3D LUT) with :meth:`apply` and
+:meth:`apply_blended` (partial-strength) methods. :func:`trilinear_sample`
+does vectorized 3D LUT lookup. :func:`load_cube` and :func:`load_3dl` parse
+the Adobe and Iridas interchange formats.
+
+Generator functions :func:`generate_tint_lut` and :func:`generate_contrast_lut`
+build LUTs programmatically (warm/cool tint, S-curve contrast) from identity
+grids — useful for cross-process, bleach-bypass, and split-tone effects
+without relying on external .cube files.
 
 The :class:`LUTRegistry` provides a hot-loadable cache: it invalidates
 entries on file-mtime change so adding or editing a ``.cube`` file in
@@ -28,6 +34,8 @@ __all__ = [
     "load_cube",
     "load_3dl",
     "trilinear_sample",
+    "generate_tint_lut",
+    "generate_contrast_lut",
     "luts_dir",
     "list_available_luts",
     "LUTRegistry",
@@ -94,6 +102,31 @@ class CubeLUT:
                 f = f * (1.0 / 255.0)
         out = trilinear_sample(self._array, f)
         return np.clip(out * 255.0 + 0.5, 0.0, 255.0).astype(np.uint8)
+
+    def apply_blended(
+        self, img_bgr: np.ndarray, intensity: float = 1.0
+    ) -> np.ndarray:
+        """Apply this LUT at partial strength, blending with the original.
+
+        ``intensity=1.0`` is full LUT effect (same as :meth:`apply`).
+        ``intensity=0.0`` returns the original image unchanged.
+        ``intensity=0.5`` gives 50/50 blend.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR image.
+            intensity: Blend strength in [0, 1].
+
+        Returns:
+            (H, W, 3) uint8 BGR image.
+        """
+        if intensity <= 0.0:
+            return img_bgr.copy()
+        if intensity >= 1.0:
+            return self.apply(img_bgr)
+        lut_result = self.apply(img_bgr)
+        w = float(np.clip(intensity, 0.0, 1.0))
+        blended = img_bgr.astype(np.float32) * (1.0 - w) + lut_result.astype(np.float32) * w
+        return np.clip(blended + 0.5, 0, 255).astype(np.uint8)
 
 
 def trilinear_sample(lut: np.ndarray, bgr: np.ndarray) -> np.ndarray:
@@ -213,8 +246,145 @@ def load_cube(path: Union[str, Path]) -> CubeLUT:
 
 
 def load_3dl(path: Union[str, Path]) -> CubeLUT:
-    """Parse an Iridas ``.3dl`` file. Not implemented in this spike."""
-    raise NotImplementedError("3dl loader not yet implemented; use load_cube")
+    """Parse an Iridas ``.3dl`` file into a :class:`CubeLUT`.
+
+    The .3dl header contains ``3DLUTSIZE`` (required) and optional
+    ``2DLUTSIZE`` (ignored).  Data lines are space-separated R G B
+    triplets in the same order as .cube files.
+
+    Args:
+        path: Path to a ``.3dl`` file.
+
+    Returns:
+        :class:`CubeLUT` with the loaded 3D data.
+    """
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f".3dl file not found: {p}")
+    size: Optional[int] = None
+    lines: List[str] = []
+    with open(p, "r", encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            head = line[:32].upper()
+            if head.startswith("TITLE") or head.startswith("DESCRIPTION"):
+                continue
+            if head.startswith("2DLUTSIZE"):
+                continue
+            if head.startswith("3DLUTSIZE"):
+                parts = line.split()
+                if len(parts) < 2:
+                    raise ValueError(f"Malformed 3DLUTSIZE line: {line!r}")
+                try:
+                    parsed = int(parts[1])
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Invalid 3DLUTSIZE value: {parts[1]!r}"
+                    ) from exc
+                if parsed < 2:
+                    raise ValueError(f"3DLUTSIZE must be >= 2; got {parsed}")
+                size = parsed
+                continue
+            lines.append(line)
+    if size is None:
+        raise ValueError(f"Missing 3DLUTSIZE declaration in {p.name}")
+    triplets: List[float] = []
+    for line in lines:
+        parts = line.split()
+        if len(parts) != 3:
+            continue
+        try:
+            r_v, g_v, b_v = (float(x) for x in parts)
+        except ValueError:
+            continue
+        triplets.extend((r_v, g_v, b_v))
+    expected = size * size * size * 3
+    if len(triplets) != expected:
+        raise ValueError(
+            f"Expected {expected} floats ({size}^3 * 3) in {p.name}; got {len(triplets)}"
+        )
+    rgb = np.array(triplets, dtype=np.float32).reshape(size, size, size, 3)
+    bgr = rgb[..., ::-1].copy()
+    return CubeLUT(bgr)
+
+
+def generate_tint_lut(
+    size: int = 17,
+    r_gain: float = 1.0,
+    g_gain: float = 1.0,
+    b_gain: float = 1.0,
+    temperature: float = 0.0,
+) -> CubeLUT:
+    """Generate a warm/cool tint LUT with channel gains and temperature shift.
+
+    ``temperature`` shifts the white point: positive = warmer (more
+    red/orange), negative = cooler (more blue).  Range [-1, 1] maps
+    to roughly ±1000K.
+
+    Args:
+        size: Grid resolution (17 or 33 are common).
+        r_gain: Red channel multiplier (1.0 = neutral).
+        g_gain: Green channel multiplier.
+        b_gain: Blue channel multiplier.
+        temperature: Warm/cool shift in [-1, 1].
+
+    Returns:
+        :class:`CubeLUT` with the desired tint baked in.
+    """
+    lut = _build_identity_lut(size)
+    temp = float(np.clip(temperature, -1.0, 1.0))
+    lut[..., 0] *= b_gain
+    lut[..., 1] *= g_gain
+    lut[..., 2] *= r_gain
+    if temp > 0.0:
+        lut[..., 2] = np.clip(lut[..., 2] + temp * 0.15, 0.0, 1.0)
+        lut[..., 0] = np.clip(lut[..., 0] - temp * 0.10, 0.0, 1.0)
+    elif temp < 0.0:
+        lut[..., 0] = np.clip(lut[..., 0] + abs(temp) * 0.15, 0.0, 1.0)
+        lut[..., 2] = np.clip(lut[..., 2] - abs(temp) * 0.10, 0.0, 1.0)
+    return CubeLUT(lut)
+
+
+def generate_contrast_lut(
+    size: int = 17,
+    contrast: float = 0.0,
+    pivot: float = 0.5,
+) -> CubeLUT:
+    """Generate an S-curve contrast LUT from an identity grid.
+
+    Applies an identical luminance contrast curve to all three channels
+    (works on the sRGB values stored in the identity grid). Positive
+    contrast lifts highlights and deepens shadows; negative contrast
+    flattens the mid-tones.
+
+    Args:
+        size: Grid resolution.
+        contrast: Contrast strength in [-1, 1]. 0 = identity.
+        pivot: Mid-point of the contrast curve (default 0.5).
+
+    Returns:
+        :class:`CubeLUT`.
+    """
+    lut = _build_identity_lut(size)
+    if abs(contrast) < 1e-6:
+        return CubeLUT(lut)
+    c = float(np.clip(contrast, -1.0, 1.0))
+    p = float(np.clip(pivot, 0.01, 0.99))
+    sign = -1.0 if c < 0 else 1.0
+    strength = abs(c) * 2.0
+    for ch in range(3):
+        v = lut[..., ch]
+        below = v < p
+        above = v >= p
+        v = v.copy()
+        v[below] = p - (p - v[below]) * ((p - v[below]) / p) ** strength
+        v[above] = p + (v[above] - p) * ((v[above] - p) / (1.0 - p)) ** strength
+        if sign < 0:
+            v = v * 0.5 + (1.0 - v) * 0.5
+        lut[..., ch] = np.clip(v, 0.0, 1.0)
+    return CubeLUT(lut)
 
 
 def luts_dir() -> Path:
