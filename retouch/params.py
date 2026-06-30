@@ -852,6 +852,60 @@ _SPLIT_TONING_PARAMS = [
     ),
 ]
 
+# White balance / B&W mixer
+_WB_BW_PARAMS = [
+    ParamSpec(
+        name="white_balance_kelvin",
+        cli_flag="wb-kelvin",
+        cli_type=int,
+        default=6500,
+        recipe_key="white_balance_kelvin",
+        conversion="gui_direct",
+        min_val=2000,
+        max_val=12000,
+    ),
+    ParamSpec(
+        name="white_balance_tint",
+        cli_flag="wb-tint",
+        cli_type=float,
+        default=0.0,
+        recipe_key="white_balance_tint",
+        conversion="gui_direct",
+        min_val=-100.0,
+        max_val=100.0,
+    ),
+    ParamSpec(
+        name="bw_channel_mixer_r",
+        cli_flag="bw-r",
+        cli_type=int,
+        default=30,
+        recipe_key="bw_channel_mixer_r",
+        conversion="gui_direct",
+        min_val=-100,
+        max_val=200,
+    ),
+    ParamSpec(
+        name="bw_channel_mixer_g",
+        cli_flag="bw-g",
+        cli_type=int,
+        default=59,
+        recipe_key="bw_channel_mixer_g",
+        conversion="gui_direct",
+        min_val=-100,
+        max_val=200,
+    ),
+    ParamSpec(
+        name="bw_channel_mixer_b",
+        cli_flag="bw-b",
+        cli_type=int,
+        default=11,
+        recipe_key="bw_channel_mixer_b",
+        conversion="gui_direct",
+        min_val=-100,
+        max_val=200,
+    ),
+]
+
 
 PROCESSING_PARAMS: List[ParamSpec] = (
     _SKIN_PARAMS
@@ -860,6 +914,7 @@ PROCESSING_PARAMS: List[ParamSpec] = (
     + _LENS_PARAMS
     + _GRADING_PARAMS
     + _SPLIT_TONING_PARAMS
+    + _WB_BW_PARAMS
 )
 
 

@@ -145,6 +145,8 @@ def _flat_to_engine_recipe(flat: Dict[str, Any]) -> Dict[str, Any]:
         "contrast", "brightness", "highlights", "shadows", "whites", "blacks",
         "grain", "halation", "chromatic_aberration", "lut", "auto_exposure",
         "shadow_hue", "shadow_sat", "midtone_hue", "midtone_sat", "highlight_hue", "highlight_sat",
+        "white_balance_kelvin", "white_balance_tint",
+        "bw_channel_mixer_r", "bw_channel_mixer_g", "bw_channel_mixer_b",
     )
     for key in top_level_keys:
         if key in flat:
@@ -227,6 +229,8 @@ def _engine_to_flat_recipe(engine: Dict[str, Any]) -> Dict[str, Any]:
         "contrast", "brightness", "highlights", "shadows", "whites", "blacks",
         "grain", "halation", "chromatic_aberration", "lut", "auto_exposure",
         "shadow_hue", "shadow_sat", "midtone_hue", "midtone_sat", "highlight_hue", "highlight_sat",
+        "white_balance_kelvin", "white_balance_tint",
+        "bw_channel_mixer_r", "bw_channel_mixer_g", "bw_channel_mixer_b",
     ):
         if key in engine and engine[key] is not None:
             flat[key] = _convert_param_from_engine(key, engine[key])

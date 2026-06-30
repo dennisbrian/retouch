@@ -215,6 +215,13 @@ class ProcessingContext:
     highlight_hue: float = _DEFAULTS["highlight_hue"]
     highlight_sat: float = _DEFAULTS["highlight_sat"]
 
+    # --- White balance / B&W mixer ---
+    white_balance_kelvin: int = _DEFAULTS["white_balance_kelvin"]
+    white_balance_tint: float = _DEFAULTS["white_balance_tint"]
+    bw_channel_mixer_r: int = _DEFAULTS["bw_channel_mixer_r"]
+    bw_channel_mixer_g: int = _DEFAULTS["bw_channel_mixer_g"]
+    bw_channel_mixer_b: int = _DEFAULTS["bw_channel_mixer_b"]
+
     # --- Global Bloom (Oniric-Style Glow) ---
     bloom: float = 0.0
     bloom_threshold: float = _DEFAULTS["bloom_threshold"]
@@ -618,6 +625,11 @@ class RetouchEngine:
         midtone_sat: Optional[float] = None,
         highlight_hue: Optional[float] = None,
         highlight_sat: Optional[float] = None,
+        white_balance_kelvin: Optional[int] = None,
+        white_balance_tint: Optional[float] = None,
+        bw_channel_mixer_r: Optional[int] = None,
+        bw_channel_mixer_g: Optional[int] = None,
+        bw_channel_mixer_b: Optional[int] = None,
         color_grade_stack=None,
         color_ref: Optional[np.ndarray] = None,
         color_transfer_intensity: float = 1.0,
@@ -712,6 +724,11 @@ class RetouchEngine:
             "midtone_sat": midtone_sat,
             "highlight_hue": highlight_hue,
             "highlight_sat": highlight_sat,
+            "white_balance_kelvin": white_balance_kelvin,
+            "white_balance_tint": white_balance_tint,
+            "bw_channel_mixer_r": bw_channel_mixer_r,
+            "bw_channel_mixer_g": bw_channel_mixer_g,
+            "bw_channel_mixer_b": bw_channel_mixer_b,
             "color_grade_stack": color_grade_stack,
             "color_ref": color_ref,
             "color_transfer_intensity": color_transfer_intensity,
@@ -1047,6 +1064,14 @@ class RetouchEngine:
         if ctx.tonal_curve_strength > 0:
             result = tonal.apply_hd_curve(result, strength=ctx.tonal_curve_strength)
 
+        # --- White balance (LCH-based, Phase 1.d) ---
+        if ctx.white_balance_kelvin != 6500 or ctx.white_balance_tint != 0.0:
+            result = self._grader.white_balance_lch(
+                result,
+                temperature=ctx.white_balance_kelvin,
+                tint=ctx.white_balance_tint,
+            )
+
         post_effects = self._assemble_post_effects(ctx)
         skip_glows = ctx.bloom > 0.0
 
@@ -1089,6 +1114,20 @@ class RetouchEngine:
 
         if ctx.grain_strength > 0:
             result = grain.apply_film_grain(result, ctx.grain_strength)
+
+        # --- B&W channel mixer (Phase 1.d) — applied last ---
+        bw_active = (
+            ctx.bw_channel_mixer_r != 30
+            or ctx.bw_channel_mixer_g != 59
+            or ctx.bw_channel_mixer_b != 11
+        )
+        if bw_active:
+            result = self._grader.channel_mixer_bw(
+                result,
+                r_weight=ctx.bw_channel_mixer_r / 100.0,
+                g_weight=ctx.bw_channel_mixer_g / 100.0,
+                b_weight=ctx.bw_channel_mixer_b / 100.0,
+            )
 
         return result
 
@@ -1480,6 +1519,14 @@ class RetouchEngine:
                 result, ctx.color_ref, intensity=ctx.color_transfer_intensity
             )
 
+        # --- White balance (LCH-based, Phase 1.d) ---
+        if ctx.white_balance_kelvin != 6500 or ctx.white_balance_tint != 0.0:
+            result = self._grader.white_balance_lch(
+                result,
+                temperature=ctx.white_balance_kelvin,
+                tint=ctx.white_balance_tint,
+            )
+
         # Build glow mask — allow glow on skin & background, preserve costume details
         # BUGFIX-1: use accumulated acc_skin (all faces) instead of loop-scoped s_mask
         pm_norm = _norm_mask(person_mask)
@@ -1562,6 +1609,20 @@ class RetouchEngine:
 
         if ctx.grain_strength > 0:
             result = grain.apply_film_grain(result, ctx.grain_strength)
+
+        # --- B&W channel mixer (Phase 1.d) — applied last ---
+        bw_active = (
+            ctx.bw_channel_mixer_r != 30
+            or ctx.bw_channel_mixer_g != 59
+            or ctx.bw_channel_mixer_b != 11
+        )
+        if bw_active:
+            result = self._grader.channel_mixer_bw(
+                result,
+                r_weight=ctx.bw_channel_mixer_r / 100.0,
+                g_weight=ctx.bw_channel_mixer_g / 100.0,
+                b_weight=ctx.bw_channel_mixer_b / 100.0,
+            )
 
         return result
 
