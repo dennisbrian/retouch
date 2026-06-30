@@ -61,14 +61,14 @@ EXPECTED_RECIPE_KEYS = [
     "blemish", "dark_circles", "catchlight", "whiten_tone", "auto_exposure",
     "lip_finish", "slimming", "impact", "clarity", "vibrance", "saturation",
     "glow", "vignette", "sharpen", "sharpen_radius", "subject_separation",
-    "specular_bloom_tone", "color_grade", "grade_intensity",
+    "specular_bloom_tone", "color_grade", "grade_intensity", "color_transfer_intensity",
     "chromatic_aberration", "grain", "halation", "lut",
     "shadow_hue", "shadow_sat", "midtone_hue", "midtone_sat",
     "highlight_hue", "highlight_sat",
     "tonal_curve_strength", "skin_protect_strength",
     "highlight_rolloff_strength", "grain_strength",
 ]
-EXPECTED_RECIPE_KEY_COUNT = 64
+EXPECTED_RECIPE_KEY_COUNT = 65
 EXPECTED_UI_OUTPUT_COUNT = 64
 
 
@@ -553,7 +553,7 @@ class TestProcessInputKeys:
         import inspect
         sig = inspect.signature(gui.process_image)
         # process_image takes *args — but PROCESS_INPUT_KEYS is the canonical list
-        assert len(gui.PROCESS_INPUT_KEYS) == 74
+        assert len(gui.PROCESS_INPUT_KEYS) == 75
 
     def test_first_key_is_img_paths(self):
         assert gui.PROCESS_INPUT_KEYS[0] == "img_paths"
@@ -935,7 +935,7 @@ class TestProcessImageValidation:
             "slimming": 0, "impact": 0,
             "sharpen": 0, "sharpen_radius": 1.0, "glow": 0, "vignette": 0,
             "subject_separation": 0, "specular_bloom_tone": "rosy",
-            "color_grade": "none", "grade_intensity": 0,
+            "color_grade": "none", "grade_intensity": 0, "color_transfer_intensity": 1.0,
             "chromatic_aberration": 0.0, "grain": 0.0, "halation": 0.0,
             "lut": "none",
             "tonal_curve_strength": 0.0, "skin_protect_strength": 0.0,
