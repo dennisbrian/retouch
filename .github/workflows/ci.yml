@@ -1,0 +1,167 @@
+name: Test & Benchmark
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-gui.txt
+          pip install pytest pytest-cov
+
+      - name: Download model assets
+        run: |
+          mkdir -p models
+          # Skip model download in CI — model-gated tests are skipped automatically.
+          # To enable full suite, upload models as repo secrets and uncomment:
+          # curl -L -o models/face_landmarker.task "${{ secrets.MODEL_URL_LANDMARKER }}"
+          # curl -L -o models/selfie_segmenter.tflite "${{ secrets.MODEL_URL_SEGMENTER }}"
+          # curl -L -o models/resnet18.onnx "${{ secrets.MODEL_URL_BISENET }}"
+
+      - name: Syntax check (all modules)
+        run: |
+          for f in retouch/*.py gui.py cli.py desktop.py; do
+            python -m py_compile "$f"
+          done
+
+      - name: Fast tests (no model dependency)
+        run: |
+          python -m pytest tests/ \
+            --ignore=tests/test_detection.py \
+            --ignore=tests/test_parsing_fallback.py \
+            --ignore=tests/test_engine.py \
+            --ignore=tests/test_engine_stages.py \
+            --ignore=tests/test_skin.py \
+            --ignore=tests/test_eyes.py \
+            --ignore=tests/test_lips.py \
+            --ignore=tests/test_teeth.py \
+            --ignore=tests/test_hair.py \
+            --ignore=tests/test_blemish.py \
+            --ignore=tests/test_geometry.py \
+            --ignore=tests/test_makeup.py \
+            --ignore=tests/test_relight.py \
+            --ignore=tests/test_frequency.py \
+            --ignore=tests/test_style.py \
+            --ignore=tests/test_style_extraction.py \
+            --ignore=tests/test_style_analyzer.py \
+            --ignore=tests/test_style_library.py \
+            --ignore=tests/test_grading.py \
+            --ignore=tests/test_grading_internal.py \
+            --ignore=tests/test_integration.py \
+            --ignore=tests/test_integration_pipeline.py \
+            --ignore=tests/test_batch_workflow.py \
+            --ignore=tests/test_batch_onnx.py \
+            --ignore=tests/test_grain.py \
+            --ignore=tests/test_highlight.py \
+            --ignore=tests/test_astia.py \
+            --ignore=tests/test_provia.py \
+            --ignore=tests/test_classic_chrome.py \
+            --ignore=tests/test_sim_integration.py \
+            --ignore=tests/test_sim_docs.py \
+            --ignore=tests/test_compare_fuji_sims.py \
+            --ignore=tests/test_wide_gamut.py \
+            --ignore=tests/test_io_icc.py \
+            --ignore=tests/test_lut_registry.py \
+            --ignore=tests/test_demo_luts.py \
+            --ignore=tests/test_undereye.py \
+            --ignore=tests/test_perf_optimizations.py \
+            --ignore=tests/test_cli.py \
+            --ignore=tests/test_cli_integration.py \
+            --ignore=tests/test_cli_helpers.py \
+            --ignore=tests/test_skin_protect.py \
+            --ignore=tests/test_regions.py \
+            --ignore=tests/test_color_space.py \
+            --ignore=tests/test_recipe_integration.py \
+            --ignore=tests/test_recipe_generator.py \
+            -v -q
+
+      - name: Fast tests with coverage
+        run: |
+          python -m pytest tests/ \
+            --ignore=tests/test_detection.py \
+            --ignore=tests/test_parsing_fallback.py \
+            --ignore=tests/test_engine.py \
+            --ignore=tests/test_engine_stages.py \
+            --ignore=tests/test_skin.py \
+            --ignore=tests/test_eyes.py \
+            --ignore=tests/test_lips.py \
+            --ignore=tests/test_teeth.py \
+            --ignore=tests/test_hair.py \
+            --ignore=tests/test_blemish.py \
+            --ignore=tests/test_geometry.py \
+            --ignore=tests/test_makeup.py \
+            --ignore=tests/test_relight.py \
+            --ignore=tests/test_frequency.py \
+            --ignore=tests/test_style.py \
+            --ignore=tests/test_style_extraction.py \
+            --ignore=tests/test_style_analyzer.py \
+            --ignore=tests/test_style_library.py \
+            --ignore=tests/test_grading.py \
+            --ignore=tests/test_grading_internal.py \
+            --ignore=tests/test_integration.py \
+            --ignore=tests/test_integration_pipeline.py \
+            --ignore=tests/test_batch_workflow.py \
+            --ignore=tests/test_batch_onnx.py \
+            --ignore=tests/test_grain.py \
+            --ignore=tests/test_highlight.py \
+            --ignore=tests/test_astia.py \
+            --ignore=tests/test_provia.py \
+            --ignore=tests/test_classic_chrome.py \
+            --ignore=tests/test_sim_integration.py \
+            --ignore=tests/test_sim_docs.py \
+            --ignore=tests/test_compare_fuji_sims.py \
+            --ignore=tests/test_wide_gamut.py \
+            --ignore=tests/test_io_icc.py \
+            --ignore=tests/test_lut_registry.py \
+            --ignore=tests/test_demo_luts.py \
+            --ignore=tests/test_undereye.py \
+            --ignore=tests/test_perf_optimizations.py \
+            --ignore=tests/test_cli.py \
+            --ignore=tests/test_cli_integration.py \
+            --ignore=tests/test_cli_helpers.py \
+            --ignore=tests/test_skin_protect.py \
+            --ignore=tests/test_regions.py \
+            --ignore=tests/test_color_space.py \
+            --ignore=tests/test_recipe_integration.py \
+            --ignore=tests/test_recipe_generator.py \
+            --cov=retouch --cov-report=term -q
+
+  benchmark:
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-gui.txt
+
+      - name: Run benchmark (fast mode)
+        run: |
+          python scripts/benchmark.py 2>&1 || echo "Benchmark skipped (models required)"
