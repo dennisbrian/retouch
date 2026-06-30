@@ -25,7 +25,7 @@ from retouch.recipes import RECIPES
 class TestProcessingContext:
     def test_default_values(self):
         ctx = ProcessingContext()
-        assert ctx.smooth == 50.0
+        assert ctx.smooth == 30
         assert ctx.whiten == 0.0
         assert ctx.contrast == 0.0
         assert ctx.impact == 0.0

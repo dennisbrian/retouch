@@ -143,14 +143,14 @@ class ProcessingContext:
     """Fully-resolved, typed processing parameters for one engine.process() call."""
 
     # --- Skin ---
-    smooth: float = 50.0
+    smooth: float = _DEFAULTS["smooth"]
     whiten: float = 0.0
     whiten_tone: str = _DEFAULTS["whiten_tone"]
     equalize: float = 0.0
     blemish: float = 0.0
     nose_smooth: Optional[float] = None
     micro_restore: float = _DEFAULTS["micro_restore"]
-    mid_reduction: float = 0.40
+    mid_reduction: float = _DEFAULTS["mid_reduction"]
     texture_opacity: float = _DEFAULTS["texture_opacity"]
     pore_synthesis: float = 0.0
     specular_bloom: float = 0.0

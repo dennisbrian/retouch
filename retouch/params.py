@@ -716,6 +716,16 @@ _GRADING_PARAMS = [
         conversion="gui_div100",
     ),
     ParamSpec(
+        name="color_transfer_intensity",
+        cli_flag="color-transfer-intensity",
+        cli_type=float,
+        default=1.0,
+        recipe_key="color_transfer_intensity",
+        conversion="gui_direct",
+        min_val=0.0,
+        max_val=1.0,
+    ),
+    ParamSpec(
         name="chromatic_aberration",
         cli_flag="chromatic-aberration",
         cli_type=float,
