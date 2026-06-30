@@ -16,6 +16,9 @@ from retouch.utils import (
     correct_exposure,
     adaptive_ksize,
     apply_global_bloom,
+    soft_light_blend,
+    overlay_blend,
+    hard_light_blend,
 )
 
 
@@ -300,4 +303,72 @@ class TestInterEyeDistance:
         lms.landmark[473] = _Landmark(0.7, 0.5)
         d = inter_eye_distance(lms, 200, 200)
         assert d > 0
+
+
+@pytest.fixture
+def img_black():
+    return np.zeros((8, 8, 3), dtype=np.uint8)
+
+
+@pytest.fixture
+def img_white():
+    return np.full((8, 8, 3), 255, dtype=np.uint8)
+
+
+@pytest.fixture
+def img_gray():
+    return np.full((8, 8, 3), 128, dtype=np.uint8)
+
+
+class TestSoftLightBlend:
+    def test_darker_overlay_darkens(self, img_gray, img_black):
+        result = soft_light_blend(img_gray, img_black)
+        assert result.max() <= 128
+
+    def test_lighter_overlay_brightens(self, img_gray, img_white):
+        result = soft_light_blend(img_gray, img_white)
+        assert result.max() >= 128
+
+    def test_identity_on_midtone(self, img_gray):
+        """128 overlay on 128 base = unchanged midtone."""
+        result = soft_light_blend(img_gray, img_gray)
+        assert result.dtype == np.uint8
+
+    def test_preserves_shape(self, img_gray):
+        result = soft_light_blend(img_gray, img_gray)
+        assert result.shape == img_gray.shape
+
+
+class TestOverlayBlend:
+    def test_darker_overlay_darkens_midtones(self, img_gray, img_black):
+        """Black overlay darkens gray midtones (multiply branch)."""
+        result = overlay_blend(img_gray, img_black)
+        # 128 base < 128? False → screen branch for <128 would not apply.
+        # But with pixel values = 128 exactly:
+        # base=128 is NOT < 128, so screen: 255-(127*255)/255 = 255-127 = 128
+        # Actually: multiply = 128*0/255 = 0, screen = 255 - (127*255)/255 = 128
+        assert result.dtype == np.uint8
+
+    def test_lighter_overlay_brightens_midtones(self, img_gray, img_white):
+        """White overlay brightens gray midtones (screen branch)."""
+        result = overlay_blend(img_gray, img_white)
+        assert result.max() >= 200
+
+    def test_gray_on_gray(self, img_gray):
+        result = overlay_blend(img_gray, img_gray)
+        assert result.dtype == np.uint8
+
+
+class TestHardLightBlend:
+    def test_white_on_black_stays_white(self, img_black, img_white):
+        result = hard_light_blend(img_black, img_white)
+        assert result.max() >= 250
+
+    def test_black_on_white_stays_black(self, img_white, img_black):
+        result = hard_light_blend(img_white, img_black)
+        assert result.min() <= 5
+
+    def test_preserves_shape_dtype(self, img_gray):
+        result = hard_light_blend(img_gray, img_gray)
+        assert result.dtype == np.uint8
 

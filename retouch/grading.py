@@ -1238,6 +1238,45 @@ class ColorGrader:
         if mask is not None: return blend_masked(img_bgr, result, mask)
         return result
 
+    def apply_soft_light_layer(
+        self,
+        img_bgr: np.ndarray,
+        layer_bgr: Optional[np.ndarray] = None,
+        opacity: float = 0.5,
+        blur_radius: int = 0,
+    ) -> np.ndarray:
+        """Non-destructive grading via soft-light blend.
+
+        If ``layer_bgr`` is given, it is blended over ``img_bgr`` using
+        soft-light at ``opacity`` strength.  If ``layer_bgr`` is None,
+        a self-blended soft-light layer is used (same image blurred at
+        ``blur_radius``) — this is the classic "detail-preserving
+        contrast" technique used in DaVinci Resolve and Photoshop.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR base image.
+            layer_bgr: Optional overlay layer.  If None, the base is
+                Gaussian-blurred to create the layer.
+            opacity: Blend strength in [0, 1].
+            blur_radius: Gaussian blur radius for self-blend mode.
+
+        Returns:
+            (H, W, 3) uint8 BGR image.
+        """
+        if opacity <= 0.0:
+            return img_bgr
+        from .utils import soft_light_blend
+        if layer_bgr is not None:
+            sl = soft_light_blend(img_bgr, layer_bgr)
+        else:
+            h, w = img_bgr.shape[:2]
+            ksize = max(blur_radius, int(min(h, w) * 0.02)) | 1
+            blurred = cv2.GaussianBlur(img_bgr, (ksize, ksize), 0)
+            sl = soft_light_blend(img_bgr, blurred)
+        if opacity >= 1.0:
+            return sl
+        return cv2.addWeighted(img_bgr, 1.0 - opacity, sl, opacity, 0)
+
     def _add_haze(
         self,
         img_bgr: np.ndarray,

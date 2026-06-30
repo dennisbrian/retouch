@@ -9,7 +9,10 @@ from __future__ import annotations
 from typing import Any, List, Optional, Sequence, Tuple
 
 import cv2
+import logging
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -96,6 +99,69 @@ def screen_blend(a: np.ndarray, b: np.ndarray) -> np.ndarray:
         Screen-blended result with the broadcast shape.
     """
     return 255.0 - ((255.0 - a) * (255.0 - b) / 255.0)
+
+
+def soft_light_blend(base: np.ndarray, layer: np.ndarray) -> np.ndarray:
+    """Soft-light blend — gentle contrast-preserving overlay.
+
+    Uses the Pegtop approximation in normalised [0, 1] space:
+    ``(1 - 2*layer) * base² + 2*layer * base``.
+
+    Preserves original detail while applying tonal shifts — ideal for
+    non-destructive grading layers.
+
+    Args:
+        base: (H, W, 3) uint8 BGR base image.
+        layer: (H, W, 3) uint8 BGR overlay layer.
+
+    Returns:
+        (H, W, 3) uint8 BGR blended result.
+    """
+    base_f = base.astype(np.float32) / 255.0
+    layer_f = layer.astype(np.float32) / 255.0
+    result = (1.0 - 2.0 * layer_f) * base_f * base_f + 2.0 * layer_f * base_f
+    return np.clip(result * 255.0, 0, 255).astype(np.uint8)
+
+
+def overlay_blend(base: np.ndarray, layer: np.ndarray) -> np.ndarray:
+    """Overlay blend — multiply on dark pixels, screen on light pixels.
+
+    For each channel, pixels below 128 use multiply, above 128 use screen.
+    This is the classic "contrast boost" blend mode.
+
+    Args:
+        base: (H, W, 3) uint8 BGR base image.
+        layer: (H, W, 3) uint8 BGR overlay layer.
+
+    Returns:
+        (H, W, 3) uint8 BGR blended result.
+    """
+    base_f = base.astype(np.float32)
+    layer_f = layer.astype(np.float32)
+    multiply = base_f * layer_f / 255.0
+    screen = 255.0 - ((255.0 - base_f) * (255.0 - layer_f) / 255.0)
+    return np.where(base_f < 128.0, multiply, screen).astype(np.uint8)
+
+
+def hard_light_blend(base: np.ndarray, layer: np.ndarray) -> np.ndarray:
+    """Hard-light blend — overlay but driven by the layer, not the base.
+
+    For each channel, pixels in *layer* below 128 use multiply, above 128
+    use screen.  This is the "hard contrast" version — stronger than overlay,
+    preserves no original detail in highlights/shadows.
+
+    Args:
+        base: (H, W, 3) uint8 BGR base image.
+        layer: (H, W, 3) uint8 BGR overlay layer.
+
+    Returns:
+        (H, W, 3) uint8 BGR blended result.
+    """
+    base_f = base.astype(np.float32)
+    layer_f = layer.astype(np.float32)
+    multiply = base_f * layer_f / 255.0
+    screen = 255.0 - ((255.0 - base_f) * (255.0 - layer_f) / 255.0)
+    return np.where(layer_f < 128.0, multiply, screen).astype(np.uint8)
 
 
 def feather_mask(
@@ -354,7 +420,7 @@ def correct_exposure(
                 current_mean = np.mean(face_crop)
                 use_face = True
         except Exception:
-            pass
+            logger.warning("Primary-face detection failed; falling back to global mean", exc_info=True)
 
     if not use_face:
         current_mean = np.mean(l_chan)
