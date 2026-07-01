@@ -924,6 +924,36 @@ _WB_BW_PARAMS = [
         min_val=0.0,
         max_val=100.0,
     ),
+    ParamSpec(
+        name="hsl_hue_global",
+        cli_flag="hsl-hue",
+        cli_type=int,
+        default=0,
+        recipe_key="hsl_hue_global",
+        conversion="gui_direct",
+        min_val=-100,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="hsl_sat_global",
+        cli_flag="hsl-sat",
+        cli_type=int,
+        default=0,
+        recipe_key="hsl_sat_global",
+        conversion="gui_direct",
+        min_val=-100,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="hsl_lum_global",
+        cli_flag="hsl-lum",
+        cli_type=int,
+        default=0,
+        recipe_key="hsl_lum_global",
+        conversion="gui_direct",
+        min_val=-100,
+        max_val=100,
+    ),
 ]
 
 

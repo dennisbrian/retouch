@@ -223,6 +223,9 @@ class ProcessingContext:
     bw_channel_mixer_b: int = _DEFAULTS["bw_channel_mixer_b"]
     negative_split_tone_shadow: float = _DEFAULTS["negative_split_tone_shadow"]
     negative_split_tone_highlight: float = _DEFAULTS["negative_split_tone_highlight"]
+    hsl_hue_global: int = _DEFAULTS["hsl_hue_global"]
+    hsl_sat_global: int = _DEFAULTS["hsl_sat_global"]
+    hsl_lum_global: int = _DEFAULTS["hsl_lum_global"]
 
     # --- Global Bloom (Oniric-Style Glow) ---
     bloom: float = 0.0
@@ -634,6 +637,9 @@ class RetouchEngine:
         bw_channel_mixer_b: Optional[int] = None,
         negative_split_tone_shadow: Optional[float] = None,
         negative_split_tone_highlight: Optional[float] = None,
+        hsl_hue_global: Optional[int] = None,
+        hsl_sat_global: Optional[int] = None,
+        hsl_lum_global: Optional[int] = None,
         color_grade_stack=None,
         color_ref: Optional[np.ndarray] = None,
         color_transfer_intensity: float = 1.0,
@@ -735,6 +741,9 @@ class RetouchEngine:
             "bw_channel_mixer_b": bw_channel_mixer_b,
             "negative_split_tone_shadow": negative_split_tone_shadow,
             "negative_split_tone_highlight": negative_split_tone_highlight,
+            "hsl_hue_global": hsl_hue_global,
+            "hsl_sat_global": hsl_sat_global,
+            "hsl_lum_global": hsl_lum_global,
             "color_grade_stack": color_grade_stack,
             "color_ref": color_ref,
             "color_transfer_intensity": color_transfer_intensity,
@@ -1076,6 +1085,15 @@ class RetouchEngine:
                 result,
                 temperature=ctx.white_balance_kelvin,
                 tint=ctx.white_balance_tint,
+            )
+
+        # --- Master HSL (Phase 1.d) — global LCH adjustments ---
+        if ctx.hsl_hue_global != 0 or ctx.hsl_sat_global != 0 or ctx.hsl_lum_global != 0:
+            result = self._grader.adjust_hsl_lch(
+                result,
+                hue_shift=ctx.hsl_hue_global * 0.6,
+                sat_scale=1.0 + ctx.hsl_sat_global / 100.0,
+                lum_shift=ctx.hsl_lum_global * 0.5,
             )
 
         post_effects = self._assemble_post_effects(ctx)
@@ -1539,6 +1557,15 @@ class RetouchEngine:
                 result,
                 temperature=ctx.white_balance_kelvin,
                 tint=ctx.white_balance_tint,
+            )
+
+        # --- Master HSL (Phase 1.d) — global LCH adjustments ---
+        if ctx.hsl_hue_global != 0 or ctx.hsl_sat_global != 0 or ctx.hsl_lum_global != 0:
+            result = self._grader.adjust_hsl_lch(
+                result,
+                hue_shift=ctx.hsl_hue_global * 0.6,
+                sat_scale=1.0 + ctx.hsl_sat_global / 100.0,
+                lum_shift=ctx.hsl_lum_global * 0.5,
             )
 
         # Build glow mask — allow glow on skin & background, preserve costume details
