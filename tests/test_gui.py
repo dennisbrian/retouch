@@ -67,10 +67,11 @@ EXPECTED_RECIPE_KEYS = [
     "highlight_hue", "highlight_sat",
     "white_balance_kelvin", "white_balance_tint",
     "bw_channel_mixer_r", "bw_channel_mixer_g", "bw_channel_mixer_b",
+    "negative_split_tone_shadow", "negative_split_tone_highlight",
     "tonal_curve_strength", "skin_protect_strength",
     "highlight_rolloff_strength", "grain_strength",
 ]
-EXPECTED_RECIPE_KEY_COUNT = 70
+EXPECTED_RECIPE_KEY_COUNT = 72
 EXPECTED_UI_OUTPUT_COUNT = 64
 
 
@@ -555,7 +556,7 @@ class TestProcessInputKeys:
         import inspect
         sig = inspect.signature(gui.process_image)
         # process_image takes *args — but PROCESS_INPUT_KEYS is the canonical list
-        assert len(gui.PROCESS_INPUT_KEYS) == 80
+        assert len(gui.PROCESS_INPUT_KEYS) == 82
 
     def test_first_key_is_img_paths(self):
         assert gui.PROCESS_INPUT_KEYS[0] == "img_paths"
@@ -940,6 +941,7 @@ class TestProcessImageValidation:
             "color_grade": "none", "grade_intensity": 0, "color_transfer_intensity": 1.0,
             "white_balance_kelvin": 6500, "white_balance_tint": 0,
             "bw_channel_mixer_r": 30, "bw_channel_mixer_g": 59, "bw_channel_mixer_b": 11,
+            "negative_split_tone_shadow": 0, "negative_split_tone_highlight": 0,
             "chromatic_aberration": 0.0, "grain": 0.0, "halation": 0.0,
             "lut": "none",
             "tonal_curve_strength": 0.0, "skin_protect_strength": 0.0,

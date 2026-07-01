@@ -221,6 +221,8 @@ class ProcessingContext:
     bw_channel_mixer_r: int = _DEFAULTS["bw_channel_mixer_r"]
     bw_channel_mixer_g: int = _DEFAULTS["bw_channel_mixer_g"]
     bw_channel_mixer_b: int = _DEFAULTS["bw_channel_mixer_b"]
+    negative_split_tone_shadow: float = _DEFAULTS["negative_split_tone_shadow"]
+    negative_split_tone_highlight: float = _DEFAULTS["negative_split_tone_highlight"]
 
     # --- Global Bloom (Oniric-Style Glow) ---
     bloom: float = 0.0
@@ -630,6 +632,8 @@ class RetouchEngine:
         bw_channel_mixer_r: Optional[int] = None,
         bw_channel_mixer_g: Optional[int] = None,
         bw_channel_mixer_b: Optional[int] = None,
+        negative_split_tone_shadow: Optional[float] = None,
+        negative_split_tone_highlight: Optional[float] = None,
         color_grade_stack=None,
         color_ref: Optional[np.ndarray] = None,
         color_transfer_intensity: float = 1.0,
@@ -729,6 +733,8 @@ class RetouchEngine:
             "bw_channel_mixer_r": bw_channel_mixer_r,
             "bw_channel_mixer_g": bw_channel_mixer_g,
             "bw_channel_mixer_b": bw_channel_mixer_b,
+            "negative_split_tone_shadow": negative_split_tone_shadow,
+            "negative_split_tone_highlight": negative_split_tone_highlight,
             "color_grade_stack": color_grade_stack,
             "color_ref": color_ref,
             "color_transfer_intensity": color_transfer_intensity,
@@ -1114,6 +1120,14 @@ class RetouchEngine:
 
         if ctx.grain_strength > 0:
             result = grain.apply_film_grain(result, ctx.grain_strength)
+
+        # --- Negative split tone (Phase 1.d) — desaturate shadows/highlights ---
+        if ctx.negative_split_tone_shadow > 0 or ctx.negative_split_tone_highlight > 0:
+            result = self._grader.negative_split_tone(
+                result,
+                shadow_desat=ctx.negative_split_tone_shadow / 100.0,
+                highlight_desat=ctx.negative_split_tone_highlight / 100.0,
+            )
 
         # --- B&W channel mixer (Phase 1.d) — applied last ---
         bw_active = (
@@ -1609,6 +1623,14 @@ class RetouchEngine:
 
         if ctx.grain_strength > 0:
             result = grain.apply_film_grain(result, ctx.grain_strength)
+
+        # --- Negative split tone (Phase 1.d) — desaturate shadows/highlights ---
+        if ctx.negative_split_tone_shadow > 0 or ctx.negative_split_tone_highlight > 0:
+            result = self._grader.negative_split_tone(
+                result,
+                shadow_desat=ctx.negative_split_tone_shadow / 100.0,
+                highlight_desat=ctx.negative_split_tone_highlight / 100.0,
+            )
 
         # --- B&W channel mixer (Phase 1.d) — applied last ---
         bw_active = (

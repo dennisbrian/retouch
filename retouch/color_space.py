@@ -411,6 +411,60 @@ def color_balance_lch(
     return out
 
 
+def negative_split_tone_lch(
+    lch: np.ndarray,
+    shadow_desat: float = 0.0,
+    highlight_desat: float = 0.0,
+    shadow_threshold: float = 50.0,
+    highlight_threshold: float = 60.0,
+) -> np.ndarray:
+    """Desaturate shadows and/or highlights independently.
+
+    Unlike regular split toning (which *adds* a colour cast), this
+    *removes* chroma from the targeted luminance zones — producing
+    the "faded film", "bleach bypass", or "vintage" look.
+
+    Shadows: pixels with L* ≤ ``shadow_threshold`` are desaturated by
+    ``shadow_desat`` (0 = none, 1 = full grayscale in shadows).
+    Highlights: pixels with L* ≥ ``highlight_threshold`` are desaturated
+    by ``highlight_desat``.
+
+    Both parameters use a smooth sigmoid transition for natural blending.
+
+    Args:
+        lch: (H, W, 3) float32 LCH.
+        shadow_desat: Desaturation strength in shadows (0–1).
+        highlight_desat: Desaturation strength in highlights (0–1).
+        shadow_threshold: L* value below which shadows begin to desaturate.
+        highlight_threshold: L* value above which highlights begin.
+
+    Returns:
+        New (H, W, 3) float32 LCH.
+    """
+    if shadow_desat <= 0.0 and highlight_desat <= 0.0:
+        return lch.copy()
+
+    out = lch.copy()
+    l_star = out[:, :, 0]
+    c = out[:, :, 1]
+
+    if shadow_desat > 0.0:
+        sd = float(np.clip(shadow_desat, 0.0, 1.0))
+        st = float(np.clip(shadow_threshold, 5.0, 95.0))
+        shadow_weight = np.clip(1.0 - l_star / st, 0.0, 1.0) ** 2
+        ratio = 1.0 - shadow_weight * sd
+        out[:, :, 1] = c * ratio
+
+    if highlight_desat > 0.0:
+        hd = float(np.clip(highlight_desat, 0.0, 1.0))
+        ht = float(np.clip(highlight_threshold, 5.0, 95.0))
+        highlight_weight = np.clip((l_star - ht) / (100.0 - ht), 0.0, 1.0) ** 2
+        ratio = 1.0 - highlight_weight * hd
+        out[:, :, 1] = out[:, :, 1] * ratio
+
+    return out
+
+
 def skin_mask_lch(
     lch: np.ndarray,
     hue_center: float = 25.0,

@@ -14,6 +14,7 @@ from retouch.color_space import (
     color_balance_lch,
     hue_range_mask,
     lch_to_bgr,
+    negative_split_tone_lch,
     split_tone_lch,
 )
 
@@ -245,3 +246,32 @@ class TestColorBalanceLCH:
         lch = bgr_to_lch(_RED_BGR)
         result = color_balance_lch(lch, cyan_red=5.0)
         assert result[:, :, 2].min() >= 0.0
+
+
+class TestNegativeSplitToneLCH:
+    def test_noop_at_zero(self):
+        lch = bgr_to_lch(_RED_BGR)
+        result = negative_split_tone_lch(lch, shadow_desat=0.0, highlight_desat=0.0)
+        assert np.allclose(result, lch, atol=0.1)
+
+    def test_shadow_desat_reduces_chroma(self):
+        lch = bgr_to_lch(_RED_BGR)
+        result = negative_split_tone_lch(lch, shadow_desat=1.0)
+        assert result[:, :, 1].max() <= lch[:, :, 1].max()
+
+    def test_highlight_desat_reduces_chroma(self):
+        # White image has high L*, so highlight desat affects it
+        lch = bgr_to_lch(_WHITE_BGR)
+        result = negative_split_tone_lch(lch, highlight_desat=1.0)
+        assert result[:, :, 1].max() <= lch[:, :, 1].max()
+
+    def test_clamped_values(self):
+        lch = bgr_to_lch(_RED_BGR)
+        result = negative_split_tone_lch(lch, shadow_desat=5.0)
+        assert result[:, :, 1].min() >= 0.0
+
+    def test_preserves_shape_and_dtype(self):
+        lch = bgr_to_lch(_RED_BGR)
+        result = negative_split_tone_lch(lch, shadow_desat=0.5, highlight_desat=0.3)
+        assert result.shape == lch.shape
+        assert result.dtype == np.float32

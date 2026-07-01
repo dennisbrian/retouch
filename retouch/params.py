@@ -852,7 +852,7 @@ _SPLIT_TONING_PARAMS = [
     ),
 ]
 
-# White balance / B&W mixer
+# White balance / B&W mixer / negative split tone
 _WB_BW_PARAMS = [
     ParamSpec(
         name="white_balance_kelvin",
@@ -903,6 +903,26 @@ _WB_BW_PARAMS = [
         conversion="gui_direct",
         min_val=-100,
         max_val=200,
+    ),
+    ParamSpec(
+        name="negative_split_tone_shadow",
+        cli_flag="neg-split-shadow",
+        cli_type=float,
+        default=0.0,
+        recipe_key="negative_split_tone_shadow",
+        conversion="gui_direct",
+        min_val=0.0,
+        max_val=100.0,
+    ),
+    ParamSpec(
+        name="negative_split_tone_highlight",
+        cli_flag="neg-split-highlight",
+        cli_type=float,
+        default=0.0,
+        recipe_key="negative_split_tone_highlight",
+        conversion="gui_direct",
+        min_val=0.0,
+        max_val=100.0,
     ),
 ]
 

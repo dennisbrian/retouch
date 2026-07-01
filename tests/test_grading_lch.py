@@ -171,3 +171,27 @@ class TestChannelMixerBw:
     def test_contrast_stretches(self, grader, img):
         result = grader.channel_mixer_bw(img, contrast=30.0)
         assert result.dtype == np.uint8
+
+
+class TestNegativeSplitTone:
+    def test_noop_when_both_zero(self, grader, colorful_img):
+        result = grader.negative_split_tone(colorful_img, shadow_desat=0.0, highlight_desat=0.0)
+        np.testing.assert_allclose(result, colorful_img, atol=1)
+
+    def test_shadow_desat_darkens_shadows(self, grader, colorful_img):
+        result = grader.negative_split_tone(colorful_img, shadow_desat=0.8, highlight_desat=0.0)
+        assert result.dtype == np.uint8
+        assert not np.array_equal(result, colorful_img)
+
+    def test_highlight_desat_affects_highlights(self, grader, colorful_img):
+        result = grader.negative_split_tone(colorful_img, shadow_desat=0.0, highlight_desat=0.8)
+        assert result.dtype == np.uint8
+        assert not np.array_equal(result, colorful_img)
+
+    def test_both_active(self, grader, colorful_img):
+        result = grader.negative_split_tone(colorful_img, shadow_desat=0.5, highlight_desat=0.5)
+        assert result.shape == colorful_img.shape
+
+    def test_full_desat_is_not_identity(self, grader, colorful_img):
+        result = grader.negative_split_tone(colorful_img, shadow_desat=1.0, highlight_desat=1.0)
+        assert not np.array_equal(result, colorful_img)

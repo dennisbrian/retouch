@@ -1128,6 +1128,32 @@ class ColorGrader:
         toned = _st(lch, shadow_hue, shadow_sat, highlight_hue, highlight_sat, balance)
         return lch_to_bgr(toned)
 
+    def negative_split_tone(
+        self,
+        img_bgr: np.ndarray,
+        shadow_desat: float = 0.0,
+        highlight_desat: float = 0.0,
+    ) -> np.ndarray:
+        """Desaturate shadows and/or highlights — 'faded film' look.
+
+        Unlike :meth:`split_tone_lch` which adds colour, this removes
+        it from the targeted luminance zones.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR.
+            shadow_desat: Shadow desaturation strength (0–1).
+            highlight_desat: Highlight desaturation strength (0–1).
+
+        Returns:
+            (H, W, 3) uint8 BGR.
+        """
+        if shadow_desat <= 0.0 and highlight_desat <= 0.0:
+            return img_bgr
+        from .color_space import bgr_to_lch, lch_to_bgr, negative_split_tone_lch as _nst
+        lch = bgr_to_lch(img_bgr)
+        toned = _nst(lch, shadow_desat, highlight_desat)
+        return lch_to_bgr(toned)
+
     def white_balance_lch(
         self,
         img_bgr: np.ndarray,
