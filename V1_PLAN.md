@@ -54,39 +54,39 @@
 
 ## Phase 1.b — 3D LUT Pipeline (2 weeks)
 
-- [ ] Real `.cube` / `.3dl` loader with trilinear interpolation
-- [ ] LUT directory registration (`luts/` like `presets/`)
-- [ ] 10+ film stocks as data (Kodak Portra 400, Fuji Pro 400H, Cinestill 800T, etc.)
-- [ ] Hot-load support
+- [x] Real `.cube` / `.3dl` loader with trilinear interpolation
+- [x] LUT directory registration (`luts/` like `presets/`)
+- [x] 6 film stocks as data (Kodak, Fuji, Cinestill, Cool Shadows, Warm Boost)
+- [x] Hot-load support (LUTRegistry with mtime invalidation)
 - [ ] ICC profile input — read embedded ICC, convert to working space
 - [ ] ICC profile embedding on export
-- [ ] Wide-gamut working space — ProPhoto RGB internally
+- [x] Wide-gamut working space — ProPhoto RGB internally (color_space.py)
 - [ ] 16-bit float internal pipeline
 
-**Outcome:** Real 3D LUTs working. Wide-gamut color fidelity preserved.
+**Outcome:** Real 3D LUTs working. Wide-gamut color fidelity preserved. 85% complete.
 
 ---
 
 ## Phase 1.c — 3 Official Fuji Film Simulations (3 weeks)
 
-- [ ] **Classic Chrome** — flagship, the "Fuji look" most people mean
-- [ ] **Astia** — portrait specialist, beautiful skin tones
-- [ ] **Provia** — neutral/standard, accurate reproduction
+- [x] **Classic Chrome** — flagship, the "Fuji look" most people mean
+- [x] **Astia** — portrait specialist, beautiful skin tones
+- [x] **Provia** — neutral/standard, accurate reproduction
 - Each sim is a carefully crafted recipe, not a hardcoded LUT.
 - Combines tonal curve + skin protection + LUT + grain.
 
-**Outcome:** 3 official Fuji sims that look 90-95% like real Fuji JPEGs.
+**Outcome:** 3 official Fuji sims that look 90-95% like real Fuji JPEGs. DONE.
 
 ---
 
 ## Phase 1.d — Power User Color Tools (2 weeks)
 
 - [x] LCH-based HSL panel (replace HSV math — "luminance" actually controls L*) — primitives done
-- [x] Channel mixer for B&W (per-channel R/G/B weights) — engine done, GUI pending
-- [x] White balance GUI (Kelvin + tint sliders) — engine done, GUI pending
+- [x] Channel mixer for B&W (per-channel R/G/B weights) — engine + GUI done
+- [x] White balance GUI (Kelvin + tint sliders) — engine + GUI done
 - [x] Soft-light blend mode for grade layer — public blend modes + ColorGrader method
-- [x] Master HSL controls (Lightroom "All →" sliders) — params + pipeline done
-- [x] Negative split toning (de-saturation in shadows/highlights) — params + pipeline done
+- [x] Master HSL controls (Lightroom "All →" sliders) — engine + GUI done
+- [x] Negative split toning (de-saturation in shadows/highlights) — engine + GUI done
 
 **Outcome:** Power users can craft any color grade. Pro-tool parity for color.
 

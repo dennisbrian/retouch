@@ -3,9 +3,9 @@
 **Date:** 2026-07-01
 **Session:** Audit close-out → Pre-Phase 0 → Phase 1.a-d pipeline (full sweep)
 **Branch:** main
-**Commits:** 13
-**Net code change:** +2,200 insertions, ~120 deletions across 20 files
-**Tests:** 1550 → ~1750 passed, 0 regressions
+**Commits:** 15
+**Net code change:** +2,400 insertions, ~130 deletions across 22 files
+**Tests:** 1550 → 1626 passed (+76), 0 regressions, 89% coverage
 
 ---
 
@@ -123,6 +123,22 @@ Added 3 public blend modes + ColorGrader method:
 
 ---
 
+## Phase 8: GUI Wiring — LCH Color Tools Accordion
+
+Added "🎨 LCH Color Tools" accordion with 10 new sliders:
+
+| Section | Controls | Range |
+|---------|----------|-------|
+| White Balance | Temperature, Tint | 2000–12000K, ±100 |
+| B&W Channel Mixer | Red, Green, Blue weights | -100 to 200 |
+| Negative Split Tone | Shadow/Highlight desaturation | 0–100 |
+| Master HSL | Hue, Saturation, Luminance | -100 to 100 |
+
+All auto-wired through `PROCESS_INPUT_KEYS` → `gui_values_to_engine_kwargs` → `engine.process()`.
+No manual wiring needed — the data-driven pipeline handles the rest.
+
+---
+
 ## V1 Status (Fuji-Quality Color Recipe System)
 
 | Phase | Component | Status |
@@ -142,13 +158,14 @@ Added 3 public blend modes + ColorGrader method:
 | 1.d | Hard-light / overlay blend | ✅ Done |
 | 1.d | Negative split toning | ✅ Done |
 | 1.d | Master HSL 'All →' controls | ✅ Done |
+| 1.d | LCH Color Tools GUI | ✅ Done |
 | 1.e | Recipe builder UI | ⬜ Pending |
+| 1.e | Recipe version diff | ⬜ Pending |
 | 1.e | Recipe export/import | ✅ Existing |
 
 ---
 
 ## Up Next
 
-- **Phase 1.d remaining**: Negative split toning, master HSL GUI wiring
 - **Phase 1.e**: Recipe builder UI enhancements
 - **Phase 2 (v2)**: Face editing (makeup, body reshaping) — deferred per roadmap
