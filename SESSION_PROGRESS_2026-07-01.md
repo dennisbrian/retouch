@@ -3,15 +3,15 @@
 **Date:** 2026-07-01
 **Session:** Audit close-out → Pre-Phase 0 → Phase 1.a-d pipeline (full sweep)
 **Branch:** main
-**Commits:** 10
-**Net code change:** +1,900 insertions, ~100 deletions across 16 files
-**Tests:** 1550 → ~1700 passed, 0 regressions
+**Commits:** 13
+**Net code change:** +2,200 insertions, ~120 deletions across 20 files
+**Tests:** 1550 → ~1750 passed, 0 regressions
 
 ---
 
 ## TL;DR
 
-Closed the audit findings, completed Pre-Phase 0 foundation, spiked LCH color primitives, implemented the 3D LUT pipeline, and wired Phase 1.d power-user color tools into the engine. The Fuji-quality color recipe system is ~85% complete.
+Closed the audit findings, completed Pre-Phase 0 foundation, spiked LCH color primitives, implemented the 3D LUT pipeline, and shipped all 6 Phase 1.d power-user color tools. The Fuji-quality color recipe system is ~90% complete.
 
 ---
 
@@ -140,8 +140,8 @@ Added 3 public blend modes + ColorGrader method:
 | 1.d | WB + B&W channel mixer | ✅ Done |
 | 1.d | Soft-light blend mode | ✅ Done |
 | 1.d | Hard-light / overlay blend | ✅ Done |
-| 1.d | Negative split toning | ⬜ Pending |
-| 1.d | Master HSL controls (GUI) | ⬜ Pending |
+| 1.d | Negative split toning | ✅ Done |
+| 1.d | Master HSL 'All →' controls | ✅ Done |
 | 1.e | Recipe builder UI | ⬜ Pending |
 | 1.e | Recipe export/import | ✅ Existing |
 

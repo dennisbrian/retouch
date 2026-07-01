@@ -85,8 +85,8 @@
 - [x] Channel mixer for B&W (per-channel R/G/B weights) — engine done, GUI pending
 - [x] White balance GUI (Kelvin + tint sliders) — engine done, GUI pending
 - [x] Soft-light blend mode for grade layer — public blend modes + ColorGrader method
-- [ ] Master HSL controls (Lightroom "All →" sliders)
-- [ ] Negative split toning (de-saturation in shadows/highlights)
+- [x] Master HSL controls (Lightroom "All →" sliders) — params + pipeline done
+- [x] Negative split toning (de-saturation in shadows/highlights) — params + pipeline done
 
 **Outcome:** Power users can craft any color grade. Pro-tool parity for color.
 
