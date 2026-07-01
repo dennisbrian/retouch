@@ -1397,6 +1397,23 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             highlight_hue = gr.Slider(0, 360, 0, step=1, label="Highlight Hue", info="Hue shift applied to highlight tones (degrees)")
                             highlight_sat = gr.Slider(0, 100, 0, step=1, label="Highlight Saturation", info="Saturation boost for highlight tones")
 
+                        with gr.Accordion("🎨 LCH Color Tools", open=False):
+                            reset_lch_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
+                            gr.Markdown("**White Balance**")
+                            white_balance_kelvin = gr.Slider(2000, 12000, 6500, step=100, label="Temperature (K)", info="2000=warm candlelight, 6500=neutral daylight, 12000=cool shade")
+                            white_balance_tint = gr.Slider(-100, 100, 0, step=1, label="Tint", info="Negative=green correction, positive=magenta correction")
+                            gr.Markdown("**B&W Channel Mixer**")
+                            bw_channel_mixer_r = gr.Slider(-100, 200, 30, step=1, label="Red Weight", info="Red channel weight for B&W conversion")
+                            bw_channel_mixer_g = gr.Slider(-100, 200, 59, step=1, label="Green Weight", info="Green channel weight for B&W conversion")
+                            bw_channel_mixer_b = gr.Slider(-100, 200, 11, step=1, label="Blue Weight", info="Blue channel weight for B&W conversion")
+                            gr.Markdown("**Negative Split Tone**")
+                            negative_split_tone_shadow = gr.Slider(0, 100, 0, step=1, label="Shadow Desaturation", info="Fade shadows toward grayscale")
+                            negative_split_tone_highlight = gr.Slider(0, 100, 0, step=1, label="Highlight Desaturation", info="Fade highlights toward grayscale")
+                            gr.Markdown("**Master HSL**")
+                            hsl_hue_global = gr.Slider(-100, 100, 0, step=1, label="Hue Shift", info="Global hue rotation in LCH space")
+                            hsl_sat_global = gr.Slider(-100, 100, 0, step=1, label="Saturation", info="Global perceptual saturation ±100%")
+                            hsl_lum_global = gr.Slider(-100, 100, 0, step=1, label="Luminance", info="Global L* lightness ±100")
+
                         with gr.Accordion("🔮 Color Transfer", open=False):
                             reset_color_transfer_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                             gr.Markdown("Upload a reference image to match its color tone using CDF-based histogram transfer")
