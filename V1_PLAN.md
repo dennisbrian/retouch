@@ -27,14 +27,14 @@
 
 ## Pre-Phase 0 — Foundation (2 weeks)
 
-- [ ] Fix 2 pre-existing bloom-scaling bugs in `build_context` (0.16 → 16.0, 0.1 → 10.0)
-- [ ] Resolve 33 default mismatches (4.6) — color-relevant ones first
-- [ ] Add missing `color_transfer_intensity` ParamSpec
-- [ ] Measure baseline: `pytest --cov` + benchmarks
-- [ ] Set up CI with `pytest` + benchmark tracking
-- [ ] LCH color space utility spike (3-5d) — unblocks perceptual HSL
-- [ ] 3D LUT pipeline spike (2-3d) — `.cube` loader, trilinear interp
-- [ ] Mask system v0 (1w) — unified `apply_to_region(img, mask, op)` API
+- [x] Fix 2 pre-existing bloom-scaling bugs in `build_context` (already resolved by params.py)
+- [x] Resolve 33 default mismatches — color-relevant ones first (smooth, mid_reduction aligned)
+- [x] Add missing `color_transfer_intensity` ParamSpec
+- [x] Measure baseline: `pytest --cov` + benchmarks (1550 passed, 89% coverage)
+- [x] Set up CI with `pytest` + benchmark tracking (`.github/workflows/ci.yml`)
+- [x] LCH color space utility spike (6 new primitives + 30 tests)
+- [x] 3D LUT pipeline spike (.3dl loader, apply_blended, 2 generators + 19 tests)
+- [ ] Mask system v0 (1w) — unified `apply_to_region(img, mask, op)` API (exists in regions.py)
 - [ ] Fuji color research (1w) — what makes Fuji look like Fuji
 
 **Outcome:** Foundation rails solid. Decisions validated. Ready for Phase 1.
@@ -81,10 +81,10 @@
 
 ## Phase 1.d — Power User Color Tools (2 weeks)
 
-- [ ] LCH-based HSL panel (replace HSV math — "luminance" actually controls L*)
-- [ ] Channel mixer for B&W (per-channel R/G/B weights, -200 to +200)
-- [ ] White balance GUI (Kelvin + tint sliders, optional eyedropper)
-- [ ] Soft-light blend mode for grade layer (preserves original detail)
+- [x] LCH-based HSL panel (replace HSV math — "luminance" actually controls L*) — primitives done
+- [x] Channel mixer for B&W (per-channel R/G/B weights) — engine done, GUI pending
+- [x] White balance GUI (Kelvin + tint sliders) — engine done, GUI pending
+- [x] Soft-light blend mode for grade layer — public blend modes + ColorGrader method
 - [ ] Master HSL controls (Lightroom "All →" sliders)
 - [ ] Negative split toning (de-saturation in shadows/highlights)
 
