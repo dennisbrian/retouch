@@ -40,7 +40,7 @@ The workflow is divided into 7 stages:
 |-------|------|-------------|
 | **0** | Detection & Segmentation | RetinaFace/MediaPipe detection, person segmentation, auto-exposure correction. Supports `FaceContext` caching. |
 | **1** | Face Reshaping | Liquid warping for jaw slimming, cheek slimming, chin lifts (global, applied once). |
-| **2** | Per-Face Processing | Portrait ROI crop, BiSeNet parsing, frequency separation, component enhancements (skin, blemish, eyes, lips, teeth, makeup, hair, dodge & burn). Parallelized via `FaceProcessorPool` or `ThreadPoolExecutor` for multi-face. |
+| **2** | Per-Face Processing | Portrait ROI crop, BiSeNet parsing, frequency separation, anime skin primitives (cel flatten, tone quantize, hue unify), component enhancements (skin, blemish, eyes, lips, teeth, makeup, hair, dodge & burn). Parallelized via `FaceProcessorPool` or `ThreadPoolExecutor` for multi-face. |
 | **3** | Global Tonal Adjustments | Contrast, brightness (gamma), tonal curves (highlights, shadows, whites, blacks). |
 | **4** | Subject-Background Separation | Optional separation processing between subject and background. |
 | **5** | Color Grading (Fuji-Quality) | **Global Fuji foundation (always applied):** tonal curve (H&D film response), highlight rolloff (soft film-like clip), organic clumped film grain. **Color-grade stage (only when a color_grade is set):** split-toning, HSL, presets/stacking, reference-based color transfer, white costume pearl/lavender lift, skin-tone protection, real 3D LUT emulation, atmospheric glow (`ctx.glow`), vignette (`ctx.vignette`), chromatic aberration, halation, bloom. |

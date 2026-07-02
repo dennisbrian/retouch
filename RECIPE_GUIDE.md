@@ -35,6 +35,12 @@ Edit `retouch/recipes.py` — add a new entry to the `RECIPES` dict.
 | `skin` | `equalize` | 0.0–1.0 | Equalize (×100) |
 | `skin` | `rosy` / `porcelain` | 0.0–1.0 | Whitening (×100) |
 | `skin` | `nose_smooth` | 0.0–1.0 | Nose Smooth (×100) |
+| `skin` | `flatten` | 0.0–1.0 | Skin Flatten — cel flatting (×100) |
+| `skin` | `quantize` | 0.0–1.0 | Tone Quantize — cel bands (×100) |
+| `skin` | `unify` | 0.0–1.0 | Hue Unify — anime skin tone (×100) |
+| `skin` | `unify_hue` | −1–360 | Target hue for unify (−1 = auto) |
+| `skin` | `glow` | 0.0–1.0 | Skin Light-Wrap glow (×100) |
+| `skin` | `relight` | 0.0–1.0 | Virtual studio relighting (×100) |
 | `eyes` | `whites` / `iris` | 0.0–1.0 | Eye Enhance (×100) |
 | `eyes` | `catchlight` | 0.0–1.0 | Catchlight (×100) |
 | `eyes` | `dark_circles` | 0.0–1.0 | Dark Circles (×100) |

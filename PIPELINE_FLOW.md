@@ -41,6 +41,7 @@ flowchart TD
         SEP["FrequencySeparator.separate&#40;&#41;<br/>low  &#40;color/tone&#41;<br/>mid  &#40;blemishes&#41;<br/>high &#40;pores&#41;"]:::freqCls
         COMB["FrequencySeparator.combine&#40;&#41;<br/>• mid *= 1 - mask × mid_reduction<br/>• bilateralFilter&#40;low + mid&#41;<br/>• low blended with smooth_strength × 0.25 gauss<br/>• texture_opacity attenuates high band<br/>• Optional split-nose smoothing"]:::freqCls
         RESTORE["★ SkinProcessor.restore_micro_texture&#40;&#41;  &#91;NEW&#93;<br/>detail = original - smoothed<br/>dim_mask = nose_bridge + cheek_highlights<br/>&nbsp;&nbsp;+ left/right_under_eye &#40;feathered&#41;<br/>output += detail × &#40;strength/100&#41;<br/>&nbsp;&nbsp;× smooth_strength × dim_mask"]:::restoreCls
+        ANIME_SKIN["★ Anime Skin Primitives &#40;new&#41;<br/>• flatten&#40;&#41;        — guided-filter cel flatting<br/>• unify_tone&#40;&#41;     — hue/chroma pull in LCH<br/>• quantize_tones&#40;&#41; — soft cel shading bands"]:::restoreCls
         SKIN["Skin &amp; Feature stages &#40;in order&#41;<br/>• equalize&#40;&#41;     — CLAHE + LAB median pull<br/>• whiten&#40;&#41;       — Rosy / Porcelain / Neutral<br/>• relight&#40;&#41;      — 3D virtual studio<br/>• specular_bloom&#40;&#41;<br/>• blemish.remove&#40;&#41;<br/>• undereye.repair&#40;&#41;<br/>• harmonize_neck&#40;&#41;<br/>• eyes + teeth + lips + blush + hair"]:::skinCls
         DODGE["SkinProcessor.dodge_burn&#40;&#41;<br/>&#40;nose_bridge brighten, jawline contour&#41;"]:::skinCls
         COMPOSITE["_composite_faces&#40;&#41;<br/>blend each face canvas back into<br/>the full-res image, accumulate masks"]:::detectCls
@@ -50,8 +51,8 @@ flowchart TD
     subgraph S3[" PHASE 3 — GLOBAL STAGES &#40;full image&#41; "]
         direction TB
         SUBJ["_stage_subject_separation&#40;&#41;<br/>subject+0.3EV / background-0.4EV<br/>via person_mask"]:::lightCls
-        GLBL["_stage_global&#40;&#41;<br/>impact finish, bloom, glow, vignette"]:::finishCls
-        GRADE["_stage_grade&#40;&#41;<br/>• tonal.apply_hd_curve&#40;&#41;<br/>• skin_protect → grader._color_ops&#40;&#41;<br/>&nbsp;&nbsp;&#40;white_balance, curves, RGB curves,<br/>&nbsp;&nbsp;shadow_lift, calibration, warmth,<br/>&nbsp;&nbsp;saturation, HSL, split_tone, clarity&#41;<br/>• highlight.apply_highlight_rolloff&#40;&#41;<br/>• grain, halation, chromatic_aberration<br/>• LUT application"]:::gradeCls
+        GLBL["_stage_global&#40;&#41;<br/>impact finish, skin_glow &#40;anime light-wrap&#41;, bloom, glow, vignette"]:::finishCls
+        GRADE["_stage_grade&#40;&#41;<br/>• tonal.apply_hd_curve&#40;&#41;<br/>• skin_protect → grader._color_ops&#40;&#41;<br/>&nbsp;&nbsp;&#40;white_balance, curves, RGB curves,<br/>&nbsp;&nbsp;shadow_lift, calibration, warmth,<br/>&nbsp;&nbsp;saturation, HSL, split_tone, clarity&#41;<br/>• highlight.apply_highlight_rolloff&#40;&#41;<br/>• apply_skin_diffusion&#40;&#41; &#91;anime light-wrap&#93;<br/>• bloom &#40;apply_global_bloom&#41;<br/>• grain, halation, chromatic_aberration<br/>• LUT application"]:::gradeCls
         FINISH["_stage_finish&#40;&#41;<br/>• color_transfer &#40;if reference image&#41;<br/>• sharpen &#40;mask-driven&#41;<br/>• auto_exposure &#40;optional&#41;<br/>• grade_intensity blend<br/>• halation overlay"]:::finishCls
     end
 
