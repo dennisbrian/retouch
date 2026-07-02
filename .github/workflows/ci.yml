@@ -1,3 +1,7 @@
+# Fast-feedback CI workflow for quick syntax and partial test coverage.
+# For comprehensive testing across Python 3.9-3.11 and full model suite,
+# see test.yml (the canonical test workflow). This workflow is intentionally
+# lightweight to provide quick feedback; it skips ~40 model-dependent tests.
 name: Test & Benchmark
 
 on:
