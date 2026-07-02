@@ -251,6 +251,7 @@ def write_image_with_icc(
     path: Union[str, Path],
     img: np.ndarray,
     icc_profile: Optional[bytes] = None,
+    bit_depth: int = 8,
     **kwargs: Any,
 ) -> None:
     """Write *img* (BGR ndarray) to *path* with an optional embedded ICC profile.
@@ -263,6 +264,8 @@ def write_image_with_icc(
             converted to RGB/RGBA for PIL.
         icc_profile: Raw ICC profile bytes to embed. If ``None`` or empty,
             the image is saved without an embedded profile.
+        bit_depth: Output bit depth. ``8`` (default) for uint8, ``16`` for
+            uint16 (PNG/TIFF only). JPEG/WebP always output 8-bit.
         **kwargs: ``quality`` (int, default ``95``) and ``format`` (str) are
             consumed; all remaining kwargs are forwarded to ``PIL.Image.save``.
 
@@ -274,18 +277,57 @@ def write_image_with_icc(
     pil_format = kwargs.pop("format", _ICC_WRITE_FORMAT_MAP.get(ext))
     quality = int(kwargs.pop("quality", 95))
 
+    # 16-bit export: only PNG and TIFF support it
+    if bit_depth == 16:
+        if ext not in (".png", ".tif", ".tiff"):
+            logger.warning(
+                "16-bit export requested for %s format; falling back to 8-bit. "
+                "Use PNG or TIFF for 16-bit output.", ext
+            )
+            bit_depth = 8
+        else:
+            # Convert to uint16 for 16-bit export
+            if img.dtype == np.float32 or img.dtype == np.float64:
+                img_16 = np.clip(img * 65535.0 + 0.5, 0, 65535).astype(np.uint16)
+            elif img.dtype == np.uint8:
+                # Upscale uint8 to uint16: multiply by 257 to fill the range
+                img_16 = (img.astype(np.uint16) * 257).astype(np.uint16)
+            else:
+                img_16 = img.astype(np.uint16)
+            
+            # For 16-bit, use PIL with proper mode
+            if img_16.ndim == 2:
+                pil_img = Image.fromarray(img_16, mode="I;16")
+            elif img_16.ndim == 3 and img_16.shape[2] == 3:
+                # Convert BGR to RGB for PIL
+                rgb_16 = cv2.cvtColor(img_16, cv2.COLOR_BGR2RGB)
+                pil_img = Image.fromarray(rgb_16, mode="RGB;16")
+            elif img_16.ndim == 3 and img_16.shape[2] == 4:
+                rgba_16 = cv2.cvtColor(img_16, cv2.COLOR_BGRA2RGBA)
+                pil_img = Image.fromarray(rgba_16, mode="RGBA;16")
+            else:
+                raise ValueError(f"16-bit export: unsupported image shape {img_16.shape}")
+            
+            save_kwargs: Dict[str, Any] = {"format": pil_format or ("PNG" if ext == ".png" else "TIFF")}
+            if icc_profile:
+                save_kwargs["icc_profile"] = icc_profile
+            save_kwargs.update(kwargs)
+            pil_img.save(str(path), **save_kwargs)
+            return
+
+    # 8-bit path (original logic)
     if pil_format is None:
         cv2.imwrite(str(path), img, encode_write_params(ext.lstrip("."), quality))
         return
 
     pil_img = _bgr_to_pil(img)
-    save_kwargs: Dict[str, Any] = {"format": pil_format}
+    save_kwargs_8: Dict[str, Any] = {"format": pil_format}
     if pil_format in ("JPEG", "WEBP"):
-        save_kwargs["quality"] = quality
+        save_kwargs_8["quality"] = quality
     if icc_profile:
-        save_kwargs["icc_profile"] = icc_profile
-    save_kwargs.update(kwargs)
-    pil_img.save(str(path), **save_kwargs)
+        save_kwargs_8["icc_profile"] = icc_profile
+    save_kwargs_8.update(kwargs)
+    pil_img.save(str(path), **save_kwargs_8)
 
 
 def convert_image_colorspace(

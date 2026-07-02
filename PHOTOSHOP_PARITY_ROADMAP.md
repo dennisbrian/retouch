@@ -94,6 +94,8 @@ Extend `geometry.py:FaceReshaper` (already does landmark-driven warping for `sli
 
 ## 4. Suggested execution order
 
+> ⚠️ **Superseded (2026-07-02):** the current master sequence for all tiers is in `PLAN_TIERP_PERF_ARCH_SHIP.md` — P1 (guided filter) and F8 (full-res) now come before 1.1/F1. The order below is kept for historical context.
+
 ```
 1.1 float32 pipeline ──► 1.2 session/undo ──► 1.3 brush masks ──► 2.1 spot heal
                                                       │

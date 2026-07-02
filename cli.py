@@ -24,6 +24,7 @@ from retouch.io import (
     imread_exif,
     make_comparison,
     output_format,
+    read_icc_profile,
     resize_for_processing,
 )
 from retouch.recipes import RECIPES
@@ -75,10 +76,15 @@ def _init_worker():
 
 
 def _process_single(args):
-    img_path, output_dir, params, format_arg, quality, force, copy_exif_flag, max_dim, compare_flag, global_only = args
+    img_path, output_dir, params, format_arg, quality, force, copy_exif_flag, max_dim, compare_flag, global_only, bit_depth = args
     try:
         fmt = output_format(img_path, format_arg)
         stem = img_path.stem
+        
+        # For 16-bit, force PNG or TIFF
+        if bit_depth == 16 and fmt not in ("png", "tif", "tiff"):
+            fmt = "png"
+        
         out_path = (output_dir / f"{stem}.{fmt}") if output_dir else \
             img_path.with_suffix(f".{fmt}")
 
@@ -112,9 +118,12 @@ def _process_single(args):
             result = cv2.resize(result, (orig_shape[1], orig_shape[0]),
                                 interpolation=cv2.INTER_LINEAR)
 
-        cv2.imwrite(str(out_path), result, encode_write_params(fmt, quality))
+        # Use write_image_with_icc for 16-bit support
+        from retouch.io import write_image_with_icc
+        icc_profile = read_icc_profile(img_path) if copy_exif_flag else None
+        write_image_with_icc(str(out_path), result, icc_profile=icc_profile, bit_depth=bit_depth, quality=quality)
 
-        if copy_exif_flag:
+        if copy_exif_flag and bit_depth == 8:
             copy_exif(img_path, out_path)
 
         if compare_flag:
@@ -133,7 +142,8 @@ def _process_single(args):
             "quality": quality,
             "max_dim": max_dim,
             "compare_flag": compare_flag,
-            "global_only": global_only
+            "global_only": global_only,
+            "bit_depth": bit_depth,
         })
         return (img_path.name, f"failed: {e}")
 
@@ -332,6 +342,8 @@ def main():
                         help="Output quality 1-100 (default: 95)")
     parser.add_argument("--format", choices=["jpg", "png", "webp", "same"],
                         default="same", help="Output format (default: same as input)")
+    parser.add_argument("--bit-depth", type=int, choices=[8, 16], default=8,
+                        help="Output bit depth (default: 8). 16-bit requires PNG or TIFF format.")
     parser.add_argument("--max-dim", type=int, default=None,
                         help="Downscale so longest side ≤ N px before processing (faster)")
     parser.add_argument("-r", "--recursive", action="store_true",
@@ -414,7 +426,7 @@ def main():
 
     if args.workers > 1 and len(files) > 1:
         pool_args = [
-            (f, output_dir, params, args.format, args.quality, args.force, not args.no_exif, args.max_dim, args.compare, args.global_only)
+            (f, output_dir, params, args.format, args.quality, args.force, not args.no_exif, args.max_dim, args.compare, args.global_only, args.bit_depth)
             for f in files
         ]
         with ProcessPoolExecutor(
@@ -443,6 +455,9 @@ def main():
                     continue
 
                 fmt = output_format(f, args.format)
+                # For 16-bit, force PNG or TIFF
+                if args.bit_depth == 16 and fmt not in ("png", "tif", "tiff"):
+                    fmt = "png"
                 out_path = output_dir / f"{f.stem}.{fmt}" if output_dir else \
                     f.with_suffix(f".{fmt}")
 
@@ -462,8 +477,13 @@ def main():
                 if _scale < 1.0:
                     result = cv2.resize(result, (orig_shape[1], orig_shape[0]),
                                         interpolation=cv2.INTER_LINEAR)
-                cv2.imwrite(str(out_path), result, encode_write_params(fmt, args.quality))
-                if not args.no_exif:
+                
+                # Use write_image_with_icc for 16-bit support
+                from retouch.io import write_image_with_icc, read_icc_profile
+                icc_profile = read_icc_profile(f) if not args.no_exif else None
+                write_image_with_icc(str(out_path), result, icc_profile=icc_profile, bit_depth=args.bit_depth, quality=args.quality)
+                
+                if not args.no_exif and args.bit_depth == 8:
                     copy_exif(f, out_path)
 
                 if args.compare:

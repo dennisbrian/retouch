@@ -6,12 +6,51 @@ anomalies in the skin region, then removes them with OpenCV inpainting.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Tuple
 
 import cv2
 import numpy as np
 
 from .utils import estimate_face_width
+
+
+def inpaint_and_blend(
+    img_bgr: np.ndarray,
+    mask: np.ndarray,
+    inpaint_radius: int,
+    flags: int = cv2.INPAINT_TELEA,
+    blend_ksize: int = 7,
+) -> np.ndarray:
+    """Inpaint masked regions and softly blend the result.
+
+    Shared helper used by BlemishRemover and heal_region.
+
+    Args:
+        img_bgr: (H, W, 3) uint8 BGR image.
+        mask: (H, W) uint8 binary mask (255 = region to inpaint).
+        inpaint_radius: Radius for cv2.inpaint.
+        flags: cv2.INPAINT_TELEA or cv2.INPAINT_NS.
+        blend_ksize: Gaussian blur kernel size for soft-edge blending (must be odd).
+
+    Returns:
+        (H, W, 3) uint8 result with inpainted regions softly blended.
+    """
+    if mask.sum() == 0:
+        return img_bgr
+
+    blend_ksize = max(blend_ksize, 3) | 1
+
+    inpainted = cv2.inpaint(img_bgr, mask, inpaintRadius=inpaint_radius, flags=flags)
+
+    blend_mask = cv2.GaussianBlur(
+        mask.astype(np.float32) / 255.0, (blend_ksize, blend_ksize), 0
+    )
+    blend_mask = blend_mask[:, :, np.newaxis]
+    result = (
+        img_bgr.astype(np.float32) * (1.0 - blend_mask)
+        + inpainted.astype(np.float32) * blend_mask
+    )
+    return np.clip(result, 0, 255).astype(np.uint8)
 
 
 class BlemishRemover:
@@ -45,19 +84,10 @@ class BlemishRemover:
         if blemish_mask.sum() == 0:
             return img_bgr
 
-        # Inpaint blemishes
-        inpainted = cv2.inpaint(img_bgr, blemish_mask, inpaintRadius=max(int(3 * (face_width / 500.0)), 2),
-                                flags=cv2.INPAINT_TELEA)
-
-        # Blend softly to avoid harsh edges
         scale = face_width / 500.0
-        blend_ksize = max(int(7 * scale), 3) | 1
-        blend_mask = cv2.GaussianBlur(
-            blemish_mask.astype(np.float32) / 255.0, (blend_ksize, blend_ksize), 0
-        )
-        blend_mask = blend_mask[:, :, np.newaxis]
-        result = img_bgr.astype(np.float32) * (1 - blend_mask) + inpainted.astype(np.float32) * blend_mask
-        return np.clip(result, 0, 255).astype(np.uint8)
+        inpaint_r = max(int(3 * scale), 2)
+        blend_k = max(int(7 * scale), 3) | 1
+        return inpaint_and_blend(img_bgr, blemish_mask, inpaint_r, cv2.INPAINT_TELEA, blend_k)
 
     def _detect(
         self,

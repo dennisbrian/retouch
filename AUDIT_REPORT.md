@@ -15,7 +15,7 @@ The Retouch Engine is a mature, well-structured Python image-processing pipeline
 - **All 40 Python files compile cleanly.** No syntax errors.
 - **Test suite is green: 1626 passed, 1 skipped** (`pytest tests/ -q`, 512s) — up from 1495 at the last audit, no regressions from new features or the in-flight WIP fixes.
 - **Prior findings confirmed closed**: all 4 test-coverage gaps (§8 rows 1-3, `tonal`/`precision`/`style_transfer`/`recipe_loader_cli` tests promoted, commit `06e50aa`), the 3 silent GUI/engine/utils exceptions (§8 rows 4-5), the `watch_luts_dir` doc drift (§8 row 10), and both bugs from the §10 "Retouch Fix Audit" (no-face `subject_mask`, dead sharpen branch) — all via commit `e633293`. **§8 row 6 (LUT hot-reload wiring) remains open, unchanged** — see §11.2.
-- **2 new MAJOR-tier math bugs found in this cycle's new code** — `overlay_blend`/`hard_light_blend` (missing ×2 factor breaks the 50%-gray no-op identity) and `color_balance_lch` (hue distance ignores 0°/360° wraparound). **Both are currently dead code** — defined and unit-tested, but never called from `engine.py`/`gui.py`/`cli.py` — so there is no live user-facing impact today, but either will misbehave the moment something wires it in.
+- **No new MAJOR-tier defects found in this cycle.** Two candidate MAJOR findings were identified by the auditor but both were verified as false positives after source re-read — `overlay_blend`/`hard_light_blend` (`utils.py:141-142`) already includes the ×2 factor (50%-gray identity holds, produces ~128.5), and `color_balance_lch` (`color_space.py:390-393`) already computes circular hue distance via `np.minimum(..., 360-...)`. See §11.3 for retraction details.
 - **1 dormant registry-bypass bug**: `engine.py` gates white-balance/channel-mixer activation with hardcoded literals (`6500`, `30`, `59`, `11`) instead of `params.py` `_DEFAULTS[...]`, unlike every other field in the same dataclass. Values currently match, so no behavioral effect yet, but this violates the single-source-of-truth mandate and will silently desync if the registry defaults ever change.
 - **Uncommitted WIP** (`skin.py`, `perf_optimizations.py`, `style_library.py`) fixes a genuine latent bug (`_build_dimensional_mask` returning a hardcoded 200×200 zero mask instead of the actual image shape when no region matched) and adds defensive `None` guards; all 1626 tests still pass. This touches Visual-Critical code (`skin.py`) per AGENTS.md and has **not** had a Visual QA pass — flagged as a process gap, not a defect.
 - **No hardcoded secrets, API keys, or absolute user paths** anywhere in the code added since the last audit.
@@ -24,7 +24,7 @@ The Retouch Engine is a mature, well-structured Python image-processing pipeline
 | Severity | Count | Summary |
 |----------|-------|---------|
 | CRITICAL | 0 | — |
-| MAJOR    | 2 (new) | `overlay_blend`/`hard_light_blend` missing ×2 factor (§11.3); `color_balance_lch` hue-wraparound bug (§11.3) — both dead code today, real bugs the moment they're wired in |
+| MAJOR    | 0 | — |
 | MINOR    | 8 (1 carried + 7 new/updated) | LUT hot-reload still unwired (§3.4, unchanged); registry-bypass literals in `engine.py` (§11.3); redundant/under-covering CI workflow (§11.4); `white_balance_lch` tint uses linear (non-circular) hue interpolation (§11.3); uncommitted `skin.py` changes lack Visual QA (§11.5); `gui.py`/`engine.py`/`grading.py`/`params.py` continue to grow (1668/1855/1401/1337 LOC) |
 | INFO     | 2 | `color_space` wide-gamut tradeoff (unchanged, §1.4); `.3dl` loader has no upper bound on `3DLUTSIZE` (theoretical DoS, not reachable — not wired into GUI/CLI) |
 
@@ -355,21 +355,23 @@ Two separate numbering schemes exist in the 2026-06-28 baseline: the §8 **Findi
 
 ### 11.3 New Findings — Committed Feature Code (`adee825..HEAD`)
 
-**MAJOR — `overlay_blend`/`hard_light_blend` missing ×2 factor (`retouch/utils.py:126-164`).**
-Standard overlay/hard-light blend formulas are `2ab/255` (multiply branch) and `255 - 2(255-a)(255-b)/255` (screen branch) — the factor of 2 is what makes 50%-gray (`128,128,128`) a no-op identity. The implementation omits it on both branches:
+**RETRACTED — `overlay_blend`/`hard_light_blend` ×2 factor (`retouch/utils.py:126-164`).**
+The audit claimed the ×2 factor was missing. **The actual source does include it.** Lines 141-142:
 ```python
-multiply = base_f * layer_f / 255.0
-screen = 255.0 - ((255.0 - base_f) * (255.0 - layer_f) / 255.0)
+multiply = 2.0 * base_f * layer_f / 255.0
+screen = 255.0 - 2.0 * (255.0 - base_f) * (255.0 - layer_f) / 255.0
 ```
-Hand-computed: `overlay_blend(128, 128)` → base=128 is not `< 128`, so it takes the screen branch → `255 - 127*127/255 = 191.75`, not the expected ≈128. Every overlay/hard-light result is systematically over-lightened relative to the documented behavior ("classic contrast boost" / "hard contrast" — both docstrings claim standard Photoshop-equivalent semantics). Existing tests (`test_utils.py` `TestOverlayBlend`/`TestHardLightBlend`) only assert dtype/shape/rough direction, never the 50%-gray identity, so this shipped undetected. `soft_light_blend` (Pegtop approximation, same file) is correct by contrast.
-**Blast radius today: none.** `grep -rn "overlay_blend\|hard_light_blend"` shows both functions are defined and tested but never called from `engine.py`, `grading.py`, `gui.py`, or `cli.py` — only `soft_light_blend` is wired in (via `ColorGrader.apply_soft_light_layer`, itself also currently unwired into `engine.py`). Fix before exposing either via GUI/recipe.
+The hand-calc with actual code: `overlay_blend(128, 128)` → screen branch gives `255 - 2*127*127/255 ≈ 128.5`, which is correct near-identity for 50%-gray. Both functions are mathematically correct. The auditor's quoted formula was erroneous — not a bug in the code. **No action needed.** Tests could add a 50%-gray identity assertion for completeness, but this is not a defect.
 
-**MAJOR — `color_balance_lch` hue-distance ignores 0°/360° wraparound (`retouch/color_space.py:390-402`).**
+**RETRACTED — `color_balance_lch` hue wraparound (`retouch/color_space.py:390-402`).**
+The audit claimed `np.abs(h - 0.0)` was used directly without circular distance. **The actual source does compute the short-path distance** via `np.minimum` before the weight formula:
 ```python
-red_weight = np.where(c_red >= 0, 1.0 - np.abs(h - 0.0) / 180.0, 0.0)
+d_red = np.minimum(np.abs(h - 0.0), 360.0 - np.abs(h - 0.0))
+red_weight = np.where(c_red >= 0, 1.0 - d_red / 180.0, 0.0)
 ```
-This assumes `abs(h - 0)` never exceeds 180, which is false for `h` in `(180°, 360°)`. At `h=350°` (perceptually 10° from red, should weight ≈0.94), `abs(350-0)/180 = 1.94` → `red_weight = -0.94`, a large **negative, unclamped** weight — the correction is applied in the wrong direction for hues just below the 0/360 seam. The file's own `hue_range_mask` function (a few hundred lines away) correctly handles this with `d = min(d, 360-d)`; `color_balance_lch` doesn't reuse it. Same class of bug, smaller magnitude, in `split_tone_lch` (`color_space.py:194-201`) and `white_balance_lch`'s tint axis (`grading.py:1191-1196`), both of which linearly interpolate hue (`h + (target-h)*strength`) instead of taking the circular short path — for `white_balance_lch` the practical impact is limited since it only acts on near-neutral, low-chroma pixels (where hue is perceptually noisy anyway), but `color_balance_lch` operates at full chroma.
-**Blast radius today:** `color_balance_lch` and `split_tone_lch` (the `color_space.py` version) are **not called from `engine.py`/`gui.py`** — dead code, same as the blend functions. `white_balance_lch` **is** wired into the render path (`engine.py:1084,1556`), so its milder version of the same bug is live, but low-severity per the chroma-gating above — logged as MINOR, not MAJOR.
+The file's `hue_range_mask` pattern is already reused here. The auditor's quoted snippet was erroneous. **No action needed.**
+
+**MINOR — `split_tone_lch` linear hue interpolation (`color_space.py:336,342`).** Separately from the retracted MAJOR finding above, `split_tone_lch` does blend hue via `h * (1-w) + target_h * w` without circular short-path handling — this is a genuine edge case for hues straddling the 0°/360° seam. Low severity (dead code — not wired into engine/gui). `white_balance_lch` tint axis (`grading.py:1194`) is correctly implemented using `(delta + 180) % 360 - 180` — the audit's claim about it was also mistaken.
 
 **MINOR — `engine.py` bypasses the params registry for 2 feature gates (`engine.py:1083-1084, 1152-1154, 1555, 1664-1666`).**
 ```python
@@ -401,8 +403,8 @@ This diff is **not yet committed**. Reviewed for correctness; all 1626 tests pas
 
 | # | Severity | Finding | Location | Status |
 |---|----------|---------|----------|--------|
-| 11 | MAJOR | `overlay_blend`/`hard_light_blend` missing ×2 factor — breaks 50%-gray identity | `retouch/utils.py:126-164` | Open — dead code today, fix before wiring in |
-| 12 | MAJOR | `color_balance_lch` hue-distance ignores 0°/360° wraparound; same pattern (milder) in `split_tone_lch`/`white_balance_lch` tint | `retouch/color_space.py:390-402`, `grading.py:1191-1196` | Open — `color_balance_lch`/`split_tone_lch` are dead code; `white_balance_lch` is live but low-severity due to chroma-gating |
+| 11 | — | [**RETRACTED**] `overlay_blend`/`hard_light_blend` ×2 factor — source re-read confirms `2.0*` is present (utils.py:141-142), 50%-gray identity holds | `retouch/utils.py:126-164` | False positive — no action needed |
+| 12 | — | [**RETRACTED**] `color_balance_lch` hue wraparound — source re-read confirms `np.minimum(..., 360-...)` is used (color_space.py:390-393); `white_balance_lch` tint claim also false (uses `(d+180)%360-180` at grading.py:1194) | `retouch/color_space.py:390-402`, `grading.py:1191-1196` | False positive — no action needed |
 | 13 | MINOR | 4 hardcoded-literal registry-bypass gates instead of `_DEFAULTS[...]` | `engine.py:1083-1084,1152-1154,1555,1664-1666` | Open — dormant (literals currently match registry) |
 | 14 | MINOR | Redundant CI workflow with ~40-file ignore-list under-covering vs. `test.yml` | `.github/workflows/ci.yml` | Open |
 | 15 | MINOR | Uncommitted `skin.py`/`perf_optimizations.py` diff has no Visual QA pass per AGENTS.md mandate | `retouch/skin.py` (working tree) | Open — process gap, block merge until QA'd |
@@ -411,12 +413,12 @@ This diff is **not yet committed**. Reviewed for correctness; all 1626 tests pas
 
 ### 11.6 Recommendations (Cycle 3, priority order)
 
-1. **Fix the blend-mode math bug** (`utils.py` `overlay_blend`/`hard_light_blend`) — add the missing ×2 factor, add a 50%-gray identity test for both. Cheap, prevents shipping a visibly-wrong blend mode later.
-2. **Fix the hue-wraparound bug** in `color_balance_lch` (reuse the `min(d, 360-d)` circular-distance pattern already correct in `hue_range_mask`) before this function is wired into any UI/recipe surface.
-3. **Run Visual QA** on the uncommitted `skin.py`/`perf_optimizations.py` diff per `docs/VISUAL_QA.md` before merging — required by AGENTS.md, not optional for Visual-Critical modules.
-4. **Replace the 4 hardcoded literals** in `engine.py` with `_DEFAULTS[...]` lookups — one-line change each, closes the registry-bypass gap.
-5. **Consolidate or trim** `.github/workflows/ci.yml` — either delete it (redundant with `test.yml`) or remove the ~40-file ignore-list now that model assets are available.
-6. Carried over from Cycle 2: **decide on LUT hot-reload** (§3.4/finding #6) — wire `watch_luts_dir`'s callback to also evict `ColorGrader._lut_cache`, or mark the watcher experimental in its docstring.
+1. **Run Visual QA** on the uncommitted `skin.py`/`perf_optimizations.py` diff per `docs/VISUAL_QA.md` before merging — required by AGENTS.md, not optional for Visual-Critical modules.
+2. **Replace the 4 hardcoded literals** in `engine.py` with `_DEFAULTS[...]` lookups — one-line change each, closes the registry-bypass gap.
+3. **Consolidate or trim** `.github/workflows/ci.yml` — either delete it (redundant with `test.yml`) or remove the ~40-file ignore-list now that model assets are available.
+4. Carried over from Cycle 2: **decide on LUT hot-reload** (§3.4/finding #6) — wire `watch_luts_dir`'s callback to also evict `ColorGrader._lut_cache`, or mark the watcher experimental in its docstring.
+
+> **Note:** Recommendations 1–2 from the original audit (blend ×2 fix, hue-wraparound fix) have been retracted — both were false positives.
 
 ---
 

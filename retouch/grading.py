@@ -140,11 +140,12 @@ class ColorGrader:
         skip_glows: bool = False,
         skip_post_effects: bool = False,
         skin_protect_strength: float = 0.0,
+        return_float: bool = False,
     ) -> np.ndarray:
         """Apply a colour grading preset to an image.
 
         Args:
-            img_bgr: (H, W, 3) uint8 BGR image.
+            img_bgr: (H, W, 3) uint8 or float32 [0,1] BGR image.
             preset: Preset name (loaded from JSON) or a settings dict.
             intensity: 0.0–1.0 blend strength against the original.
             split_tone_mask: Optional mask to restrict split-toning.
@@ -161,9 +162,10 @@ class ColorGrader:
                 the color operations. Other Fuji foundation effects (tonal curve,
                 highlight rolloff, film grain) are now applied as global stages in
                 ``engine.py``, not as kwargs to ``grade()``.
+            return_float: If True, return float32 [0,1] instead of uint8.
 
         Returns:
-            (H, W, 3) uint8 BGR image.
+            (H, W, 3) uint8 or float32 [0,1] BGR image.
         """
         if isinstance(preset, str):
             settings = PRESETS.get(preset)
@@ -175,7 +177,8 @@ class ColorGrader:
         else:
             settings = preset
 
-        original_u8 = img_bgr
+        is_float_input = img_bgr.dtype == np.float32
+        original_for_blend = img_bgr.copy()
         result = img_bgr.copy()
 
         def _color_ops(img: np.ndarray) -> np.ndarray:
@@ -233,12 +236,17 @@ class ColorGrader:
             if settings.get("haze", 0) > 0:
                 r = self._F_add_haze(r, settings["haze"], mask=haze_mask)
 
+            if return_float or is_float_input:
+                return np.clip(r, 0.0, 1.0).astype(np.float32)
             return to_uint8(r)
 
         if skin_protect_strength > 0:
             result = skin_protect.protect_skin(result, _color_ops, skin_protect_strength)
         else:
             result = _color_ops(result)
+
+        # Track if we need float output
+        want_float = return_float or is_float_input
 
         if "halation" in settings and not skip_post_effects:
             h_conf = settings["halation"]
@@ -265,8 +273,22 @@ class ColorGrader:
         if settings.get("grain", 0) > 0 and not skip_post_effects:
             result = self._add_grain(result, settings["grain"])
 
+        # Convert back to float if needed (post-effects return uint8)
+        if want_float and result.dtype == np.uint8:
+            result = result.astype(np.float32) / 255.0
+
         if intensity < 1.0:
-            result = cv2.addWeighted(original_u8, 1.0 - intensity, result, intensity, 0)
+            # Ensure both arrays have the same dtype for blending
+            if result.dtype != original_for_blend.dtype:
+                if result.dtype == np.float32:
+                    original_for_blend = ensure_float(original_for_blend)
+                else:
+                    result = to_uint8(result)
+            if result.dtype == np.float32:
+                result = original_for_blend * (1.0 - intensity) + result * intensity
+                result = np.clip(result, 0.0, 1.0).astype(np.float32)
+            else:
+                result = cv2.addWeighted(original_for_blend, 1.0 - intensity, result, intensity, 0)
 
         return result
 

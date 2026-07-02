@@ -83,6 +83,8 @@ Round-trip (params → JSON → params identical); load-session component-order 
 
 ## Order & milestones
 
+> ⚠️ **Superseded (2026-07-02):** see master sequencing in `PLAN_TIERP_PERF_ARCH_SHIP.md` — P1 (bilateral→guided) and F8+P2 (full-res fidelity) now run before F1, so F1 lands on the full-resolution pipeline. F1→F2→F3 relative order is unchanged.
+
 ```
 F1 (float32 + 16-bit)  →  F2 (session/undo)  →  F3 (brush masks)
         quality               workflow              capability

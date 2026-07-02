@@ -103,6 +103,8 @@ Round-trip: grade an image with a known preset → extract from the pair → ext
 
 ## Recommended order & dependencies
 
+> ℹ️ Within-tier order below is current. For where Tier 2 sits relative to the other tiers, see master sequencing in `PLAN_TIERP_PERF_ARCH_SHIP.md` (Tier 2 runs after P1/F8/F1/F11/P3/F2/F3).
+
 ```
 F4 spot heal (v0 Telea)  ──►  F5 liquify  ──►  F6 look-from-reference  ──►  F7 denoise/SR  ──►  F4.b LaMa
 ```

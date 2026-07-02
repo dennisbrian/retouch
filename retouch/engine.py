@@ -260,6 +260,9 @@ class ProcessingContext:
     # Cached per-face detection + parsing; None ⇒ engine detects/parses.
     face_contexts: Optional[List["FaceContext"]] = None
 
+    # F4: Manual heal marks — list of {"mask_png_b64": str, "method": str}
+    heals: Optional[List[Dict[str, Any]]] = None
+
 
 # ---------------------------------------------------------------------------
 # ProcessingResult — rich return value
@@ -658,6 +661,7 @@ class RetouchEngine:
         style_ref: Optional[np.ndarray] = None,
         debug_dir: Optional[str] = None,
         face_contexts: Optional[List["FaceContext"]] = None,
+        heals: Optional[List[Dict[str, Any]]] = None,
     ) -> ProcessingResult:
         """Process a single image through the full Retouch pipeline.
 
@@ -775,6 +779,8 @@ class RetouchEngine:
         ctx = build_context(active_recipe, rec, overrides)
         if face_contexts is not None:
             ctx.face_contexts = face_contexts
+        if heals is not None:
+            ctx.heals = heals
 
         if style_profile is not None:
             if overrides["contrast"] is None:
@@ -798,6 +804,24 @@ class RetouchEngine:
                     ctx.whiten_tone = "neutral"
             if overrides["saturation"] is None:
                 ctx.saturation = np.clip(style_profile.saturation_delta, -100.0, 100.0)
+
+        # ------------------------------------------------------------------
+        # F4: Pre-pipeline heal hook — heals run BEFORE retouch/grade
+        # ------------------------------------------------------------------
+        if ctx.heals:
+            from .heal import heal_region, b64_to_mask
+            t_heal = time.perf_counter()
+            for heal_entry in ctx.heals:
+                mask_b64 = heal_entry.get("mask_png_b64", "")
+                method = heal_entry.get("method", "telea")
+                if not mask_b64:
+                    continue
+                try:
+                    heal_mask = b64_to_mask(mask_b64, img_bgr.shape)
+                    img_bgr = heal_region(img_bgr, heal_mask, method=method)
+                except Exception as e:
+                    logger.warning("Heal failed: %s", e)
+            timings["heal"] = (time.perf_counter() - t_heal) * 1000
 
         # ------------------------------------------------------------------
         # Core pipeline (stages 0–6) with automatic proxy down/upscaling
@@ -959,7 +983,12 @@ class RetouchEngine:
         are skipped and the cached face data / regions are reused. Otherwise
         detection + parsing run normally and ``FaceContext`` objects are
         built and returned for caller caching.
+        
+        Phase 3 stages (global, grade, finish) run in float32 [0,1] to avoid
+        inter-stage quantization banding.
         """
+        from .precision import to_float, to_uint8
+        
         # ------------------------------------------------------------------
         # Stage 0 — Detection + segmentation (with FaceContext caching)
         # ------------------------------------------------------------------
@@ -1023,14 +1052,13 @@ class RetouchEngine:
         )
 
         # ------------------------------------------------------------------
-        # Stage 3 — Global tonal adjustments
+        # F1: Convert to float32 [0,1] for Phase 3 global stages
+        # This eliminates inter-stage uint8 quantization banding
         # ------------------------------------------------------------------
-        t3 = time.perf_counter()
-        result = self._stage_global(result, ctx)
-        timings["global"] = (time.perf_counter() - t3) * 1000
+        result = to_float(result)
 
         # ------------------------------------------------------------------
-        # Stage 4 — Subject-background separation
+        # Stage 3 — Subject-background separation (now in float)
         # ------------------------------------------------------------------
         t_subj = time.perf_counter()
         if ctx.subject_separation > 0:
@@ -1038,7 +1066,14 @@ class RetouchEngine:
         timings["subject_separation"] = (time.perf_counter() - t_subj) * 1000
 
         # ------------------------------------------------------------------
-        # Stage 5 — Colour grading
+        # Stage 4 — Global tonal adjustments (now in float)
+        # ------------------------------------------------------------------
+        t3 = time.perf_counter()
+        result = self._stage_global(result, ctx)
+        timings["global"] = (time.perf_counter() - t3) * 1000
+
+        # ------------------------------------------------------------------
+        # Stage 5 — Colour grading (now in float)
         # ------------------------------------------------------------------
         t4 = time.perf_counter()
         result = self._stage_grade(
@@ -1048,11 +1083,16 @@ class RetouchEngine:
         timings["grading"] = (time.perf_counter() - t4) * 1000
 
         # ------------------------------------------------------------------
-        # Stage 6 — Selective sharpening + impact finish
+        # Stage 6 — Selective sharpening + impact finish (now in float)
         # ------------------------------------------------------------------
         t5 = time.perf_counter()
         result = self._stage_finish(result, ctx, acc_sharpen, faces=faces, person_mask=person_mask)
         timings["finish"] = (time.perf_counter() - t5) * 1000
+
+        # ------------------------------------------------------------------
+        # F1: Convert back to uint8 for output
+        # ------------------------------------------------------------------
+        result = to_uint8(result)
 
         final_contexts = built_contexts if built_contexts is not None else cached_contexts
         return _CoreResult(

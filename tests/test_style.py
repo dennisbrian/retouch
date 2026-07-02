@@ -202,3 +202,152 @@ class TestReinhardTransferMasked:
         result = reinhard_transfer_masked(src, ref, mask, mask)
         assert result.shape == src.shape
         assert result.shape == (64, 64, 3)
+
+
+class TestExtractLook:
+    def _make_gradient_image(self, h=128, w=128):
+        img = np.zeros((h, w, 3), dtype=np.uint8)
+        for y in range(h):
+            val = int(y * 255 / h)
+            img[y, :] = [val, val, val]
+        return img
+
+    def _make_warm_image(self, h=128, w=128):
+        img = np.zeros((h, w, 3), dtype=np.uint8)
+        for y in range(h):
+            base = int(y * 200 / h)
+            img[y, :] = [max(0, base - 20), base, min(255, base + 30)]
+        return img
+
+    def test_unpaired_mode_returns_preset_dict(self):
+        from retouch.style import StyleAnalyzer
+        analyzer = StyleAnalyzer.__new__(StyleAnalyzer)
+        ref = self._make_warm_image()
+        preset = analyzer.extract_look(ref, base_img=None, save=False)
+        assert "curves" in preset
+        assert "white_balance" in preset
+        assert "split_tone_three_way" in preset
+        assert "hsl_adjustments" in preset
+        assert "description" in preset
+
+    def test_paired_mode_returns_preset_dict(self):
+        from retouch.style import StyleAnalyzer
+        analyzer = StyleAnalyzer.__new__(StyleAnalyzer)
+        base = self._make_gradient_image()
+        ref = self._make_warm_image()
+        preset = analyzer.extract_look(ref, base_img=base, save=False)
+        assert "curves" in preset
+        assert "L" in preset["curves"]
+        assert len(preset["curves"]["L"]) == 7
+
+    def test_curve_monotonic(self):
+        from retouch.style import StyleAnalyzer
+        analyzer = StyleAnalyzer.__new__(StyleAnalyzer)
+        rng = np.random.default_rng(42)
+        base = np.clip(rng.normal(128, 40, (128, 128, 3)), 0, 255).astype(np.uint8)
+        ref = np.clip(rng.normal(140, 35, (128, 128, 3)), 0, 255).astype(np.uint8)
+        preset = analyzer.extract_look(ref, base_img=base, save=False)
+        curve = preset["curves"]["L"]
+        for i in range(1, len(curve)):
+            assert curve[i][1] >= curve[i - 1][1], f"Curve not monotonic at point {i}"
+
+    def test_white_balance_values(self):
+        from retouch.style import StyleAnalyzer
+        analyzer = StyleAnalyzer.__new__(StyleAnalyzer)
+        ref = self._make_warm_image()
+        preset = analyzer.extract_look(ref, save=False)
+        wb = preset["white_balance"]
+        assert "R" in wb and "G" in wb and "B" in wb
+        assert 0.0 <= wb["R"] <= 1.0
+        assert 0.0 <= wb["G"] <= 1.0
+        assert 0.0 <= wb["B"] <= 1.0
+
+    def test_split_tone_structure(self):
+        from retouch.style import StyleAnalyzer
+        analyzer = StyleAnalyzer.__new__(StyleAnalyzer)
+        ref = self._make_warm_image()
+        preset = analyzer.extract_look(ref, save=False)
+        st = preset["split_tone_three_way"]
+        assert "shadows" in st
+        assert "midtones" in st
+        assert "highlights" in st
+        assert "balance" in st
+        for band in ("shadows", "midtones", "highlights"):
+            assert "hue" in st[band]
+            assert "sat" in st[band]
+            assert 0.0 <= st[band]["hue"] < 360.0
+            assert 0.0 <= st[band]["sat"] <= 100.0
+
+    def test_cool_reference_cool_shadows(self):
+        from retouch.style import StyleAnalyzer
+        analyzer = StyleAnalyzer.__new__(StyleAnalyzer)
+        h, w = 128, 128
+        ref = np.zeros((h, w, 3), dtype=np.uint8)
+        for y in range(h):
+            l_val = int(y * 200 / h)
+            ref[y, :] = [min(255, l_val + 40), l_val, max(0, l_val - 20)]
+        preset = analyzer.extract_look(ref, save=False)
+        shadow_hue = preset["split_tone_three_way"]["shadows"]["hue"]
+        assert 165.0 <= shadow_hue <= 295.0, f"Cool shadow hue expected 165-295, got {shadow_hue}"
+
+    def test_hsl_adjustments_structure(self):
+        from retouch.style import StyleAnalyzer
+        analyzer = StyleAnalyzer.__new__(StyleAnalyzer)
+        base = self._make_gradient_image()
+        ref = self._make_warm_image()
+        preset = analyzer.extract_look(ref, base_img=base, save=False)
+        hsl = preset["hsl_adjustments"]
+        assert isinstance(hsl, dict)
+        if "saturation" in hsl:
+            assert isinstance(hsl["saturation"], dict)
+            for color, val in hsl["saturation"].items():
+                assert isinstance(val, int)
+
+    def test_save_preset_to_disk(self, tmp_path):
+        from retouch.style import StyleAnalyzer
+        import json
+        analyzer = StyleAnalyzer.__new__(StyleAnalyzer)
+        ref = self._make_warm_image()
+
+        presets_dir = tmp_path / "presets"
+        presets_dir.mkdir()
+
+        preset = analyzer.extract_look(ref, name="test_look", save=False)
+        filepath = presets_dir / "test_look.json"
+        with open(filepath, "w") as f:
+            json.dump(preset, f)
+
+        assert filepath.exists()
+        with open(filepath) as f:
+            loaded = json.load(f)
+        assert loaded["description"] == "extracted from test_look"
+
+    def test_roundtrip_with_known_preset(self):
+        from retouch.style import StyleAnalyzer
+        from retouch.grading import ColorGrader
+        analyzer = StyleAnalyzer.__new__(StyleAnalyzer)
+        grader = ColorGrader()
+
+        base = np.random.default_rng(99).integers(
+            40, 220, (128, 128, 3), dtype=np.uint8
+        )
+        known_preset = {
+            "curves": {"L": [[0, 10], [64, 60], [128, 135], [192, 200], [255, 245]]},
+            "white_balance": {"R": 0.95, "G": 1.0, "B": 1.05},
+            "split_tone_three_way": {
+                "shadows": {"hue": 220.0, "sat": 20.0},
+                "midtones": {"hue": 200.0, "sat": 10.0},
+                "highlights": {"hue": 40.0, "sat": 5.0},
+                "balance": -10.0,
+            },
+        }
+
+        graded = grader.grade(base, preset=known_preset, intensity=1.0)
+        extracted = analyzer.extract_look(graded, base_img=base, save=False)
+
+        ext_curve = extracted["curves"]["L"]
+        assert len(ext_curve) == 7
+        assert ext_curve[0][1] >= ext_curve[0][0] - 5
+
+        ext_wb = extracted["white_balance"]
+        assert ext_wb["R"] > ext_wb["B"] or abs(ext_wb["R"] - ext_wb["B"]) < 0.2

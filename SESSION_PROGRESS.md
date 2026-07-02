@@ -1,5 +1,16 @@
 # Session Progress Report
 
+> **Latest session:** See `SESSION_PROGRESS_2026-07-02.md` for the most recent work
+> (Photoshop-Parity Roadmap + F1 float32 pipeline + F4 spot heal + F6 look-from-reference).
+>
+> **Previous sessions:**
+> - `SESSION_PROGRESS_2026-07-01.md` — Audit close-out, Pre-Phase 0, Phase 1.a-d pipeline
+> - `SESSION_PROGRESS_2026-06-24.md` — Stage A/B anime skin primitives
+> - `SESSION_PROGRESS_2026-06-23.md` — Frequency separation + skin processor
+> - This file (below) — 2026-06-22 code quality audit
+
+---
+
 **Date:** 2026-06-22
 **Session:** Code Quality Audit → Fix → Document
 **Branch:** main

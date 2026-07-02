@@ -24,7 +24,8 @@ from retouch.params import recipe_to_params, param_names, gui_values_to_engine_k
 from retouch.grading import list_available_presets
 from retouch.style_library import list_styles, save_style_profile, learn_dataset_style
 from retouch.batch_processor import BatchProcessor
-from retouch.style import StyleProfile
+from retouch.style import StyleProfile, StyleAnalyzer
+from retouch.heal import heal_region, mask_to_b64, b64_to_mask
 
 _logger = logging.getLogger(__name__)
 
@@ -181,6 +182,77 @@ def on_learn_style(orig_dir, edit_dir, style_name, author, tags_str, prg=gr.Prog
     except Exception as e:
         _logger.exception("Error during dataset learning: %s", e)
         return gr.update(), gr.update(), f"Error during dataset learning: {e}"
+
+
+def on_extract_preset(
+    ref_img_path,
+    preset_name,
+    current_img_path,
+    recipe_name,
+):
+    """Extract an editable preset from a reference image."""
+    if not ref_img_path:
+        return (
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            "Error: Please upload a reference image first.",
+        )
+
+    preset_name = (preset_name or "").strip()
+    if not preset_name:
+        if isinstance(ref_img_path, str):
+            preset_name = Path(ref_img_path).stem
+        else:
+            preset_name = "extracted_look"
+
+    try:
+        ref_bgr = imread_exif(
+            ref_img_path
+            if isinstance(ref_img_path, str)
+            else ref_img_path.get("name") or ref_img_path.get("path")
+        )
+
+        base_bgr = None
+        if current_img_path:
+            try:
+                base_bgr = imread_exif(
+                    current_img_path
+                    if isinstance(current_img_path, str)
+                    else current_img_path.get("name") or current_img_path.get("path")
+                )
+            except Exception:
+                base_bgr = None
+
+        analyzer = StyleAnalyzer()
+        preset = analyzer.extract_look(
+            reference_img=ref_bgr,
+            base_img=base_bgr,
+            name=preset_name,
+            save=True,
+        )
+
+        from retouch.grading import ColorGrader, list_available_presets as _lap
+        grader = ColorGrader()
+
+        if base_bgr is not None:
+            result = grader.grade(base_bgr, preset=preset, intensity=0.65)
+            result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
+        else:
+            result_rgb = None
+
+        new_choices = ["none"] + _lap()
+        gr.Info(f"Preset '{preset_name}' extracted!")
+
+        return (
+            gr.update(choices=new_choices, value=preset_name),
+            gr.update(choices=new_choices, value=preset_name),
+            result_rgb,
+            f"Preset '{preset_name}' extracted and saved. Preview at 65% intensity.",
+        )
+    except Exception as e:
+        _logger.exception("Failed to extract preset: %s", e)
+        return gr.update(), gr.update(), gr.update(), f"Failed to extract preset: {e}"
 
 
 def on_process_folder(input_dir, output_dir, style_type, custom_style_name, recipe_name,
@@ -1438,6 +1510,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             gr.Markdown("Upload a reference image to match its color tone using CDF-based histogram transfer")
                             color_ref_img = gr.Image(type="filepath", label="Reference Image", show_label=True, height=160)
                             color_ref_strength = gr.Slider(0.0, 1.0, 1.0, step=0.05, label="Transfer Strength", info="Mix ratio between original grade and matched reference grade (1.0 = full transfer, 0.0 = no transfer)")
+                            with gr.Group():
+                                gr.Markdown("**F6: Extract Editable Preset**")
+                                extract_preset_name = gr.Textbox(label="Preset Name", placeholder="e.g. moody_blue_v2", info="Name for the extracted preset (auto-generated from filename if empty)")
+                                extract_preset_btn = gr.Button("Extract Editable Preset", variant="secondary", elem_classes=["secondary-btn"])
+                                extract_preset_status = gr.Textbox(label="Status", interactive=False, lines=2)
 
                         with gr.Accordion("🔍 Debug & Mask Preview", open=False):
                             reset_debug_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
@@ -1506,6 +1583,127 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                     learn_tags = gr.Textbox(label="Tags (comma-separated)", placeholder="learned, cosplay")
                     learn_style_btn = gr.Button("Extract & Learn Style from Dataset 🧠", variant="primary", elem_classes=["primary-btn"])
                     learn_status = gr.Textbox(label="Learning Status", lines=5, interactive=False)
+
+        with gr.Tab("🩹 Heal"):
+            with gr.Row():
+                with gr.Column(scale=2):
+                    gr.Markdown("### Paint over areas to remove (stray hairs, dust, wig lace, clutter)")
+                    heal_editor = gr.ImageEditor(
+                        label="Paint mask over regions to heal",
+                        height=500,
+                        brush=gr.Brush(colors=["#ff0000"], default_size=20),
+                        layers=False,
+                        sources=["upload", "clipboard"],
+                    )
+                    with gr.Row():
+                        heal_method = gr.Dropdown(
+                            choices=["telea", "ns"],
+                            value="telea",
+                            label="Inpaint Method",
+                            info="Telea: fast boundary-based · NS: Navier-Stokes fluid",
+                        )
+                        heal_btn = gr.Button("🩹 Heal", variant="primary", elem_classes=["primary-btn"])
+                        clear_heals_btn = gr.Button("Clear All Heals", variant="secondary", elem_classes=["secondary-btn"])
+                    heal_status = gr.Textbox(label="Status", interactive=False, placeholder="Paint on the image, then click Heal...")
+
+                with gr.Column(scale=1):
+                    gr.Markdown("### Heal History")
+                    heal_history = gr.Dataframe(
+                        headers=["#", "Method", "Mask Size"],
+                        datatype=["number", "str", "str"],
+                        row_count=(0, "dynamic"),
+                        col_count=(3, "fixed"),
+                        interactive=False,
+                        height=300,
+                    )
+                    _heals_state = gr.State(value=[])
+
+    def on_heal(editor_data, method, heals_list):
+        if editor_data is None:
+            return editor_data, heals_list, _make_heal_table(heals_list), "No image loaded."
+
+        if isinstance(editor_data, dict):
+            composite = editor_data.get("composite")
+            layers = editor_data.get("layers", [])
+        else:
+            composite = editor_data
+            layers = []
+
+        if composite is None:
+            return editor_data, heals_list, _make_heal_table(heals_list), "No image to heal."
+
+        if isinstance(composite, np.ndarray):
+            img_rgb = composite
+        else:
+            img_rgb = np.array(composite)
+
+        if img_rgb.ndim == 2:
+            img_rgb = cv2.cvtColor(img_rgb, cv2.COLOR_GRAY2RGB)
+        elif img_rgb.shape[2] == 4:
+            img_rgb = img_rgb[:, :, :3]
+
+        mask_rgb = None
+        if layers and len(layers) > 0:
+            layer = layers[0]
+            if isinstance(layer, np.ndarray):
+                mask_rgb = layer
+            elif layer is not None:
+                mask_rgb = np.array(layer)
+
+        if mask_rgb is None or mask_rgb.sum() == 0:
+            return editor_data, heals_list, _make_heal_table(heals_list), "No mask painted. Use the brush to paint over areas to remove."
+
+        if mask_rgb.ndim == 3:
+            mask_gray = cv2.cvtColor(mask_rgb, cv2.COLOR_RGB2GRAY)
+        else:
+            mask_gray = mask_rgb
+
+        mask_binary = (mask_gray > 50).astype(np.uint8) * 255
+
+        if mask_binary.sum() == 0:
+            return editor_data, heals_list, _make_heal_table(heals_list), "Mask is empty after thresholding."
+
+        img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+        result_bgr = heal_region(img_bgr, mask_binary, method=method)
+        result_rgb = cv2.cvtColor(result_bgr, cv2.COLOR_BGR2RGB)
+
+        mask_b64 = mask_to_b64(mask_binary)
+        heal_entry = {"mask_png_b64": mask_b64, "method": method}
+        heals_list = list(heals_list) if heals_list else []
+        heals_list.append(heal_entry)
+
+        new_editor = {
+            "composite": result_rgb,
+            "layers": [],
+            "background": result_rgb,
+        }
+
+        mask_h, mask_w = mask_binary.shape[:2]
+        mask_size_str = f"{mask_w}x{mask_h}"
+        return new_editor, heals_list, _make_heal_table(heals_list), f"Heal #{len(heals_list)} applied ({method})."
+
+    def _make_heal_table(heals_list):
+        if not heals_list:
+            return []
+        rows = []
+        for i, h in enumerate(heals_list):
+            rows.append([i + 1, h.get("method", "telea"), "mask"])
+        return rows
+
+    def on_clear_heals(heals_list):
+        return [], gr.update(value=None), "All heals cleared."
+
+    heal_btn.click(
+        fn=on_heal,
+        inputs=[heal_editor, heal_method, _heals_state],
+        outputs=[heal_editor, _heals_state, heal_history, heal_status],
+    )
+
+    clear_heals_btn.click(
+        fn=on_clear_heals,
+        inputs=[_heals_state],
+        outputs=[_heals_state, heal_editor, heal_status],
+    )
 
     def on_batch_style_change(style_type):
         if style_type == "Use Custom Style":
@@ -1628,6 +1826,12 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         fn=reset_color_transfer,
         inputs=[],
         outputs=[color_ref_img, color_ref_strength]
+    )
+
+    extract_preset_btn.click(
+        fn=on_extract_preset,
+        inputs=[color_ref_img, extract_preset_name, img_input, recipe],
+        outputs=[color_grade, color_grade, img_output, extract_preset_status]
     )
 
     reset_debug_btn.click(

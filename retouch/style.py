@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 from dataclasses import dataclass, asdict
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 from .detection import FaceDetector
 from .frequency import separate as freq_separate
@@ -253,6 +258,229 @@ class StyleAnalyzer:
             skin_mid_reduction=skin_mid_reduction,
             skin_texture_opacity=skin_texture_opacity,
         )
+
+    def extract_look(
+        self,
+        reference_img: np.ndarray,
+        base_img: Optional[np.ndarray] = None,
+        name: Optional[str] = None,
+        save: bool = True,
+    ) -> Dict[str, Any]:
+        """Reverse-engineer an editable preset from a reference image.
+
+        Two modes:
+          - Paired: base_img (original) + reference_img (edited) → extract delta
+          - Unpaired: reference_img only → extract absolute look characteristics
+
+        Args:
+            reference_img: BGR uint8 image representing the target look.
+            base_img: Optional BGR uint8 original image (for paired extraction).
+            name: Optional preset name. If None, auto-generated from filename.
+            save: If True, write preset JSON to presets/ directory.
+
+        Returns:
+            Preset dictionary with keys: description, curves, white_balance,
+            split_tone_three_way, hsl_adjustments.
+        """
+        if base_img is not None:
+            if base_img.shape[:2] != reference_img.shape[:2]:
+                reference_img = cv2.resize(
+                    reference_img,
+                    (base_img.shape[1], base_img.shape[0]),
+                )
+            source_for_curve = base_img
+        else:
+            source_for_curve = reference_img
+
+        preset: Dict[str, Any] = {}
+
+        preset["curves"] = self._extract_l_curve(source_for_curve, reference_img)
+        preset["white_balance"] = self._extract_white_balance(reference_img)
+        preset["split_tone_three_way"] = self._extract_split_tone(reference_img)
+        preset["hsl_adjustments"] = self._extract_hsl_adjustments(
+            source_for_curve, reference_img
+        )
+
+        if name is None:
+            name = "extracted_look"
+        preset["description"] = f"extracted from {name}"
+
+        if save:
+            self._save_preset(preset, name)
+
+        return preset
+
+    def _extract_l_curve(
+        self,
+        base_img: np.ndarray,
+        reference_img: np.ndarray,
+    ) -> Dict[str, List[List[int]]]:
+        """Extract L channel curve from percentile mapping."""
+        base_lab = cv2.cvtColor(base_img, cv2.COLOR_BGR2LAB).astype(np.float32)
+        ref_lab = cv2.cvtColor(reference_img, cv2.COLOR_BGR2LAB).astype(np.float32)
+
+        base_l = base_lab[:, :, 0].ravel()
+        ref_l = ref_lab[:, :, 0].ravel()
+
+        percentiles = [0, 5, 25, 50, 75, 95, 100]
+        base_pts = np.percentile(base_l, percentiles)
+        ref_pts = np.percentile(ref_l, percentiles)
+
+        curve_points = []
+        for b, r in zip(base_pts, ref_pts):
+            curve_points.append([int(round(b)), int(round(r))])
+
+        curve_points = self._ensure_monotonic(curve_points)
+
+        return {"L": curve_points}
+
+    def _ensure_monotonic(
+        self, points: List[List[int]]
+    ) -> List[List[int]]:
+        """Ensure curve points are monotonically non-decreasing in Y."""
+        if len(points) < 2:
+            return points
+        result = [points[0][:]]
+        for i in range(1, len(points)):
+            x, y = points[i]
+            prev_y = result[-1][1]
+            if y < prev_y:
+                y = prev_y
+            result.append([x, y])
+        return result
+
+    def _extract_white_balance(
+        self, reference_img: np.ndarray
+    ) -> Dict[str, float]:
+        """Extract white balance from gray-world assumption."""
+        img_f = reference_img.astype(np.float32)
+        b_mean = np.mean(img_f[:, :, 0])
+        g_mean = np.mean(img_f[:, :, 1])
+        r_mean = np.mean(img_f[:, :, 2])
+
+        gray = (b_mean + g_mean + r_mean) / 3.0
+
+        if gray < 1.0:
+            return {"R": 1.0, "G": 1.0, "B": 1.0}
+
+        r_gain = gray / r_mean
+        g_gain = gray / g_mean
+        b_gain = gray / b_mean
+
+        max_gain = max(r_gain, g_gain, b_gain)
+        if max_gain > 0:
+            r_gain /= max_gain
+            g_gain /= max_gain
+            b_gain /= max_gain
+
+        return {
+            "R": round(float(r_gain), 3),
+            "G": round(float(g_gain), 3),
+            "B": round(float(b_gain), 3),
+        }
+
+    def _extract_split_tone(
+        self, reference_img: np.ndarray
+    ) -> Dict[str, Any]:
+        """Extract split tone from LAB a/b in luminance bands."""
+        lab = cv2.cvtColor(reference_img, cv2.COLOR_BGR2LAB).astype(np.float32)
+        l_chan = lab[:, :, 0]
+        a_chan = lab[:, :, 1] - 128.0
+        b_chan = lab[:, :, 2] - 128.0
+
+        shadow_mask = l_chan < 85
+        midtone_mask = (l_chan >= 85) & (l_chan <= 170)
+        highlight_mask = l_chan > 170
+
+        def band_to_hue_sat(
+            mask: np.ndarray, a: np.ndarray, b: np.ndarray
+        ) -> Tuple[float, float]:
+            if np.sum(mask) < 100:
+                return 0.0, 0.0
+            a_mean = np.mean(a[mask])
+            b_mean = np.mean(b[mask])
+            chroma = np.sqrt(a_mean ** 2 + b_mean ** 2)
+            hue_rad = np.arctan2(b_mean, a_mean)
+            hue_deg = np.degrees(hue_rad) % 360.0
+            sat = min(chroma / 25.0 * 100.0, 100.0)
+            return round(float(hue_deg), 1), round(float(sat), 1)
+
+        s_hue, s_sat = band_to_hue_sat(shadow_mask, a_chan, b_chan)
+        m_hue, m_sat = band_to_hue_sat(midtone_mask, a_chan, b_chan)
+        h_hue, h_sat = band_to_hue_sat(highlight_mask, a_chan, b_chan)
+
+        l_norm = l_chan / 255.0
+        balance = float(np.mean(l_norm) - 0.5) * 100.0
+
+        return {
+            "shadows": {"hue": s_hue, "sat": s_sat},
+            "midtones": {"hue": m_hue, "sat": m_sat},
+            "highlights": {"hue": h_hue, "sat": h_sat},
+            "balance": round(balance, 1),
+        }
+
+    def _extract_hsl_adjustments(
+        self,
+        base_img: np.ndarray,
+        reference_img: np.ndarray,
+    ) -> Dict[str, Dict[str, int]]:
+        """Extract per-hue HSL adjustments from saturation differences."""
+        color_centers = {
+            "red": 0.0, "orange": 14.0, "yellow": 27.0, "green": 57.0,
+            "cyan": 92.0, "blue": 122.0, "purple": 148.0, "magenta": 156.0,
+        }
+        sigma = 10.0
+
+        base_hsv = cv2.cvtColor(base_img, cv2.COLOR_BGR2HSV).astype(np.float32)
+        ref_hsv = cv2.cvtColor(reference_img, cv2.COLOR_BGR2HSV).astype(np.float32)
+
+        base_h = base_hsv[:, :, 0]
+        base_s = base_hsv[:, :, 1]
+        ref_s = ref_hsv[:, :, 1]
+
+        sat_adjusts: Dict[str, int] = {}
+        for color, center in color_centers.items():
+            dist = np.abs(base_h - center)
+            dist = np.minimum(dist, 180.0 - dist)
+            weight = np.exp(-(dist ** 2) / (2.0 * sigma ** 2))
+
+            if np.sum(weight) < 100:
+                continue
+
+            base_sat_weighted = np.sum(base_s * weight) / np.sum(weight)
+            ref_sat_weighted = np.sum(ref_s * weight) / np.sum(weight)
+            delta = ref_sat_weighted - base_sat_weighted
+
+            if abs(delta) > 2.0:
+                sat_adjusts[color] = int(round(delta))
+
+        result: Dict[str, Dict[str, int]] = {}
+        if sat_adjusts:
+            result["saturation"] = sat_adjusts
+
+        return result
+
+    def _save_preset(
+        self, preset: Dict[str, Any], name: str
+    ) -> Path:
+        """Save preset to presets/ directory."""
+        presets_dir = Path(__file__).resolve().parent.parent / "presets"
+        presets_dir.mkdir(parents=True, exist_ok=True)
+
+        filename = "".join(c if c.isalnum() or c == "_" else "_" for c in name.lower())
+        filename = filename.strip("_") or "extracted_look"
+        filepath = presets_dir / f"{filename}.json"
+
+        suffix = 2
+        while filepath.exists():
+            filepath = presets_dir / f"{filename}_{suffix}.json"
+            suffix += 1
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(preset, f, indent=2)
+
+        logger.info("Saved extracted preset to %s", filepath)
+        return filepath
 
 
 class StyleApplier:
