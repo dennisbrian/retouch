@@ -46,6 +46,17 @@ Round-trip BGR→Oklab→BGR max error ≤ 2/255; known anchors (pure white → 
 ## Slice 3 — C2 structural light-shadow (`retouch/sculpt.py`)
 Landmark-mesh shading model + form-band correction per parent doc §C2; shares light-direction estimate with relight. Blocked on: Slice 1 shipped + S2 helpers existing (S2 is the adjacent Phase 2 item — build S2 first per MASTER_PLAN order).
 
+## Slice 3b — Relight v2 (review outcome, 2026-07-03) — companion to C2
+Fable review of `retouch/relight.py` (triggered by the facet-mottling bug, fixed 2026-07-03 via coarse-scale shading). Structural weaknesses remaining even after the fix:
+1. Adds a second light instead of moving the light — diffuse term multiplies the photo's existing shading (`relight.py:153`); no delight step.
+2. Specular is a colorless LAB-L push (`:158`) → chalky highlights; real speculars carry light color and reduce skin chroma.
+3. Gamma-space math (lighting should be ~linear; wants F1).
+4. Face-only mask — neck/ears/hair keep old lighting, mismatch at strength.
+5. No estimate of the photo's existing light direction; user azimuth can fight reality.
+Keep: yaw guard, highlight protection, landmark mesh geometry at coarse scale.
+
+**v2 design (rides C2's shared shading engine):** estimate existing light (least-squares fit of low-band L vs mesh normals) → bounded delight (divide out estimated low-band shading) → re-shade with target direction in ≈linear space → apply as tinted RGB gain (`relight_kelvin` param) with chroma-aware specular → extend through neck/ear masks, feathered → `relight_softness` (shading-field blur = softbox size). Build as part of Slice 3, one engine for sculpt + relight. QA: existing-vs-new light agreement test (relight toward the estimated direction ≈ no-op at low strength), chalkiness check (skin chroma under specular must not rise), neck-face lighting continuity.
+
 ## Slice 4 — C4 finish pack (`grading.py` ops: fade_toe, highlight_drift, airy_haze, clarity_split + `jp_transparent_v1` recipe).
 ## Slice 5 — C3 film engine (`retouch/film.py`) — blocked on F1 float pipeline.
 ## Slice 6 — C5 harmonization — pairs with T1.

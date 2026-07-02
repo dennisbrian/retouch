@@ -301,9 +301,14 @@ def process_image(*args):
 
     color_ref_bgr = None
     if color_ref_img is not None and color_ref_strength > 0:
+        # Defensive check: only process if color_ref_img is a valid file path (not bool/invalid type)
         if isinstance(color_ref_img, dict):
             color_ref_img = color_ref_img.get("name") or color_ref_img.get("path")
-        color_ref_bgr = imread_exif(color_ref_img)
+        if color_ref_img and isinstance(color_ref_img, (str, bytes)) or hasattr(color_ref_img, '__fspath__'):
+            try:
+                color_ref_bgr = imread_exif(color_ref_img)
+            except (TypeError, FileNotFoundError) as e:
+                _logger.warning("Failed to load color reference image: %s", e)
 
     engine = get_engine()
     start = time.time()
@@ -1292,6 +1297,10 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         img_output = gr.Image(height=600, show_label=False, elem_id="retouch-output")
                         compare_viewer = gr.HTML(visible=False, elem_id="retouch-compare")
                         _original_state = gr.State(value=None)
+                        # Hidden state variables for newly-added parameters (skin_hue_unify, skin_chroma_even)
+                        # These maintain alignment with PROCESS_INPUT_KEYS but don't have visible UI yet.
+                        _skin_hue_unify_state = gr.State(value=0)
+                        _skin_chroma_even_state = gr.State(value=0)
                         status = gr.Textbox(label="Status", interactive=False, placeholder="Upload an image and click Process to start...")
                         export_file = gr.File(label="📥 Download Exported Assets")
 
@@ -1654,7 +1663,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth, micro_restore,
         whiten, equalize, blemish, whiten_tone, nose_blush, under_eye_blush, white_costume_lift,
         dodge_burn, relight, relight_azimuth, relight_elevation, specular_bloom, specular_bloom_tone,
-        skin_flatten, skin_quantize, skin_unify, skin_unify_hue, skin_glow,
+        skin_flatten, skin_quantize, skin_unify, skin_unify_hue, _skin_hue_unify_state, _skin_chroma_even_state, skin_glow,
         eye_enhance, catchlight, dark_circles, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, slimming, hair_enhance,
         contrast, brightness, highlights, shadows, whites, blacks, clarity, vibrance, saturation, auto_exposure,
         bloom, bloom_threshold, bloom_softness, glow, vignette, sharpen, sharpen_radius, subject_separation, impact,
