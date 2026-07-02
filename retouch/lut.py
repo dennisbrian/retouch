@@ -285,6 +285,8 @@ def load_3dl(path: Union[str, Path]) -> CubeLUT:
                     ) from exc
                 if parsed < 2:
                     raise ValueError(f"3DLUTSIZE must be >= 2; got {parsed}")
+                if parsed > 256:
+                    raise ValueError(f"3DLUTSIZE too large: {parsed} (max 256; {parsed}^3 * 3 = {parsed**3 * 3 // 1_000_000}M floats)")
                 size = parsed
                 continue
             lines.append(line)
