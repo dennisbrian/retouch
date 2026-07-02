@@ -1095,7 +1095,7 @@ class RetouchEngine:
             result = tonal.apply_hd_curve(result, strength=ctx.tonal_curve_strength)
 
         # --- White balance (LCH-based, Phase 1.d) ---
-        if ctx.white_balance_kelvin != 6500 or ctx.white_balance_tint != 0.0:
+        if ctx.white_balance_kelvin != _DEFAULTS["white_balance_kelvin"] or ctx.white_balance_tint != _DEFAULTS["white_balance_tint"]:
             result = self._grader.white_balance_lch(
                 result,
                 temperature=ctx.white_balance_kelvin,
@@ -1478,10 +1478,17 @@ class RetouchEngine:
           subject += 0.3 EV  * strength%
           background -= 0.4 EV * strength%
         Applied in LAB L-channel for clean exposure shifts.
+        Accepts uint8 or float32 [0,1] input, returns same dtype.
         """
         strength = ctx.subject_separation
         if strength <= 0 or person_mask is None:
             return img
+
+        is_float = img.dtype == np.float32
+        if is_float:
+            img_255 = img * 255.0
+        else:
+            img_255 = img.astype(np.float32)
 
         pm = person_mask.astype(np.float32)
         pm = squeeze_mask(pm)
@@ -1492,45 +1499,66 @@ class RetouchEngine:
         feather = max(3, int(min(h_img, w_img) * 0.02) | 1)
         pm = cv2.GaussianBlur(pm, (feather, feather), 0)
 
-        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
+        bgr_u8 = np.clip(img_255, 0, 255).astype(np.uint8)
+        lab = cv2.cvtColor(bgr_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
         L = lab[:, :, 0]
 
-        # Subject brighten: +0.3 EV = multiply by 2^(0.3) ≈ 1.23
         s = strength / 100.0
         subject_gain = 1.0 + 0.23 * s
-        background_gain = 1.0 - 0.33 * s  # -0.4 EV ≈ * 0.76
+        background_gain = 1.0 - 0.33 * s
 
         mask_subject = pm
         mask_bg = np.clip(1.0 - pm, 0.0, 1.0)
 
         L_new = L * (mask_subject * subject_gain + mask_bg * background_gain)
         lab[:, :, 0] = np.clip(L_new, 0.0, 255.0)
-        return cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        result_u8 = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        
+        if is_float:
+            return result_u8.astype(np.float32) / 255.0
+        return result_u8
 
     def _stage_global(self, img: np.ndarray, ctx: ProcessingContext) -> np.ndarray:
-        """Global tonal operators (contrast, brightness, HSL tonal curve)."""
+        """Global tonal operators (contrast, brightness, HSL tonal curve).
+        Accepts uint8 or float32 [0,1] input, returns same dtype.
+        """
+        is_float = img.dtype == np.float32
         result = img
 
         if ctx.contrast:
-            result = _adjust_contrast(result, ctx.contrast)
+            if is_float:
+                result = _F_adjust_contrast(result, ctx.contrast)
+            else:
+                result = _adjust_contrast(result, ctx.contrast)
 
         if ctx.brightness is not None and ctx.brightness != 0:
             gamma = np.clip(1.0 - (ctx.brightness / 100.0), 0.1, 4.0)
-            # BUGFIX-4 + PERF: Vectorized LUT calculation
-            x = np.arange(256, dtype=np.float32) / 255.0
-            _brightness_lut = (np.power(x, gamma) * 255.0).astype(np.uint8)
-            result = cv2.LUT(result, _brightness_lut)
+            if is_float:
+                result = np.power(np.clip(result, 0.0, 1.0), gamma).astype(np.float32)
+            else:
+                x = np.arange(256, dtype=np.float32) / 255.0
+                _brightness_lut = (np.power(x, gamma) * 255.0).astype(np.uint8)
+                result = cv2.LUT(result, _brightness_lut)
 
         if any(v is not None and v != 0 for v in (
             ctx.highlights, ctx.shadows, ctx.whites, ctx.blacks
         )):
-            result = _adjust_tonal(
-                result,
-                shadows=ctx.shadows or 0,
-                highlights=ctx.highlights or 0,
-                whites=ctx.whites or 0,
-                blacks=ctx.blacks or 0,
-            )
+            if is_float:
+                result = _F_adjust_tonal(
+                    result,
+                    shadows=ctx.shadows or 0,
+                    highlights=ctx.highlights or 0,
+                    whites=ctx.whites or 0,
+                    blacks=ctx.blacks or 0,
+                )
+            else:
+                result = _adjust_tonal(
+                    result,
+                    shadows=ctx.shadows or 0,
+                    highlights=ctx.highlights or 0,
+                    whites=ctx.whites or 0,
+                    blacks=ctx.blacks or 0,
+                )
 
         if ctx.clarity:
             result = self._grader._add_clarity(result, ctx.clarity / 100.0)
@@ -1539,7 +1567,10 @@ class RetouchEngine:
             result = _adjust_vibrance(result, ctx.vibrance)
 
         if ctx.saturation:
-            result = _apply_uniform_saturation(result, ctx.saturation)
+            if is_float:
+                result = _F_apply_uniform_saturation(result, ctx.saturation)
+            else:
+                result = _apply_uniform_saturation(result, ctx.saturation)
 
         return result
 
@@ -1553,38 +1584,59 @@ class RetouchEngine:
         style_ref: Optional[np.ndarray] = None,
         faces=None,
     ) -> np.ndarray:
-        """Colour transfer, grading, and white-costume lift."""
+        """Colour transfer, grading, and white-costume lift.
+        Accepts uint8 or float32 [0,1] input, returns same dtype.
+        """
+        is_float = img.dtype == np.float32
         result = img
+
+        # For functions that don't yet support float, convert temporarily
+        def _to_uint8_if_float(x):
+            if x.dtype == np.float32:
+                return np.clip(x * 255.0, 0, 255).astype(np.uint8)
+            return x
+
+        def _to_float_if_needed(x, was_float):
+            if was_float and x.dtype == np.uint8:
+                return x.astype(np.float32) / 255.0
+            return x
 
         # Subject-Aware Color Transfer (Meitu/Xingtu-style portrait match)
         if style_ref is not None:
-            result = subject_aware_transfer(self, result, style_ref, target_faces=faces, target_person=person_mask)
+            result_u8 = _to_uint8_if_float(result)
+            result_u8 = subject_aware_transfer(self, result_u8, style_ref, target_faces=faces, target_person=person_mask)
+            result = _to_float_if_needed(result_u8, is_float)
 
         # Colour transfer (reference-based)
         if ctx.color_ref is not None:
-            result = self._grader.color_transfer(
-                result, ctx.color_ref, intensity=ctx.color_transfer_intensity
+            result_u8 = _to_uint8_if_float(result)
+            result_u8 = self._grader.color_transfer(
+                result_u8, ctx.color_ref, intensity=ctx.color_transfer_intensity
             )
+            result = _to_float_if_needed(result_u8, is_float)
 
         # --- White balance (LCH-based, Phase 1.d) ---
-        if ctx.white_balance_kelvin != 6500 or ctx.white_balance_tint != 0.0:
-            result = self._grader.white_balance_lch(
-                result,
+        if ctx.white_balance_kelvin != _DEFAULTS["white_balance_kelvin"] or ctx.white_balance_tint != _DEFAULTS["white_balance_tint"]:
+            result_u8 = _to_uint8_if_float(result)
+            result_u8 = self._grader.white_balance_lch(
+                result_u8,
                 temperature=ctx.white_balance_kelvin,
                 tint=ctx.white_balance_tint,
             )
+            result = _to_float_if_needed(result_u8, is_float)
 
         # --- Master HSL (Phase 1.d) — global LCH adjustments ---
         if ctx.hsl_hue_global != 0 or ctx.hsl_sat_global != 0 or ctx.hsl_lum_global != 0:
-            result = self._grader.adjust_hsl_lch(
-                result,
+            result_u8 = _to_uint8_if_float(result)
+            result_u8 = self._grader.adjust_hsl_lch(
+                result_u8,
                 hue_shift=ctx.hsl_hue_global * 0.6,
                 sat_scale=1.0 + ctx.hsl_sat_global / 100.0,
                 lum_shift=ctx.hsl_lum_global * 0.5,
             )
+            result = _to_float_if_needed(result_u8, is_float)
 
         # Build glow mask — allow glow on skin & background, preserve costume details
-        # BUGFIX-1: use accumulated acc_skin (all faces) instead of loop-scoped s_mask
         pm_norm = _norm_mask(person_mask)
         if pm_norm is not None:
             pm_norm = squeeze_mask(pm_norm)
@@ -1593,22 +1645,21 @@ class RetouchEngine:
         else:
             g_mask = np.ones(img.shape[:2], dtype=np.float32)
 
-        # Determine if we should skip built-in glows (Smart Glow & Orton Glow) in presets
-        # because the new high-level bloom control is active
         skip_glows = ctx.bloom > 0.0
-
-        # Assemble post-effects settings (to run after bloom)
         post_effects = self._assemble_post_effects(ctx)
 
         if ctx.tonal_curve_strength > 0:
-            result = tonal.apply_hd_curve(result, strength=ctx.tonal_curve_strength)
+            result_u8 = _to_uint8_if_float(result)
+            result_u8 = tonal.apply_hd_curve(result_u8, strength=ctx.tonal_curve_strength)
+            result = _to_float_if_needed(result_u8, is_float)
 
-        # Run core color grading
+        # Run core color grading (grade() now supports float natively)
         if ctx.color_grade_stack:
-            result = self._grader.grade_stack(result, ctx.color_grade_stack)
+            result_u8 = _to_uint8_if_float(result)
+            result_u8 = self._grader.grade_stack(result_u8, ctx.color_grade_stack)
+            result = _to_float_if_needed(result_u8, is_float)
         elif ctx.color_grade:
             settings = PRESETS.get(ctx.color_grade, PRESETS["natural"]).copy()
-            # Extract preset post-effects to run them later
             for k in ["halation", "grain", "chromatic_aberration", "lut"]:
                 if k in settings and k not in post_effects:
                     post_effects[k] = settings[k]
@@ -1619,78 +1670,100 @@ class RetouchEngine:
                 skin_mask=acc_skin,
                 skip_glows=skip_glows, skip_post_effects=True,
                 skin_protect_strength=ctx.skin_protect_strength,
+                return_float=is_float,
             )
 
-        # Apply recipe-level split toning (from ProcessingContext, not preset)
+        # Apply recipe-level split toning
         if any((ctx.shadow_hue, ctx.shadow_sat, ctx.midtone_hue, ctx.midtone_sat, ctx.highlight_hue, ctx.highlight_sat)):
             tones = {
                 "shadows": {"hue": ctx.shadow_hue, "sat": ctx.shadow_sat},
                 "midtones": {"hue": ctx.midtone_hue, "sat": ctx.midtone_sat},
                 "highlights": {"hue": ctx.highlight_hue, "sat": ctx.highlight_sat},
             }
-            result = self._grader._split_tone_three_way(result, tones, mask=acc_skin)
+            result_u8 = _to_uint8_if_float(result)
+            result_u8 = self._grader._split_tone_three_way(result_u8, tones, mask=acc_skin)
+            result = _to_float_if_needed(result_u8, is_float)
 
         if ctx.highlight_rolloff_strength > 0:
-            result = highlight.apply_highlight_rolloff(result, ctx.highlight_rolloff_strength)
+            result_u8 = _to_uint8_if_float(result)
+            result_u8 = highlight.apply_highlight_rolloff(result_u8, ctx.highlight_rolloff_strength)
+            result = _to_float_if_needed(result_u8, is_float)
 
         # ---- Skin light-wrap diffusion (anime) ----
         if ctx.skin_glow > 0 and acc_skin is not None and acc_skin.max() > 0.01:
-            result = apply_skin_diffusion(result, acc_skin, strength=ctx.skin_glow)
+            result_u8 = _to_uint8_if_float(result)
+            result_u8 = apply_skin_diffusion(result_u8, acc_skin, strength=ctx.skin_glow)
+            result = _to_float_if_needed(result_u8, is_float)
 
-        # Apply Global Cinematic Bloom (runs after color grading, but before halation/grain)
+        # Apply Global Cinematic Bloom
         if ctx.bloom > 0.0:
-            result = apply_global_bloom(
-                result,
+            result_u8 = _to_uint8_if_float(result)
+            result_u8 = apply_global_bloom(
+                result_u8,
                 strength=ctx.bloom,
                 threshold=ctx.bloom_threshold,
                 softness=ctx.bloom_softness,
             )
+            result = _to_float_if_needed(result_u8, is_float)
 
-        # Apply ctx-level atmospheric glow (separate from preset glow)
+        # Apply ctx-level atmospheric glow
         if ctx.glow > 0:
-            result = self._grader._add_glow(result, ctx.glow / 100.0, mask=g_mask)
+            result_u8 = _to_uint8_if_float(result)
+            result_u8 = self._grader._add_glow(result_u8, ctx.glow / 100.0, mask=g_mask)
+            result = _to_float_if_needed(result_u8, is_float)
 
-        # Apply post-effects (halation, lut, grain, chromatic aberration)
+        # Apply post-effects
         if post_effects:
             result = self._grader.grade(
                 result, post_effects, 1.0,
                 split_tone_mask=acc_skin, glow_mask=g_mask, haze_mask=g_mask,
                 skin_mask=acc_skin,
                 skin_protect_strength=ctx.skin_protect_strength,
+                return_float=is_float,
             )
 
         # White costume pearl/lavender lift
         if ctx.white_costume_lift:
-            result = self._apply_white_costume_lift(result, acc_skin, acc_lips, ctx.grade_intensity)
+            result_u8 = _to_uint8_if_float(result)
+            result_u8 = self._apply_white_costume_lift(result_u8, acc_skin, acc_lips, ctx.grade_intensity)
+            result = _to_float_if_needed(result_u8, is_float)
 
-        # Apply ctx-level vignette (last, after all other effects)
+        # Apply ctx-level vignette
         if ctx.vignette > 0:
-            result = self._grader._add_vignette(result, ctx.vignette / 100.0)
+            result_u8 = _to_uint8_if_float(result)
+            result_u8 = self._grader._add_vignette(result_u8, ctx.vignette / 100.0)
+            result = _to_float_if_needed(result_u8, is_float)
 
         if ctx.grain_strength > 0:
-            result = grain.apply_film_grain(result, ctx.grain_strength)
+            result_u8 = _to_uint8_if_float(result)
+            result_u8 = grain.apply_film_grain(result_u8, ctx.grain_strength)
+            result = _to_float_if_needed(result_u8, is_float)
 
-        # --- Negative split tone (Phase 1.d) — desaturate shadows/highlights ---
+        # --- Negative split tone ---
         if ctx.negative_split_tone_shadow > 0 or ctx.negative_split_tone_highlight > 0:
-            result = self._grader.negative_split_tone(
-                result,
+            result_u8 = _to_uint8_if_float(result)
+            result_u8 = self._grader.negative_split_tone(
+                result_u8,
                 shadow_desat=ctx.negative_split_tone_shadow / 100.0,
                 highlight_desat=ctx.negative_split_tone_highlight / 100.0,
             )
+            result = _to_float_if_needed(result_u8, is_float)
 
-        # --- B&W channel mixer (Phase 1.d) — applied last ---
+        # --- B&W channel mixer ---
         bw_active = (
             ctx.bw_channel_mixer_r != 30
             or ctx.bw_channel_mixer_g != 59
             or ctx.bw_channel_mixer_b != 11
         )
         if bw_active:
-            result = self._grader.channel_mixer_bw(
-                result,
+            result_u8 = _to_uint8_if_float(result)
+            result_u8 = self._grader.channel_mixer_bw(
+                result_u8,
                 r_weight=ctx.bw_channel_mixer_r / 100.0,
                 g_weight=ctx.bw_channel_mixer_g / 100.0,
                 b_weight=ctx.bw_channel_mixer_b / 100.0,
             )
+            result = _to_float_if_needed(result_u8, is_float)
 
         return result
 
@@ -1702,6 +1775,8 @@ class RetouchEngine:
         faces=None,
         person_mask: Optional[np.ndarray] = None,
     ) -> np.ndarray:
+        """Finish stage: sharpening + impact. Accepts uint8 or float32 [0,1]."""
+        is_float = img.dtype == np.float32
         result = img
         sharpen_mask = acc_sharpen
         if ctx.sharpen > 0 and sharpen_mask.max() <= 0.01:
@@ -1713,9 +1788,14 @@ class RetouchEngine:
                 radius = ctx.sharpen_radius * (avg_ied / 80.0)
                 radius = max(0.5, min(4.0, radius))
             amount = max(1.2, ctx.sharpen / 100.0 * 2.0)
-            result = _apply_selective_sharpening(
-                result, sharpen_mask, radius=radius, amount=amount, threshold=2
-            )
+            if is_float:
+                result = _F_apply_selective_sharpening(
+                    result, sharpen_mask, radius=radius, amount=amount, threshold=2.0
+                )
+            else:
+                result = _apply_selective_sharpening(
+                    result, sharpen_mask, radius=radius, amount=amount, threshold=2
+                )
         if ctx.impact > 0:
             result = self._grader.add_impact_finish(result, ctx.impact, subject_mask=person_mask)
         return result
@@ -1782,12 +1862,34 @@ def _apply_uniform_saturation(img: np.ndarray, saturation: float) -> np.ndarray:
     return cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
 
+def _F_apply_uniform_saturation(img_f: np.ndarray, saturation: float) -> np.ndarray:
+    """Float32 [0,1] variant of _apply_uniform_saturation."""
+    if saturation == 0:
+        return img_f
+    bgr_u8 = np.clip(img_f * 255.0, 0, 255).astype(np.uint8)
+    hsv = cv2.cvtColor(bgr_u8, cv2.COLOR_BGR2HSV).astype(np.float32)
+    factor = 1.0 + saturation / 100.0
+    hsv[:, :, 1] = np.clip(hsv[:, :, 1] * factor, 0, 255)
+    out_u8 = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+    return out_u8.astype(np.float32) / 255.0
+
+
 def _adjust_contrast(img: np.ndarray, contrast: float) -> np.ndarray:
     if contrast == 0:
         return img
     f = (259.0 * (contrast + 255.0)) / (255.0 * (259.0 - contrast))
     result = f * (img.astype(np.float32) - 128.0) + 128.0
     return np.clip(result, 0, 255).astype(np.uint8)
+
+
+def _F_adjust_contrast(img_f: np.ndarray, contrast: float) -> np.ndarray:
+    """Float32 [0,1] variant of _adjust_contrast."""
+    if contrast == 0:
+        return img_f
+    f = (259.0 * (contrast + 255.0)) / (255.0 * (259.0 - contrast))
+    img_255 = img_f * 255.0
+    result = f * (img_255 - 128.0) + 128.0
+    return np.clip(result / 255.0, 0.0, 1.0).astype(np.float32)
 
 
 def _adjust_tonal(
@@ -1820,6 +1922,36 @@ def _adjust_tonal(
     return cv2.LUT(img, y)
 
 
+def _F_adjust_tonal(
+    img_f: np.ndarray,
+    shadows: float = 0,
+    highlights: float = 0,
+    whites: float = 0,
+    blacks: float = 0,
+) -> np.ndarray:
+    """Float32 [0,1] variant of _adjust_tonal. Applies curve directly without LUT."""
+    if not any([shadows, highlights, whites, blacks]):
+        return img_f
+    x = np.linspace(0.0, 1.0, 256, dtype=np.float32)
+    y = x.copy()
+    if blacks:
+        w = np.clip(1.0 - x / (64.0 / 255.0), 0, 1)
+        y = y + (blacks / 100.0) * (48.0 / 255.0) * w
+    if shadows:
+        w = np.clip(1.0 - np.abs(x - 25.0 / 255.0) / (100.0 / 255.0), 0, 1)
+        w = w * w * (3 - 2 * w)
+        y = y + (shadows / 100.0) * (48.0 / 255.0) * w
+    if highlights:
+        w = np.clip(1.0 - np.abs(x - 230.0 / 255.0) / (100.0 / 255.0), 0, 1)
+        w = w * w * (3 - 2 * w)
+        y = y + (highlights / 100.0) * (48.0 / 255.0) * w
+    if whites:
+        w = np.clip(1.0 - (1.0 - x) / (64.0 / 255.0), 0, 1)
+        y = y + (whites / 100.0) * (48.0 / 255.0) * w
+    y_clipped = np.clip(y, 0.0, 1.0)
+    return np.interp(img_f, x, y_clipped).astype(np.float32)
+
+
 def _apply_selective_sharpening(
     img_bgr: np.ndarray,
     mask: np.ndarray,
@@ -1833,15 +1965,34 @@ def _apply_selective_sharpening(
     high_freq = img_f - blurred
     mask_3d = mask[:, :, np.newaxis] if mask.ndim == 2 else mask
     if threshold > 0:
-        # OPTIMIZATION: Compute grayscale directly from float arrays instead of uint8 casting.
-        # OpenCV uses BGR ordering, so channels are 0: Blue, 1: Green, 2: Red.
-        # Standard BT.601 weights are 0.114 * B + 0.587 * G + 0.299 * R.
         gray_high = 0.114 * high_freq[:, :, 0] + 0.587 * high_freq[:, :, 1] + 0.299 * high_freq[:, :, 2]
         threshold_mask = (np.abs(gray_high) >= threshold)[:, :, np.newaxis]
         sharpened_diff = threshold_mask * (high_freq * (amount * mask_3d))
     else:
         sharpened_diff = high_freq * (amount * mask_3d)
     return np.clip(img_f + sharpened_diff, 0, 255).astype(np.uint8)
+
+
+def _F_apply_selective_sharpening(
+    img_f: np.ndarray,
+    mask: np.ndarray,
+    radius: float = 0.8,
+    amount: float = 0.8,
+    threshold: float = 2.0,
+) -> np.ndarray:
+    """Float32 [0,1] variant of _apply_selective_sharpening."""
+    img_255 = img_f * 255.0
+    blurred = cv2.GaussianBlur(img_255, (0, 0), radius)
+    high_freq = img_255 - blurred
+    mask_3d = mask[:, :, np.newaxis] if mask.ndim == 2 else mask
+    if threshold > 0:
+        gray_high = 0.114 * high_freq[:, :, 0] + 0.587 * high_freq[:, :, 1] + 0.299 * high_freq[:, :, 2]
+        threshold_mask = (np.abs(gray_high) >= threshold)[:, :, np.newaxis]
+        sharpened_diff = threshold_mask * (high_freq * (amount * mask_3d))
+    else:
+        sharpened_diff = high_freq * (amount * mask_3d)
+    result = np.clip(img_255 + sharpened_diff, 0, 255)
+    return (result / 255.0).astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
