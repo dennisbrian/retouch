@@ -24,7 +24,7 @@ from retouch.params import recipe_to_params, param_names, gui_values_to_engine_k
 from retouch.grading import list_available_presets
 from retouch.style_library import list_styles, save_style_profile, learn_dataset_style
 from retouch.batch_processor import BatchProcessor
-from retouch.style import StyleProfile, StyleAnalyzer
+from retouch.style import StyleProfile
 from retouch.heal import heal_region, mask_to_b64, b64_to_mask
 
 _logger = logging.getLogger(__name__)
@@ -191,6 +191,8 @@ def on_extract_preset(
     recipe_name,
 ):
     """Extract an editable preset from a reference image."""
+    from retouch.style import StyleAnalyzer
+
     if not ref_img_path:
         return (
             gr.update(),
