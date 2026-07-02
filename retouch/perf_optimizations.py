@@ -298,6 +298,10 @@ def _process_face_core(
     if ctx.equalize > 0:
         canvas = skin.equalize(canvas, regions.skin, ctx.equalize, ref_lab=original_lab)
 
+    # ---- Skin hue-line unification (preferred-locus pull) ----
+    if ctx.skin_hue_unify > 0 or ctx.skin_chroma_even > 0:
+        canvas = skin.unify_hue_line(canvas, regions.skin, int(ctx.skin_hue_unify), int(ctx.skin_chroma_even))
+
     # ---- Skin hue/chroma unification (anime) ----
     if ctx.skin_unify > 0:
         canvas = skin.unify_tone(canvas, regions.skin, int(ctx.skin_unify), target_hue=ctx.skin_unify_hue)

@@ -5,13 +5,21 @@ All operations work within the skin mask to never affect hair, eyes, or backgrou
 
 from __future__ import annotations
 
-from typing import Any, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import cv2
 import numpy as np
 
 from .utils import blend_masked, normalize_mask, squeeze_mask, guided_filter
 from .color_space import bgr_to_lch, lch_to_bgr, skin_mask_lch
+from .color_science import (
+    bgr_to_oklab,
+    oklab_to_bgr,
+    oklab_to_oklch,
+    oklch_to_oklab,
+    measure_skin_state,
+    SKIN_LOCI,
+)
 
 
 class SkinProcessor:
@@ -684,6 +692,87 @@ class SkinProcessor:
 
         out = lch_to_bgr(lch_out)
         return blend_masked(img_bgr, out, skin_mask * lch_skin)
+
+    def unify_hue_line(
+        self,
+        img_bgr: np.ndarray,
+        skin_mask: Optional[np.ndarray],
+        hue_strength: int = 0,
+        chroma_strength: int = 0,
+        locus: Optional[Dict[str, float]] = None,
+    ) -> np.ndarray:
+        """Hue-line skin tone unification via OKLCh constant-hue-line pull.
+
+        Rotates hue toward a target (up to ±8°) and compresses chroma variance
+        (up to ±0.04) while leaving luminance untouched. Protects high-chroma
+        regions (makeup/tattoo), dark features (hair/shadow), and specular highlights.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR image.
+            skin_mask: (H, W) float mask 0–1. May be None to skip processing.
+            hue_strength: 0–100 hue rotation intensity.
+            chroma_strength: 0–100 chroma variance compression intensity.
+            locus: Optional target locus dict with 'h_target' and 'C_target' keys.
+                If None, auto-determined from skin state.
+
+        Returns:
+            (H, W, 3) uint8 BGR image.
+        """
+        if (hue_strength <= 0 and chroma_strength <= 0) or skin_mask is None:
+            return img_bgr
+
+        # Convert to OKLCh
+        oklab = bgr_to_oklab(img_bgr)
+        oklch = oklab_to_oklch(oklab)
+
+        # Measure skin state to pick locus class if not provided
+        if locus is None:
+            state = measure_skin_state(img_bgr, skin_mask, thresh=0.3)
+            L_mean = state.L_mean
+
+            # Choose locus class by L_mean
+            if L_mean >= SKIN_LOCI["fair"].get("L_min", 0.72):
+                locus = SKIN_LOCI["fair"]
+            elif L_mean >= SKIN_LOCI["tan"].get("L_min", 0.55):
+                locus = SKIN_LOCI["tan"]
+            else:
+                locus = SKIN_LOCI["deep"]
+
+        h_target = locus["h_target"]
+        C_target = locus["C_target"]
+
+        # Extract channels
+        L = oklch[..., 0]
+        C = oklch[..., 1]
+        h = oklch[..., 2]
+
+        # Eligibility mask: exclude high chroma (makeup/tattoo), very dark (hair/shadow), specular
+        eligible = np.ones(img_bgr.shape[:2], dtype=np.float32)
+        eligible *= (C <= 0.18).astype(np.float32)  # Not high-chroma
+        eligible *= (L >= 0.25).astype(np.float32)  # Not dark features
+        eligible *= (L <= 0.95).astype(np.float32)  # Not specular highlights
+        eligible *= skin_mask  # Within skin mask
+
+        # Hue rotation: shortest arc to target, clipped to ±8°
+        delta_h = (h_target - h + 180.0) % 360.0 - 180.0  # Shortest arc
+        delta_h_clipped = np.clip(delta_h, -8.0, 8.0)
+        h_new = (h + delta_h_clipped * (hue_strength / 100.0) * eligible) % 360.0
+
+        # Chroma pull: toward target, clipped to ±0.04
+        delta_C = np.clip(C_target - C, -0.04, 0.04)
+        C_new = C + delta_C * (chroma_strength / 100.0) * eligible
+
+        # Reconstruct OKLCh
+        oklch_out = oklch.copy()
+        oklch_out[..., 0] = L
+        oklch_out[..., 1] = C_new
+        oklch_out[..., 2] = h_new
+
+        # Convert back to BGR
+        oklab_out = oklch_to_oklab(oklch_out)
+        out = oklab_to_bgr(oklab_out)
+
+        return blend_masked(img_bgr, out, skin_mask)
 
     @staticmethod
     def _get_highlight_protection(lab: np.ndarray) -> np.ndarray:

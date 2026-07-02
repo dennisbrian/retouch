@@ -113,9 +113,20 @@ RECIPES = {
         "color_harmony": {"preset": "natural", "amount": 0.30},
         "bloom": {"opacity": 0.04},
         "texture": {"opacity": 0.95},
-        
+
         # Modular overrides
         "lip_finish": "velvet",
+    },
+    "porcelain_unified_v1": {
+        "extends": "korean_beauty",
+        "frequency": {"smooth": 0.40},
+        "skin": {
+            "equalize": 0.05,
+            "rosy": 0.15,
+            "hue_unify": 0.60,
+            "chroma_even": 0.50,
+        },
+        "texture": {"opacity": 0.97},
     },
     "idol": {
         "extends": "natural",

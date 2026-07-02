@@ -163,6 +163,8 @@ class ProcessingContext:
     skin_quantize: float = 0.0
     skin_unify: float = 0.0
     skin_unify_hue: float = -1.0
+    skin_hue_unify: float = 0.0
+    skin_chroma_even: float = 0.0
     skin_glow: float = 0.0
 
     # --- Eyes ---
