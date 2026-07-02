@@ -6,7 +6,7 @@ from retouch.params import PROCESSING_PARAMS, resolve_recipe
 
 
 # Build a set of all valid recipe keys (both top-level and nested)
-_VALID_KEYS = {spec.name for spec in PROCESSING_PARAMS}
+_VALID_KEYS = {spec.recipe_key or spec.name for spec in PROCESSING_PARAMS}
 # Nested keys can be dicts (e.g., {"skin": {...}, "bloom": {...}})
 _VALID_NESTED_ROOTS = {"skin", "eyes", "lips", "hair", "bloom", "makeup", "frequency", "texture", "color_harmony", "finish"}
 
