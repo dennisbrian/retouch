@@ -17,11 +17,10 @@ import gradio as gr
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from retouch import RetouchEngine
-from retouch.engine import resolve_recipe
 from retouch.io import imread_exif, EXPORT_RES_MAP, EXT_MAP
 from retouch.lips import LIP_TINT_NAMES
 from retouch.recipes import RECIPES
-from retouch.params import recipe_to_params, PROCESSING_PARAMS, param_names, gui_values_to_engine_kwargs
+from retouch.params import recipe_to_params, param_names, gui_values_to_engine_kwargs
 from retouch.grading import list_available_presets
 from retouch.style_library import list_styles, save_style_profile, learn_dataset_style
 from retouch.batch_processor import BatchProcessor
@@ -521,6 +520,13 @@ def reset_film_effects(recipe_name):
 def reset_split_toning(recipe_name):
     d = recipe_defaults(recipe_name)
     return d["shadow_hue"], d["shadow_sat"], d["midtone_hue"], d["midtone_sat"], d["highlight_hue"], d["highlight_sat"]
+
+def reset_lch(recipe_name):
+    d = recipe_defaults(recipe_name)
+    return (d["white_balance_kelvin"], d["white_balance_tint"],
+            d["bw_channel_mixer_r"], d["bw_channel_mixer_g"], d["bw_channel_mixer_b"],
+            d["negative_split_tone_shadow"], d["negative_split_tone_highlight"],
+            d["hsl_hue_global"], d["hsl_sat_global"], d["hsl_lum_global"])
 
 def reset_color_transfer():
     return None, 1.0
@@ -1308,7 +1314,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             reset_skin_smooth_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                             smooth = gr.Slider(0, 100, 30, step=1, label="Smooth", info="Strength of skin smoothing (blur/median blend)")
                             nose_smooth = gr.Slider(0, 100, 0, step=1, label="Nose Smooth (0 = follow face)", info="Additional smoothing for nose bridge highlights")
-                            mid_reduction = gr.Slider(0.0, 1.0, 0.45, step=0.05, label="Mid Frequency Reduction", info="Target mid-level skin blemishes while preserving high-frequency pores")
+                            mid_reduction = gr.Slider(0.0, 1.0, 0.35, step=0.05, label="Mid Frequency Reduction", info="Target mid-level skin blemishes while preserving high-frequency pores")
                             texture_opacity = gr.Slider(0.0, 1.0, 1.0, step=0.05, label="Texture Opacity", info="Control original pore structure opacity overlay")
                             micro_restore = gr.Slider(0, 50, 20, step=1, label="Micro-Texture Restore", info="Re-inject dimensional micro-contrast in cheek/nose/under-eye zones after smoothing (0 = off, 25 = subtle, 50 = strong)")
                             pore_synthesis = gr.Slider(0, 100, 0, step=1, label="Pore Synthesis", info="Add micro-texture/synthesized pores to prevent artificial plastic skin")
@@ -1320,7 +1326,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             reset_skin_tone_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                             whiten = gr.Slider(0, 100, 10, step=1, label="Whitening", info="Luminance boost and porcelain skin color match")
                             whiten_tone = gr.Dropdown(choices=WHITEN_TONE_CHOICES, value="rosy", label="Whitening Tone", interactive=True, info="Tone direction: rosy (warm pink), porcelain (cool neutral), neutral")
-                            equalize = gr.Slider(0, 100, 20, step=1, label="Equalize", info="Even out skin redness and regional color inconsistencies")
+                            equalize = gr.Slider(0, 100, 0, step=1, label="Equalize", info="Even out skin redness and regional color inconsistencies")
                             skin_unify = gr.Slider(0, 100, 0, step=1, label="Skin Hue Unify (Anime)", info="Pull skin hues toward a single cel color · 0=off, 60=strong unified look")
                             skin_unify_hue = gr.Slider(-1.0, 360.0, -1.0, step=1.0, label="Target Hue (Anime)", info="Target skin hue angle · -1=auto (detect from face), 0=red, 50=orange, 180=cyan")
                             auto_exposure = gr.Checkbox(label="Auto Exposure Correction", value=False, info="Automatically correct under/over-exposed images before processing")
@@ -1330,7 +1336,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             reset_basic_tone_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                             contrast = gr.Slider(-50, 50, 0, step=1, label="Contrast", info="Adjust global image contrast")
                             brightness = gr.Slider(-50, 50, 0, step=1, label="Brightness", info="Adjust global image brightness")
-                            clarity = gr.Slider(-100, 100, 0, step=1, label="Clarity", info="Mid-tone contrast / local contrast enhancement (negative = soften)")
+                            clarity = gr.Slider(-50, 50, 0, step=1, label="Clarity", info="Mid-tone contrast / local contrast enhancement (negative = soften)")
                             vibrance = gr.Slider(-100, 100, 0, step=1, label="Vibrance", info="Smart saturation boost that protects skin tones")
                             saturation = gr.Slider(-100, 100, 0, step=1, label="Saturation", info="Uniform global saturation adjustment")
 
@@ -1350,7 +1356,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         with gr.Accordion("👁️ Eyes & Lips", open=False):
                             reset_eyes_lips_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                             eye_enhance = gr.Slider(0, 100, 5, step=1, label="Eye Enhance", info="Boost eye clarity, iris reflection details, and whites brightness")
-                            catchlight = gr.Slider(0, 100, 0, step=1, label="Catchlight Boost", info="Amplify existing catchlight highlights in the iris (0 = follow Eye Enhance)")
+                            catchlight = gr.Slider(0, 100, 5, step=1, label="Catchlight Boost", info="Amplify existing catchlight highlights in the iris (0 = follow Eye Enhance)")
                             dark_circles = gr.Slider(0, 100, 0, step=1, label="Dark Circle Repair", info="Under-eye dark circle detection and repair")
                             teeth_whiten = gr.Slider(0, 100, 5, step=1, label="Teeth Whiten", info="Naturally whiten and brighten teeth enamel")
                             lip_enhance = gr.Slider(0, 100, 5, step=1, label="Lip Enhance", info="Enhance lip texture definition, gloss, and contour")
@@ -1384,7 +1390,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
 
                         with gr.Accordion("🎬 Film Color Grading", open=False):
                             reset_color_grading_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
-                            color_grade = gr.Dropdown(choices=COLOR_GRADE_NAMES, value="natural", label="Color Grade Preset", interactive=True, info="Apply a film/color grading preset from the presets library")
+                            color_grade = gr.Dropdown(choices=COLOR_GRADE_NAMES, value="none", label="Color Grade Preset", interactive=True, info="Apply a film/color grading preset from the presets library")
                             grade_intensity = gr.Slider(0, 100, 0, step=1, label="Grade Intensity", info="Blend strength of the color grade (0-100%)")
 
                         with gr.Accordion("🎞️ Film & Analog Effects", open=False):
@@ -1607,6 +1613,15 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         fn=reset_split_toning,
         inputs=[recipe],
         outputs=[shadow_hue, shadow_sat, midtone_hue, midtone_sat, highlight_hue, highlight_sat]
+    )
+
+    reset_lch_btn.click(
+        fn=reset_lch,
+        inputs=[recipe],
+        outputs=[white_balance_kelvin, white_balance_tint,
+                 bw_channel_mixer_r, bw_channel_mixer_g, bw_channel_mixer_b,
+                 negative_split_tone_shadow, negative_split_tone_highlight,
+                 hsl_hue_global, hsl_sat_global, hsl_lum_global],
     )
 
     reset_color_transfer_btn.click(

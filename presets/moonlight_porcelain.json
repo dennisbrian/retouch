@@ -1,0 +1,31 @@
+{
+  "description": "Moody blue cinematic cosplay — indigo shadows, cyan mids, porcelain subject, warm flower accents preserved",
+  "curves": {
+    "L": [[0, 4], [42, 30], [128, 122], [210, 214], [255, 250]]
+  },
+  "white_balance": {
+    "R": 0.93,
+    "G": 1.00,
+    "B": 1.08
+  },
+  "calibration": {
+    "red":   {"hue": 0.0,  "sat": 6.0},
+    "green": {"hue": 15.0, "sat": -8.0},
+    "blue":  {"hue": -8.0, "sat": 14.0}
+  },
+  "split_tone_three_way": {
+    "shadows":    {"hue": 242.0, "sat": 28.0},
+    "midtones":   {"hue": 207.0, "sat": 13.0},
+    "highlights": {"hue": 210.0, "sat": 5.0},
+    "balance": -15.0
+  },
+  "hsl_adjustments": {
+    "saturation": {"red": 10, "magenta": 8, "orange": -4, "yellow": -12, "green": -10},
+    "luminance":  {"blue": -6, "yellow": -5}
+  },
+  "haze": 0.06,
+  "glow": 0.10,
+  "orton_glow": 0.05,
+  "vignette": 0.10,
+  "grain": 0.03
+}

@@ -504,3 +504,140 @@ class TestAnimeV2Recipe:
     def test_build_context_skin_glow(self):
         ctx = build_context("anime_v2", resolve_recipe("anime_v2"), {})
         assert ctx.skin_glow == pytest.approx(20.0)
+
+
+# ---------------------------------------------------------------------------
+# Moonlight Porcelain recipe + preset
+# ---------------------------------------------------------------------------
+
+
+class TestMoonlightPorcelainRecipe:
+    """Tests for the moonlight_porcelain / moonlight_cool recipes."""
+
+    def test_resolve_moonlight_porcelain(self):
+        rec = resolve_recipe("moonlight_porcelain")
+        assert "frequency" in rec
+        assert "skin" in rec
+
+    def test_inherits_anime_skin_stack(self):
+        """moonlight_porcelain extends anime_v2 — must keep flatten/quantize/unify."""
+        rec = resolve_recipe("moonlight_porcelain")
+        assert rec["skin"]["flatten"] == 0.55
+        assert rec["skin"]["quantize"] == 0.40
+        assert rec["skin"]["unify"] == 0.50
+
+    def test_highlight_hue_override(self):
+        """Parent anime_cinematic_v1 sets highlight_hue=320 (magenta);
+        moonlight_porcelain must override to 210 (cool)."""
+        rec = resolve_recipe("moonlight_porcelain")
+        assert rec["highlight_hue"] == 210.0
+
+    def test_skin_glow_override(self):
+        rec = resolve_recipe("moonlight_porcelain")
+        assert rec["skin"]["glow"] == 0.25
+
+    def test_skin_protect(self):
+        rec = resolve_recipe("moonlight_porcelain")
+        assert rec["skin_protect"] == 0.45
+
+    def test_color_harmony_preset(self):
+        rec = resolve_recipe("moonlight_porcelain")
+        assert rec["color_harmony"]["preset"] == "moonlight_porcelain"
+        assert rec["color_harmony"]["amount"] == 0.65
+
+    def test_build_context_highlight_hue(self):
+        ctx = build_context("moonlight_porcelain", resolve_recipe("moonlight_porcelain"), {})
+        assert ctx.highlight_hue == 210.0
+
+    def test_build_context_color_grade(self):
+        ctx = build_context("moonlight_porcelain", resolve_recipe("moonlight_porcelain"), {})
+        assert ctx.color_grade == "moonlight_porcelain"
+
+    def test_build_context_grade_intensity(self):
+        ctx = build_context("moonlight_porcelain", resolve_recipe("moonlight_porcelain"), {})
+        assert ctx.grade_intensity == pytest.approx(0.65)
+
+    def test_build_context_skin_protect(self):
+        ctx = build_context("moonlight_porcelain", resolve_recipe("moonlight_porcelain"), {})
+        assert ctx.skin_protect_strength == 0.45
+
+    def test_moonlight_cool_overrides(self):
+        rec = resolve_recipe("moonlight_cool")
+        assert rec["skin_protect"] == 0.15
+        assert rec["midtone_sat"] == 14.0
+        assert rec["color_harmony"]["amount"] == 0.80
+
+    def test_moonlight_cool_inherits_skin_stack(self):
+        rec = resolve_recipe("moonlight_cool")
+        assert rec["skin"]["flatten"] == 0.55
+        assert rec["highlight_hue"] == 210.0
+
+    def test_preset_loads(self):
+        from retouch.grading import load_preset, list_available_presets
+        assert "moonlight_porcelain" in list_available_presets()
+        preset = load_preset("moonlight_porcelain")
+        assert "split_tone_three_way" in preset
+        assert "hsl_adjustments" in preset
+        assert preset["split_tone_three_way"]["shadows"]["hue"] == 242.0
+
+    def test_e2e_engine_process(self, engine, synthetic_face):
+        """End-to-end: engine.process with moonlight_porcelain must not crash."""
+        result = engine.process(synthetic_face, recipe="moonlight_porcelain")
+        assert result.shape == synthetic_face.shape
+        assert result.dtype == np.uint8
+        assert not np.any(np.isnan(result.astype(np.float32)))
+
+    def test_e2e_engine_process_moonlight_cool(self, engine, synthetic_face):
+        result = engine.process(synthetic_face, recipe="moonlight_cool")
+        assert result.shape == synthetic_face.shape
+        assert result.dtype == np.uint8
+
+    # ---- Dead-key guard ----
+
+    @pytest.mark.parametrize("recipe_name", ["moonlight_porcelain", "moonlight_cool"])
+    def test_no_dead_recipe_keys(self, recipe_name):
+        """Every key in the new recipe dicts must resolve to a known ParamSpec
+        recipe_key or a recognised structural key.  This guards against the
+        ``anime_crystal_void`` failure mode where unknown keys are silently
+        dropped."""
+        from retouch.params import PROCESSING_PARAMS
+
+        # Build the set of all valid recipe_keys (dotted paths)
+        valid_keys: set = set()
+        for spec in PROCESSING_PARAMS:
+            if spec.recipe_key:
+                valid_keys.add(spec.recipe_key)
+        # Structural keys that are not ParamSpecs but are consumed by the engine
+        valid_keys |= {
+            "extends",
+            "color_harmony.preset",
+            "color_harmony.amount",
+            "bloom.opacity",
+            "bloom.threshold",
+            "bloom.softness",
+            "texture.opacity",
+            "texture.pore_synthesis",
+            "finish.impact",
+            # Engine-quirk fallback keys (consumed by _resolve_engine_value
+            # but read via another ParamSpec's recipe_key)
+            "eyes.iris",
+            "eyes.teeth_whiten",
+        }
+
+        raw = RECIPES[recipe_name]
+        dead = _find_dead_keys(raw, valid_keys, prefix="")
+        assert not dead, f"{recipe_name} has dead recipe keys: {dead}"
+
+
+def _find_dead_keys(d, valid_keys, prefix=""):
+    """Recursively flatten a recipe dict into dotted keys and return the
+    ones not in ``valid_keys``."""
+    dead = []
+    for key, val in d.items():
+        full = f"{prefix}.{key}" if prefix else key
+        if isinstance(val, dict):
+            dead.extend(_find_dead_keys(val, valid_keys, full))
+        else:
+            if full not in valid_keys:
+                dead.append(full)
+    return dead
