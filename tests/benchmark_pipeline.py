@@ -348,6 +348,43 @@ class TestBenchmarkPerFace:
         print(f"\n[benchmark] pipeline stage breakdown: {timings} (sum={total:.1f}ms)")
         assert total >= 0.0
 
+    def test_skin_quality_metrics_per_face(self):
+        """Compute skin quality metrics before and after processing."""
+        from retouch import engine as engine_mod
+        from retouch.engine import RetouchEngine
+        from scripts.benchmark import skin_quality_metrics
+
+        _bd, _bp, dets, pars = _make_mock_engine_cls()
+        with patch.object(engine_mod, "FaceDetector", _bd), \
+             patch.object(engine_mod, "FaceParser", _bp):
+            eng = RetouchEngine()
+        det = dets[0]
+        par = pars[0]
+        img = np.random.randint(0, 255, (400, 400, 3), dtype=np.uint8)
+        _wire_mocks(det, par, 400, 400, no_face=False)
+
+        # Process the image
+        result = eng.process(img, recipe="natural", fast=False)
+
+        # Compute metrics on input and output
+        if result.face_contexts and len(result.face_contexts) > 0:
+            face_ctx = result.face_contexts[0]
+            face_width = face_ctx.face_data.ied * 2.5
+
+            # Metrics on input
+            input_metrics = skin_quality_metrics(img, result.skin_mask, face_width)
+            # Metrics on output
+            output_metrics = skin_quality_metrics(result, result.skin_mask, face_width)
+
+            print(f"\n[benchmark] skin_quality_input: blotch_std={input_metrics['blotch_std']:.6f} chroma_std={input_metrics['chroma_std']:.6f}")
+            print(f"[benchmark] skin_quality_output: blotch_std={output_metrics['blotch_std']:.6f} chroma_std={output_metrics['chroma_std']:.6f}")
+
+            # Just verify they are finite
+            assert np.isfinite(input_metrics["blotch_std"])
+            assert np.isfinite(output_metrics["blotch_std"])
+            assert np.isfinite(input_metrics["chroma_std"])
+            assert np.isfinite(output_metrics["chroma_std"])
+
 
 # ---------------------------------------------------------------------------
 # 3. Global processing time (grading, bloom, vignette)

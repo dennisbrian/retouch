@@ -279,6 +279,16 @@ _SKIN_PARAMS = [
         max_val=50,
     ),
     ParamSpec(
+        name="micro_dodge_burn",
+        cli_flag="micro-dodge-burn",
+        cli_type=int,
+        default=0,
+        recipe_key="skin.micro_db",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
         name="whiten",
         cli_flag="whiten",
         cli_type=int,

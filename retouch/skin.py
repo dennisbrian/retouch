@@ -22,6 +22,56 @@ from .color_science import (
 )
 
 
+def _blotch_bandpass(L: np.ndarray, face_width: float) -> np.ndarray:
+    """Difference-of-Gaussians bandpass of luminance channel.
+
+    Extracts the blotch frequency range (between pores and shading) by
+    subtracting a small-scale Gaussian from a large-scale Gaussian.
+
+    Args:
+        L: (H, W) float32 luminance channel [0, 255].
+        face_width: Face width in pixels. Sigma parameters scale as face_width/N.
+
+    Returns:
+        (H, W) float32 bandpass signal (can be negative).
+    """
+    sigma_small = max(1.0, face_width / 40.0)
+    sigma_large = max(1.0, face_width / 12.0)
+
+    # cv2.GaussianBlur with ksize=(0,0) uses sigma to determine kernel size
+    low_small = cv2.GaussianBlur(L, (0, 0), sigma_small)
+    low_large = cv2.GaussianBlur(L, (0, 0), sigma_large)
+
+    return low_small - low_large
+
+
+def _edge_protect(lab: np.ndarray) -> np.ndarray:
+    """Continuous edge protection mask based on gradient magnitude.
+
+    Protects feature lines (high gradients) from dodge & burn by returning
+    a mask that is 1.0 in smooth areas and 0.0 near edges. Combined with
+    highlight protection to avoid specular clipping.
+
+    Args:
+        lab: (H, W, 3) float32 LAB image.
+
+    Returns:
+        (H, W) float32 protection mask in [0, 1].
+    """
+    L = lab[:, :, 0]
+
+    # Compute gradient magnitude of L using Sobel
+    grad_x = cv2.Sobel(L, cv2.CV_32F, 1, 0, ksize=3)
+    grad_y = cv2.Sobel(L, cv2.CV_32F, 0, 1, ksize=3)
+    grad_mag = np.sqrt(grad_x ** 2 + grad_y ** 2)
+
+    # Inverse normalized gradient: 1.0 where flat, 0.0 where edges
+    # Threshold of 30 protects features with strong gradients
+    grad_protect = 1.0 - np.clip(grad_mag / 30.0, 0.0, 1.0)
+
+    return grad_protect
+
+
 class SkinProcessor:
     """Skin smoothing, whitening, and tone equalization."""
 
@@ -773,6 +823,58 @@ class SkinProcessor:
         out = oklab_to_bgr(oklab_out)
 
         return blend_masked(img_bgr, out, skin_mask)
+
+    def micro_dodge_burn(
+        self,
+        img_bgr: np.ndarray,
+        skin_mask: Optional[np.ndarray],
+        strength: int = 0,
+        face_width: float = 100.0,
+    ) -> np.ndarray:
+        """Auto micro dodge & burn — evening luminance blotches without blur.
+
+        Applies a band-passed correction to the L channel that evens out
+        luminance unevenness at the blotch frequency (between pores and shading).
+        No blurring of the image; operates only on the band-passed signal.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR image.
+            skin_mask: (H, W) float mask 0–1. May be None to skip processing.
+            strength: 0–100 correction strength. 0 returns input unchanged.
+            face_width: Face width in pixels for bandpass frequency scaling.
+
+        Returns:
+            (H, W, 3) uint8 BGR image.
+        """
+        if strength <= 0 or skin_mask is None:
+            return img_bgr
+
+        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        L = lab[:, :, 0]
+
+        # Band-pass the L channel at blotch scale
+        dog = _blotch_bandpass(L, face_width)
+
+        # Edge protection (preserve feature lines)
+        edge_protect = _edge_protect(lab)
+
+        # Highlight protection (preserve specular)
+        highlight_protect = self._get_highlight_protection(lab)
+
+        # Combined protection
+        protection = edge_protect * highlight_protect
+
+        # Correction: subtract band signal (negative DoG brightens, positive darkens)
+        # scaled by strength and mask
+        strength_factor = (strength / 100.0) * 0.85
+        L_new = L - dog * strength_factor * skin_mask * protection
+
+        # Clip to valid range
+        lab[:, :, 0] = np.clip(L_new, 0, 255)
+
+        # Convert back and blend
+        result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        return blend_masked(img_bgr, result, skin_mask)
 
     @staticmethod
     def _get_highlight_protection(lab: np.ndarray) -> np.ndarray:

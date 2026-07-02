@@ -150,6 +150,7 @@ class ProcessingContext:
     blemish: float = 0.0
     nose_smooth: Optional[float] = None
     micro_restore: float = _DEFAULTS["micro_restore"]
+    micro_dodge_burn: float = 0.0
     mid_reduction: float = _DEFAULTS["mid_reduction"]
     texture_opacity: float = _DEFAULTS["texture_opacity"]
     pore_synthesis: float = 0.0
@@ -607,6 +608,7 @@ class RetouchEngine:
         mid_reduction: Optional[float] = None,
         nose_smooth: Optional[float] = None,
         micro_restore: Optional[float] = None,
+        micro_dodge_burn: Optional[float] = None,
         hair_enhance: Optional[float] = None,
         dodge_burn: Optional[float] = None,
         relight: Optional[float] = None,
@@ -719,6 +721,7 @@ class RetouchEngine:
             "mid_reduction": mid_reduction,
             "nose_smooth": nose_smooth,
             "micro_restore": micro_restore,
+            "micro_dodge_burn": micro_dodge_burn,
             "hair_enhance": hair_enhance,
             "dodge_burn": dodge_burn,
             "relight": relight,

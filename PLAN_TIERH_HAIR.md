@@ -47,7 +47,7 @@ Wig flatness fix: darken interior/under-layers, lift crown/edge locks — D&B fi
 H0 (flow field) ──► H1 (flyaways) ──► H2 (shine) ──► H3 (color) ──► H4 (depth)
 ```
 Proposed MASTER_PLAN slot: **Phase 4** (with the manual tools — H1 pairs naturally with F4 heal since both are inpaint-based), except **H3 can ride Phase 2/3 cheaply** (it's a mask + C1-math reuse). A3's wig-lace blend (hairline) stays in A3; H stages assume it.
-Not yet folded into MASTER_PLAN.md — adopt like Tier C when ready.
+**Adopted into MASTER_PLAN.md 2026-07-03:** H3 → Phase 3 (row 14b, rides C1 math); H0+H1 → Phase 4 (row 18b, pairs with F4); H2(+H4) → Phase 4 (row 18c).
 
 ## Verification
 - H1: two-sided corpus metric (flyaways removed ≥80%, intentional wisps eaten = 0 on labeled 20-image set); before/after at 100% on silhouette bands.

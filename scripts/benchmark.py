@@ -170,6 +170,10 @@ _STAGE_RE = re.compile(
 _BATCH_RE = re.compile(
     r"\[benchmark\]\s+batch avg per-image:\s*(?P<avg>[\d.]+)\s*ms"
 )
+_SKIN_QUALITY_RE = re.compile(
+    r"\[benchmark\]\s+skin_quality_(?P<phase>\w+):\s+"
+    r"blotch_std=(?P<blotch_std>[\d.]+)\s+chroma_std=(?P<chroma_std>[\d.]+)"
+)
 
 
 def parse_benchmark_lines(output: str) -> List[Dict[str, Any]]:
@@ -213,7 +217,75 @@ def parse_benchmark_lines(output: str) -> List[Dict[str, Any]]:
             results.append(
                 {"type": "batch_avg", "avg_per_image_ms": float(m.group("avg"))}
             )
+            continue
+        m = _SKIN_QUALITY_RE.search(line)
+        if m:
+            results.append(
+                {
+                    "type": "skin_quality",
+                    "phase": m.group("phase"),
+                    "blotch_std": float(m.group("blotch_std")),
+                    "chroma_std": float(m.group("chroma_std")),
+                }
+            )
     return results
+
+
+# ---------------------------------------------------------------------------
+# Skin quality metrics
+# ---------------------------------------------------------------------------
+
+
+def skin_quality_metrics(
+    img_bgr,
+    skin_mask: Optional,
+    face_width: float,
+) -> Dict[str, float]:
+    """Compute objective skin-quality metrics.
+
+    Args:
+        img_bgr: (H, W, 3) uint8 BGR image.
+        skin_mask: (H, W) float mask [0, 1], or None.
+        face_width: Face width in pixels (typically ied * 2.5).
+
+    Returns:
+        dict with keys "blotch_std" and "chroma_std", both floats.
+        If skin_mask is None or empty, returns {"blotch_std": 0.0, "chroma_std": 0.0}.
+    """
+    import numpy as np
+    import cv2
+    from retouch.color_science import skin_chroma_std
+
+    result = {"blotch_std": 0.0, "chroma_std": 0.0}
+
+    # Handle empty/None mask
+    if skin_mask is None or skin_mask.size == 0:
+        return result
+    if np.sum(skin_mask > 0.3) == 0:
+        return result
+
+    # Convert BGR to LAB
+    img_lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    L = img_lab[..., 0]
+
+    # Band-pass filter: DoG at sigma=fw/40 vs fw/12
+    sigma_narrow = face_width / 40.0
+    sigma_wide = face_width / 12.0
+    blur_narrow = cv2.GaussianBlur(L, (0, 0), sigma_narrow)
+    blur_wide = cv2.GaussianBlur(L, (0, 0), sigma_wide)
+    band = blur_narrow - blur_wide
+
+    # Compute std within skin_mask > 0.3
+    mask_binary = (skin_mask > 0.3).astype(np.float32)
+    masked_band = band * mask_binary
+    valid_pixels = masked_band[mask_binary > 0.5]
+    if valid_pixels.size > 0:
+        result["blotch_std"] = float(np.std(valid_pixels))
+
+    # Compute chroma std using the color_science function
+    result["chroma_std"] = skin_chroma_std(img_bgr, skin_mask)
+
+    return result
 
 
 # ---------------------------------------------------------------------------

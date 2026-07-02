@@ -58,6 +58,7 @@ A correct fix that introduces a halo artifact is not a fix. Revert. A fast fix t
 - Tag claims `[VERIFIED]` / `[ASSUMED]` / `[STALE]`. Colorspace/dtype claims MUST be verified by reading source — never from memory.
 - No "while I'm here" edits. Exception: precision violations (uint8 intermediate, missing colorspace conversion) MAY be fixed but documented as separate finding in REVIEW_OUTPUT.
 - After 2 failed attempts: STOP, escalate. Do not invent fixes.
+- **Mark work done in the plan docs.** When a planned task/stage passes its tests and review, annotate its heading/row in the owning plan doc (`PLAN_PHASE2_EXECUTION.md` Q-slices, `MASTER_PLAN.md` stage rows, tier docs) with `✅ DONE <date>` plus a one-line receipt (files touched, test count). The plan docs are the progress source of truth — an unmarked finished task reads as not done.
 
 ## Verification (run before shipping Python)
 1. `python3 -m py_compile path/to/file.py`

@@ -294,6 +294,10 @@ def _process_face_core(
             smooth_strength=ctx.smooth / 100.0,
         )
 
+    # ---- Micro dodge & burn (blotch evening) ----
+    if ctx.micro_dodge_burn > 0:
+        canvas = skin.micro_dodge_burn(canvas, _norm_mask(regions.skin), ctx.micro_dodge_burn, face_width)
+
     # ---- Skin equalization ----
     if ctx.equalize > 0:
         canvas = skin.equalize(canvas, regions.skin, ctx.equalize, ref_lab=original_lab)

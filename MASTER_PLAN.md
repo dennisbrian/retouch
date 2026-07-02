@@ -1,11 +1,13 @@
 # MASTER PLAN — Prioritized Execution Order (AUTHORITATIVE)
 
 **Date:** 2026-07-02  
-**Changelog:** 2026-07-02: Tier C (East✕West color) adopted per `PLAN_EASTWEST_COLOR_SUPREMACY.md`.
+**Changelog:** 2026-07-02: Tier C (East✕West color) adopted per `PLAN_EASTWEST_COLOR_SUPREMACY.md`. 2026-07-03: Tier E (engine/skin fidelity) adopted per `PLAN_TIERE_ENGINE_FIDELITY.md` and Tier H (hair & wig) adopted per `PLAN_TIERH_HAIR.md` — E3/E4 riders + F8.0 slot into Phase 2 gaps, E3 response-curve remaps attach to A2, E1/E2 attach to the F8/F1 slots, H3 slots in Phase 3, H0–H2/H4 in Phase 4.
 
 **This document is the single source of truth for execution order.** Detail lives in the tier docs; when order here conflicts with a tier doc, this doc wins. Supersedes the master sequence in `PLAN_TIERP_PERF_ARCH_SHIP.md` and resolves the placement decisions flagged in `PLAN_SKIN_PRO.md` / `PLAN_SKIN_ADVANTAGE.md`.
 
 **Priority logic:** (1) unblock + measure first, (2) raise the quality floor, (3) win on skin — the core product, (4) architecture + workflow, (5) manual tools, (6) intelligence, (7) creative expansion + moat, (8) ship. Skin work is deliberately promoted ahead of workflow/tools — output quality is what the cosplay audience judges.
+
+**Current execution order (arranged 2026-07-03):** P1 shipped (`10bab48`) → **now: the Phase 2 Haiku queue Q1→Q2→Q3(+Q4 riders E3.3/E3.4)→Q4** per `PLAN_PHASE2_EXECUTION.md`, with **F8.0 / E3.5 / E4** as gap fillers between review gates → then the Phase 1 big block (F8.1 → E1 → F8.2 → F1+E2 → F11) as one uninterrupted window → then the remaining Phase 2 rows (C2, A2+remaps, S1, S4) and onward per the tables below. Rationale: Q1–Q4 are small, owner-visible daily, and produce the metrics (Q1) that everything downstream is judged by; F8.1/2+E1 restructure engine plumbing and deserve a clean window. Deferred pending owner action: A1 corpus (needs Evoto/R4me/PixCake trials — still the standing unblocker for A2).
 
 | Detail doc | Stages |
 |---|---|
@@ -17,6 +19,10 @@
 | `PLAN_SKIN_PRO.md` | S1–S6 |
 | `PLAN_SKIN_ADVANTAGE.md` | A1–A5 |
 | `PLAN_EASTWEST_COLOR_SUPREMACY.md` | C1–C6 (color science: East✕West) |
+| `PLAN_TIERH_HAIR.md` | H0–H4 (hair & wig) |
+| `PLAN_TIERE_ENGINE_FIDELITY.md` | E1–E4 (engine/skin fidelity) |
+| `PLAN_PHASE2_EXECUTION.md` | Q1–Q4 (Haiku-ready Phase 2 queue) |
+| `PLAN_F8_EXECUTION.md` | F8.0–F8.2 (staged F8 slices) |
 | `PLAN_MOONLIGHT_PORCELAIN.md` | ✅ shipped (`2b46f96`) |
 
 ---
@@ -28,15 +34,15 @@
 | 1 | **P1** | Bilateral → guided filter | 3–5 d | 99% of processing time is this one filter; hard prerequisite for F8 and S1 — **implemented in working tree 2026-07-02 · pending test-suite approval + visual QA (see P1_IMPLEMENTATION_NOTES.md)** |
 | 2 | **A1** | Competitive benchmark harness (Evoto/R4me/PixCake corpus + metrics) | 4 d | Evidence baseline before any quality work; PixCake added as Eastern quality bar (see `PLAN_EASTWEST_COLOR_SUPREMACY.md`); runs parallel to P1 |
 
-## Phase 1 — Quality Floor (~5 weeks)
+## Phase 1 — Quality Floor (~7 weeks; runs AFTER the Phase 2 queue — see execution note below)
 
 | # | Stage | What | Effort | Depends on |
 |---|---|---|---|---|
-| 3 | **F8 + P2** | Full-res fidelity (kill 2048px proxy ceiling) + perf guards | ~3 wk | P1 |
-| 4 | **F1** | Float32 global pipeline + 16-bit export + 16-bit RAW in | ~1.5 wk | F8 |
-| 5 | **F11** | Output self-QA detectors (banding/halo/clipping/seam/plastic-skin) | ~1.5 wk | — (measures F8/F1 wins; guards everything after) |
+| 3 | **F8.1/F8.2 + P2 + E1** | Full-res fidelity (kill 2048px proxy ceiling) + perf guards + float-LAB face core (order F8.1 → E1 → F8.2; one shared golden-output harness) | ~4 wk | P1 · F8.0 ships early as a Phase 2 gap filler |
+| 4 | **F1 + E2** | Float32 global pipeline + 16-bit export + 16-bit RAW in — work inventory = 16 uint8 round-trip sites + 3 fake-float helpers + uint8 no-face path (`PLAN_TIERE_ENGINE_FIDELITY.md` §1.1) | ~1.5 wk | F8 |
+| 5 | **F11** | Output self-QA detectors (banding/halo/clipping/seam/plastic-skin) — standalone detector module ✅ 2026-07-03 (`retouch/qa_detectors.py`, 27 tests); pipeline/benchmark wiring remains | ~1 wk left | — (measures F8/F1 wins; guards everything after) |
 
-## Phase 2 — Skin Supremacy (core product) (~7.5 weeks)
+## Phase 2 — Skin Supremacy (core product) (~8.5 weeks; Q1–Q4 queue runs FIRST — see execution note above)
 
 | # | Stage | What | Effort | Depends on |
 |---|---|---|---|---|
@@ -45,25 +51,30 @@
 | 7 | **C2** | Structural light-shadow (自动中性灰 v2 / 立体感 via landmark shading) | 1.5 wk | C1 infra |
 | 8 | **S2** | Auto micro dodge & burn | 1 wk | F11 (guards) |
 | 9 | **S3** | Color-blotch / redness evening | 3 d | S2 infra |
-| 10 | **A2** | Tune S2/S3/C1/C2 to match/beat Retouch4me (blind A/B) + freckle protection | 1 wk | S2, S3, C1, C2, A1 |
+| 9b | **E3/E4 riders** | Fidelity riders: harmonize_neck gate + unify_hue_line smoothstep (land with C1/Q4), B&W-mixer `_DEFAULTS`, dead-Numba/pool hygiene (`PLAN_TIERE_ENGINE_FIDELITY.md` §E3/E4) | 2–3 d | gap filler between Q-queue review gates |
+| 9c | **F8.0** | Proxy detail reinjection quick win (`PLAN_F8_EXECUTION.md`) — recovers most >2048px print softness immediately | 1 d | P1 (slots into any gap) |
+| 10 | **A2** | Tune S2/S3/C1/C2 to match/beat Retouch4me (blind A/B) + freckle protection **+ E3 response-curve remaps** (sharpen 1–60 dead zone, equalize s² — recipe re-tune gated on Q1 metrics) | 1 wk | S2, S3, C1, C2, A1 |
 | 11 | **S1** | Body skin retouch + `body_match_face` (first-in-market) | 2 wk | P1; F11 |
 | 12 | **S4** | Shine / oil removal | 1 wk | — |
 
-## Phase 3 — Architecture & Workflow (~6.5 weeks)
+## Phase 3 — Architecture & Workflow (~7 weeks)
 
 | # | Stage | What | Effort | Depends on |
 |---|---|---|---|---|
 | 13 | **P3** | Stage-registry refactor (golden-output gated) | ~1.5 wk | calmer codebase after Phase 2 |
 | 14 | **C4** | 透明感/空気感 finish pack (lifted-toe, highlight-drift, airy-haze, clarity-split) | 1 wk | C1 (hue-safe ops) |
+| 14b | **H3** | Hair color unify & tint (silver-wig venue-cast fix; reuses C1 hue-line math) | 4 d | C1; hair_mask |
 | 15 | **F2** | Sessions, undo/redo, snapshots, session-driven batch | ~2 wk | P3 (stage mixer) |
 | 16 | **F3** | Brush/radial/linear local masks (+ semantic intersect) | ~2 wk | F1; F2 (persistence) |
 
-## Phase 4 — Manual Tools (~10 weeks)
+## Phase 4 — Manual Tools (~13.5 weeks)
 
 | # | Stage | What | Effort | Depends on |
 |---|---|---|---|---|
 | 17 | **C3** | Parametric film-density engine (beyond LUTs; subtractive model + hue-preserving tone-map) | 2 wk | F1 (float32 pipeline) |
 | 18 | **F4** | Spot heal / object removal v0 (Telea) | 1 wk | F3 (paint surface) |
+| 18b | **H0 + H1** | Strand flow field ✅ 2026-07-03 (`retouch/hairwork.py`, 29 tests, non-square + axial-wrap bugs fixed in review) + flyaway/stray-hair removal (`PLAN_TIERH_HAIR.md`) — pairs with F4's inpaint machinery | ~1.5 wk left | F4 |
+| 18c | **H2 (+H4 opt.)** | Wig shine shaping (deglare + anisotropic angel ring); optional depth D&B along flow | ~1.5 wk | H0 |
 | 19 | **F5** | Face-aware liquify sliders | 2 wk | — |
 | 20 | **S5** | Wrinkle & line softening | 1.5 wk | — |
 | 21 | **F6** | Look-from-reference → editable preset extraction | 1.5 wk | C3 (film engine improves fitting target) |
@@ -118,4 +129,4 @@
 3. P3 migration commits must be golden-output byte-identical.
 4. Bugs found during implementation: report, don't silently fix (your standing instruction).
 5. Tier C verification per `PLAN_EASTWEST_COLOR_SUPREMACY.md`: C1 acceptance on dark-skin corpus, C2 blind A/B vs manual retouch, C3 ΔE ~3 to LUT re-expression.
-6. Rough total: ~47 weeks sequential; phases 2/3/4/5 have parallelizable stages if capacity allows.
+6. Rough total: ~53 weeks sequential after Tier E/H adoption (+~5.5 wk over the 2026-07-02 baseline); phases 2/3/4/5 have parallelizable stages if capacity allows.
