@@ -113,10 +113,6 @@ class TestValueRanges:
                     path = f"{name}.{sec}.{subk}"
                     if subv is None or isinstance(subv, str):
                         continue
-                    # unify_hue uses -1.0 as an "auto" sentinel; it's a hue
-                    # angle (−1 to 360), not a 0–1 ratio
-                    if subk == "unify_hue":
-                        continue
                     msg = f"{path}={subv!r} not in [0, 1]"
                     assert _is_float_in_range(subv), msg
 

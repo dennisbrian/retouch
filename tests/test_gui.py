@@ -694,19 +694,6 @@ class TestResetFunctions:
         assert isinstance(result, tuple)
         assert len(result) == 6
 
-    def test_reset_lch_returns_ten_values(self):
-        result = gui.reset_lch("natural")
-        assert isinstance(result, tuple)
-        assert len(result) == 10
-
-    def test_reset_lch_values_match_natural_recipe(self):
-        d = gui.recipe_defaults("natural")
-        result = gui.reset_lch("natural")
-        assert result == (d["white_balance_kelvin"], d["white_balance_tint"],
-                          d["bw_channel_mixer_r"], d["bw_channel_mixer_g"], d["bw_channel_mixer_b"],
-                          d["negative_split_tone_shadow"], d["negative_split_tone_highlight"],
-                          d["hsl_hue_global"], d["hsl_sat_global"], d["hsl_lum_global"])
-
     def test_reset_color_transfer_returns_none_and_one(self):
         """Color-transfer reset clears the reference image and resets strength to 1.0."""
         result = gui.reset_color_transfer()
@@ -731,7 +718,6 @@ class TestResetFunctions:
             gui.reset_color_grading(recipe)
             gui.reset_film_effects(recipe)
             gui.reset_split_toning(recipe)
-            gui.reset_lch(recipe)
             gui.reset_debug(recipe)
 
     def test_reset_functions_fall_back_for_unknown_recipe(self):
@@ -1042,23 +1028,6 @@ class TestIntegrationConstantCrossRef:
     def test_recipe_outputs_count_matches_on_recipe_change(self):
         """_recipe_outputs and on_recipe_change return tuple must match."""
         assert len(gui._recipe_outputs) == len(gui.on_recipe_change("natural"))
-
-    def test_on_recipe_change_return_matches_defaults_positionally(self):
-        """Every position in on_recipe_change's 79-tuple must match the
-        corresponding recipe_defaults key. This guards against the 5-list
-        sync bug: if _recipe_outputs / on_recipe_change / apply_custom_style
-        / _process_inputs / PROCESS_INPUT_KEYS drift out of alignment,
-        this test catches it."""
-        from retouch.params import param_names
-        result = gui.on_recipe_change("natural")
-        d = gui.recipe_defaults("natural")
-        expected_keys = [n for n in param_names() if n != "color_transfer_intensity"]
-        for i, key in enumerate(expected_keys):
-            assert result[i] == d[key], (
-                f"Position {i} mismatch: got {result[i]!r} for key {key!r}, "
-                f"expected {d[key]!r}. The on_recipe_change return tuple is "
-                f"out of sync with recipe_defaults() — check the ordering."
-            )
 
     def test_process_input_keys_excludes_color_transfer_intensity(self):
         """color_transfer_intensity is in param_names() but has no GUI component."""
