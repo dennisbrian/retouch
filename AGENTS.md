@@ -65,6 +65,14 @@ A correct fix that introduces a halo artifact is not a fix. Revert. A fast fix t
 3. `python3 scripts/benchmark.py` (if performance-affecting)
 4. Visual QA gates (if pipeline stage touched) — per `docs/VISUAL_QA.md`
 
+## Budget (always active — not just under quota pressure)
+- **Prefer direct tools over subagents.** Use Grep/Glob/Read directly — do not spawn Explore subagent for what a single search can answer. Subagents = extra context load × N.
+- **Never run concurrent subagents unless the task genuinely requires parallelism** (e.g. reading 4+ unrelated files across the codebase). A 2-file fix task doesn't need parallel agents.
+- **Batch independent tool calls in one message** instead of chaining sequential subagents.
+- **Read files directly.** Only spawn General subagent for multi-step write/edit tasks you can't do in one pass.
+- **Subagent prompt must be specific**: target file paths, exact return format, "read-only — do not write" when exploring. Vague prompts waste subagent token budget.
+- **Budget hierarchy**: Correctness > Token efficiency > Parallelism. A correct 2-tool-call answer beats a parallel 4-subagent circus.
+
 ## Quota Mode (429/TPM pressure)
 Serial execution, reduce context depth, compress summaries. Defer benchmarks/integration suites. **Never defer visual QA for Visual-Critical modules.**
 
