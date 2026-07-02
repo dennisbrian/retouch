@@ -247,6 +247,93 @@ def create_polygon_mask(
     return mask_f
 
 
+def guided_filter(src: np.ndarray, radius: int, eps: float, guide: Optional[np.ndarray] = None, max_dim: Optional[int] = 1200) -> np.ndarray:
+    """Edge-preserving guided filter for smoothing while maintaining structure.
+
+    Implements the guided filter algorithm where the output is a linear combination
+    of the guide image. When guide is None, performs self-guided filtering (equivalent
+    to bilateral filtering with edge preservation).
+
+    Args:
+        src: Input image, float32 single-channel array (H, W).
+        radius: Kernel radius in pixels (kernel size = 2*radius+1).
+        eps: Regularization parameter controlling edge preservation. Higher values
+             preserve more edges (less smoothing). Typically in range [0.1, 100.0].
+        guide: Guide image for filtering. If None, uses src as guide (self-guided).
+               Must be float32 single-channel (H, W), same shape as src.
+        max_dim: For large images (min(h,w) > max_dim), compute coefficients at
+                 downsampled scale, then upsample them. Pass None to disable.
+                 Improves performance on high-res images without quality loss.
+
+    Returns:
+        Filtered output image, float32 single-channel (H, W), same shape as src.
+
+    Notes:
+        For self-guided case (guide=None), the algorithm reduces to:
+            mean_I = blur(src)
+            var_I = blur(src*src) - mean_I*mean_I
+            a = var_I / (var_I + eps)
+            b = mean_I * (1 - a)
+            output = blur(a) * src + blur(b)
+
+        Downsampling is applied only to the coefficient computation (a, b), while
+        the final blend is always done at full resolution.
+    """
+    if src.ndim != 2 or src.dtype != np.float32:
+        raise ValueError(f"src must be float32 single-channel, got shape {src.shape}, dtype {src.dtype}")
+
+    if guide is None:
+        guide = src
+    else:
+        if guide.shape != src.shape or guide.dtype != np.float32:
+            raise ValueError(f"guide shape/dtype mismatch: got {guide.shape}/{guide.dtype}, expected {src.shape}/float32")
+
+    h, w = src.shape[:2]
+    r = radius
+
+    # Downsample guard: if image is too large, compute coefficients at smaller scale
+    min_dim = min(h, w)
+    is_downsampled = max_dim is not None and min_dim > max_dim
+
+    if is_downsampled:
+        scale = float(max_dim) / min_dim
+        h_small = max(1, int(h * scale))
+        w_small = max(1, int(w * scale))
+        guide_small = cv2.resize(guide, (w_small, h_small), interpolation=cv2.INTER_AREA)
+        src_small = cv2.resize(src, (w_small, h_small), interpolation=cv2.INTER_AREA)
+        r_small = max(1, int(r * scale))
+    else:
+        guide_small = guide
+        src_small = src
+        r_small = r
+
+    # Compute statistics on guide
+    mean_guide = cv2.blur(guide_small, (r_small, r_small))
+    mean_src = cv2.blur(src_small, (r_small, r_small))
+    mean_guide_src = cv2.blur(guide_small * src_small, (r_small, r_small))
+    mean_guide_guide = cv2.blur(guide_small * guide_small, (r_small, r_small))
+
+    # Covariance and variance
+    cov_guide_src = mean_guide_src - mean_guide * mean_src
+    var_guide = mean_guide_guide - mean_guide * mean_guide
+
+    # Coefficients a, b
+    a = cov_guide_src / np.clip(var_guide + eps, eps, None)
+    b = mean_src - a * mean_guide
+
+    # Upsample coefficients if downsampled
+    if is_downsampled:
+        a = cv2.resize(a, (w, h), interpolation=cv2.INTER_LINEAR)
+        b = cv2.resize(b, (w, h), interpolation=cv2.INTER_LINEAR)
+
+    # Final filtering: blur the coefficients, then blend
+    mean_a = cv2.blur(a, (r, r))
+    mean_b = cv2.blur(b, (r, r))
+    output = mean_a * guide + mean_b
+
+    return output
+
+
 # ---------------------------------------------------------------------------
 # Landmark helpers
 # ---------------------------------------------------------------------------

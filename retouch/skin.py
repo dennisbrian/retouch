@@ -10,7 +10,7 @@ from typing import Any, Optional, Tuple
 import cv2
 import numpy as np
 
-from .utils import blend_masked, normalize_mask, squeeze_mask
+from .utils import blend_masked, normalize_mask, squeeze_mask, guided_filter
 from .color_space import bgr_to_lch, lch_to_bgr, skin_mask_lch
 
 
@@ -537,7 +537,7 @@ class SkinProcessor:
         skin_mask: Optional[np.ndarray],
         strength: int = 0,
     ) -> np.ndarray:
-        """Edge-preserving cel flatten via hand-rolled self-guided filter on LAB L.
+        """Edge-preserving cel flatten via guided filter on LAB L.
 
         Args:
             img_bgr: (H, W, 3) uint8 BGR image.
@@ -559,28 +559,8 @@ class SkinProcessor:
         r = max(8, int(min(h, w) * 0.04))
         eps = (6.0 + 14.0 * s) ** 2
 
-        min_dim = min(h, w)
-        is_downsampled = min_dim > 1200
-        if is_downsampled:
-            scale = 1200.0 / min_dim
-            L_small = cv2.resize(L, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-        else:
-            L_small = L
-
-        mean_I = cv2.blur(L_small, (r, r))
-        mean_II = cv2.blur(L_small * L_small, (r, r))
-        var_I = np.clip(mean_II - mean_I * mean_I, 0, None)
-        a = var_I / (var_I + eps)
-        b = mean_I * (1.0 - a)
-
-        if is_downsampled:
-            a_full = cv2.resize(a, (w, h), interpolation=cv2.INTER_LINEAR)
-            b_full = cv2.resize(b, (w, h), interpolation=cv2.INTER_LINEAR)
-        else:
-            a_full = a
-            b_full = b
-
-        q = cv2.blur(a_full, (r, r)) * L + cv2.blur(b_full, (r, r))
+        # Apply guided filter (self-guided with max_dim=1200 for proxy resolution)
+        q = guided_filter(L, radius=r, eps=eps, guide=None, max_dim=1200)
 
         skin_3d = skin_mask[:, :, np.newaxis]
         lab[:, :, 0] = L + (q - L) * s * skin_3d[:, :, 0]

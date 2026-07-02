@@ -26,7 +26,7 @@ from typing import Optional, Tuple
 import cv2
 import numpy as np
 
-from .utils import adaptive_ksize, blend_masked, estimate_face_width
+from .utils import adaptive_ksize, blend_masked, estimate_face_width, guided_filter
 
 # Constants for adaptive sizing and parameters
 DEFAULT_FEATHER_FACTOR = 0.015
@@ -121,6 +121,7 @@ class FrequencySeparator:
         face_width: Optional[float] = None,
         pore_synthesis: float = 0.0,
         roi_coords: Optional[Tuple[int, int]] = None,
+        smooth_engine: str = "guided",
     ) -> np.ndarray:
         """Re-combine layers after selective processing.
 
@@ -137,6 +138,7 @@ class FrequencySeparator:
             face_width: Face width in pixels (for adaptive mask feathering).
             pore_synthesis: Strength of micro-pore texture synthesis (0-1).
             roi_coords: Tuple of (roi_x1, roi_y1) coordinates for deterministic spatial seeding.
+            smooth_engine: Smoothing method: "guided" (guided filter, default) or "bilateral" (legacy).
 
         Returns:
             (H, W, 3) uint8 BGR result.
@@ -214,15 +216,33 @@ class FrequencySeparator:
         k_smooth = adaptive_ksize(f_width, factor=SMOOTH_K_FACTOR, minimum=SMOOTH_K_MIN)
         smoothed_low_gaussian = cv2.GaussianBlur(low, (k_smooth, k_smooth), 0)
 
-        # Bilateral Filter
+        # Smoothing filter (guided or bilateral)
         # Keep in float32 to avoid quantization banding on gradients (uint8 artifacts).
         low_mid_f32 = np.clip(low + mid_original, 0, 255)
         sigma_color = SIGMA_BASE + smooth_strength * SIGMA_STRENGTH_FACTOR
         sigma_space = SIGMA_BASE + smooth_strength * SIGMA_STRENGTH_FACTOR
 
-        # Use d=-1 to let OpenCV compute an optimal, efficient kernel size.
-        smoothed_f32 = cv2.bilateralFilter(low_mid_f32, -1, sigma_color, sigma_space)
-        smoothed_low_bilateral = smoothed_f32 - mid_original
+        if smooth_engine == "guided":
+            # Guided filter: radius from sigma_space, eps from sigma_color^2
+            radius = max(2, int(round(sigma_space)))
+            eps = sigma_color ** 2
+
+            # Apply guided filter to each channel separately (self-guided)
+            smoothed_f32 = np.zeros_like(low_mid_f32)
+            for c in range(low_mid_f32.shape[2]):
+                smoothed_f32[:, :, c] = guided_filter(
+                    low_mid_f32[:, :, c],
+                    radius=radius,
+                    eps=eps,
+                    guide=None,  # self-guided
+                    max_dim=None  # crops are already bounded
+                )
+            smoothed_low_bilateral = smoothed_f32 - mid_original
+        else:
+            # Bilateral filter (legacy path)
+            # Use d=-1 to let OpenCV compute an optimal, efficient kernel size.
+            smoothed_f32 = cv2.bilateralFilter(low_mid_f32, -1, sigma_color, sigma_space)
+            smoothed_low_bilateral = smoothed_f32 - mid_original
 
         # Hybrid blend (cv2.addWeighted is slightly faster and purely SIMD optimized)
         blend_gaussian = min(1.0, smooth_strength * GAUSSIAN_BLEND_FACTOR)
@@ -264,6 +284,7 @@ def combine(
     face_width: Optional[float] = None,
     pore_synthesis: float = 0.0,
     roi_coords: Optional[Tuple[int, int]] = None,
+    smooth_engine: str = "guided",
 ) -> np.ndarray:
     """Deprecated. Use ``FrequencySeparator().combine()`` instead."""
     return FrequencySeparator().combine(
@@ -275,4 +296,5 @@ def combine(
         face_width=face_width,
         pore_synthesis=pore_synthesis,
         roi_coords=roi_coords,
+        smooth_engine=smooth_engine,
     )
