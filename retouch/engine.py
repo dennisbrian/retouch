@@ -1604,7 +1604,10 @@ class RetouchEngine:
             result = self._grader._add_clarity(result, ctx.clarity / 100.0)
 
         if ctx.vibrance:
-            result = _adjust_vibrance(result, ctx.vibrance)
+            if is_float:
+                result = _F_adjust_vibrance(result, ctx.vibrance)
+            else:
+                result = _adjust_vibrance(result, ctx.vibrance)
 
         if ctx.saturation:
             if is_float:
@@ -1890,6 +1893,19 @@ class RetouchEngine:
 def _adjust_vibrance(img: np.ndarray, vibrance: float) -> np.ndarray:
     """Smart saturation boost — protects skin tones, boosts unsaturated areas more."""
     return _vibrance_fn(img, None, vibrance / 100.0)
+
+
+def _F_adjust_vibrance(img_f: np.ndarray, vibrance: float) -> np.ndarray:
+    """Float32 [0,1] variant of _adjust_vibrance.
+
+    ``vibrance()`` in utils.py requires uint8 [0,255] BGR input (it round-trips
+    through cv2 HSV conversion); feeding it float32 [0,1] silently corrupts the
+    image instead of raising, since cv2 accepts float32 as an already-normalized
+    HSV range. Convert at the boundary instead.
+    """
+    bgr_u8 = np.clip(img_f * 255.0, 0, 255).astype(np.uint8)
+    out_u8 = _adjust_vibrance(bgr_u8, vibrance)
+    return out_u8.astype(np.float32) / 255.0
 
 
 def _apply_uniform_saturation(img: np.ndarray, saturation: float) -> np.ndarray:
