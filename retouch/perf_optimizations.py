@@ -59,6 +59,13 @@ def _build_smooth_mask(
             smooth_mask = np.clip(
                 smooth_mask - excl.astype(np.float32), 0.0, 1.0
             )
+
+    # Erode by 3px to protect hair/skin boundary pixels that the segmentation
+    # model may have misclassified (common with white/gray hair). The erosion
+    # ensures a thin safety margin so smoothing never bleeds into hair.
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    smooth_mask = cv2.erode(smooth_mask, kernel, iterations=1)
+
     return smooth_mask
 
 try:

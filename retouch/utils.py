@@ -138,8 +138,8 @@ def overlay_blend(base: np.ndarray, layer: np.ndarray) -> np.ndarray:
     """
     base_f = base.astype(np.float32)
     layer_f = layer.astype(np.float32)
-    multiply = base_f * layer_f / 255.0
-    screen = 255.0 - ((255.0 - base_f) * (255.0 - layer_f) / 255.0)
+    multiply = 2.0 * base_f * layer_f / 255.0
+    screen = 255.0 - 2.0 * (255.0 - base_f) * (255.0 - layer_f) / 255.0
     return np.where(base_f < 128.0, multiply, screen).astype(np.uint8)
 
 
@@ -159,8 +159,8 @@ def hard_light_blend(base: np.ndarray, layer: np.ndarray) -> np.ndarray:
     """
     base_f = base.astype(np.float32)
     layer_f = layer.astype(np.float32)
-    multiply = base_f * layer_f / 255.0
-    screen = 255.0 - ((255.0 - base_f) * (255.0 - layer_f) / 255.0)
+    multiply = 2.0 * base_f * layer_f / 255.0
+    screen = 255.0 - 2.0 * (255.0 - base_f) * (255.0 - layer_f) / 255.0
     return np.where(layer_f < 128.0, multiply, screen).astype(np.uint8)
 
 

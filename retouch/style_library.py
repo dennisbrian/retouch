@@ -68,6 +68,7 @@ def save_style_profile(
             v_float = float(old_version)
             resolved_version = f"{v_float + 1.0:.1f}"
         except Exception:
+            logger.warning("Failed to parse existing recipe version; defaulting to 2.0", exc_info=True)
             resolved_version = "2.0"
         
         filepath = style_dir / f"{base_filename}_v{resolved_version}.json"

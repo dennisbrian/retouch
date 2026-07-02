@@ -387,18 +387,24 @@ def color_balance_lch(
     chroma_weight = np.clip(c / 10.0, 0.0, 1.0)
 
     # Red axis: push hue toward 0° (positive) or 180° (negative)
-    red_weight = np.where(c_red >= 0, 1.0 - np.abs(h - 0.0) / 180.0, 0.0)
-    cyan_weight = np.where(c_red < 0, 1.0 - np.abs(h - 180.0) / 180.0, 0.0)
+    d_red = np.minimum(np.abs(h - 0.0), 360.0 - np.abs(h - 0.0))
+    d_cyan = np.minimum(np.abs(h - 180.0), 360.0 - np.abs(h - 180.0))
+    red_weight = np.where(c_red >= 0, 1.0 - d_red / 180.0, 0.0)
+    cyan_weight = np.where(c_red < 0, 1.0 - d_cyan / 180.0, 0.0)
     h += (c_red * red_weight - c_red * cyan_weight) * chroma_weight
 
     # Green axis: push hue toward 120° (positive) or 300°=magenta (negative)
-    green_weight = np.where(m_green >= 0, 1.0 - np.abs(h - 120.0) / 180.0, 0.0)
-    magenta_weight = np.where(m_green < 0, 1.0 - np.abs(h - 300.0) / 180.0, 0.0)
+    d_green = np.minimum(np.abs(h - 120.0), 360.0 - np.abs(h - 120.0))
+    d_magenta = np.minimum(np.abs(h - 300.0), 360.0 - np.abs(h - 300.0))
+    green_weight = np.where(m_green >= 0, 1.0 - d_green / 180.0, 0.0)
+    magenta_weight = np.where(m_green < 0, 1.0 - d_magenta / 180.0, 0.0)
     h += (m_green * green_weight - m_green * magenta_weight) * chroma_weight
 
     # Blue axis: push hue toward 240° (positive) or 60°=yellow (negative)
-    blue_weight = np.where(y_blue >= 0, 1.0 - np.abs(h - 240.0) / 180.0, 0.0)
-    yellow_weight = np.where(y_blue < 0, 1.0 - np.abs(h - 60.0) / 180.0, 0.0)
+    d_blue = np.minimum(np.abs(h - 240.0), 360.0 - np.abs(h - 240.0))
+    d_yellow = np.minimum(np.abs(h - 60.0), 360.0 - np.abs(h - 60.0))
+    blue_weight = np.where(y_blue >= 0, 1.0 - d_blue / 180.0, 0.0)
+    yellow_weight = np.where(y_blue < 0, 1.0 - d_yellow / 180.0, 0.0)
     h += (y_blue * blue_weight - y_blue * yellow_weight) * chroma_weight
 
     out[:, :, 2] = np.mod(h, 360.0)

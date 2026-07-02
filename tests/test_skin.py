@@ -270,9 +270,9 @@ class TestBuildSmoothMask:
 
         out = _build_smooth_mask(skin, exclusions=(hair,))
         # Hair region must be fully excluded.
-        assert np.all(out[: h // 2, :] == 0.0)
-        # Skin-only region must be untouched.
-        assert np.all(out[h // 2:, :] == 1.0)
+        assert np.all(out[: h // 2 - 5, :] == 0.0)
+        # Skin-only region must be untouched (skip 5px for 3px erosion margin).
+        assert out[h // 2 + 5:, :].min() == 1.0
 
     def test_excludes_multiple_regions(self):
         h, w = 32, 32
@@ -294,14 +294,14 @@ class TestBuildSmoothMask:
         assert np.all(out[20:23, 0:4] == 1.0)
 
     def test_none_exclusion_is_skipped(self):
-        skin = np.ones((4, 4), dtype=np.float32)
-        hair = np.zeros((4, 4), dtype=np.float32)
-        hair[:2, :] = 1.0
+        skin = np.ones((8, 8), dtype=np.float32)
+        hair = np.zeros((8, 8), dtype=np.float32)
+        hair[:4, :] = 1.0
         out = _build_smooth_mask(
             skin, exclusions=(None, hair, None)
         )
-        assert np.all(out[:2, :] == 0.0)
-        assert np.all(out[2:, :] == 1.0)
+        assert np.all(out[:4, :] == 0.0)
+        assert out[5:, :].min() == 1.0
 
     def test_output_is_clipped_to_unit_range(self):
         skin = np.ones((4, 4), dtype=np.float32)
@@ -400,7 +400,7 @@ class TestBuildDimensionalMask:
             nose_bridge = None
             cheek_highlights_l = None
             cheek_highlights_r = None
-        mask = SkinProcessor._build_dimensional_mask(FakeRegions())
+        mask = SkinProcessor._build_dimensional_mask(FakeRegions(), shape=(200, 200))
         assert mask.shape == (200, 200)
         assert mask.dtype == np.float32
         assert mask.max() == 0.0
@@ -410,7 +410,7 @@ class TestBuildDimensionalMask:
             nose_bridge = np.ones((50, 70), dtype=np.float32) * 0.4
             cheek_highlights_l = None
             cheek_highlights_r = None
-        mask = SkinProcessor._build_dimensional_mask(FakeRegions())
+        mask = SkinProcessor._build_dimensional_mask(FakeRegions(), shape=(50, 70))
         assert mask.shape == (50, 70)
         assert mask.dtype == np.float32
         assert mask.max() == pytest.approx(0.4)
@@ -420,7 +420,7 @@ class TestBuildDimensionalMask:
             nose_bridge = np.ones((10, 10), dtype=np.float32) * 0.7
             cheek_highlights_l = np.ones((10, 10), dtype=np.float32) * 0.7
             cheek_highlights_r = None
-        mask = SkinProcessor._build_dimensional_mask(FakeRegions())
+        mask = SkinProcessor._build_dimensional_mask(FakeRegions(), shape=(10, 10))
         assert mask.shape == (10, 10)
         assert mask.max() == pytest.approx(1.0)
 
@@ -432,6 +432,7 @@ class TestBuildDimensionalMask:
             forehead_center = np.ones((8, 8), dtype=np.float32) * 0.3
         mask = SkinProcessor._build_dimensional_mask(
             FakeRegions(),
+            shape=(8, 8),
             attrs=("forehead_center",),
         )
         assert mask.shape == (8, 8)
@@ -442,7 +443,7 @@ class TestBuildDimensionalMask:
             nose_bridge = np.ones((20, 20), dtype=np.float32) * 0.5
             cheek_highlights_l = None
             cheek_highlights_r = None
-        mask = SkinProcessor._build_dimensional_mask(FakeRegions(), feather=0)
+        mask = SkinProcessor._build_dimensional_mask(FakeRegions(), shape=(20, 20), feather=0)
         assert mask.max() == pytest.approx(0.5)
 
     def test_feather_smooths_peak(self):
@@ -451,8 +452,8 @@ class TestBuildDimensionalMask:
             nose_bridge[18:22, 18:22] = 1.0
             cheek_highlights_l = None
             cheek_highlights_r = None
-        mask_plain = SkinProcessor._build_dimensional_mask(FakeRegions(), feather=0)
-        mask_feather = SkinProcessor._build_dimensional_mask(FakeRegions(), feather=5)
+        mask_plain = SkinProcessor._build_dimensional_mask(FakeRegions(), shape=(40, 40), feather=0)
+        mask_feather = SkinProcessor._build_dimensional_mask(FakeRegions(), shape=(40, 40), feather=5)
         assert mask_plain.max() == pytest.approx(1.0)
         assert mask_feather.max() < 1.0
         assert mask_feather.max() > 0.0
@@ -462,7 +463,7 @@ class TestBuildDimensionalMask:
             nose_bridge = (np.ones((5, 5), dtype=np.uint8) * 200)
             cheek_highlights_l = None
             cheek_highlights_r = None
-        mask = SkinProcessor._build_dimensional_mask(FakeRegions())
+        mask = SkinProcessor._build_dimensional_mask(FakeRegions(), shape=(5, 5))
         assert mask.dtype == np.float32
         assert mask.max() > 0.0
 

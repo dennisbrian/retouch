@@ -1191,8 +1191,9 @@ class ColorGrader:
         if abs(tint_val) > 1e-4:
             tint_hue = 150.0 if tint_val < 0 else 330.0
             tint_strength = abs(tint_val) / 100.0 * chroma_weight * 0.2
+            delta = (tint_hue - lch[:, :, 2] + 180.0) % 360.0 - 180.0
             lch[:, :, 2] = np.mod(
-                lch[:, :, 2] + (tint_hue - lch[:, :, 2]) * tint_strength, 360.0
+                lch[:, :, 2] + delta * tint_strength, 360.0
             )
         return lch_to_bgr(lch)
 

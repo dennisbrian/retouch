@@ -288,7 +288,7 @@ class TestRecipeParameterCoverage:
         # Construct a representative recipe
         rec = {
             "frequency": {"smooth": 0.5, "mid_reduction": 0.4},
-            "skin": {"equalize": 0.3, "rosy": 0.2, "porcelain": 0.0},
+            "skin": {"equalize": 0.3, "rosy": 0.2, "porcelain": 0.0, "relight": 0.3, "relight_azimuth": 45.0, "relight_elevation": 35.0},
             "eyes": {"whites": 0.1, "teeth_whiten": 0.1, "iris": 0.1, "catchlight": 0.1, "dark_circles": 0.05},
             "lips": {"tint": "rose", "gloss": 0.1},
             "hair": {"shine": 0.2},
@@ -297,7 +297,6 @@ class TestRecipeParameterCoverage:
             "bloom": {"opacity": 0.1, "threshold": 200.0, "softness": 25.0},
             "texture": {"opacity": 0.9, "pore_synthesis": 0.0},
             "finish": {"impact": 0.5},
-            "relight": 0.3,
             "specular_bloom": 30,
             "slimming": 20.0,
             "blush": 15.0,

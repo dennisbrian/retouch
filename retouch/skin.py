@@ -21,6 +21,7 @@ class SkinProcessor:
     @staticmethod
     def _build_dimensional_mask(
         regions: Any,
+        shape: Tuple[int, int],
         attrs: Tuple[str, ...] = (
             "nose_bridge", "cheek_highlights_l", "cheek_highlights_r",
         ),
@@ -28,7 +29,7 @@ class SkinProcessor:
     ) -> np.ndarray:
         """Union of the named FaceRegions attrs, with optional Gaussian feather.
 
-        Returns a float32 mask in [0, 1] with the same shape as the regions.
+        Returns a float32 mask in [0, 1] with the same shape as the target.
         Feather is the Gaussian kernel size (odd int). 0 = no feather.
         """
         dim_mask: Optional[np.ndarray] = None
@@ -36,14 +37,14 @@ class SkinProcessor:
             m = getattr(regions, attr, None)
             if m is None:
                 continue
-            m_f = m.astype(np.float32, copy=False) if m.dtype != np.float32 else m
+            m_f = squeeze_mask(m.astype(np.float32, copy=False) if m.dtype != np.float32 else m)
             if dim_mask is None:
                 dim_mask = m_f.copy()
                 continue
             dim_mask = np.clip(dim_mask + m_f, 0.0, 1.0)
 
         if dim_mask is None:
-            return np.zeros((200, 200), dtype=np.float32)
+            return np.zeros(shape, dtype=np.float32)
 
         if feather > 0:
             dim_mask = cv2.GaussianBlur(dim_mask, (feather, feather), 0)
@@ -139,7 +140,7 @@ class SkinProcessor:
         Returns:
             (H, W, 3) uint8 BGR image.
         """
-        if strength <= 0:
+        if strength <= 0 or skin_mask is None:
             return img_bgr
 
         s = strength / 100.0
@@ -185,7 +186,7 @@ class SkinProcessor:
         Returns:
             (H, W, 3) uint8 BGR image.
         """
-        if strength <= 0:
+        if strength <= 0 or regions is None or getattr(regions, "skin", None) is None:
             return img_bgr
 
         s = strength / 100.0
@@ -194,6 +195,7 @@ class SkinProcessor:
 
         brighten_mask = self._build_dimensional_mask(
             regions,
+            shape=img_bgr.shape[:2],
             attrs=(
                 "nose_bridge", "forehead_center",
                 "cheek_highlights_l", "cheek_highlights_r",
@@ -202,7 +204,7 @@ class SkinProcessor:
 
         darken_mask = (regions.jawline_contour.astype(np.float32, copy=False)
                        if regions.jawline_contour is not None
-                       else np.zeros(regions.skin.shape, dtype=np.float32))
+                       else np.zeros(img_bgr.shape[:2], dtype=np.float32))
         darken_mask = np.clip(darken_mask - brighten_mask, 0.0, 1.0)
 
         l_val = lab[:, :, 0]
@@ -214,16 +216,15 @@ class SkinProcessor:
         # Exclude hair and eyebrows from dodge/burn output so we never
         # sculpt inside hair roots or scrub pigment off brow hairs.
         blend = regions.skin
-        if blend is not None:
-            for excl_attr in ("hair", "left_eyebrow", "right_eyebrow"):
-                excl = getattr(regions, excl_attr, None)
-                if excl is not None:
-                    blend = np.clip(
-                        blend.astype(np.float32, copy=False)
-                        - excl.astype(np.float32),
-                        0.0,
-                        1.0,
-                    )
+        for excl_attr in ("hair", "left_eyebrow", "right_eyebrow"):
+            excl = getattr(regions, excl_attr, None)
+            if excl is not None:
+                blend = np.clip(
+                    blend.astype(np.float32, copy=False)
+                    - excl.astype(np.float32),
+                    0.0,
+                    1.0,
+                )
         return blend_masked(img_bgr, result, blend)
 
     def harmonize_neck(
@@ -285,7 +286,6 @@ class SkinProcessor:
                 return img_bgr
 
             pm = normalize_mask(person_mask)
-            from .utils import squeeze_mask
             pm = squeeze_mask(pm)
 
             neck_mask_est = np.zeros((h_img, w_img), dtype=np.float32)
@@ -314,9 +314,9 @@ class SkinProcessor:
             n = np.cross(p2 - p1, p3 - p1)
             n = n / (np.linalg.norm(n) + 1e-5)
             
-            z_neck = lm[152].z * face_w
+            # Approximate plane distance in screen-space (XY only) to avoid geometric flaws of substitute Z
             Y, X = np.ogrid[:h_img, :w_img]
-            dist_to_plane = np.abs(n[0] * (X - p1[0]) + n[1] * (Y - p1[1]) + n[2] * (z_neck - p1[2]))
+            dist_to_plane = np.abs(n[0] * (X - p1[0]) + n[1] * (Y - p1[1]))
             
             threshold = face_w * 0.15
             depth_gate = (dist_to_plane < threshold).astype(np.float32)
@@ -435,7 +435,7 @@ class SkinProcessor:
         Returns:
             (H, W, 3) uint8 BGR canvas with restored micro-contrast.
         """
-        if strength <= 0 or smooth_strength <= 0:
+        if strength <= 0 or smooth_strength <= 0 or regions is None:
             return smoothed_bgr
 
         h, w = smoothed_bgr.shape[:2]
@@ -447,6 +447,7 @@ class SkinProcessor:
         # flatten, and where restoration is perceptually most valuable.
         dim_mask = self._build_dimensional_mask(
             regions,
+            shape=smoothed_bgr.shape[:2],
             attrs=(
                 "nose_bridge",
                 "cheek_highlights_l",
@@ -504,26 +505,21 @@ class SkinProcessor:
         Returns:
             (H, W, 3) uint8 BGR canvas with localized clarity applied.
         """
-        if strength <= 0:
+        if strength <= 0 or regions is None:
             return img_bgr
 
         h, w = img_bgr.shape[:2]
+        feather = max(3, int(min(h, w) * 0.01)) | 1
 
-        local_mask = np.zeros((h, w), dtype=np.float32)
-        for attr in ("nose", "lips", "left_eye", "right_eye", "nose_bridge"):
-            m = getattr(regions, attr, None)
-            if m is None:
-                continue
-            m_f = m.astype(np.float32) if m.dtype != np.float32 else m
-            m_f = squeeze_mask(m_f)
-            local_mask = np.clip(local_mask + m_f, 0.0, 1.0)
+        local_mask = self._build_dimensional_mask(
+            regions,
+            shape=img_bgr.shape[:2],
+            attrs=("nose", "lips", "left_eye", "right_eye", "nose_bridge"),
+            feather=feather,
+        )
 
         if local_mask.max() < 0.01:
             return img_bgr
-
-        feather = max(3, int(min(h, w) * 0.01)) | 1
-        local_mask = cv2.GaussianBlur(local_mask, (feather, feather), 0)
-        local_mask = np.clip(local_mask, 0.0, 1.0)
 
         ksize = max(radius * 2 + 1, 3)
         img_f = img_bgr.astype(np.float32)
