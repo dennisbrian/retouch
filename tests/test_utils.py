@@ -16,6 +16,7 @@ from retouch.utils import (
     correct_exposure,
     adaptive_ksize,
     apply_global_bloom,
+    apply_skin_diffusion,
     soft_light_blend,
     overlay_blend,
     hard_light_blend,
@@ -371,4 +372,36 @@ class TestHardLightBlend:
     def test_preserves_shape_dtype(self, img_gray):
         result = hard_light_blend(img_gray, img_gray)
         assert result.dtype == np.uint8
+
+
+class TestApplySkinDiffusion:
+    def test_zero_strength_noop(self):
+        img = np.full((64, 64, 3), 150, dtype=np.uint8)
+        mask = np.ones((64, 64), dtype=np.float32)
+        result = apply_skin_diffusion(img, mask, strength=0)
+        assert np.all(result == img)
+
+    def test_mid_gray_skin_brightens(self):
+        img = np.full((64, 64, 3), 180, dtype=np.uint8)
+        mask = np.ones((64, 64), dtype=np.float32)
+        result = apply_skin_diffusion(img, mask, strength=30)
+        lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB).astype(np.float32)
+        orig_lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
+        assert lab[:, :, 0].mean() >= orig_lab[:, :, 0].mean()
+
+    def test_far_outside_mask_unchanged(self):
+        img = np.full((64, 64, 3), 100, dtype=np.uint8)
+        mask = np.zeros((64, 64), dtype=np.float32)
+        mask[16:48, 16:48] = 1.0
+        mask = cv2.GaussianBlur(mask, (5, 5), 0)
+        img[50:60, 50:60] = [50, 200, 100]
+        result = apply_skin_diffusion(img, mask, strength=40)
+        np.testing.assert_allclose(result[50:60, 50:60], img[50:60, 50:60], atol=3)
+
+    def test_dtype_shape(self):
+        img = np.full((64, 64, 3), 180, dtype=np.uint8)
+        mask = np.ones((64, 64), dtype=np.float32)
+        result = apply_skin_diffusion(img, mask, strength=20)
+        assert result.dtype == np.uint8
+        assert result.shape == img.shape
 

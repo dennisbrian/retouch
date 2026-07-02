@@ -606,3 +606,154 @@ class TestRestoreMicroTexture:
         assert result.dtype == np.uint8
         assert result.shape == original.shape
 
+
+class TestFlatten:
+    def test_zero_strength_noop(self, proc, img, face_mask):
+        result = proc.flatten(img, face_mask, strength=0)
+        assert np.all(result == img)
+
+    def test_skin_region_l_std_decreases(self, proc, face_mask):
+        img_bgr = np.full((64, 64, 3), 128, dtype=np.uint8)
+        img_bgr[24:40, 24:40] = [128 + 30, 128, 128]
+        img_bgr[24:40, 24:40, :] += np.random.randint(-10, 10, (16, 16, 3), dtype=np.int16).clip(0, 255).astype(np.uint8)
+        result = proc.flatten(img_bgr, face_mask, strength=60)
+        lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB).astype(np.float32)
+        orig_lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        skin_l = lab[:, :, 0][face_mask > 0.3]
+        orig_skin_l = orig_lab[:, :, 0][face_mask > 0.3]
+        assert np.std(skin_l) < np.std(orig_skin_l)
+
+    def test_hard_edge_preserved(self, proc, face_mask):
+        img_bgr = np.full((64, 64, 3), 200, dtype=np.uint8)
+        img_bgr[32:48, :] = 100
+        result = proc.flatten(img_bgr, face_mask, strength=50)
+        step_before = abs(float(img_bgr[32, 0, 0]) - float(img_bgr[30, 0, 0]))
+        step_after = abs(float(result[32, 0, 0]) - float(result[30, 0, 0]))
+        assert step_after >= 0.8 * step_before
+
+    def test_outside_mask_unchanged(self, proc, face_mask):
+        img_bgr = np.full((64, 64, 3), 128, dtype=np.uint8)
+        img_bgr[0:10, 0:10] = [50, 200, 100]
+        result = proc.flatten(img_bgr, face_mask, strength=80)
+        np.testing.assert_allclose(result[0:10, 0:10], img_bgr[0:10, 0:10], atol=2)
+
+    def test_none_mask_noop(self, proc, img):
+        result = proc.flatten(img, None, strength=50)
+        assert np.all(result == img)
+
+    def test_dtype_shape(self, proc, img, face_mask):
+        result = proc.flatten(img, face_mask, strength=30)
+        assert result.dtype == np.uint8
+        assert result.shape == img.shape
+
+
+class TestQuantizeTones:
+    def test_zero_strength_noop(self, proc, img, face_mask):
+        result = proc.quantize_tones(img, face_mask, strength=0)
+        assert np.all(result == img)
+
+    def test_linear_ramp_creates_bands(self, proc, face_mask):
+        h, w = 64, 64
+        L_ramp = np.tile(np.linspace(80, 220, w, dtype=np.float32), (h, 1))
+        img_bgr = np.zeros((h, w, 3), dtype=np.uint8)
+        lab = np.zeros((h, w, 3), dtype=np.float32)
+        lab[:, :, 0] = L_ramp
+        lab[:, :, 1:] = 128.0
+        img_bgr = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        result = proc.quantize_tones(img_bgr, face_mask, strength=80, bands=3, softness=0.3)
+        result_lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB).astype(np.float32)
+        skin_l = result_lab[:, :, 0][face_mask > 0.3]
+        orig_skin_l = L_ramp[face_mask > 0.3]
+        assert np.std(skin_l) < np.std(orig_skin_l)
+
+    def test_near_uniform_noop(self, proc, face_mask):
+        img_bgr = np.full((64, 64, 3), 128, dtype=np.uint8)
+        result = proc.quantize_tones(img_bgr, face_mask, strength=50)
+        assert np.all(result == img_bgr)
+
+    def test_strength_100_greater_than_30(self, proc, face_mask):
+        L_ramp = np.tile(np.linspace(100, 200, 64, dtype=np.float32), (64, 1))
+        lab = np.zeros((64, 64, 3), dtype=np.float32)
+        lab[:, :, 0] = L_ramp
+        lab[:, :, 1:] = 128.0
+        img_bgr = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        r30 = proc.quantize_tones(img_bgr, face_mask, strength=30, bands=3, softness=0.3)
+        r100 = proc.quantize_tones(img_bgr, face_mask, strength=100, bands=3, softness=0.3)
+        assert r30.dtype == np.uint8
+        assert r100.dtype == np.uint8
+        assert r30.shape == img_bgr.shape
+        assert r100.shape == img_bgr.shape
+        assert not np.all(r30 == img_bgr)
+        assert not np.all(r100 == img_bgr)
+
+    def test_outside_mask_unchanged(self, proc, face_mask):
+        img_bgr = np.full((64, 64, 3), 128, dtype=np.uint8)
+        img_bgr[0:10, 0:10] = [50, 200, 100]
+        result = proc.quantize_tones(img_bgr, face_mask, strength=80)
+        np.testing.assert_allclose(result[0:10, 0:10], img_bgr[0:10, 0:10], atol=2)
+
+    def test_none_mask_noop(self, proc, img):
+        result = proc.quantize_tones(img, None, strength=50)
+        assert np.all(result == img)
+
+    def test_dtype_shape(self, proc, img, face_mask):
+        result = proc.quantize_tones(img, face_mask, strength=40)
+        assert result.dtype == np.uint8
+        assert result.shape == img.shape
+
+
+class TestUnifyTone:
+    def _make_two_hue_image(self):
+        from retouch.color_space import lch_to_bgr
+        lch = np.zeros((64, 64, 3), dtype=np.float32)
+        lch[:, :, 0] = 70.0
+        lch[:, :, 1] = 30.0
+        lch[:32, :, 2] = 15.0
+        lch[32:, :, 2] = 35.0
+        return lch_to_bgr(lch)
+
+    def test_zero_strength_noop(self, proc, face_mask):
+        img_bgr = self._make_two_hue_image()
+        result = proc.unify_tone(img_bgr, face_mask, strength=0)
+        assert np.all(result == img_bgr)
+
+    def test_hue_std_decreases(self, proc, face_mask):
+        img_bgr = self._make_two_hue_image()
+        result = proc.unify_tone(img_bgr, face_mask, strength=50)
+        from retouch.color_space import bgr_to_lch
+        lch_orig = bgr_to_lch(img_bgr)
+        lch_res = bgr_to_lch(result)
+        skin_h_orig = lch_orig[:, :, 2][face_mask > 0.3]
+        skin_h_res = lch_res[:, :, 2][face_mask > 0.3]
+        # After unification, the circular hue spread should decrease
+        d_orig = ((skin_h_orig - skin_h_orig.mean() + 180.0) % 360.0) - 180.0
+        d_res = ((skin_h_res - skin_h_res.mean() + 180.0) % 360.0) - 180.0
+        assert np.std(d_res) < np.std(d_orig)
+
+    def test_target_hue_pulls_mean(self, proc, face_mask):
+        img_bgr = self._make_two_hue_image()
+        result = proc.unify_tone(img_bgr, face_mask, strength=60, target_hue=25.0)
+        from retouch.color_space import bgr_to_lch
+        lch_res = bgr_to_lch(result)
+        skin_h = lch_res[:, :, 2][face_mask > 0.3]
+        H_mean = float(np.degrees(np.arctan2(
+            np.sin(np.radians(skin_h)).mean(),
+            np.cos(np.radians(skin_h)).mean(),
+        ))) % 360.0
+        assert abs(H_mean - 25.0) < 20.0
+
+    def test_chroma_decreases(self, proc, face_mask):
+        img_bgr = self._make_two_hue_image()
+        result = proc.unify_tone(img_bgr, face_mask, strength=50, chroma_compress=1.0)
+        assert result.dtype == np.uint8
+        assert result.shape == img_bgr.shape
+
+    def test_none_mask_noop(self, proc, img):
+        result = proc.unify_tone(img, None, strength=50)
+        assert np.all(result == img)
+
+    def test_dtype_shape(self, proc, img, face_mask):
+        result = proc.unify_tone(img, face_mask, strength=30)
+        assert result.dtype == np.uint8
+        assert result.shape == img.shape
+

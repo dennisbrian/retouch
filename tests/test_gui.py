@@ -69,11 +69,12 @@ EXPECTED_RECIPE_KEYS = [
     "bw_channel_mixer_r", "bw_channel_mixer_g", "bw_channel_mixer_b",
     "negative_split_tone_shadow", "negative_split_tone_highlight",
     "hsl_hue_global", "hsl_sat_global", "hsl_lum_global",
+    "skin_flatten", "skin_quantize", "skin_unify", "skin_unify_hue", "skin_glow",
     "tonal_curve_strength", "skin_protect_strength",
     "highlight_rolloff_strength", "grain_strength",
 ]
-EXPECTED_RECIPE_KEY_COUNT = 75
-EXPECTED_UI_OUTPUT_COUNT = 64
+EXPECTED_RECIPE_KEY_COUNT = 80
+EXPECTED_UI_OUTPUT_COUNT = 79
 
 
 # ---------------------------------------------------------------------------
@@ -337,8 +338,8 @@ class TestOnRecipeChange:
         result = gui.on_recipe_change("anime_cinematic_v1")
         d = gui.recipe_defaults("anime_cinematic_v1")
         assert d["clarity"] == 14
-        # clarity sits at index 35 in the on_recipe_change output tuple
-        clarity_index = 35
+        # clarity sits at index 40 in the on_recipe_change output tuple
+        clarity_index = 40
         assert result[clarity_index] == 14
 
 
@@ -557,7 +558,7 @@ class TestProcessInputKeys:
         import inspect
         sig = inspect.signature(gui.process_image)
         # process_image takes *args — but PROCESS_INPUT_KEYS is the canonical list
-        assert len(gui.PROCESS_INPUT_KEYS) == 85
+        assert len(gui.PROCESS_INPUT_KEYS) == 89
 
     def test_first_key_is_img_paths(self):
         assert gui.PROCESS_INPUT_KEYS[0] == "img_paths"
@@ -623,27 +624,29 @@ class TestGetEngine:
 class TestResetFunctions:
     """Tests for the gui.reset_*() section-reset helpers."""
 
-    def test_reset_skin_smoothing_returns_seven_values(self):
+    def test_reset_skin_smoothing_returns_nine_values(self):
         result = gui.reset_skin_smoothing("natural")
         assert isinstance(result, tuple)
-        assert len(result) == 7
+        assert len(result) == 9
 
     def test_reset_skin_smoothing_values_match_natural_recipe(self):
         d = gui.recipe_defaults("natural")
         result = gui.reset_skin_smoothing("natural")
         assert result == (d["smooth"], d["nose_smooth"], d["mid_reduction"],
                           d["texture_opacity"], d["micro_restore"],
-                          d["pore_synthesis"], d["blemish"])
+                          d["pore_synthesis"], d["blemish"],
+                          d["skin_flatten"], d["skin_quantize"])
 
-    def test_reset_skin_tone_returns_five_values(self):
+    def test_reset_skin_tone_returns_seven_values(self):
         result = gui.reset_skin_tone("natural")
         assert isinstance(result, tuple)
-        assert len(result) == 5
+        assert len(result) == 7
 
     def test_reset_skin_tone_values_match_natural_recipe(self):
         d = gui.recipe_defaults("natural")
         result = gui.reset_skin_tone("natural")
         assert result == (d["whiten"], d["whiten_tone"], d["equalize"],
+                          d["skin_unify"], d["skin_unify_hue"],
                           d["auto_exposure"], d["white_costume_lift"])
 
     def test_reset_basic_tone_returns_five_values(self):
@@ -671,10 +674,10 @@ class TestResetFunctions:
         d = gui.recipe_defaults("natural")
         assert result == d["slimming"]
 
-    def test_reset_structure_effects_returns_thirteen_values(self):
+    def test_reset_structure_effects_returns_fourteen_values(self):
         result = gui.reset_structure_effects("natural")
         assert isinstance(result, tuple)
-        assert len(result) == 13
+        assert len(result) == 14
 
     def test_reset_color_grading_returns_two_values(self):
         result = gui.reset_color_grading("natural")
@@ -910,7 +913,7 @@ class TestProcessImageValidation:
     """Tests for gui.process_image() input-validation early returns."""
 
     def _build_args(self, **overrides):
-        """Build a 69-arg tuple for process_image, with all entries as defaults.
+        """Build an 89-arg tuple for process_image, with all entries as defaults.
 
         Default values reflect a 'natural' recipe with all-zero adjustments,
         so the function should reach its validation gates and short-circuit
@@ -927,6 +930,7 @@ class TestProcessImageValidation:
             "lip_enhance": 0, "lip_tint": "none", "blush": 0,
             "nose_blush": False, "under_eye_blush": False,
             "hair_enhance": 0, "dodge_burn": 0, "specular_bloom": 0,
+            "skin_flatten": 0, "skin_quantize": 0, "skin_unify": 0, "skin_unify_hue": -1.0, "skin_glow": 0,
             "bloom": 0, "bloom_threshold": 210, "bloom_softness": 30,
             "contrast": 0, "brightness": 0,
             "highlights": 0, "shadows": 0, "whites": 0, "blacks": 0,
@@ -1015,7 +1019,19 @@ class TestIntegrationConstantCrossRef:
         """The number of UI outputs (from the _recipe_outputs list) must match
         what on_recipe_change returns."""
         result = gui.on_recipe_change("natural")
-        assert len(result) == 64
+        assert len(result) == 79
+
+    def test_process_inputs_count_matches_process_input_keys(self):
+        """_process_inputs and PROCESS_INPUT_KEYS must have matching lengths."""
+        assert len(gui._process_inputs) == len(gui.PROCESS_INPUT_KEYS)
+
+    def test_recipe_outputs_count_matches_on_recipe_change(self):
+        """_recipe_outputs and on_recipe_change return tuple must match."""
+        assert len(gui._recipe_outputs) == len(gui.on_recipe_change("natural"))
+
+    def test_process_input_keys_excludes_color_transfer_intensity(self):
+        """color_transfer_intensity is in param_names() but has no GUI component."""
+        assert "color_transfer_intensity" not in gui.PROCESS_INPUT_KEYS
 
     def test_process_input_keys_excludes_visual_outputs(self):
         """PROCESS_INPUT_KEYS is for process_image inputs and does not include

@@ -447,3 +447,60 @@ class TestRecipeExtensionSemantics:
         # by checking that the 'soft' chain terminates.
         resolved = resolve_recipe("soft")
         assert "frequency" in resolved
+
+
+class TestAnimeV2Recipe:
+    def test_resolve_anime_v2(self):
+        rec = resolve_recipe("anime_v2")
+        assert "frequency" in rec
+        assert "skin" in rec
+
+    def test_anime_v2_extends_anime_cinematic_v1(self):
+        rec = resolve_recipe("anime_v2")
+        assert rec.get("specular_bloom_tone") == "rosy"
+        assert "frequency" in rec
+
+    def test_skin_flatten_value(self):
+        rec = resolve_recipe("anime_v2")
+        assert rec["skin"]["flatten"] == 0.55
+
+    def test_skin_quantize_value(self):
+        rec = resolve_recipe("anime_v2")
+        assert rec["skin"]["quantize"] == 0.40
+
+    def test_skin_relight_in_skin_dict(self):
+        rec = resolve_recipe("anime_v2")
+        assert rec["skin"]["relight"] == 0.42
+
+    def test_build_context_skin_flatten(self):
+        ctx = build_context("anime_v2", resolve_recipe("anime_v2"), {})
+        assert ctx.skin_flatten == pytest.approx(55.0)
+
+    def test_build_context_skin_quantize(self):
+        ctx = build_context("anime_v2", resolve_recipe("anime_v2"), {})
+        assert ctx.skin_quantize == 40.0
+
+    def test_build_context_relight_from_skin_dict(self):
+        ctx = build_context("anime_v2", resolve_recipe("anime_v2"), {})
+        assert ctx.relight == 42.0
+
+    def test_override_wins(self):
+        rec = resolve_recipe("anime_v2")
+        ctx = build_context("anime_v2", rec, {"skin_flatten": 75.0})
+        assert ctx.skin_flatten == 75.0
+
+    def test_skin_unify_value(self):
+        rec = resolve_recipe("anime_v2")
+        assert rec["skin"]["unify"] == 0.50
+
+    def test_skin_glow_value(self):
+        rec = resolve_recipe("anime_v2")
+        assert rec["skin"]["glow"] == 0.20
+
+    def test_build_context_skin_unify(self):
+        ctx = build_context("anime_v2", resolve_recipe("anime_v2"), {})
+        assert ctx.skin_unify == pytest.approx(50.0)
+
+    def test_build_context_skin_glow(self):
+        ctx = build_context("anime_v2", resolve_recipe("anime_v2"), {})
+        assert ctx.skin_glow == pytest.approx(20.0)

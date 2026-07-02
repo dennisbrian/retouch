@@ -531,6 +531,85 @@ def apply_global_bloom(
     return np.clip(result, 0, 255).astype(np.uint8)
 
 
+def apply_skin_diffusion(
+    img_bgr: np.ndarray,
+    skin_mask: np.ndarray,
+    strength: float,
+) -> np.ndarray:
+    """Skin-scoped atmospheric glow / light-wrap.
+
+    Like ``apply_global_bloom`` but gated to luminous skin mid-tones rather
+    than specular highlights, and weighted by a blurred skin mask so the
+    wrap extends slightly past the silhouette.
+
+    Args:
+        img_bgr: (H, W, 3) uint8 BGR image.
+        skin_mask: (H, W) float32 mask in [0, 1].
+        strength: 0–100 glow intensity.
+
+    Returns:
+        (H, W, 3) uint8 BGR image.
+    """
+    if strength <= 0 or skin_mask is None or skin_mask.max() < 0.01:
+        return img_bgr
+
+    lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    l_chan = lab[:, :, 0]
+
+    skin_gate = np.clip((l_chan - 110.0) / 90.0, 0.0, 1.0)
+    highlight_mask = skin_gate
+
+    if highlight_mask.max() < 0.01:
+        return img_bgr
+
+    h, w = img_bgr.shape[:2]
+    min_dim = min(h, w)
+
+    k = max(15, int(min_dim * 0.015)) | 1
+    blurred_skin = cv2.GaussianBlur(skin_mask, (k, k), 0)
+    wrap = np.clip(blurred_skin * 1.3, 0.0, 1.0)
+    highlight_mask = highlight_mask * wrap
+
+    if highlight_mask.max() < 0.01:
+        return img_bgr
+
+    highlights = img_bgr.astype(np.float32) * highlight_mask[:, :, np.newaxis]
+
+    target_min = 2000
+    is_downsampled = min_dim > target_min
+    if is_downsampled:
+        scale = target_min / min_dim
+        highlights_low = cv2.resize(
+            highlights, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA
+        )
+        blur_dim = min(highlights_low.shape[:2])
+    else:
+        highlights_low = highlights
+        blur_dim = min_dim
+
+    k1 = max(15, int(blur_dim * 0.01)) | 1
+    k2 = max(31, int(blur_dim * 0.03)) | 1
+    k3 = max(63, int(blur_dim * 0.08)) | 1
+
+    blur1 = cv2.GaussianBlur(highlights_low, (k1, k1), 0)
+    blur2 = cv2.GaussianBlur(highlights_low, (k2, k2), 0)
+    blur3 = cv2.GaussianBlur(highlights_low, (k3, k3), 0)
+
+    glow_low = blur1 * 0.5 + blur2 * 0.3 + blur3 * 0.2
+
+    if is_downsampled:
+        glow = cv2.resize(glow_low, (w, h), interpolation=cv2.INTER_LINEAR)
+    else:
+        glow = glow_low
+
+    img_f = img_bgr.astype(np.float32)
+    screen = screen_blend(img_f, glow)
+
+    s_factor = strength / 100.0
+    result = img_f * (1.0 - s_factor) + screen * s_factor
+    return np.clip(result, 0, 255).astype(np.uint8)
+
+
 def log_crash(exc: Exception, context_info: Optional[dict] = None) -> str:
     """Log details of a crash (traceback, timestamp, context params) to ``~/.cache/retouch/crash.log``.
 

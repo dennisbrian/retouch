@@ -114,7 +114,7 @@ from .recipes import RECIPES
 from .recipe_loader import load_user_recipes
 from .style import StyleProfile
 from .style_transfer import subject_aware_transfer
-from .utils import correct_exposure, apply_global_bloom, vibrance as _vibrance_fn, squeeze_mask
+from .utils import correct_exposure, apply_global_bloom, apply_skin_diffusion, vibrance as _vibrance_fn, squeeze_mask
 from .params import resolve_recipe, _deep_merge, PROCESSING_PARAMS  # noqa: F401  (re-export for backward compat)
 
 
@@ -159,6 +159,11 @@ class ProcessingContext:
     relight: float = 0.0
     relight_azimuth: float = _DEFAULTS["relight_azimuth"]
     relight_elevation: float = _DEFAULTS["relight_elevation"]
+    skin_flatten: float = 0.0
+    skin_quantize: float = 0.0
+    skin_unify: float = 0.0
+    skin_unify_hue: float = -1.0
+    skin_glow: float = 0.0
 
     # --- Eyes ---
     eye_enhance: float = 0.0
@@ -1617,6 +1622,10 @@ class RetouchEngine:
 
         if ctx.highlight_rolloff_strength > 0:
             result = highlight.apply_highlight_rolloff(result, ctx.highlight_rolloff_strength)
+
+        # ---- Skin light-wrap diffusion (anime) ----
+        if ctx.skin_glow > 0 and acc_skin is not None and acc_skin.max() > 0.01:
+            result = apply_skin_diffusion(result, acc_skin, strength=ctx.skin_glow)
 
         # Apply Global Cinematic Bloom (runs after color grading, but before halation/grain)
         if ctx.bloom > 0.0:

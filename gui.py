@@ -99,6 +99,7 @@ def apply_custom_style(style_name, current_recipe="natural"):
         d["smooth"], d["mid_reduction"], d["texture_opacity"], d["pore_synthesis"], d["nose_smooth"], d["micro_restore"],
         d["whiten"], d["equalize"], d["blemish"], d["whiten_tone"], d["nose_blush"], d["under_eye_blush"], d["white_costume_lift"],
         d["dodge_burn"], d["relight"], d["relight_azimuth"], d["relight_elevation"], d["specular_bloom"], d["specular_bloom_tone"],
+        d["skin_flatten"], d["skin_quantize"], d["skin_unify"], d["skin_unify_hue"], d["skin_glow"],
         d["eye_enhance"], d["catchlight"], d["dark_circles"], d["teeth_whiten"], d["lip_enhance"], d["lip_tint"], d["lip_finish"], d["blush"], d["slimming"], d["hair_enhance"],
         d["contrast"], d["brightness"], d["highlights"], d["shadows"], d["whites"], d["blacks"], d["clarity"], d["vibrance"], d["saturation"], d["auto_exposure"],
         d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["glow"], d["vignette"], d["sharpen"], d["sharpen_radius"], d["subject_separation"], d["impact"],
@@ -106,6 +107,9 @@ def apply_custom_style(style_name, current_recipe="natural"):
         d["chromatic_aberration"], d["grain"], d["halation"], d["lut"],
         d["tonal_curve_strength"], d["skin_protect_strength"], d["grain_strength"], d["highlight_rolloff_strength"],
         d["shadow_hue"], d["shadow_sat"], d["midtone_hue"], d["midtone_sat"], d["highlight_hue"], d["highlight_sat"],
+        d["white_balance_kelvin"], d["white_balance_tint"], d["bw_channel_mixer_r"], d["bw_channel_mixer_g"], d["bw_channel_mixer_b"],
+        d["negative_split_tone_shadow"], d["negative_split_tone_highlight"],
+        d["hsl_hue_global"], d["hsl_sat_global"], d["hsl_lum_global"],
     )
 
 
@@ -237,7 +241,7 @@ def on_process_folder(input_dir, output_dir, style_type, custom_style_name, reci
 # fixed-prefix transport / session keys at the end.
 PROCESS_INPUT_KEYS = (
     ["img_paths", "recipe"]
-    + param_names()
+    + [n for n in param_names() if n != "color_transfer_intensity"]
     + [
         "color_ref_img", "color_ref_strength",
         "show_compare", "fast",
@@ -460,6 +464,7 @@ def on_recipe_change(recipe):
         d["smooth"], d["mid_reduction"], d["texture_opacity"], d["pore_synthesis"], d["nose_smooth"], d["micro_restore"],
         d["whiten"], d["equalize"], d["blemish"], d["whiten_tone"], d["nose_blush"], d["under_eye_blush"], d["white_costume_lift"],
         d["dodge_burn"], d["relight"], d["relight_azimuth"], d["relight_elevation"], d["specular_bloom"], d["specular_bloom_tone"],
+        d["skin_flatten"], d["skin_quantize"], d["skin_unify"], d["skin_unify_hue"], d["skin_glow"],
         d["eye_enhance"], d["catchlight"], d["dark_circles"], d["teeth_whiten"], d["lip_enhance"], d["lip_tint"], d["lip_finish"], d["blush"], d["slimming"], d["hair_enhance"],
         d["contrast"], d["brightness"], d["highlights"], d["shadows"], d["whites"], d["blacks"], d["clarity"], d["vibrance"], d["saturation"], d["auto_exposure"],
         d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["glow"], d["vignette"], d["sharpen"], d["sharpen_radius"], d["subject_separation"], d["impact"],
@@ -467,16 +472,19 @@ def on_recipe_change(recipe):
         d["chromatic_aberration"], d["grain"], d["halation"], d["lut"],
         d["tonal_curve_strength"], d["skin_protect_strength"], d["grain_strength"], d["highlight_rolloff_strength"],
         d["shadow_hue"], d["shadow_sat"], d["midtone_hue"], d["midtone_sat"], d["highlight_hue"], d["highlight_sat"],
+        d["white_balance_kelvin"], d["white_balance_tint"], d["bw_channel_mixer_r"], d["bw_channel_mixer_g"], d["bw_channel_mixer_b"],
+        d["negative_split_tone_shadow"], d["negative_split_tone_highlight"],
+        d["hsl_hue_global"], d["hsl_sat_global"], d["hsl_lum_global"],
     )
 
 
 def reset_skin_smoothing(recipe_name):
     d = recipe_defaults(recipe_name)
-    return d["smooth"], d["nose_smooth"], d["mid_reduction"], d["texture_opacity"], d["micro_restore"], d["pore_synthesis"], d["blemish"]
+    return d["smooth"], d["nose_smooth"], d["mid_reduction"], d["texture_opacity"], d["micro_restore"], d["pore_synthesis"], d["blemish"], d["skin_flatten"], d["skin_quantize"]
 
 def reset_skin_tone(recipe_name):
     d = recipe_defaults(recipe_name)
-    return d["whiten"], d["whiten_tone"], d["equalize"], d["auto_exposure"], d["white_costume_lift"]
+    return d["whiten"], d["whiten_tone"], d["equalize"], d["skin_unify"], d["skin_unify_hue"], d["auto_exposure"], d["white_costume_lift"]
 
 def reset_basic_tone(recipe_name):
     d = recipe_defaults(recipe_name)
@@ -500,7 +508,7 @@ def reset_face_reshaping(recipe_name):
 
 def reset_structure_effects(recipe_name):
     d = recipe_defaults(recipe_name)
-    return d["hair_enhance"], d["dodge_burn"], d["impact"], d["specular_bloom"], d["specular_bloom_tone"], d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["sharpen"], d["sharpen_radius"], d["glow"], d["vignette"], d["subject_separation"]
+    return d["hair_enhance"], d["dodge_burn"], d["impact"], d["specular_bloom"], d["specular_bloom_tone"], d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["sharpen"], d["sharpen_radius"], d["glow"], d["skin_glow"], d["vignette"], d["subject_separation"]
 
 def reset_color_grading(recipe_name):
     d = recipe_defaults(recipe_name)
@@ -1305,12 +1313,16 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             micro_restore = gr.Slider(0, 50, 20, step=1, label="Micro-Texture Restore", info="Re-inject dimensional micro-contrast in cheek/nose/under-eye zones after smoothing (0 = off, 25 = subtle, 50 = strong)")
                             pore_synthesis = gr.Slider(0, 100, 0, step=1, label="Pore Synthesis", info="Add micro-texture/synthesized pores to prevent artificial plastic skin")
                             blemish = gr.Slider(0, 100, 30, step=1, label="Blemish Removal", info="AI blemish detection and inpainting for acne/spots")
+                            skin_flatten = gr.Slider(0, 100, 0, step=1, label="Skin Flatten (Anime)", info="Edge-preserving cel flatten for anime-style shading · 0=off, 80=aggressive")
+                            skin_quantize = gr.Slider(0, 100, 0, step=1, label="Tone Quantize (Anime)", info="Cel shading colour bands on skin · 0=off, 60=dramatic bands")
 
                         with gr.Accordion("🎨 Skin Tone", open=False):
                             reset_skin_tone_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                             whiten = gr.Slider(0, 100, 10, step=1, label="Whitening", info="Luminance boost and porcelain skin color match")
                             whiten_tone = gr.Dropdown(choices=WHITEN_TONE_CHOICES, value="rosy", label="Whitening Tone", interactive=True, info="Tone direction: rosy (warm pink), porcelain (cool neutral), neutral")
                             equalize = gr.Slider(0, 100, 20, step=1, label="Equalize", info="Even out skin redness and regional color inconsistencies")
+                            skin_unify = gr.Slider(0, 100, 0, step=1, label="Skin Hue Unify (Anime)", info="Pull skin hues toward a single cel color · 0=off, 60=strong unified look")
+                            skin_unify_hue = gr.Slider(-1.0, 360.0, -1.0, step=1.0, label="Target Hue (Anime)", info="Target skin hue angle · -1=auto (detect from face), 0=red, 50=orange, 180=cyan")
                             auto_exposure = gr.Checkbox(label="Auto Exposure Correction", value=False, info="Automatically correct under/over-exposed images before processing")
                             white_costume_lift = gr.Checkbox(label="White Costume Lift", value=False, info="Selectively boost bright clothing to create separation")
 
@@ -1366,6 +1378,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             sharpen = gr.Slider(0, 100, 0, step=1, label="Selective Sharpening", info="Sharpen eyes, eyebrows, and hair edges (mask-driven)")
                             sharpen_radius = gr.Slider(0.1, 5.0, 1.0, step=0.1, label="Sharpen Radius", info="Blur radius for unsharp mask kernel")
                             glow = gr.Slider(0, 100, 0, step=1, label="Atmospheric Glow", info="Multi-scale atmospheric glow/bloom effect")
+                            skin_glow = gr.Slider(0, 100, 0, step=1, label="Skin Light-Wrap (Anime)", info="Skin-scoped diffusion glow / light-wrap for anime cel blending · 0=off, 30=visible halo")
                             vignette = gr.Slider(0, 100, 0, step=1, label="Vignette", info="Darken image corners for a focused portrait look")
                             subject_separation = gr.Slider(0, 100, 0, step=1, label="Subject-Background Separation", info="Brighten subject / darken background using person segmentation mask")
 
@@ -1499,6 +1512,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth, micro_restore,
         whiten, equalize, blemish, whiten_tone, nose_blush, under_eye_blush, white_costume_lift,
         dodge_burn, relight, relight_azimuth, relight_elevation, specular_bloom, specular_bloom_tone,
+        skin_flatten, skin_quantize, skin_unify, skin_unify_hue, skin_glow,
         eye_enhance, catchlight, dark_circles, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, slimming, hair_enhance,
         contrast, brightness, highlights, shadows, whites, blacks, clarity, vibrance, saturation, auto_exposure,
         bloom, bloom_threshold, bloom_softness, glow, vignette, sharpen, sharpen_radius, subject_separation, impact,
@@ -1506,6 +1520,9 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         chromatic_aberration, grain, halation, lut,
         tonal_curve_strength, skin_protect_strength, grain_strength, highlight_rolloff_strength,
         shadow_hue, shadow_sat, midtone_hue, midtone_sat, highlight_hue, highlight_sat,
+        white_balance_kelvin, white_balance_tint, bw_channel_mixer_r, bw_channel_mixer_g, bw_channel_mixer_b,
+        negative_split_tone_shadow, negative_split_tone_highlight,
+        hsl_hue_global, hsl_sat_global, hsl_lum_global,
     ]
 
     recipe.change(
@@ -1529,13 +1546,13 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     reset_skin_smooth_btn.click(
         fn=reset_skin_smoothing,
         inputs=[recipe],
-        outputs=[smooth, nose_smooth, mid_reduction, texture_opacity, micro_restore, pore_synthesis, blemish]
+        outputs=[smooth, nose_smooth, mid_reduction, texture_opacity, micro_restore, pore_synthesis, blemish, skin_flatten, skin_quantize]
     )
 
     reset_skin_tone_btn.click(
         fn=reset_skin_tone,
         inputs=[recipe],
-        outputs=[whiten, whiten_tone, equalize, auto_exposure, white_costume_lift]
+        outputs=[whiten, whiten_tone, equalize, skin_unify, skin_unify_hue, auto_exposure, white_costume_lift]
     )
 
     reset_basic_tone_btn.click(
@@ -1571,7 +1588,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     reset_structure_effects_btn.click(
         fn=reset_structure_effects,
         inputs=[recipe],
-        outputs=[hair_enhance, dodge_burn, impact, specular_bloom, specular_bloom_tone, bloom, bloom_threshold, bloom_softness, sharpen, sharpen_radius, glow, vignette, subject_separation]
+        outputs=[hair_enhance, dodge_burn, impact, specular_bloom, specular_bloom_tone, bloom, bloom_threshold, bloom_softness, sharpen, sharpen_radius, glow, skin_glow, vignette, subject_separation]
     )
 
     reset_color_grading_btn.click(
@@ -1637,12 +1654,16 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth, micro_restore,
         whiten, equalize, blemish, whiten_tone, nose_blush, under_eye_blush, white_costume_lift,
         dodge_burn, relight, relight_azimuth, relight_elevation, specular_bloom, specular_bloom_tone,
+        skin_flatten, skin_quantize, skin_unify, skin_unify_hue, skin_glow,
         eye_enhance, catchlight, dark_circles, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, slimming, hair_enhance,
         contrast, brightness, highlights, shadows, whites, blacks, clarity, vibrance, saturation, auto_exposure,
         bloom, bloom_threshold, bloom_softness, glow, vignette, sharpen, sharpen_radius, subject_separation, impact,
         color_grade, grade_intensity, chromatic_aberration, grain, halation, lut,
         tonal_curve_strength, skin_protect_strength, grain_strength, highlight_rolloff_strength,
         shadow_hue, shadow_sat, midtone_hue, midtone_sat, highlight_hue, highlight_sat,
+        white_balance_kelvin, white_balance_tint, bw_channel_mixer_r, bw_channel_mixer_g, bw_channel_mixer_b,
+        negative_split_tone_shadow, negative_split_tone_highlight,
+        hsl_hue_global, hsl_sat_global, hsl_lum_global,
         color_ref_img, color_ref_strength,
         show_compare, fast,
         export_fmt, export_quality, export_res,

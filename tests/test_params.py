@@ -378,3 +378,55 @@ class TestRecipeToParams:
             assert isinstance(val, int) and not isinstance(val, bool), (
                 f"{spec.name!r} should be int, got {type(val).__name__}: {val!r}"
             )
+
+
+class TestAnimeParams:
+    def test_skin_flatten_in_param_names(self):
+        assert "skin_flatten" in param_names()
+
+    def test_skin_quantize_in_param_names(self):
+        assert "skin_quantize" in param_names()
+
+    def test_skin_flatten_recipe_key(self):
+        from retouch.params import _BY_NAME
+        spec = _BY_NAME["skin_flatten"]
+        assert spec.recipe_key == "skin.flatten"
+        assert spec.conversion == "recipe_pct"
+        assert spec.min_val == 0
+        assert spec.max_val == 100
+        assert spec.default == 0
+
+    def test_skin_quantize_recipe_key(self):
+        from retouch.params import _BY_NAME
+        spec = _BY_NAME["skin_quantize"]
+        assert spec.recipe_key == "skin.quantize"
+        assert spec.conversion == "recipe_pct"
+        assert spec.min_val == 0
+        assert spec.max_val == 100
+        assert spec.default == 0
+
+    def test_skin_unify_in_param_names(self):
+        assert "skin_unify" in param_names()
+        assert "skin_unify_hue" in param_names()
+        assert "skin_glow" in param_names()
+
+    def test_skin_unify_recipe_key(self):
+        from retouch.params import _BY_NAME
+        spec = _BY_NAME["skin_unify"]
+        assert spec.recipe_key == "skin.unify"
+        assert spec.conversion == "recipe_pct"
+
+    def test_skin_unify_hue_recipe_key(self):
+        from retouch.params import _BY_NAME
+        spec = _BY_NAME["skin_unify_hue"]
+        assert spec.recipe_key == "skin.unify_hue"
+        assert spec.conversion == "recipe_direct"
+        assert spec.default == -1.0
+
+    def test_skin_glow_recipe_key(self):
+        from retouch.params import _BY_NAME
+        spec = _BY_NAME["skin_glow"]
+        assert spec.recipe_key == "skin.glow"
+        assert spec.conversion == "recipe_pct"
+        assert spec.min_val == 0
+        assert spec.max_val == 100

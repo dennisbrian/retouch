@@ -277,6 +277,10 @@ def _process_face_core(
             roi_coords=(roi_x1, roi_y1),
         )
 
+    # ---- Edge-preserving cel flatten ----
+    if ctx.skin_flatten > 0:
+        canvas = skin.flatten(canvas, regions.skin, int(ctx.skin_flatten))
+
     # ---- Adaptive micro-texture restoration ----
     # Re-injects dimensional micro-contrast in cheek / nose / under-eye zones
     # that the bilateral+mid_reduction step washed out. Modulated by
@@ -294,6 +298,10 @@ def _process_face_core(
     if ctx.equalize > 0:
         canvas = skin.equalize(canvas, regions.skin, ctx.equalize, ref_lab=original_lab)
 
+    # ---- Skin hue/chroma unification (anime) ----
+    if ctx.skin_unify > 0:
+        canvas = skin.unify_tone(canvas, regions.skin, int(ctx.skin_unify), target_hue=ctx.skin_unify_hue)
+
     # ---- Foundation / whitening ----
     if ctx.whiten != 0:
         canvas = skin.whiten(canvas, regions.skin, ctx.whiten, tone=ctx.whiten_tone)
@@ -309,6 +317,10 @@ def _process_face_core(
             azimuth=ctx.relight_azimuth,
             elevation=ctx.relight_elevation,
         )
+
+    # ---- Tone quantization (cel shading bands) ----
+    if ctx.skin_quantize > 0:
+        canvas = skin.quantize_tones(canvas, regions.skin, int(ctx.skin_quantize))
 
     # ---- Specular bloom ----
     if ctx.specular_bloom > 0:

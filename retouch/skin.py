@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 
 from .utils import blend_masked, normalize_mask, squeeze_mask
+from .color_space import bgr_to_lch, lch_to_bgr, skin_mask_lch
 
 
 class SkinProcessor:
@@ -529,6 +530,180 @@ class SkinProcessor:
         mask_3d = local_mask[:, :, np.newaxis]
         boosted = img_f + high * float(strength) * mask_3d
         return np.clip(boosted, 0, 255).astype(np.uint8)
+
+    def flatten(
+        self,
+        img_bgr: np.ndarray,
+        skin_mask: Optional[np.ndarray],
+        strength: int = 0,
+    ) -> np.ndarray:
+        """Edge-preserving cel flatten via hand-rolled self-guided filter on LAB L.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR image.
+            skin_mask: (H, W) float mask 0–1.
+            strength: 0–100 flattening intensity.
+
+        Returns:
+            (H, W, 3) uint8 BGR image.
+        """
+        if strength <= 0 or skin_mask is None:
+            return img_bgr
+
+        s = strength / 100.0
+        h, w = img_bgr.shape[:2]
+
+        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        L = lab[:, :, 0]
+
+        r = max(8, int(min(h, w) * 0.04))
+        eps = (6.0 + 14.0 * s) ** 2
+
+        min_dim = min(h, w)
+        is_downsampled = min_dim > 1200
+        if is_downsampled:
+            scale = 1200.0 / min_dim
+            L_small = cv2.resize(L, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        else:
+            L_small = L
+
+        mean_I = cv2.blur(L_small, (r, r))
+        mean_II = cv2.blur(L_small * L_small, (r, r))
+        var_I = np.clip(mean_II - mean_I * mean_I, 0, None)
+        a = var_I / (var_I + eps)
+        b = mean_I * (1.0 - a)
+
+        if is_downsampled:
+            a_full = cv2.resize(a, (w, h), interpolation=cv2.INTER_LINEAR)
+            b_full = cv2.resize(b, (w, h), interpolation=cv2.INTER_LINEAR)
+        else:
+            a_full = a
+            b_full = b
+
+        q = cv2.blur(a_full, (r, r)) * L + cv2.blur(b_full, (r, r))
+
+        skin_3d = skin_mask[:, :, np.newaxis]
+        lab[:, :, 0] = L + (q - L) * s * skin_3d[:, :, 0]
+        lab = np.clip(lab, 0, 255).astype(np.uint8)
+        out = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+        return blend_masked(img_bgr, out, skin_mask)
+
+    def quantize_tones(
+        self,
+        img_bgr: np.ndarray,
+        skin_mask: Optional[np.ndarray],
+        strength: int = 0,
+        bands: int = 3,
+        softness: float = 0.35,
+    ) -> np.ndarray:
+        """Soft cel shading via band-based L quantization on skin pixels.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR image.
+            skin_mask: (H, W) float mask 0–1.
+            strength: 0–100 quantization intensity.
+            bands: Number of tone bands (2 or 3).
+            softness: Transition width factor [0, 1].
+
+        Returns:
+            (H, W, 3) uint8 BGR image.
+        """
+        if strength <= 0 or skin_mask is None:
+            return img_bgr
+
+        s = strength / 100.0
+        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        L = lab[:, :, 0]
+
+        skin_px = L[skin_mask > 0.3]
+        if skin_px.size < 50:
+            return img_bgr
+
+        if bands == 3:
+            centers = np.percentile(skin_px, [15.0, 55.0, 92.0])
+        else:
+            centers = np.percentile(skin_px, [25.0, 80.0])
+
+        diffs = np.diff(centers)
+        if diffs.min() < 4.0:
+            return img_bgr
+
+        edges = (centers[:-1] + centers[1:]) / 2.0
+
+        q = np.full_like(L, centers[0].item())
+        q += np.clip(L - centers[-1], 0.0, None)
+        q -= np.clip(centers[0] - L, 0.0, None)
+
+        for i in range(len(edges)):
+            e_i = float(edges[i])
+            c_delta = float(centers[i + 1] - centers[i])
+            w_i = max(2.0, softness * (float(centers[i + 1]) - float(centers[i])))
+            step = c_delta * np.clip(0.5 + 0.5 * np.tanh((L - e_i) / w_i), 0.0, 1.0)
+            q += step
+
+        protection = self._get_highlight_protection(lab)
+        lab[:, :, 0] = L + (q - L) * s * protection * skin_mask
+        lab = np.clip(lab, 0, 255).astype(np.uint8)
+        out = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+        return blend_masked(img_bgr, out, skin_mask)
+
+    def unify_tone(
+        self,
+        img_bgr: np.ndarray,
+        skin_mask: Optional[np.ndarray],
+        strength: int = 0,
+        target_hue: float = -1.0,
+        chroma_compress: float = 0.5,
+    ) -> np.ndarray:
+        """Hue and chroma unification for anime-style uniform skin tone.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR image.
+            skin_mask: (H, W) float mask 0–1.
+            strength: 0–100 unification intensity.
+            target_hue: Target hue in degrees [0, 360). -1 = auto (chroma-weighted mean).
+            chroma_compress: Chroma compression factor toward mean [0, 1].
+
+        Returns:
+            (H, W, 3) uint8 BGR image.
+        """
+        if strength <= 0 or skin_mask is None:
+            return img_bgr
+
+        s = strength / 100.0
+        lch = bgr_to_lch(img_bgr)
+        H = lch[:, :, 2]
+        C = lch[:, :, 1]
+
+        lch_skin = skin_mask_lch(lch)
+        w = (skin_mask * lch_skin).astype(np.float32)
+        w_sum = w.sum()
+
+        if w_sum < 1e-6:
+            return img_bgr
+
+        if target_hue < 0.0:
+            H_rad = np.deg2rad(H)
+            sin_sum = (w * C * np.sin(H_rad)).sum()
+            cos_sum = (w * C * np.cos(H_rad)).sum()
+            t = float(np.rad2deg(np.arctan2(sin_sum, cos_sum))) % 360.0
+        else:
+            t = target_hue
+
+        d = ((t - H + 180.0) % 360.0) - 180.0
+        near = np.clip(1.0 - np.abs(d) / 60.0, 0.0, 1.0)
+
+        H_new = (H + d * s * 0.8 * near) % 360.0
+
+        c_mean = float((w * C).sum() / max(w_sum, 1e-6))
+        C_new = C + (c_mean - C) * s * chroma_compress * near
+
+        lch_out = lch.copy()
+        lch_out[:, :, 2] = H_new
+        lch_out[:, :, 1] = C_new
+
+        out = lch_to_bgr(lch_out)
+        return blend_masked(img_bgr, out, skin_mask * lch_skin)
 
     @staticmethod
     def _get_highlight_protection(lab: np.ndarray) -> np.ndarray:

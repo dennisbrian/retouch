@@ -394,6 +394,17 @@ RECIPES = {
         "shadow_sat": 14.0,
         "chromatic_aberration": 5.0,
     },
+    "anime_v2": {
+        "extends": "anime_cinematic_v1",
+        "skin": {"equalize": 0.45, "porcelain": 0.42, "flatten": 0.55,
+                 "quantize": 0.40, "relight": 0.42,
+                 "unify": 0.50, "unify_hue": -1.0, "glow": 0.20},
+        "frequency": {"smooth": 0.38, "mid_reduction": 0.30},
+        "micro_restore": 8,
+        "clarity": 8.0,
+        "texture": {"opacity": 0.70},
+        "bloom": {"opacity": 0.14, "threshold": 195.0},
+    },
 }
 
 RECIPES["soft"] = RECIPES["anime_cinematic_soft"]
