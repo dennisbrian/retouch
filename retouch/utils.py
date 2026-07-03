@@ -562,9 +562,15 @@ def apply_global_bloom(
     if strength <= 0:
         return img_bgr
 
+    is_float = img_bgr.dtype == np.float32
+
     # Convert to LAB to isolate highlights based on L (luminance) channel
     # Threshold and softness logic operates in gamma-space L domain (photographer-intuitive)
-    lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    if is_float:
+        img_u8 = np.clip(img_bgr * 255.0, 0, 255).astype(np.uint8)
+    else:
+        img_u8 = img_bgr
+    lab = cv2.cvtColor(img_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
     l_chan = lab[:, :, 0]
 
     # Soft threshold ramp from threshold to threshold + softness
@@ -574,15 +580,15 @@ def apply_global_bloom(
     if highlight_mask.max() < 0.01:
         return img_bgr
 
-    h, w = img_bgr.shape[:2]
+    h, w = img_u8.shape[:2]
     min_dim = min(h, w)
 
     # Isolate highlights in float32 (color-preserving, avoid early quantization to uint8)
-    highlights_gamma = img_bgr.astype(np.float32) * highlight_mask[:, :, np.newaxis]
+    highlights_gamma = img_u8.astype(np.float32) * highlight_mask[:, :, np.newaxis]
 
     # Linearize highlights and base image for bloom computation (gamma 2.2)
     highlights_lin = (highlights_gamma / 255.0) ** 2.2
-    img_lin = (img_bgr.astype(np.float32) / 255.0) ** 2.2
+    img_lin = (img_u8.astype(np.float32) / 255.0) ** 2.2
 
     # Downsampled bloom optimization for large images (operates in linear space)
     target_min = 2000
@@ -626,8 +632,10 @@ def apply_global_bloom(
     result_lin = np.clip(result_lin, 0.0, 1.0)
 
     # Delinearize back to gamma space (inverse gamma 2.2)
-    result = (result_lin ** (1.0 / 2.2) * 255.0).astype(np.uint8)
-    return result
+    result = result_lin ** (1.0 / 2.2)
+    if is_float:
+        return result.astype(np.float32)
+    return (result * 255.0).astype(np.uint8)
 
 
 def apply_skin_diffusion(

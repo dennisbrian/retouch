@@ -318,6 +318,14 @@ def _process_face_core(
     if ctx.whiten != 0:
         canvas = skin.whiten(canvas, regions.skin, ctx.whiten, tone=ctx.whiten_tone, hue_stable=bool(ctx.whiten_hue_stable))
 
+    # ---- Shine / oil removal (before relight so intentional glow isn't removed) ----
+    if ctx.shine_removal > 0:
+        eyes_mask = np.maximum(
+            _norm_mask(regions.left_eye) if regions.left_eye is not None else np.zeros((roi_h, roi_w), dtype=np.float32),
+            _norm_mask(regions.right_eye) if regions.right_eye is not None else np.zeros((roi_h, roi_w), dtype=np.float32),
+        )
+        canvas = skin.shine_removal(canvas, regions.skin, int(ctx.shine_removal), eyes_mask=eyes_mask)
+
     # ---- Virtual studio relighting ----
     if ctx.relight > 0:
         canvas = relighter.relight(

@@ -171,6 +171,7 @@ class ProcessingContext:
     skin_glow: float = 0.0
     whiten_hue_stable: bool = False
     skin_locus: Optional[Dict[str, float]] = None
+    shine_removal: float = 0.0
 
     # --- Eyes ---
     eye_enhance: float = 0.0
@@ -660,6 +661,7 @@ class RetouchEngine:
         redness_even: Optional[float] = None,
         whiten_hue_stable: Optional[bool] = None,
         skin_glow: Optional[float] = None,
+        shine_removal: Optional[float] = None,
         lut: Optional[str] = None,
         skin_locus: Optional[Dict[str, float]] = None,
         tonal_curve_strength: Optional[float] = None,
@@ -777,6 +779,7 @@ class RetouchEngine:
             "redness_even": redness_even,
             "whiten_hue_stable": whiten_hue_stable,
             "skin_glow": skin_glow,
+            "shine_removal": shine_removal,
             "lut": lut,
             "skin_locus": skin_locus,
             "tonal_curve_strength": tonal_curve_strength,

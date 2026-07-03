@@ -416,6 +416,16 @@ _SKIN_PARAMS = [
         max_val=100,
     ),
     ParamSpec(
+        name="shine_removal",
+        cli_flag=None,
+        cli_type=None,
+        default=0,
+        recipe_key="skin.shine_removal",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
         name="specular_bloom",
         cli_flag="specular-bloom",
         cli_type=int,

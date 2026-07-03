@@ -53,7 +53,7 @@ def isolated_styles_dir():
 
 EXPECTED_RECIPE_KEYS = [
     "smooth", "mid_reduction", "texture_opacity", "pore_synthesis", "nose_smooth", "micro_restore",
-    "whiten", "equalize", "relight", "relight_azimuth", "relight_elevation", "sculpt",
+    "whiten", "equalize", "relight", "relight_azimuth", "relight_elevation", "sculpt", "shine_removal",
     "eye_enhance", "lip_enhance", "lip_tint", "blush", "teeth_whiten",
     "hair_enhance", "dodge_burn", "specular_bloom", "bloom", "bloom_threshold",
     "bloom_softness", "contrast", "brightness", "highlights", "shadows",
@@ -76,8 +76,8 @@ EXPECTED_RECIPE_KEYS = [
     "tonal_curve_strength", "skin_protect_strength",
     "highlight_rolloff_strength", "grain_strength",
 ]
-EXPECTED_RECIPE_KEY_COUNT = 91
-EXPECTED_UI_OUTPUT_COUNT = 85
+EXPECTED_RECIPE_KEY_COUNT = 92
+EXPECTED_UI_OUTPUT_COUNT = 86
 
 
 # ---------------------------------------------------------------------------
@@ -341,9 +341,9 @@ class TestOnRecipeChange:
         result = gui.on_recipe_change("anime_cinematic_v1")
         d = gui.recipe_defaults("anime_cinematic_v1")
         assert d["clarity"] == 14
-        # clarity sits at index 41 in the on_recipe_change output tuple
-        # (after sculpt was added at index 40)
-        clarity_index = 41
+        # clarity sits at index 42 in the on_recipe_change output tuple
+        # (after sculpt and shine_removal were added at indices 40, 41)
+        clarity_index = 42
         assert result[clarity_index] == 14
 
 
@@ -562,7 +562,7 @@ class TestProcessInputKeys:
         import inspect
         sig = inspect.signature(gui.process_image)
         # process_image takes *args — but PROCESS_INPUT_KEYS is the canonical list
-        assert len(gui.PROCESS_INPUT_KEYS) == 100
+        assert len(gui.PROCESS_INPUT_KEYS) == 101
 
     def test_first_key_is_img_paths(self):
         assert gui.PROCESS_INPUT_KEYS[0] == "img_paths"
@@ -931,7 +931,7 @@ class TestProcessImageValidation:
             "micro_dodge_burn": 0, "redness_even": 0, "whiten_hue_stable": 0,
             "whiten": 0, "equalize": 0, "white_costume_lift": False,
             "skin_hue_unify": 0, "skin_chroma_even": 0,
-            "relight": 0, "relight_azimuth": 0, "relight_elevation": 30, "sculpt": 0,
+            "relight": 0, "relight_azimuth": 0, "relight_elevation": 30, "sculpt": 0, "shine_removal": 0,
             "eye_enhance": 0, "teeth_whiten": 0,
             "lip_enhance": 0, "lip_tint": "none", "blush": 0,
             "nose_blush": False, "under_eye_blush": False,
@@ -1027,7 +1027,7 @@ class TestIntegrationConstantCrossRef:
         """The number of UI outputs (from the _recipe_outputs list) must match
         what on_recipe_change returns."""
         result = gui.on_recipe_change("natural")
-        assert len(result) == 85
+        assert len(result) == 86
 
     def test_process_inputs_count_matches_process_input_keys(self):
         """_process_inputs and PROCESS_INPUT_KEYS must have matching lengths."""

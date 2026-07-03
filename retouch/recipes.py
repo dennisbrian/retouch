@@ -255,11 +255,11 @@ RECIPES = {
         "hair": {"shine": 0.25},
         "dodge_burn": {"amount": 0.25},
         "color_harmony": {"preset": "xhs_ultrasoft", "amount": 0.90},
-        "bloom": {"opacity": 0.20},
+        "bloom": {"opacity": 0.12},
         "texture": {"opacity": 0.20},
-        "finish": {"impact": 0.40},
-        # Aggressive light sculpting + dreamy glow + soft tonal compression
-        "specular_bloom": 40,
+        "finish": {"impact": 0.35},
+        # Soft light sculpting + dreamy glow + soft tonal compression
+        "specular_bloom": 20,
         "tonal_curve_strength": 0.35,
         "highlight_rolloff": 0.45,
         "skin_protect": 0.65,
@@ -283,13 +283,13 @@ RECIPES = {
         "hair": {"shine": 0.30},
         "dodge_burn": {"amount": 0.30},
         "color_harmony": {"preset": "xhs_ultrasoft", "amount": 0.95},
-        "bloom": {"opacity": 0.25},
-        "texture": {"opacity": 0.50},
-        "finish": {"impact": 0.30},
-        # The strongest Xiaohongshu preset — full light sculpting stack:
+        "bloom": {"opacity": 0.15},
+        "texture": {"opacity": 0.35},
+        "finish": {"impact": 0.25},
+        # Xiaohongshu soft glow — light sculpting with reduced halo artifacts:
         # face-relight + specular bloom + tonal curve + highlight rolloff
         # + cool/warm split-toning + restored micro-texture + organic grain.
-        "specular_bloom": 50,
+        "specular_bloom": 25,
         "tonal_curve_strength": 0.45,
         "highlight_rolloff": 0.55,
         "skin_protect": 0.75,

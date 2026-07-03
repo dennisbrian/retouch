@@ -942,6 +942,162 @@ class SkinProcessor:
         result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
         return blend_masked(img_bgr, result, skin_mask)
 
+    def shine_removal(
+        self,
+        img_bgr: np.ndarray,
+        skin_mask: Optional[np.ndarray],
+        strength: int = 0,
+        eyes_mask: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """Shine / oil removal via specular detection and local median reconstruction.
+
+        Detects bright, low-chroma regions (shine), reconstructs their chroma from
+        surrounding skin via guided filtering, and compresses their luminance toward
+        a local non-shine median using exponential rolloff (adapted from soft_clip_highlights).
+        Eye catchlights are excluded via eyes_mask to preserve their natural appearance.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR image.
+            skin_mask: (H, W) float mask 0–1. May be None to skip processing.
+            strength: 0–100 shine removal intensity. 0 returns input unchanged.
+            eyes_mask: Optional (H, W) float mask marking eye regions to exclude.
+                       Regions marked here will not be modified.
+
+        Returns:
+            (H, W, 3) uint8 BGR image.
+
+        Algorithm:
+        1. Detect shine: pixels with L > adaptive_threshold AND low chroma (desaturated)
+           within skin_mask. Feather the mask with Gaussian blur for soft edges.
+        2. Exclude eyes: subtract dilated eyes_mask from shine mask to protect catchlights.
+        3. Reconstruct chroma: guided-filter a/b channels to inpaint plausible chroma
+           in shine regions, pulling from surrounding skin.
+        4. Compress L: compute per-pixel targets as local non-shine L median (via
+           guided filter), then apply soft exponential compression toward the target,
+           scaled by strength. Over-removal guard ensures residual shine (≥30% prominence).
+        5. Blend into skin_mask to avoid edge artifacts.
+        """
+        if strength <= 0 or skin_mask is None:
+            return img_bgr
+
+        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        h_img, w_img = lab.shape[:2]
+
+        L = lab[:, :, 0]
+        a = lab[:, :, 1]
+        b = lab[:, :, 2]
+
+        # Compute chroma (C = sqrt((a-128)^2 + (b-128)^2)).
+        # cv2's LAB convention offsets a/b by 128 (a neutral/gray pixel is
+        # a=128, b=128), so the offset MUST be subtracted before computing
+        # chroma — matching retouch/color_space.py's bgr_to_lab convention.
+        # Using raw a/b here would give ~181 for a perfectly neutral pixel,
+        # swamping real skin-vs-shine chroma differences (~10-40 units).
+        chroma = np.sqrt((a - 128.0) ** 2 + (b - 128.0) ** 2)
+
+        # --- Detect shine: L > adaptive_threshold AND low chroma ---
+        # Adaptive threshold based on local context: median L in skin region
+        skin_indices = skin_mask > 0.3
+        if np.any(skin_indices):
+            median_L_skin = np.median(L[skin_indices])
+            median_chroma_skin = np.median(chroma[skin_indices])
+        else:
+            return img_bgr
+
+        # Shine threshold: adaptive, typically median_L + 20-30 L levels (oily shine usually 180-230 range)
+        # This is relative to actual skin L, not a fixed value
+        shine_L_threshold = median_L_skin + 20.0
+
+        # Chroma threshold: use the median chroma of normal skin as reference
+        # Shine is detected where chroma << normal skin chroma (e.g., < 40% of normal)
+        # This accounts for the fact that normal skin has color and shine doesn't
+        chroma_threshold_for_shine = max(5.0, median_chroma_skin * 0.4)
+
+        # Luminance gate: soft ramp for pixels above shine_L_threshold
+        L_gate = np.clip((L - shine_L_threshold) / 15.0, 0.0, 1.0)  # Smooth ramp over 15 L units
+
+        # Chroma gate: soft ramp for pixels below chroma_threshold (low chroma = likely shine)
+        # Gate is 1.0 when chroma is low, 0.0 when chroma is high
+        chroma_gate = 1.0 - np.clip(chroma / chroma_threshold_for_shine, 0.0, 1.0)
+
+        # Combine gates: both conditions must be met
+        shine_mask = L_gate * chroma_gate * skin_mask
+
+        # Feather shine mask with Gaussian blur for soft edges
+        shine_mask = cv2.GaussianBlur(shine_mask, (11, 11), 0)
+        shine_mask = np.clip(shine_mask, 0.0, 1.0)
+
+        # --- Exclude eyes ---
+        if eyes_mask is not None:
+            # Dilate eyes_mask slightly to ensure catchlight protection
+            eyes_mask_norm = normalize_mask(eyes_mask.astype(np.float32, copy=False) if eyes_mask.dtype != np.float32 else eyes_mask)
+            eye_dilation_kernel = np.ones((5, 5), np.uint8)
+            eyes_dilated = cv2.dilate(eyes_mask_norm, eye_dilation_kernel)
+            shine_mask = shine_mask * (1.0 - eyes_dilated)
+
+        # Early return if shine_mask is negligible
+        if shine_mask.max() < 0.01:
+            return img_bgr
+
+        # --- Compute local non-shine median as per-pixel target ---
+        # Compute a smooth baseline L by filtering only non-shine pixels
+        # Use a large-radius Gaussian blur of L masked to non-shine regions
+        non_shine_mask = 1.0 - shine_mask
+
+        # Create masked version: set shine regions to a neutral value that won't affect blur
+        L_masked = L * non_shine_mask + np.median(L[skin_indices]) * shine_mask
+
+        # Blur the masked image to get a smooth local baseline
+        # Large radius so the target is a local average of surrounding non-shine L
+        L_target_smooth = cv2.GaussianBlur(L_masked, (31, 31), 0)
+
+        # In shine regions, use the smoothed target; elsewhere use original L
+        # This ensures shine pixels are pulled toward their local non-shine neighbors
+        L_target = L * (1.0 - shine_mask) + L_target_smooth * shine_mask
+
+        # --- Reconstruct chroma via guided filtering ---
+        # Guided-filter a and b channels to inpaint plausible color in shine regions
+        # Use L as the guide so the filter preserves luminance structure
+        a_inpainted = guided_filter(a, radius=30, eps=100.0, guide=None)
+        b_inpainted = guided_filter(b, radius=30, eps=100.0, guide=None)
+
+        # Blend inpainted chroma into shine regions
+        a_new = a * (1.0 - shine_mask) + a_inpainted * shine_mask
+        b_new = b * (1.0 - shine_mask) + b_inpainted * shine_mask
+
+        # --- Compress L toward local target using soft exponential rolloff ---
+        # Adapted from soft_clip_highlights: instead of compressing toward a fixed
+        # ceiling, we compress each pixel toward its per-pixel target.
+        # Formula: out = current + (target - current) * (1 - exp(-k * excess))
+        # where excess = max(current - target, 0) normalized.
+
+        s = strength / 100.0
+
+        # For pixels where current L > target L, apply soft compression downward
+        L_excess = np.maximum(L - L_target, 0.0)
+        L_excess_max = np.max(L_excess) if np.max(L_excess) > 0 else 1.0
+        normalized_excess = L_excess / (L_excess_max + 1e-6)
+
+        # Exponential approach: compress down by a fraction dependent on normalized excess
+        # k chosen so the curve is smooth and the reduction tops out around 70% at strength=100
+        k_rolloff = 1.5  # Controls curvature; higher = more aggressive compression
+        compression_factor = 1.0 - np.exp(-k_rolloff * normalized_excess)
+
+        # Over-removal guard: never reduce more than ~70% of the way to target at full strength
+        max_reduction = 0.70
+        compression_factor = np.clip(compression_factor * s, 0.0, max_reduction)
+
+        # Apply compression only in shine regions
+        L_new = L - L_excess * compression_factor * shine_mask
+
+        # --- Assemble result ---
+        lab[:, :, 0] = np.clip(L_new, 0, 255)
+        lab[:, :, 1] = a_new
+        lab[:, :, 2] = b_new
+
+        result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        return blend_masked(img_bgr, result, skin_mask)
+
     @staticmethod
     def _get_highlight_protection(lab: np.ndarray) -> np.ndarray:
         """Linearly decays adjustments for bright pixels (L > 220) to prevent specular clipping.

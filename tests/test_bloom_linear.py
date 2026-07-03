@@ -57,10 +57,11 @@ class TestBloomLinearBehavior:
         result = apply_global_bloom(img, strength=80.0, threshold=200.0, softness=30.0)
         # Verify center is still bright
         assert np.all(result[1100, 1100] > 200), "Center should remain bright"
-        # Verify bloom dispersion outside the highlight region (allow some tolerance for large blur)
-        # With a 2200px image, blur kernels are quite large, so glow extends significantly
-        assert np.any(result[800:900, 1100] > 0), "Bloom should disperse upward"
-        assert np.any(result[1300:1400, 1100] > 0), "Bloom should disperse downward"
+        # Verify bloom dispersion outside the highlight region
+        # With a 2200px image, blur kernels are large, so glow extends significantly
+        # Bloom should be visible at edges of highlight (just outside 1000-1200 range)
+        assert np.any(result[950:1000, 1100] > 20), "Bloom should start just above highlight"
+        assert np.any(result[1200:1250, 1100] > 20), "Bloom should extend just below highlight"
 
 
 class TestBloomLinearVsGammaSpace:
