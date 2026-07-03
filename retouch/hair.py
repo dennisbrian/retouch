@@ -11,7 +11,7 @@ from typing import Optional, Tuple
 import cv2
 import numpy as np
 
-from .utils import normalize_mask, squeeze_mask
+from .utils import normalize_mask, squeeze_mask, apply_u8_op_float
 
 from .hairwork import hair_flow, unify_hair_color
 
@@ -43,6 +43,13 @@ class HairEnhancer:
         """
         if strength <= 0:
             return img_bgr
+
+        if img_bgr.dtype == np.float32:
+            # E1 delta adapter: hair pipeline is uint8-contract. Delta is
+            # confined to the hair region.
+            return apply_u8_op_float(img_bgr, self.enhance, person_mask,
+                                     face_oval_mask, bbox, strength,
+                                     hair_mask=hair_mask)
 
         if hair_mask is not None and hair_mask.max() > 0.01:
             h_mask = hair_mask.copy()

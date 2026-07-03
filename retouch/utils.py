@@ -197,6 +197,70 @@ def feather_mask(
     return cv2.GaussianBlur(mask_f, (ksize, ksize), sigma)
 
 
+def apply_u8_op_float(img_f32: np.ndarray, op, *args, **kwargs) -> np.ndarray:
+    """Run a uint8-contract op on a float32 [0, 255] canvas via delta application.
+
+    E1 adapter for ops built on inherently-uint8 primitives (e.g. cv2.inpaint):
+    the op runs on a uint8 snapshot of the float canvas and its *delta*
+    (op output minus snapshot) is added back to the float canvas. Pixels the op
+    does not change keep full float precision; quantization is confined to the
+    pixels the op actually modifies.
+
+    Args:
+        img_f32: (H, W, 3) float32 BGR canvas in [0, 255].
+        op: Callable taking a uint8 image as first argument and returning uint8.
+        *args, **kwargs: Forwarded to ``op`` after the image.
+
+    Returns:
+        (H, W, 3) float32 BGR canvas in [0, 255].
+    """
+    # Truncating snapshot (not rounding) matches the legacy uint8 chain's
+    # per-op `np.clip(x, 0, 255).astype(np.uint8)` convention, so threshold
+    # detectors inside `op` see values consistent with the pre-E1 pipeline.
+    u8 = np.clip(img_f32, 0, 255).astype(np.uint8)
+    out = op(u8, *args, **kwargs)
+    delta = out.astype(np.float32) - u8.astype(np.float32)
+    return np.clip(img_f32 + delta, 0.0, 255.0)
+
+
+def bgr_f32_to_lab_f32(img_bgr_f32: np.ndarray) -> np.ndarray:
+    """Convert float32 BGR [0, 255] to float32 LAB in the uint8-scale convention.
+
+    cv2's float LAB path returns L in [0, 100] and a/b in [-127, 127]; this helper
+    rescales to the uint8 convention (L in [0, 255], a/b offset by +128) so that
+    code written against ``cv2.cvtColor(uint8, COLOR_BGR2LAB)`` values works
+    unchanged — but without the uint8 quantization step (E1 float path).
+
+    Args:
+        img_bgr_f32: (H, W, 3) float32 BGR image in [0, 255].
+
+    Returns:
+        (H, W, 3) float32 LAB image, L in [0, 255], a/b centered at 128.
+    """
+    lab = cv2.cvtColor(np.clip(img_bgr_f32, 0.0, 255.0) * (1.0 / 255.0), cv2.COLOR_BGR2LAB)
+    lab[:, :, 0] *= 255.0 / 100.0
+    lab[:, :, 1] += 128.0
+    lab[:, :, 2] += 128.0
+    return lab
+
+
+def lab_f32_to_bgr_f32(lab_f32: np.ndarray) -> np.ndarray:
+    """Inverse of :func:`bgr_f32_to_lab_f32` — float32 LAB (uint8-scale) to float32 BGR [0, 255].
+
+    Args:
+        lab_f32: (H, W, 3) float32 LAB image, L in [0, 255], a/b centered at 128.
+
+    Returns:
+        (H, W, 3) float32 BGR image clipped to [0, 255].
+    """
+    lab = lab_f32.astype(np.float32, copy=True)
+    lab[:, :, 0] = np.clip(lab[:, :, 0], 0.0, 255.0) * (100.0 / 255.0)
+    lab[:, :, 1] = np.clip(lab[:, :, 1], 0.0, 255.0) - 128.0
+    lab[:, :, 2] = np.clip(lab[:, :, 2], 0.0, 255.0) - 128.0
+    bgr = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+    return np.clip(bgr * 255.0, 0.0, 255.0)
+
+
 def blend_masked(
     original: np.ndarray,
     processed: np.ndarray,
@@ -204,13 +268,16 @@ def blend_masked(
 ) -> np.ndarray:
     """Alpha-blend *processed* onto *original* using a soft mask.
 
+    Supports both uint8 [0, 255] and float32 [0, 255] images. If input is float32,
+    output is float32; if input is uint8, output is uint8.
+
     Args:
-        original: (H, W, C) uint8 image.
-        processed: (H, W, C) uint8 image.
+        original: (H, W, C) uint8 or float32 image.
+        processed: (H, W, C) uint8 or float32 image. Must match original dtype.
         mask: (H, W) float mask, 0.0–1.0. If None, ``processed`` is returned.
 
     Returns:
-        Blended (H, W, C) uint8 image.
+        Blended (H, W, C) image, same dtype as input (uint8 or float32).
     """
     if mask is None:
         return processed
@@ -219,8 +286,15 @@ def blend_masked(
     if m.ndim == 2:
         m = m[:, :, np.newaxis]
 
+    # Check if input is float32; if so, keep output float32
+    is_float = original.dtype == np.float32
+
     out = original.astype(np.float32) * (1.0 - m) + processed.astype(np.float32) * m
-    return np.clip(out, 0, 255).astype(np.uint8)
+
+    if is_float:
+        return np.clip(out, 0, 255).astype(np.float32)
+    else:
+        return np.clip(out, 0, 255).astype(np.uint8)
 
 
 def create_polygon_mask(

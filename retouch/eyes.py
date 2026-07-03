@@ -13,7 +13,7 @@ from typing import Any, Optional
 import cv2
 import numpy as np
 
-from .utils import blend_masked, feather_mask
+from .utils import blend_masked, feather_mask, apply_u8_op_float
 
 
 class EyeEnhancer:
@@ -40,6 +40,13 @@ class EyeEnhancer:
         """
         if strength <= 0:
             return img_bgr
+
+        if img_bgr.dtype == np.float32:
+            # E1 delta adapter: eye pipeline is uint8-contract. Run on a uint8
+            # snapshot and apply the delta to the float canvas so quantization
+            # is confined to the eye regions the op changes.
+            return apply_u8_op_float(img_bgr, self.enhance, regions, strength,
+                                     catchlight_strength=catchlight_strength)
 
         s = strength / 100.0
         result = img_bgr.copy()

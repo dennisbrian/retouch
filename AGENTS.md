@@ -24,6 +24,7 @@ A correct fix that introduces a halo artifact is not a fix. Revert. A fast fix t
 - Bare `except: pass` or `except Exception` without logging
 - Skin op that doesn't preserve high-frequency detail band
 - Any pipeline invariant violation from `docs/PERCEPTUAL.md` §2
+- **Multiprocess pickling**: `FaceContext`/`ctx` passed as `dict` across process boundary but accessed via attribute syntax (`.nose_smooth`, `.smooth`, etc.). Must convert with `SimpleNamespace(**ctx)` in worker function before use. See `retouch/perf_optimizations.py:246`.
 
 ## Visual QA (Mandatory for pipeline stages)
 - Any change touching `frequency.py`, `skin.py`, `grading.py`, `parsing.py`, `geometry.py` = Visual-Critical. Visual QA gates cannot be bypassed regardless of task size.

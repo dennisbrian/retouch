@@ -10,7 +10,7 @@ from typing import Any, Optional
 import cv2
 import numpy as np
 
-from .utils import normalize_mask
+from .utils import apply_u8_op_float, normalize_mask
 
 
 class MakeupEngine:
@@ -46,6 +46,19 @@ class MakeupEngine:
         """
         if strength <= 0:
             return img_bgr
+
+        if img_bgr.dtype == np.float32:
+            # E1 delta adapter (see apply_u8_op_float).
+            return apply_u8_op_float(
+                img_bgr,
+                self.apply_blush,
+                face_landmarks,
+                face_width,
+                strength,
+                regions=regions,
+                nose_blush=nose_blush,
+                under_eye_blush=under_eye_blush,
+            )
 
         h, w = img_bgr.shape[:2]
         s = strength / 100.0

@@ -102,15 +102,56 @@ class TestEqualize:
         result = proc.equalize(img, face_mask, strength=0)
         assert np.all(result == img)
 
-    def test_equalize_changes_image(self, proc, img, face_mask):
-        result = proc.equalize(img, face_mask, strength=50)
-        assert not np.allclose(result, img)
+    def test_equalize_changes_image(self, proc, face_mask):
+        # Use a textured (non-flat) image so equalize has genuine local contrast
+        # to redistribute. A flat image has nothing to even out, and mean-
+        # luminance preservation correctly leaves it unchanged.
+        rng = np.random.RandomState(0)
+        textured = rng.randint(80, 180, (64, 64, 3), dtype=np.uint8)
+        result = proc.equalize(textured, face_mask, strength=50)
+        assert not np.allclose(result, textured)
 
-    def test_with_ref_lab(self, proc, img, face_mask):
+    @pytest.mark.parametrize("strength", [20, 60])
+    def test_bright_pale_preserves_luminance(self, proc, strength):
+        # Bright, pale, low-contrast skin (e.g. cosplay white makeup): equalize
+        # must even out tone without shifting exposure (mean L must stay put).
+        rng = np.random.RandomState(7)
+        base = np.array([200, 205, 230], dtype=np.float32)
+        noise = rng.normal(0.0, 3.0, (64, 64, 3)).astype(np.float32)
+        bright = np.clip(base + noise, 0, 255).astype(np.uint8)
+        mask = np.ones((64, 64), dtype=np.float32)
+
+        result = proc.equalize(bright, mask, strength=strength)
+
+        orig_L = cv2.cvtColor(bright, cv2.COLOR_BGR2LAB)[:, :, 0].astype(np.float32)
+        result_L = cv2.cvtColor(result, cv2.COLOR_BGR2LAB)[:, :, 0].astype(np.float32)
+        assert abs(result_L.mean() - orig_L.mean()) < 2.0
+
+    @pytest.mark.parametrize("strength", [20, 60])
+    def test_bright_pale_does_not_increase_variance(self, proc, strength):
+        # equalize must never make already-even pale skin LESS even: CLAHE can
+        # amplify luminance variance (gray mottling), which must be clamped.
+        rng = np.random.RandomState(7)
+        base = np.array([200, 205, 230], dtype=np.float32)
+        noise = rng.normal(0.0, 3.0, (64, 64, 3)).astype(np.float32)
+        bright = np.clip(base + noise, 0, 255).astype(np.uint8)
+        mask = np.ones((64, 64), dtype=np.float32)
+
+        result = proc.equalize(bright, mask, strength=strength)
+
+        orig_L = cv2.cvtColor(bright, cv2.COLOR_BGR2LAB)[:, :, 0].astype(np.float32)
+        result_L = cv2.cvtColor(result, cv2.COLOR_BGR2LAB)[:, :, 0].astype(np.float32)
+        assert result_L.std() <= orig_L.std() + 0.5
+
+    def test_with_ref_lab(self, proc, face_mask):
+        # Textured input so equalize + a/b pull toward the reference produce a
+        # real change (a flat image has no local contrast to redistribute).
+        rng = np.random.RandomState(1)
+        textured = rng.randint(80, 180, (64, 64, 3), dtype=np.uint8)
         ref = np.full((64, 64, 3), 100, dtype=np.uint8)
         ref_lab = cv2.cvtColor(ref, cv2.COLOR_BGR2LAB)
-        result = proc.equalize(img, face_mask, strength=50, ref_lab=ref_lab)
-        assert not np.allclose(result, img)
+        result = proc.equalize(textured, face_mask, strength=50, ref_lab=ref_lab)
+        assert not np.allclose(result, textured)
 
     def test_non_skin_unchanged(self, proc, img, face_mask):
         img_copy = img.copy()

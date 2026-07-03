@@ -12,6 +12,11 @@ STD_SECTIONS = {"frequency", "skin", "eyes", "lips", "hair", "dodge_burn",
 
 FLOAT_SECS = {"frequency", "skin", "eyes", "lips", "hair"}
 
+# Nested keys that are legitimately NOT [0, 1] fractions:
+#   - relight_azimuth / relight_elevation: light angles in degrees.
+#   - unify_hue: -1.0 is the engine sentinel default ("auto/off", engine.py).
+NON_FRACTION_SUBKEYS = {"relight_azimuth", "relight_elevation", "unify_hue"}
+
 
 def _is_bool(val):
     return isinstance(val, bool)
@@ -112,6 +117,8 @@ class TestValueRanges:
                 for subk, subv in recipe[sec].items():
                     path = f"{name}.{sec}.{subk}"
                     if subv is None or isinstance(subv, str):
+                        continue
+                    if subk in NON_FRACTION_SUBKEYS:
                         continue
                     msg = f"{path}={subv!r} not in [0, 1]"
                     assert _is_float_in_range(subv), msg

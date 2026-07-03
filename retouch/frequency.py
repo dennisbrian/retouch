@@ -122,6 +122,7 @@ class FrequencySeparator:
         pore_synthesis: float = 0.0,
         roi_coords: Optional[Tuple[int, int]] = None,
         smooth_engine: str = "guided",
+        float32_out: bool = False,
     ) -> np.ndarray:
         """Re-combine layers after selective processing.
 
@@ -139,12 +140,16 @@ class FrequencySeparator:
             pore_synthesis: Strength of micro-pore texture synthesis (0-1).
             roi_coords: Tuple of (roi_x1, roi_y1) coordinates for deterministic spatial seeding.
             smooth_engine: Smoothing method: "guided" (guided filter, default) or "bilateral" (legacy).
+            float32_out: If True, return float32 [0, 255] instead of uint8. Default False.
 
         Returns:
-            (H, W, 3) uint8 BGR result.
+            (H, W, 3) uint8 BGR result, or float32 if float32_out=True.
         """
         if skin_mask is None:
-            return layers.reconstruct()
+            result = layers.reconstruct()
+            if float32_out:
+                return result.astype(np.float32)
+            return result
 
         m_raw = skin_mask.astype(np.float32)
 
@@ -153,7 +158,10 @@ class FrequencySeparator:
         # on the entire image when the skin only covers a small fraction.
         ys, xs = np.where(m_raw > 0.01)
         if len(xs) == 0:
-            return layers.reconstruct()
+            result = layers.reconstruct()
+            if float32_out:
+                return result.astype(np.float32)
+            return result
 
         fw_approx = face_width if face_width else estimate_face_width(img_shape=layers.low.shape[:2], fallback_ratio=APPROX_FACE_WIDTH_RATIO)
         pad = max(10, int(fw_approx * 0.1))
@@ -207,6 +215,11 @@ class FrequencySeparator:
             orig_crop = layers.low[y1:y2, x1:x2] + layers.mid[y1:y2, x1:x2] + layers.high[y1:y2, x1:x2]
             result_crop = blend_masked(orig_crop, processed_crop, m_2d)
 
+            if float32_out:
+                # E1 float path: keep the full result float32 — no uint8 paste target.
+                full_result = np.clip(layers.low + layers.mid + layers.high, 0, 255).astype(np.float32)
+                full_result[y1:y2, x1:x2] = np.clip(result_crop, 0, 255)
+                return full_result
             full_result = layers.reconstruct()
             full_result[y1:y2, x1:x2] = result_crop
             return full_result
@@ -259,10 +272,15 @@ class FrequencySeparator:
         orig_crop = layers.low[y1:y2, x1:x2] + layers.mid[y1:y2, x1:x2] + layers.high[y1:y2, x1:x2]
         result_crop = blend_masked(orig_crop, processed_crop, m_2d)
 
+        if float32_out:
+            # E1 float path: keep the full result float32 — no uint8 paste target.
+            full_result = np.clip(layers.low + layers.mid + layers.high, 0, 255).astype(np.float32)
+            full_result[y1:y2, x1:x2] = np.clip(result_crop, 0, 255)
+            return full_result
+
         # Paste back into the full image
         full_result = layers.reconstruct()
         full_result[y1:y2, x1:x2] = result_crop
-
         return full_result
 
 

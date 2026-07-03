@@ -12,7 +12,7 @@ from typing import Optional, Tuple, Union
 import cv2
 import numpy as np
 
-from .utils import blend_masked, estimate_face_width, vibrance as vibrance_fn
+from .utils import blend_masked, estimate_face_width, vibrance as vibrance_fn, apply_u8_op_float
 
 
 # Predefined lip tint colours (BGR)
@@ -54,6 +54,12 @@ class LipEnhancer:
         """
         if strength <= 0 or lip_mask is None or lip_mask.max() < 0.01:
             return img_bgr
+
+        if img_bgr.dtype == np.float32:
+            # E1 delta adapter: lip pipeline is uint8-contract. Delta is
+            # confined to the lip region.
+            return apply_u8_op_float(img_bgr, self.enhance, lip_mask, strength,
+                                     tint=tint, finish=finish)
 
         # Estimate face width from lip mask (lip width is typically ~30% of face width)
         face_width = estimate_face_width(lip_mask=lip_mask, img_shape=img_bgr.shape[:2])

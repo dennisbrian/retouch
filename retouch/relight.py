@@ -7,6 +7,8 @@ from typing import Any, Optional, Tuple
 import cv2
 import numpy as np
 
+from .utils import apply_u8_op_float
+
 
 class Relighter:
     """Estimates a 3D depth map and normal map from face landmarks to apply directional relighting."""
@@ -361,6 +363,20 @@ class Relighter:
         if strength <= 0.0 or skin_mask is None or skin_mask.max() < 0.01:
             return canvas
 
+        if canvas.dtype == np.float32:
+            # E1 delta adapter (see apply_u8_op_float).
+            return apply_u8_op_float(
+                canvas,
+                self.relight,
+                landmarks,
+                skin_mask,
+                face_width,
+                strength=strength,
+                azimuth=azimuth,
+                elevation=elevation,
+                engine=engine,
+            )
+
         h, w = canvas.shape[:2]
         lm = landmarks.landmark
 
@@ -438,6 +454,19 @@ class Relighter:
         """
         if strength <= 0.0 or skin_mask is None or skin_mask.max() < 0.01:
             return canvas
+
+        if canvas.dtype == np.float32:
+            # E1 delta adapter (see apply_u8_op_float).
+            return apply_u8_op_float(
+                canvas,
+                self.sculpt,
+                landmarks,
+                skin_mask,
+                face_width,
+                strength=strength,
+                light_azimuth=light_azimuth,
+                light_elevation=light_elevation,
+            )
 
         h, w = canvas.shape[:2]
         lm = landmarks.landmark

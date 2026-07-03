@@ -153,15 +153,25 @@ RECIPES = {
         # Strong shine_removal + moderate sculpt for dimension the harsh
         # lighting otherwise flattens, C1 hue-unify to fix venue color casts.
         "extends": "porcelain_unified_v1",
+        # nose_smooth ~10% below the parent's 0.40 face smooth (texture realism).
+        "frequency": {"nose_smooth": 0.36},
         "skin": {
             "equalize": 0.0,
             "rosy": 0.10,
-            "hue_unify": 0.65,
-            "chroma_even": 0.55,
+            "hue_unify": 0.35,
+            "chroma_even": 0.30,
             "whiten_hue_stable": 1,
             "shine_removal": 0.70,
             "sculpt": 0.30,
+            "exposure_lock": 0.7,
         },
+        "eyes": {
+            "catchlight": 0.18,
+        },
+        # Subtle lash/brow definition via the eye-weighted selective sharpen mask.
+        "sharpen": 16.0,
+        # Con-hall wigs are often near clipping — halve the inherited shine push.
+        "hair": {"shine": 0.05},
     },
     "milk_skin_v1": {
         # Flagship #5: 韩系牛奶皮/water-glow — high mean L, LOW chroma variance
@@ -191,14 +201,26 @@ RECIPES = {
         # plan's own over-modeling warning from PLAN_EASTWEST_COLOR_SUPREMACY
         # §C2 QA), no C4 finish pack (those are stylistic, not "natural").
         "extends": "natural",
-        "frequency": {"smooth": 0.25},
+        # nose_smooth ~10% below face smooth: keeps a touch more natural
+        # texture on the nose/philtrum where pores read as realism.
+        "frequency": {"smooth": 0.25, "nose_smooth": 0.22},
         "skin": {
             "equalize": 0.05,
             "hue_unify": 0.20,
             "chroma_even": 0.15,
             "whiten_hue_stable": 1,
-            "shine_removal": 0.20,
+            "shine_removal": 0.30,
+            "exposure_lock": 0.7,
         },
+        "eyes": {
+            "dark_circles": 0.15,
+            "catchlight": 0.08,
+        },
+        # Selective sharpen rides the lash/brow-weighted acc_sharpen mask
+        # (eyes 1.0, brows 0.53) — subtle lash/brow definition only.
+        "sharpen": 12.0,
+        # Wig highlights on bright cosplay hair sit near clipping; no shine push.
+        "hair": {"shine": 0.0},
     },
     "wrinkle_free_glow_v1": {
         # Flagship #7: isolates S5 wrinkle/line softening for close-up beauty
@@ -690,7 +712,7 @@ RECIPES = {
     "anime_cinematic_v1": {
         "extends": "natural",
         "frequency": {"smooth": 0.32, "mid_reduction": 0.22},
-        "skin": {"equalize": 0.38, "porcelain": 0.42, "relight": 35.0, "relight_azimuth": 45.0, "relight_elevation": 35.0},
+        "skin": {"equalize": 0.38, "porcelain": 0.42, "relight": 0.35, "relight_azimuth": 45.0, "relight_elevation": 35.0},
         "eyes": {"whites": 0.18, "teeth_whiten": 0.18, "iris": 0.22, "catchlight": 0.25, "dark_circles": 0.22},
         "lips": {"tint": None, "gloss": 0.22},
         "hair": {"shine": 0.75},

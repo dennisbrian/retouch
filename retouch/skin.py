@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional, Tuple
 import cv2
 import numpy as np
 
-from .utils import blend_masked, normalize_mask, squeeze_mask, guided_filter
+from .utils import blend_masked, normalize_mask, squeeze_mask, guided_filter, apply_u8_op_float
 from .color_space import bgr_to_lch, lch_to_bgr, skin_mask_lch
 from .color_science import (
     bgr_to_oklab,
@@ -127,18 +127,28 @@ class SkinProcessor:
     ) -> np.ndarray:
         """Adaptive Rosy Foundation: LAB-based skin whitening and rosy/porcelain cosmetic shift.
 
+        Supports both uint8 and float32 input. If input is float32 [0, 255], output is float32.
+        If input is uint8, output is uint8.
+
         Args:
-            img_bgr: (H, W, 3) uint8 BGR image.
+            img_bgr: (H, W, 3) uint8 or float32 BGR image.
             skin_mask: (H, W) float mask 0–1. May be None to skip processing.
             strength: -100–100 signed whitening strength. Positive lifts, negative
                 deepens shadows. 0 returns the input unchanged.
             tone: Cosmetic tone: "rosy", "porcelain", or "neutral".
+            hue_stable: If True, preserve hue using OKLab/OKLCh.
 
         Returns:
-            (H, W, 3) uint8 BGR image.
+            (H, W, 3) uint8 or float32 BGR image, matching input dtype.
         """
         if strength == 0 or skin_mask is None:
             return img_bgr
+
+        if img_bgr.dtype == np.float32:
+            # E1 delta adapter: run the uint8 op on a truncating snapshot and
+            # apply its delta to the float canvas (see apply_u8_op_float).
+            return apply_u8_op_float(img_bgr, self.whiten, skin_mask, strength,
+                                     tone=tone, hue_stable=hue_stable)
 
         s = strength / 100.0
         lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
@@ -161,8 +171,7 @@ class SkinProcessor:
             oklch[:, :, 0] = np.clip(L_new, 0.0, 1.0)
             oklab_out = oklch_to_oklab(oklch)
             out = oklab_to_bgr(oklab_out)
-            result = blend_masked(img_bgr, out, skin_mask)
-            return result
+            return blend_masked(img_bgr, out, skin_mask)
 
         protection = self._get_highlight_protection(lab)
 
@@ -218,18 +227,26 @@ class SkinProcessor:
     ) -> np.ndarray:
         """CLAHE + local average color equalization to unify skin tone.
 
+        Supports both uint8 and float32 input. If input is float32 [0, 255], output is float32.
+        If input is uint8, output is uint8.
+
         Args:
-            img_bgr: (H, W, 3) uint8 BGR image.
+            img_bgr: (H, W, 3) uint8 or float32 BGR image.
             skin_mask: (H, W) float mask 0–1.
             strength: 0–100 equalization intensity.
             ref_lab: Optional reference LAB image whose a/b statistics
                 are used as the colour target.
 
         Returns:
-            (H, W, 3) uint8 BGR image.
+            (H, W, 3) uint8 or float32 BGR image, matching input dtype.
         """
         if strength <= 0 or skin_mask is None:
             return img_bgr
+
+        if img_bgr.dtype == np.float32:
+            # E1 delta adapter (see apply_u8_op_float).
+            return apply_u8_op_float(img_bgr, self.equalize, skin_mask, strength,
+                                     ref_lab=ref_lab)
 
         s = math.sqrt(strength / 100.0)
         lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
@@ -253,9 +270,32 @@ class SkinProcessor:
         clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
         l_clahe = clahe.apply(l_chan_u8)
 
+        # Snapshot original L over skin before CLAHE blend (a/b pull above did
+        # not touch L, so lab[:, :, 0] here is still the original luminance).
+        l_orig = lab[:, :, 0].copy()
+
         protection = self._get_highlight_protection(lab)
         l_clahe_f = l_clahe.astype(np.float32)
         l_final_f = l_clahe_f * protection + lab[:, :, 0] * (1.0 - protection)
+
+        # Preserve mean skin luminance: CLAHE redistributes a bright, low-contrast
+        # histogram downward, shifting exposure. equalize should even out tone,
+        # not change exposure — so re-center the mean over skin with a global shift.
+        if np.any(skin_indices):
+            mean_orig = float(l_orig[skin_indices].mean())
+            mean_new = float(l_final_f[skin_indices].mean())
+            l_final_f = l_final_f + (mean_orig - mean_new)
+
+            # Never let CLAHE make skin LESS even: on pale, already-even faces
+            # it can amplify luminance variance (gray mottling on cheeks). If
+            # skin L std increased, rescale deviations around the preserved
+            # mean back to the original std. Where CLAHE genuinely evens tone
+            # (std decreases), behavior is unchanged.
+            sd_orig = float(l_orig[skin_indices].std())
+            sd_new = float(l_final_f[skin_indices].std())
+            if sd_new > sd_orig and sd_new > 1e-6:
+                l_final_f = mean_orig + (l_final_f - mean_orig) * (sd_orig / sd_new)
+
         lab[:, :, 0] = np.clip(l_final_f, 0, 255)
 
         # Fix #6: Explicitly clip all channels to prevent AB wrap-around artifacts
@@ -276,6 +316,10 @@ class SkinProcessor:
         """
         if strength <= 0 or regions is None or getattr(regions, "skin", None) is None:
             return img_bgr
+
+        if img_bgr.dtype == np.float32:
+            # E1 delta adapter (see apply_u8_op_float).
+            return apply_u8_op_float(img_bgr, self.dodge_burn, regions, strength)
 
         s = strength / 100.0
         lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
@@ -440,8 +484,11 @@ class SkinProcessor:
     ) -> np.ndarray:
         """Unify the neck and chest skin color and brightness with the face skin.
 
+        Supports both uint8 and float32 input. If input is float32 [0, 255], output is float32.
+        If input is uint8, output is uint8.
+
         Args:
-            img_bgr: (H, W, 3) uint8 BGR image.
+            img_bgr: (H, W, 3) uint8 or float32 BGR image.
             face_landmarks: MediaPipe NormalizedLandmarkList.
             person_mask: (H, W) float person segmentation mask. May be None.
             face_skin_mask: (H, W) float skin mask of the face.
@@ -449,10 +496,16 @@ class SkinProcessor:
             strength: 0–100 harmonization intensity.
 
         Returns:
-            (H, W, 3) uint8 BGR image.
+            (H, W, 3) uint8 or float32 BGR image, matching input dtype.
         """
         if strength <= 0 or person_mask is None or face_skin_mask is None:
             return img_bgr
+
+        if img_bgr.dtype == np.float32:
+            # E1 delta adapter (see apply_u8_op_float).
+            return apply_u8_op_float(img_bgr, self.harmonize_neck, face_landmarks,
+                                     person_mask, face_skin_mask,
+                                     neck_mask=neck_mask, strength=strength)
 
         s = strength / 100.0
         h_img, w_img = img_bgr.shape[:2]
@@ -677,7 +730,11 @@ class SkinProcessor:
         dim_mask_3d = dim_mask[:, :, np.newaxis]
 
         restored = smoothed_bgr.astype(np.float32) + detail * restore_amount * dim_mask_3d
-        return np.clip(restored, 0, 255).astype(np.uint8)
+        restored = np.clip(restored, 0, 255)
+        if smoothed_bgr.dtype == np.float32:
+            # E1 float path: pure arithmetic op — stay float32, no quantization.
+            return restored
+        return restored.astype(np.uint8)
 
     def local_clarity(
         self,
@@ -900,8 +957,11 @@ class SkinProcessor:
         (up to ±0.04) while leaving luminance untouched. Protects high-chroma
         regions (makeup/tattoo), dark features (hair/shadow), and specular highlights.
 
+        Supports both uint8 and float32 input. If input is float32 [0, 255], output is float32.
+        If input is uint8, output is uint8.
+
         Args:
-            img_bgr: (H, W, 3) uint8 BGR image.
+            img_bgr: (H, W, 3) uint8 or float32 BGR image.
             skin_mask: (H, W) float mask 0–1. May be None to skip processing.
             hue_strength: 0–100 hue rotation intensity.
             chroma_strength: 0–100 chroma variance compression intensity.
@@ -909,10 +969,15 @@ class SkinProcessor:
                 If None, auto-determined from skin state.
 
         Returns:
-            (H, W, 3) uint8 BGR image.
+            (H, W, 3) uint8 or float32 BGR image, matching input dtype.
         """
         if (hue_strength <= 0 and chroma_strength <= 0) or skin_mask is None:
             return img_bgr
+
+        if img_bgr.dtype == np.float32:
+            # E1 delta adapter (see apply_u8_op_float).
+            return apply_u8_op_float(img_bgr, self.unify_hue_line, skin_mask,
+                                     hue_strength, chroma_strength, locus=locus)
 
         # Convert to OKLCh
         oklab = bgr_to_oklab(img_bgr)
@@ -1070,15 +1135,18 @@ class SkinProcessor:
         a local non-shine median using exponential rolloff (adapted from soft_clip_highlights).
         Eye catchlights are excluded via eyes_mask to preserve their natural appearance.
 
+        Supports both uint8 and float32 input. If input is float32 [0, 255], output is float32.
+        If input is uint8, output is uint8.
+
         Args:
-            img_bgr: (H, W, 3) uint8 BGR image.
+            img_bgr: (H, W, 3) uint8 or float32 BGR image.
             skin_mask: (H, W) float mask 0–1. May be None to skip processing.
             strength: 0–100 shine removal intensity. 0 returns input unchanged.
             eyes_mask: Optional (H, W) float mask marking eye regions to exclude.
                        Regions marked here will not be modified.
 
         Returns:
-            (H, W, 3) uint8 BGR image.
+            (H, W, 3) uint8 or float32 BGR image, matching input dtype.
 
         Algorithm:
         1. Detect shine: pixels with L > adaptive_threshold AND low chroma (desaturated)
@@ -1093,6 +1161,11 @@ class SkinProcessor:
         """
         if strength <= 0 or skin_mask is None:
             return img_bgr
+
+        if img_bgr.dtype == np.float32:
+            # E1 delta adapter (see apply_u8_op_float).
+            return apply_u8_op_float(img_bgr, self.shine_removal, skin_mask,
+                                     strength, eyes_mask=eyes_mask)
 
         lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
         h_img, w_img = lab.shape[:2]

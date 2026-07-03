@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 
 from .parsing import FaceRegions
-from .utils import blend_masked
+from .utils import apply_u8_op_float, blend_masked
 
 
 class UnderEyeRepairer:
@@ -34,6 +34,10 @@ class UnderEyeRepairer:
         """
         if strength <= 0:
             return img_bgr
+
+        if img_bgr.dtype == np.float32:
+            # E1 delta adapter (see apply_u8_op_float).
+            return apply_u8_op_float(img_bgr, self.repair, regions, strength)
 
         s = strength / 100.0
         result = img_bgr.copy()

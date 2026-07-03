@@ -66,16 +66,19 @@ def bgr_to_oklab(img_bgr: np.ndarray) -> np.ndarray:
     return oklab
 
 
-def oklab_to_bgr(oklab: np.ndarray) -> np.ndarray:
-    """Convert float32 Oklab to uint8 BGR color space.
+def oklab_to_bgr(oklab: np.ndarray, float32_out: bool = False) -> np.ndarray:
+    """Convert float32 Oklab to BGR color space.
 
     Inverts bgr_to_oklab via M2_inv, cube, M1_inv, and sRGB companding.
 
     Args:
         oklab: (H, W, 3) float32 Oklab image.
+        float32_out: If True, return float32 [0, 255] (E1 float path — no
+            uint8 quantization). Default False returns uint8.
 
     Returns:
-        (H, W, 3) uint8 BGR image, clipped to [0, 255].
+        (H, W, 3) uint8 BGR image clipped to [0, 255], or float32 if
+        ``float32_out=True``.
     """
     # Oklab -> cbrt(LMS) (via M2_inv)
     lms_cbrt = np.dot(oklab, _OKLAB_M2_INV.T)
@@ -96,7 +99,10 @@ def oklab_to_bgr(oklab: np.ndarray) -> np.ndarray:
 
     # RGB -> BGR and scale to [0, 255]
     img_bgr = img_rgb[..., ::-1]
-    return np.clip(img_bgr * 255.0, 0, 255).astype(np.uint8)
+    out = np.clip(img_bgr * 255.0, 0, 255)
+    if float32_out:
+        return np.ascontiguousarray(out, dtype=np.float32)
+    return out.astype(np.uint8)
 
 
 def oklab_to_oklch(oklab: np.ndarray) -> np.ndarray:

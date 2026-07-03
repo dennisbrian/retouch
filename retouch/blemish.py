@@ -11,7 +11,7 @@ from typing import Optional, Tuple
 import cv2
 import numpy as np
 
-from .utils import estimate_face_width
+from .utils import estimate_face_width, apply_u8_op_float
 
 
 def inpaint_and_blend(
@@ -74,6 +74,12 @@ class BlemishRemover:
         """
         if strength <= 0:
             return img_bgr
+
+        if img_bgr.dtype == np.float32:
+            # E1 delta adapter: inpainting is inherently uint8. Run on a uint8
+            # snapshot and apply the delta to the float canvas so quantization
+            # is confined to the healed pixels.
+            return apply_u8_op_float(img_bgr, self.remove, skin_mask, strength)
 
         # Estimate face width from skin mask
         face_width = estimate_face_width(skin_mask=skin_mask, img_shape=img_bgr.shape[:2])

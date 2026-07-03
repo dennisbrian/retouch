@@ -173,6 +173,7 @@ class ProcessingContext:
     skin_glow: float = 0.0
     whiten_hue_stable: bool = False
     skin_locus: Optional[Dict[str, float]] = None
+    smooth_exposure_lock: float = 0.0
     shine_removal: float = 0.0
     wrinkle_soften: float = 0.0
     texture_transplant: float = 0.0
@@ -380,7 +381,7 @@ def build_context(
             # uses, defined in ParamSpec.recipe_key). Returns 0 when the
             # recipe has no relight information.
             v = _lookup_recipe(rec, spec.recipe_key) if spec.recipe_key else None
-            return 0.0 if v is None else float(v) * 100.0
+            return 0.0 if v is None else min(float(v) * 100.0, 100.0)
         if spec.name == "whiten":
             # Historical engine quirk: ``rosy`` always wins if it is in the
             # recipe, even when ``porcelain`` is also set.  Reproduce that
@@ -481,6 +482,7 @@ def build_context(
         "color_ref",
         "color_transfer_intensity",
         "skin_locus",
+        "smooth_exposure_lock",
     }
     spec_kwargs = {
         spec.name: resolved[spec.name]
@@ -491,6 +493,16 @@ def build_context(
     # Caller overrides win over recipe defaults.
     recipe_skin_locus = rec.get("skin", {}).get("locus")
     final_skin_locus = overrides.get("skin_locus") if overrides.get("skin_locus") is not None else recipe_skin_locus
+    # Extract smooth_exposure_lock from recipe (skin.exposure_lock) or override.
+    # Caller override wins over recipe default; absent → 0.0.
+    recipe_exposure_lock = rec.get("skin", {}).get("exposure_lock")
+    final_exposure_lock = (
+        overrides.get("smooth_exposure_lock")
+        if overrides.get("smooth_exposure_lock") is not None
+        else recipe_exposure_lock
+    )
+    if final_exposure_lock is None:
+        final_exposure_lock = 0.0
 
     return ProcessingContext(
         # Recipe-derived fields (data-driven) — the bulk of the context.
@@ -506,10 +518,19 @@ def build_context(
         grain=overrides.get("grain"),
         lut=overrides.get("lut"),
         skin_locus=final_skin_locus,
-        # ``nose_smooth`` is recipe-static (always 0 in the spec default) and
-        # the only consumer of overrides is the engine call, so it lives
-        # outside the spec loop and is set straight from the override.
-        nose_smooth=overrides.get("nose_smooth"),
+        smooth_exposure_lock=final_exposure_lock,
+        # ``nose_smooth`` reads the caller override first, then the recipe's
+        # ``frequency.nose_smooth`` (0-1 fraction, converted to 0-100 like
+        # ``frequency.smooth``); absent → None (nose smoothed with the face).
+        nose_smooth=(
+            overrides.get("nose_smooth")
+            if overrides.get("nose_smooth") is not None
+            else (
+                float(rec.get("frequency", {}).get("nose_smooth")) * 100.0
+                if rec.get("frequency", {}).get("nose_smooth") is not None
+                else None
+            )
+        ),
         # Final fixed values
         active_recipe=active_recipe,
     )
@@ -1000,34 +1021,102 @@ class RetouchEngine:
     ) -> _CoreResult:
         """Wrap the core pipeline with automatic proxy down/upscaling.
 
+        F8.1: Stages 0-2 (detection+reshape+per-face) run at proxy resolution.
+        Global phases (stages 3+) run at native resolution on a composite of
+        the upscaled face edits + pristine background.
+
         If the longest image side exceeds ``PROXY_MAX_DIM``, the image is
-        downscaled (INTER_AREA) before the expensive detection / parsing /
-        smoothing / grading stages, then the result and all accumulated
-        masks are upscaled (INTER_LINEAR) back to the pre-proxy resolution.
+        downscaled (INTER_AREA), detection+reshape+per-face process at proxy,
+        then the upscaled face-region result is pasted onto the native original
+        (face-bbox-limited composite). Masks are upscaled, and global phases run
+        on the native-resolution composite.
         """
         h, w = img_bgr.shape[:2]
         proxy_scale = 1.0
         native_img_bgr = img_bgr
+        proxy_img_bgr = img_bgr
+
         if max(h, w) > PROXY_MAX_DIM:
             proxy_scale = PROXY_MAX_DIM / float(max(h, w))
             new_w = int(w * proxy_scale)
             new_h = int(h * proxy_scale)
-            img_bgr = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            proxy_img_bgr = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
-        core = self._run_core_pipeline(img_bgr, ctx, style_ref, timings)
+        # Stages 0-2: detection+reshape+per-face at proxy resolution
+        core = self._run_detection_and_faces(proxy_img_bgr, ctx, timings)
 
         if proxy_scale < 1.0:
-            core = self._upscale_core_result(core, h, w)
-            # F8.0: reinject native detail in non-skin regions
-            smooth_strength = ctx.smooth / 100.0 if ctx.smooth > 0 else 0.3
-            sigma = 2.0 * (1.0 / proxy_scale)
-            original_float = native_img_bgr.astype(np.float32)
-            blurred = cv2.GaussianBlur(original_float, (0, 0), sigma)
-            high_band = original_float - blurred
-            skin_weight = core.acc_skin * smooth_strength if core.acc_skin is not None else 0.0
-            weight = np.clip(1.0 - skin_weight, 0.0, 1.0)[:, :, np.newaxis]
-            result_f = core.result.astype(np.float32) + high_band * weight * 0.85
-            core.result = np.clip(result_f, 0, 255).astype(np.uint8)
+            # Upscale face-region result + masks back to native resolution
+            upscaled_core = self._upscale_core_result(core, h, w)
+
+            # F8.1: Composite upscaled face edits onto native image
+            # Only paste the face ROIs that were actually retouched
+            composite_result = self._composite_upscaled_faces_onto_native(
+                native_img_bgr, upscaled_core, core.faces
+            )
+
+            # Update core result with the native-resolution composite
+            upscaled_core.result = composite_result
+            core = upscaled_core
+
+            # F8.0: reinject native detail — but post-F8.1, only the pasted
+            # edit-mask regions come from the blurry upscaled proxy; the
+            # background is already pristine native. Injecting the high band
+            # frame-wide (the pre-F8.1 behavior) would ADD a second copy of
+            # the high band on top of native pixels, over-sharpening the
+            # background (~3.2x the input's Laplacian energy, measured).
+            # Restrict reinjection to edit-mask regions, still excluding
+            # deliberately-smoothed skin.
+            if core.acc_skin is not None:
+                edit_mask = core.acc_skin.copy()
+                if core.acc_skin_hair is not None:
+                    edit_mask = np.maximum(edit_mask, core.acc_skin_hair)
+                if core.acc_lips is not None:
+                    edit_mask = np.maximum(edit_mask, core.acc_lips)
+                if edit_mask.max() > 0.01:
+                    smooth_strength = ctx.smooth / 100.0 if ctx.smooth > 0 else 0.3
+                    sigma = 2.0 * (1.0 / proxy_scale)
+                    original_float = native_img_bgr.astype(np.float32)
+                    blurred = cv2.GaussianBlur(original_float, (0, 0), sigma)
+                    high_band = original_float - blurred
+                    weight = np.clip(
+                        edit_mask * (1.0 - core.acc_skin * smooth_strength),
+                        0.0, 1.0,
+                    )[:, :, np.newaxis]
+                    result_f = core.result.astype(np.float32) + high_band * weight * 0.85
+                    core.result = np.clip(result_f, 0, 255).astype(np.uint8)
+
+        # Handle no-face case: run minimal global processing if needed
+        if core.no_face:
+            result = self._no_face_fallback(native_img_bgr if proxy_scale < 1.0 else proxy_img_bgr, ctx, core.person_mask)
+            h_img, w_img = result.shape[:2]
+            return _CoreResult(
+                result=result,
+                acc_skin=core.acc_skin,
+                acc_skin_hair=core.acc_skin_hair,
+                acc_lips=core.acc_lips,
+                acc_sharpen=core.acc_sharpen,
+                faces=core.faces,
+                person_mask=core.person_mask,
+                no_face=True,
+                face_contexts=core.face_contexts,
+                qa=core.qa,
+            )
+
+        # Stages 3+: global phases at native resolution (or proxy if no scaling needed)
+        # When using proxy (proxy_scale < 1.0): use the composited upscaled result
+        # When NOT using proxy (proxy_scale == 1.0): use the detection_and_faces result
+        core = self._run_global_phases(
+            core.result,
+            ctx, style_ref, timings,
+            acc_skin=core.acc_skin,
+            acc_skin_hair=core.acc_skin_hair,
+            acc_lips=core.acc_lips,
+            acc_sharpen=core.acc_sharpen,
+            faces=core.faces,
+            person_mask=core.person_mask,
+            face_contexts=core.face_contexts,
+        )
 
         return core
 
@@ -1052,25 +1141,64 @@ class RetouchEngine:
                 ))
         return core
 
-    def _run_core_pipeline(
+    @staticmethod
+    def _composite_upscaled_faces_onto_native(
+        native_img: np.ndarray,
+        upscaled_core: _CoreResult,
+        faces: list,
+    ) -> np.ndarray:
+        """F8.1: Paste upscaled face-region edits onto native image.
+
+        Only the face ROI regions are taken from upscaled_core.result;
+        everything outside face ROIs comes from the pristine native_img.
+        This preserves native-resolution detail in non-face regions.
+        """
+        result = native_img.copy()
+        h_native, w_native = result.shape[:2]
+
+        # Upscaled core result has same dimensions as native
+        upscaled_img = upscaled_core.result
+
+        # For each detected face, paste its upscaled region onto native
+        # The upscaled_core.result already has the upscaled per-face edits composited
+        # We just use the minimal bounding region that actually changed
+        if not faces or upscaled_core.acc_skin is None:
+            # No faces detected or no skin work done — use upscaled result as-is
+            return upscaled_img
+
+        # Create a mask from accumulated skin mask to identify edited regions
+        edit_mask = upscaled_core.acc_skin.copy()
+        if upscaled_core.acc_skin_hair is not None:
+            edit_mask = np.maximum(edit_mask, upscaled_core.acc_skin_hair)
+        if upscaled_core.acc_lips is not None:
+            edit_mask = np.maximum(edit_mask, upscaled_core.acc_lips)
+
+        # Blend upscaled edits into native using the edit mask
+        if edit_mask.max() > 0.01:
+            alpha = np.clip(edit_mask, 0.0, 1.0)[:, :, np.newaxis]
+            result_f = (
+                upscaled_img.astype(np.float32) * alpha +
+                native_img.astype(np.float32) * (1.0 - alpha)
+            )
+            result = np.clip(result_f, 0, 255).astype(np.uint8)
+
+        return result
+
+    def _run_detection_and_faces(
         self,
         img_bgr: np.ndarray,
         ctx: ProcessingContext,
-        style_ref: Optional[np.ndarray],
         timings: Dict[str, float],
     ) -> _CoreResult:
-        """Run stages 0–6 (detection → finish) at the given resolution.
+        """F8.1: Stages 0-2 only (detection + reshape + per-face processing).
 
-        Honours ``ctx.face_contexts``: when provided, detection and parsing
-        are skipped and the cached face data / regions are reused. Otherwise
-        detection + parsing run normally and ``FaceContext`` objects are
-        built and returned for caller caching.
-        
-        Phase 3 stages (global, grade, finish) run in float32 [0,1] to avoid
-        inter-stage quantization banding.
+        Returns the composited face-region result at the input image resolution,
+        plus accumulated masks and face data. When no faces are detected, runs
+        minimal no-face fallback and returns early.
+
+        Does NOT run global phases (stages 3+); those are handled separately
+        by _run_global_phases() at native resolution.
         """
-        from .precision import to_float, to_uint8
-        
         # ------------------------------------------------------------------
         # Stage 0 — Detection + segmentation (with FaceContext caching)
         # ------------------------------------------------------------------
@@ -1094,13 +1222,13 @@ class RetouchEngine:
         timings["detection"] = (time.perf_counter() - t0) * 1000
 
         # ------------------------------------------------------------------
-        # No-face fallback: minimal global processing
+        # No-face fallback: return early with minimal data
+        # (global phases will handle the image processing)
         # ------------------------------------------------------------------
         if not faces:
-            result = self._no_face_fallback(img_bgr, ctx, person_mask)
-            h_img, w_img = result.shape[:2]
+            h_img, w_img = img_bgr.shape[:2]
             return _CoreResult(
-                result=result,
+                result=img_bgr.copy(),
                 acc_skin=np.zeros((h_img, w_img), dtype=np.float32),
                 acc_skin_hair=np.zeros((h_img, w_img), dtype=np.float32),
                 acc_lips=np.zeros((h_img, w_img), dtype=np.float32),
@@ -1134,11 +1262,51 @@ class RetouchEngine:
             result, face_results, h_img, w_img
         )
 
+        final_contexts = built_contexts if built_contexts is not None else cached_contexts
+        return _CoreResult(
+            result=result,
+            acc_skin=acc_skin,
+            acc_skin_hair=acc_skin_hair,
+            acc_lips=acc_lips,
+            acc_sharpen=acc_sharpen,
+            faces=faces,
+            person_mask=person_mask,
+            no_face=False,
+            face_contexts=final_contexts,
+            qa=[],
+        )
+
+    def _run_global_phases(
+        self,
+        img_bgr: np.ndarray,
+        ctx: ProcessingContext,
+        style_ref: Optional[np.ndarray],
+        timings: Dict[str, float],
+        acc_skin: Optional[np.ndarray],
+        acc_skin_hair: Optional[np.ndarray],
+        acc_lips: Optional[np.ndarray],
+        acc_sharpen: Optional[np.ndarray],
+        faces: list,
+        person_mask: Optional[np.ndarray],
+        face_contexts: Optional[List["FaceContext"]],
+    ) -> _CoreResult:
+        """F8.1: Stages 3+ (global tonal, grading, sharpen/finish).
+
+        Runs on the native-resolution image (either direct or composite of
+        upscaled face edits + native background). Converts to float32 for
+        global processing, then back to uint8, and runs QA detectors.
+
+        Returns a complete _CoreResult with QA warnings populated.
+        """
+        from .precision import to_float, to_uint8
+
         # ------------------------------------------------------------------
         # F1: Convert to float32 [0,1] for Phase 3 global stages
         # This eliminates inter-stage uint8 quantization banding
         # ------------------------------------------------------------------
-        result = to_float(result)
+        result = to_float(img_bgr)
+
+        h_img, w_img = result.shape[:2]
 
         # ------------------------------------------------------------------
         # Stage 3 — Subject-background separation (now in float)
@@ -1184,6 +1352,9 @@ class RetouchEngine:
         # ------------------------------------------------------------------
         result = to_uint8(result)
 
+        # ------------------------------------------------------------------
+        # QA detectors
+        # ------------------------------------------------------------------
         qa_warnings: List[QAWarning] = []
         if person_mask is not None and np.any(person_mask > 0.3):
             qa_raw = qa_detectors.run_all(result, skin_mask=person_mask, person_mask=person_mask)
@@ -1213,7 +1384,6 @@ class RetouchEngine:
                     ))
         ctx._qa_results = {d: r for d, r in qa_raw.items()} if 'qa_raw' in locals() else {}
 
-        final_contexts = built_contexts if built_contexts is not None else cached_contexts
         return _CoreResult(
             result=result,
             acc_skin=acc_skin,
@@ -1222,9 +1392,60 @@ class RetouchEngine:
             acc_sharpen=acc_sharpen,
             faces=faces,
             person_mask=person_mask,
-            no_face=False,
-            face_contexts=final_contexts,
+            no_face=len(faces) == 0,
+            face_contexts=face_contexts,
             qa=qa_warnings,
+        )
+
+    def _run_core_pipeline(
+        self,
+        img_bgr: np.ndarray,
+        ctx: ProcessingContext,
+        style_ref: Optional[np.ndarray],
+        timings: Dict[str, float],
+    ) -> _CoreResult:
+        """F8.1: Wrapper that runs the full pipeline (stages 0–6).
+
+        For backward compatibility, this delegates to the split methods:
+        _run_detection_and_faces() for stages 0-2, then handles no-face
+        fallback OR runs _run_global_phases() for stages 3+.
+
+        Honours ``ctx.face_contexts``: when provided, detection and parsing
+        are skipped and the cached face data / regions are reused. Otherwise
+        detection + parsing run normally and ``FaceContext`` objects are
+        built and returned for caller caching.
+        """
+        # Stages 0-2: detection + reshape + per-face
+        core = self._run_detection_and_faces(img_bgr, ctx, timings)
+
+        # No-face fallback: run minimal global processing
+        if core.no_face:
+            result = self._no_face_fallback(img_bgr, ctx, core.person_mask)
+            h_img, w_img = result.shape[:2]
+            return _CoreResult(
+                result=result,
+                acc_skin=np.zeros((h_img, w_img), dtype=np.float32),
+                acc_skin_hair=np.zeros((h_img, w_img), dtype=np.float32),
+                acc_lips=np.zeros((h_img, w_img), dtype=np.float32),
+                acc_sharpen=np.zeros((h_img, w_img), dtype=np.float32),
+                faces=core.faces,
+                person_mask=core.person_mask,
+                no_face=True,
+                face_contexts=core.face_contexts,
+                qa=core.qa,
+            )
+
+        # Stages 3+: global phases (tonal, grading, finish)
+        return self._run_global_phases(
+            core.result,
+            ctx, style_ref, timings,
+            acc_skin=core.acc_skin,
+            acc_skin_hair=core.acc_skin_hair,
+            acc_lips=core.acc_lips,
+            acc_sharpen=core.acc_sharpen,
+            faces=core.faces,
+            person_mask=core.person_mask,
+            face_contexts=core.face_contexts,
         )
 
     @staticmethod

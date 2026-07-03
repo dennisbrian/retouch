@@ -11,7 +11,7 @@ from typing import Optional
 import cv2
 import numpy as np
 
-from .utils import blend_masked, feather_mask
+from .utils import blend_masked, feather_mask, apply_u8_op_float
 
 
 class TeethWhitener:
@@ -37,6 +37,11 @@ class TeethWhitener:
             return img_bgr
         if mouth_interior_mask is None or mouth_interior_mask.max() < 0.01:
             return img_bgr
+
+        if img_bgr.dtype == np.float32:
+            # E1 delta adapter: teeth pipeline is uint8-contract. Delta is
+            # confined to the mouth interior.
+            return apply_u8_op_float(img_bgr, self.whiten, mouth_interior_mask, strength)
 
         s = strength / 100.0
         teeth_mask = self._detect_teeth(img_bgr, mouth_interior_mask)

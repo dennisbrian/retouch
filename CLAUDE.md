@@ -120,6 +120,20 @@ Cuts memory from 7.5 GB → 1.84 GB, runtime from 15.3s → 3.09s.
 
 **Verified:** Comparisons source from `_DEFAULTS`, maintaining single-source-of-truth with `params.py` registry.
 
+### ✅ RESOLVED 2026-07-04: E1 float32 canvas breaks undereye/makeup/relight (solid-blue face)
+**Issue:** The E1 float32 per-face chain missed `undereye.py`, `makeup.py`, and `relight.py` — they called `cv2.cvtColor` directly on the float32 [0,255] canvas (OpenCV expects float BGR in [0,1]), so any recipe with `dark_circles>0` or `blush>0` painted the whole face solid blue (~20 of 50 recipes on real photos; reported as a "multi-face" bug but reproduces on any face).
+
+**Fix:** `apply_u8_op_float` E1 adapters added to `UnderEyeRepairer.repair`, `MakeupEngine.apply_blush`, `Relighter.relight`/`sculpt`. Also fixed `anime_cinematic_v1` recipe data (`skin.relight` 35.0 → 0.35; convention is 0–1 fraction) and clamped the engine's relight conversion to ≤100.
+
+**Verified:** action/wedding/idol/xhs_soft_glow render normal skin on the DSCF6102 reference photo. Regression tests: `tests/test_e1_float_parity.py` (float/uint8 parity + recipe `skin.relight` range check).
+
+### ✅ RESOLVED 2026-07-03: Equalize grays pale/high-key faces (skin.py `equalize`)
+**Issue:** Reported as "recipes look worse with 2–3 people" but actually image-type-dependent: CLAHE in `equalize` darkened very pale, bright, low-contrast skin (cosplay white makeup, L≈200) by ~10 L points and amplified skin L variance (gray mottling). Multi-face path verified bit-identical to single-face; face ROIs verified non-contaminating.
+
+**Fix:** uint8 branch of `equalize` now (1) re-centers mean skin L after the CLAHE/protection blend, and (2) caps skin L std at its original value (asymmetric — genuine tone-evening untouched). Float path inherits via `apply_u8_op_float`.
+
+**Verified:** on reference photo `~/Desktop/event/DSCF6102.jpg` (2 pale faces), natural recipe: skin mean L 185→194.6 (source 199.4), std 26.9→21.8 (source 23.6). Regression tests: `tests/test_skin.py::TestEqualize` bright-pale luminance + variance tests (strengths 20/60).
+
 ### ✅ RESOLVED 2026-07-03: Sharpen inert zone 1-60
 Sharpen mapping now activates correctly across the full 1-100 slider range.
 
