@@ -315,6 +315,120 @@ class SkinProcessor:
                 )
         return blend_masked(img_bgr, result, blend)
 
+    def wrinkle_soften(
+        self,
+        img_bgr: np.ndarray,
+        regions: Any,
+        strength: float = 0,
+    ) -> np.ndarray:
+        """Ridge-aware wrinkle and line softening via black-hat morphology.
+
+        Detects directional ridge patterns (wrinkles) in landmark-defined zones
+        using black-hat morphology at multiple orientations, then attenuates
+        the ridge signal from the L channel. Depth is capped at 60% reduction
+        to preserve natural facial geometry.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR image.
+            regions: FaceRegions object with wrinkle zones.
+            strength: 0–100 wrinkle softening intensity.
+
+        Returns:
+            (H, W, 3) uint8 BGR image.
+        """
+        if strength <= 0 or regions is None or getattr(regions, "skin", None) is None:
+            return img_bgr
+
+        h_img, w_img = img_bgr.shape[:2]
+        s = strength / 100.0
+
+        # Estimate wrinkle scale from image dimensions
+        # Typical wrinkle width is ~ied*0.15-0.3; approximate ied as face height
+        face_height = h_img * 0.6  # Approximate face height as 60% of image
+        wrinkle_length = int(face_height * 0.2)
+        wrinkle_length = max(wrinkle_length, 8)
+
+        # Build wrinkle-eligible mask: union of all wrinkle zones
+        wrinkle_mask_attrs = []
+        for attr in ("forehead", "nasolabial_l", "nasolabial_r",
+                     "crows_feet_l", "crows_feet_r", "neck"):
+            if hasattr(regions, attr):
+                wrinkle_mask_attrs.append(attr)
+
+        wrinkle_mask = self._build_dimensional_mask(
+            regions,
+            shape=(h_img, w_img),
+            attrs=tuple(wrinkle_mask_attrs),
+            feather=0,
+        )
+
+        # Exclude hair, eyebrows, and eyes explicitly. Eyes are a defense-in-depth
+        # guard: even if a wrinkle zone's landmark geometry is imperfect, the eye
+        # itself (lash/lid) must never be touched by this op.
+        for excl_attr in ("hair", "left_eyebrow", "right_eyebrow", "left_eye", "right_eye"):
+            excl = getattr(regions, excl_attr, None)
+            if excl is not None:
+                wrinkle_mask = np.clip(
+                    wrinkle_mask.astype(np.float32, copy=False)
+                    - excl.astype(np.float32),
+                    0.0,
+                    1.0,
+                )
+
+        if wrinkle_mask.max() < 0.01:
+            return img_bgr
+
+        # Convert to LAB and extract L channel
+        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        L = lab[:, :, 0]
+
+        # Detect ridges using difference-of-Gaussians at wrinkle scale
+        # This isolates mid-frequency structures (wrinkles, fine lines)
+        sigma_small = max(1.0, wrinkle_length / 6.0)
+        sigma_large = max(1.0, wrinkle_length / 2.0)
+
+        gaussian_small = cv2.GaussianBlur(L, (0, 0), sigma_small)
+        gaussian_large = cv2.GaussianBlur(L, (0, 0), sigma_large)
+
+        # DoG isolates mid-frequency details (wrinkles live here)
+        dog = gaussian_small - gaussian_large
+
+        # Wrinkles are dark ridges, so they appear as negative DoG values
+        # Clip to get absolute magnitude of negative features only
+        ridge_signal = np.clip(-dog, 0.0, 255.0)
+
+        # Attenuate ridge signal: subtract from L, capped at 60% reduction
+        ridge_signal_masked = ridge_signal * wrinkle_mask
+
+        # Compute scale for normalization
+        ridge_nonzero = ridge_signal_masked[ridge_signal_masked > 0.1]
+        if ridge_nonzero.size > 0:
+            # Normalize by 95th percentile for stability
+            ridge_scale = np.percentile(ridge_nonzero, 95)
+            if ridge_scale < 1.0:
+                ridge_scale = 1.0
+        else:
+            ridge_scale = 1.0
+
+        # Attenuation: strength scales the effect, capped at 60% of ridge depth
+        # ridge_signal is in [0, 255], scale it by strength
+        # At strength=100, reduce ridge signal by max 60% (preserve 40% residual depth)
+        max_reduction_frac = 0.6  # 60% cap on depth reduction
+
+        # Scale attenuation directly from ridge signal
+        # ridge_signal is already in magnitude units (0-255)
+        # strength is normalized (0-100), so we use it directly as a fraction
+        attenuation = ridge_signal_masked * (s / 100.0) * max_reduction_frac * 100.0
+
+        # Apply to L channel: ADD attenuation to lighten dark wrinkles
+        # (dark wrinkles have high negative DoG values, so we lighten them)
+        lab[:, :, 0] = np.clip(L + attenuation, 0.0, 255.0)
+
+        result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+
+        # Blend using the wrinkle mask
+        return blend_masked(img_bgr, result, wrinkle_mask)
+
     def harmonize_neck(
         self,
         img_bgr: np.ndarray,
@@ -1094,6 +1208,237 @@ class SkinProcessor:
         lab[:, :, 0] = np.clip(L_new, 0, 255)
         lab[:, :, 1] = a_new
         lab[:, :, 2] = b_new
+
+        result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        return blend_masked(img_bgr, result, skin_mask)
+
+    def texture_transplant(
+        self,
+        img_bgr: np.ndarray,
+        skin_mask: Optional[np.ndarray],
+        strength: float = 0,
+        face_width: float = 100.0,
+    ) -> np.ndarray:
+        """Texture transplant: clone high-frequency texture from clean skin to over-smoothed zones.
+
+        Implements same-face texture cloning by:
+        1. Finding the cleanest (lowest-blotch) skin region via _blotch_bandpass variance
+        2. Extracting tileable high-band texture from the donor patch
+        3. Detecting texture-poor (over-smoothed/inpainted) zones via local high-band energy
+        4. Blending donor texture into target zones with rotation jitter and luminance matching
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR image.
+            skin_mask: (H, W) float mask 0–1. May be None to skip processing.
+            strength: 0–100 texture transplant intensity. 0 returns input unchanged.
+            face_width: Face width in pixels. Used to scale patch sizes and frequency bands.
+
+        Returns:
+            (H, W, 3) uint8 BGR image.
+
+        Algorithm overview:
+        - Early return if strength <= 0 or skin_mask is None
+        - Compute blotch-band metric within skin regions via _blotch_bandpass
+        - Divide skin-masked area into candidate patches, score by local blotch variance
+        - Pick lowest-variance patch as donor (cleanest skin, usually cheeks)
+        - If insufficient candidate patches exist, return input unchanged (no clean donor found)
+        - Extract high-band residual from donor patch (L - gaussian_blur(L, sigma≈2))
+        - Apply soft radial falloff to donor patch edges for tileable seaming
+        - Detect target zones: regions where local high-band energy < threshold (smoothed/inpainted)
+        - For each target zone, blend donor texture with:
+          * Random rotation jitter (±15-45°, seeded by position for reproducibility)
+          * Luminance rescaling to match target zone's local contrast
+          * Soft masking to avoid harsh edges
+        - Final blend into skin_mask via blend_masked
+        - Donor region itself remains unmodified (read-only)
+        """
+        if strength <= 0 or skin_mask is None:
+            return img_bgr
+
+        s = strength / 100.0
+        h_img, w_img = img_bgr.shape[:2]
+
+        # Convert to LAB for processing
+        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        L = lab[:, :, 0]
+
+        # --- Step 1: Compute blotch-band signal (for donor region detection) ---
+        blotch_band = _blotch_bandpass(L, face_width)
+
+        # --- Step 2: Find cleanest donor patch ---
+        skin_indices = skin_mask > 0.3
+        if np.sum(skin_indices) < 100:
+            return img_bgr  # Insufficient skin area
+
+        # Divide skin-masked region into candidate patches
+        patch_size = max(int(face_width * 0.10), 20)  # 10% of face width, min 20px
+        grid_step = patch_size // 2  # 50% overlap for smoother scoring
+
+        # Precompute pore-scale high-band residual for the whole image so we can
+        # reject "clean by blotch metric but actually textureless" patches (bug
+        # found in review 2026-07-03: a perfectly flat patch has zero variance at
+        # EVERY frequency, including the blotch band, so it was scoring as the
+        # "cleanest" donor while having literally nothing to transplant — donor_
+        # highband std was 0.0). A valid donor must have real pore-scale texture,
+        # not just low blotchiness.
+        L_blurred_full = cv2.GaussianBlur(L, (0, 0), 2.0)
+        highband_full = L - L_blurred_full
+
+        candidate_patches = []
+        for y in range(0, h_img - patch_size, grid_step):
+            for x in range(0, w_img - patch_size, grid_step):
+                patch_skin_mask = skin_mask[y:y + patch_size, x:x + patch_size]
+                if np.mean(patch_skin_mask) < 0.5:
+                    continue  # Skip patches that aren't mostly skin
+
+                patch_blotch = blotch_band[y:y + patch_size, x:x + patch_size]
+                patch_blotch_masked = patch_blotch * patch_skin_mask
+                blotch_variance = np.std(patch_blotch_masked[patch_skin_mask > 0.3])
+
+                # Donor-quality guard: the patch must actually contain pore-scale
+                # high-band texture (std > a small floor) to be worth cloning from.
+                patch_highband = highband_full[y:y + patch_size, x:x + patch_size]
+                patch_highband_energy = np.std(patch_highband[patch_skin_mask > 0.3])
+
+                if not np.isnan(blotch_variance) and patch_highband_energy > 0.5:
+                    candidate_patches.append({
+                        'x': x, 'y': y,
+                        'variance': blotch_variance,
+                        'highband_energy': patch_highband_energy,
+                    })
+
+        if len(candidate_patches) < 3:
+            return img_bgr  # Not enough textured candidate patches to find a clean donor
+
+        # Sort by blotch variance (ascending) and pick the cleanest *textured* patch
+        candidate_patches.sort(key=lambda p: p['variance'])
+        donor_patch = candidate_patches[0]
+        donor_x, donor_y = donor_patch['x'], donor_patch['y']
+
+        # --- Step 3: Extract tileable high-band texture from donor ---
+        donor_L = L[donor_y:donor_y + patch_size, donor_x:donor_x + patch_size]
+        donor_skin = skin_mask[donor_y:donor_y + patch_size, donor_x:donor_x + patch_size]
+
+        # High-band residual (pore-scale texture)
+        donor_L_blurred = cv2.GaussianBlur(donor_L, (0, 0), 2.0)
+        donor_highband = donor_L - donor_L_blurred
+
+        # Apply soft radial falloff to patch edges for seamless tiling
+        # Create a radial gradient mask: 1.0 at center, 0.0 at edges
+        center_y, center_x = patch_size / 2.0, patch_size / 2.0
+        yy, xx = np.ogrid[:patch_size, :patch_size]
+        dist_to_center = np.sqrt((yy - center_y) ** 2 + (xx - center_x) ** 2)
+        max_dist = np.sqrt(center_y ** 2 + center_x ** 2)
+        radial_falloff = 1.0 - np.clip(dist_to_center / (max_dist * 0.8), 0.0, 1.0)
+        radial_falloff = np.power(radial_falloff, 2.0)  # Smooth curve
+
+        donor_highband = donor_highband * radial_falloff
+
+        # --- Step 4: Detect texture-poor target zones ---
+        # Compute high-band residual for the entire image
+        L_blurred = cv2.GaussianBlur(L, (0, 0), 2.0)
+        L_highband = L - L_blurred
+
+        # Compute local high-band energy via standard deviation in sliding windows
+        window_size = max(int(face_width * 0.08), 16)
+        window_size = window_size if window_size % 2 == 1 else window_size + 1  # Ensure odd
+
+        # Use moving window via morphological approach: compute std in local regions
+        # Simple approximation: use highband squared as proxy for energy
+        L_highband_sq = L_highband ** 2
+        # Low-pass filter to get local energy estimate
+        local_energy_approx = cv2.GaussianBlur(L_highband_sq, (window_size, window_size), 0)
+        local_highband_energy = np.sqrt(np.clip(local_energy_approx, 0, None))
+
+        # Target zones: low energy relative to face median energy
+        valid_energy = local_highband_energy[skin_indices]
+        median_energy = np.median(valid_energy) if len(valid_energy) > 0 else 1.0
+        energy_threshold = median_energy * 0.4  # Zones with <40% of median energy
+
+        target_mask = np.logical_and(
+            local_highband_energy < energy_threshold,
+            skin_mask > 0.3
+        ).astype(np.float32)
+
+        if np.sum(target_mask) < 50:
+            return img_bgr  # Insufficient target area
+
+        # Feather target mask for smooth blending
+        target_mask = cv2.GaussianBlur(target_mask, (11, 11), 0)
+        target_mask = np.clip(target_mask, 0.0, 1.0)
+
+        # --- Step 5: Blend transplanted texture with rotation jitter and luminance matching ---
+        # Place donor texture tiles across target regions
+        result_L = L.copy()
+
+        # Deterministic seeding based on position for reproducibility
+        random_seed_base = int(donor_x + donor_y * w_img)
+
+        for tile_y in range(0, h_img, patch_size):
+            for tile_x in range(0, w_img, patch_size):
+                tile_target_mask = target_mask[
+                    tile_y:min(tile_y + patch_size, h_img),
+                    tile_x:min(tile_x + patch_size, w_img)
+                ]
+
+                if np.max(tile_target_mask) < 0.01:
+                    continue
+
+                # Deterministic random seed from tile position
+                np.random.seed((random_seed_base + tile_x + tile_y * 1000) % (2 ** 31))
+
+                # Random rotation jitter (±15 to ±45 degrees)
+                angle = np.random.uniform(-45, 45)
+                rotation_matrix = cv2.getRotationMatrix2D(
+                    (patch_size / 2, patch_size / 2), angle, 1.0
+                )
+                donor_highband_rotated = cv2.warpAffine(
+                    donor_highband,
+                    rotation_matrix,
+                    (patch_size, patch_size),
+                    borderMode=cv2.BORDER_REFLECT,
+                )
+
+                # Tile the rotated donor texture to cover the target area
+                tile_h = min(patch_size, h_img - tile_y)
+                tile_w = min(patch_size, w_img - tile_x)
+
+                # Crop rotated donor to match tile dimensions
+                donor_tile = donor_highband_rotated[:tile_h, :tile_w]
+                target_tile_mask = tile_target_mask[:tile_h, :tile_w]
+
+                if np.max(target_tile_mask) < 0.01:
+                    continue
+
+                # Luminance matching: rescale donor texture to match the face's own
+                # HEALTHY high-band energy level (median_energy, computed in Step 4
+                # from the whole skin region), NOT the target zone's own pre-transplant
+                # energy. The target zone was selected specifically because its energy
+                # is far below median (< 40% of median_energy, see energy_threshold
+                # above) — scaling toward the target's own near-zero energy would be
+                # circular and self-defeating (on a perfectly flat target, energy_scale
+                # would collapse to ~0, making the transplant a no-op on exactly the
+                # zones it exists to repair). Bug caught in review 2026-07-03: the
+                # original implementation measured tile_L_energy from the target zone
+                # itself, producing a 0/0-ish ratio on flat regions. Fixed by reusing
+                # median_energy as the target amplitude instead.
+                tile_L = result_L[tile_y:tile_y + tile_h, tile_x:tile_x + tile_w]
+
+                donor_tile_energy = np.std(donor_tile[target_tile_mask > 0.1])
+                if donor_tile_energy > 0.1:
+                    # Scale donor texture to match healthy face-wide texture amplitude
+                    energy_scale = median_energy / (donor_tile_energy + 1e-6)
+                    donor_tile = donor_tile * energy_scale
+
+                # Blend into result with target mask
+                blend_factor = target_tile_mask * s
+                result_L[tile_y:tile_y + tile_h, tile_x:tile_x + tile_w] = np.clip(
+                    tile_L + donor_tile * blend_factor,
+                    0.0, 255.0
+                )
+
+        # --- Step 6: Assemble result and verify donor region unchanged ---
+        lab[:, :, 0] = result_L
 
         result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
         return blend_masked(img_bgr, result, skin_mask)

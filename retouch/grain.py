@@ -73,7 +73,7 @@ def apply_film_grain(
     b_chan = lab[:, :, 2].astype(np.float32)
 
     lum_mod = np.power(1.0 - l, luma_power)
-    amplitude = strength * 20.0
+    amplitude = strength * 7.0
 
     l_out = np.clip(lab[:, :, 0].astype(np.float32) + g_low * amplitude * lum_mod, 0, 100)
     if g_mid is not None and g_high is not None:

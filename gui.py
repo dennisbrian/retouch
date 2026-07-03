@@ -98,7 +98,8 @@ def apply_custom_style(style_name, current_recipe="natural"):
     return (
         d["smooth"], d["mid_reduction"], d["texture_opacity"], d["pore_synthesis"], d["nose_smooth"], d["micro_restore"],
         d["whiten"], d["equalize"], d["blemish"], d["whiten_tone"], d["nose_blush"], d["under_eye_blush"], d["white_costume_lift"],
-        d["dodge_burn"], d["relight"], d["relight_azimuth"], d["relight_elevation"], d["sculpt"], d["shine_removal"], d["specular_bloom"], d["specular_bloom_tone"],
+        d["body_smooth"], d["body_equalize"], d["body_whiten"], d["body_match_face"],
+        d["dodge_burn"], d["relight"], d["relight_azimuth"], d["relight_elevation"], d["sculpt"], d["shine_removal"], d["wrinkle_soften"], d["specular_bloom"], d["specular_bloom_tone"],
         d["skin_flatten"], d["skin_quantize"], d["skin_unify"], d["skin_unify_hue"], d["skin_glow"],
         d["eye_enhance"], d["catchlight"], d["dark_circles"], d["teeth_whiten"], d["lip_enhance"], d["lip_tint"], d["lip_finish"], d["blush"], d["slimming"], d["hair_enhance"],
         d["contrast"], d["brightness"], d["highlights"], d["shadows"], d["whites"], d["blacks"], d["clarity"], d["vibrance"], d["saturation"], d["auto_exposure"],
@@ -332,6 +333,7 @@ def process_image(*args):
     temp_dir = tempfile.mkdtemp(prefix="retouch_tmp_")
     debug_dir = os.path.join(temp_dir, "debug") if debug_mode else None
     qa_warnings = []
+    qa_html = ""
 
     # Translate the GUI-side values dict into the engine-side kwargs dict.
     # The spec list (in retouch.params) is the source of truth for the
@@ -475,7 +477,8 @@ def on_recipe_change(recipe):
     return (
         d["smooth"], d["mid_reduction"], d["texture_opacity"], d["pore_synthesis"], d["nose_smooth"], d["micro_restore"],
         d["whiten"], d["equalize"], d["blemish"], d["whiten_tone"], d["nose_blush"], d["under_eye_blush"], d["white_costume_lift"],
-        d["dodge_burn"], d["relight"], d["relight_azimuth"], d["relight_elevation"], d["sculpt"], d["shine_removal"], d["specular_bloom"], d["specular_bloom_tone"],
+        d["body_smooth"], d["body_equalize"], d["body_whiten"], d["body_match_face"],
+        d["dodge_burn"], d["relight"], d["relight_azimuth"], d["relight_elevation"], d["sculpt"], d["shine_removal"], d["wrinkle_soften"], d["specular_bloom"], d["specular_bloom_tone"],
         d["skin_flatten"], d["skin_quantize"], d["skin_unify"], d["skin_unify_hue"], d["skin_glow"],
         d["eye_enhance"], d["catchlight"], d["dark_circles"], d["teeth_whiten"], d["lip_enhance"], d["lip_tint"], d["lip_finish"], d["blush"], d["slimming"], d["hair_enhance"],
         d["contrast"], d["brightness"], d["highlights"], d["shadows"], d["whites"], d["blacks"], d["clarity"], d["vibrance"], d["saturation"], d["auto_exposure"],
@@ -1346,6 +1349,13 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             auto_exposure = gr.Checkbox(label="Auto Exposure Correction", value=False, info="Automatically correct under/over-exposed images before processing")
                             white_costume_lift = gr.Checkbox(label="White Costume Lift", value=False, info="Selectively boost bright clothing to create separation")
 
+                        with gr.Accordion("🦵 Body Skin", open=False):
+                            reset_body_skin_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
+                            body_smooth = gr.Slider(0, 100, 0, step=1, label="Body Smooth", info="Smoothing for arms, legs, décolletage · milder curve than face to preserve texture")
+                            body_equalize = gr.Slider(0, 100, 0, step=1, label="Body Equalize", info="Even out tone in body skin regions · tone harmonization at body scale")
+                            body_whiten = gr.Slider(0, 100, 0, step=1, label="Body Whiten", info="Lighten body skin to match face whitening treatment")
+                            body_match_face = gr.Slider(0, 100, 0, step=1, label="Body Match Face", info="Pull body skin L/a/b toward retouched face skin color · bounded ±8L ±6a/b")
+
                         with gr.Accordion("📊 Basic Tone & Color", open=False):
                             reset_basic_tone_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                             contrast = gr.Slider(-50, 50, 0, step=1, label="Contrast", info="Adjust global image contrast")
@@ -1368,6 +1378,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             relight_elevation = gr.Slider(-90, 90, 30, step=1, label="Light Elevation", info="Vertical light source direction angle (-90° to 90°)")
                             sculpt = gr.Slider(0, 100, 0, step=1, label="Facial Sculpting", info="Shape reflectance: deepen cheekbones, nose ridge, and jawline via low-band shading")
                             shine_removal = gr.Slider(0, 100, 0, step=1, label="Shine Removal", info="Remove oily/sweaty shine: compress specular highlights and reconstruct chroma")
+                            wrinkle_soften = gr.Slider(0, 100, 0, step=1, label="Wrinkle & Line Softening", info="Reduce nasolabial folds, forehead lines, and crow's feet via ridge-aware attenuation")
+                            texture_transplant = gr.Slider(0, 100, 0, step=1, label="Texture Transplant", info="Clone pore texture from clean skin regions to over-smoothed/inpainted zones for realistic texture")
 
                         with gr.Accordion("👁️ Eyes & Lips", open=False):
                             reset_eyes_lips_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
@@ -1538,7 +1550,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     _recipe_outputs = [
         smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth, micro_restore,
         whiten, equalize, blemish, whiten_tone, nose_blush, under_eye_blush, white_costume_lift,
-        dodge_burn, relight, relight_azimuth, relight_elevation, sculpt, shine_removal, specular_bloom, specular_bloom_tone,
+        body_smooth, body_equalize, body_whiten, body_match_face,
+        dodge_burn, relight, relight_azimuth, relight_elevation, sculpt, shine_removal, wrinkle_soften, specular_bloom, specular_bloom_tone,
         skin_flatten, skin_quantize, skin_unify, skin_unify_hue, skin_glow,
         eye_enhance, catchlight, dark_circles, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, slimming, hair_enhance,
         contrast, brightness, highlights, shadows, whites, blacks, clarity, vibrance, saturation, auto_exposure,
@@ -1680,7 +1693,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         img_input, recipe,
         smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth, micro_restore, _micro_dodge_burn_state, _redness_even_state, _whiten_hue_stable_state,
         whiten, equalize, blemish, whiten_tone, nose_blush, under_eye_blush, white_costume_lift,
-        dodge_burn, relight, relight_azimuth, relight_elevation, sculpt, shine_removal, specular_bloom, specular_bloom_tone,
+        body_smooth, body_equalize, body_whiten, body_match_face,
+        dodge_burn, relight, relight_azimuth, relight_elevation, sculpt, shine_removal, wrinkle_soften, texture_transplant, specular_bloom, specular_bloom_tone,
         skin_flatten, skin_quantize, skin_unify, skin_unify_hue, _skin_hue_unify_state, _skin_chroma_even_state, skin_glow,
         eye_enhance, catchlight, dark_circles, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, slimming, hair_enhance,
         contrast, brightness, highlights, shadows, whites, blacks, clarity, vibrance, saturation, auto_exposure,

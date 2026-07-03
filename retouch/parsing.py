@@ -92,6 +92,19 @@ RIGHT_CHEEK = [
     295, 282, 283, 276, 353, 265, 340, 346,
 ]
 
+# Nasolabial folds (wrinkle zones)
+LEFT_NASOLABIAL = [206, 216, 92, 165, 167]
+RIGHT_NASOLABIAL = [426, 436, 322, 391, 393]
+
+# Crow's feet / outer eye wrinkle zones — lateral (temple-side) skin outward
+# from the outer eye corner (33 / 263), NOT the eyelid/lash contour itself.
+# Verified 2026-07-03 by rendering these points on two real detected faces
+# (test_output/DSCF4550.jpg and grace_hopper.jpg) and visually confirming
+# the cluster sits outside the LEFT_EYE/RIGHT_EYE lash contour, in skin,
+# toward the temple/hairline — see fix notes for the render technique used.
+LEFT_CROWS_FEET = [34, 227, 116, 137]
+RIGHT_CROWS_FEET = [264, 447, 345, 366]
+
 
 class FaceRegions:
     """Holds all per-region masks for one face."""
@@ -107,6 +120,8 @@ class FaceRegions:
         "nose_bridge", "forehead_center",
         "cheek_highlights_l", "cheek_highlights_r",
         "jawline_contour", "hair", "neck",
+        "nasolabial_l", "nasolabial_r",
+        "crows_feet_l", "crows_feet_r",
     ]
 
     def __init__(self) -> None:
@@ -524,6 +539,10 @@ class FaceParser:
         regions.forehead_center = self._circle_mask(landmarks, 151, ied * 0.25, w_img, h_img, feather)
         regions.cheek_highlights_l = self._circle_mask(landmarks, 117, ied * 0.22, w_img, h_img, feather)
         regions.cheek_highlights_r = self._circle_mask(landmarks, 346, ied * 0.22, w_img, h_img, feather)
+        regions.nasolabial_l = self._mask(landmarks, LEFT_NASOLABIAL, w_img, h_img, feather)
+        regions.nasolabial_r = self._mask(landmarks, RIGHT_NASOLABIAL, w_img, h_img, feather)
+        regions.crows_feet_l = self._mask(landmarks, LEFT_CROWS_FEET, w_img, h_img, feather)
+        regions.crows_feet_r = self._mask(landmarks, RIGHT_CROWS_FEET, w_img, h_img, feather)
         regions.jawline_contour = np.clip(
             self._mask(landmarks, [234, 127, 93, 132, 58, 172, 136, 150], w_img, h_img, feather) +
             self._mask(landmarks, [454, 323, 361, 288, 397, 365, 379, 378], w_img, h_img, feather),
@@ -531,7 +550,7 @@ class FaceParser:
         )
 
         # For sub-skin highlights/contours, intersect them with the skin mask to be perfectly clean
-        for attr in ['nose_bridge', 'forehead_center', 'cheek_highlights_l', 'cheek_highlights_r', 'jawline_contour', 'left_under_eye', 'right_under_eye', 'left_cheek', 'right_cheek', 'forehead']:
+        for attr in ['nose_bridge', 'forehead_center', 'cheek_highlights_l', 'cheek_highlights_r', 'jawline_contour', 'left_under_eye', 'right_under_eye', 'left_cheek', 'right_cheek', 'forehead', 'nasolabial_l', 'nasolabial_r', 'crows_feet_l', 'crows_feet_r']:
             val = getattr(regions, attr)
             if val is not None:
                 setattr(regions, attr, val * regions.skin)

@@ -114,7 +114,9 @@ from .recipes import RECIPES
 from .recipe_loader import load_user_recipes
 from .style import StyleProfile
 from .style_transfer import subject_aware_transfer
-from .utils import correct_exposure, apply_global_bloom, apply_skin_diffusion, vibrance as _vibrance_fn, squeeze_mask
+from .utils import correct_exposure, apply_global_bloom, apply_skin_diffusion, vibrance as _vibrance_fn, squeeze_mask, feather_mask, guided_filter, normalize_mask, blend_masked
+from .color_space import bgr_to_lch, skin_mask_lch
+from .color_science import bgr_to_oklab, oklab_to_oklch
 from .params import resolve_recipe, _deep_merge, PROCESSING_PARAMS  # noqa: F401  (re-export for backward compat)
 
 
@@ -172,6 +174,12 @@ class ProcessingContext:
     whiten_hue_stable: bool = False
     skin_locus: Optional[Dict[str, float]] = None
     shine_removal: float = 0.0
+    wrinkle_soften: float = 0.0
+    texture_transplant: float = 0.0
+    body_smooth: float = 0.0
+    body_equalize: float = 0.0
+    body_whiten: float = 0.0
+    body_match_face: float = 0.0
 
     # --- Eyes ---
     eye_enhance: float = 0.0
@@ -635,6 +643,11 @@ class RetouchEngine:
         relight_azimuth: Optional[float] = None,
         relight_elevation: Optional[float] = None,
         sculpt: Optional[float] = None,
+        fade_toe: Optional[float] = None,
+        highlight_drift: Optional[float] = None,
+        airy_haze: Optional[float] = None,
+        clarity_split_neg: Optional[float] = None,
+        clarity_split_pos: Optional[float] = None,
         slimming: Optional[float] = None,
         blush: Optional[float] = None,
         lip_finish: Optional[str] = None,
@@ -662,6 +675,12 @@ class RetouchEngine:
         whiten_hue_stable: Optional[bool] = None,
         skin_glow: Optional[float] = None,
         shine_removal: Optional[float] = None,
+        wrinkle_soften: Optional[float] = None,
+        texture_transplant: Optional[float] = None,
+        body_smooth: Optional[float] = None,
+        body_equalize: Optional[float] = None,
+        body_whiten: Optional[float] = None,
+        body_match_face: Optional[float] = None,
         lut: Optional[str] = None,
         skin_locus: Optional[Dict[str, float]] = None,
         tonal_curve_strength: Optional[float] = None,
@@ -753,6 +772,11 @@ class RetouchEngine:
             "relight_azimuth": relight_azimuth,
             "relight_elevation": relight_elevation,
             "sculpt": sculpt,
+            "fade_toe": fade_toe,
+            "highlight_drift": highlight_drift,
+            "airy_haze": airy_haze,
+            "clarity_split_neg": clarity_split_neg,
+            "clarity_split_pos": clarity_split_pos,
             "slimming": slimming,
             "blush": blush,
             "lip_finish": lip_finish,
@@ -780,6 +804,12 @@ class RetouchEngine:
             "whiten_hue_stable": whiten_hue_stable,
             "skin_glow": skin_glow,
             "shine_removal": shine_removal,
+            "wrinkle_soften": wrinkle_soften,
+            "texture_transplant": texture_transplant,
+            "body_smooth": body_smooth,
+            "body_equalize": body_equalize,
+            "body_whiten": body_whiten,
+            "body_match_face": body_match_face,
             "lut": lut,
             "skin_locus": skin_locus,
             "tonal_curve_strength": tonal_curve_strength,
@@ -1117,6 +1147,13 @@ class RetouchEngine:
         if ctx.subject_separation > 0:
             result = self._stage_subject_separation(result, person_mask, ctx)
         timings["subject_separation"] = (time.perf_counter() - t_subj) * 1000
+
+        # ------------------------------------------------------------------
+        # Stage 3.5 — Body skin retouch (now in float)
+        # ------------------------------------------------------------------
+        t_body = time.perf_counter()
+        result = self._stage_body_skin(result, ctx, person_mask, acc_skin, acc_skin_hair, faces, h_img, w_img)
+        timings["body_skin"] = (time.perf_counter() - t_body) * 1000
 
         # ------------------------------------------------------------------
         # Stage 4 — Global tonal adjustments (now in float)
@@ -1645,6 +1682,225 @@ class RetouchEngine:
         if is_float:
             return result_u8.astype(np.float32) / 255.0
         return result_u8
+
+    def _stage_body_skin(
+        self,
+        img: np.ndarray,
+        ctx: ProcessingContext,
+        person_mask: Optional[np.ndarray],
+        acc_skin: Optional[np.ndarray],
+        acc_skin_hair: Optional[np.ndarray],
+        faces: Optional[List[FaceData]],
+        h_img: int,
+        w_img: int,
+    ) -> np.ndarray:
+        """Body skin retouch: smoothing, tone matching to face, equalization, blemish removal.
+
+        Operates on full-image body skin (arms, legs, décolletage, etc.) detected via
+        LCH-based skin color detection, intersected with person_mask and excluding face ROIs.
+        Accepts float32 [0,1] input, returns same dtype.
+
+        Args:
+            img: (H, W, 3) float32 BGR image [0, 1].
+            ctx: ProcessingContext with body_smooth, body_equalize, body_whiten, body_match_face.
+            person_mask: (H, W) float32 person segmentation mask [0, 1].
+            acc_skin: (H, W) float32 accumulated face skin mask (already retouched).
+            acc_skin_hair: (H, W) float32 accumulated face skin+hair mask.
+            faces: List of detected FaceData objects.
+            h_img, w_img: Image height and width.
+
+        Returns:
+            (H, W, 3) float32 BGR image [0, 1].
+        """
+        # Early exit: all body params are zero
+        if (ctx.body_smooth <= 0 and ctx.body_equalize <= 0 and
+            ctx.body_whiten <= 0 and ctx.body_match_face <= 0):
+            return img
+
+        if person_mask is None or person_mask.max() < 0.01:
+            return img
+
+        # ------ Build body skin mask ------
+        # Convert to LCH and apply skin color detection
+        img_u8 = np.clip(img * 255.0, 0, 255).astype(np.uint8)
+        lch = bgr_to_lch(img_u8)
+        skin_mask_lch_result = skin_mask_lch(lch, hue_center=25.0, hue_tolerance=25.0, chroma_min=8.0)
+
+        # Intersect with person mask (normalized)
+        pm = normalize_mask(person_mask)
+        pm = squeeze_mask(pm)
+        body_skin_candidate = skin_mask_lch_result * pm
+
+        # Exclude face skin region (already handled by per-face processing)
+        if acc_skin is not None:
+            acc_skin_norm = normalize_mask(acc_skin)
+            acc_skin_norm = squeeze_mask(acc_skin_norm)
+            body_skin_candidate = np.clip(body_skin_candidate - acc_skin_norm, 0, 1)
+
+        # Exclude face hair region if available
+        if acc_skin_hair is not None:
+            acc_hair = normalize_mask(acc_skin_hair)
+            acc_hair = squeeze_mask(acc_hair)
+            # Erode hair mask to avoid over-exclusion at edges
+            acc_hair_eroded = cv2.erode(acc_hair, np.ones((3, 3), np.uint8), iterations=1)
+            body_skin_candidate = np.clip(body_skin_candidate - acc_hair_eroded, 0, 1)
+
+        # Morphological cleaning: open (remove small noise) then close (fill small holes)
+        # Scale kernel size to person size, not face size
+        person_bbox_size = max(h_img, w_img) * 0.15  # Estimate person region size
+        k_morph = max(3, int(person_bbox_size / 50.0) | 1)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_morph, k_morph))
+        body_skin_candidate = cv2.morphologyEx(body_skin_candidate, cv2.MORPH_OPEN, kernel)
+        body_skin_candidate = cv2.morphologyEx(body_skin_candidate, cv2.MORPH_CLOSE, kernel)
+
+        # Contiguity check: drop disconnected components that don't touch the face region
+        if acc_skin is not None and acc_skin.max() > 0.01:
+            # Dilate face skin region for tolerance
+            face_skin_dilated = cv2.dilate(acc_skin_norm, np.ones((21, 21), np.uint8), iterations=1)
+
+            # Find connected components in body_skin_candidate
+            n_labels, labels = cv2.connectedComponents((body_skin_candidate > 0.3).astype(np.uint8))
+
+            # Build filtered mask: only keep components that overlap dilated face region
+            body_skin_filtered = np.zeros_like(body_skin_candidate)
+            for label_id in range(1, n_labels):  # 0 is background
+                comp_mask = (labels == label_id).astype(np.float32)
+                overlap = np.sum(comp_mask * face_skin_dilated)
+                if overlap > 10:  # At least 10 pixels of overlap with face region
+                    body_skin_filtered += comp_mask * body_skin_candidate
+            body_skin_candidate = np.clip(body_skin_filtered, 0, 1)
+
+        # Tattoo/body paint exclusion: exclude high-chroma zones within body skin.
+        # Use the SAME gate as unify_hue_line (skin.py ~line 945): smoothstep at
+        # C=0.18 in OKLCh space. NOTE: `lch` above is CIE-LAB-derived LCH from
+        # bgr_to_lch(), whose chroma is unbounded (~0-130+ for real photos) —
+        # NOT the same space or scale as OKLCh's ~[0,1]-range chroma. Reusing
+        # the CIE-LCH chroma channel with a 0.18 threshold was a bug: it clipped
+        # tattoo_gate to 0 everywhere on real images, zeroing the entire
+        # body_skin_mask. Recompute chroma in OKLCh to match unify_hue_line's
+        # actual units before applying the 0.18 threshold.
+        oklab = bgr_to_oklab(img_u8)
+        oklch = oklab_to_oklch(oklab)
+        c_oklch = oklch[:, :, 1].astype(np.float32)
+        tattoo_gate = np.clip((0.18 - c_oklch) / 0.02, 0.0, 1.0)  # Smooth transition at 0.18
+        body_skin_candidate = body_skin_candidate * tattoo_gate
+
+        # Feather the mask for smooth blending at edges
+        k_feather = max(5, int(person_bbox_size / 40.0) | 1)
+        body_skin_mask = feather_mask(body_skin_candidate, radius=k_feather, sigma=k_feather / 2.0)
+
+        if body_skin_mask.max() < 0.01:
+            return img
+
+        # ------ Apply body skin operations ------
+        result = img.copy()
+
+        # 1. Body smoothing (guided filter at body scale, milder than face)
+        if ctx.body_smooth > 0:
+            s = ctx.body_smooth / 100.0
+            # Guided filter radius scales from person size (milder curve than face smoothing)
+            person_diag = np.sqrt(h_img ** 2 + w_img ** 2)
+            gf_radius = max(3, int(person_diag * 0.04 * s))  # Gentler than face scale
+            gf_eps = 0.01 * s
+            result_smoothed = np.zeros_like(result)
+            for c in range(result.shape[2]):
+                result_smoothed[:, :, c] = guided_filter(
+                    result[:, :, c], gf_radius, gf_eps, guide=None, max_dim=1200
+                )
+            # blend_masked expects uint8 [0,255] images, not float32 [0,1]
+            result_u8 = np.clip(result * 255.0, 0, 255).astype(np.uint8)
+            result_smoothed_u8 = np.clip(result_smoothed * 255.0, 0, 255).astype(np.uint8)
+            result = blend_masked(result_u8, result_smoothed_u8, body_skin_mask * s * 0.7).astype(np.float32) / 255.0
+
+        # 2. Body tone matching to face (body_match_face)
+        if ctx.body_match_face > 0 and acc_skin is not None and acc_skin.max() > 0.01:
+            s = ctx.body_match_face / 100.0
+            # Measure median LAB of retouched face skin
+            result_u8 = np.clip(result * 255.0, 0, 255).astype(np.uint8)
+            lab = cv2.cvtColor(result_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
+
+            face_indices = acc_skin_norm > 0.3
+            if np.any(face_indices):
+                face_median_l = np.median(lab[:, :, 0][face_indices])
+                face_median_a = np.median(lab[:, :, 1][face_indices])
+                face_median_b = np.median(lab[:, :, 2][face_indices])
+
+                body_indices = body_skin_mask > 0.3
+                if np.any(body_indices):
+                    body_median_l = np.median(lab[:, :, 0][body_indices])
+                    body_median_a = np.median(lab[:, :, 1][body_indices])
+                    body_median_b = np.median(lab[:, :, 2][body_indices])
+
+                    # Compute bounded corrections (hard clamp at ±8 L, ±6 a/b per plan)
+                    l_diff = np.clip((face_median_l - body_median_l) * s, -8.0, 8.0)
+                    a_diff = np.clip((face_median_a - body_median_a) * s, -6.0, 6.0)
+                    b_diff = np.clip((face_median_b - body_median_b) * s, -6.0, 6.0)
+
+                    lab[:, :, 0] = np.clip(lab[:, :, 0] + body_skin_mask * l_diff, 0, 255)
+                    lab[:, :, 1] = np.clip(lab[:, :, 1] + body_skin_mask * a_diff, 0, 255)
+                    lab[:, :, 2] = np.clip(lab[:, :, 2] + body_skin_mask * b_diff, 0, 255)
+
+                    result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR).astype(np.float32) / 255.0
+
+        # 3. Body equalization (global median a/b pull + CLAHE on L, scaled to body)
+        if ctx.body_equalize > 0:
+            s = ctx.body_equalize / 100.0
+            result_u8 = np.clip(result * 255.0, 0, 255).astype(np.uint8)
+            lab = cv2.cvtColor(result_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
+
+            body_indices = body_skin_mask > 0.3
+            if np.any(body_indices):
+                # Pull a/b toward median (gentler factor than face)
+                median_a = np.median(lab[:, :, 1][body_indices])
+                median_b = np.median(lab[:, :, 2][body_indices])
+                pull = (0.12 * s * body_skin_mask)  # Gentler than face (0.20)
+                lab[:, :, 1] = lab[:, :, 1] + (median_a - lab[:, :, 1]) * pull
+                lab[:, :, 2] = lab[:, :, 2] + (median_b - lab[:, :, 2]) * pull
+
+                # Light CLAHE on L channel
+                l_chan_u8 = np.clip(lab[:, :, 0], 0, 255).astype(np.uint8)
+                clip_limit = 1.0 + s * 1.5  # Gentler than face
+                clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
+                l_clahe = clahe.apply(l_chan_u8)
+                lab_new = lab.copy()
+                lab_new[:, :, 0] = l_clahe.astype(np.float32)
+                result_equalized_u8 = cv2.cvtColor(np.clip(lab_new, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+                # blend_masked expects uint8 [0,255] images, not float32 [0,1]
+                result_u8 = np.clip(result * 255.0, 0, 255).astype(np.uint8)
+                result = blend_masked(result_u8, result_equalized_u8, body_skin_mask * s * 0.6).astype(np.float32) / 255.0
+
+        # 4. Body whitening (lighten L channel in body skin)
+        if ctx.body_whiten > 0:
+            s = ctx.body_whiten / 100.0
+            # Use SkinProcessor's whiten method on body skin
+            result_u8 = np.clip(result * 255.0, 0, 255).astype(np.uint8)
+            skin_processor = SkinProcessor()
+            result_whitened = skin_processor.whiten(result_u8, body_skin_mask, strength=int(ctx.body_whiten))
+            result = result_whitened.astype(np.float32) / 255.0
+
+        # 5. Blemish removal on body (conservative size threshold scaled to person)
+        # Gated on the stage itself being active (any of the 4 body params nonzero),
+        # NOT on body_smooth specifically — each param must independently unlock its
+        # own sub-step, and blemish removal is a reasonable default whenever body skin
+        # is being touched at all. Strength is a fixed conservative default scaled by
+        # the strongest active param, rather than derived from body_smooth alone
+        # (deriving it from one unrelated param was the bug: a user setting only
+        # body_whiten/body_match_face/body_equalize got silently zero blemish removal).
+        if (ctx.body_smooth > 0 or ctx.body_equalize > 0 or
+            ctx.body_whiten > 0 or ctx.body_match_face > 0):
+            active_strength = max(ctx.body_smooth, ctx.body_equalize, ctx.body_whiten, ctx.body_match_face)
+            blemish_strength = max(20.0, active_strength * 0.5)  # conservative floor of 20
+            blemish_remover = BlemishRemover()
+            result_u8 = np.clip(result * 255.0, 0, 255).astype(np.uint8)
+            result_unblemished = blemish_remover.remove(result_u8, body_skin_mask, strength=blemish_strength)
+            # blend_masked expects uint8 [0,255] images, not float32 [0,1]
+            result = blend_masked(
+                result_u8,
+                result_unblemished,
+                body_skin_mask * 0.3
+            ).astype(np.float32) / 255.0
+
+        return result
 
     def _stage_global(self, img: np.ndarray, ctx: ProcessingContext) -> np.ndarray:
         """Global tonal operators (contrast, brightness, HSL tonal curve).

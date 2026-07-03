@@ -413,6 +413,16 @@ def _process_face_core(
     if ctx.dodge_burn > 0:
         canvas = skin.dodge_burn(canvas, regions, ctx.dodge_burn)
 
+    # ---- Wrinkle & line softening ----
+    if ctx.wrinkle_soften > 0:
+        canvas = skin.wrinkle_soften(canvas, regions, ctx.wrinkle_soften)
+
+    # ---- Texture transplant (pore realism v2) ----
+    if ctx.texture_transplant > 0:
+        canvas = skin.texture_transplant(
+            canvas, regions.skin, ctx.texture_transplant, face_width=face_width
+        )
+
     # ---- Local clarity (nose/lips/eyes pop) ----
     if ctx.clarity > 0:
         canvas = skin.local_clarity(

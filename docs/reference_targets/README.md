@@ -32,6 +32,30 @@ reference specifically:
   smoothing, A3's `makeup-aware smoothing` item, for the general version of this
   concern).
 
+## 3. Con-hall raw→edited tutorial pair (screenshot only, not saved to disk)
+Owner shared a Chinese-language retouching tutorial screenshot (场照修图教程 = "convention
+photo retouching tutorial") showing a genuine BEFORE/AFTER on the SAME source photo — this
+is the most valuable reference type per the note below, upgrading from "aspirational look"
+to real A/B evidence. Also a temp/sandboxed screenshot path Fable could not read from disk;
+described from direct visual inspection:
+- **Before** (small inset, bottom-left): raw convention-hall shot — harsh mixed venue
+  lighting (visible overhead rigging/lights in frame), flat/muddy color, a second blurred
+  figure in the background not fully separated from the subject, overall "phone-snapshot
+  at a con" quality.
+- **After** (main image): white/silver-haired cosplay character (dynamic action pose,
+  fantasy costume with metallic dagger-like hair ornaments and a blue/dark ornate outfit).
+  Clean saturated blues, sharp costume/prop detail (metal trim, fabric texture all crisp —
+  NOT oversmoothed), controlled skin tone despite the original harsh lighting, background
+  cleaned up/simplified vs. the busy con-hall original.
+- **Why this matters for the roadmap:** this is a textbook T1 (background replace/scene
+  relight) + C2 (structural sculpt) + S4 (shine removal, since con-hall lighting is
+  EXACTLY the harsh-highlight scenario S4 targets) + A2 competitive-tuning case in one
+  image. The raw→edited transformation is bigger than any single stage — it's the kind of
+  full-pipeline result A2's blind A/B should be judged against once C2/S4 are both mature.
+- If the owner can supply the RAW source photo (not just this tutorial screenshot), it
+  becomes a real A1/A2 fixture: run it through our current recipes and directly compare
+  against this tutorial's edited result on the identical starting point.
+
 ## How to use these
 Not automated QA fixtures (no ground truth, no ΔE targets) — visual references for
 human judgment during A2-style tuning passes, or as F6 look-from-reference candidates
