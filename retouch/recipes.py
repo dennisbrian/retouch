@@ -121,10 +121,11 @@ RECIPES = {
         "extends": "korean_beauty",
         "frequency": {"smooth": 0.40},
         "skin": {
-            "equalize": 0.05,
+            "equalize": 0.0,
             "rosy": 0.15,
             "hue_unify": 0.60,
             "chroma_even": 0.50,
+            "whiten_hue_stable": 1,
         },
         "texture": {"opacity": 0.97},
     },

@@ -174,6 +174,12 @@ _SKIN_QUALITY_RE = re.compile(
     r"\[benchmark\]\s+skin_quality_(?P<phase>\w+):\s+"
     r"blotch_std=(?P<blotch_std>[\d.]+)\s+chroma_std=(?P<chroma_std>[\d.]+)"
 )
+_QA_DETECTOR_RE = re.compile(
+    r"\[benchmark\]\s+qa_detector_(?P<phase>\w+):\s+"
+    r"banding=(?P<banding>[\d.]+)\s+"
+    r"clipping=(?P<clipping>[\d.]+)\s+"
+    r"plastic=(?P<plastic>[\d.]+)"
+)
 
 
 def parse_benchmark_lines(output: str) -> List[Dict[str, Any]]:
@@ -226,6 +232,18 @@ def parse_benchmark_lines(output: str) -> List[Dict[str, Any]]:
                     "phase": m.group("phase"),
                     "blotch_std": float(m.group("blotch_std")),
                     "chroma_std": float(m.group("chroma_std")),
+                }
+            )
+            continue
+        m = _QA_DETECTOR_RE.search(line)
+        if m:
+            results.append(
+                {
+                    "type": "qa_detector",
+                    "phase": m.group("phase"),
+                    "banding": float(m.group("banding")),
+                    "clipping": float(m.group("clipping")),
+                    "plastic": float(m.group("plastic")),
                 }
             )
     return results
@@ -284,6 +302,49 @@ def skin_quality_metrics(
 
     # Compute chroma std using the color_science function
     result["chroma_std"] = skin_chroma_std(img_bgr, skin_mask)
+
+    return result
+
+
+def qa_detector_metrics(
+    img_bgr: np.ndarray,
+    skin_mask: Optional[np.ndarray] = None,
+) -> Dict[str, float]:
+    """Run QA detectors and return their scores.
+
+    Args:
+        img_bgr: (H, W, 3) uint8 BGR image.
+        skin_mask: Optional (H, W) float mask [0, 1].
+
+    Returns:
+        dict with keys "banding_score", "clipping_score", "plastic_skin_score".
+        Returns 0.0 for each if detection fails.
+    """
+    from retouch import qa_detectors
+
+    result: Dict[str, float] = {
+        "banding_score": 0.0,
+        "clipping_score": 0.0,
+        "plastic_skin_score": 0.0,
+    }
+
+    try:
+        banding = qa_detectors.detect_banding(img_bgr, skin_mask)
+        result["banding_score"] = float(banding.get("score", 0.0))
+    except Exception:
+        pass
+
+    try:
+        clipping = qa_detectors.detect_clipping(img_bgr)
+        result["clipping_score"] = float(clipping.get("score", 0.0))
+    except Exception:
+        pass
+
+    try:
+        plastic = qa_detectors.detect_plastic_skin(img_bgr, skin_mask)
+        result["plastic_skin_score"] = float(plastic.get("score", 0.0))
+    except Exception:
+        pass
 
     return result
 

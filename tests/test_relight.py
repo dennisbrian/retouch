@@ -166,3 +166,50 @@ def test_v1_engine_still_works():
     assert out.dtype == np.uint8
     # With strength > 0 and valid mask, output should differ
     assert not np.array_equal(out, canvas)
+
+
+def test_strength_zero_unchanged():
+    """Test that strength=0 returns the input array unchanged for both engines."""
+    relighter = Relighter()
+    canvas = np.full((64, 64, 3), 100, dtype=np.uint8)
+    landmarks = MockLandmarksList()
+    mask = np.ones((64, 64), dtype=np.float32)
+
+    for engine in ("v1", "v2"):
+        out = relighter.relight(
+            canvas, landmarks, mask, face_width=64.0,
+            strength=0.0, engine=engine
+        )
+        assert np.array_equal(out, canvas)
+
+
+def test_output_dtype_and_shape():
+    """Test that relight returns uint8 output with preserved shape."""
+    relighter = Relighter()
+    h, w = 80, 120
+    canvas = np.full((h, w, 3), 128, dtype=np.uint8)
+    landmarks = MockLandmarksList()
+    mask = np.ones((h, w), dtype=np.float32)
+
+    out = relighter.relight(
+        canvas, landmarks, mask, face_width=80.0,
+        strength=50.0, engine="v2"
+    )
+
+    assert out.dtype == np.uint8
+    assert out.shape == (h, w, 3)
+    assert not np.array_equal(out, canvas)
+
+
+def test_none_mask_unchanged():
+    """Test that None skin_mask returns the input unchanged."""
+    relighter = Relighter()
+    canvas = np.full((64, 64, 3), 128, dtype=np.uint8)
+    landmarks = MockLandmarksList()
+
+    out = relighter.relight(
+        canvas, landmarks, skin_mask=None, face_width=64.0,
+        strength=100.0, engine="v2"
+    )
+
+    assert np.array_equal(out, canvas)

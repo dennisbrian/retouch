@@ -739,3 +739,23 @@ def log_crash(exc: Exception, context_info: Optional[dict] = None) -> str:
         sys.stderr.write(f"Failed to write crash log: {log_err}\n")
         return ""
 
+
+def safe_divide(
+    numerator: np.ndarray,
+    denominator: np.ndarray,
+    fallback: float = 0.0,
+) -> np.ndarray:
+    """Element-wise division with zero-denominator protection.
+
+    Args:
+        numerator: (H, W) or (H, W, C) float32 array.
+        denominator: Same shape as numerator.
+        fallback: Value to use where |denominator| < 1e-8.
+
+    Returns:
+        Division result with safe fallback for near-zero denominators.
+    """
+    denom = np.where(np.abs(denominator) < 1e-8, 1.0, denominator)
+    result = numerator / denom
+    return np.where(np.abs(denominator) < 1e-8, fallback, result)
+

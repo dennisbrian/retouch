@@ -107,25 +107,32 @@ Cuts memory from 7.5 GB → 1.84 GB, runtime from 15.3s → 3.09s.
 ### Known Limitations
 - Remaining ~4% undetected faces: extreme profiles, heavy occlusion, tiny faces in distance shots
 - LUT hot-reload (daemon thread watcher) exists but not wired into GUI/CLI yet
-- B&W channel-mixer literals (30/59/11) in `engine.py` should use `_DEFAULTS` (see "Outstanding Fixes" below)
 - `.3dl` LUT loader has no upper-bound on file size (theoretical DoS, not reachable from GUI)
 
 ---
 
 ## Outstanding Fixes
 
-### MINOR: Registry-Bypass Bug — B&W channel mixer (engine.py:1212-1216, 1802-1806)
-**Issue:** `bw_active` checks `ctx.bw_channel_mixer_r != 30 / != 59 / != 11` using hardcoded literals instead of `_DEFAULTS["bw_channel_mixer_*"]` — same bug class as the white-balance instance fixed earlier (WB now correctly uses `_DEFAULTS` at engine.py:1144 and :1668).
+### ✅ RESOLVED 2026-07-03: Registry-Bypass Bug — B&W channel mixer _DEFAULTS (was engine.py:1212-1216, 1802-1806)
+**Issue:** `bw_active` checked `ctx.bw_channel_mixer_r != 30 / != 59 / != 11` using hardcoded literals instead of `_DEFAULTS["bw_channel_mixer_*"]` — same bug class as the white-balance instance fixed earlier (WB now correctly uses `_DEFAULTS` at engine.py:1144 and :1668).
 
-**Fix:** Replace both sites with comparisons against `_DEFAULTS["bw_channel_mixer_r"]` / `_g` / `_b`.
+**Fix:** Both sites now use `_DEFAULTS["bw_channel_mixer_r"]` / `_g` / `_b`.
 
-**Impact:** Currently matching (no behavioral effect), but violates single-source-of-truth — will silently desync if `params.py` defaults change. (Found in the 2026-07-03 audit; full findings in `PLAN_TIERE_ENGINE_FIDELITY.md`.)
+**Verified:** Comparisons source from `_DEFAULTS`, maintaining single-source-of-truth with `params.py` registry.
+
+### ✅ RESOLVED 2026-07-03: Sharpen inert zone 1-60
+Sharpen mapping now activates correctly across the full 1-100 slider range.
+
+### ✅ RESOLVED 2026-07-03: Equalize s² non-linearity
+Equalize curve now applies the correct s² transfer function.
 
 ### ✅ RESOLVED: White-balance literals (was engine.py:1098, 1570)
 Both sites now use `_DEFAULTS["white_balance_kelvin"]` / `["white_balance_tint"]` — verified 2026-07-03.
 
 ### ✅ RESOLVED: `_build_dimensional_mask` WIP (skin.py, perf_optimizations.py)
 Shape-aware fix is merged (`skin.py:31-61` takes a `shape` param); working tree clean as of 2026-07-03.
+
+### MINOR: skin.locus recipe override not wired — Q4 leftover; recipe_loader needs nested dict support for skin.locus pass-through to unify_hue_line().
 
 ### MINOR: LUT Hot-Reload Unwired
 **Status:** `watch_luts_dir()` daemon exists in `lut.py` but not integrated into GUI/CLI.

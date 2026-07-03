@@ -88,6 +88,17 @@ class TestApplyHDCurve:
         with pytest.raises(ValueError):
             apply_hd_curve(np.zeros((32, 32, 1), dtype=np.uint8))
 
+    def test_flat_midgray_noop_at_strength_zero(self):
+        img = np.full((32, 32, 3), 128, dtype=np.uint8)
+        result = apply_hd_curve(img, strength=0.0)
+        assert np.array_equal(result, img)
+
+    def test_output_dtype_uint8_across_strengths(self):
+        img = np.random.randint(0, 255, (32, 32, 3), dtype=np.uint8)
+        for strength in (0.0, 0.3, 0.7, 1.0):
+            result = apply_hd_curve(img, strength=strength)
+            assert result.dtype == np.uint8
+
 
 class TestLiftGammaGain:
     def test_all_zero_is_noop(self):
@@ -110,3 +121,8 @@ class TestLiftGammaGain:
         img = np.full((32, 32, 3), 128, dtype=np.uint8)
         result = apply_lift_gamma_gain(img, gain=1.5, luma_only=True)
         assert not np.array_equal(result, img)
+
+    def test_flat_midgray_noop_with_neutral_params(self):
+        img = np.full((32, 32, 3), 128, dtype=np.uint8)
+        result = apply_lift_gamma_gain(img, lift=0.0, gamma=1.0, gain=1.0)
+        assert np.array_equal(result, img)

@@ -206,3 +206,39 @@ class TestSpecularBoost:
         assert abs(outside_diff) < 0.5, (
             f"Expected outside-iris bright spot unchanged, got diff={outside_diff:.2f}"
         )
+
+
+def _random_eye_test_image():
+    np.random.seed(42)
+    img = np.random.randint(0, 256, (64, 64, 3), dtype=np.uint8)
+    regions = MockFaceRegions()
+    regions.left_eye = np.zeros((64, 64), dtype=np.float32)
+    regions.right_eye = np.zeros((64, 64), dtype=np.float32)
+    regions.left_iris = np.zeros((64, 64), dtype=np.float32)
+    regions.right_iris = np.zeros((64, 64), dtype=np.float32)
+    regions.left_eye[20:30, 20:30] = 1.0
+    regions.right_eye[20:30, 34:44] = 1.0
+    regions.left_iris[24:27, 24:27] = 1.0
+    regions.right_iris[24:27, 37:40] = 1.0
+    return img, regions
+
+
+def test_enhance_strength_zero():
+    img, regions = _random_eye_test_image()
+    enhancer = EyeEnhancer()
+    result = enhancer.enhance(img, regions, strength=0)
+    assert np.all(result == img)
+
+
+def test_enhance_output_dtype():
+    img, regions = _random_eye_test_image()
+    enhancer = EyeEnhancer()
+    result = enhancer.enhance(img, regions, strength=50)
+    assert result.dtype == np.uint8
+
+
+def test_enhance_output_shape():
+    img, regions = _random_eye_test_image()
+    enhancer = EyeEnhancer()
+    result = enhancer.enhance(img, regions, strength=50)
+    assert result.shape == (64, 64, 3)

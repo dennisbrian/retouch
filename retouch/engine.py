@@ -77,7 +77,7 @@ from __future__ import annotations
 import copy
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import cv2
@@ -98,7 +98,6 @@ from .perf_optimizations import (
     _FaceResult,
     _norm_mask,
     _process_face_core,
-    warmup_jit_kernels,
 )
 from .skin import SkinProcessor
 from .blemish import BlemishRemover
@@ -107,7 +106,8 @@ from .undereye import UnderEyeRepairer
 from .lips import LipEnhancer
 from .teeth import TeethWhitener
 from .grading import ColorGrader, PRESETS
-from . import grain, highlight, tonal
+from . import grain, highlight, tonal, qa_detectors
+from .qa_detectors import QAWarning
 from .hair import HairEnhancer
 from .relight import Relighter
 from .recipes import RECIPES
@@ -166,7 +166,9 @@ class ProcessingContext:
     skin_unify_hue: float = -1.0
     skin_hue_unify: float = 0.0
     skin_chroma_even: float = 0.0
+    redness_even: float = 0.0
     skin_glow: float = 0.0
+    whiten_hue_stable: bool = False
 
     # --- Eyes ---
     eye_enhance: float = 0.0
@@ -289,6 +291,7 @@ class ProcessingResult(np.ndarray):
         params: Optional[ProcessingContext] = None,
         timings: Optional[Dict[str, float]] = None,
         face_contexts: Optional[List["FaceContext"]] = None,
+        qa: Optional[List[QAWarning]] = None,
     ):
         obj = np.asarray(image).view(cls)
         obj.image = image
@@ -300,6 +303,7 @@ class ProcessingResult(np.ndarray):
         obj.params = params
         obj.timings = timings or {}
         obj.face_contexts = face_contexts
+        obj.qa = qa or []
         return obj
 
     def __array_finalize__(self, obj):
@@ -314,6 +318,7 @@ class ProcessingResult(np.ndarray):
         self.params = getattr(obj, "params", None)
         self.timings = getattr(obj, "timings", {})
         self.face_contexts = getattr(obj, "face_contexts", None)
+        self.qa = getattr(obj, "qa", None) or []
 
 
 # ---------------------------------------------------------------------------
@@ -510,6 +515,7 @@ class _CoreResult:
     person_mask: Optional[np.ndarray]
     no_face: bool = False
     face_contexts: Optional[List["FaceContext"]] = None
+    qa: List[QAWarning] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -565,8 +571,7 @@ class RetouchEngine:
             logging.getLogger(__name__).info(f"Loaded {len(loaded)} user recipes: {loaded}")
 
         # Warm up JIT kernels on engine startup (safe fallback if Numba is missing)
-        warmup_jit_kernels()
-
+        
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -637,6 +642,8 @@ class RetouchEngine:
         skin_unify_hue: Optional[float] = None,
         skin_hue_unify: Optional[float] = None,
         skin_chroma_even: Optional[float] = None,
+        redness_even: Optional[float] = None,
+        whiten_hue_stable: Optional[bool] = None,
         skin_glow: Optional[float] = None,
         lut: Optional[str] = None,
         tonal_curve_strength: Optional[float] = None,
@@ -750,6 +757,8 @@ class RetouchEngine:
             "skin_unify_hue": skin_unify_hue,
             "skin_hue_unify": skin_hue_unify,
             "skin_chroma_even": skin_chroma_even,
+            "redness_even": redness_even,
+            "whiten_hue_stable": whiten_hue_stable,
             "skin_glow": skin_glow,
             "lut": lut,
             "tonal_curve_strength": tonal_curve_strength,
@@ -863,6 +872,7 @@ class RetouchEngine:
                 params=ctx,
                 timings=timings,
                 face_contexts=built_contexts,
+                qa=core.qa,
             )
 
         # ------------------------------------------------------------------
@@ -923,6 +933,7 @@ class RetouchEngine:
             params=ctx,
             timings=timings,
             face_contexts=built_contexts,
+            qa=core.qa,
         )
 
     # ------------------------------------------------------------------
@@ -945,6 +956,7 @@ class RetouchEngine:
         """
         h, w = img_bgr.shape[:2]
         proxy_scale = 1.0
+        native_img_bgr = img_bgr
         if max(h, w) > PROXY_MAX_DIM:
             proxy_scale = PROXY_MAX_DIM / float(max(h, w))
             new_w = int(w * proxy_scale)
@@ -955,6 +967,16 @@ class RetouchEngine:
 
         if proxy_scale < 1.0:
             core = self._upscale_core_result(core, h, w)
+            # F8.0: reinject native detail in non-skin regions
+            smooth_strength = ctx.smooth / 100.0 if ctx.smooth > 0 else 0.3
+            sigma = 2.0 * (1.0 / proxy_scale)
+            original_float = native_img_bgr.astype(np.float32)
+            blurred = cv2.GaussianBlur(original_float, (0, 0), sigma)
+            high_band = original_float - blurred
+            skin_weight = core.acc_skin * smooth_strength if core.acc_skin is not None else 0.0
+            weight = np.clip(1.0 - skin_weight, 0.0, 1.0)[:, :, np.newaxis]
+            result_f = core.result.astype(np.float32) + high_band * weight * 0.85
+            core.result = np.clip(result_f, 0, 255).astype(np.uint8)
 
         return core
 
@@ -1036,6 +1058,7 @@ class RetouchEngine:
                 person_mask=person_mask,
                 no_face=True,
                 face_contexts=None,
+                qa=[],
             )
 
         # ------------------------------------------------------------------
@@ -1103,6 +1126,27 @@ class RetouchEngine:
         # ------------------------------------------------------------------
         result = to_uint8(result)
 
+        qa_warnings: List[QAWarning] = []
+        if person_mask is not None and np.any(person_mask > 0.3):
+            qa_raw = qa_detectors.run_all(result, skin_mask=person_mask, person_mask=person_mask)
+            for detector_name, det_result in qa_raw.items():
+                if det_result.get("flagged", False):
+                    msg = {
+                        "banding": "Banding visible in smooth gradient regions",
+                        "clipping": "Highlight/shadow clipping detected",
+                        "plastic_skin": "Skin texture loss detected — may appear plastic",
+                        "halo": "Edge overshoot halos detected from sharpening",
+                        "seam": "Seam visible at subject boundary",
+                    }.get(detector_name, f"{detector_name} artifact detected")
+                    qa_warnings.append(QAWarning(
+                        detector=detector_name,
+                        score=det_result.get("score", 0.0),
+                        flagged=True,
+                        message=msg,
+                        details={k: v for k, v in det_result.items() if k not in ("score", "flagged")},
+                    ))
+        ctx._qa_results = {d: r for d, r in qa_raw.items()} if 'qa_raw' in locals() else {}
+
         final_contexts = built_contexts if built_contexts is not None else cached_contexts
         return _CoreResult(
             result=result,
@@ -1114,6 +1158,7 @@ class RetouchEngine:
             person_mask=person_mask,
             no_face=False,
             face_contexts=final_contexts,
+            qa=qa_warnings,
         )
 
     @staticmethod
@@ -1213,9 +1258,9 @@ class RetouchEngine:
 
         # --- B&W channel mixer (Phase 1.d) — applied last ---
         bw_active = (
-            ctx.bw_channel_mixer_r != 30
-            or ctx.bw_channel_mixer_g != 59
-            or ctx.bw_channel_mixer_b != 11
+            ctx.bw_channel_mixer_r != _DEFAULTS["bw_channel_mixer_r"]
+            or ctx.bw_channel_mixer_g != _DEFAULTS["bw_channel_mixer_g"]
+            or ctx.bw_channel_mixer_b != _DEFAULTS["bw_channel_mixer_b"]
         )
         if bw_active:
             result = self._grader.channel_mixer_bw(
@@ -1337,6 +1382,11 @@ class RetouchEngine:
         # falling back to ThreadPoolExecutor (shares memory + GIL-released ops).
         proc_results: Optional[List[Optional[dict]]] = None
         try:
+            def _slim_ctx(ctx):
+                return {
+                    k: v for k, v in ctx.__dict__.items()
+                    if not isinstance(v, np.ndarray)
+                }
             payloads = [
                 (
                     prepared_faces[i]['canvas'],
@@ -1344,7 +1394,7 @@ class RetouchEngine:
                     prepared_faces[i]['shifted_bbox'],
                     prepared_faces[i]['shifted_landmarks'],
                     ieds[i],
-                    ctx,
+                    _slim_ctx(ctx),
                     prepared_faces[i]['roi_box'],
                     prepared_faces[i]['roi_person_mask'],
                     prepared_faces[i]['roi_box'][3] - prepared_faces[i]['roi_box'][1],
@@ -1803,9 +1853,9 @@ class RetouchEngine:
 
         # --- B&W channel mixer ---
         bw_active = (
-            ctx.bw_channel_mixer_r != 30
-            or ctx.bw_channel_mixer_g != 59
-            or ctx.bw_channel_mixer_b != 11
+            ctx.bw_channel_mixer_r != _DEFAULTS["bw_channel_mixer_r"]
+            or ctx.bw_channel_mixer_g != _DEFAULTS["bw_channel_mixer_g"]
+            or ctx.bw_channel_mixer_b != _DEFAULTS["bw_channel_mixer_b"]
         )
         if bw_active:
             result_u8 = _to_uint8_if_float(result)
@@ -1839,7 +1889,11 @@ class RetouchEngine:
                 avg_ied = np.mean([f.ied for f in faces])
                 radius = ctx.sharpen_radius * (avg_ied / 80.0)
                 radius = max(0.5, min(4.0, radius))
-            amount = max(1.2, ctx.sharpen / 100.0 * 2.0)
+            # Monotone sharpen map: 0 -> 0, 50 -> 1.0, 100 -> 3.0 (linear in between)
+            if ctx.sharpen <= 50:
+                amount = ctx.sharpen / 50.0 * 1.0
+            else:
+                amount = 1.0 + (ctx.sharpen - 50.0) / 50.0 * 2.0
             if is_float:
                 result = _F_apply_selective_sharpening(
                     result, sharpen_mask, radius=radius, amount=amount, threshold=2.0
@@ -1849,7 +1903,12 @@ class RetouchEngine:
                     result, sharpen_mask, radius=radius, amount=amount, threshold=2
                 )
         if ctx.impact > 0:
-            result = self._grader.add_impact_finish(result, ctx.impact, subject_mask=person_mask)
+            if is_float:
+                result_u8 = np.clip(result * 255.0, 0, 255).astype(np.uint8)
+                result_u8 = self._grader.add_impact_finish(result_u8, ctx.impact, subject_mask=person_mask)
+                result = result_u8.astype(np.float32) / 255.0
+            else:
+                result = self._grader.add_impact_finish(result, ctx.impact, subject_mask=person_mask)
         return result
 
     @staticmethod

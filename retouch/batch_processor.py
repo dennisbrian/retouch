@@ -27,7 +27,7 @@ class BatchProcessorCache:
     Keyed by the SHA-256 hash of the resolved input directory.
     """
 
-    def __init__(self, input_dir: Path):
+    def __init__(self, input_dir: Path) -> None:
         self.input_dir = input_dir
         self.cache_dir = Path.home() / ".cache" / "retouch"
         self.cache_dir.mkdir(parents=True, exist_ok=True)

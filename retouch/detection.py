@@ -284,17 +284,17 @@ class FaceDetector:
 
         return np.ones(img_bgr.shape[:2], dtype=np.float32)
 
-    def close(self):
+    def close(self) -> None:
         """Release resources."""
         if hasattr(self, '_landmarker') and self._landmarker:
             self._landmarker.close()
         if hasattr(self, '_segmenter') and self._segmenter:
             self._segmenter.close()
 
-    def __enter__(self):
+    def __enter__(self) -> FaceDetector:
         return self
 
-    def __exit__(self, *_):
+    def __exit__(self, *_: Any) -> None:
         self.close()
 
     # ------------------------------------------------------------------

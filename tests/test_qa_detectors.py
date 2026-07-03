@@ -9,6 +9,7 @@ from retouch.qa_detectors import (
     detect_clipping,
     detect_plastic_skin,
     detect_halo,
+    detect_seam,
     run_all,
     BANDING_THRESHOLD,
     CLIPPING_THRESHOLD,
@@ -72,6 +73,14 @@ class TestDetectBanding:
         assert result["flagged"] is False
         assert result["score"] == 0.0
         assert result["smooth_pixels"] == 0
+
+    def test_banding_vectorized_small(self):
+        img = np.zeros((50, 50, 3), dtype=np.uint8)
+        for y in range(50):
+            val = int(y * 5.1)
+            img[y, :] = [val, val, val]
+        result = detect_banding(img)
+        assert isinstance(result["score"], float)
 
 
 class TestDetectClipping:
@@ -245,11 +254,44 @@ class TestDetectHalo:
         assert result["mean_overshoot"] == 0.0
 
 
+class TestDetectSeam:
+    """Tests for seam detection at subject boundaries."""
+
+    def test_no_mask_returns_zero(self):
+        img = np.random.randint(50, 200, (100, 100, 3), dtype=np.uint8)
+        result = detect_seam(img)
+        assert result["score"] == 0.0
+        assert result["flagged"] is False
+
+    def test_clean_boundary_not_flagged(self):
+        img = np.full((100, 100, 3), 128, dtype=np.uint8)
+        mask = np.zeros((100, 100), dtype=np.float32)
+        mask[30:70, 30:70] = 1.0
+        cv2.GaussianBlur(mask, (11, 11), 3, dst=mask)
+        result = detect_seam(img, person_mask=mask)
+        assert "score" in result
+        assert "seam_gradient" in result
+
+    def test_sharp_boundary_flagged(self):
+        img = np.zeros((100, 100, 3), dtype=np.uint8)
+        img[50:, :] = 200
+        mask = np.zeros((100, 100), dtype=np.float32)
+        mask[50:, :] = 1.0
+        result = detect_seam(img, person_mask=mask)
+        assert "seam_gradient" in result
+
+    def test_tiny_image_safe(self):
+        img = np.full((8, 8, 3), 128, dtype=np.uint8)
+        result = detect_seam(img)
+        assert result["flagged"] is False
+        assert result["score"] == 0.0
+
+
 class TestRunAll:
     """Tests for the aggregated run_all() function."""
 
-    def test_returns_all_four_detectors(self):
-        """run_all() should return results for all four detectors."""
+    def test_returns_all_five_detectors(self):
+        """run_all() should return results for all five detectors."""
         img = np.random.randint(50, 200, (100, 100, 3), dtype=np.uint8)
         result = run_all(img)
 
@@ -257,9 +299,10 @@ class TestRunAll:
         assert "clipping" in result
         assert "plastic_skin" in result
         assert "halo" in result
+        assert "seam" in result
 
         # Each should have score and flagged
-        for detector_name in ["banding", "clipping", "plastic_skin", "halo"]:
+        for detector_name in ["banding", "clipping", "plastic_skin", "halo", "seam"]:
             assert "score" in result[detector_name]
             assert "flagged" in result[detector_name]
 
@@ -274,6 +317,7 @@ class TestRunAll:
         assert "clipping" in result
         assert "plastic_skin" in result
         assert "halo" in result
+        assert "seam" in result
 
     def test_with_reference_image(self):
         """run_all() should pass reference to plastic skin detector."""
@@ -294,13 +338,14 @@ class TestRunAll:
         assert "clipping" in result
         assert "plastic_skin" in result
         assert "halo" in result
+        assert "seam" in result
 
     def test_tiny_image_safe(self):
         """Tiny images should not crash."""
         img = np.full((8, 8, 3), 128, dtype=np.uint8)
         result = run_all(img)
 
-        for detector_name in ["banding", "clipping", "plastic_skin", "halo"]:
+        for detector_name in ["banding", "clipping", "plastic_skin", "halo", "seam"]:
             assert result[detector_name]["flagged"] is False
 
 

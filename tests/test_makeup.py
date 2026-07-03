@@ -94,3 +94,13 @@ class TestApplyBlush:
         regions.right_under_eye = None
         result = engine.apply_blush(img, landmarks, 100, strength=50, regions=regions)
         assert result.shape == (100, 100, 3)
+
+    def test_blush_strength_zero_returns_same_object(self, engine, img, landmarks):
+        result = engine.apply_blush(img, landmarks, 100, strength=0)
+        assert result is img
+
+    def test_output_uint8_and_shape_across_strengths(self, engine, img, landmarks):
+        for s in [0, 30, 70, 100]:
+            result = engine.apply_blush(img, landmarks, 100, strength=s)
+            assert result.shape == img.shape
+            assert result.dtype == np.uint8

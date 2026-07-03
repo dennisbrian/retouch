@@ -4,6 +4,7 @@ import numpy as np
 import cv2
 import pytest
 
+from retouch.color_science import bgr_to_oklab, oklab_to_oklch
 from retouch.perf_optimizations import _build_smooth_mask
 from retouch.skin import SkinProcessor
 
@@ -71,6 +72,29 @@ class TestWhiten:
         result = proc.whiten(img, face_mask, strength=30)
         assert result.dtype == np.uint8
         assert result.shape == (64, 64, 3)
+
+    def test_whiten_hue_stable_true_lifts_luminance(self, proc, face_mask):
+        rng = np.random.RandomState(42)
+        colorful = rng.randint(50, 200, (64, 64, 3), dtype=np.uint8)
+        result = proc.whiten(colorful, face_mask, strength=50, tone="rosy", hue_stable=True)
+        L_orig = bgr_to_oklab(colorful)[..., 0]
+        L_result = bgr_to_oklab(result)[..., 0]
+        skin_idx = face_mask > 0.3
+        assert L_result[skin_idx].mean() > L_orig[skin_idx].mean() + 0.005
+
+    def test_whiten_hue_stable_preserves_chroma(self, proc, face_mask):
+        rng = np.random.RandomState(42)
+        colorful = rng.randint(50, 200, (64, 64, 3), dtype=np.uint8)
+        result = proc.whiten(colorful, face_mask, strength=50, tone="rosy", hue_stable=True)
+        C_orig = oklab_to_oklch(bgr_to_oklab(colorful))[..., 1]
+        C_result = oklab_to_oklch(bgr_to_oklab(result))[..., 1]
+        skin_idx = face_mask > 0.3
+        mean_C_diff = np.abs(C_result[skin_idx] - C_orig[skin_idx]).mean()
+        assert mean_C_diff < 0.005
+
+    def test_whiten_hue_stable_zero_strength(self, proc, img, face_mask):
+        result = proc.whiten(img, face_mask, strength=0, tone="rosy", hue_stable=True)
+        assert np.array_equal(result, img)
 
 
 class TestEqualize:

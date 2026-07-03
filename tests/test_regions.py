@@ -3,6 +3,7 @@
 import numpy as np
 import pytest
 
+from retouch.parsing import FaceRegions
 from retouch.regions import (
     _blend_multiply,
     _blend_normal,
@@ -16,6 +17,7 @@ from retouch.regions import (
     feather_mask,
     threshold_mask,
 )
+from retouch.utils import normalize_mask
 
 
 class TestApplyToRegion:
@@ -253,3 +255,19 @@ class TestBlendModes:
         out_bright = _blend_overlay(bright, layer)
         assert out_dark.max() < 200
         assert out_bright.min() > 200
+
+
+class TestFaceRegions:
+    def test_no_faces_all_attrs_none(self):
+        regions = FaceRegions()
+        for slot in FaceRegions.__slots__:
+            assert getattr(regions, slot) is None
+
+    def test_regions_are_float32_after_normalization(self):
+        regions = FaceRegions()
+        mask_uint8 = np.full((20, 20), 180, dtype=np.uint8)
+        regions.skin = mask_uint8
+        normalized = normalize_mask(regions.skin)
+        assert normalized.dtype == np.float32
+        assert normalized.min() >= 0.0
+        assert normalized.max() <= 1.0

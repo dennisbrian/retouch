@@ -183,6 +183,14 @@ def compute_skin_quality_map(
     - Low values = smooth skin -> needs less smoothing
 
     Uses local variance of luminance in a sliding window.
+
+    Args:
+        image_bgr: (H, W, 3) uint8 BGR image.
+        skin_mask: (H, W) float32 skin mask 0–1.
+        patch_size: Side length of sliding window for variance (odd, >=3).
+
+    Returns:
+        (H, W) float32 quality map in [0,1] masked to skin region.
     """
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
 

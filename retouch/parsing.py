@@ -109,7 +109,7 @@ class FaceRegions:
         "jawline_contour", "hair", "neck",
     ]
 
-    def __init__(self):
+    def __init__(self) -> None:
         for attr in self.__slots__:
             setattr(self, attr, None)
 
@@ -117,7 +117,7 @@ class FaceRegions:
 class FaceParser:
     """Generate precise per-region masks using BiSeNet ONNX + MediaPipe Face Mesh coordinates."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._model_path = os.path.join(
             os.path.dirname(os.path.dirname(__file__)), "models", "resnet18.onnx"
         )

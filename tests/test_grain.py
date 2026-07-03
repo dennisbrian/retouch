@@ -18,6 +18,11 @@ class TestGenerateFilmGrain:
         assert g.shape == (128, 256)
         assert g.dtype == np.float32
 
+    def test_zero_grain_strength_returns_zeros(self):
+        g = generate_film_grain((64, 64), grain_strength=0.0)
+        assert np.array_equal(g, np.zeros((64, 64), dtype=np.float32))
+        assert g.dtype == np.float32
+
     def test_output_has_expected_std(self):
         np.random.seed(1)
         g = generate_film_grain((256, 256), grain_strength=0.5, clumping_sigma=1.2)
@@ -44,6 +49,16 @@ class TestApplyFilmGrain:
         img = np.random.randint(0, 256, (64, 64, 3), dtype=np.uint8)
         out = apply_film_grain(img, strength=0.0)
         assert np.array_equal(out, img)
+        assert out.dtype == np.uint8
+
+    def test_output_shape_matches_input(self):
+        img = np.random.randint(0, 256, (73, 97, 3), dtype=np.uint8)
+        out = apply_film_grain(img, strength=0.5, seed=42)
+        assert out.shape == (73, 97, 3)
+
+    def test_output_is_uint8(self):
+        img = np.random.randint(0, 256, (64, 64, 3), dtype=np.uint8)
+        out = apply_film_grain(img, strength=0.5, seed=99)
         assert out.dtype == np.uint8
 
     def test_nonzero_strength_changes_pixels(self):

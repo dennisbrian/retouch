@@ -95,7 +95,7 @@ class StyleAnalyzer:
             self._parser = parser or FaceParser()
 
     @property
-    def engine(self):
+    def engine(self) -> Optional[Any]:
         """Backwards-compatible accessor for the underlying engine.
 
         Created lazily on first access so importing ``retouch.style`` does not
@@ -107,7 +107,7 @@ class StyleAnalyzer:
         return self._engine
 
     @engine.setter
-    def engine(self, value):
+    def engine(self, value: Any) -> None:
         self._engine = value
 
     def extract(self, original_img: np.ndarray, edited_img: np.ndarray) -> StyleProfile:
@@ -502,7 +502,7 @@ class StyleApplier:
         self._parser = parser or (getattr(engine, "_parser", None) if engine is not None else None)
 
     @property
-    def engine(self):
+    def engine(self) -> Optional[Any]:
         """Backwards-compatible accessor for the underlying engine.
 
         Created lazily on first access so importing ``retouch.style`` does not
@@ -514,7 +514,7 @@ class StyleApplier:
         return self._engine
 
     @engine.setter
-    def engine(self, value):
+    def engine(self, value: Any) -> None:
         self._engine = value
 
     def _ensure_detector_and_parser(self) -> None:

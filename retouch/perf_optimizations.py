@@ -298,6 +298,10 @@ def _process_face_core(
     if ctx.micro_dodge_burn > 0:
         canvas = skin.micro_dodge_burn(canvas, _norm_mask(regions.skin), ctx.micro_dodge_burn, face_width)
 
+    # ---- Redness evening (color blotch on a/b channels) ----
+    if ctx.redness_even > 0:
+        canvas = skin.redness_even(canvas, _norm_mask(regions.skin), ctx.redness_even, face_width, lips_mask=_norm_mask(regions.lips))
+
     # ---- Skin equalization ----
     if ctx.equalize > 0:
         canvas = skin.equalize(canvas, regions.skin, ctx.equalize, ref_lab=original_lab)
@@ -312,7 +316,7 @@ def _process_face_core(
 
     # ---- Foundation / whitening ----
     if ctx.whiten != 0:
-        canvas = skin.whiten(canvas, regions.skin, ctx.whiten, tone=ctx.whiten_tone)
+        canvas = skin.whiten(canvas, regions.skin, ctx.whiten, tone=ctx.whiten_tone, hue_stable=bool(ctx.whiten_hue_stable))
 
     # ---- Virtual studio relighting ----
     if ctx.relight > 0:
@@ -345,14 +349,14 @@ def _process_face_core(
         canvas = undereye.repair(canvas, regions, ctx.dark_circles)
 
     # ---- Neck harmonisation ----
-    if ctx.whiten != 0 or ctx.equalize > 0:
+    if ctx.whiten != 0 or ctx.equalize > 0 or ctx.skin_hue_unify > 0 or ctx.skin_chroma_even > 0 or ctx.redness_even > 0:
         canvas = skin.harmonize_neck(
             canvas,
             shifted_face.landmarks,
             roi_person_mask,
             regions.skin,
             regions.neck,
-            strength=max(abs(ctx.whiten), ctx.equalize),
+            strength=max(abs(ctx.whiten), ctx.equalize, ctx.skin_hue_unify, ctx.skin_chroma_even, ctx.redness_even),
         )
 
     # ---- Eye enhancement ----
@@ -541,7 +545,7 @@ class FaceProcessorPool:
 
     def __init__(self, max_workers: int | None = None) -> None:
         self._ctx = mp.get_context("spawn")
-        self._max_workers = max_workers or os.cpu_count() or 2
+        self._max_workers = max_workers or 4
         self._executor: ProcessPoolExecutor | None = None
 
     def __enter__(self) -> "FaceProcessorPool":
@@ -667,97 +671,4 @@ def build_ort_providers() -> list[str | tuple[str, dict]]:
     return providers
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# PROPOSAL 4 — Numba JIT pixel loops
-# ──────────────────────────────────────────────────────────────────────────────
 
-_TONAL_SIGNATURES = [
-    "float32[:,:,:](float32[:,:,:], float32[:])",
-]
-
-
-@numba.jit(
-    _TONAL_SIGNATURES,
-    nopython=True,
-    fastmath=True,
-    parallel=True,
-    cache=True,
-)
-def _apply_tonal_lut(img_f: np.ndarray, y_lut: np.ndarray) -> np.ndarray:
-    """
-    JIT-compiled tonal LUT mapping over a float32 image.
-    """
-    h, w, _ = img_f.shape
-    out = np.empty_like(img_f)
-
-    for y in numba.prange(h):
-        for x in range(w):
-            v0 = img_f[y, x, 0]
-            v1 = img_f[y, x, 1]
-            v2 = img_f[y, x, 2]
-
-            i0 = int(v0)
-            i1 = int(v1)
-            i2 = int(v2)
-
-            if i0 < 0:   i0 = 0
-            elif i0 > 255: i0 = 255
-            if i1 < 0:   i1 = 0
-            elif i1 > 255: i1 = 255
-            if i2 < 0:   i2 = 0
-            elif i2 > 255: i2 = 255
-
-            out[y, x, 0] = y_lut[i0]
-            out[y, x, 1] = y_lut[i1]
-            out[y, x, 2] = y_lut[i2]
-
-    return out
-
-
-@numba.jit(
-    ["float32[:,:,:](float32[:,:,:], float32[:,:,:], float32[:,:])"],
-    nopython=True,
-    fastmath=True,
-    parallel=True,
-    cache=True,
-)
-def _blend_highpass(
-    low: np.ndarray,
-    original: np.ndarray,
-    alpha_mask: np.ndarray,
-) -> np.ndarray:
-    """
-    JIT-compiled high-pass blend for frequency separation.
-    Computes: out = low + (original - low) * (1 - alpha_mask)
-    """
-    h, w, _ = low.shape
-    out = np.empty_like(low)
-
-    for y in numba.prange(h):
-        for x in range(w):
-            a = alpha_mask[y, x]
-            one_minus_a = 1.0 - a
-
-            out[y, x, 0] = low[y, x, 0] + (original[y, x, 0] - low[y, x, 0]) * one_minus_a
-            out[y, x, 1] = low[y, x, 1] + (original[y, x, 1] - low[y, x, 1]) * one_minus_a
-            out[y, x, 2] = low[y, x, 2] + (original[y, x, 2] - low[y, x, 2]) * one_minus_a
-
-    return out
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Warm-up JIT compilation
-# ──────────────────────────────────────────────────────────────────────────────
-
-def warmup_jit_kernels() -> None:
-    """
-    Triggers Numba JIT compilation of kernels on dummy data.
-    """
-    logger.info("Warming up Numba JIT kernels...")
-    dummy_img = np.zeros((4, 4, 3), dtype=np.float32)
-    dummy_lut = np.arange(256, dtype=np.float32)
-    dummy_mask = np.ones((4, 4), dtype=np.float32) * 0.5
-
-    _apply_tonal_lut(dummy_img, dummy_lut)
-    _blend_highpass(dummy_img, dummy_img, dummy_mask)
-    logger.info("Numba JIT warm-up complete.")

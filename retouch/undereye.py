@@ -6,11 +6,10 @@ Goes beyond simple brightening by detecting the *colour* of dark circles
 
 from __future__ import annotations
 
-from typing import Any, Optional
-
 import cv2
 import numpy as np
 
+from .parsing import FaceRegions
 from .utils import blend_masked
 
 
@@ -20,7 +19,7 @@ class UnderEyeRepairer:
     def repair(
         self,
         img_bgr: np.ndarray,
-        regions: Any,
+        regions: FaceRegions,
         strength: int = 40,
     ) -> np.ndarray:
         """Repair dark circles under both eyes.

@@ -5,6 +5,8 @@ All operations work within the skin mask to never affect hair, eyes, or backgrou
 
 from __future__ import annotations
 
+import math
+
 from typing import Any, Dict, Optional, Tuple
 
 import cv2
@@ -72,6 +74,11 @@ def _edge_protect(lab: np.ndarray) -> np.ndarray:
     return grad_protect
 
 
+def _smoothstep(edge0: float, edge1: float, x: np.ndarray) -> np.ndarray:
+    t = np.clip((x - edge0) / (edge1 - edge0), 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
 class SkinProcessor:
     """Skin smoothing, whitening, and tone equalization."""
 
@@ -116,6 +123,7 @@ class SkinProcessor:
         skin_mask: Optional[np.ndarray],
         strength: int = 30,
         tone: str = "rosy",
+        hue_stable: bool = False,
     ) -> np.ndarray:
         """Adaptive Rosy Foundation: LAB-based skin whitening and rosy/porcelain cosmetic shift.
 
@@ -134,6 +142,27 @@ class SkinProcessor:
 
         s = strength / 100.0
         lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+
+        if hue_stable:
+            oklab = bgr_to_oklab(img_bgr)
+            oklch = oklab_to_oklch(oklab)
+            L = oklch[:, :, 0]
+            protection = self._get_highlight_protection(lab)
+            l_val = L.copy()
+            shadow_protection = (np.clip((l_val * 255.0 - 80.0) / 40.0, 0.0, 1.0)
+                                 if s >= 0
+                                 else np.clip((l_val * 255.0 - 10.0) / 20.0, 0.0, 1.0))
+            skin_color_mask = skin_mask * shadow_protection
+            lift_factor = 0.16 * abs(s)
+            if s >= 0:
+                L_new = L + (1.0 - L) * skin_color_mask * lift_factor * protection
+            else:
+                L_new = L + L * skin_color_mask * lift_factor * shadow_protection
+            oklch[:, :, 0] = np.clip(L_new, 0.0, 1.0)
+            oklab_out = oklch_to_oklab(oklch)
+            out = oklab_to_bgr(oklab_out)
+            result = blend_masked(img_bgr, out, skin_mask)
+            return result
 
         protection = self._get_highlight_protection(lab)
 
@@ -202,7 +231,7 @@ class SkinProcessor:
         if strength <= 0 or skin_mask is None:
             return img_bgr
 
-        s = strength / 100.0
+        s = math.sqrt(strength / 100.0)
         lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
 
         skin_indices = skin_mask > 0.3
@@ -798,9 +827,10 @@ class SkinProcessor:
 
         # Eligibility mask: exclude high chroma (makeup/tattoo), very dark (hair/shadow), specular
         eligible = np.ones(img_bgr.shape[:2], dtype=np.float32)
-        eligible *= (C <= 0.18).astype(np.float32)  # Not high-chroma
-        eligible *= (L >= 0.25).astype(np.float32)  # Not dark features
-        eligible *= (L <= 0.95).astype(np.float32)  # Not specular highlights
+        # Smoothstep gates instead of hard binary (prevents contour seams)
+        eligible *= (1.0 - _smoothstep(0.0, 0.18, C))  # 1->0 as C goes 0->0.18 (high-chroma = ineligible)
+        eligible *= _smoothstep(0.25, 0.50, L)       # 0->1 as L goes 0.25->0.50
+        eligible *= (1.0 - _smoothstep(0.90, 0.95, L))  # 1->0 as L goes 0.90->0.95
         eligible *= skin_mask  # Within skin mask
 
         # Hue rotation: shortest arc to target, clipped to ±8°
@@ -873,6 +903,42 @@ class SkinProcessor:
         lab[:, :, 0] = np.clip(L_new, 0, 255)
 
         # Convert back and blend
+        result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        return blend_masked(img_bgr, result, skin_mask)
+
+    def redness_even(
+        self,
+        img_bgr: np.ndarray,
+        skin_mask: Optional[np.ndarray],
+        strength: int = 0,
+        face_width: float = 100.0,
+        lips_mask: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        if strength <= 0 or skin_mask is None:
+            return img_bgr
+
+        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        a = lab[:, :, 1].copy()
+        b = lab[:, :, 2].copy()
+
+        dog_a = _blotch_bandpass(a, face_width)
+        dog_b = _blotch_bandpass(b, face_width)
+
+        edge_protect = _edge_protect(lab)
+        highlight_protect = self._get_highlight_protection(lab)
+        protection = edge_protect * highlight_protect
+
+        strength_factor = strength / 100.0
+        correction_a = dog_a * strength_factor * skin_mask * protection
+        correction_b = dog_b * strength_factor * 0.5 * skin_mask * protection
+
+        if lips_mask is not None:
+            correction_a *= (1.0 - lips_mask)
+            correction_b *= (1.0 - lips_mask)
+
+        lab[:, :, 1] = a - correction_a
+        lab[:, :, 2] = b - correction_b
+
         result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
         return blend_masked(img_bgr, result, skin_mask)
 

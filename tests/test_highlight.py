@@ -184,3 +184,26 @@ class TestToneMapFilmic:
         # Pick a dark-mid value (index 32 ~ input 32)
         # Filmic toe raises the value relative to identity
         assert out[32, 0, 0] >= 32
+
+
+def test_zero_strength_returns_input_unchanged():
+    rng = np.random.default_rng(42)
+    img = rng.integers(0, 256, size=(32, 32, 3), dtype=np.uint8)
+    out = apply_highlight_rolloff(img, strength=0.0)
+    np.testing.assert_array_equal(out, img)
+
+
+def test_none_mask_returns_input_unchanged():
+    rng = np.random.default_rng(43)
+    img = rng.integers(0, 256, size=(32, 32, 3), dtype=np.uint8)
+    out = recover_highlights(img, threshold=240.0, amount=0.0)
+    np.testing.assert_array_equal(out, img)
+
+
+def test_output_shape_preserved():
+    rng = np.random.default_rng(44)
+    img = rng.integers(0, 256, size=(48, 48, 3), dtype=np.uint8)
+    for fn in (soft_clip_highlights, recover_highlights,
+               tone_map_reinhard, tone_map_filmic):
+        out = fn(img)
+        assert out.shape == img.shape

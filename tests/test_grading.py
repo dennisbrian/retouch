@@ -93,10 +93,24 @@ class TestGrade:
         result = grader.grade(img, "cosplay", glow_mask=mask)
         assert result.shape == img.shape
 
+    def test_output_dtype_uint8(self, grader, img):
+        for preset in list(PRESETS)[:3]:
+            result = grader.grade(img, preset)
+            assert result.dtype == np.uint8, f"{preset} dtype {result.dtype}"
+
+    def test_output_shape_matches_input(self, grader, gradient_img):
+        for preset in list(PRESETS)[:3]:
+            result = grader.grade(gradient_img, preset)
+            assert result.shape == gradient_img.shape, f"{preset} shape {result.shape}"
+
 
 class TestGradeStack:
     def test_empty_returns_original(self, grader, img):
         result = grader.grade_stack(img, {})
+        assert np.all(result == img)
+
+    def test_grade_stack_zero_intensity_returns_original(self, grader, img):
+        result = grader.grade_stack(img, {"natural": 0.0})
         assert np.all(result == img)
 
     def test_single_stack(self, grader, img):

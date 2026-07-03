@@ -76,7 +76,7 @@ def _init_worker():
 
 
 def _process_single(args):
-    img_path, output_dir, params, format_arg, quality, force, copy_exif_flag, max_dim, compare_flag, global_only, bit_depth = args
+    img_path, output_dir, params, format_arg, quality, force, copy_exif_flag, max_dim, compare_flag, global_only, bit_depth, fail_on_qa = args
     try:
         fmt = output_format(img_path, format_arg)
         stem = img_path.stem
@@ -109,6 +109,13 @@ def _process_single(args):
 
             try:
                 result = engine.process(img_bgr, **dict(params))
+                if fail_on_qa:
+                    qa = getattr(result, 'qa', [])
+                    if qa:
+                        flagged = [w for w in qa if w.flagged]
+                        if flagged:
+                            reasons = "; ".join(f"{w.detector}={w.score:.2f}" for w in flagged)
+                            return (img_path.name, f"QA_FAIL: {reasons}")
             finally:
                 if should_close:
                     engine.close()
@@ -201,7 +208,7 @@ def _apply_global_finish(img_bgr, params):
     return result
 
 
-def find_images(input_path, recursive):
+def find_images(input_path: str, recursive: bool) -> list[Path]:
     path = Path(input_path)
     if path.is_file():
         return [path]
@@ -246,7 +253,7 @@ def _add_processing_arg(parser, spec):
     )
 
 
-def build_params(args):
+def build_params(args: argparse.Namespace) -> dict:
     params = {}
     if getattr(args, "recipe", None):
         params["recipe"] = args.recipe
@@ -326,7 +333,7 @@ def build_params(args):
     return params
 
 
-def main():
+def main() -> None:
     warnings.filterwarnings(
         "always",
         category=DeprecationWarning,
@@ -392,6 +399,8 @@ def main():
                         help="Skip side-by-side comparison output")
     parser.add_argument("--no-exif", action="store_true",
                         help="Skip EXIF metadata copying")
+    parser.add_argument("--fail-on-qa", action="store_true",
+                        help="Exit with code 1 if any QA detector flags an artifact")
 
     args = parser.parse_args()
     input_path = Path(args.input)
@@ -426,7 +435,7 @@ def main():
 
     if args.workers > 1 and len(files) > 1:
         pool_args = [
-            (f, output_dir, params, args.format, args.quality, args.force, not args.no_exif, args.max_dim, args.compare, args.global_only, args.bit_depth)
+            (f, output_dir, params, args.format, args.quality, args.force, not args.no_exif, args.max_dim, args.compare, args.global_only, args.bit_depth, args.fail_on_qa)
             for f in files
         ]
         with ProcessPoolExecutor(
@@ -473,6 +482,15 @@ def main():
                     result = _apply_global_finish(img_bgr, dict(params))
                 else:
                     result = engine.process(img_bgr, **dict(params))
+                    if args.fail_on_qa:
+                        qa = getattr(result, 'qa', [])
+                        if qa:
+                            flagged = [w for w in qa if w.flagged]
+                            if flagged:
+                                reasons = "; ".join(f"{w.detector}={w.score:.2f}" for w in flagged)
+                                print(f"  ✖ {f.name}: QA_FAIL: {reasons}")
+                                failed += 1
+                                continue
 
                 if _scale < 1.0:
                     result = cv2.resize(result, (orig_shape[1], orig_shape[0]),

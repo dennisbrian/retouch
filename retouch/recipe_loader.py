@@ -91,6 +91,10 @@ def _flat_to_engine_recipe(flat: Dict[str, Any]) -> Dict[str, Any]:
         if key in flat:
             engine.setdefault("skin", {})[key] = _convert_param_to_engine(key, flat[key])
 
+    # skin.locus override: nested dict pass-through for unify_hue_line
+    if "skin_locus" in flat:
+        engine.setdefault("skin", {})["locus"] = flat["skin_locus"]
+
     for key in ("eye_enhance", "catchlight", "dark_circles", "teeth_whiten"):
         if key in flat:
             engine.setdefault("eyes", {})[key] = _convert_param_to_engine(key, flat[key])
@@ -173,6 +177,9 @@ def _engine_to_flat_recipe(engine: Dict[str, Any]) -> Dict[str, Any]:
     for key in ("whiten", "whiten_tone", "equalize", "relight", "relight_azimuth", "relight_elevation"):
         if key in skin:
             flat[key] = _convert_param_from_engine(key, skin[key])
+
+    if "locus" in skin:
+        flat["skin_locus"] = skin["locus"]
 
     eyes = engine.get("eyes", {})
     for key in ("eye_enhance", "catchlight", "dark_circles", "teeth_whiten"):

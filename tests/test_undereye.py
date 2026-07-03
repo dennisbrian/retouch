@@ -60,6 +60,21 @@ class TestRepair:
         assert not np.allclose(result, img)
 
 
+    def test_strength_zero_with_masks(self, repairer, img):
+        regions = MockFaceRegions()
+        regions.left_under_eye = np.ones((64, 64), dtype=np.float32)
+        regions.right_under_eye = np.ones((64, 64), dtype=np.float32)
+        result = repairer.repair(img, regions, strength=0)
+        assert np.array_equal(result, img)
+
+    def test_output_dtype_shape_preserved(self, repairer, img):
+        regions = MockFaceRegions()
+        regions.left_under_eye = np.ones((64, 64), dtype=np.float32) * 0.5
+        regions.right_under_eye = np.ones((64, 64), dtype=np.float32) * 0.5
+        result = repairer.repair(img, regions, strength=75)
+        assert result.shape == img.shape
+        assert result.dtype == np.uint8
+
 class TestRepairRegion:
     def test_small_surround_returns_original(self, repairer, img):
         mask = np.ones((64, 64), dtype=np.float32)

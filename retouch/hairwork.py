@@ -36,6 +36,8 @@ from typing import Optional, Tuple
 import cv2
 import numpy as np
 
+from .utils import blend_masked
+
 
 def hair_flow(
     img_bgr: np.ndarray,
@@ -153,3 +155,81 @@ def hair_flow(
     coherence = np.nan_to_num(coherence, nan=0.0, posinf=1.0, neginf=0.0)
 
     return orientation.astype(np.float32), coherence.astype(np.float32)
+
+
+def unify_hair_color(
+    img_bgr: np.ndarray,
+    hair_mask: np.ndarray,
+    strength: int = 50,
+    target_hue: Optional[float] = None,
+    target_chroma: Optional[float] = None,
+) -> np.ndarray:
+    """Unify hair color by pulling toward median hue/chroma within hair mask.
+
+    Removes venue-light color casts (especially on white/silver wigs) by
+    gently pulling each hair pixel's hue toward the hair-region median hue
+    and compressing chroma variance. Luminance is untouched so shading remains.
+
+    Uses the same OKLCh hue-line math as C1 (skin color science).
+
+    Args:
+        img_bgr: (H, W, 3) uint8 BGR image.
+        hair_mask: (H, W) float mask [0, 1] indicating hair region.
+        strength: 0-100 pull strength. 0 returns input unchanged.
+        target_hue: Optional target hue in degrees. If None, computed as
+                    chroma-weighted median hue within hair_mask.
+        target_chroma: Optional target chroma. If None, computed as median
+                       chroma within hair_mask.
+
+    Returns:
+        (H, W, 3) uint8 BGR image with unified hair color.
+    """
+    if strength <= 0 or hair_mask is None:
+        return img_bgr
+
+    from .color_science import bgr_to_oklab, oklab_to_oklch, oklch_to_oklab
+
+    s = strength / 100.0
+
+    # Convert to OKLCh
+    oklab = bgr_to_oklab(img_bgr)
+    oklch = oklab_to_oklch(oklab)
+
+    L = oklch[..., 0].copy()
+    C = oklch[..., 1].copy()
+    h = oklch[..., 2].copy()
+
+    # Determine target hue and chroma from hair region
+    mask_binary = (hair_mask > 0.05).astype(np.float32)
+    if mask_binary.sum() < 100:
+        return img_bgr  # Too few hair pixels
+
+    if target_hue is None:
+        # Chroma-weighted circular mean hue
+        h_rad = np.deg2rad(h)
+        sin_sum = (mask_binary * np.sin(h_rad)).sum()
+        cos_sum = (mask_binary * np.cos(h_rad)).sum()
+        target_hue = float(np.rad2deg(np.arctan2(sin_sum, cos_sum))) % 360.0
+
+    if target_chroma is None:
+        target_chroma = float(np.median(C[mask_binary > 0.5]))
+
+    # Pull hue toward target (shortest arc, clipped to +/-10 deg)
+    delta_h = (target_hue - h + 180.0) % 360.0 - 180.0
+    delta_h_clipped = np.clip(delta_h, -10.0, 10.0)
+    h_new = (h + delta_h_clipped * s * hair_mask) % 360.0
+
+    # Pull chroma toward target (clipped to +/-0.03)
+    delta_C = np.clip(target_chroma - C, -0.03, 0.03)
+    C_new = C + delta_C * s * hair_mask
+
+    # Reconstruct
+    oklch_out = oklch.copy()
+    oklch_out[..., 0] = L
+    oklch_out[..., 1] = np.clip(C_new, 0.0, None)
+    oklch_out[..., 2] = h_new
+
+    result_oklab = oklch_to_oklab(oklch_out)
+    from .color_science import oklab_to_bgr
+    result = oklab_to_bgr(result_oklab)
+    return blend_masked(img_bgr, result, hair_mask)

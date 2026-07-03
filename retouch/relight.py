@@ -11,7 +11,7 @@ import numpy as np
 class Relighter:
     """Estimates a 3D depth map and normal map from face landmarks to apply directional relighting."""
 
-    def __init__(self, alpha: float = 32.0):
+    def __init__(self, alpha: float = 32.0) -> None:
         """Initialize the relighter.
 
         Args:

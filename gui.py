@@ -285,7 +285,7 @@ def process_image(*args):
     debug_mode = params.get("debug_mode")
 
     if not img_paths:
-        return None, gr.update(visible=False), None, None, "Please upload an image first.", None, gr.update(visible=False)
+        return None, gr.update(visible=False), None, None, "Please upload an image first.", None, gr.update(visible=False), ""
 
     if not isinstance(img_paths, list):
         img_paths = [img_paths]
@@ -331,6 +331,7 @@ def process_image(*args):
 
     temp_dir = tempfile.mkdtemp(prefix="retouch_tmp_")
     debug_dir = os.path.join(temp_dir, "debug") if debug_mode else None
+    qa_warnings = []
 
     # Translate the GUI-side values dict into the engine-side kwargs dict.
     # The spec list (in retouch.params) is the source of truth for the
@@ -361,6 +362,7 @@ def process_image(*args):
             )
 
             result = engine.process(img_bgr, **engine_kwargs)
+            qa_warnings = getattr(result, 'qa', [])
 
             if first_result_rgb is None and first_combined is None:
                 first_original = original
@@ -436,11 +438,16 @@ def process_image(*args):
 
     if not exported_paths:
         gr.Warning("No images were successfully processed.")
-        return None, gr.update(visible=False), None, None, "Error: No images were successfully processed.", None, gr.update(visible=False)
+        return None, gr.update(visible=False), None, None, "Error: No images were successfully processed.", None, gr.update(visible=False), qa_html
 
     preview = first_combined if show_compare else first_result_rgb
     debug_gallery = debug_images if debug_images else None
     debug_vis = gr.update(visible=bool(debug_images))
+
+    qa_html = ""
+    if qa_warnings:
+        items = "".join(f'<li>⚠️ {w.message} (score: {w.score:.2f})</li>' for w in qa_warnings)
+        qa_html = f'<div style="background:#fff3cd;border:1px solid #ffc107;padding:8px 12px;border-radius:6px;margin:8px 0;font-size:13px"><strong>Quality Warnings:</strong><ul style="margin:4px 0 0 16px;padding:0">{items}</ul></div>'
 
     elapsed = time.time() - start
     slide_html = _make_comparison_html(first_original, first_result) if (first_original is not None and first_result is not None) else ""
@@ -453,14 +460,14 @@ def process_image(*args):
         gr.Info(f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s")
 
         if show_compare:
-            return gr.update(visible=False), gr.update(value=slide_html, visible=True), first_original, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓", debug_gallery, debug_vis
-        return preview, gr.update(visible=False), first_original, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓", debug_gallery, debug_vis
+            return gr.update(visible=False), gr.update(value=slide_html, visible=True), first_original, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓", debug_gallery, debug_vis, qa_html
+        return preview, gr.update(visible=False), first_original, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓", debug_gallery, debug_vis, qa_html
     else:
         gr.Info(f"Done in {elapsed:.1f}s")
 
         if show_compare:
-            return gr.update(visible=False), gr.update(value=slide_html, visible=True), first_original, exported_paths[0], f"Done in {elapsed:.1f}s ✓", debug_gallery, debug_vis
-        return preview, gr.update(visible=False), first_original, exported_paths[0], f"Done in {elapsed:.1f}s ✓", debug_gallery, debug_vis
+            return gr.update(visible=False), gr.update(value=slide_html, visible=True), first_original, exported_paths[0], f"Done in {elapsed:.1f}s ✓", debug_gallery, debug_vis, qa_html
+        return preview, gr.update(visible=False), first_original, exported_paths[0], f"Done in {elapsed:.1f}s ✓", debug_gallery, debug_vis, qa_html
 
 
 def on_recipe_change(recipe):
@@ -1302,6 +1309,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         _skin_hue_unify_state = gr.State(value=0)
                         _skin_chroma_even_state = gr.State(value=0)
                         status = gr.Textbox(label="Status", interactive=False, placeholder="Upload an image and click Process to start...")
+                        qa_status = gr.HTML(visible=True)
                         export_file = gr.File(label="📥 Download Exported Assets")
 
                     with gr.Group(visible=False) as debug_panel:
@@ -1321,6 +1329,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             texture_opacity = gr.Slider(0.0, 1.0, 1.0, step=0.05, label="Texture Opacity", info="Control original pore structure opacity overlay")
                             micro_restore = gr.Slider(0, 50, 20, step=1, label="Micro-Texture Restore", info="Re-inject dimensional micro-contrast in cheek/nose/under-eye zones after smoothing (0 = off, 25 = subtle, 50 = strong)")
                             _micro_dodge_burn_state = gr.State(value=0)
+                            _redness_even_state = gr.State(value=0)
+                            _whiten_hue_stable_state = gr.State(value=0)
                             pore_synthesis = gr.Slider(0, 100, 0, step=1, label="Pore Synthesis", info="Add micro-texture/synthesized pores to prevent artificial plastic skin")
                             blemish = gr.Slider(0, 100, 30, step=1, label="Blemish Removal", info="AI blemish detection and inpainting for acne/spots")
                             skin_flatten = gr.Slider(0, 100, 0, step=1, label="Skin Flatten (Anime)", info="Edge-preserving cel flatten for anime-style shading · 0=off, 80=aggressive")
@@ -1661,7 +1671,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
 
     _process_inputs = [
         img_input, recipe,
-        smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth, micro_restore, _micro_dodge_burn_state,
+        smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth, micro_restore, _micro_dodge_burn_state, _redness_even_state, _whiten_hue_stable_state,
         whiten, equalize, blemish, whiten_tone, nose_blush, under_eye_blush, white_costume_lift,
         dodge_burn, relight, relight_azimuth, relight_elevation, specular_bloom, specular_bloom_tone,
         skin_flatten, skin_quantize, skin_unify, skin_unify_hue, _skin_hue_unify_state, _skin_chroma_even_state, skin_glow,
@@ -1679,7 +1689,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         export_fmt, export_quality, export_res,
         debug_mode,
     ]
-    _process_outputs = [img_output, compare_viewer, _original_state, export_file, status, debug_gallery, debug_panel]
+    _process_outputs = [img_output, compare_viewer, _original_state, export_file, status, debug_gallery, debug_panel, qa_status]
 
     process_btn.click(
         fn=process_image,

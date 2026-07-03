@@ -235,3 +235,24 @@ def skin_chroma_std(img_bgr: np.ndarray, skin_mask: Optional[np.ndarray]) -> flo
     """
     state = measure_skin_state(img_bgr, skin_mask)
     return state.C_std
+
+
+def resolve_locus_override(
+    locus: Dict[str, float],
+    skin_state: Optional["SkinState"] = None,
+) -> Dict[str, float]:
+    """Resolve a partial locus override dict to a full target specification.
+
+    Args:
+        locus: Dict with optional keys 'h_target', 'C_target', 'L_min'.
+               Missing keys are filled from SKIN_LOCI defaults.
+        skin_state: Optional SkinState for auto-selecting the base locus class.
+
+    Returns:
+        Full locus dict with 'h_target', 'C_target', 'L_min' keys.
+    """
+    out: Dict[str, float] = {}
+    out["h_target"] = float(locus.get("h_target", SKIN_LOCI["fair"]["h_target"]))
+    out["C_target"] = float(locus.get("C_target", SKIN_LOCI["fair"]["C_target"]))
+    out["L_min"] = float(locus.get("L_min", SKIN_LOCI["fair"]["L_min"]))
+    return out

@@ -150,3 +150,34 @@ class PrecisionContext:
             )
         out_f = op(to_float(img))
         return to_uint8(out_f)
+
+
+def check_float_pipeline(img: np.ndarray) -> bool:
+    """Return True if image is float32 (pipeline running at float precision).
+
+    Args:
+        img: Input image array.
+
+    Returns:
+        True if dtype is float32.
+    """
+    return img.dtype == np.float32
+
+
+def assert_no_uint8_intermediate(
+    before: np.ndarray,
+    after: np.ndarray,
+    msg: str = "",
+) -> None:
+    """Assert that processing did not introduce uint8 quantization steps.
+
+    Args:
+        before: Image before operation (float32).
+        after: Image after operation (float32).
+        msg: Optional assertion message.
+
+    Raises:
+        AssertionError: If either input is uint8.
+    """
+    if before.dtype == np.uint8 or after.dtype == np.uint8:
+        raise AssertionError(f"uint8 intermediate detected: {msg}")

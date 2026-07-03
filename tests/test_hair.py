@@ -76,3 +76,20 @@ class TestEnhance:
         face_oval = np.ones((100, 100), dtype=np.float32)
         result = enhancer.enhance(img, pm, face_oval, bbox, strength=50)
         assert result.shape == (100, 100, 3)
+
+
+def test_hair_enhance_zero_strength(enhancer, img, person_mask, face_oval, bbox):
+    result = enhancer.enhance(img, person_mask, face_oval, bbox, strength=0)
+    assert np.all(result == img)
+
+
+def test_hair_enhance_none_mask(enhancer, img, face_oval, bbox):
+    result = enhancer.enhance(img, None, face_oval, bbox, strength=50)
+    assert np.all(result == img)
+
+
+def test_hair_enhance_output_range(enhancer, img, person_mask, face_oval, bbox):
+    result = enhancer.enhance(img, person_mask, face_oval, bbox, strength=80)
+    assert result.dtype == np.uint8
+    assert result.min() >= 0
+    assert result.max() <= 255

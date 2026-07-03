@@ -5,6 +5,7 @@ Provides pure-function artifact detectors that analyze output images for:
   - Clipping (blown highlights and crushed blacks)
   - Plastic skin (over-smoothed texture loss in skin regions)
   - Halo (edge overshoot from aggressive sharpening)
+  - Seam (gradient discontinuities along subject-separation boundaries)
 
 Each detector returns a dict with:
   - "score": float in [0, 1] (higher = more problematic)
@@ -14,10 +15,20 @@ Each detector returns a dict with:
 
 from __future__ import annotations
 
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional, List
 
 import cv2
 import numpy as np
+
+
+@dataclass
+class QAWarning:
+    detector: str
+    score: float
+    flagged: bool
+    message: str
+    details: Dict[str, Any] = field(default_factory=dict)
 
 
 # Threshold constants — adjust based on tuning
@@ -73,12 +84,10 @@ def detect_banding(
     # Identify smooth (low-variance) regions via 3x3 local std
     # Compute local variance in sliding window
     h, w = L.shape
-    local_var = np.zeros((h, w), dtype=np.float32)
-
-    for y in range(1, h - 1):
-        for x in range(1, w - 1):
-            patch = L[y - 1:y + 2, x - 1:x + 2]
-            local_var[y, x] = np.var(patch)
+    local_mean = cv2.boxFilter(L, cv2.CV_32F, (3, 3))
+    local_sq_mean = cv2.boxFilter(L * L, cv2.CV_32F, (3, 3))
+    local_var = local_sq_mean - local_mean * local_mean
+    local_var = np.maximum(local_var, 0.0)
 
     # Smooth regions: local variance < 0.5 (threshold empirical)
     smooth_mask = local_var < 0.5
@@ -349,50 +358,41 @@ def detect_halo(
             "edge_count": 0,
         }
 
-    # For each edge pixel, look at a band perpendicular to the edge
-    # Measure overshoot: max within band minus local baseline
-    h, w = L.shape
-    overshoots = []
+    # For each edge pixel, measure overshoot using morphological dilation
+    edge_dilated = cv2.dilate(edges.astype(np.uint8), np.ones((7, 7), np.uint8))
+    edge_eroded = cv2.erode(edges.astype(np.uint8), np.ones((3, 3), np.uint8))
 
-    # Find edge coordinates
-    edge_coords = np.argwhere(edges > 0)
+    # Forward band = dilation for overshoot, backward band = edge pixels themselves
+    forward_band = edge_dilated & ~edges.astype(np.uint8)
+    edge_band = edges.astype(np.uint8) & ~edge_eroded
 
-    for y, x in edge_coords:
-        # Local baseline: average a few pixels back from edge (perpendicular)
-        baseline = L[max(0, y - 3):y, max(0, x - 1):min(w, x + 2)].mean()
+    if forward_band.sum() == 0:
+        return {"score": 0.0, "flagged": False, "mean_overshoot": 0.0, "edge_count": 0}
 
-        # Overshoot: max in forward band
-        forward_max = L[min(h - 1, y + 3):min(h - 1, y + 8), max(0, x - 1):min(w, x + 2)].max()
+    # Baseline: L at edge pixels
+    baseline_vals = L[edge_band > 0]
+    # Overshoot: L in forward band
+    forward_vals = L[forward_band > 0]
 
-        overshoot = forward_max - baseline
-        if overshoot > 0:
-            overshoots.append(overshoot)
+    if len(baseline_vals) == 0 or len(forward_vals) == 0:
+        return {"score": 0.0, "flagged": False, "mean_overshoot": 0.0, "edge_count": 0}
 
-    if not overshoots:
-        mean_overshoot = 0.0
-    else:
-        mean_overshoot = float(np.mean(overshoots))
+    # For each edge pixel, find nearest forward pixel's max value
+    # Simplified: percentile-based comparison
+    baseline_median = np.median(baseline_vals)
+    forward_max = np.percentile(forward_vals, 95)
+    mean_overshoot = float(max(0.0, forward_max - baseline_median))
 
-    # Apply mask if given
     if mask is not None:
         mask_f = mask.astype(np.float32)
         if mask_f.max() > 1.0:
             mask_f /= 255.0
-
-        # Filter edge coordinates to those in mask
-        edge_coords_masked = edge_coords[mask_f[edge_coords[:, 0], edge_coords[:, 1]] > 0.5]
-        overshoots_masked = []
-
-        for y, x in edge_coords_masked:
-            baseline = L[max(0, y - 3):y, max(0, x - 1):min(w, x + 2)].mean()
-            forward_max = L[min(h - 1, y + 3):min(h - 1, y + 8), max(0, x - 1):min(w, x + 2)].max()
-            overshoot = forward_max - baseline
-            if overshoot > 0:
-                overshoots_masked.append(overshoot)
-
-        if overshoots_masked:
-            mean_overshoot = float(np.mean(overshoots_masked))
-            overshoots = overshoots_masked
+        baseline_masked = baseline_vals[mask_f[edge_band > 0].astype(bool)] if edge_band[mask_f > 0.5].sum() > 0 else np.array([], dtype=np.float32)
+        forward_masked = forward_vals[mask_f[forward_band > 0].astype(bool)] if forward_band[mask_f > 0.5].sum() > 0 else np.array([], dtype=np.float32)
+        if len(baseline_masked) > 0 and len(forward_masked) > 0:
+            baseline_median = np.median(baseline_masked)
+            forward_max = np.percentile(forward_masked, 95)
+            mean_overshoot = float(max(0.0, forward_max - baseline_median))
 
     # Score is the mean overshoot
     score = mean_overshoot
@@ -402,32 +402,88 @@ def detect_halo(
         "score": float(score),
         "flagged": bool(flagged),
         "mean_overshoot": float(mean_overshoot),
-        "edge_count": len(overshoots),
+        "edge_count": int(forward_band.sum()),
     }
+
+
+def detect_seam(
+    img_bgr: np.ndarray,
+    person_mask: Optional[np.ndarray] = None,
+) -> dict:
+    if img_bgr.shape[0] < 16 or img_bgr.shape[1] < 16:
+        return {"score": 0.0, "flagged": False, "seam_gradient": 0.0, "boundary_pixels": 0}
+    img_lab = _bgr_to_lab(img_bgr)
+    L = img_lab[:, :, 0]
+    grad_x = cv2.Sobel(L, cv2.CV_32F, 1, 0, ksize=3)
+    grad_y = cv2.Sobel(L, cv2.CV_32F, 0, 1, ksize=3)
+    grad_mag = np.sqrt(grad_x**2 + grad_y**2)
+    if person_mask is not None:
+        mask_f = person_mask.astype(np.float32)
+        if mask_f.max() > 1.0:
+            mask_f /= 255.0
+        boundary = (cv2.dilate((mask_f > 0.5).astype(np.uint8), np.ones((5, 5), np.uint8)) ^
+                    cv2.erode((mask_f > 0.5).astype(np.uint8), np.ones((5, 5), np.uint8)))
+        if boundary.sum() == 0:
+            return {"score": 0.0, "flagged": False, "seam_gradient": 0.0, "boundary_pixels": 0}
+        interior = mask_f > 0.5
+        exterior = ~interior
+        boundary_grad = grad_mag[boundary > 0]
+        interior_grad = grad_mag[interior]
+        exterior_grad = grad_mag[exterior]
+        if len(boundary_grad) == 0 or len(interior_grad) == 0 or len(exterior_grad) == 0:
+            return {"score": 0.0, "flagged": False, "seam_gradient": 0.0, "boundary_pixels": 0}
+        boundary_mean = float(np.mean(boundary_grad))
+        context_mean = float((np.mean(interior_grad) + np.mean(exterior_grad)) / 2.0)
+        seam_gradient = max(0.0, boundary_mean - context_mean)
+        flagged = seam_gradient > 5.0
+        return {
+            "score": min(1.0, seam_gradient / 20.0),
+            "flagged": bool(flagged),
+            "seam_gradient": seam_gradient,
+            "boundary_pixels": int(boundary.sum()),
+        }
+    return {"score": 0.0, "flagged": False, "seam_gradient": 0.0, "boundary_pixels": 0}
 
 
 def run_all(
     img_bgr: np.ndarray,
     skin_mask: Optional[np.ndarray] = None,
     reference_img_bgr: Optional[np.ndarray] = None,
-) -> dict:
-    """Run all four QA detectors and aggregate results.
+    person_mask: Optional[np.ndarray] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Run all QA detectors and aggregate their results.
 
     Args:
-        img_bgr: (H, W, 3) uint8 BGR image (output to check).
-        skin_mask: Optional (H, W) float mask [0, 1] for skin region.
-        reference_img_bgr: Optional (H, W, 3) uint8 BGR image (input) for comparison.
+        img_bgr: (H, W, 3) uint8 BGR image.
+        skin_mask: Optional (H, W) float mask [0, 1].
+        reference_img_bgr: Optional pre-retouch reference image, forwarded to
+            ``detect_plastic_skin`` for before/after texture-loss comparison.
+        person_mask: Optional (H, W) float mask [0, 1] for seam detection.
 
     Returns:
-        dict with keys for each detector:
-            - "banding": dict from detect_banding()
-            - "clipping": dict from detect_clipping()
-            - "plastic_skin": dict from detect_plastic_skin()
-            - "halo": dict from detect_halo()
+        dict with keys "banding", "clipping", "plastic_skin", "halo", "seam",
+        each mapping to that detector's full result dict (score/flagged/details).
     """
-    return {
-        "banding": detect_banding(img_bgr, mask=skin_mask),
-        "clipping": detect_clipping(img_bgr, mask=skin_mask),
-        "plastic_skin": detect_plastic_skin(img_bgr, mask=skin_mask, reference_img_bgr=reference_img_bgr),
-        "halo": detect_halo(img_bgr, mask=skin_mask),
-    }
+    result: Dict[str, Dict[str, Any]] = {}
+    try:
+        result["banding"] = detect_banding(img_bgr, skin_mask)
+    except Exception:
+        result["banding"] = {"score": 0.0, "flagged": False}
+    try:
+        result["clipping"] = detect_clipping(img_bgr, skin_mask)
+    except Exception:
+        result["clipping"] = {"score": 0.0, "flagged": False}
+    try:
+        result["plastic_skin"] = detect_plastic_skin(img_bgr, skin_mask, reference_img_bgr)
+    except Exception:
+        result["plastic_skin"] = {"score": 0.0, "flagged": False}
+    try:
+        result["halo"] = detect_halo(img_bgr, skin_mask)
+    except Exception:
+        result["halo"] = {"score": 0.0, "flagged": False}
+    try:
+        pm = person_mask if person_mask is not None else skin_mask
+        result["seam"] = detect_seam(img_bgr, pm)
+    except Exception:
+        result["seam"] = {"score": 0.0, "flagged": False}
+    return result

@@ -71,10 +71,11 @@ EXPECTED_RECIPE_KEYS = [
     "hsl_hue_global", "hsl_sat_global", "hsl_lum_global",
     "skin_flatten", "skin_quantize", "skin_unify", "skin_unify_hue", "skin_glow",
     "skin_hue_unify", "skin_chroma_even", "micro_dodge_burn",
+    "redness_even", "whiten_hue_stable",
     "tonal_curve_strength", "skin_protect_strength",
     "highlight_rolloff_strength", "grain_strength",
 ]
-EXPECTED_RECIPE_KEY_COUNT = 83
+EXPECTED_RECIPE_KEY_COUNT = 85
 EXPECTED_UI_OUTPUT_COUNT = 79
 
 
@@ -559,7 +560,7 @@ class TestProcessInputKeys:
         import inspect
         sig = inspect.signature(gui.process_image)
         # process_image takes *args — but PROCESS_INPUT_KEYS is the canonical list
-        assert len(gui.PROCESS_INPUT_KEYS) == 92
+        assert len(gui.PROCESS_INPUT_KEYS) == 94
 
     def test_first_key_is_img_paths(self):
         assert gui.PROCESS_INPUT_KEYS[0] == "img_paths"
@@ -914,7 +915,7 @@ class TestProcessImageValidation:
     """Tests for gui.process_image() input-validation early returns."""
 
     def _build_args(self, **overrides):
-        """Build a 92-arg tuple for process_image, with all entries as defaults.
+        """Build a 94-arg tuple for process_image, with all entries as defaults.
 
         Default values reflect a 'natural' recipe with all-zero adjustments,
         so the function should reach its validation gates and short-circuit
@@ -925,7 +926,7 @@ class TestProcessImageValidation:
             "recipe": "natural",
             "smooth": 0, "mid_reduction": 0.0, "texture_opacity": 1.0,
             "pore_synthesis": 0, "nose_smooth": 0, "micro_restore": 0,
-            "micro_dodge_burn": 0,
+            "micro_dodge_burn": 0, "redness_even": 0, "whiten_hue_stable": 0,
             "whiten": 0, "equalize": 0, "white_costume_lift": False,
             "skin_hue_unify": 0, "skin_chroma_even": 0,
             "relight": 0, "relight_azimuth": 0, "relight_elevation": 30,
@@ -964,11 +965,12 @@ class TestProcessImageValidation:
         return tuple(defaults[k] for k in gui.PROCESS_INPUT_KEYS)
 
     def test_no_image_returns_seven_tuple(self):
-        """No image uploaded should return a 7-tuple early without engine work."""
+        """No image uploaded should return an 8-tuple early without engine work
+        (7 original outputs + qa_warnings_html appended for F11)."""
         args = self._build_args(img_paths=None)
         result = gui.process_image(*args)
         assert isinstance(result, tuple)
-        assert len(result) == 7
+        assert len(result) == 8
 
     def test_no_image_returns_user_facing_error_message(self):
         args = self._build_args(img_paths=None)

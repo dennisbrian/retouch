@@ -42,8 +42,31 @@ EXPORT_RES_MAP: Dict[str, Optional[int]] = {
 EXT_MAP: Dict[str, str] = {
     "JPEG": ".jpg",
     "PNG": ".png",
+    "PNG-16": ".png",
     "WebP": ".webp",
 }
+
+
+def imwrite_16bit_png(path: Union[str, Path], img: np.ndarray) -> bool:
+    """Write image as 16-bit PNG (uint16).
+
+    Args:
+        path: Output file path.
+        img: (H, W, 3) uint8 or float32 [0,1] BGR image.
+
+    Returns:
+        True on success.
+    """
+    if img.dtype == np.float32:
+        img_u16 = np.clip(img * 65535.0, 0, 65535).astype(np.uint16)
+    elif img.dtype == np.uint8:
+        img_u16 = img.astype(np.uint16) * 257
+    else:
+        img_u16 = img.astype(np.uint16)
+    rgb = cv2.cvtColor(img_u16, cv2.COLOR_BGR2RGB)
+    pil_img = Image.fromarray(rgb, mode="RGB;16" if hasattr(Image, "fromarray") else "RGB")
+    pil_img.save(str(path), format="PNG")
+    return True
 
 
 def imread_exif(path: Union[str, Path]) -> np.ndarray:

@@ -1,19 +1,18 @@
-"""
-Pro Max Face Retouch Engine
-===========================
-Professional-grade automated face retouching pipeline.
+"""Professional-grade automated face retouching pipeline.
+
+Operates entirely in float32 with explicit colorspace boundaries (LAB for
+skin tone, BGR for compositing). Preserves high-frequency skin detail via
+3-level frequency separation — never blurs skin directly.
 
 Pipeline:
-    MediaPipe Face Mesh → Face Region Parsing → 3-Level Frequency Separation
-    → Skin Smoothing → Blemish Removal → Under-Eye Repair → Eye Enhancement
-    → Lip Enhancement → Teeth Whitening → Skin Equalization → Color Grading
+    MediaPipe Face Mesh → BiSeNet Region Parsing → 3-Level Frequency
+    Separation → Skin Smoothing (detail-preserving) → Blemish Removal →
+    Under-Eye Repair → Eye Enhancement → Lip Enhancement → Teeth Whitening
+    → Skin Equalization → Color Grading
 
 Usage:
-    from retouch import retouch
+    from retouch import retouch, RetouchEngine
     result = retouch(img_bgr, preset='natural', smooth=60)
-
-    # Or use the engine directly for more control:
-    from retouch import RetouchEngine
     engine = RetouchEngine()
     result = engine.process(img_bgr, smooth=60, whiten=30)
 """

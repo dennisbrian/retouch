@@ -6,7 +6,7 @@ so the schema is always in sync with the engine's parameter registry.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict
 
 import jsonschema
 
@@ -54,7 +54,7 @@ def _spec_to_json_property(spec: ParamSpec) -> Dict[str, Any]:
     return prop
 
 
-def build_recipe_schema() -> Dict[str, Any]:
+def build_recipe_schema() -> dict[str, Any]:
     """Build the full recipe JSON Schema from the PROCESSING_PARAMS registry.
 
     The schema is dynamic — it picks up any new parameters added to
@@ -103,7 +103,7 @@ def build_recipe_schema() -> Dict[str, Any]:
     return schema
 
 
-def validate_recipe(recipe_dict: Dict[str, Any]) -> Tuple[bool, List[str]]:
+def validate_recipe(recipe_dict: dict[str, Any]) -> tuple[bool, list[str]]:
     """Validate a recipe dict against the schema.
 
     Returns:

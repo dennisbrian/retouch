@@ -13,6 +13,8 @@ import numpy as np
 
 from .utils import normalize_mask, squeeze_mask
 
+from .hairwork import hair_flow, unify_hair_color
+
 
 class HairEnhancer:
     """Enhance hair/wig highlights and local contrast."""

@@ -94,6 +94,22 @@ class TestCombine:
         assert result.shape == (30, 40, 3)
         assert result.dtype == np.uint8
 
+    def test_strength_zero_returns_input(self):
+        img = np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8)
+        layers = separate(img, face_width=64)
+        mask = np.ones((32, 32), dtype=np.float32)
+        result = combine(layers, skin_mask=mask, smooth_strength=0,
+                         mid_reduction=0, texture_opacity=1.0)
+        assert np.allclose(result.astype(np.float32), img.astype(np.float32), atol=2)
+
+    def test_combine_output_dtype_shape(self):
+        img = np.random.randint(0, 256, (48, 64, 3), dtype=np.uint8)
+        layers = separate(img, face_width=96)
+        mask = np.ones((48, 64), dtype=np.float32)
+        result = combine(layers, skin_mask=mask, smooth_strength=0.5)
+        assert result.dtype == np.uint8
+        assert result.shape == (48, 64, 3)
+
 
 # Helpers
 def checkerboard_100():
