@@ -391,3 +391,161 @@ class Relighter:
                 canvas, N_x, N_y, N_z, skin_mask,
                 effective_strength, azimuth, elevation, scale, face_width
             )
+
+    def sculpt(
+        self,
+        canvas: np.ndarray,
+        landmarks: Any,
+        skin_mask: Optional[np.ndarray],
+        face_width: float,
+        strength: float = 0.0,
+        light_azimuth: Optional[float] = None,
+        light_elevation: Optional[float] = None,
+    ) -> np.ndarray:
+        """Sculpt facial structure by shaping reflectance (low-band luminance modulation).
+
+        This stage complements relight() by sculpting the form frequency (cheekbone depth,
+        nose ridge, jawline contour) without changing illumination direction. It applies
+        a shading correction to the low-band (form) frequency only, preserving micro-texture
+        (pores, blotches).
+
+        Algorithm:
+        1. Extract surface normals from landmarks via Delaunay triangulation.
+        2. Compute target shading from a light direction (auto-estimated from L gradient or explicit).
+        3. Compute low-band correction: (target_shading - 1.0) * strength * skin_mask.
+        4. Apply correction to the Gaussian-blurred (low-band) L channel.
+        5. Re-add the untouched high-frequency residual to preserve texture.
+        6. Fade correction via yaw guard for profile faces (reuses relight() logic).
+
+        Args:
+            canvas: Crop ROI image (BGR, uint8).
+            landmarks: Shifted face landmarks relative to crop ROI canvas.
+            skin_mask: Soft float mask (0-1) for face skin area.
+            face_width: Approximate face width in pixels (ied * 2.5).
+            strength: Slider strength (0-100), default 0 (no effect).
+            light_azimuth: Light angle in degrees (-180 to 180), or None for auto-estimate.
+            light_elevation: Light elevation angle in degrees (-90 to 90), or None for auto-estimate.
+
+        Returns:
+            Sculpted canvas (BGR, uint8).
+
+        Notes:
+            - Early return if strength <= 0, skin_mask is None, or skin_mask is nearly empty.
+            - Yaw guard attenuates strength for profile faces (temple ratio 1.5→1.7 fade).
+            - Strength scaling: effective correction is (strength / 100) * 0.35 to keep sculpting subtle.
+            - Target shading uses Lambertian model: S_target = 0.55 + 0.45 * max(N·L, 0).
+            - Auto light direction estimated from blurred L-channel gradient direction.
+        """
+        if strength <= 0.0 or skin_mask is None or skin_mask.max() < 0.01:
+            return canvas
+
+        h, w = canvas.shape[:2]
+        lm = landmarks.landmark
+
+        # Temple-Calibrated Yaw Guard (identical to relight)
+        # lm[6] is nose bridge midpoint, lm[234] is left temple, lm[454] is right temple
+        d_left = abs(lm[6].x - lm[234].x)
+        d_right = abs(lm[454].x - lm[6].x)
+        ratio = max(d_left, d_right) / (min(d_left, d_right) + 1e-5)
+        # Attenuate strength linearly as ratio ranges from 1.5 to 1.7
+        yaw_factor = 1.0 - np.clip((ratio - 1.5) / 0.2, 0.0, 1.0)
+
+        effective_strength = strength * yaw_factor
+        if effective_strength <= 0.0:
+            return canvas
+
+        # Extract shading geometry
+        N_x, N_y, N_z, w_small, h_small, scale = self._shading_geometry(
+            (h, w), landmarks, face_width
+        )
+
+        # Downsample canvas for coarse computation and extract L channel
+        canvas_small = cv2.resize(canvas, (w_small, h_small), interpolation=cv2.INTER_AREA)
+        gray_small = cv2.cvtColor(canvas_small, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+        Y = gray_small ** 2.2  # Linear luminance
+
+        # Low-band via Gaussian blur at form-frequency scale
+        sigma = max(2.0, face_width * scale / 8.0)  # Same sigma as relight v2
+        Y_low = cv2.GaussianBlur(Y, (0, 0), sigmaX=sigma)
+
+        # Downsample skin mask
+        mask_small = cv2.resize(skin_mask, (w_small, h_small), interpolation=cv2.INTER_LINEAR)
+        valid = (mask_small > 0.3) & (N_z < 0.999)
+
+        # Auto-estimate light direction if not provided
+        if light_azimuth is None or light_elevation is None:
+            # Fit existing shading via least squares (reuses relight v2's approach)
+            if np.sum(valid) >= 50:
+                Y_valid = Y_low[valid].reshape(-1, 1)
+                design = np.column_stack([
+                    np.ones(np.sum(valid)),
+                    N_x[valid].flatten(),
+                    N_y[valid].flatten(),
+                    N_z[valid].flatten(),
+                ])
+                try:
+                    coeffs = np.linalg.lstsq(design, Y_valid, rcond=None)[0].flatten()
+                    c0, cx, cy, cz = coeffs
+                    norm_dir = np.sqrt(cx**2 + cy**2 + cz**2)
+                    if norm_dir >= 1e-6:
+                        # Fitted (cx, cy, cz) is the light direction: convert to angles
+                        light_azimuth = np.arctan2(cx, cz) * 180.0 / np.pi
+                        light_elevation = -np.arcsin(np.clip(cy, -1.0, 1.0)) * 180.0 / np.pi
+                    else:
+                        # Fallback: frontal light
+                        light_azimuth = 0.0
+                        light_elevation = 30.0
+                except np.linalg.LinAlgError:
+                    light_azimuth = 0.0
+                    light_elevation = 30.0
+            else:
+                light_azimuth = 0.0
+                light_elevation = 30.0
+
+        # Compute light direction vector from azimuth/elevation
+        theta = light_azimuth * np.pi / 180.0
+        phi = light_elevation * np.pi / 180.0
+        L_x = np.cos(phi) * np.sin(theta)
+        L_y = -np.sin(phi)
+        L_z = np.cos(phi) * np.cos(theta)
+
+        # Target shading using Lambertian model (matching relight v2)
+        lambert = np.clip(N_x * L_x + N_y * L_y + N_z * L_z, 0.0, 1.0)
+        S_target = 0.55 + 0.45 * lambert
+        S_target = S_target / np.mean(S_target[valid])
+
+        # Compute sculpting gain at coarse scale
+        # Sculpt uses a conservative multiplicative gain to preserve flat areas
+        strength_factor = (effective_strength / 100.0) * 0.35
+        # Blend toward target shading, but bounded to avoid over-correction
+        gain = np.clip(S_target, 0.7, 1.3)
+        gain_final = gain ** strength_factor
+
+        # Upsample gain back to full resolution
+        gain_full = cv2.resize(gain_final, (w, h), interpolation=cv2.INTER_LINEAR)
+        mask_full = cv2.resize(mask_small, (w, h), interpolation=cv2.INTER_LINEAR)
+
+        # Apply gain correction to full-res image in LAB space
+        lab = cv2.cvtColor(canvas, cv2.COLOR_BGR2LAB).astype(np.float32)
+        L_full = lab[:, :, 0]
+
+        # Decompose into low-band and high-band at full resolution
+        # Form-frequency scale per spec: face_width * 0.15
+        L_full_norm = L_full / 255.0
+        blur_sigma = face_width * 0.15
+        L_low_full_norm = cv2.GaussianBlur(L_full_norm, (0, 0), sigmaX=blur_sigma)
+        L_high_norm = L_full_norm - L_low_full_norm
+
+        # Apply multiplicative gain only to low-band
+        L_low_corrected_norm = np.clip(L_low_full_norm * gain_full, 0.0, 1.0)
+
+        # Reconstruct: corrected low-band + original high-band
+        L_result_norm = np.clip(L_low_corrected_norm + L_high_norm, 0.0, 1.0)
+        L_result = L_result_norm * 255.0
+
+        # Blend with skin mask
+        L_final = L_full * (1.0 - mask_full) + L_result * mask_full
+        lab[:, :, 0] = np.clip(L_final, 0.0, 255.0)
+
+        result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        return result

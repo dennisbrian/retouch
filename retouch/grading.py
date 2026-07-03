@@ -241,7 +241,17 @@ class ColorGrader:
             return to_uint8(r)
 
         if skin_protect_strength > 0:
-            result = skin_protect.protect_skin(result, _color_ops, skin_protect_strength)
+            if is_float_input or return_float:
+                def _color_ops_u8(img_u8: np.ndarray) -> np.ndarray:
+                    r = _color_ops(img_u8)
+                    if r.dtype == np.float32:
+                        return np.clip(r * 255.0, 0, 255).astype(np.uint8)
+                    return r
+                result_u8 = np.clip(result * 255.0, 0, 255).astype(np.uint8)
+                result_u8 = skin_protect.protect_skin(result_u8, _color_ops_u8, skin_protect_strength)
+                result = result_u8.astype(np.float32) / 255.0
+            else:
+                result = skin_protect.protect_skin(result, _color_ops, skin_protect_strength)
         else:
             result = _color_ops(result)
 
@@ -258,7 +268,7 @@ class ColorGrader:
                     radius=h_conf.get("radius", 15), intensity=h_conf.get("intensity", 0.3)
                 )
 
-        if settings.get("vignette", 0) > 0:
+        if settings.get("vignette", 0) > 0 and not skip_post_effects:
             result = self._add_vignette(result, settings["vignette"])
         if settings.get("glow", 0) > 0 and not skip_glows:
             result = self._add_glow(result, settings["glow"], tint=settings.get("glow_tint", None), mask=glow_mask)
@@ -595,6 +605,9 @@ class ColorGrader:
         max_dist = np.sqrt(cx ** 2 + cy ** 2)
         vignette = 1.0 - (dist / max_dist) ** 2 * strength
         vignette = np.clip(vignette, 0, 1)[:, :, np.newaxis]
+        is_float = img.dtype == np.float32
+        if is_float:
+            return np.clip(img * vignette, 0.0, 1.0).astype(np.float32)
         return np.clip(img.astype(np.float32) * vignette, 0, 255).astype(np.uint8)
 
     def _apply_rgb_curves(
@@ -697,17 +710,25 @@ class ColorGrader:
 
     def _add_grain(self, img_bgr: np.ndarray, strength: float) -> np.ndarray:
         if strength <= 0: return img_bgr
-        h, w = img_bgr.shape[:2]
+        is_float = img_bgr.dtype == np.float32
+        if is_float:
+            img_u8 = np.clip(img_bgr * 255.0, 0, 255).astype(np.uint8)
+        else:
+            img_u8 = img_bgr
+        h, w = img_u8.shape[:2]
         gw, gh = max(w // 2, 64), max(h // 2, 64)
         noise = np.random.normal(0, 255.0 * strength, (gh, gw)).astype(np.float32)
         noise_scaled = cv2.resize(noise, (w, h), interpolation=cv2.INTER_LINEAR)
         noise_blurred = cv2.GaussianBlur(noise_scaled, (3, 3), 0.5)
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
+        lab = cv2.cvtColor(img_u8, cv2.COLOR_BGR2LAB)
         l_chan = lab[:, :, 0].astype(np.float32)
         weight = np.exp(-((l_chan - 128.0) ** 2) / (2.0 * 64.0 ** 2))
         weighted_noise = (noise_blurred * weight)[:, :, np.newaxis]
-        img_f = img_bgr.astype(np.float32)
-        return np.clip(img_f + weighted_noise, 0, 255).astype(np.uint8)
+        img_f = img_u8.astype(np.float32)
+        result = np.clip(img_f + weighted_noise, 0, 255).astype(np.uint8)
+        if is_float:
+            return result.astype(np.float32) / 255.0
+        return result
 
     def _adjust_white_balance(
         self,
@@ -1204,11 +1225,18 @@ class ColorGrader:
         lch = bgr_to_lch(img_bgr)
         t = float(np.clip(temperature, 2000.0, 50000.0))
         tint_val = float(np.clip(tint, -100.0, 100.0))
-        kelvin_hue = 60.0 - (t - 2000.0) / 48000.0 * 90.0
-        kelvin_hue = np.mod(kelvin_hue, 360.0)
+        # Mired-based white balance correction
+        # Mired = 1e6 / temperature (reciprocal Kelvin)
+        # Neutral at 6500K ≈ 153.85 mired
+        # Negative mired_delta → cool (high K), positive → warm (low K)
+        MIRED_NEUTRAL = 1e6 / 6500.0  # ≈ 153.85
+        mired_delta = (1e6 / max(t, 100.0)) - MIRED_NEUTRAL
+        # Scale mired_delta to hue shift: ~30 mireds per ±50° hue
+        # This gives smooth, monotonic correction with correct sign flip at 6500K
+        hue_delta = mired_delta / MIRED_NEUTRAL * 100.0 * 0.3
         chroma = lch[:, :, 1]
         chroma_weight = np.clip(1.0 - chroma / 60.0, 0.0, 1.0)
-        hue_delta = (kelvin_hue - 30.0) * chroma_weight * 0.3
+        hue_delta = hue_delta * chroma_weight
         lch[:, :, 2] = np.mod(lch[:, :, 2] + hue_delta, 360.0)
         if abs(tint_val) > 1e-4:
             tint_hue = 150.0 if tint_val < 0 else 330.0
@@ -1422,3 +1450,238 @@ class ColorGrader:
         sparkle_f = sparkle_overlay.astype(np.float32)
         screened = screen_blend(img_f, sparkle_f * opacity)
         return np.clip(screened, 0, 255).astype(np.uint8)
+
+    # ---- Stage C4: 透明感 / 空気感 Finish Pack ----
+
+    def fade_toe(
+        self,
+        img_bgr: np.ndarray,
+        strength: float,
+        mask: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """Lifted-black with hue-locked toe (L-only fade in LAB).
+
+        Lifts shadows while preserving hue by modifying only the L channel in LAB.
+        Classic RGB-channel fade shifts shadows blue-green unintentionally; this
+        approach avoids that by locking a/b untouched.
+
+        Args:
+            img_bgr: uint8 BGR image.
+            strength: Fade strength, 0-1 (0=no-op, 1=full lift).
+            mask: Optional per-pixel mask to scope the effect (1=apply, 0=preserve).
+
+        Returns:
+            uint8 BGR image with lifted shadows.
+        """
+        if strength <= 0:
+            return img_bgr
+        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        l = lab[:, :, 0]
+        # Shadow threshold and weight: pixels with L < 50 get max lift, linear falloff to L=50
+        shadow_weight = np.clip(1.0 - l / 50.0, 0, 1)
+        # Lift amount: ~20 on 0-255 L scale (matches _lift_shadows magnitude)
+        lift_amount = 20.0
+        l_new = np.clip(l + shadow_weight * strength * lift_amount, 0, 255)
+        lab[:, :, 0] = l_new
+        result = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
+        if mask is not None:
+            m_f = normalize_mask(mask)
+            if m_f.ndim == 2:
+                m_f = m_f[:, :, np.newaxis]
+            result = blend_masked(img_bgr, result, m_f)
+        return result
+
+    def highlight_drift(
+        self,
+        img_bgr: np.ndarray,
+        strength: float,
+        skin_state: Optional[np.ndarray] = None,
+        mask: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """Bounded hue rotation of highlights toward cyan, skin-protected.
+
+        Rotates hue of bright pixels (L > 75 on 0-100 L* scale) toward cyan (180°)
+        by up to 10-15° (scaled by strength). If skin_state or mask is provided,
+        skin regions (high chroma) are protected from the rotation.
+
+        Args:
+            img_bgr: uint8 BGR image.
+            strength: Rotation strength, 0-1.
+            skin_state: Optional SkinState object for chroma-based skin detection.
+            mask: Optional per-pixel mask (1=skin=protect, 0=non-skin=full effect).
+
+        Returns:
+            uint8 BGR image with hue-rotated highlights.
+        """
+        if strength <= 0:
+            return img_bgr
+        from .color_space import bgr_to_lch, lch_to_bgr
+        lch = bgr_to_lch(img_bgr)
+        l_chan = lch[:, :, 0]
+        h_chan = lch[:, :, 2]
+        c_chan = lch[:, :, 1]
+        # Highlight threshold on 0-100 L* scale; pixels with L > 75 get rotation
+        highlight_mask = np.clip((l_chan - 75.0) / 25.0, 0, 1)
+        # Max hue rotation: 10-15°, scaled by strength
+        max_rotation = 12.0  # degrees
+        rotation = max_rotation * strength
+        # Protect skin: if mask provided, use it; else use a chroma-based ramp.
+        if mask is not None:
+            m_f = normalize_mask(mask)
+            if m_f.ndim == 2:
+                m_f = m_f[:, :, np.newaxis]
+            protect_factor = m_f  # mask=1 (skin) -> protect_factor=1 (fully protected)
+        else:
+            # Chroma-based skin ramp in LCh(ab) C units (0-~130 scale for sRGB gamut).
+            # Below chroma_floor: achromatic/background, unprotected (protect_factor=0).
+            # At/above chroma_ceiling: clearly chromatic (skin-range and beyond),
+            # fully protected (protect_factor=1). This codebase's own
+            # `color_space.skin_mask_lch` uses chroma_min=8.0 as its skin-chroma
+            # gate, so 8.0 is reused here as the floor (below it = not skin).
+            # chroma_ceiling=20.0 chosen because typical measured skin chroma in
+            # LCh(ab) for well-lit portraits runs roughly 15-35 (moderately
+            # saturated warm tones); by C=20 a pixel is unambiguously chromatic
+            # (skin or a strongly colored object), so full protection is safe —
+            # ramping over [8, 20] avoids a hard step at the skin_mask_lch floor.
+            chroma_floor = 8.0
+            chroma_ceiling = 20.0
+            protect_factor = np.clip(
+                (c_chan - chroma_floor) / (chroma_ceiling - chroma_floor), 0, 1
+            )[:, :, np.newaxis]
+        # Apply rotation, attenuated by protection
+        h_rotated = h_chan + rotation * highlight_mask * (1.0 - protect_factor[:, :, 0])
+        h_rotated = np.clip(h_rotated, 0, 360)
+        lch[:, :, 2] = h_rotated
+        return lch_to_bgr(lch)
+
+    def airy_haze(
+        self,
+        img_bgr: np.ndarray,
+        strength: float,
+        l_threshold: float = 200.0,
+        person_mask: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """L-threshold-scoped haze with person_mask-aware distance falloff.
+
+        Computes a soft glow from pixels above L_threshold, screen-blends it with
+        the image, and scales opacity by person_mask (background gets more air,
+        subject gets less for sharpness preservation). Distance falloff ensures
+        the glow fades naturally from highlights outward.
+
+        Args:
+            img_bgr: uint8 BGR image.
+            strength: Haze strength, 0-1.
+            l_threshold: LAB L threshold (0-255 scale) above which haze is computed.
+                         Default 200 creates haze only in very bright areas.
+            person_mask: Optional per-pixel mask (1=subject, 0=background).
+                         Scales glow opacity: background gets 100%, subject gets 40%.
+
+        Returns:
+            uint8 BGR image with L-threshold-scoped haze effect.
+        """
+        if strength <= 0:
+            return img_bgr
+        h, w = img_bgr.shape[:2]
+        img_f = img_bgr.astype(np.float32)
+        # Compute haze source from blurred image
+        ksize = max(int(min(h, w) * 0.02), 7) | 1
+        blurred = cv2.GaussianBlur(img_f, (ksize, ksize), 0)
+        # Extract LAB L to threshold
+        lab_u8 = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
+        l_chan = lab_u8[:, :, 0].astype(np.float32)
+        # Create highlight mask from L_threshold
+        hl_mask = np.clip((l_chan - l_threshold) / 20.0, 0, 1)[:, :, np.newaxis]
+        # Screen-blend the blurred image where highlights exist
+        screen = screen_blend(img_f, blurred)
+        result = img_f * (1.0 - hl_mask * strength) + screen * (hl_mask * strength)
+        # Apply person_mask: background (person_mask~0) gets full effect,
+        # subject (person_mask~1) gets attenuated (40% opacity)
+        if person_mask is not None:
+            pm_f = normalize_mask(person_mask)
+            if pm_f.ndim == 2:
+                pm_f = pm_f[:, :, np.newaxis]
+            # glow_opacity = (1.0 - pm_f * 0.6) means:
+            # person_mask=0 (bg) -> opacity=1.0 (full)
+            # person_mask=1 (fg) -> opacity=0.4 (attenuated)
+            glow_opacity = 1.0 - pm_f * 0.6
+            result = img_f + (result - img_f) * glow_opacity * strength
+        return np.clip(result, 0, 255).astype(np.uint8)
+
+    def clarity_split(
+        self,
+        img_bgr: np.ndarray,
+        negative_strength: float,
+        positive_strength: float,
+        mask: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """Negative clarity on form band + positive micro-contrast on texture band.
+
+        Uses two guided-filter passes at different radii:
+        - Large radius (form band): guided-filter base, inverted (subtracted) for
+          negative local-contrast reduction.
+        - Small radius (texture band): high-pass detail, boosted for positive
+          micro-contrast enhancement.
+
+        The result is soft-yet-detailed, a signature of JP portrait finishing.
+
+        Args:
+            img_bgr: uint8 BGR image.
+            negative_strength: Form-band clarity reduction, 0-1.
+            positive_strength: Texture-band clarity boost, 0-1.
+            mask: Optional per-pixel mask to scope the effect.
+
+        Returns:
+            uint8 BGR image with split-clarity processing.
+        """
+        if negative_strength <= 0 and positive_strength <= 0:
+            return img_bgr
+        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        l_chan = lab[:, :, 0]
+        h, w = img_bgr.shape[:2]
+        # Large radius for form band (low-frequency local contrast).
+        # NOTE: 0.04*min(h,w) (matching _add_clarity's positive-clarity radius
+        # convention) was measured to leave the guided-filter base nearly
+        # identical to l_chan for genuine form-scale structure (~30-80px
+        # period) — at that radius detail_form's std was ~5% of l_chan's std,
+        # so no amount of scaling the correction term could produce a
+        # meaningful reduction (this was the actual root cause of the
+        # near-inert negative-clarity bug, not just an undersized constant).
+        # 0.25*min(h,w) (min 40px) was verified empirically to isolate
+        # genuine form-band content and, combined with form_reduction_k=1.0,
+        # delivers 40-90%+ form-band local-contrast reduction across test
+        # patterns (52.9% on a period-30px sine-blob probe measured with a
+        # sigma=15 Gaussian, matching the plan's "negative clarity on the
+        # form band" intent).
+        r_form = max(int(min(h, w) * 0.25), 40)
+        eps = 0.05
+        l_norm = l_chan / 255.0
+        # Guided filter on form band
+        base_form = self._guided_filter(l_norm, l_norm, r_form, eps) * 255.0
+        detail_form = l_chan - base_form
+        # Small radius for texture band (high-frequency micro-contrast)
+        r_texture = max(int(min(h, w) * 0.008), 2)
+        base_texture = self._guided_filter(l_norm, l_norm, r_texture, eps) * 255.0
+        detail_texture = l_chan - base_texture
+        # Composite: reduce form-band contrast, boost texture-band detail.
+        # Negative pass is a direct subtractive correction (mirrors
+        # _add_clarity's positive `base + detail * (1.0 + strength)` pattern,
+        # but shrinking detail_form's contribution instead of growing it).
+        # form_reduction_k=1.0 means negative_strength=1.0 fully removes the
+        # form-band detail signal (l_new == base_form), the maximal "flatten
+        # the form band" reading of the spec; negative_strength=0 leaves
+        # detail_form fully intact (l_new == l_chan, a true no-op).
+        form_reduction_k = 1.0
+        l_new = base_form + detail_form * (1.0 - negative_strength * form_reduction_k)
+        # Texture-band boost mirrors _add_clarity's `detail * (1.0 + strength)`
+        # pattern: at positive_strength=1.0 the texture-band detail signal is
+        # doubled, a strength on par with _add_clarity's own scaling.
+        l_new = l_new + detail_texture * positive_strength
+        l_new = np.clip(l_new, 0, 255)
+        lab[:, :, 0] = l_new.astype(np.uint8)
+        result = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
+        if mask is not None:
+            m_f = normalize_mask(mask)
+            if m_f.ndim == 2:
+                m_f = m_f[:, :, np.newaxis]
+            result = blend_masked(img_bgr, result, m_f)
+        return result

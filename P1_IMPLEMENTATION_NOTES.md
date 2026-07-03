@@ -1,7 +1,7 @@
 # P1 Implementation Notes — Bilateral → Guided Filter Migration
 
 **Date:** 2026-07-02  
-**Status:** Working tree only (not yet committed); pending test-suite approval + visual QA  
+**Status:** ✅ DONE 2026-07-03 — committed as `10bab48` (`feat(utils): add shared guided_filter, use in frequency and skin modules`)  
 **Unblocks:** F8 (full-res fidelity), S1 (body skin), F11 (output QA detectors)
 
 ---
@@ -111,7 +111,7 @@ This kwarg will be deprecated and removed in the next release per `PLAN_TIERP_PE
 2. **Visual QA:** Spot-check retouches on >1200px images (flatten edge case)
 3. **Benchmark gate:** Per-face ≤250ms @ 400×400 (already achieved: 1.70ms/channel, ~5ms for 3-channel)
 4. **SSIM corpus check:** Verify output still matches SSIM thresholds (once F11 corpus built)
-5. **Commit & tag:** Will merge post-approval; P1 unblocks F8 Phase 1 execution
+5. **Commit:** ✅ DONE 2026-07-03 — `10bab48`; P1 unblocks F8 Phase 1 execution
 
 ---
 

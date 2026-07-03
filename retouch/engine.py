@@ -160,6 +160,7 @@ class ProcessingContext:
     relight: float = 0.0
     relight_azimuth: float = _DEFAULTS["relight_azimuth"]
     relight_elevation: float = _DEFAULTS["relight_elevation"]
+    sculpt: float = 0.0
     skin_flatten: float = 0.0
     skin_quantize: float = 0.0
     skin_unify: float = 0.0
@@ -169,6 +170,7 @@ class ProcessingContext:
     redness_even: float = 0.0
     skin_glow: float = 0.0
     whiten_hue_stable: bool = False
+    skin_locus: Optional[Dict[str, float]] = None
 
     # --- Eyes ---
     eye_enhance: float = 0.0
@@ -253,6 +255,11 @@ class ProcessingContext:
 
     # --- Finish ---
     impact: float = 0.0
+    fade_toe: float = 0.0
+    highlight_drift: float = 0.0
+    airy_haze: float = 0.0
+    clarity_split_neg: float = 0.0
+    clarity_split_pos: float = 0.0
 
     # --- Internal recipe tag (used for conditional logic) ---
     active_recipe: str = "natural"
@@ -464,12 +471,18 @@ def build_context(
         "color_grade_stack",
         "color_ref",
         "color_transfer_intensity",
+        "skin_locus",
     }
     spec_kwargs = {
         spec.name: resolved[spec.name]
         for spec in PROCESSING_PARAMS
         if spec.name not in _CALLER_ONLY
     }
+    # Extract skin_locus from recipe (if present) or overrides (if caller-supplied).
+    # Caller overrides win over recipe defaults.
+    recipe_skin_locus = rec.get("skin", {}).get("locus")
+    final_skin_locus = overrides.get("skin_locus") if overrides.get("skin_locus") is not None else recipe_skin_locus
+
     return ProcessingContext(
         # Recipe-derived fields (data-driven) — the bulk of the context.
         **spec_kwargs,
@@ -483,6 +496,7 @@ def build_context(
         halation=overrides.get("halation"),
         grain=overrides.get("grain"),
         lut=overrides.get("lut"),
+        skin_locus=final_skin_locus,
         # ``nose_smooth`` is recipe-static (always 0 in the spec default) and
         # the only consumer of overrides is the engine call, so it lives
         # outside the spec loop and is set straight from the override.
@@ -619,6 +633,7 @@ class RetouchEngine:
         relight: Optional[float] = None,
         relight_azimuth: Optional[float] = None,
         relight_elevation: Optional[float] = None,
+        sculpt: Optional[float] = None,
         slimming: Optional[float] = None,
         blush: Optional[float] = None,
         lip_finish: Optional[str] = None,
@@ -646,6 +661,7 @@ class RetouchEngine:
         whiten_hue_stable: Optional[bool] = None,
         skin_glow: Optional[float] = None,
         lut: Optional[str] = None,
+        skin_locus: Optional[Dict[str, float]] = None,
         tonal_curve_strength: Optional[float] = None,
         skin_protect_strength: Optional[float] = None,
         grain_strength: Optional[float] = None,
@@ -734,6 +750,7 @@ class RetouchEngine:
             "relight": relight,
             "relight_azimuth": relight_azimuth,
             "relight_elevation": relight_elevation,
+            "sculpt": sculpt,
             "slimming": slimming,
             "blush": blush,
             "lip_finish": lip_finish,
@@ -761,6 +778,7 @@ class RetouchEngine:
             "whiten_hue_stable": whiten_hue_stable,
             "skin_glow": skin_glow,
             "lut": lut,
+            "skin_locus": skin_locus,
             "tonal_curve_strength": tonal_curve_strength,
             "skin_protect_strength": skin_protect_strength,
             "grain_strength": grain_strength,
@@ -1138,10 +1156,18 @@ class RetouchEngine:
                         "halo": "Edge overshoot halos detected from sharpening",
                         "seam": "Seam visible at subject boundary",
                     }.get(detector_name, f"{detector_name} artifact detected")
+                    _qa_thresholds = {
+                        "banding": qa_detectors.BANDING_THRESHOLD,
+                        "clipping": qa_detectors.CLIPPING_THRESHOLD,
+                        "plastic_skin": qa_detectors.PLASTIC_SKIN_THRESHOLD,
+                        "halo": qa_detectors.HALO_THRESHOLD,
+                        "seam": qa_detectors.SEAM_THRESHOLD,
+                    }
                     qa_warnings.append(QAWarning(
                         detector=detector_name,
                         score=det_result.get("score", 0.0),
                         flagged=True,
+                        threshold=_qa_thresholds.get(detector_name, 0.0),
                         message=msg,
                         details={k: v for k, v in det_result.items() if k not in ("score", "flagged")},
                     ))
@@ -1812,6 +1838,37 @@ class RetouchEngine:
         if ctx.glow > 0:
             result_u8 = _to_uint8_if_float(result)
             result_u8 = self._grader._add_glow(result_u8, ctx.glow / 100.0, mask=g_mask)
+            result = _to_float_if_needed(result_u8, is_float)
+
+        # ---- Stage C4: 透明感 / 空気感 Finish Pack ----
+
+        # Fade toe: lifted-black with hue-locked toe (L-only in LAB)
+        if ctx.fade_toe > 0:
+            result_u8 = _to_uint8_if_float(result)
+            result_u8 = self._grader.fade_toe(result_u8, ctx.fade_toe / 100.0, mask=acc_skin)
+            result = _to_float_if_needed(result_u8, is_float)
+
+        # Highlight drift: hue rotation toward cyan in highlights, skin-protected
+        if ctx.highlight_drift > 0:
+            result_u8 = _to_uint8_if_float(result)
+            result_u8 = self._grader.highlight_drift(result_u8, ctx.highlight_drift / 100.0, mask=acc_skin)
+            result = _to_float_if_needed(result_u8, is_float)
+
+        # Airy haze: L-threshold-scoped glow with person_mask-aware distance falloff
+        if ctx.airy_haze > 0:
+            result_u8 = _to_uint8_if_float(result)
+            result_u8 = self._grader.airy_haze(result_u8, ctx.airy_haze / 100.0, person_mask=person_mask)
+            result = _to_float_if_needed(result_u8, is_float)
+
+        # Clarity split: negative form-band clarity + positive micro-contrast
+        if ctx.clarity_split_neg > 0 or ctx.clarity_split_pos > 0:
+            result_u8 = _to_uint8_if_float(result)
+            result_u8 = self._grader.clarity_split(
+                result_u8,
+                ctx.clarity_split_neg / 100.0,
+                ctx.clarity_split_pos / 100.0,
+                mask=None
+            )
             result = _to_float_if_needed(result_u8, is_float)
 
         # Apply post-effects

@@ -420,6 +420,23 @@ RECIPES = {
         "texture": {"opacity": 0.70},
         "bloom": {"opacity": 0.14, "threshold": 195.0},
     },
+    "jp_transparent_v1": {
+        "extends": "natural",
+        "frequency": {"smooth": 0.25},
+        "skin": {
+            "equalize": 0.08,
+            "whiten_hue_stable": 1,
+            "micro_dodge_burn": 0.05,
+        },
+        "finish": {
+            "fade_toe": 0.30,
+            "highlight_drift": 0.25,
+            "airy_haze": 0.20,
+            "clarity_split_neg": 0.15,
+            "clarity_split_pos": 0.10,
+            "impact": 0.05,
+        },
+    },
 }
 
 RECIPES["soft"] = RECIPES["anime_cinematic_soft"]

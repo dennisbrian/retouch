@@ -94,15 +94,15 @@ def apply_custom_style(style_name, current_recipe="natural"):
     d["texture_opacity"] = float(np.clip(profile.skin_texture_opacity, 0.0, 1.0))
     d["contrast"] = int(profile.contrast_delta)
     d["brightness"] = int(np.clip(profile.brightness_delta, -50.0, 50.0))
-    
+
     return (
         d["smooth"], d["mid_reduction"], d["texture_opacity"], d["pore_synthesis"], d["nose_smooth"], d["micro_restore"],
         d["whiten"], d["equalize"], d["blemish"], d["whiten_tone"], d["nose_blush"], d["under_eye_blush"], d["white_costume_lift"],
-        d["dodge_burn"], d["relight"], d["relight_azimuth"], d["relight_elevation"], d["specular_bloom"], d["specular_bloom_tone"],
+        d["dodge_burn"], d["relight"], d["relight_azimuth"], d["relight_elevation"], d["sculpt"], d["specular_bloom"], d["specular_bloom_tone"],
         d["skin_flatten"], d["skin_quantize"], d["skin_unify"], d["skin_unify_hue"], d["skin_glow"],
         d["eye_enhance"], d["catchlight"], d["dark_circles"], d["teeth_whiten"], d["lip_enhance"], d["lip_tint"], d["lip_finish"], d["blush"], d["slimming"], d["hair_enhance"],
         d["contrast"], d["brightness"], d["highlights"], d["shadows"], d["whites"], d["blacks"], d["clarity"], d["vibrance"], d["saturation"], d["auto_exposure"],
-        d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["glow"], d["vignette"], d["sharpen"], d["sharpen_radius"], d["subject_separation"], d["impact"],
+        d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["glow"], d["vignette"], d["sharpen"], d["sharpen_radius"], d["fade_toe"], d["highlight_drift"], d["airy_haze"], d["clarity_split_neg"], d["clarity_split_pos"], d["subject_separation"], d["impact"],
         d["color_grade"], d["grade_intensity"],
         d["chromatic_aberration"], d["grain"], d["halation"], d["lut"],
         d["tonal_curve_strength"], d["skin_protect_strength"], d["grain_strength"], d["highlight_rolloff_strength"],
@@ -475,11 +475,11 @@ def on_recipe_change(recipe):
     return (
         d["smooth"], d["mid_reduction"], d["texture_opacity"], d["pore_synthesis"], d["nose_smooth"], d["micro_restore"],
         d["whiten"], d["equalize"], d["blemish"], d["whiten_tone"], d["nose_blush"], d["under_eye_blush"], d["white_costume_lift"],
-        d["dodge_burn"], d["relight"], d["relight_azimuth"], d["relight_elevation"], d["specular_bloom"], d["specular_bloom_tone"],
+        d["dodge_burn"], d["relight"], d["relight_azimuth"], d["relight_elevation"], d["sculpt"], d["specular_bloom"], d["specular_bloom_tone"],
         d["skin_flatten"], d["skin_quantize"], d["skin_unify"], d["skin_unify_hue"], d["skin_glow"],
         d["eye_enhance"], d["catchlight"], d["dark_circles"], d["teeth_whiten"], d["lip_enhance"], d["lip_tint"], d["lip_finish"], d["blush"], d["slimming"], d["hair_enhance"],
         d["contrast"], d["brightness"], d["highlights"], d["shadows"], d["whites"], d["blacks"], d["clarity"], d["vibrance"], d["saturation"], d["auto_exposure"],
-        d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["glow"], d["vignette"], d["sharpen"], d["sharpen_radius"], d["subject_separation"], d["impact"],
+        d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["glow"], d["vignette"], d["sharpen"], d["sharpen_radius"], d["fade_toe"], d["highlight_drift"], d["airy_haze"], d["clarity_split_neg"], d["clarity_split_pos"], d["subject_separation"], d["impact"],
         d["color_grade"], d["grade_intensity"],
         d["chromatic_aberration"], d["grain"], d["halation"], d["lut"],
         d["tonal_curve_strength"], d["skin_protect_strength"], d["grain_strength"], d["highlight_rolloff_strength"],
@@ -1366,6 +1366,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             relight = gr.Slider(0, 100, 0, step=1, label="Relight Strength", info="Intensity of 3D virtual studio light source redirection")
                             relight_azimuth = gr.Slider(-180, 180, 0, step=1, label="Light Azimuth", info="Horizontal light source direction angle (-180° to 180°)")
                             relight_elevation = gr.Slider(-90, 90, 30, step=1, label="Light Elevation", info="Vertical light source direction angle (-90° to 90°)")
+                            sculpt = gr.Slider(0, 100, 0, step=1, label="Facial Sculpting", info="Shape reflectance: deepen cheekbones, nose ridge, and jawline via low-band shading")
 
                         with gr.Accordion("👁️ Eyes & Lips", open=False):
                             reset_eyes_lips_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
@@ -1400,6 +1401,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             glow = gr.Slider(0, 100, 0, step=1, label="Atmospheric Glow", info="Multi-scale atmospheric glow/bloom effect")
                             skin_glow = gr.Slider(0, 100, 0, step=1, label="Skin Light-Wrap (Anime)", info="Skin-scoped diffusion glow / light-wrap for anime cel blending · 0=off, 30=visible halo")
                             vignette = gr.Slider(0, 100, 0, step=1, label="Vignette", info="Darken image corners for a focused portrait look")
+                            fade_toe = gr.Slider(0, 100, 0, step=1, label="Fade Toe", info="Lift shadows while preserving hue (L-only LAB fade for 透明感)")
+                            highlight_drift = gr.Slider(0, 100, 0, step=1, label="Highlight Drift", info="Bounded cyan hue rotation in highlights with skin protection")
+                            airy_haze = gr.Slider(0, 100, 0, step=1, label="Airy Haze", info="L-threshold-scoped atmospheric glow for 空気感 effect")
+                            clarity_split_neg = gr.Slider(0, 100, 0, step=1, label="Clarity Split (Form)", info="Reduce form-band local contrast for soft look")
+                            clarity_split_pos = gr.Slider(0, 100, 0, step=1, label="Clarity Split (Texture)", info="Boost texture-band micro-contrast for detail")
                             subject_separation = gr.Slider(0, 100, 0, step=1, label="Subject-Background Separation", info="Brighten subject / darken background using person segmentation mask")
 
                         with gr.Accordion("🎬 Film Color Grading", open=False):
@@ -1531,11 +1537,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     _recipe_outputs = [
         smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth, micro_restore,
         whiten, equalize, blemish, whiten_tone, nose_blush, under_eye_blush, white_costume_lift,
-        dodge_burn, relight, relight_azimuth, relight_elevation, specular_bloom, specular_bloom_tone,
+        dodge_burn, relight, relight_azimuth, relight_elevation, sculpt, specular_bloom, specular_bloom_tone,
         skin_flatten, skin_quantize, skin_unify, skin_unify_hue, skin_glow,
         eye_enhance, catchlight, dark_circles, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, slimming, hair_enhance,
         contrast, brightness, highlights, shadows, whites, blacks, clarity, vibrance, saturation, auto_exposure,
-        bloom, bloom_threshold, bloom_softness, glow, vignette, sharpen, sharpen_radius, subject_separation, impact,
+        bloom, bloom_threshold, bloom_softness, glow, vignette, sharpen, sharpen_radius, fade_toe, highlight_drift, airy_haze, clarity_split_neg, clarity_split_pos, subject_separation, impact,
         color_grade, grade_intensity,
         chromatic_aberration, grain, halation, lut,
         tonal_curve_strength, skin_protect_strength, grain_strength, highlight_rolloff_strength,
@@ -1673,11 +1679,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         img_input, recipe,
         smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth, micro_restore, _micro_dodge_burn_state, _redness_even_state, _whiten_hue_stable_state,
         whiten, equalize, blemish, whiten_tone, nose_blush, under_eye_blush, white_costume_lift,
-        dodge_burn, relight, relight_azimuth, relight_elevation, specular_bloom, specular_bloom_tone,
+        dodge_burn, relight, relight_azimuth, relight_elevation, sculpt, specular_bloom, specular_bloom_tone,
         skin_flatten, skin_quantize, skin_unify, skin_unify_hue, _skin_hue_unify_state, _skin_chroma_even_state, skin_glow,
         eye_enhance, catchlight, dark_circles, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, slimming, hair_enhance,
         contrast, brightness, highlights, shadows, whites, blacks, clarity, vibrance, saturation, auto_exposure,
-        bloom, bloom_threshold, bloom_softness, glow, vignette, sharpen, sharpen_radius, subject_separation, impact,
+        bloom, bloom_threshold, bloom_softness, glow, vignette, sharpen, sharpen_radius, fade_toe, highlight_drift, airy_haze, clarity_split_neg, clarity_split_pos, subject_separation, impact,
         color_grade, grade_intensity, chromatic_aberration, grain, halation, lut,
         tonal_curve_strength, skin_protect_strength, grain_strength, highlight_rolloff_strength,
         shadow_hue, shadow_sat, midtone_hue, midtone_sat, highlight_hue, highlight_sat,

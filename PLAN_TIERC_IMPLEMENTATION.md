@@ -31,7 +31,7 @@ Signature: `unify_hue_line(img_bgr, skin_mask, hue_strength: int = 0, chroma_str
   if ctx.skin_hue_unify > 0 or ctx.skin_chroma_even > 0:
       canvas = skin.unify_hue_line(canvas, regions.skin, int(ctx.skin_hue_unify), int(ctx.skin_chroma_even))
   ```
-- No recipe changes in this slice (recipes adopt after visual QA). `skin_locus` recipe override deferred — ParamSpec registry is scalar-only; needs a nested-dict recipe key design (Slice 2 decision).
+- No recipe changes in this slice (recipes adopt after visual QA). `skin_locus` recipe override deferred here — ParamSpec registry is scalar-only; nested-dict recipe handling lands in Slice 2.
 
 ### 1d. Tests `tests/test_color_science.py` (+ additions to `tests/test_skin.py`)
 Round-trip BGR→Oklab→BGR max error ≤ 2/255; known anchors (pure white → L≈1.0, C≈0; sRGB red hue ≈ 29°); hue rotation never exceeds 8° at strength 100; synthetic patchy-skin image (two hue clusters 15° apart): post-op circular hue std strictly decreases and is monotonic in strength; σ_C decreases under chroma_even; strength-0 byte-identical; None-mask no-op; lips-free mask assumption documented (call passes `regions.skin`, which BiSeNet already separates from lips).
@@ -40,8 +40,10 @@ Round-trip BGR→Oklab→BGR max error ≤ 2/255; known anchors (pure white → 
 
 ---
 
-## Slice 2 — C1 finish (whiten refactor + metric + recipes) — after Slice 1 visual QA
+## Slice 2 — C1 finish (whiten refactor + metric + recipes) — ✅ DONE 2026-07-03
 `whiten` gains `hue_stable: bool = False`: when set, the L-lift (skin.py:98-104) runs in OKLCh with C and h held (kills high-strength chalkiness); tone shifts (rosy/porcelain) still apply after, expressed as bounded OKLCh hue/chroma nudges. Old path stays default until corpus A/B. σ_C metric into `benchmark.py`. `skin.locus` nested recipe key (dict pass-through like existing nested `skin` blocks). Add modest `hue_unify`/`chroma_even` to one portrait recipe as proving ground.
+
+Receipt 2026-07-03: `whiten_hue_stable`, σ_C benchmark metric, C1 recipe updates, and `skin.locus` override wiring are present. Follow-up doc-sync verified `skin_locus` flows recipe_loader.py → engine.py ProcessingContext → perf_optimizations.py `unify_hue_line(locus=...)`; 22 focused non-MediaPipe tests passed. Full `tests/test_skin_locus_override.py` is still blocked locally by a MediaPipe abort during `RetouchEngine()` initialization, so real face-detected visual QA remains owner/full-runtime work.
 
 ## Slice 3 — C2 structural light-shadow (`retouch/sculpt.py`)
 Landmark-mesh shading model + form-band correction per parent doc §C2; shares light-direction estimate with relight. Blocked on: Slice 1 shipped + S2 helpers existing (S2 is the adjacent Phase 2 item — build S2 first per MASTER_PLAN order).

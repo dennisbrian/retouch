@@ -555,67 +555,79 @@ def apply_global_bloom(
     """Apply a multi-scale atmospheric glow/bloom effect to the entire image.
 
     Resembles Composite Nation's Oniric Photoshop plugin.
-    Isolates highlight regions above the threshold, blurs at 3 scales, and screen-blends.
+    Isolates highlight regions above the threshold, blurs at 3 scales, and screen-blends
+    in LINEAR RGB space to produce denser, more concentrated bloom with hot cores and
+    long soft tails (unlike gamma-space bloom which under-weights bright pixels).
     """
     if strength <= 0:
         return img_bgr
 
     # Convert to LAB to isolate highlights based on L (luminance) channel
+    # Threshold and softness logic operates in gamma-space L domain (photographer-intuitive)
     lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
     l_chan = lab[:, :, 0]
 
     # Soft threshold ramp from threshold to threshold + softness
     soft_w = max(1.0, softness)
     highlight_mask = np.clip((l_chan - threshold) / soft_w, 0.0, 1.0)
-    
+
     if highlight_mask.max() < 0.01:
         return img_bgr
 
     h, w = img_bgr.shape[:2]
     min_dim = min(h, w)
-    
-    # Isolate highlights in float32 (color-preserving, avoid early quantization to uint8)
-    highlights = img_bgr.astype(np.float32) * highlight_mask[:, :, np.newaxis]
 
-    # Downsampled bloom optimization for large images
+    # Isolate highlights in float32 (color-preserving, avoid early quantization to uint8)
+    highlights_gamma = img_bgr.astype(np.float32) * highlight_mask[:, :, np.newaxis]
+
+    # Linearize highlights and base image for bloom computation (gamma 2.2)
+    highlights_lin = (highlights_gamma / 255.0) ** 2.2
+    img_lin = (img_bgr.astype(np.float32) / 255.0) ** 2.2
+
+    # Downsampled bloom optimization for large images (operates in linear space)
     target_min = 2000
     is_downsampled = min_dim > target_min
     if is_downsampled:
         scale = target_min / min_dim
-        highlights_low = cv2.resize(
-            highlights, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA
+        highlights_lin_low = cv2.resize(
+            highlights_lin, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA
         )
-        blur_dim = min(highlights_low.shape[:2])
+        blur_dim = min(highlights_lin_low.shape[:2])
     else:
-        highlights_low = highlights
+        highlights_lin_low = highlights_lin
         blur_dim = min_dim
 
-    # Cascaded Gaussian blurs representing different scales of atmospheric glow (1%, 3%, 8%)
+    # Cascaded Gaussian blurs in linear space representing different scales of atmospheric glow (1%, 3%, 8%)
     k1 = max(15, int(blur_dim * 0.01)) | 1
     k2 = max(31, int(blur_dim * 0.03)) | 1
     k3 = max(63, int(blur_dim * 0.08)) | 1
 
-    blur1 = cv2.GaussianBlur(highlights_low, (k1, k1), 0)
-    blur2 = cv2.GaussianBlur(highlights_low, (k2, k2), 0)
-    blur3 = cv2.GaussianBlur(highlights_low, (k3, k3), 0)
+    blur1 = cv2.GaussianBlur(highlights_lin_low, (k1, k1), 0)
+    blur2 = cv2.GaussianBlur(highlights_lin_low, (k2, k2), 0)
+    blur3 = cv2.GaussianBlur(highlights_lin_low, (k3, k3), 0)
 
-    # Blend multi-scale glows to form realistic falloff
-    glow_low = blur1 * 0.5 + blur2 * 0.3 + blur3 * 0.2
-    
+    # Blend multi-scale glows in linear space to form realistic falloff
+    glow_lin_low = blur1 * 0.5 + blur2 * 0.3 + blur3 * 0.2
+
     if is_downsampled:
-        glow = cv2.resize(glow_low, (w, h), interpolation=cv2.INTER_LINEAR)
+        glow_lin = cv2.resize(glow_lin_low, (w, h), interpolation=cv2.INTER_LINEAR)
     else:
-        glow = glow_low
-    
-    # Screen blend to avoid clipping:
-    # screen = 255 - ((255 - img) * (255 - glow) / 255)
-    img_f = img_bgr.astype(np.float32)
-    screen = screen_blend(img_f, glow)
+        glow_lin = glow_lin_low
 
-    # Linearly interpolate between original BGR and Screened BGR based on strength factor
+    # Screen blend in linear space: 1 - (1 - a) * (1 - b)
+    # Both img_lin and glow_lin are in [0, 1] range after linearization
+    screen_lin = 1.0 - (1.0 - img_lin) * (1.0 - glow_lin)
+
+    # Linearly interpolate between original (linear) and screen-blended (linear)
     s_factor = strength / 100.0
-    result = img_f * (1.0 - s_factor) + screen * s_factor
-    return np.clip(result, 0, 255).astype(np.uint8)
+    result_lin = img_lin * (1.0 - s_factor) + screen_lin * s_factor
+
+    # Clip to [0, 1] in linear space before delinearizing
+    result_lin = np.clip(result_lin, 0.0, 1.0)
+
+    # Delinearize back to gamma space (inverse gamma 2.2)
+    result = (result_lin ** (1.0 / 2.2) * 255.0).astype(np.uint8)
+    return result
 
 
 def apply_skin_diffusion(

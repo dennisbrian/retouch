@@ -308,7 +308,7 @@ def _process_face_core(
 
     # ---- Skin hue-line unification (preferred-locus pull) ----
     if ctx.skin_hue_unify > 0 or ctx.skin_chroma_even > 0:
-        canvas = skin.unify_hue_line(canvas, regions.skin, int(ctx.skin_hue_unify), int(ctx.skin_chroma_even))
+        canvas = skin.unify_hue_line(canvas, regions.skin, int(ctx.skin_hue_unify), int(ctx.skin_chroma_even), locus=ctx.skin_locus)
 
     # ---- Skin hue/chroma unification (anime) ----
     if ctx.skin_unify > 0:
@@ -328,6 +328,16 @@ def _process_face_core(
             strength=ctx.relight,
             azimuth=ctx.relight_azimuth,
             elevation=ctx.relight_elevation,
+        )
+
+    # ---- Facial structure sculpting (C2: low-band shaping, form-frequency modulation) ----
+    if ctx.sculpt > 0:
+        canvas = relighter.sculpt(
+            canvas,
+            shifted_face.landmarks,
+            regions.skin,
+            face_width=face_width,
+            strength=ctx.sculpt,
         )
 
     # ---- Tone quantization (cel shading bands) ----

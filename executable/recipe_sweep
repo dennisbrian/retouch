@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  ./executable/recipe_sweep INPUT_IMAGE [OUTPUT_DIR] [recipe_sweep options]
+
+Examples:
+  ./executable/recipe_sweep photo.jpg
+  ./executable/recipe_sweep photo.jpg test_output/recipe_sweeps/photo_check --compare
+  ./executable/recipe_sweep photo.jpg --recipes natural,portrait,cosplay --max-dim 1600
+  ./executable/recipe_sweep photo.jpg --global-only --format png
+
+Notes:
+  - If OUTPUT_DIR is omitted, a timestamped folder is created under
+    test_output/recipe_sweeps/.
+  - All extra flags are forwarded to scripts/recipe_sweep.py.
+USAGE
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  echo
+  cd "${ROOT_DIR}"
+  exec "${PYTHON_BIN}" scripts/recipe_sweep.py --help
+fi
+
+if [[ $# -lt 1 ]]; then
+  usage >&2
+  exit 2
+fi
+
+INPUT_IMAGE="$1"
+shift
+
+OUTPUT_DIR=""
+if [[ $# -gt 0 && "${1}" != -* ]]; then
+  OUTPUT_DIR="$1"
+  shift
+fi
+
+HAS_OUTPUT_FLAG=0
+for arg in "$@"; do
+  if [[ "${arg}" == "-o" || "${arg}" == "--output" || "${arg}" == --output=* ]]; then
+    HAS_OUTPUT_FLAG=1
+    break
+  fi
+done
+
+if [[ -n "${OUTPUT_DIR}" && "${HAS_OUTPUT_FLAG}" -eq 1 ]]; then
+  echo "error: pass either positional OUTPUT_DIR or -o/--output, not both" >&2
+  exit 2
+fi
+
+if [[ -z "${OUTPUT_DIR}" && "${HAS_OUTPUT_FLAG}" -eq 0 ]]; then
+  stamp="$(date +%Y%m%d_%H%M%S)"
+  stem="$(basename "${INPUT_IMAGE}")"
+  stem="${stem%.*}"
+  OUTPUT_DIR="${ROOT_DIR}/test_output/recipe_sweeps/${stem}_${stamp}"
+fi
+
+mkdir -p "${OUTPUT_DIR}"
+export MPLCONFIGDIR="${MPLCONFIGDIR:-/private/tmp/retouch-mpl}"
+export PYTHONPYCACHEPREFIX="${PYTHONPYCACHEPREFIX:-/private/tmp/retouch-pycache}"
+
+cd "${ROOT_DIR}"
+
+if [[ "${HAS_OUTPUT_FLAG}" -eq 1 ]]; then
+  exec "${PYTHON_BIN}" scripts/recipe_sweep.py "${INPUT_IMAGE}" "$@"
+fi
+
+exec "${PYTHON_BIN}" scripts/recipe_sweep.py "${INPUT_IMAGE}" -o "${OUTPUT_DIR}" "$@"

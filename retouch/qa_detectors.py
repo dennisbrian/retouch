@@ -28,6 +28,7 @@ class QAWarning:
     score: float
     flagged: bool
     message: str
+    threshold: float = 0.0
     details: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -36,6 +37,7 @@ BANDING_THRESHOLD = 0.15  # Flag if >15% of smooth pixels on quantization step e
 CLIPPING_THRESHOLD = 0.08  # Flag if clipped blob fraction >8% of image
 PLASTIC_SKIN_THRESHOLD = 0.60  # Flag if high-freq energy ratio falls below 60%
 HALO_THRESHOLD = 15.0  # Flag if mean overshoot amplitude >15 levels
+SEAM_THRESHOLD = 5.0   # Flag if boundary gradient >5 L-levels above context
 
 
 def _bgr_to_lab(img_bgr: np.ndarray) -> np.ndarray:
@@ -435,7 +437,7 @@ def detect_seam(
         boundary_mean = float(np.mean(boundary_grad))
         context_mean = float((np.mean(interior_grad) + np.mean(exterior_grad)) / 2.0)
         seam_gradient = max(0.0, boundary_mean - context_mean)
-        flagged = seam_gradient > 5.0
+        flagged = seam_gradient > SEAM_THRESHOLD
         return {
             "score": min(1.0, seam_gradient / 20.0),
             "flagged": bool(flagged),
