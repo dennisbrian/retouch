@@ -75,6 +75,7 @@ RECIPE-2  Recipes now support an optional "extends" key for single-level
 from __future__ import annotations
 
 import copy
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -91,7 +92,7 @@ from .detection import FaceDetector, FaceData, FaceContext
 from .parsing import FaceParser, FaceRegions
 from .geometry import FaceReshaper
 from .makeup import MakeupEngine
-from .frequency import FrequencySeparator
+from .frequency import FrequencySeparator, _texture_adaptation_factor
 from .perf_optimizations import (
     FaceProcessorPool,
     _accum,
@@ -125,6 +126,28 @@ from .params import resolve_recipe, _deep_merge, PROCESSING_PARAMS  # noqa: F401
 # ---------------------------------------------------------------------------
 
 PROXY_MAX_DIM = 2048
+
+# --- Proxy native-detail reinjection adaptation (F8.0) ---
+# The proxy round-trip (downscale → retouch → upscale) discards pore-scale
+# texture that only exists above proxy resolution. F8.0 reinjects the native
+# high band into edit-mask regions, but discounts it by the recipe's smooth
+# strength. On flat, front-lit skin the native texture is predominantly
+# fine-scale (above proxy Nyquist) and intrinsically low-amplitude, so that
+# discount is exactly what reads as "waxy". These thresholds map the robust
+# (MAD) energy of the native high band inside acc_skin to an adaptation
+# factor: low energy (flat lighting) → lift the discount and reinject fuller
+# native detail; high energy (directional lighting, coarse texture) → keep
+# the existing behavior unchanged. Calibrated on the duotian-nikke batch
+# (natural_polish_v1, 4160px input, 2048px proxy): waxy front-lit faces
+# measure native-skin high-band energy ~1.48-1.51, well-lit faces ~1.65-1.73;
+# both sit inside [LOW, HIGH] so both recover proxy-lost pore detail, with the
+# waxy faces (lower energy → smaller adapt) getting the larger lift. Set
+# REINJECT_DEBUG=1 to log per-image energy/adapt. HIGH=3.0 leaves genuinely
+# high-frequency faces untouched.
+REINJECT_ENERGY_LOW = 1.0
+REINJECT_ENERGY_HIGH = 3.0
+REINJECT_ADAPT_FLOOR = 0.0
+REINJECT_BASE_GAIN = 0.85
 
 # Anime cinematic variants get standard nose blush, no slimming
 # Mapped modularly in recipes config
@@ -1079,11 +1102,31 @@ class RetouchEngine:
                     original_float = native_img_bgr.astype(np.float32)
                     blurred = cv2.GaussianBlur(original_float, (0, 0), sigma)
                     high_band = original_float - blurred
+                    # Adaptive discount lift: flat/front-lit skin (low native
+                    # high-band energy) needs fuller reinjection or the proxy
+                    # round-trip reads as waxy. adapt==1.0 → byte-identical to
+                    # the previous fixed behavior; adapt→0 → discount removed
+                    # and gain raised toward 1.0. Strictly asymmetric: never
+                    # reinjects less than before.
+                    adapt = _texture_adaptation_factor(
+                        high_band, core.acc_skin,
+                        energy_low=REINJECT_ENERGY_LOW,
+                        energy_high=REINJECT_ENERGY_HIGH,
+                        floor=REINJECT_ADAPT_FLOOR,
+                    )
+                    if os.getenv("REINJECT_DEBUG"):
+                        _hm = np.abs(high_band).mean(axis=2)[core.acc_skin > 0.5]
+                        _med = float(np.median(_hm))
+                        _energy = float(np.median(np.abs(_hm - _med))) * 1.4826
+                        logger.warning(
+                            "REINJECT_DEBUG energy=%.3f adapt=%.3f", _energy, adapt
+                        )
                     weight = np.clip(
-                        edit_mask * (1.0 - core.acc_skin * smooth_strength),
+                        edit_mask * (1.0 - core.acc_skin * smooth_strength * adapt),
                         0.0, 1.0,
                     )[:, :, np.newaxis]
-                    result_f = core.result.astype(np.float32) + high_band * weight * 0.85
+                    gain = REINJECT_BASE_GAIN + (1.0 - adapt) * (1.0 - REINJECT_BASE_GAIN)
+                    result_f = core.result.astype(np.float32) + high_band * weight * gain
                     core.result = np.clip(result_f, 0, 255).astype(np.uint8)
 
         # Handle no-face case: run minimal global processing if needed

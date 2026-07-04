@@ -39,6 +39,79 @@ SIGMA_BASE = 20.0
 SIGMA_STRENGTH_FACTOR = 60.0
 GAUSSIAN_BLEND_FACTOR = 0.25
 
+# --- Adaptive texture preservation (flat/front-lit skin protection) ---
+# Flat, front-lit skin has intrinsically low high-band amplitude, so fixed
+# smoothing parameters strip real pore texture as if it were noise. We measure
+# the robust high-band energy inside the skin mask and, when it is low, scale
+# back the effective smoothing and floor texture_opacity upward. The response
+# is smooth (no threshold pop), asymmetric (only ever *reduces* smoothing), and
+# expressed in intensity units (resolution-independent for amplitude).
+#
+# ENERGY_LOW/ENERGY_HIGH are robust-std (MAD-derived) thresholds on the masked
+# high band. Below ENERGY_LOW the adaptation is at its strongest (factor floor);
+# at/above ENERGY_HIGH there is no adaptation (factor 1.0 → identical output).
+TEXTURE_ENERGY_LOW = 0.5
+TEXTURE_ENERGY_HIGH = 3.0
+# Minimum multiplier applied to smooth/mid levers when texture is maximally
+# flat. Never 0 — we still want gentle smoothing, just far less aggressive.
+TEXTURE_ADAPT_FLOOR = 0.5
+# MAD → std scaling for a normal distribution (1 / 0.6745).
+_MAD_TO_STD = 1.4826
+
+
+def _texture_adaptation_factor(
+    high: np.ndarray,
+    mask_2d: np.ndarray,
+    energy_low: float = TEXTURE_ENERGY_LOW,
+    energy_high: float = TEXTURE_ENERGY_HIGH,
+    floor: float = TEXTURE_ADAPT_FLOOR,
+) -> float:
+    """Return a smooth, asymmetric adaptation factor in [floor, 1].
+
+    Measures the robust high-band energy (MAD-based std) inside the skin mask.
+    High energy (textured / directional light) → 1.0 (no change). Low energy
+    (flat / front-lit) → toward ``floor``, so callers can scale back smoothing
+    and preserve pore texture.
+
+    The mapping is a smoothstep between ``energy_low`` and ``energy_high``, so
+    there is no hard threshold and the response is monotonic in energy. The
+    factor only ever *reduces* smoothing (it is capped at 1.0), keeping the
+    adaptation asymmetric.
+
+    Args:
+        high: (H, W, 3) float32 high-frequency band (can be negative).
+        mask_2d: (H, W) float mask; pixels > 0.5 count toward the measurement.
+        energy_low: Energy at/below which adaptation is strongest (→ floor).
+        energy_high: Energy at/above which there is no adaptation (→ 1.0).
+        floor: Minimum returned factor when texture is maximally flat.
+
+    Returns:
+        Scalar float in [floor, 1.0]. Returns 1.0 (no adaptation) when the
+        mask is empty or degenerate.
+    """
+    sel = mask_2d > 0.5
+    n = int(np.count_nonzero(sel))
+    if n < 16:
+        return 1.0
+
+    # Per-pixel high-band magnitude (mean over channels), measured only inside
+    # the mask. MAD is robust to specular highlights / stray hairs that would
+    # otherwise inflate a plain std.
+    high_mag = np.abs(high).mean(axis=2)
+    vals = high_mag[sel]
+    med = float(np.median(vals))
+    mad = float(np.median(np.abs(vals - med)))
+    energy = mad * _MAD_TO_STD
+
+    # Smoothstep from LOW→HIGH: 0 at/below LOW, 1 at/above HIGH.
+    span = energy_high - energy_low
+    t = (energy - energy_low) / span
+    t = min(1.0, max(0.0, t))
+    smooth_t = t * t * (3.0 - 2.0 * t)  # smoothstep
+
+    factor = floor + (1.0 - floor) * smooth_t
+    return min(1.0, max(floor, factor))
+
 
 class FrequencyLayers:
     """Container for the three frequency bands."""
@@ -184,6 +257,28 @@ class FrequencySeparator:
 
         m_2d = cv2.GaussianBlur(m_raw, (feather_r, feather_r), 0)
         m_3d = m_2d[:, :, np.newaxis]
+
+        # --- Adaptive texture preservation ---
+        # Flat/front-lit skin has low intrinsic high-band energy, so the fixed,
+        # content-blind smoothing parameters strip real pore texture as if it
+        # were noise. Measure masked high-band energy and, when low, back off the
+        # levers that erode pore-scale structure:
+        #   (a) smooth_strength — drives the guided-filter eps/radius on low+mid;
+        #       this is the dominant texture-killer, so it is scaled directly.
+        #   (b) texture_opacity — floored upward so the high band is fully kept.
+        # The response is smooth (no threshold pop), monotonic in energy, and
+        # strictly asymmetric: every lever is only ever *reduced* (smoothing
+        # never gets stronger than the recipe asks). On normal/high-texture
+        # faces adapt == 1.0 → output is byte-for-byte identical to before.
+        # (mid_reduction is intentionally NOT scaled: the guided-filter
+        # interaction makes the output mid band non-monotonic in mid_reduction,
+        # so touching it would not reliably preserve texture.)
+        adapt = _texture_adaptation_factor(high, m_2d)
+        if adapt < 1.0:
+            smooth_strength = smooth_strength * adapt
+            # Raise opacity toward 1.0 (keep more of the surviving high band).
+            texture_opacity = texture_opacity + (1.0 - adapt) * (1.0 - texture_opacity)
+            texture_opacity = max(0.0, min(1.0, texture_opacity))
 
         # Texture opacity — attenuate high band inside the mask
         if texture_opacity < 1.0:

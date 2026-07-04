@@ -162,3 +162,199 @@ class TestPoreSynthesis:
             pore_synthesis=0.5, face_width=100.0, roi_coords=(10, 21)
         )
         assert not np.array_equal(res1, res2)
+
+
+class TestAdaptiveTexturePreservation:
+    """Adaptive protection of pore texture on flat, front-lit skin.
+
+    The mechanism measures masked high-band energy in ``combine()`` and, when
+    it is low, scales back effective smoothing and floors ``texture_opacity``
+    upward. It must be smooth (no threshold pop), asymmetric (only ever reduce
+    smoothing), resolution-independent (amplitude in intensity units), and a
+    no-op when texture energy is normal/high.
+    """
+
+    @staticmethod
+    def _robust_std(vals):
+        med = np.median(vals)
+        return float(np.median(np.abs(vals - med)) * 1.4826)
+
+    def _make_layers(self, size, amp, seed=0):
+        """Build FrequencyLayers with a controlled pore-texture amplitude.
+
+        Real pore texture spans the mid ("blemish"-scale) and high ("pore"-
+        scale) bands. We place correlated band-limited noise in BOTH bands and
+        scale both so their robust std equals ``amp`` (intensity units). This
+        mirrors reality: the guided filter smooths low+mid, so mid-band texture
+        is the part that gets stripped, while the high band drives the detector.
+        Low band is a flat mid-gray.
+        """
+        rng = np.random.default_rng(seed)
+        low = np.full((size, size, 3), 150.0, dtype=np.float32)
+
+        def band(sigma_lo, sigma_hi):
+            noise = rng.standard_normal((size, size, 3)).astype(np.float32)
+            hi = noise if sigma_hi <= 0 else cv2.GaussianBlur(noise, (0, 0), sigma_hi)
+            lo = noise if sigma_lo <= 0 else cv2.GaussianBlur(noise, (0, 0), sigma_lo)
+            b = hi - lo
+            mag = np.abs(b).mean(axis=2)
+            cur = self._robust_std(mag)
+            if cur > 1e-6:
+                b = b * (amp / cur)
+            return b.astype(np.float32)
+
+        mid = band(1.5, 4.0)   # medium-scale texture
+        high = band(0.0, 1.2)  # fine pore texture
+        # Rescale high so its own robust std is exactly `amp` (band() normalizes
+        # to `amp` already, but the two bands are independent draws).
+        return FrequencyLayers(low, mid, high)
+
+    def _high_std(self, result, mask):
+        """Std of retained high-frequency (pore) texture in the output, in mask.
+
+        Higher means more pore texture preserved. This is the quantity the
+        adaptive mechanism protects on flat/front-lit skin.
+        """
+        r = result.astype(np.float32)
+        highband = r - cv2.GaussianBlur(r, (0, 0), 1.2)
+        sel = mask > 0.5
+        return float(highband[sel].std())
+
+    def test_low_texture_retains_more_high_band(self):
+        """Flat/front-lit (low-energy) skin keeps more pore texture than the
+        non-adaptive baseline would leave (baseline emulated with adapt=1).
+
+        Uses texture_opacity=0.6 (a realistic 'smoother' recipe) so the
+        opacity-floor lever is exercised: on flat skin the adaptation raises
+        opacity toward 1.0, preserving the high band the recipe would otherwise
+        attenuate.
+        """
+        size = 200
+        layers_low = self._make_layers(size, amp=0.6, seed=1)
+        mask = np.ones((size, size), dtype=np.float32)
+
+        import retouch.frequency as freq
+        adaptive = combine(
+            layers_low, skin_mask=mask, smooth_strength=0.5,
+            mid_reduction=0.35, texture_opacity=0.6, face_width=float(size),
+        )
+        # Baseline: force adapt to 1.0 (old behaviour) via monkeypatch.
+        orig = freq._texture_adaptation_factor
+        freq._texture_adaptation_factor = lambda h, m: 1.0
+        try:
+            baseline = combine(
+                layers_low, skin_mask=mask, smooth_strength=0.5,
+                mid_reduction=0.35, texture_opacity=0.6, face_width=float(size),
+            )
+        finally:
+            freq._texture_adaptation_factor = orig
+
+        adaptive_tex = self._high_std(adaptive, mask)
+        baseline_tex = self._high_std(baseline, mask)
+        assert adaptive_tex > baseline_tex * 1.05, (
+            f"adaptive={adaptive_tex:.4f} not >5% over baseline={baseline_tex:.4f}"
+        )
+
+    def test_high_texture_unchanged(self):
+        """Normal/high-texture skin must be pixel-identical to non-adaptive
+        output (adapt clamps to 1.0)."""
+        size = 200
+        layers_high = self._make_layers(size, amp=6.0, seed=2)
+        mask = np.ones((size, size), dtype=np.float32)
+
+        import retouch.frequency as freq
+        adaptive = combine(
+            layers_high, skin_mask=mask, smooth_strength=0.5,
+            mid_reduction=0.35, texture_opacity=0.6, face_width=float(size),
+        )
+        orig = freq._texture_adaptation_factor
+        freq._texture_adaptation_factor = lambda h, m: 1.0
+        try:
+            baseline = combine(
+                layers_high, skin_mask=mask, smooth_strength=0.5,
+                mid_reduction=0.35, texture_opacity=0.6, face_width=float(size),
+            )
+        finally:
+            freq._texture_adaptation_factor = orig
+
+        # High-energy → adapt clamps to 1.0 → identical output.
+        assert np.array_equal(adaptive, baseline)
+
+    def test_adapt_factor_monotonic_and_asymmetric(self):
+        """Factor is monotonic in energy and never exceeds 1.0 (never boosts
+        smoothing)."""
+        import retouch.frequency as freq
+        size = 160
+        mask = np.ones((size, size), dtype=np.float32)
+        energies = [0.3, 0.8, 1.5, 2.5, 4.0, 8.0]
+        factors = []
+        for i, amp in enumerate(energies):
+            layers = self._make_layers(size, amp=amp, seed=100 + i)
+            f = freq._texture_adaptation_factor(layers.high, mask)
+            factors.append(f)
+            assert f <= 1.0 + 1e-9, f"factor {f} exceeds 1.0 (would boost smoothing)"
+            assert f >= freq.TEXTURE_ADAPT_FLOOR - 1e-9
+
+        # Non-decreasing in energy (allowing tiny numerical noise).
+        for a, b in zip(factors, factors[1:]):
+            assert b >= a - 1e-6, f"factor not monotonic: {factors}"
+        # Extremes behave as designed.
+        assert factors[0] == pytest.approx(freq.TEXTURE_ADAPT_FLOOR, abs=1e-6)
+        assert factors[-1] == pytest.approx(1.0, abs=1e-6)
+
+    def test_empty_mask_no_adaptation(self):
+        """Degenerate/empty mask → factor 1.0 (no crash, no adaptation)."""
+        import retouch.frequency as freq
+        size = 64
+        layers = self._make_layers(size, amp=3.0, seed=7)
+        empty = np.zeros((size, size), dtype=np.float32)
+        assert freq._texture_adaptation_factor(layers.high, empty) == 1.0
+
+
+class TestAdaptFactorCustomThresholds:
+    """The engine's F8.0 reinjection calls _texture_adaptation_factor with
+    custom energy_low/energy_high/floor. Verify the parametrization behaves."""
+
+    def _high_with_energy(self, size, amp, seed):
+        rng = np.random.default_rng(seed)
+        return (rng.standard_normal((size, size, 3)).astype(np.float32) * amp)
+
+    def test_custom_floor_zero_reaches_zero(self):
+        import retouch.frequency as freq
+        size = 128
+        mask = np.ones((size, size), dtype=np.float32)
+        # Very low energy, floor=0.0 → factor drives to 0.0.
+        high = self._high_with_energy(size, amp=0.05, seed=1)
+        f = freq._texture_adaptation_factor(
+            high, mask, energy_low=1.0, energy_high=3.0, floor=0.0
+        )
+        assert f == pytest.approx(0.0, abs=1e-6)
+
+    def test_custom_high_threshold_leaves_textured_untouched(self):
+        import retouch.frequency as freq
+        size = 128
+        mask = np.ones((size, size), dtype=np.float32)
+        # Energy above energy_high → factor 1.0 (no adaptation).
+        high = self._high_with_energy(size, amp=20.0, seed=2)
+        f = freq._texture_adaptation_factor(
+            high, mask, energy_low=1.0, energy_high=3.0, floor=0.0
+        )
+        assert f == pytest.approx(1.0, abs=1e-6)
+
+    def test_custom_thresholds_monotonic(self):
+        import retouch.frequency as freq
+        size = 128
+        mask = np.ones((size, size), dtype=np.float32)
+        factors = []
+        for i, amp in enumerate([0.3, 1.2, 2.0, 4.0]):
+            high = self._high_with_energy(size, amp=amp, seed=10 + i)
+            factors.append(
+                freq._texture_adaptation_factor(
+                    high, mask, energy_low=1.0, energy_high=3.0, floor=0.0
+                )
+            )
+        for a, b in zip(factors, factors[1:]):
+            assert b >= a - 1e-6, f"not monotonic: {factors}"
+        # Lower-energy input must yield a strictly smaller factor than a
+        # clearly-textured one (asymmetric lift is energy-driven).
+        assert factors[0] < factors[-1]
