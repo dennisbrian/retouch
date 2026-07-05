@@ -383,6 +383,9 @@ class SkinProcessor:
         if strength <= 0 or regions is None or getattr(regions, "skin", None) is None:
             return img_bgr
 
+        if img_bgr.dtype == np.float32:
+            return apply_u8_op_float(img_bgr, self.wrinkle_soften, regions, strength)
+
         h_img, w_img = img_bgr.shape[:2]
         s = strength / 100.0
 
@@ -622,6 +625,9 @@ class SkinProcessor:
         if strength <= 0 or skin_mask is None:
             return img_bgr
 
+        if img_bgr.dtype == np.float32:
+            return apply_u8_op_float(img_bgr, self.apply_specular_bloom, skin_mask, strength, tone=tone)
+
         lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
         l_chan = lab[:, :, 0]
 
@@ -855,6 +861,10 @@ class SkinProcessor:
         if strength <= 0 or skin_mask is None:
             return img_bgr
 
+        if img_bgr.dtype == np.float32:
+            return apply_u8_op_float(img_bgr, self.quantize_tones, skin_mask, strength,
+                                      bands=bands, softness=softness)
+
         s = strength / 100.0
         lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
         L = lab[:, :, 0]
@@ -1064,6 +1074,10 @@ class SkinProcessor:
         if strength <= 0 or skin_mask is None:
             return img_bgr
 
+        if img_bgr.dtype == np.float32:
+            return apply_u8_op_float(img_bgr, self.micro_dodge_burn, skin_mask, strength,
+                                      face_width=face_width)
+
         lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
         L = lab[:, :, 0]
 
@@ -1101,6 +1115,10 @@ class SkinProcessor:
     ) -> np.ndarray:
         if strength <= 0 or skin_mask is None:
             return img_bgr
+
+        if img_bgr.dtype == np.float32:
+            return apply_u8_op_float(img_bgr, self.redness_even, skin_mask, strength,
+                                      face_width=face_width, lips_mask=lips_mask)
 
         lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
         a = lab[:, :, 1].copy()
@@ -1333,6 +1351,10 @@ class SkinProcessor:
         """
         if strength <= 0 or skin_mask is None:
             return img_bgr
+
+        if img_bgr.dtype == np.float32:
+            return apply_u8_op_float(img_bgr, self.texture_transplant, skin_mask, strength,
+                                      face_width=face_width)
 
         s = strength / 100.0
         h_img, w_img = img_bgr.shape[:2]
