@@ -204,6 +204,11 @@ class ProcessingContext:
     body_equalize: float = 0.0
     body_whiten: float = 0.0
     body_match_face: float = 0.0
+    body_relight: float = 0.0
+    body_dodge_burn: float = 0.0
+    body_shadow_lift: float = 0.0
+    shadow_lift: float = 0.0
+    nose_restore: float = 0.0
 
     # --- Eyes ---
     eye_enhance: float = 0.0
@@ -725,6 +730,11 @@ class RetouchEngine:
         body_equalize: Optional[float] = None,
         body_whiten: Optional[float] = None,
         body_match_face: Optional[float] = None,
+        body_relight: Optional[float] = None,
+        body_dodge_burn: Optional[float] = None,
+        body_shadow_lift: Optional[float] = None,
+        shadow_lift: Optional[float] = None,
+        nose_restore: Optional[float] = None,
         lut: Optional[str] = None,
         skin_locus: Optional[Dict[str, float]] = None,
         tonal_curve_strength: Optional[float] = None,
@@ -854,6 +864,11 @@ class RetouchEngine:
             "body_equalize": body_equalize,
             "body_whiten": body_whiten,
             "body_match_face": body_match_face,
+            "body_relight": body_relight,
+            "body_dodge_burn": body_dodge_burn,
+            "body_shadow_lift": body_shadow_lift,
+            "shadow_lift": shadow_lift,
+            "nose_restore": nose_restore,
             "lut": lut,
             "skin_locus": skin_locus,
             "tonal_curve_strength": tonal_curve_strength,
@@ -1363,7 +1378,7 @@ class RetouchEngine:
         # Stage 3.5 — Body skin retouch (now in float)
         # ------------------------------------------------------------------
         t_body = time.perf_counter()
-        result = self._stage_body_skin(result, ctx, person_mask, acc_skin, acc_skin_hair, faces, h_img, w_img)
+        result = self._stage_body_skin(result, ctx, person_mask, acc_skin, acc_skin_hair, acc_lips, faces, h_img, w_img)
         timings["body_skin"] = (time.perf_counter() - t_body) * 1000
 
         # ------------------------------------------------------------------
@@ -1954,6 +1969,7 @@ class RetouchEngine:
         person_mask: Optional[np.ndarray],
         acc_skin: Optional[np.ndarray],
         acc_skin_hair: Optional[np.ndarray],
+        acc_lips: Optional[np.ndarray],
         faces: Optional[List[FaceData]],
         h_img: int,
         w_img: int,
@@ -1970,6 +1986,7 @@ class RetouchEngine:
             person_mask: (H, W) float32 person segmentation mask [0, 1].
             acc_skin: (H, W) float32 accumulated face skin mask (already retouched).
             acc_skin_hair: (H, W) float32 accumulated face skin+hair mask.
+            acc_lips: (H, W) float32 accumulated lips mask (already retouched).
             faces: List of detected FaceData objects.
             h_img, w_img: Image height and width.
 
@@ -1978,7 +1995,9 @@ class RetouchEngine:
         """
         # Early exit: all body params are zero
         if (ctx.body_smooth <= 0 and ctx.body_equalize <= 0 and
-            ctx.body_whiten <= 0 and ctx.body_match_face <= 0):
+            ctx.body_whiten <= 0 and ctx.body_match_face <= 0 and
+            ctx.body_relight <= 0 and ctx.body_dodge_burn <= 0 and
+            ctx.body_shadow_lift <= 0):
             return img
 
         if person_mask is None or person_mask.max() < 0.01:
@@ -2001,6 +2020,33 @@ class RetouchEngine:
             acc_skin_norm = squeeze_mask(acc_skin_norm)
             body_skin_candidate = np.clip(body_skin_candidate - acc_skin_norm, 0, 1)
 
+            # Exclude the whole FACE INTERIOR, not just the per-face skin mask.
+            # The raw acc_skin mask has gaps between skin patches (nose bridge,
+            # nasolabial folds, brow) — pixels that belong to the face but sit
+            # outside the segmented skin regions. Those gaps leak into the body
+            # skin mask, so body_relight / body_dodge_burn / body_equalize then
+            # apply directional shading + CLAHE to e.g. the nose bridge. On a
+            # face with a real (already-correct) nose-bridge shadow, that
+            # darkens it ~-10 L and adds ~+4 L local contrast, making the
+            # source photo's soft warm shading read as a harsh cool/gray
+            # bridge shadow (user-flagged on DSCF7142 / aaa_photoreal recipes).
+            # The convex hull of the face-skin mask fills those interior gaps
+            # while staying within the face outline, so genuine body skin
+            # (neck/chest/arms, outside the hull) is untouched.
+            skin_bin = (acc_skin_norm > 0.3).astype(np.uint8)
+            contours, _ = cv2.findContours(
+                skin_bin, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )
+            if contours:
+                all_pts = np.vstack(contours)
+                if len(all_pts) >= 3:
+                    hull = cv2.convexHull(all_pts)
+                    face_interior = np.zeros_like(skin_bin)
+                    cv2.fillConvexPoly(face_interior, hull, 1)
+                    body_skin_candidate = body_skin_candidate * (
+                        1.0 - face_interior.astype(np.float32)
+                    )
+
         # Exclude face hair region if available
         if acc_skin_hair is not None:
             acc_hair = normalize_mask(acc_skin_hair)
@@ -2008,6 +2054,29 @@ class RetouchEngine:
             # Erode hair mask to avoid over-exclusion at edges
             acc_hair_eroded = cv2.erode(acc_hair, np.ones((3, 3), np.uint8), iterations=1)
             body_skin_candidate = np.clip(body_skin_candidate - acc_hair_eroded, 0, 1)
+
+        # Exclude lips (already handled by per-face lip processing). High-chroma
+        # red lip pixels can pass skin_mask_lch's hue/chroma heuristic and were
+        # otherwise left unexcluded, letting body_smooth/body_equalize/body_relight/
+        # body_dodge_burn/shadow_lift darken the mouth on close-up crops.
+        if acc_lips is not None:
+            acc_lips_norm = normalize_mask(acc_lips)
+            acc_lips_norm = squeeze_mask(acc_lips_norm)
+            acc_lips_dilated = cv2.dilate(acc_lips_norm, np.ones((5, 5), np.uint8), iterations=1)
+            body_skin_candidate = np.clip(body_skin_candidate - acc_lips_dilated, 0, 1)
+
+        # Exclude wig/hair draping past the face crop onto the body (e.g.
+        # long hair over the chest/shoulders). acc_skin_hair above only
+        # covers hair near the detected face bbox; skin_mask_lch's hue/
+        # chroma heuristic otherwise misclassifies light-colored (pink,
+        # blonde, silver) hair as skin, since it has no texture awareness.
+        # A whole-image BiSeNet pass (coarser than the face-crop path, but
+        # topologically correct — see parse_hair_full_image) catches this.
+        body_hair_mask = self._parser.parse_hair_full_image(
+            np.clip(img * 255.0, 0, 255).astype(np.uint8)
+        )
+        if body_hair_mask is not None:
+            body_skin_candidate = body_skin_candidate * (1.0 - body_hair_mask)
 
         # Morphological cleaning: open (remove small noise) then close (fill small holes)
         # Scale kernel size to person size, not face size
@@ -2019,8 +2088,22 @@ class RetouchEngine:
 
         # Contiguity check: drop disconnected components that don't touch the face region
         if acc_skin is not None and acc_skin.max() > 0.01:
-            # Dilate face skin region for tolerance
-            face_skin_dilated = cv2.dilate(acc_skin_norm, np.ones((21, 21), np.uint8), iterations=1)
+            # Geodesic dilation of the face-skin region, constrained to stay
+            # within person_mask at every step. A single large isotropic
+            # dilation (even scaled to person_bbox_size) can fail on close-up
+            # crops where the face bbox and a distant chest/décolletage skin
+            # patch don't overlap on either axis within a sane radius — but
+            # bridging them with a huge kernel risks bleeding sideways into
+            # background/other-person skin. Instead, "walk" the dilation
+            # along the body silhouette in small steps re-masked by pm each
+            # iteration, so it follows the person's contour (neck -> chest)
+            # rather than growing as a raw circle. Cheap: ~10 iterations of a
+            # small kernel.
+            step_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+            face_skin_dilated = acc_skin_norm.copy()
+            for _ in range(12):
+                face_skin_dilated = cv2.dilate(face_skin_dilated, step_kernel, iterations=1)
+                face_skin_dilated = face_skin_dilated * pm
 
             # Find connected components in body_skin_candidate
             n_labels, labels = cv2.connectedComponents((body_skin_candidate > 0.3).astype(np.uint8))
@@ -2059,13 +2142,18 @@ class RetouchEngine:
         # ------ Apply body skin operations ------
         result = img.copy()
 
-        # 1. Body smoothing (guided filter at body scale, milder than face)
+        # 1. Body smoothing (guided filter at body scale)
         if ctx.body_smooth > 0:
             s = ctx.body_smooth / 100.0
-            # Guided filter radius scales from person size (milder curve than face smoothing)
+            # Radius/blend caps raised to visually match face-level smoothing
+            # intensity (face's frequency-separation path was noticeably
+            # stronger at the same recipe strength — user-flagged gap
+            # across arms/torso/legs). Not a literal port of face's
+            # multi-layer frequency separation, but close enough in
+            # perceived smoothness at equal strength values.
             person_diag = np.sqrt(h_img ** 2 + w_img ** 2)
-            gf_radius = max(3, int(person_diag * 0.04 * s))  # Gentler than face scale
-            gf_eps = 0.01 * s
+            gf_radius = max(3, int(person_diag * 0.09 * s))
+            gf_eps = 0.02 * s
             result_smoothed = np.zeros_like(result)
             for c in range(result.shape[2]):
                 result_smoothed[:, :, c] = guided_filter(
@@ -2074,7 +2162,7 @@ class RetouchEngine:
             # blend_masked expects uint8 [0,255] images, not float32 [0,1]
             result_u8 = np.clip(result * 255.0, 0, 255).astype(np.uint8)
             result_smoothed_u8 = np.clip(result_smoothed * 255.0, 0, 255).astype(np.uint8)
-            result = blend_masked(result_u8, result_smoothed_u8, body_skin_mask * s * 0.7).astype(np.float32) / 255.0
+            result = blend_masked(result_u8, result_smoothed_u8, body_skin_mask * s).astype(np.float32) / 255.0
 
         # 2. Body tone matching to face (body_match_face)
         if ctx.body_match_face > 0 and acc_skin is not None and acc_skin.max() > 0.01:
@@ -2114,16 +2202,18 @@ class RetouchEngine:
 
             body_indices = body_skin_mask > 0.3
             if np.any(body_indices):
-                # Pull a/b toward median (gentler factor than face)
+                # Pull a/b toward median. Factor raised 0.12 -> 0.20 to
+                # match face's own pull strength (user-flagged: body read
+                # visibly less evened-out than face at equal strength).
                 median_a = np.median(lab[:, :, 1][body_indices])
                 median_b = np.median(lab[:, :, 2][body_indices])
-                pull = (0.12 * s * body_skin_mask)  # Gentler than face (0.20)
+                pull = (0.20 * s * body_skin_mask)
                 lab[:, :, 1] = lab[:, :, 1] + (median_a - lab[:, :, 1]) * pull
                 lab[:, :, 2] = lab[:, :, 2] + (median_b - lab[:, :, 2]) * pull
 
-                # Light CLAHE on L channel
+                # CLAHE clip limit raised to match face-level contrast lift.
                 l_chan_u8 = np.clip(lab[:, :, 0], 0, 255).astype(np.uint8)
-                clip_limit = 1.0 + s * 1.5  # Gentler than face
+                clip_limit = 1.0 + s * 2.5
                 clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
                 l_clahe = clahe.apply(l_chan_u8)
                 lab_new = lab.copy()
@@ -2131,7 +2221,7 @@ class RetouchEngine:
                 result_equalized_u8 = cv2.cvtColor(np.clip(lab_new, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
                 # blend_masked expects uint8 [0,255] images, not float32 [0,1]
                 result_u8 = np.clip(result * 255.0, 0, 255).astype(np.uint8)
-                result = blend_masked(result_u8, result_equalized_u8, body_skin_mask * s * 0.6).astype(np.float32) / 255.0
+                result = blend_masked(result_u8, result_equalized_u8, body_skin_mask * s).astype(np.float32) / 255.0
 
         # 4. Body whitening (lighten L channel in body skin)
         if ctx.body_whiten > 0:
@@ -2142,8 +2232,43 @@ class RetouchEngine:
             result_whitened = skin_processor.whiten(result_u8, body_skin_mask, strength=int(ctx.body_whiten))
             result = result_whitened.astype(np.float32) / 255.0
 
-        # 5. Blemish removal on body (conservative size threshold scaled to person)
-        # Gated on the stage itself being active (any of the 4 body params nonzero),
+        # 5. Body relight (landmark-free directional shading — see body_relight.py).
+        # Isolated module: unlike face relight (relight.py), this has no
+        # FaceMesh dependency, so it can run on any body-skin mask.
+        if ctx.body_relight > 0:
+            from .body_relight import BodyRelighter
+            result_u8 = np.clip(result * 255.0, 0, 255).astype(np.uint8)
+            body_relighter = BodyRelighter()
+            result_relit = body_relighter.relight(result_u8, body_skin_mask, strength=ctx.body_relight)
+            result = result_relit.astype(np.float32) / 255.0
+
+        # 6. Body dodge/burn (local-contrast sculpting — see body_relight.py).
+        if ctx.body_dodge_burn > 0:
+            from .body_relight import BodyRelighter
+            result_u8 = np.clip(result * 255.0, 0, 255).astype(np.uint8)
+            body_relighter = BodyRelighter()
+            result_sculpted = body_relighter.dodge_burn(result_u8, body_skin_mask, strength=ctx.body_dodge_burn)
+            result = result_sculpted.astype(np.float32) / 255.0
+
+        # 7. Body shadow lift (targeted local fill-light — see shadow_lift.py).
+        # Opt-in only: real photographic shade (e.g. a jaw/chest area next to
+        # a bright prop/light) is not a retouch defect, so this must be
+        # explicitly requested via a recipe rather than applied by default.
+        if ctx.body_shadow_lift > 0:
+            from .shadow_lift import ShadowLifter
+            result_u8 = np.clip(result * 255.0, 0, 255).astype(np.uint8)
+            shadow_lifter = ShadowLifter()
+            # Include body-wide hair (e.g. long wig hair crossing a dark
+            # background) so genuine hair-lighting falloff gets the same
+            # gentle local lift as body skin, not left untouched.
+            lift_mask = body_skin_mask
+            if body_hair_mask is not None:
+                lift_mask = np.clip(body_skin_mask + body_hair_mask, 0, 1)
+            result_lifted = shadow_lifter.lift(result_u8, lift_mask, strength=ctx.body_shadow_lift)
+            result = result_lifted.astype(np.float32) / 255.0
+
+        # 8. Blemish removal on body (conservative size threshold scaled to person)
+        # Gated on the stage itself being active (any of the 7 body params nonzero),
         # NOT on body_smooth specifically — each param must independently unlock its
         # own sub-step, and blemish removal is a reasonable default whenever body skin
         # is being touched at all. Strength is a fixed conservative default scaled by
@@ -2151,8 +2276,14 @@ class RetouchEngine:
         # (deriving it from one unrelated param was the bug: a user setting only
         # body_whiten/body_match_face/body_equalize got silently zero blemish removal).
         if (ctx.body_smooth > 0 or ctx.body_equalize > 0 or
-            ctx.body_whiten > 0 or ctx.body_match_face > 0):
-            active_strength = max(ctx.body_smooth, ctx.body_equalize, ctx.body_whiten, ctx.body_match_face)
+            ctx.body_whiten > 0 or ctx.body_match_face > 0 or
+            ctx.body_relight > 0 or ctx.body_dodge_burn > 0 or
+            ctx.body_shadow_lift > 0):
+            active_strength = max(
+                ctx.body_smooth, ctx.body_equalize, ctx.body_whiten,
+                ctx.body_match_face, ctx.body_relight, ctx.body_dodge_burn,
+                ctx.body_shadow_lift,
+            )
             blemish_strength = max(20.0, active_strength * 0.5)  # conservative floor of 20
             blemish_remover = BlemishRemover()
             result_u8 = np.clip(result * 255.0, 0, 255).astype(np.uint8)

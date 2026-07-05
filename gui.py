@@ -1344,6 +1344,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             whiten = gr.Slider(0, 100, 10, step=1, label="Whitening", info="Luminance boost and porcelain skin color match")
                             whiten_tone = gr.Dropdown(choices=WHITEN_TONE_CHOICES, value="rosy", label="Whitening Tone", interactive=True, info="Tone direction: rosy (warm pink), porcelain (cool neutral), neutral")
                             equalize = gr.Slider(0, 100, 20, step=1, label="Equalize", info="Even out skin redness and regional color inconsistencies")
+                            shadow_lift = gr.Slider(0, 100, 0, step=1, label="Shadow Lift", info="Brighten small localized face shadows relative to local neighborhood")
+                            nose_restore = gr.Slider(0, 100, 0, step=1, label="Nose Restore", info="Blend original (pre-retouch) nose pixels back in, to preserve natural nose shading")
                             skin_unify = gr.Slider(0, 100, 0, step=1, label="Skin Hue Unify (Anime)", info="Pull skin hues toward a single cel color · 0=off, 60=strong unified look")
                             skin_unify_hue = gr.Slider(-1.0, 360.0, -1.0, step=1.0, label="Target Hue (Anime)", info="Target skin hue angle · -1=auto (detect from face), 0=red, 50=orange, 180=cyan")
                             auto_exposure = gr.Checkbox(label="Auto Exposure Correction", value=False, info="Automatically correct under/over-exposed images before processing")
@@ -1355,6 +1357,9 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             body_equalize = gr.Slider(0, 100, 0, step=1, label="Body Equalize", info="Even out tone in body skin regions · tone harmonization at body scale")
                             body_whiten = gr.Slider(0, 100, 0, step=1, label="Body Whiten", info="Lighten body skin to match face whitening treatment")
                             body_match_face = gr.Slider(0, 100, 0, step=1, label="Body Match Face", info="Pull body skin L/a/b toward retouched face skin color · bounded ±8L ±6a/b")
+                            body_relight = gr.Slider(0, 100, 0, step=1, label="Body Relight", info="Landmark-free directional shading on exposed body skin · matches face relight intensity")
+                            body_dodge_burn = gr.Slider(0, 100, 0, step=1, label="Body Dodge & Burn", info="Local-contrast sculpting on body skin (CLAHE-based highlight/shadow)")
+                            body_shadow_lift = gr.Slider(0, 100, 0, step=1, label="Body Shadow Lift", info="Brighten small localized shadows on body skin")
 
                         with gr.Accordion("📊 Basic Tone & Color", open=False):
                             reset_basic_tone_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
@@ -1693,8 +1698,9 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         img_input, recipe,
         smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth, micro_restore, _micro_dodge_burn_state, _redness_even_state, _whiten_hue_stable_state,
         whiten, equalize, blemish, whiten_tone, nose_blush, under_eye_blush, white_costume_lift,
-        body_smooth, body_equalize, body_whiten, body_match_face,
-        dodge_burn, relight, relight_azimuth, relight_elevation, sculpt, shine_removal, wrinkle_soften, texture_transplant, specular_bloom, specular_bloom_tone,
+        dodge_burn, relight, relight_azimuth, relight_elevation, sculpt, shine_removal, wrinkle_soften, texture_transplant,
+        body_smooth, body_equalize, body_whiten, body_match_face, body_relight, body_dodge_burn, shadow_lift, body_shadow_lift, nose_restore,
+        specular_bloom, specular_bloom_tone,
         skin_flatten, skin_quantize, skin_unify, skin_unify_hue, _skin_hue_unify_state, _skin_chroma_even_state, skin_glow,
         eye_enhance, catchlight, dark_circles, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, slimming, hair_enhance,
         contrast, brightness, highlights, shadows, whites, blacks, clarity, vibrance, saturation, auto_exposure,

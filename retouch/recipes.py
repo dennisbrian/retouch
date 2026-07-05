@@ -827,6 +827,260 @@ RECIPES = {
             "impact": 0.05,
         },
     },
+    "game_character_v1": {
+        # AAA-game-character look: rendered/sculpted lighting and punchy
+        # color like a cinematic-trailer character model, while keeping
+        # identity intact (moderate smoothing, texture retained, no
+        # geometric warp). Contrast with anime_cinematic_v1 (flatter,
+        # more illustrated) — this keeps more photographic skin micro-detail
+        # and pushes directional relight + micro-contrast instead of porcelain.
+        "extends": "natural",
+        "frequency": {"smooth": 0.40, "mid_reduction": 0.30},
+        # shadow_lift: opt-in local fill-light (shadow_lift.py) for real
+        # photographic shade — e.g. a jaw/chin shadow next to a bright prop
+        # — that would otherwise look like an untouched patch next to
+        # heavily relit skin.
+        "skin": {
+            "equalize": 0.25,
+            "rosy": 0.20,
+            "porcelain": 0.15,
+            "relight": 0.55,
+            "relight_azimuth": 55.0,
+            "relight_elevation": 40.0,
+            "shadow_lift": 0.35,
+            # Restores the real nose-bridge shadow toward the untouched
+            # original (see perf_optimizations.py) — smoother surrounding
+            # skin can make the source photo's own nose shading read as
+            # over-defined even though no single op deepens it.
+            "nose_restore": 0.40,
+        },
+        "eyes": {"whites": 0.25, "teeth_whiten": 0.20, "iris": 0.40, "catchlight": 0.45},
+        "lips": {"tint": None, "gloss": 0.15},
+        "hair": {"shine": 0.55},
+        # Body smoothing/equalize raised (0.30/0.45 -> 0.50/0.60) so exposed
+        # legs/arms/chest read closer to the face's retouch level instead of
+        # looking comparatively untouched. relight/dodge_burn added (new
+        # body_relight.py module, landmark-free) to close the remaining gap:
+        # body_skin's smooth+equalize alone can't approach face-level
+        # perceived retouch since it has no sculpting/shading step of its
+        # own — these two give body a lightweight analog of the face's
+        # relight + dodge_burn passes. shadow_lift added for the same local-
+        # shade reason as the face-side key above.
+        "body_skin": {
+            "smooth": 0.50, "equalize": 0.60, "match_face": 0.65,
+            "relight": 0.45, "dodge_burn": 0.40, "shadow_lift": 0.35,
+        },
+        # dodge_burn reduced 30.0 -> 15.0 — 30 produced visibly harsh
+        # under-eye/cheek shadow sculpting on strong side-lit photos
+        # (verified on DSCF7142); this recipe's own docstring calls for
+        # "directional relight + micro-contrast instead of porcelain," not
+        # hard sculpting.
+        "dodge_burn": 15.0,
+        "texture": {"opacity": 0.75},
+        "brightness": 3.0,
+        "contrast": 16.0,
+        "highlights": -12.0,
+        "shadows": -8.0,
+        "whites": 6.0,
+        "blacks": 3.0,
+        "clarity": 22.0,
+        "saturation": 10.0,
+        "vibrance": 18.0,
+        "shadow_hue": 210.0,
+        "shadow_sat": 14.0,
+        "midtone_hue": 25.0,
+        "midtone_sat": 6.0,
+        "highlight_hue": 40.0,
+        "highlight_sat": 12.0,
+        "bloom": {"opacity": 0.10, "threshold": 205.0},
+        "glow": 4.0,
+        "vignette": 8.0,
+        "sharpen": 24.0,
+        "sharpen_radius": 1.0,
+        "chromatic_aberration": 0.5,
+        "grain": 0.0,
+        "specular_bloom": 35,
+        "specular_bloom_tone": "neutral",
+
+        # Modular overrides — kept subtle to preserve identity
+        "slimming": 0.0,
+        "blush": 10.0,
+    },
+    "aaa_photoreal_v1": {
+        # Targets the "AAA Gold Quality" photoreal brief: over-smooth then
+        # reclone real pore texture (texture_transplant, borrowed from
+        # pore_realism_v1) instead of leaving skin flat/plastic, soft
+        # wraparound relight instead of hard sculpt, gentle highlight
+        # rolloff + skin_protect to avoid clipped highlights/crushed
+        # shadows. No slimming/geometry change — identity untouched.
+        # Note: this engine has no eyelash/eyebrow-specific or background-
+        # separation ops, so those brief items aren't directly addressable.
+        "extends": "natural",
+        "frequency": {"smooth": 0.60, "mid_reduction": 0.35, "nose_smooth": 0.30},
+        "skin": {
+            "equalize": 0.10,
+            "rosy": 0.15,
+            "hue_unify": 0.35,
+            "chroma_even": 0.30,
+            "whiten_hue_stable": 1,
+            "texture_transplant": 0.65,
+            "relight": 0.30,
+            "relight_azimuth": 40.0,
+            "relight_elevation": 45.0,
+            "shadow_lift": 0.35,
+            "nose_restore": 0.40,
+        },
+        "eyes": {"whites": 0.15, "teeth_whiten": 0.12, "iris": 0.25, "catchlight": 0.30},
+        "lips": {"tint": None, "gloss": 0.12},
+        "hair": {"shine": 0.30},
+        # Tone-match exposed chest/shoulder/arm skin to the retouched face
+        # (body_match_v1's fix) — without this, cosplay/swimwear shots show
+        # a visible seam where face relight/smoothing stops at the jawline.
+        # smooth/equalize raised (0.30/0.45 -> 0.50/0.60, verified on
+        # DSCF7117) so exposed legs/arms/chest read closer to the face's
+        # retouch level. relight/dodge_burn added (new body_relight.py
+        # module) to give body a landmark-free analog of the face's own
+        # relight + dodge_burn passes, closing the perceived-intensity gap.
+        # shadow_lift addresses real local shade (e.g. a shadowed jaw/chest
+        # patch next to a bright prop) without flattening genuine contrast.
+        "body_skin": {
+            "smooth": 0.50, "equalize": 0.60, "match_face": 0.65,
+            "relight": 0.30, "dodge_burn": 0.25, "shadow_lift": 0.35,
+        },
+        "dodge_burn": 12.0,
+        "texture": {"opacity": 0.85},
+        "skin_protect": 0.70,
+        "highlight_rolloff": 0.50,
+        "tonal_curve_strength": 0.25,
+        "brightness": 2.0,
+        "contrast": 10.0,
+        "highlights": -14.0,
+        "shadows": -6.0,
+        "clarity": 10.0,
+        "saturation": 4.0,
+        "vibrance": 10.0,
+        "bloom": {"opacity": 0.04, "threshold": 215.0},
+        "vignette": 4.0,
+        "sharpen": 8.0,
+        "sharpen_radius": 1.3,
+        "chromatic_aberration": 0.0,
+        "grain": 0.0,
+
+        # Modular overrides
+        "slimming": 0.0,
+        "blush": 8.0,
+    },
+    "aaa_photoreal_v2": {
+        # Pushes aaa_photoreal_v1 to match a labeled reference edit brief:
+        # brighter/cleaner catchlights + iris detail, cleaner hair
+        # specular highlights, subtle satin (not heavy) lip gloss, and an
+        # explicit blue-shadow/orange-highlight split-tone for the
+        # "cinematic" separation/depth call-out — while keeping the same
+        # texture_transplant-based skin (no plastic look) and no geometry
+        # change. Still no eyelash-specific op in this engine; the "more
+        # detailed eyes" ask is approximated via iris/catchlight strength.
+        "extends": "aaa_photoreal_v1",
+        "eyes": {"whites": 0.22, "teeth_whiten": 0.15, "iris": 0.40, "catchlight": 0.50},
+        "lips": {"tint": None, "gloss": 0.20},
+        "hair": {"shine": 0.55},
+        # dodge_burn reverted 18.0 -> 12.0 (v1's value) — 18 produced
+        # visibly harsh under-eye/cheek shadow sculpting on strong
+        # side-lit photos (verified on DSCF7142), contradicting this
+        # recipe's own "soft wraparound relight, no hard sculpt" intent.
+        "dodge_burn": 12.0,
+        "clarity": 14.0,
+        "saturation": 6.0,
+        "vibrance": 12.0,
+        "shadow_hue": 220.0,
+        "shadow_sat": 16.0,
+        "midtone_hue": 30.0,
+        "midtone_sat": 4.0,
+        "highlight_hue": 45.0,
+        "highlight_sat": 14.0,
+        "bloom": {"opacity": 0.06, "threshold": 210.0},
+        "vignette": 6.0,
+        "sharpen": 12.0,
+
+        # Modular overrides
+        "slimming": 0.0,
+        "blush": 10.0,
+    },
+    "zzz_anime_v1": {
+        # Targets the "premium modern anime game render" brief (cel-shaded,
+        # ZZZ/Genshin-adjacent aesthetic) without reproducing any specific
+        # copyrighted character. Built on anime_cinematic_v1's rendered-
+        # skin foundation but pushes iris/catchlight size, glossy lips,
+        # and rim-light bloom harder for the "expressive eyes + soft bloom
+        # + rim light" look; keeps porcelain moderate (not full flatten)
+        # so it stays "stylized yet believable" rather than fully flat.
+        "extends": "anime_cinematic_v1",
+        "skin": {
+            "porcelain": 0.45, "relight": 0.40, "relight_azimuth": 50.0,
+            "relight_elevation": 30.0, "shadow_lift": 0.35, "nose_restore": 0.40,
+        },
+        "eyes": {"whites": 0.25, "teeth_whiten": 0.20, "iris": 0.50, "catchlight": 0.55, "dark_circles": 0.15},
+        "lips": {"tint": "pink", "gloss": 0.40},
+        "hair": {"shine": 0.85},
+        # smooth/equalize raised (0.35/0.45 -> 0.55/0.65) so exposed
+        # legs/arms/chest read closer to the porcelain face's retouch
+        # level. relight/dodge_burn added (body_relight.py) as a landmark-
+        # free analog of the face's own relight + dodge_burn passes.
+        # shadow_lift addresses real local shade next to bright props/lights.
+        "body_skin": {
+            "smooth": 0.55, "equalize": 0.65, "match_face": 0.70,
+            "relight": 0.40, "dodge_burn": 0.35, "shadow_lift": 0.35,
+        },
+        # Override anime_cinematic_v1's dodge_burn (18.0) down to 12.0 —
+        # 18 produced visibly harsh under-eye/cheek shadow sculpting on
+        # strong side-lit photos (verified on DSCF7142).
+        "dodge_burn": 12.0,
+        "contrast": 10.0,
+        "clarity": 10.0,
+        "saturation": 10.0,
+        "vibrance": 16.0,
+        "bloom": {"opacity": 0.22, "threshold": 185.0},
+        "glow": 12.0,
+        "vignette": 5.0,
+        "sharpen": 14.0,
+        "chromatic_aberration": 1.0,
+
+        # Modular overrides
+        "blush": 35.0,
+        "nose_blush": True,
+        "under_eye_blush": True,
+    },
+    "zzz_anime_v2": {
+        # Moderate push past zzz_anime_v1: more rim-light bloom, bigger
+        # eyes/catchlights, punchier color — still meant to read as a
+        # photo of the real person in cosplay, not a full game render.
+        # Porcelain/relight nudged up but stops short of anime_v2's
+        # flatten/quantize (that would cel-shade and risk identity loss).
+        "extends": "zzz_anime_v1",
+        "skin": {"porcelain": 0.55, "relight": 0.55, "relight_azimuth": 55.0, "relight_elevation": 35.0},
+        "eyes": {"whites": 0.30, "teeth_whiten": 0.22, "iris": 0.62, "catchlight": 0.68, "dark_circles": 0.18},
+        "lips": {"tint": "pink", "gloss": 0.50},
+        "hair": {"shine": 0.95},
+        "contrast": 14.0,
+        "clarity": 12.0,
+        "saturation": 14.0,
+        "vibrance": 22.0,
+        # Bloom pulled back from 0.32/175 — at that strength it bled into
+        # bright flyaway hair strands near the brow and softened them.
+        # Higher threshold restricts bloom to true highlights; sharpen
+        # raised to recover the strand-level crispness bloom was eating.
+        "bloom": {"opacity": 0.22, "threshold": 195.0},
+        "glow": 14.0,
+        "vignette": 7.0,
+        "sharpen": 22.0,
+        "chromatic_aberration": 2.0,
+        "specular_bloom": 45,
+        "specular_bloom_tone": "rosy",
+
+        # Modular overrides
+        "blush": 40.0,
+        "nose_blush": True,
+        "under_eye_blush": True,
+    },
 }
 
 RECIPES["soft"] = RECIPES["anime_cinematic_soft"]

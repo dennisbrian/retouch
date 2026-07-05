@@ -271,6 +271,46 @@ class FaceParser:
 
         return regions
 
+    def parse_hair_full_image(self, img_bgr: np.ndarray) -> Optional[np.ndarray]:
+        """Run BiSeNet on the *whole* image (no face-bbox crop) to get a
+        body-wide hair mask, including wig hair draping past the face crop
+        onto shoulders/chest that ``parse()`` never sees.
+
+        This is coarser than the face-crop path (512x512 covers the entire
+        frame instead of just a padded face region), so treat the result as
+        a soft exclusion signal for body_skin masking, not a precise
+        per-strand mask. Returns None if the model isn't available.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR image, full frame.
+
+        Returns:
+            (H, W) float32 mask in [0, 1], or None if BiSeNet is unavailable.
+        """
+        if self._sess is None:
+            return None
+
+        h_img, w_img = img_bgr.shape[:2]
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        img_resized = cv2.resize(img_rgb, (512, 512), interpolation=cv2.INTER_LINEAR)
+        img_f = img_resized.astype(np.float32) / 255.0
+
+        mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+        std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+        img_norm = (img_f - mean) / std
+        img_input = np.transpose(img_norm, (2, 0, 1))[np.newaxis, :, :, :]
+
+        try:
+            outs = self._sess.run(None, {"input": img_input})
+        except Exception:
+            return None
+
+        logits = outs[0][0]
+        pred = np.argmax(logits, axis=0).astype(np.uint8)
+        hair_512 = (pred == 17).astype(np.float32)
+        hair_full = cv2.resize(hair_512, (w_img, h_img), interpolation=cv2.INTER_LINEAR)
+        return hair_full
+
     def parse_batch(
         self,
         crop_list: List[np.ndarray],

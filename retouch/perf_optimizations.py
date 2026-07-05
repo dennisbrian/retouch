@@ -288,6 +288,14 @@ def _process_face_core(
     # Float convention: [0, 255] matching OpenCV BGR scale. All skin ops stay
     # float until the final conversion to uint8 at the end.
     canvas = canvas.astype(np.float32)
+    # Snapshot before any retouch ops, so nose_restore (below) can blend
+    # back toward the camera-original nose bridge shading. User-flagged:
+    # smoothing/brightening the surrounding skin can make the source
+    # photo's own real nose-bridge shadow read as more sharply defined by
+    # contrast, even though no single op deepens it — restoring the
+    # original pixels there directly avoids chasing that indirect effect
+    # through every op's parameters.
+    canvas_original = canvas.copy()
 
     # ctx may be a dict (pickled across process boundary) — convert to object
     if isinstance(ctx, dict):
@@ -556,6 +564,22 @@ def _process_face_core(
         canvas = _tr('dodge_burn', canvas)
         canvas = skin.dodge_burn(canvas, regions, ctx.dodge_burn)
 
+    # ---- Shadow lift (opt-in targeted fill-light, see shadow_lift.py) ----
+    # Real photographic shade (e.g. a jaw shadow next to a bright prop, or
+    # hair passing in front of a dark background) is not a retouch defect,
+    # so this only runs if explicitly enabled. Scope includes regions.hair
+    # alongside regions.skin so genuine hair-lighting falloff (e.g. light
+    # hair darkening where it crosses a dark backdrop) gets the same
+    # gentle local lift as skin, instead of being left untouched.
+    if ctx.shadow_lift > 0:
+        from .shadow_lift import ShadowLifter
+        canvas = _tr('shadow_lift', canvas)
+        shadow_lifter = ShadowLifter()
+        lift_mask = regions.skin
+        if regions.hair is not None:
+            lift_mask = np.clip(_norm_mask(regions.skin) + _norm_mask(regions.hair), 0, 1)
+        canvas = shadow_lifter.lift(canvas, lift_mask, strength=ctx.shadow_lift)
+
     # ---- Wrinkle & line softening ----
     if ctx.wrinkle_soften > 0:
         canvas = _tr('wrinkle_soften', canvas)
@@ -594,6 +618,18 @@ def _process_face_core(
     acc_sharpen = np.clip(
         np.maximum(eye_sharpen * 1.0, other_sharpen * 0.53), 0.0, 1.0
     )
+
+    # ---- Nose restore (opt-in) ----
+    # Blends the nose region back toward the pre-retouch original, so an
+    # already-good real nose shadow isn't left reading over-defined against
+    # now-smoother surrounding skin. See canvas_original above. Uses
+    # regions.nose (full nose landmark polygon), not regions.nose_bridge
+    # (a near-empty 4-point sliver meant for dodge_burn's thin highlight
+    # strip, not broad enough to cover the actual shadow area).
+    nose_restore = getattr(ctx, 'nose_restore', 0) or 0
+    if nose_restore > 0 and regions.nose is not None:
+        blend_amount = np.clip(nose_restore / 100.0, 0.0, 1.0) * _norm_mask(regions.nose)
+        canvas = canvas * (1.0 - blend_amount[:, :, None]) + canvas_original * blend_amount[:, :, None]
 
     # ---- E1: Convert canvas back to uint8 once at the end ----
     if canvas.dtype == np.float32:
