@@ -808,6 +808,12 @@ class SkinProcessor:
         if strength <= 0 or skin_mask is None:
             return img_bgr
 
+        if img_bgr.dtype == np.float32:
+            # E1 delta adapter (see apply_u8_op_float): cv2.cvtColor expects
+            # float BGR in [0, 1], not the engine's float32 [0, 255] canvas
+            # convention, so this must not run cvtColor directly on it.
+            return apply_u8_op_float(img_bgr, self.flatten, skin_mask, strength)
+
         s = strength / 100.0
         h, w = img_bgr.shape[:2]
 
