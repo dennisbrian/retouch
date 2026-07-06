@@ -168,4 +168,4 @@ jobs:
 
       - name: Run benchmark (fast mode)
         run: |
-          python scripts/benchmark.py 2>&1 || echo "Benchmark skipped (models required)"
+          python scripts/bench/benchmark.py 2>&1 || echo "Benchmark skipped (models required)"

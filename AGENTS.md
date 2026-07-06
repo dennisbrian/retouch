@@ -64,7 +64,7 @@ A correct fix that introduces a halo artifact is not a fix. Revert. A fast fix t
 ## Verification (run before shipping Python)
 1. `python3 -m py_compile path/to/file.py`
 2. `python3 -m pytest tests/ -v`
-3. `python3 scripts/benchmark.py` (if performance-affecting)
+3. `python3 scripts/bench/benchmark.py` (if performance-affecting)
 4. Visual QA gates (if pipeline stage touched) — per `docs/VISUAL_QA.md`
 
 ## Budget (always active — not just under quota pressure)

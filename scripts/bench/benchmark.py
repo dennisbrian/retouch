@@ -7,14 +7,14 @@ human-readable table. Saves a JSON report to ``benchmark_results.json``
 for regression tracking.
 
 Usage:
-    python3 scripts/benchmark.py                     # run everything
-    python3 scripts/benchmark.py --module pipeline   # only pipeline tests
-    python3 scripts/benchmark.py --module modules    # only module tests
-    python3 scripts/benchmark.py -k frequency        # only matching tests
-    python3 scripts/benchmark.py --iterations 50     # override default count
-    python3 scripts/benchmark.py --output my.json    # custom output path
-    python3 scripts/benchmark.py --no-save           # skip writing JSON
-    python3 scripts/benchmark.py --quiet             # only print the table
+    python3 scripts/bench/benchmark.py                     # run everything
+    python3 scripts/bench/benchmark.py --module pipeline   # only pipeline tests
+    python3 scripts/bench/benchmark.py --module modules    # only module tests
+    python3 scripts/bench/benchmark.py -k frequency        # only matching tests
+    python3 scripts/bench/benchmark.py --iterations 50     # override default count
+    python3 scripts/bench/benchmark.py --output my.json    # custom output path
+    python3 scripts/bench/benchmark.py --no-save           # skip writing JSON
+    python3 scripts/bench/benchmark.py --quiet             # only print the table
 
 The runner uses unittest.mock at the engine boundary, so it does NOT require
 MediaPipe / ONNX models on disk. It also uses synthetic images.
@@ -36,7 +36,7 @@ from typing import Any, Dict, List, Optional
 
 # Make ``tests`` and the project root importable so we can introspect
 # benchmark classes.
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 TESTS_DIR = PROJECT_ROOT / "tests"
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(TESTS_DIR))

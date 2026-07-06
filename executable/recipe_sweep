@@ -19,7 +19,7 @@ Examples:
 Notes:
   - If OUTPUT_DIR is omitted, a timestamped folder is created under
     test_output/recipe_sweeps/.
-  - All extra flags are forwarded to scripts/recipe_sweep.py.
+  - All extra flags are forwarded to scripts/recipes/recipe_sweep.py.
 USAGE
 }
 
@@ -27,7 +27,7 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   usage
   echo
   cd "${ROOT_DIR}"
-  exec "${PYTHON_BIN}" scripts/recipe_sweep.py --help
+  exec "${PYTHON_BIN}" scripts/recipes/recipe_sweep.py --help
 fi
 
 if [[ $# -lt 1 ]]; then
@@ -71,7 +71,7 @@ export PYTHONPYCACHEPREFIX="${PYTHONPYCACHEPREFIX:-/private/tmp/retouch-pycache}
 cd "${ROOT_DIR}"
 
 if [[ "${HAS_OUTPUT_FLAG}" -eq 1 ]]; then
-  exec "${PYTHON_BIN}" scripts/recipe_sweep.py "${INPUT_IMAGE}" "$@"
+  exec "${PYTHON_BIN}" scripts/recipes/recipe_sweep.py "${INPUT_IMAGE}" "$@"
 fi
 
-exec "${PYTHON_BIN}" scripts/recipe_sweep.py "${INPUT_IMAGE}" -o "${OUTPUT_DIR}" "$@"
+exec "${PYTHON_BIN}" scripts/recipes/recipe_sweep.py "${INPUT_IMAGE}" -o "${OUTPUT_DIR}" "$@"

@@ -50,7 +50,7 @@ python3 gui.py  # Opens http://127.0.0.1:7860
 python3 cli.py /path/to/photos -o /out --recipe cosplay --workers 4
 
 # Benchmarks
-python3 scripts/benchmark.py
+python3 scripts/bench/benchmark.py
 ```
 
 ---
@@ -102,7 +102,7 @@ Cuts memory from 7.5 GB → 1.84 GB, runtime from 15.3s → 3.09s.
 ### Audit Status
 - **Security:** No hardcoded secrets, API keys, or absolute paths
 - **Performance:** Benchmarked at 702ms per-face (400×400), 6.9ms for no-face global-only
-- **Process:** Weekly syntax checks, monthly algorithmic re-audit (AUDIT_REPORT.md)
+- **Process:** Weekly syntax checks, monthly algorithmic re-audit (`docs/review/AUDIT_REPORT.md`)
 
 ### Known Limitations
 - Remaining ~4% undetected faces: extreme profiles, heavy occlusion, tiny faces in distance shots
@@ -253,7 +253,7 @@ from retouch.utils import log_crash
 |------|---------|----------|
 | `README.md` | Quick start, install, examples | End users |
 | `ARCHITECTURE.md` | Deep-dive pipeline, modules, design | Engineers |
-| `AUDIT_REPORT.md` | Security, test coverage, findings | Code reviewers, maintainers |
+| `docs/review/AUDIT_REPORT.md` | Security, test coverage, findings | Code reviewers, maintainers |
 | `API.md` | Python API reference | API consumers |
 | `RECIPE_GUIDE.md` | Creating custom presets | Content creators |
 | `GUI.md` | Gradio UI layout & components | Frontend work |

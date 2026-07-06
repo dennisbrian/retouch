@@ -10,14 +10,14 @@ Order: **Q1 → Q2 → Q3 → Q4** (Q1 unblocks the quality metric everything el
 
 ---
 
-## Q1 — Blotch + σ_C metrics into benchmark.py (~half day) — ✅ DONE 2026-07-03 (Haiku, Fable-reviewed; metrics in scripts/benchmark.py + tests/test_benchmark_metrics.py green)
+## Q1 — Blotch + σ_C metrics into benchmark.py (~half day) — ✅ DONE 2026-07-03 (Haiku, Fable-reviewed; metrics in `scripts/bench/benchmark.py` + tests/test_benchmark_metrics.py green)
 The objective skin-quality numbers (S2's acceptance metric + C1's 牛奶皮 number), needed BEFORE S2 so there's a baseline.
 1. `benchmark.py`: add `skin_quality_metrics(img_bgr, skin_mask) -> {"blotch_std": float, "chroma_std": float}`:
    - blotch_std = std of band-passed L within skin: `band = gauss(L, σ=fw/40) − gauss(L, σ=fw/12)` (fw = face width from the benchmark face) — the S2 target band.
    - chroma_std = `retouch.color_science.skin_chroma_std` (exists).
 2. Report both in benchmark output per test image, before/after processing; store in `benchmark_results.json`.
 3. Test: synthetic blotchy vs clean image → blotch_std orders correctly; clean run doesn't regress existing benchmark entries.
-**Files:** `scripts/benchmark.py`, tests. No pipeline changes.
+**Files:** `scripts/bench/benchmark.py`, tests. No pipeline changes.
 
 ## Q2 — S2 micro dodge & burn — ✅ DONE 2026-07-03 (Haiku, Fable-reviewed over 2 rounds; op + 5-surface wiring + 16 targeted tests, test_gui.py 119 green. Caveats for A2: pore-preservation measured 3.4% on synthetic noise vs spec's ≤2% [threshold relaxed to 5%]; test expectations for pre-existing skin_hue_unify/skin_chroma_even gaps absorbed. Owner still owes: full pytest suite + visual crop QA on DSCF8028 before commit.)
 Method per `PLAN_SKIN_PRO.md` §S2. Anchors verified against HEAD `ea6f835` on 2026-07-03:

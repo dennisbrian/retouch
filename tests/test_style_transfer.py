@@ -1,6 +1,6 @@
 """Tests for retouch/style_transfer.py — subject-aware color transfer helpers.
 
-Promoted from the AUDIT_REPORT.md §1.4 deep algorithmic verification harness.
+Promoted from the `docs/review/AUDIT_REPORT.md` §1.4 deep algorithmic verification harness.
 """
 
 import numpy as np

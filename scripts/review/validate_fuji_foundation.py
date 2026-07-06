@@ -27,8 +27,8 @@ from pathlib import Path
 from typing import Callable, List, Tuple
 
 # Make the project root importable when running this script directly
-# (python3 scripts/validate_fuji_foundation.py).
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# (python3 scripts/review/validate_fuji_foundation.py).
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 

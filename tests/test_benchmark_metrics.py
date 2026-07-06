@@ -1,6 +1,6 @@
 """Tests for skin quality metrics (blotch_std and chroma_std).
 
-Tests the functions used by scripts/benchmark.py to measure skin quality
+Tests the functions used by scripts/bench/benchmark.py to measure skin quality
 before and after processing.
 """
 
@@ -19,7 +19,7 @@ def test_blotchy_vs_clean_synthetic_skin():
     - A blotchy version with medium-scale luminance blobs
     Uses full-ones skin mask and face_width≈200.
     """
-    from scripts.benchmark import skin_quality_metrics
+    from scripts.bench.benchmark import skin_quality_metrics
 
     img_h, img_w = 300, 300
     face_width = 200.0
@@ -65,7 +65,7 @@ def test_blotchy_vs_clean_synthetic_skin():
 
 def test_chroma_std_returns_finite():
     """Test (b): chroma_std returns a finite float for typical skin."""
-    from scripts.benchmark import skin_quality_metrics
+    from scripts.bench.benchmark import skin_quality_metrics
 
     img_h, img_w = 300, 300
     face_width = 200.0
@@ -101,7 +101,7 @@ def test_empty_mask_handled_gracefully():
 
     Should return zeros or match skin_chroma_std's convention.
     """
-    from scripts.benchmark import skin_quality_metrics
+    from scripts.bench.benchmark import skin_quality_metrics
 
     img_h, img_w = 300, 300
     face_width = 200.0

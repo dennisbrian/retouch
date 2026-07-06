@@ -1,12 +1,12 @@
 # Session Progress Report
 
-> **Latest session:** See `SESSION_PROGRESS_2026-07-02.md` for the most recent work
+> **Latest session:** See `docs/review/session/SESSION_PROGRESS_2026-07-02.md` for the most recent work
 > (Photoshop-Parity Roadmap + F1 float32 pipeline + F4 spot heal + F6 look-from-reference).
 >
 > **Previous sessions:**
-> - `SESSION_PROGRESS_2026-07-01.md` — Audit close-out, Pre-Phase 0, Phase 1.a-d pipeline
-> - `SESSION_PROGRESS_2026-06-24.md` — Stage A/B anime skin primitives
-> - `SESSION_PROGRESS_2026-06-23.md` — Frequency separation + skin processor
+> - `docs/review/session/SESSION_PROGRESS_2026-07-01.md` — Audit close-out, Pre-Phase 0, Phase 1.a-d pipeline
+> - `docs/review/session/SESSION_PROGRESS_2026-06-24.md` — Stage A/B anime skin primitives
+> - `docs/review/session/SESSION_PROGRESS_2026-06-23.md` — Frequency separation + skin processor
 > - This file (below) — 2026-06-22 code quality audit
 
 ---
@@ -115,7 +115,7 @@ Converted module-level `separate()` and `combine()` functions to a `FrequencySep
 | `tests/test_batch_workflow.py` | +10 | End-to-end batch processing |
 | `tests/benchmark_pipeline.py` | 13 | Performance benchmarks (pipeline, memory) |
 | `tests/benchmark_modules.py` | 16 | Micro-benchmarks (per-module) |
-| `scripts/benchmark.py` | — | CLI runner with timing/memory profiling |
+| `scripts/bench/benchmark.py` | — | CLI runner with timing/memory profiling |
 
 ### Coverage Improvements
 
@@ -138,7 +138,7 @@ Converted module-level `separate()` and `combine()` functions to a `FrequencySep
 
 | File | Change |
 |---|---|
-| `AUDIT_REPORT.md` | NEW — comprehensive code quality audit (6 sections, 25+ findings) |
+| `docs/review/AUDIT_REPORT.md` | NEW — comprehensive code quality audit (6 sections, 25+ findings) |
 | `ARCHITECTURE.md` | Updated with params.py, FrequencySeparator, circular dep fixes, new module sizes, 8 new changelog entries |
 | `.ai/architecture.md` | Concise update with central param registry and "Circular Dependencies — NONE" section |
 | `API.md` | Fixed `min_confidence` default, added 5+ missing params, added `ProcessingResult.face_contexts` |
@@ -248,12 +248,12 @@ The codebase is now in a significantly healthier state: no dead code, no broken 
 ### Tests (tests/)
 - 4 new test files (test_perf_optimizations, test_style_extraction, test_gui, test_integration_pipeline)
 - 2 new test files (test_recipe_integration, test_cli_integration)
-- 2 new benchmark files + scripts/benchmark.py runner
+- 2 new benchmark files + `scripts/bench/benchmark.py` runner
 - 4 existing test files extended (test_detection, test_io, test_batch_workflow, test_parsing_fallback)
 - Dead tests removed from test_grading.py
 
 ### Documentation
-- `AUDIT_REPORT.md` — NEW (437 lines)
+- `docs/review/AUDIT_REPORT.md` — NEW (437 lines)
 - `ARCHITECTURE.md` — extended with new sections, module sizes, changelog
 - `.ai/architecture.md` — concise update
 - `API.md`, `RECIPE_GUIDE.md`, `BATCH_GUIDE.md`, `README.md` — synced with code
@@ -270,7 +270,7 @@ The codebase is now in a significantly healthier state: no dead code, no broken 
 # Session 2: Audit Verification & P0-P3 Fixes
 
 **Date:** 2026-06-23
-**Session:** Verify AUDIT_REPORT.md → fix remaining items in parallel
+**Session:** Verify `docs/review/AUDIT_REPORT.md` → fix remaining items in parallel
 **Branch:** main (no commits — changes are working tree only)
 **Approach:** Coordinator Loop, 4-worker budget for first batch, 2-worker for subsequent
 **Tests run:** `nice -n 19 python3 -m pytest` (lowest CPU priority — gaming-safe)
@@ -279,7 +279,7 @@ The codebase is now in a significantly healthier state: no dead code, no broken 
 
 ## TL;DR
 
-Verified the 60+ findings in `AUDIT_REPORT.md` (generated 2026-06-22). Most were already fixed by Session 1's refactor. Spawned parallel workers to address the remaining 11 OPEN items. Net result: **57 audit findings fixed, 2 remaining OPEN (cosmetic/packaging), 2 pre-existing test failures flagged for follow-up**.
+Verified the 60+ findings in `docs/review/AUDIT_REPORT.md` (generated 2026-06-22). Most were already fixed by Session 1's refactor. Spawned parallel workers to address the remaining 11 OPEN items. Net result: **57 audit findings fixed, 2 remaining OPEN (cosmetic/packaging), 2 pre-existing test failures flagged for follow-up**.
 
 ---
 

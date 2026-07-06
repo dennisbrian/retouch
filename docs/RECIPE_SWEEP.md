@@ -26,7 +26,7 @@ Pass `-o DIR` or `--output DIR` instead of the positional arg if preferred.
 
 ## Options
 
-All flags after the first two args are forwarded to `scripts/recipe_sweep.py`:
+All flags after the first two args are forwarded to `scripts/recipes/recipe_sweep.py`:
 
 | Flag | Description |
 |------|-------------|

@@ -225,7 +225,7 @@ All tunable parameters must be registered in `retouch/params.py` under `PROCESSI
 ### ⚠️ Performance Tests
 Benchmarks are optional in CI but useful locally:
 ```bash
-python3 scripts/benchmark.py
+python3 scripts/bench/benchmark.py
 ```
 
 If you touch detection, parsing, or grading, run this to catch regressions.
@@ -255,7 +255,7 @@ This project runs on a **$20/month Claude budget**. To stay sustainable:
 | `CLAUDE.md` | Contributor playbook |
 | `API.md` | Python API reference |
 | `PERFORMANCE_TUNING.md` | GUI/CLI speed/memory trade-offs |
-| `AUDIT_REPORT.md` | Security & test coverage audit |
+| `docs/review/AUDIT_REPORT.md` | Security & test coverage audit |
 
 ### Common Questions
 
@@ -263,7 +263,7 @@ This project runs on a **$20/month Claude budget**. To stay sustainable:
 A: See `FUJI_SIMS_GUIDE.md`. Copy an existing recipe, adjust LUT paths + grade values, test against reference Fuji JPEG.
 
 **Q: How do I optimize something slow?**  
-A: Profile with `scripts/benchmark.py` first. Common bottlenecks: detection (switch to faster fallback), frequency separation (vectorize loops), grading (cache LUTs).
+A: Profile with `scripts/bench/benchmark.py` first. Common bottlenecks: detection (switch to faster fallback), frequency separation (vectorize loops), grading (cache LUTs).
 
 **Q: Can I modify the 7-stage pipeline?**  
 A: Probably not without breaking existing recipes. The pipeline is locked for v1. New stages planned for v2 (face editing).

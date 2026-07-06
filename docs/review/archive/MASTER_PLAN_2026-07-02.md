@@ -153,7 +153,7 @@
 - Plan v2 architecture (face editing API design)
 
 **Monthly:**
-- Full project review (like PROJECT_REVIEW_2026-07-02.md)
+- Full project review (like `docs/review/session/PROJECT_REVIEW_2026-07-02.md`)
 - Roadmap update if priorities shift
 
 ---

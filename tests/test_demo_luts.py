@@ -1,4 +1,4 @@
-"""Tests for scripts/generate_demo_luts.py — verifies generated demo LUTs are valid.
+"""Tests for scripts/recipes/generate_demo_luts.py — verifies generated demo LUTs are valid.
 
 These tests regenerate the demo LUTs into a temp dir on each fixture
 invocation so they are self-contained and do not depend on prior runs
@@ -26,7 +26,7 @@ from retouch.lut import list_available_luts, load_cube, luts_dir  # noqa: E402
 
 def _load_generate_module():
     spec = importlib.util.spec_from_file_location(
-        "generate_demo_luts", _SCRIPTS_DIR / "generate_demo_luts.py"
+        "generate_demo_luts", _SCRIPTS_DIR / "recipes" / "generate_demo_luts.py"
     )
     if spec is None or spec.loader is None:
         raise ImportError("could not load generate_demo_luts")
@@ -150,7 +150,7 @@ def test_luts_dir_sees_generated_files():
     if missing:
         pytest.skip(
             f"Demo LUTs not present in {luts_dir()}: missing {sorted(missing)}. "
-            f"Run: python3 scripts/generate_demo_luts.py"
+            f"Run: python3 scripts/recipes/generate_demo_luts.py"
         )
     for name in EXPECTED_NAMES:
         lut = load_cube(luts_dir() / f"{name}.cube")

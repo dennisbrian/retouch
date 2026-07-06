@@ -8,15 +8,17 @@ Scope: Full re-audit covering everything since the 2026-06-28 report — 15 feat
 
 ## 0. Executive Summary
 
+**Post-audit note (2026-07-04):** a later local test report (`./TEST_REPORT_2026-07-04.md`) records 5 failures and 5 skipped tests. Treat the verdict below as historical for the 2026-07-02 snapshot, not as current release sign-off.
+
 **This section reflects Cycle 3 (2026-07-02). See §11 for full evidence; §§1–10 below are the preserved 2026-06-28 baseline.**
 
 The Retouch Engine is a mature, well-structured Python image-processing pipeline, now ~16.5k LOC across 40 core modules + 3 entry points after a wave of Phase 1.d feature work (LCH/HSL color tools, blend modes, split toning, white balance, channel mixer, `.3dl` LUTs). Status:
 
 - **All 40 Python files compile cleanly.** No syntax errors.
-- **Test suite is green: 1626 passed, 1 skipped** (`pytest tests/ -q`, 512s) — up from 1495 at the last audit, no regressions from new features or the in-flight WIP fixes.
+- **Test suite was green in the audited cycle: 1626 passed, 1 skipped** (`pytest tests/ -q`, 512s) — up from 1495 at the last audit. A later `2026-07-04` report records 5 failures, so this is historical evidence, not current status.
 - **Prior findings confirmed closed**: all 4 test-coverage gaps (§8 rows 1-3, `tonal`/`precision`/`style_transfer`/`recipe_loader_cli` tests promoted, commit `06e50aa`), the 3 silent GUI/engine/utils exceptions (§8 rows 4-5), the `watch_luts_dir` doc drift (§8 row 10), and both bugs from the §10 "Retouch Fix Audit" (no-face `subject_mask`, dead sharpen branch) — all via commit `e633293`. **§8 row 6 (LUT hot-reload wiring) remains open, unchanged** — see §11.2.
 - **No new MAJOR-tier defects found in this cycle.** Two candidate MAJOR findings were identified by the auditor but both were verified as false positives after source re-read — `overlay_blend`/`hard_light_blend` (`utils.py:141-142`) already includes the ×2 factor (50%-gray identity holds, produces ~128.5), and `color_balance_lch` (`color_space.py:390-393`) already computes circular hue distance via `np.minimum(..., 360-...)`. See §11.3 for retraction details.
-- **1 dormant registry-bypass bug**: `engine.py` gates white-balance/channel-mixer activation with hardcoded literals (`6500`, `30`, `59`, `11`) instead of `params.py` `_DEFAULTS[...]`, unlike every other field in the same dataclass. Values currently match, so no behavioral effect yet, but this violates the single-source-of-truth mandate and will silently desync if the registry defaults ever change.
+- **Retraction: the registry-bypass finding is stale in the current tree.** `engine.py` now gates white-balance/channel-mixer activation with `_DEFAULTS[...]` lookups at the relevant call sites (`retouch/engine.py:1537`, `retouch/engine.py:1606`, `retouch/engine.py:2401`, `retouch/engine.py:2566`). Keep this note only as a record of what the 2026-07-02 snapshot reported.
 - **Uncommitted WIP** (`skin.py`, `perf_optimizations.py`, `style_library.py`) fixes a genuine latent bug (`_build_dimensional_mask` returning a hardcoded 200×200 zero mask instead of the actual image shape when no region matched) and adds defensive `None` guards; all 1626 tests still pass. This touches Visual-Critical code (`skin.py`) per AGENTS.md and has **not** had a Visual QA pass — flagged as a process gap, not a defect.
 - **No hardcoded secrets, API keys, or absolute user paths** anywhere in the code added since the last audit.
 - Two GitHub Actions workflows (`ci.yml`, `test.yml`) now run redundantly on every push/PR to `main`; `ci.yml`'s test job excludes ~40 of the ~55 test files, so it silently under-covers relative to `test.yml` and the local suite.
@@ -25,10 +27,10 @@ The Retouch Engine is a mature, well-structured Python image-processing pipeline
 |----------|-------|---------|
 | CRITICAL | 0 | — |
 | MAJOR    | 0 | — |
-| MINOR    | 8 (1 carried + 7 new/updated) | LUT hot-reload still unwired (§3.4, unchanged); registry-bypass literals in `engine.py` (§11.3); redundant/under-covering CI workflow (§11.4); `white_balance_lch` tint uses linear (non-circular) hue interpolation (§11.3); uncommitted `skin.py` changes lack Visual QA (§11.5); `gui.py`/`engine.py`/`grading.py`/`params.py` continue to grow (1668/1855/1401/1337 LOC) |
+| MINOR    | 4 (active) | LUT hot-reload still unwired (§3.4, unchanged); redundant/under-covering CI workflow (§11.4); uncommitted `skin.py` changes lack Visual QA (§11.5); `gui.py`/`engine.py`/`grading.py`/`params.py` continue to grow (1668/1855/1401/1337 LOC) |
 | INFO     | 2 | `color_space` wide-gamut tradeoff (unchanged, §1.4); `.3dl` loader has no upper bound on `3DLUTSIZE` (theoretical DoS, not reachable — not wired into GUI/CLI) |
 
-**Verdict: Ship-ready for the render path.** No CRITICAL defects and no MAJOR defect currently reachable from `engine.process()`. The two new MAJOR bugs are latent (unused public functions) — fix before wiring them into any GUI/recipe surface. Recommend closing the registry-bypass and CI redundancy opportunistically, and running a Visual QA pass on the uncommitted `skin.py` diff before merging.
+**Verdict for the 2026-07-02 snapshot: ship-ready for the render path.** No CRITICAL defects and no MAJOR defect were reachable from `engine.process()` in that snapshot. The current repo state is not current sign-off because `./TEST_REPORT_2026-07-04.md` records 5 failures; resolve those before treating this audit as release-ready. The two new MAJOR bugs were latent (unused public functions) and were retracted after source re-read. Recommend closing the CI redundancy opportunistically and running a Visual QA pass on the uncommitted `skin.py` diff before merging.
 
 ---
 
@@ -45,11 +47,14 @@ OK: gui.py  OK: cli.py  OK: desktop.py  OK: benchmark.py
 ```
 
 ### 1.2 Unit Tests (CRITICAL tier — passed)
+Baseline (2026-06-28):
 ```
 $ python3 -m pytest tests/ -q --tb=line -p no:warnings
 1495 passed, 1 skipped in 479.44s (0:07:59)
 → 1496 tests collected; 1 skipped (model-gated).
 ```
+
+This cycle's run is recorded in §11.1 (1626 passed, 1 skipped) — see the re-audit evidence there.
 
 ### 1.3 Benchmark (DEFERRED tier — baseline captured)
 `benchmark_results.json` present (2026-06-23). Per-face 400×400 median = 702 ms; pipeline.no-face 600×400 fast = 6.9 ms. No regression baseline re-run performed this cycle (not performance-affecting changes).
@@ -84,7 +89,7 @@ This cycle ran a dedicated harness that empirically validates the math in the mo
 - `RETOUCH_USER_RECIPES` env override is an admin-controlled lever, not user input. Acceptable.
 
 ### 2.2 Dangerous Calls — CLEAN ✓
-- `subprocess`: only in `scripts/benchmark.py:142` (with `TimeoutExpired` handling, no `shell=True`) and `tests/test_cli*.py` (no `shell=True`). Safe.
+- `subprocess`: only in `scripts/bench/benchmark.py:142` (with `TimeoutExpired` handling, no `shell=True`) and `tests/test_cli*.py` (no `shell=True`). Safe.
 - `eval`/`exec`/`pickle.load`: only `pickle.loads` in `tests/test_engine.py:732` (test code). No production use.
 - No `shell=True` anywhere in the codebase.
 
@@ -111,6 +116,18 @@ The remaining silent sites are the **style/batch *management* handlers**, which 
 | `retouch/batch_processor.py:47,54` | Logs via `logger.warning(...)` | OK ✓ |
 
 **Action**: Add a one-line `_logger.exception(...)` to the 3 GUI style/batch handlers and `logger.warning(...)` to the 3 engine/utils fallbacks. None are correctness defects — they're observability gaps. Downgraded from MAJOR to MINOR because no silent site sits on the actual image-rendering correctness path.
+
+Suggested one-liners (copy-paste):
+
+```
+_logger.exception("on_save_style failed for %s", style_name, exc_info=True)
+_logger.exception("on_learn_style failed for %s", dataset_name, exc_info=True)
+_logger.exception("on_process_folder failed for %s", folder_path, exc_info=True)
+
+logger.warning("FaceProcessorPool dispatch failed, falling back to ThreadPool", exc_info=True)
+logger.warning("Engine.close() shutdown error", exc_info=True)
+logger.warning("Primary-face detection fallback used for %s", image_path, exc_info=True)
+```
 
 ---
 
@@ -141,6 +158,38 @@ A subtle architectural gap surfaced during the deep check, important for anyone 
 - Additionally `watch_luts_dir` has **zero production callers** (only `lut.py` definition, `test_lut_registry.py`, and docs), and its internal error branch uses `print(...)` rather than `logger`.
 
 **Action**: If hot-reload is a real product goal, wire `watch_luts_dir(callback)` so the callback **also clears `ColorGrader._lut_cache`** (e.g. evict the matching key, or give the grader an mtime check mirroring `LUTRegistry.get`). Otherwise, mark `watch_luts_dir` experimental in the docstring to avoid implying a render-path effect it doesn't have. Also switch its `print` to `logger.warning`.
+
+Two concrete remediation options (pick one):
+
+Option A — Wire hot-reload into graders (recommended if hot-reload is desired):
+
+```
+# in lut.py (watcher): when a file change is detected
+LUTRegistry._evict(path)
+# notify registered graders (or via a central hook)
+for grader in GraderRegistry.get_all():
+    grader.evict_lut(path)
+
+# in grading.py (ColorGrader):
+def evict_lut(self, path: str):
+    with self._lock:
+        self._lut_cache.pop(path, None)
+
+# Alternatively, add an mtime check on cache-hit that mirrors LUTRegistry.get()
+```
+
+Option B — Mark experimental (fast, low-effort):
+
+```
+"""watch_luts_dir
+
+NOTE: experimental. Currently only evicts LUTRegistry cache. It does NOT evict
+ColorGrader._lut_cache — graders will continue to serve cached LUTs until
+restarted or manually cleared. Do not rely on this for production hot-reload.
+"""
+
+# also replace print(...) with logger.warning(..., exc_info=True)
+```
 
 ---
 
@@ -399,13 +448,24 @@ This diff is **not yet committed**. Reviewed for correctness; all 1626 tests pas
 
 **Process finding (not a code defect):** `skin.py` is explicitly listed in AGENTS.md as Visual-Critical ("Any change touching `frequency.py`, `skin.py`, `grading.py`, `parsing.py`, `geometry.py` = Visual-Critical. Visual QA gates cannot be bypassed regardless of task size."). This audit is text/test-only — no reference-image diff was run against `docs/VISUAL_QA.md` gates for the `harmonize_neck` and mask-shape changes. **Do not merge this diff without a Visual QA pass**; "tests pass" alone is explicitly called out in AGENTS.md as insufficient for this class of change.
 
+Visual QA checklist (required before merge):
+
+```
+- Reference images used (list file paths + brief description)
+- Before/After diffs (lossless PNGs) for each reference image
+- Quantitative metrics per image: RMS / SSIM / PSNR vs baseline
+- Gate results per docs/VISUAL_QA.md (PASS/FAIL) with thresholds recorded
+- Reviewer / QA owner + date
+- Link to PR containing the working-tree diff and the attached artifacts
+```
+
 ### 11.5 Cycle 3 Summary
 
 | # | Severity | Finding | Location | Status |
 |---|----------|---------|----------|--------|
 | 11 | — | [**RETRACTED**] `overlay_blend`/`hard_light_blend` ×2 factor — source re-read confirms `2.0*` is present (utils.py:141-142), 50%-gray identity holds | `retouch/utils.py:126-164` | False positive — no action needed |
 | 12 | — | [**RETRACTED**] `color_balance_lch` hue wraparound — source re-read confirms `np.minimum(..., 360-...)` is used (color_space.py:390-393); `white_balance_lch` tint claim also false (uses `(d+180)%360-180` at grading.py:1194) | `retouch/color_space.py:390-402`, `grading.py:1191-1196` | False positive — no action needed |
-| 13 | MINOR | 4 hardcoded-literal registry-bypass gates instead of `_DEFAULTS[...]` | `engine.py:1083-1084,1152-1154,1555,1664-1666` | Open — dormant (literals currently match registry) |
+| 13 | RETRACTED | 4 hardcoded-literal registry-bypass gates instead of `_DEFAULTS[...]` | `engine.py:1083-1084,1152-1154,1555,1664-1666` | Retracted — current tree uses `_DEFAULTS[...]` at the relevant checks |
 | 14 | MINOR | Redundant CI workflow with ~40-file ignore-list under-covering vs. `test.yml` | `.github/workflows/ci.yml` | Open |
 | 15 | MINOR | Uncommitted `skin.py`/`perf_optimizations.py` diff has no Visual QA pass per AGENTS.md mandate | `retouch/skin.py` (working tree) | Open — process gap, block merge until QA'd |
 | 16 | INFO | `.3dl` loader unbounded `3DLUTSIZE` allocation | `retouch/lut.py:248-411` | Open — not reachable from user input today |
@@ -414,7 +474,7 @@ This diff is **not yet committed**. Reviewed for correctness; all 1626 tests pas
 ### 11.6 Recommendations (Cycle 3, priority order)
 
 1. **Run Visual QA** on the uncommitted `skin.py`/`perf_optimizations.py` diff per `docs/VISUAL_QA.md` before merging — required by AGENTS.md, not optional for Visual-Critical modules.
-2. **Replace the 4 hardcoded literals** in `engine.py` with `_DEFAULTS[...]` lookups — one-line change each, closes the registry-bypass gap.
+2. **No action needed for the registry-bypass note** — the current tree already uses `_DEFAULTS[...]` lookups at the relevant `engine.py` checks, so the finding is retracted.
 3. **Consolidate or trim** `.github/workflows/ci.yml` — either delete it (redundant with `test.yml`) or remove the ~40-file ignore-list now that model assets are available.
 4. Carried over from Cycle 2: **decide on LUT hot-reload** (§3.4/finding #6) — wire `watch_luts_dir`'s callback to also evict `ColorGrader._lut_cache`, or mark the watcher experimental in its docstring.
 
@@ -426,6 +486,6 @@ This diff is **not yet committed**. Reviewed for correctness; all 1626 tests pas
 ```
 LOOP_SIGNAL { loop: verify,  iteration: 2, status: DONE,  delta: "deep algo verification ALL PASS (tonal/precision/color_space/skin_protect/style_transfer); LUT race confirmed RESOLVED", reason: "math correctness proven empirically; no CRITICAL/MAJOR", next: "report" }
 LOOP_SIGNAL { loop: review,  iteration: 2, status: DONE,  delta: "MAJOR count 5→0; reprioritized to test-gaps + observability + watch_luts_dir wiring caveat", reason: "prior MAJORs either fixed (race) or downgraded (silent-except off critical path)", next: "final output" }
-LOOP_SIGNAL { loop: verify,  iteration: 3, status: DONE,  delta: "full re-audit of 15 new-feature commits + uncommitted skin.py WIP; 1626/1627 tests green, no regressions", reason: "scope covers all Phase 1.d LCH/blend/WB work since 2026-06-28 baseline", next: "report" }
+LOOP_SIGNAL { loop: verify,  iteration: 3, status: DONE,  delta: "full re-audit of 15 new-feature commits + uncommitted skin.py WIP; 1626 passed, 1 skipped (1627 collected), no regressions", reason: "scope covers all Phase 1.d LCH/blend/WB work since 2026-06-28 baseline", next: "report" }
 LOOP_SIGNAL { loop: review,  iteration: 3, status: DONE,  delta: "found 2 new MAJOR math bugs (blend ×2 factor, hue wraparound) — both dead code; 1 dormant registry-bypass MINOR; CI redundancy MINOR; flagged uncommitted skin.py diff as missing mandatory Visual QA", reason: "new features shipped without empirical verification of their math, unlike the tonal/precision/style_transfer harness from Cycle 2", next: "fix MAJORs before wiring dead code into GUI; Visual QA the WIP diff before merge" }
 ```

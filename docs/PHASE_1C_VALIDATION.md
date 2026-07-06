@@ -61,7 +61,7 @@ Validation methods:
    `highlights`, `sharpen`, `vignette`).
 4. **Visual sanity** — the 3 sims produce visually distinct
    outputs on a synthetic test image (validated in
-   `scripts/validate_fuji_foundation.py` for the foundation
+   `scripts/review/validate_fuji_foundation.py` for the foundation
    layer, and the sims layer is a thin pass on top of that).
 5. **Performance budget** — per-sim overhead measured on a
    1080p image against the foundation-layer cost (see §3).
@@ -269,7 +269,7 @@ foundation module, the sims are *zero* cost over the input.
 
 Performance numbers are estimates pending re-benchmark with
 the 3 sims on the canonical benchmark image. The
-`scripts/benchmark.py` runner supports per-recipe timing; see
+`scripts/bench/benchmark.py` runner supports per-recipe timing; see
 `docs/PHASE_1A_VALIDATION.md` for the foundation layer's full
 benchmark.
 
@@ -360,14 +360,14 @@ project roadmap.
    `test_*` per sim that times the full sim against the
    foundation layer on 1080p and 4K. The benchmark numbers in
    §3 are estimates; the real numbers belong in
-   `scripts/benchmark.py` and the `benchmark_results.json`
+   `scripts/bench/benchmark.py` and the `benchmark_results.json`
    artefact.
 
 3. **Add a Visual A/B comparison page.** Build a 2-up before/after
    view in the Gradio GUI for the 3 sims against the input,
    so users can see the effect on a real photo without having
    to fire off a CLI run. The existing GUI already has a
-   before/after slider (post-fix per `SESSION_PROGRESS.md`),
+   before/after slider (post-fix per `docs/review/session/SESSION_PROGRESS.md`),
    so the wiring is half-done.
 
 4. **Eyeball validation against real Fuji JPEGs.** For each sim,

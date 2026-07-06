@@ -1,6 +1,6 @@
 """Tests for retouch/precision.py — float32 internal pipeline helpers.
 
-Promoted from the AUDIT_REPORT.md §1.4 deep algorithmic verification harness.
+Promoted from the `docs/review/AUDIT_REPORT.md` §1.4 deep algorithmic verification harness.
 """
 
 import numpy as np

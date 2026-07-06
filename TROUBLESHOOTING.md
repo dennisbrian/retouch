@@ -418,7 +418,7 @@ tail -f crash_*.log  # Watch in real-time
 
 ### How to profile performance
 ```bash
-python3 scripts/benchmark.py
+python3 scripts/bench/benchmark.py
 # Runs standard benchmark suite, shows per-stage timings
 ```
 

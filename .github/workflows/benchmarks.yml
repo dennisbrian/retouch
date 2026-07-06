@@ -41,7 +41,7 @@ jobs:
 
       - name: Run benchmarks
         run: |
-          python scripts/benchmark.py --output benchmark_results.json
+          python scripts/bench/benchmark.py --output benchmark_results.json
 
       - name: Upload benchmark results
         if: always()

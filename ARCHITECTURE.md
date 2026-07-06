@@ -387,7 +387,7 @@ Three hand-crafted JSON presets in `presets/` that combine the new Fuji foundati
 **Documentation:**
 *   `docs/FUJI_SIMS_GUIDE.md` — User-facing guide (2,415 words) with per-sim sections, when-to-use, key characteristics
 *   `docs/PHASE_1C_VALIDATION.md` — Validation report (2,993 words) with per-sim observations, performance, limitations, recommendations
-*   `scripts/compare_fuji_sims.py` — Side-by-side visual comparison generator (5 PNGs in `/tmp/sim_comparison/`)
+*   `scripts/review/compare_fuji_sims.py` — Side-by-side visual comparison generator (5 PNGs in `/tmp/sim_comparison/`)
 *   `docs/FUJI_COLOR_RESEARCH.md` — Fuji color science research notes (3,575 words, 10 sources)
 
 ### 3.8. Subject-Background Separation (`retouch/engine.py`)
@@ -642,9 +642,9 @@ When `fast=True` is set, the image is downscaled to 800px before entering the pi
 | `presets/provia.json` | Fuji Provia film simulation (neutral) |
 | `luts/*.cube` (6 files) | Demo 3D LUTs (identity, warm_boost, cool_shadows, kodak_ish, kodak, fuji) |
 | `luts/ACQUISITION.md` | Guide for real commercial LUT sources |
-| `scripts/generate_demo_luts.py` | Regenerates the 6 demo `.cube` files |
-| `scripts/validate_fuji_foundation.py` | Phase 1.a validation script (per-module performance, sample images) |
-| `scripts/compare_fuji_sims.py` | Phase 1.c side-by-side comparison generator |
+| `scripts/recipes/generate_demo_luts.py` | Regenerates the 6 demo `.cube` files |
+| `scripts/review/validate_fuji_foundation.py` | Phase 1.a validation script (per-module performance, sample images) |
+| `scripts/review/compare_fuji_sims.py` | Phase 1.c side-by-side comparison generator |
 | `docs/FUJI_COLOR_RESEARCH.md` | Research notes (3,575 words) |
 | `docs/PHASE_1A_VALIDATION.md` | Phase 1.a validation report |
 | `docs/FUJI_SIMS_GUIDE.md` | User-facing sim guide (2,415 words) |
@@ -756,8 +756,8 @@ cd05332 feat(lut): real 3D LUT pipeline with hot-load + 6 demo LUTs
 | F1.b.10 | `retouch/params.py` | Synced 10 type-only color defaults (0 → 0.0) for: bloom, glow, vignette, sharpen, contrast, vibrance, saturation, clarity, subject_separation, impact. |
 | F1.b.11 | `luts/` (NEW) | 6 demo `.cube` files: `identity_33.cube` (947KB), `warm_boost_17.cube`, `cool_shadows_17.cube`, `kodak_ish_17.cube`, `kodak.cube` (referenced by `film` preset), `fuji.cube` (referenced by `film` preset). |
 | F1.b.12 | `luts/ACQUISITION.md` (NEW) | Guide for real commercial LUT sources: RNI Films, VSCO, Dehancer, Fujifilm X-Trans profiles. |
-| F1.b.13 | `scripts/generate_demo_luts.py` (NEW) | Regenerates the 6 demo `.cube` files. Idempotent. |
-| F1.b.14 | `.github/workflows/benchmarks.yml` (NEW) | CI workflow: runs `python3 scripts/benchmark.py` on push, saves results as 90-day artifact. Kept existing `test.yml` intact. |
+| F1.b.13 | `scripts/recipes/generate_demo_luts.py` (NEW) | Regenerates the 6 demo `.cube` files. Idempotent. |
+| F1.b.14 | `.github/workflows/benchmarks.yml` (NEW) | CI workflow: runs `python3 scripts/bench/benchmark.py` on push, saves results as 90-day artifact. Kept existing `test.yml` intact. |
 
 ### Phase 1.c — 3 Official Fuji Film Simulations
 
@@ -767,7 +767,7 @@ cd05332 feat(lut): real 3D LUT pipeline with hot-load + 6 demo LUTs
 | F1.c.2 | `presets/astia.json` (NEW) | Portrait preset: tonal 0.55, **skin 0.85 (highest of all sims)**, hl 0.5, grain 0.0, lut=null. Red saturation -18, orange hue +8/lum +6, warm midtones, soft S-curve. |
 | F1.c.3 | `presets/provia.json` (NEW) | Neutral preset: tonal 0.4, **skin 0.2 (lowest)**, hl 0.2, grain 0.0, lut=null. No LUT, no grain, slight contrast punch, accurate color reproduction. |
 | F1.c.4 | `retouch/recipes.py` | Added 3 sims to `RECIPES` (extends="natural" with foundation params + color settings). `FUJI_SIM_NAMES = ("classic_chrome", "astia", "provia")` constant. `list_fuji_sims()` returns sorted available list. |
-| F1.c.5 | `scripts/compare_fuji_sims.py` (NEW) | Generates 1280×720 source + 3 sim outputs + 2×2 grid in `/tmp/sim_comparison/`. Computes per-sim color stats. 5 PNGs total. |
+| F1.c.5 | `scripts/review/compare_fuji_sims.py` (NEW) | Generates 1280×720 source + 3 sim outputs + 2×2 grid in `/tmp/sim_comparison/`. Computes per-sim color stats. 5 PNGs total. |
 | F1.c.6 | `docs/FUJI_SIMS_GUIDE.md` (NEW) | User-facing guide (2,415 words) with per-sim sections, when-to-use, key characteristics. |
 | F1.c.7 | `docs/PHASE_1C_VALIDATION.md` (NEW) | Validation report (2,993 words) with per-sim observations, performance estimates, honest limitations, next-step recommendations. |
 
@@ -833,9 +833,9 @@ cd05332 feat(lut): real 3D LUT pipeline with hot-load + 6 demo LUTs
 - `luts/kodak.cube`
 - `luts/fuji.cube`
 - `luts/ACQUISITION.md`
-- `scripts/generate_demo_luts.py`
-- `scripts/validate_fuji_foundation.py`
-- `scripts/compare_fuji_sims.py`
+- `scripts/recipes/generate_demo_luts.py`
+- `scripts/review/validate_fuji_foundation.py`
+- `scripts/review/compare_fuji_sims.py`
 - `docs/FUJI_COLOR_RESEARCH.md`
 - `docs/PHASE_1A_VALIDATION.md`
 - `docs/FUJI_SIMS_GUIDE.md`

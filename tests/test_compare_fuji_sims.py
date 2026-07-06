@@ -1,4 +1,4 @@
-"""Tests for scripts/compare_fuji_sims.py -- Phase 1.c comparison script.
+"""Tests for scripts/review/compare_fuji_sims.py -- Phase 1.c comparison script.
 
 The script produces a side-by-side comparison of the 3 official Fuji film
 simulations. These tests verify the script:
@@ -26,7 +26,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-SCRIPT_PATH = _PROJECT_ROOT / "scripts" / "compare_fuji_sims.py"
+SCRIPT_PATH = _PROJECT_ROOT / "scripts" / "review" / "compare_fuji_sims.py"
 
 
 # ---------------------------------------------------------------------------
@@ -35,7 +35,7 @@ SCRIPT_PATH = _PROJECT_ROOT / "scripts" / "compare_fuji_sims.py"
 
 @pytest.fixture(scope="module")
 def compare_module():
-    """Import ``scripts/compare_fuji_sims.py`` as a module without running it."""
+    """Import ``scripts/review/compare_fuji_sims.py`` as a module without running it."""
     if not SCRIPT_PATH.exists():
         pytest.skip(f"Script not found at {SCRIPT_PATH}")
     spec = importlib.util.spec_from_file_location("compare_fuji_sims", SCRIPT_PATH)
@@ -50,7 +50,7 @@ def compare_module():
 # ---------------------------------------------------------------------------
 
 def test_script_file_exists():
-    """The script must exist at scripts/compare_fuji_sims.py."""
+    """The script must exist at scripts/review/compare_fuji_sims.py."""
     assert SCRIPT_PATH.is_file(), f"missing script: {SCRIPT_PATH}"
 
 

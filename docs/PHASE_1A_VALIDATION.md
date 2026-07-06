@@ -32,7 +32,7 @@ Four new modules in `retouch/`:
 | `grain.apply_film_grain` | `apply_film_grain(img, strength, clump_sigma, luma_power, chroma, seed)` | Clumped, luminance-correlated grain |
 | `highlight.apply_highlight_rolloff` | `apply_highlight_rolloff(img, strength)` | Soft exponential highlight clip |
 
-The validation script `scripts/validate_fuji_foundation.py`:
+The validation script `scripts/review/validate_fuji_foundation.py`:
 
 1. Generates a 1080×720 synthetic test image (sky-to-ground gradient, a
    bright sun disc, two peach "skin" patches, a green foliage patch,
@@ -55,7 +55,7 @@ Output artifacts land in `/tmp/fuji_validation/`:
 /tmp/fuji_validation/comparison.png     # 1800x872  (2x3 grid)
 ```
 
-Run: `python3 scripts/validate_fuji_foundation.py`
+Run: `python3 scripts/review/validate_fuji_foundation.py`
 
 ---
 
@@ -263,8 +263,8 @@ correct**:
 
 | Check | Status |
 |---|---|
-| `python3 -m py_compile scripts/validate_fuji_foundation.py` | **passed** |
-| `python3 scripts/validate_fuji_foundation.py` runs without errors | **passed** |
+| `python3 -m py_compile scripts/review/validate_fuji_foundation.py` | **passed** |
+| `python3 scripts/review/validate_fuji_foundation.py` runs without errors | **passed** |
 | All 7 PNGs land in `/tmp/fuji_validation/` | **passed** |
 | All 7 PNGs are valid 1080x720 (or 1800x872 grid) PNGs | **passed** |
 | All 4 new modules import without errors | **passed** |

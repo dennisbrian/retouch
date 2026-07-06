@@ -40,7 +40,7 @@ This is a **well-engineered professional image processing pipeline**. 16.5k LOC 
 
 ### Documentation
 - **ARCHITECTURE.md** (1,900 lines): Comprehensive pipeline design, module breakdown, design decisions
-- **AUDIT_REPORT.md** (Cycle 3): Security audit, test coverage, algorithmic verification evidence
+- **`docs/review/AUDIT_REPORT.md`** (Cycle 3): Security audit, test coverage, algorithmic verification evidence
 - **CLAUDE.md** (newly added): Project guide, code conventions, budget context
 - **GUI.md**: Detailed UI layout, styling system, component reference
 - **RECIPE_GUIDE.md**, **BATCH_GUIDE.md**, **API.md**: Domain-specific docs
@@ -76,7 +76,7 @@ This is a **well-engineered professional image processing pipeline**. 16.5k LOC 
 - **Issue:** Hardcoded `6500` (default kelvin) instead of `_DEFAULTS["white_balance_kelvin"]`
 - **Status:** RESOLVED (commit `6331994`)
 - **Impact:** Would silently desync if param registry defaults change in future
-- **Evidence:** Audit finding flagged as MINOR in AUDIT_REPORT.md §0
+- **Evidence:** Audit finding flagged as MINOR in `docs/review/AUDIT_REPORT.md` §0
 
 #### 2. ⏳ Uncommitted WIP in skin.py / perf_optimizations.py
 - **Status:** PENDING VISUAL QA
@@ -223,12 +223,12 @@ None of these affect production rendering.
 
 - ✅ Full syntax check (40/40 modules compile)
 - ✅ Test suite execution (1,626 passing, 1 skipped)
-- ✅ Security audit (AUDIT_REPORT.md Cycle 3 verification)
+- ✅ Security audit (`docs/review/AUDIT_REPORT.md` Cycle 3 verification)
 - ✅ Code structure review (ARCHITECTURE.md walkthrough)
 - ✅ Documentation audit (README, API, GUI, architecture)
 - ✅ Performance baseline (benchmarks present, no regressions)
 - ✅ Git history review (commits are atomic, messages descriptive)
-- ✅ Outstanding issues audit (AUDIT_REPORT.md findings)
+- ✅ Outstanding issues audit (`docs/review/AUDIT_REPORT.md` findings)
 
 **Effort:** ~2 hours deep review + 1 hour documentation
 
