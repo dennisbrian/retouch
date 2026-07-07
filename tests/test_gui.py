@@ -566,7 +566,7 @@ class TestProcessInputKeys:
         # process_image takes *args — but PROCESS_INPUT_KEYS is the canonical list
         # 5 new params added (body_relight, body_dodge_burn, body_shadow_lift,
         # shadow_lift, nose_restore)
-        assert len(gui.PROCESS_INPUT_KEYS) == 112
+        assert len(gui.PROCESS_INPUT_KEYS) == 113
 
     def test_first_key_is_img_paths(self):
         assert gui.PROCESS_INPUT_KEYS[0] == "img_paths"
@@ -969,6 +969,7 @@ class TestProcessImageValidation:
             "shadow_hue": 0, "shadow_sat": 0,
             "midtone_hue": 0, "midtone_sat": 0,
             "highlight_hue": 0, "highlight_sat": 0,
+            "quality_tier": "Full (native face crops)",
             "debug_mode": False,
         }
         defaults.update(overrides)

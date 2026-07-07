@@ -321,8 +321,10 @@ class TestProxyPipeline:
     proxy down/up-scaling helper without resolution loss or crash."""
 
     def test_proxy_pipeline_triggers_for_large_image(self, engine, monkeypatch):
-        # Track whether _upscale_core_result was called — it is only called
-        # when the proxy was actually triggered (proxy_scale < 1.0).
+        """F8.2: default ``quality="full"`` path processes faces at native res
+        and never calls ``_upscale_core_result`` (faces aren't upscaled because
+        they're processed natively). The ``quality="draft"`` path keeps the
+        legacy F8.1 behavior where ``_upscale_core_result`` IS called."""
         upscale_calls = {"n": 0}
         original = RetouchEngine._upscale_core_result
 
@@ -334,21 +336,29 @@ class TestProxyPipeline:
 
         # 3000x2000 is well above the 2048 PROXY_MAX_DIM threshold
         img = np.full((2000, 3000, 3), 128, dtype=np.uint8)
-        result = engine.process(img, recipe="natural")
 
-        # Output must round-trip to the input resolution
+        # ---- F8.2 default (quality="full") ----
+        result = engine.process(img, recipe="natural")
         assert result.shape == img.shape
         assert result.dtype == np.uint8
         assert result.ndim == 3
         assert result.shape[2] == 3
-        # No faces in a blank image → face_count == 0
-        assert result.face_count == 0
-        # Detection stage should have run and produced timings
+        assert result.face_count == 0  # no faces in a blank image
         assert "detection" in result.timings
-        # The proxy path must have triggered at least once
+        # F8.2: _upscale_core_result is NOT called — faces are processed at
+        # native res, so there's no proxy-res face result to upscale.
+        assert upscale_calls["n"] == 0, (
+            "F8.2 full-quality path should not invoke _upscale_core_result — "
+            "faces are processed at native resolution."
+        )
+
+        # ---- F8.1 legacy (quality="draft") ----
+        upscale_calls["n"] = 0
+        result_draft = engine.process(img, recipe="natural", quality="draft")
+        assert result_draft.shape == img.shape
+        # Draft path uses the legacy proxy upscale path
         assert upscale_calls["n"] >= 1, (
-            "Proxy pipeline did not invoke _upscale_core_result — "
-            "_process_with_proxy may not be downscaling large images."
+            "quality='draft' should invoke _upscale_core_result (legacy F8.1 path)."
         )
 
     def test_proxy_pipeline_skipped_for_small_image(self, engine, monkeypatch):

@@ -350,6 +350,79 @@ def qa_detector_metrics(
 
 
 # ---------------------------------------------------------------------------
+# Peak-RSS guard for large-image grading (P2 row 3b)
+# ---------------------------------------------------------------------------
+
+
+def _peak_rss_mb() -> float:
+    """Return current process peak RSS in MB (best-effort, cross-platform)."""
+    try:
+        import resource
+        # ru_maxrss: kilobytes on Linux, bytes on macOS.
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        if sys.platform == "darwin":
+            return usage.ru_maxrss / (1024.0 * 1024.0)
+        return usage.ru_maxrss / 1024.0
+    except (ImportError, AttributeError):
+        return 0.0
+
+
+def assert_grading_peak_rss(
+    dims: List[tuple],
+    max_peak_mb: float = 4096.0,
+) -> List[Dict[str, Any]]:
+    """Run grading on large synthetic images and assert peak RSS stays bounded.
+
+    P2 row 3b perf guard: the ``_large_sigma_blur`` compute-downsample helper
+    must keep peak memory flat on 4K/6K frames. This builds a synthetic float32
+    image at each requested dimension, runs a haze+glow-heavy preset through
+    ``ColorGrader.grade``, and records peak RSS.
+
+    Args:
+        dims: List of (H, W) tuples to probe (e.g. [(2160, 3840), (3240, 5760)]).
+        max_peak_mb: Hard ceiling; an AssertionError is raised if exceeded.
+
+    Returns:
+        List of per-dimension dicts with keys ``dim``, ``peak_mb``, ``passed``.
+    """
+    import numpy as np
+    from retouch.grading import ColorGrader
+
+    results: List[Dict[str, Any]] = []
+    grader = ColorGrader()
+    settings = {
+        "haze": 0.5,
+        "glow": 0.4,
+        "orton_glow": 0.3,
+    }
+    for h, w in dims:
+        img = (np.random.RandomState(0).rand(h, w, 3) * 255.0).astype(np.uint8)
+        _ = grader.grade(img, settings, 1.0, skip_post_effects=False)
+        peak = _peak_rss_mb()
+        passed = peak <= max_peak_mb
+        results.append(
+            {
+                "dim": f"{h}x{w}",
+                "peak_mb": round(peak, 1),
+                "passed": passed,
+            }
+        )
+        print(
+            f"[benchmark] grading peak-RSS {h}x{w}: "
+            f"peak={peak:.1f}MB ceiling={max_peak_mb:.0f}MB "
+            f"({'PASS' if passed else 'FAIL'})"
+        )
+        if not passed:
+            raise AssertionError(
+                f"Grading peak RSS {peak:.1f}MB exceeds ceiling "
+                f"{max_peak_mb:.0f}MB at {h}x{w} — _large_sigma_blur downsample "
+                f"guard may be bypassed."
+            )
+        del img
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Reporting
 # ---------------------------------------------------------------------------
 
@@ -456,11 +529,30 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         "--quiet", "-q", action="store_true",
         help="Suppress the per-test pytest output; only show the summary table.",
     )
+    parser.add_argument(
+        "--peak-rss", action="store_true",
+        help="Run the P2 row 3b grading peak-RSS guard on 4K/6K synthetic images.",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
+
+    if args.peak_rss:
+        print(">>> P2 row 3b grading peak-RSS guard (4K / 6K)")
+        dims = [(2160, 3840), (3240, 5760)]
+        rss_rows = assert_grading_peak_rss(dims)
+        print()
+        print("  Peak-RSS guard")
+        print("  " + "-" * 50)
+        for r in rss_rows:
+            status = "PASS" if r["passed"] else "FAIL"
+            print(
+                f"  {r['dim']:<12s}  peak={r['peak_mb']:7.1f} MB  {status}"
+            )
+        print()
+        return 0
 
     selected_files: List[Path] = []
     if args.module in ("pipeline", "all"):

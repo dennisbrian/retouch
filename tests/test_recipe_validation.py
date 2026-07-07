@@ -5,8 +5,18 @@ from retouch.recipes import RECIPES
 from retouch.params import PROCESSING_PARAMS, resolve_recipe
 
 
-# Build a set of all valid recipe keys (both top-level and nested)
+# Build a set of all valid recipe keys (both top-level and nested).
+# Include engine_recipe_key as well: when a param's engine-side lookup path
+# differs from its recipe_key (e.g. relight_azimuth has recipe_key
+# "skin.relight_azimuth" but engine_recipe_key "relight_azimuth"), recipes
+# must place the value where the engine reads it — at the engine key — or it
+# is silently ignored. Without this, the test would falsely flag the
+# correctly-placed top-level key as "dead".
 _VALID_KEYS = {spec.recipe_key or spec.name for spec in PROCESSING_PARAMS}
+_VALID_KEYS.update(
+    spec.engine_recipe_key for spec in PROCESSING_PARAMS
+    if spec.engine_recipe_key is not None
+)
 # Nested keys can be dicts (e.g., {"skin": {...}, "bloom": {...}})
 _VALID_NESTED_ROOTS = {"skin", "eyes", "lips", "hair", "bloom", "makeup", "frequency", "texture", "color_harmony", "finish", "body_skin"}
 
