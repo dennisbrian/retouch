@@ -1553,6 +1553,59 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         # These maintain alignment with PROCESS_INPUT_KEYS but don't have visible UI yet.
                         _skin_hue_unify_state = gr.State(value=0)
                         _skin_chroma_even_state = gr.State(value=0)
+                        _reshape_eye_size_state = gr.State(value=0.0)
+                        _reshape_eye_distance_state = gr.State(value=0.0)
+                        _reshape_nose_width_state = gr.State(value=0.0)
+                        _reshape_nose_length_state = gr.State(value=0.0)
+                        _reshape_jaw_width_state = gr.State(value=0.0)
+                        _reshape_chin_length_state = gr.State(value=0.0)
+                        _reshape_mouth_size_state = gr.State(value=0.0)
+                        _reshape_smile_state = gr.State(value=0.0)
+                        _reshape_forehead_state = gr.State(value=0.0)
+                        _hair_deglare_state = gr.State(value=0.0)
+                        _hair_ring_position_state = gr.State(value=0.5)
+                        _hair_ring_tint_state = gr.State(value=0.0)
+                        _hair_remove_flyaways_state = gr.State(value=0.0)
+                        _film_enable_state = gr.State(value=False)
+                        _film_strength_state = gr.State(value=0.0)
+                        _film_toe_r_state = gr.State(value=0.0)
+                        _film_toe_g_state = gr.State(value=0.0)
+                        _film_toe_b_state = gr.State(value=0.0)
+                        _film_shoulder_r_state = gr.State(value=0.0)
+                        _film_shoulder_g_state = gr.State(value=0.0)
+                        _film_shoulder_b_state = gr.State(value=0.0)
+                        _film_midpoint_state = gr.State(value=0.5)
+                        _film_gamma_state = gr.State(value=1.0)
+                        _film_crosstalk_cy_mg_state = gr.State(value=0.0)
+                        _film_crosstalk_cy_ye_state = gr.State(value=0.0)
+                        _film_crosstalk_mg_ye_state = gr.State(value=0.0)
+                        _film_tonemap_strength_state = gr.State(value=0.0)
+                        _film_tonemap_toe_state = gr.State(value=0.1)
+                        _film_tonemap_shoulder_state = gr.State(value=0.1)
+                        _film_skew_state = gr.State(value=0.0)
+                        _background_harmonize_state = gr.State(value=0.0)
+                        _background_harmonize_mode_state = gr.State(value="split")
+                        _background_blur_state = gr.State(value=0.0)
+                        _background_desaturation_state = gr.State(value=0.0)
+                        _light_wrap_state = gr.State(value=0.0)
+                        _blue_shadow_grade_state = gr.State(value=0.0)
+                        _cyan_midtone_grade_state = gr.State(value=0.0)
+                        _subject_sharpen_state = gr.State(value=0.0)
+                        _matte_black_state = gr.State(value=0.0)
+                        _ai_denoise_state = gr.State(value=0.0)
+                        _ai_sr_scale_state = gr.State(value=1)
+                        _mv2_eyeshadow_state = gr.State(value=0.0)
+                        _mv2_eyeshadow_color_state = gr.State(value="brown")
+                        _mv2_eyeshadow_style_state = gr.State(value="natural")
+                        _mv2_eyeliner_state = gr.State(value=0.0)
+                        _mv2_eyeliner_color_state = gr.State(value="black")
+                        _mv2_eyeliner_style_state = gr.State(value="classic")
+                        _mv2_contour_state = gr.State(value=0.0)
+                        _mv2_brows_state = gr.State(value=0.0)
+                        _mv2_brows_color_state = gr.State(value="brown")
+                        _mv2_ombre_state = gr.State(value=0.0)
+                        _mv2_ombre_color1_state = gr.State(value="red")
+                        _mv2_ombre_color2_state = gr.State(value="pink")
                         status = gr.Textbox(label="Status", interactive=False, placeholder="Upload an image and click Process to start...")
                         smart_analysis_html = gr.HTML(visible=True)
                         qa_status = gr.HTML(visible=True)
@@ -1945,15 +1998,30 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         body_smooth, body_equalize, body_whiten, body_match_face, body_relight, body_dodge_burn, shadow_lift, body_shadow_lift, nose_restore,
         specular_bloom, specular_bloom_tone,
         skin_flatten, skin_quantize, skin_unify, skin_unify_hue, _skin_hue_unify_state, _skin_chroma_even_state, skin_glow,
-        eye_enhance, catchlight, dark_circles, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, slimming, hair_enhance,
+        eye_enhance, catchlight, dark_circles, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, slimming,
+        _reshape_eye_size_state, _reshape_eye_distance_state, _reshape_nose_width_state, _reshape_nose_length_state,
+        _reshape_jaw_width_state, _reshape_chin_length_state, _reshape_mouth_size_state, _reshape_smile_state, _reshape_forehead_state,
+        hair_enhance,
+        _hair_deglare_state, _hair_ring_position_state, _hair_ring_tint_state, _hair_remove_flyaways_state,
         contrast, brightness, highlights, shadows, whites, blacks, clarity, vibrance, saturation, auto_exposure,
         bloom, bloom_threshold, bloom_softness, glow, vignette, sharpen, sharpen_radius, fade_toe, highlight_drift, airy_haze, clarity_split_neg, clarity_split_pos, subject_separation, impact,
         color_grade, grade_intensity, chromatic_aberration, grain, halation, lut,
         tonal_curve_strength, skin_protect_strength, grain_strength, highlight_rolloff_strength,
+        _film_enable_state, _film_strength_state, _film_toe_r_state, _film_toe_g_state, _film_toe_b_state,
+        _film_shoulder_r_state, _film_shoulder_g_state, _film_shoulder_b_state,
+        _film_midpoint_state, _film_gamma_state, _film_crosstalk_cy_mg_state, _film_crosstalk_cy_ye_state,
+        _film_crosstalk_mg_ye_state, _film_tonemap_strength_state, _film_tonemap_toe_state, _film_tonemap_shoulder_state, _film_skew_state,
+        _background_harmonize_state, _background_harmonize_mode_state, _background_blur_state, _background_desaturation_state,
+        _light_wrap_state, _blue_shadow_grade_state, _cyan_midtone_grade_state, _subject_sharpen_state, _matte_black_state,
         shadow_hue, shadow_sat, midtone_hue, midtone_sat, highlight_hue, highlight_sat,
         white_balance_kelvin, white_balance_tint, bw_channel_mixer_r, bw_channel_mixer_g, bw_channel_mixer_b,
         negative_split_tone_shadow, negative_split_tone_highlight,
         hsl_hue_global, hsl_sat_global, hsl_lum_global,
+        _ai_denoise_state, _ai_sr_scale_state,
+        _mv2_eyeshadow_state, _mv2_eyeshadow_color_state, _mv2_eyeshadow_style_state,
+        _mv2_eyeliner_state, _mv2_eyeliner_color_state, _mv2_eyeliner_style_state,
+        _mv2_contour_state, _mv2_brows_state, _mv2_brows_color_state,
+        _mv2_ombre_state, _mv2_ombre_color1_state, _mv2_ombre_color2_state,
         color_ref_img, color_ref_strength,
         show_compare, fast,
         export_fmt, export_quality, export_res,
