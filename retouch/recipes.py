@@ -243,6 +243,79 @@ RECIPES = {
         "grain_strength": 0.10,
     },
 
+    "float32_cinema_v1": {
+        # Showcase #2 for the float32 pipeline: the cinematic film-finish.
+        # Where float32_beauty_v1 is understated, this leans HARD on the finish
+        # stack that was broken on the float path until today's fixes —
+        # fade_toe (lifted matte black), highlight_drift (cyan highlights),
+        # airy_haze, and clarity_split — plus a teal-shadow / warm-highlight
+        # split tone and film grain. On the old fake-float path these ops
+        # crushed to black or banded; here they compose into a clean, graded
+        # filmic look. This recipe is the most direct proof the finish-stack
+        # range fixes work end-to-end.
+        "extends": "natural_polish_v1",
+        "frequency": {"smooth": 0.30},
+        "skin": {
+            "equalize": 0.08,
+            "hue_unify": 0.30,
+            "chroma_even": 0.20,
+            "whiten_hue_stable": 1,
+            "shine_removal": 0.30,
+            "relight": 0.25,
+        },
+        "eyes": {"dark_circles": 0.15, "catchlight": 0.12, "iris": 0.12},
+        # Smooth highlight rolloff feeds the finish stack a clean range.
+        "tonal_curve_strength": 0.35,
+        "highlight_rolloff": 0.50,
+        # The finish stack — the headline of this recipe (all float-fixed today).
+        "finish": {
+            "fade_toe": 0.30,          # lifted, hue-locked matte black
+            "highlight_drift": 0.22,   # subtle cyan drift in highlights
+            "airy_haze": 0.15,
+            "clarity_split_neg": 0.18, # soft form band
+            "clarity_split_pos": 0.12, # crisp texture band
+        },
+        # Teal shadows / warm highlights — the classic cinematic split.
+        "shadow_hue": 200, "shadow_sat": 22,
+        "midtone_hue": 40, "midtone_sat": 12,
+        "highlight_hue": 45, "highlight_sat": 15,
+        "vignette": 18.0,
+        # Film grain — float-native, visible but clean.
+        "grain_strength": 0.22,
+    },
+
+    "float32_glow_v1": {
+        # Showcase #3 for the float32 pipeline: the gradient/glow stress case.
+        # Big soft bloom + skin glow + airy_haze + strong highlight_rolloff +
+        # a wide split tone produce large smooth gradients (backlight halos,
+        # bloomed highlights, sky-like falloffs) — exactly where the old uint8
+        # path showed visible banding/posterization. Rendered float-native
+        # these gradients stay continuous. A dreamy high-key glow look that
+        # doubles as a banding torture test.
+        "extends": "natural",
+        "frequency": {"smooth": 0.40},
+        "skin": {
+            "equalize": 0.15,
+            "rosy": 0.30,
+            "hue_unify": 0.25,
+            "glow": 0.35,              # skin light-wrap diffusion (smooth halo)
+        },
+        "eyes": {"whites": 0.20, "catchlight": 0.20, "iris": 0.15},
+        "lips": {"tint": "rose", "gloss": 0.25},
+        # Big smooth bloom — the primary gradient generator.
+        "bloom": {"opacity": 0.40},
+        "specular_bloom": 30,
+        # Strong highlight rolloff = long smooth highlight ramp (banding-prone).
+        "tonal_curve_strength": 0.30,
+        "highlight_rolloff": 0.60,
+        "finish": {"airy_haze": 0.28},
+        # Wide, gentle split tone across the whole tonal range.
+        "shadow_hue": 230, "shadow_sat": 18,
+        "midtone_hue": 35, "midtone_sat": 14,
+        "highlight_hue": 50, "highlight_sat": 12,
+        "grain_strength": 0.08,
+    },
+
     "natural_polish_v1": {
         # Flagship #6: the "barely retouched, just better" case — proves the
         # algorithm stack doesn't require heavy strengths to be worth having.
