@@ -2824,10 +2824,19 @@ class RetouchEngine:
 
         # Colour transfer (reference-based)
         if ctx.color_ref is not None:
-            # F1/E2: color_transfer now dtype-aware (float32 [0,255] path via bgr_f32_to_lab_f32)
-            result = self._grader.color_transfer(
-                result, ctx.color_ref, intensity=ctx.color_transfer_intensity
-            )
+            # color_transfer runs the source through bgr_f32_to_lab_f32, which
+            # expects float BGR in [0,255]; `result` is [0,1] here, so scale
+            # around the call (the ref is handled by the method internally).
+            if is_float:
+                ct_in = np.clip(result * 255.0, 0.0, 255.0).astype(np.float32)
+                ct_out = self._grader.color_transfer(
+                    ct_in, ctx.color_ref, intensity=ctx.color_transfer_intensity
+                )
+                result = np.clip(ct_out / 255.0, 0.0, 1.0).astype(np.float32)
+            else:
+                result = self._grader.color_transfer(
+                    result, ctx.color_ref, intensity=ctx.color_transfer_intensity
+                )
 
         # --- White balance (LCH-based, Phase 1.d) ---
         if ctx.white_balance_kelvin != _DEFAULTS["white_balance_kelvin"] or ctx.white_balance_tint != _DEFAULTS["white_balance_tint"]:
@@ -2849,13 +2858,25 @@ class RetouchEngine:
 
         # --- Master HSL (Phase 1.d) — global LCH adjustments ---
         if ctx.hsl_hue_global != 0 or ctx.hsl_sat_global != 0 or ctx.hsl_lum_global != 0:
-            # F1/E2: adjust_hsl_lch now dtype-aware (float32 [0,255] path via bgr_f32_to_lch_f32)
-            result = self._grader.adjust_hsl_lch(
-                result,
-                hue_shift=ctx.hsl_hue_global * 0.6,
-                sat_scale=1.0 + ctx.hsl_sat_global / 100.0,
-                lum_shift=ctx.hsl_lum_global * 0.5,
-            )
+            # adjust_hsl_lch runs through bgr_f32_to_lch_f32, which expects float
+            # BGR in [0,255]; `result` is [0,1] here, so scale around the call
+            # (otherwise the LCh L collapses and the image crushes to black).
+            if is_float:
+                hsl_in = np.clip(result * 255.0, 0.0, 255.0).astype(np.float32)
+                hsl_out = self._grader.adjust_hsl_lch(
+                    hsl_in,
+                    hue_shift=ctx.hsl_hue_global * 0.6,
+                    sat_scale=1.0 + ctx.hsl_sat_global / 100.0,
+                    lum_shift=ctx.hsl_lum_global * 0.5,
+                )
+                result = np.clip(hsl_out / 255.0, 0.0, 1.0).astype(np.float32)
+            else:
+                result = self._grader.adjust_hsl_lch(
+                    result,
+                    hue_shift=ctx.hsl_hue_global * 0.6,
+                    sat_scale=1.0 + ctx.hsl_sat_global / 100.0,
+                    lum_shift=ctx.hsl_lum_global * 0.5,
+                )
 
         # Build glow mask — allow glow on skin & background, preserve costume details
         pm_norm = _norm_mask(person_mask)
@@ -3019,12 +3040,23 @@ class RetouchEngine:
 
         # --- Negative split tone ---
         if ctx.negative_split_tone_shadow > 0 or ctx.negative_split_tone_highlight > 0:
-            # F1/E2: negative_split_tone now dtype-aware (float32 [0,255] path via bgr_f32_to_lch_f32)
-            result = self._grader.negative_split_tone(
-                result,
-                shadow_desat=ctx.negative_split_tone_shadow / 100.0,
-                highlight_desat=ctx.negative_split_tone_highlight / 100.0,
-            )
+            # negative_split_tone runs through bgr_f32_to_lch_f32, which expects
+            # float BGR in [0,255]; `result` is [0,1] here, so scale around the
+            # call (otherwise the LCh L collapses and it crushes to black).
+            if is_float:
+                nst_in = np.clip(result * 255.0, 0.0, 255.0).astype(np.float32)
+                nst_out = self._grader.negative_split_tone(
+                    nst_in,
+                    shadow_desat=ctx.negative_split_tone_shadow / 100.0,
+                    highlight_desat=ctx.negative_split_tone_highlight / 100.0,
+                )
+                result = np.clip(nst_out / 255.0, 0.0, 1.0).astype(np.float32)
+            else:
+                result = self._grader.negative_split_tone(
+                    result,
+                    shadow_desat=ctx.negative_split_tone_shadow / 100.0,
+                    highlight_desat=ctx.negative_split_tone_highlight / 100.0,
+                )
 
         # --- B&W channel mixer ---
         bw_active = (
