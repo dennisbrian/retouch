@@ -60,6 +60,21 @@ class SubjectSeparationStage(_EngineStage):
         )
 
 
+class BackgroundHarmonizeStage(_EngineStage):
+    """Stage 3.1: C5 — skin-anchored background color harmonization."""
+
+    name = "background_harmonize"
+    phase = "global"
+
+    def enabled(self, state: PipelineState) -> bool:
+        return state.ctx.background_harmonize > 0
+
+    def _call(self, state: PipelineState) -> np.ndarray:
+        return self._engine._stage_harmonize(
+            state.img, state.ctx, state.acc_skin, state.person_mask
+        )
+
+
 class BodySkinStage(_EngineStage):
     """Stage 3.5: Body skin retouch."""
 
@@ -136,6 +151,7 @@ def build_global_registry(engine: "RetouchEngine") -> "StageRegistry":
 
     registry = StageRegistry()
     registry.add(SubjectSeparationStage(engine))
+    registry.add(BackgroundHarmonizeStage(engine))
     registry.add(BodySkinStage(engine))
     registry.add(GlobalStage(engine))
     registry.add(GradeStage(engine))

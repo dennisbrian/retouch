@@ -126,6 +126,7 @@ class TestSessionJsonRoundTrip:
         parsed = json.loads(s.to_json())
         assert set(parsed.keys()) == {
             "version", "recipe", "params", "image_path", "created", "image_hash",
+            "local_adjustments",
         }
         assert isinstance(parsed["params"], dict)
 

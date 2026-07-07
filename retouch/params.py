@@ -716,11 +716,141 @@ _FACE_FEATURE_PARAMS = [
         max_val=100,
     ),
     ParamSpec(
+        name="reshape_eye_size",
+        cli_flag=None,
+        cli_type=None,
+        default=0,
+        recipe_key="reshape.eye_size",
+        conversion="gui_direct",
+        min_val=-50,
+        max_val=50,
+    ),
+    ParamSpec(
+        name="reshape_eye_distance",
+        cli_flag=None,
+        cli_type=None,
+        default=0,
+        recipe_key="reshape.eye_distance",
+        conversion="gui_direct",
+        min_val=-50,
+        max_val=50,
+    ),
+    ParamSpec(
+        name="reshape_nose_width",
+        cli_flag=None,
+        cli_type=None,
+        default=0,
+        recipe_key="reshape.nose_width",
+        conversion="gui_direct",
+        min_val=-50,
+        max_val=50,
+    ),
+    ParamSpec(
+        name="reshape_nose_length",
+        cli_flag=None,
+        cli_type=None,
+        default=0,
+        recipe_key="reshape.nose_length",
+        conversion="gui_direct",
+        min_val=-50,
+        max_val=50,
+    ),
+    ParamSpec(
+        name="reshape_jaw_width",
+        cli_flag=None,
+        cli_type=None,
+        default=0,
+        recipe_key="reshape.jaw_width",
+        conversion="gui_direct",
+        min_val=-50,
+        max_val=50,
+    ),
+    ParamSpec(
+        name="reshape_chin_length",
+        cli_flag=None,
+        cli_type=None,
+        default=0,
+        recipe_key="reshape.chin_length",
+        conversion="gui_direct",
+        min_val=-50,
+        max_val=50,
+    ),
+    ParamSpec(
+        name="reshape_mouth_size",
+        cli_flag=None,
+        cli_type=None,
+        default=0,
+        recipe_key="reshape.mouth_size",
+        conversion="gui_direct",
+        min_val=-50,
+        max_val=50,
+    ),
+    ParamSpec(
+        name="reshape_smile",
+        cli_flag=None,
+        cli_type=None,
+        default=0,
+        recipe_key="reshape.smile",
+        conversion="gui_direct",
+        min_val=-20,
+        max_val=30,
+    ),
+    ParamSpec(
+        name="reshape_forehead",
+        cli_flag=None,
+        cli_type=None,
+        default=0,
+        recipe_key="reshape.forehead",
+        conversion="gui_direct",
+        min_val=-30,
+        max_val=30,
+    ),
+    ParamSpec(
         name="hair_enhance",
         cli_flag="hair-enhance",
         cli_type=int,
         default=5,
         recipe_key="hair.shine",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="hair_deglare",
+        cli_flag="hair-deglare",
+        cli_type=int,
+        default=0,
+        recipe_key="hair.deglare",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="hair_ring_position",
+        cli_flag="hair-ring-position",
+        cli_type=int,
+        default=30,
+        recipe_key="hair.ring_position",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="hair_ring_tint",
+        cli_flag="hair-ring-tint",
+        cli_type=int,
+        default=40,
+        recipe_key="hair.ring_tint",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="hair_remove_flyaways",
+        cli_flag="hair-remove-flyaways",
+        cli_type=int,
+        default=0,
+        recipe_key="hair.remove_flyaways",
         conversion="recipe_pct",
         min_val=0,
         max_val=100,
@@ -1078,6 +1208,287 @@ _GRADING_PARAMS = [
 ]
 
 
+# Film density engine (C3 — parametric film-density model)
+_FILM_DENSITY_PARAMS = [
+    ParamSpec(
+        name="film_enable",
+        cli_flag=None,
+        cli_type=None,
+        default=False,
+        recipe_key="film.enable",
+        conversion="bool_flag",
+    ),
+    ParamSpec(
+        name="film_strength",
+        cli_flag=None,
+        cli_type=None,
+        default=1.0,
+        recipe_key="film.strength",
+        conversion="recipe_direct",
+        min_val=0.0,
+        max_val=1.0,
+    ),
+    ParamSpec(
+        name="film_toe_r",
+        cli_flag=None,
+        cli_type=None,
+        default=0.10,
+        recipe_key="film.toe.r",
+        conversion="recipe_direct",
+        min_val=0.0,
+        max_val=0.5,
+    ),
+    ParamSpec(
+        name="film_toe_g",
+        cli_flag=None,
+        cli_type=None,
+        default=0.10,
+        recipe_key="film.toe.g",
+        conversion="recipe_direct",
+        min_val=0.0,
+        max_val=0.5,
+    ),
+    ParamSpec(
+        name="film_toe_b",
+        cli_flag=None,
+        cli_type=None,
+        default=0.10,
+        recipe_key="film.toe.b",
+        conversion="recipe_direct",
+        min_val=0.0,
+        max_val=0.5,
+    ),
+    ParamSpec(
+        name="film_shoulder_r",
+        cli_flag=None,
+        cli_type=None,
+        default=0.10,
+        recipe_key="film.shoulder.r",
+        conversion="recipe_direct",
+        min_val=0.0,
+        max_val=0.5,
+    ),
+    ParamSpec(
+        name="film_shoulder_g",
+        cli_flag=None,
+        cli_type=None,
+        default=0.10,
+        recipe_key="film.shoulder.g",
+        conversion="recipe_direct",
+        min_val=0.0,
+        max_val=0.5,
+    ),
+    ParamSpec(
+        name="film_shoulder_b",
+        cli_flag=None,
+        cli_type=None,
+        default=0.10,
+        recipe_key="film.shoulder.b",
+        conversion="recipe_direct",
+        min_val=0.0,
+        max_val=0.5,
+    ),
+    ParamSpec(
+        name="film_midpoint",
+        cli_flag=None,
+        cli_type=None,
+        default=0.50,
+        recipe_key="film.midpoint",
+        conversion="recipe_direct",
+        min_val=0.0,
+        max_val=1.0,
+    ),
+    ParamSpec(
+        name="film_gamma",
+        cli_flag=None,
+        cli_type=None,
+        default=1.0,
+        recipe_key="film.gamma",
+        conversion="recipe_direct",
+        min_val=0.5,
+        max_val=2.5,
+    ),
+    ParamSpec(
+        name="film_crosstalk_cy_mg",
+        cli_flag=None,
+        cli_type=None,
+        default=0.06,
+        recipe_key="film.crosstalk.cy_mg",
+        conversion="recipe_direct",
+        min_val=-0.15,
+        max_val=0.15,
+    ),
+    ParamSpec(
+        name="film_crosstalk_cy_ye",
+        cli_flag=None,
+        cli_type=None,
+        default=0.03,
+        recipe_key="film.crosstalk.cy_ye",
+        conversion="recipe_direct",
+        min_val=-0.15,
+        max_val=0.15,
+    ),
+    ParamSpec(
+        name="film_crosstalk_mg_ye",
+        cli_flag=None,
+        cli_type=None,
+        default=0.02,
+        recipe_key="film.crosstalk.mg_ye",
+        conversion="recipe_direct",
+        min_val=-0.15,
+        max_val=0.15,
+    ),
+    ParamSpec(
+        name="film_tonemap_strength",
+        cli_flag=None,
+        cli_type=None,
+        default=0.7,
+        recipe_key="film.tonemap.strength",
+        conversion="recipe_direct",
+        min_val=0.0,
+        max_val=1.0,
+    ),
+    ParamSpec(
+        name="film_tonemap_toe",
+        cli_flag=None,
+        cli_type=None,
+        default=0.10,
+        recipe_key="film.tonemap.toe",
+        conversion="recipe_direct",
+        min_val=0.0,
+        max_val=0.5,
+    ),
+    ParamSpec(
+        name="film_tonemap_shoulder",
+        cli_flag=None,
+        cli_type=None,
+        default=0.15,
+        recipe_key="film.tonemap.shoulder",
+        conversion="recipe_direct",
+        min_val=0.0,
+        max_val=0.5,
+    ),
+    ParamSpec(
+        name="film_skew",
+        cli_flag=None,
+        cli_type=None,
+        default=0.3,
+        recipe_key="film.tonemap.skew",
+        conversion="recipe_direct",
+        min_val=0.0,
+        max_val=1.0,
+    ),
+]
+
+
+# C5 — Skin-anchored background color harmonization.
+# background_harmonize: 0-100 strength of the background auto-grade that
+# complements the corrected skin tone. 0 = no-op.
+# background_harmonize_mode: harmony strategy on the hue wheel
+# ("split" = split-complementary, the default; also "complementary",
+# "analogous_warm", "analogous_cool").
+_HARMONIZE_PARAMS = [
+    ParamSpec(
+        name="background_harmonize",
+        cli_flag=None,
+        cli_type=None,
+        default=0.0,
+        recipe_key="harmony.background_harmonize",
+        conversion="gui_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="background_harmonize_mode",
+        cli_flag=None,
+        cli_type=None,
+        default="split",
+        recipe_key="harmony.background_harmonize_mode",
+        conversion="dropdown",
+    ),
+]
+
+
+# T1 — Background replace & scene relight.
+# These 7 keys are the historically-dead ``anime_crystal_void`` params,
+# finally wired (T1). Each maps to a BackgroundReplacer operation gated
+# by the feathered person mask so the subject is always protected.
+# Recipe path is ``background.<key>`` (a new nested root). All are 0-100
+# strength scales; 0 = no-op.
+_BACKGROUND_PARAMS = [
+    ParamSpec(
+        name="background_blur",
+        cli_flag=None,
+        cli_type=None,
+        default=0.0,
+        recipe_key="background.background_blur",
+        conversion="gui_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="background_desaturation",
+        cli_flag=None,
+        cli_type=None,
+        default=0.0,
+        recipe_key="background.background_desaturation",
+        conversion="gui_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="light_wrap",
+        cli_flag=None,
+        cli_type=None,
+        default=0.0,
+        recipe_key="background.light_wrap",
+        conversion="gui_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="blue_shadow_grade",
+        cli_flag=None,
+        cli_type=None,
+        default=0.0,
+        recipe_key="background.blue_shadow_grade",
+        conversion="gui_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="cyan_midtone_grade",
+        cli_flag=None,
+        cli_type=None,
+        default=0.0,
+        recipe_key="background.cyan_midtone_grade",
+        conversion="gui_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="subject_sharpen",
+        cli_flag=None,
+        cli_type=None,
+        default=0.0,
+        recipe_key="background.subject_sharpen",
+        conversion="gui_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="matte_black",
+        cli_flag=None,
+        cli_type=None,
+        default=0.0,
+        recipe_key="background.matte_black",
+        conversion="gui_direct",
+        min_val=0,
+        max_val=100,
+    ),
+]
+
+
 # Split toning
 _SPLIT_TONING_PARAMS = [
     ParamSpec(
@@ -1235,14 +1646,160 @@ _WB_BW_PARAMS = [
 ]
 
 
+# F7 — AI denoise + super-resolution.
+# ai_denoise: 0-100 opacity blend between original and denoised image
+# (model runs once; this controls the mix). 0 = no-op.
+# ai_sr_scale: export-time upscale factor (1=off, 2, 4). GUI flag, not a
+# recipe-driven parameter — the recipe never sets it; callers opt in.
+_AI_ENHANCE_PARAMS = [
+    ParamSpec(
+        name="ai_denoise",
+        cli_flag="ai-denoise",
+        cli_type=int,
+        default=0,
+        recipe_key="ai.denoise",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="ai_sr_scale",
+        cli_flag="ai-sr-scale",
+        cli_type=int,
+        default=1,
+        recipe_key=None,
+        conversion="gui_direct",
+        min_val=1,
+        max_val=4,
+    ),
+]
+
+
+# T2 — Makeup engine v2 (eyeshadow / liner / contour / brows / ombre).
+# All keys live under the recipe root ``makeup_v2.<key>``. Each is a 0-100
+# strength scale (0 = no-op) except the dropdown/style selectors which store
+# the string verbatim.
+_MAKEUP_V2_PARAMS = [
+    ParamSpec(
+        name="mv2_eyeshadow",
+        cli_flag=None,
+        cli_type=None,
+        default=0,
+        recipe_key="makeup_v2.eyeshadow",
+        conversion="gui_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="mv2_eyeshadow_color",
+        cli_flag=None,
+        cli_type=None,
+        default="rose",
+        recipe_key="makeup_v2.eyeshadow_color",
+        conversion="dropdown",
+    ),
+    ParamSpec(
+        name="mv2_eyeshadow_style",
+        cli_flag=None,
+        cli_type=None,
+        default="natural",
+        recipe_key="makeup_v2.eyeshadow_style",
+        conversion="dropdown",
+    ),
+    ParamSpec(
+        name="mv2_eyeliner",
+        cli_flag=None,
+        cli_type=None,
+        default=0,
+        recipe_key="makeup_v2.eyeliner",
+        conversion="gui_direct",
+        min_val=0,
+        max_val=10,
+    ),
+    ParamSpec(
+        name="mv2_eyeliner_color",
+        cli_flag=None,
+        cli_type=None,
+        default="black",
+        recipe_key="makeup_v2.eyeliner_color",
+        conversion="dropdown",
+    ),
+    ParamSpec(
+        name="mv2_eyeliner_style",
+        cli_flag=None,
+        cli_type=None,
+        default="classic",
+        recipe_key="makeup_v2.eyeliner_style",
+        conversion="dropdown",
+    ),
+    ParamSpec(
+        name="mv2_contour",
+        cli_flag=None,
+        cli_type=None,
+        default=0,
+        recipe_key="makeup_v2.contour",
+        conversion="gui_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="mv2_brows",
+        cli_flag=None,
+        cli_type=None,
+        default=0,
+        recipe_key="makeup_v2.brows",
+        conversion="gui_direct",
+        min_val=0,
+        max_val=10,
+    ),
+    ParamSpec(
+        name="mv2_brows_color",
+        cli_flag=None,
+        cli_type=None,
+        default="brown",
+        recipe_key="makeup_v2.brows_color",
+        conversion="dropdown",
+    ),
+    ParamSpec(
+        name="mv2_ombre",
+        cli_flag=None,
+        cli_type=None,
+        default=False,
+        recipe_key="makeup_v2.ombre",
+        conversion="bool_flag",
+    ),
+    ParamSpec(
+        name="mv2_ombre_color1",
+        cli_flag=None,
+        cli_type=None,
+        default="red",
+        recipe_key="makeup_v2.ombre_color1",
+        conversion="dropdown",
+    ),
+    ParamSpec(
+        name="mv2_ombre_color2",
+        cli_flag=None,
+        cli_type=None,
+        default="pink",
+        recipe_key="makeup_v2.ombre_color2",
+        conversion="dropdown",
+    ),
+]
+
+
 PROCESSING_PARAMS: List[ParamSpec] = (
     _SKIN_PARAMS
     + _FACE_FEATURE_PARAMS
     + _TONAL_PARAMS
     + _LENS_PARAMS
     + _GRADING_PARAMS
+    + _FILM_DENSITY_PARAMS
+    + _HARMONIZE_PARAMS
+    + _BACKGROUND_PARAMS
     + _SPLIT_TONING_PARAMS
     + _WB_BW_PARAMS
+    + _AI_ENHANCE_PARAMS
+    + _MAKEUP_V2_PARAMS
 )
 
 

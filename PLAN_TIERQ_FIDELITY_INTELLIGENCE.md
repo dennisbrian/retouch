@@ -40,7 +40,9 @@ Also verified while exploring (assets the plan reuses): `correct_exposure()` (`r
 
 ---
 
-## Stage F9 — Image Analyzer + Adaptive Recipes ("targets, not deltas")
+## Stage F9 — Image Analyzer + Adaptive Recipes ("targets, not deltas") — ✅ DONE 2026-07-07
+
+> **Receipt:** `retouch/image_analyzer.py` (new, ImageAnalyzer + ImageAnalysis + SkinCondition dataclasses), `tests/test_image_analyzer.py` (39 tests, all green). Implemented: `analyze()` (lighting type, dynamic range, noise via MAD-on-quiet-blocks, WB estimate via gray-world, dominant colors via 4-bin histogram, sharpness via Laplacian std, skin condition when face+mask provided), `suggest_params()` (target-based brightness/blacks/whites/contrast/WB/ai_denoise/sharpen/whiten/redness_even/equalize, all clamped to ParamSpec bounds), `suggest_recipe()` (rule-based, validates candidates against RECIPES table). float32 internal, explicit cvtColor at every colorspace boundary, no `except: pass`. Plan Steps 2–4 (targets block in recipes, build_context hook, GUI readout) deferred to F10 wiring.
 
 **The core idea:** today a recipe applies `brightness +6` blindly — perfect for the photo it was tuned on, wrong for a darker or brighter one. `correct_exposure()` already shows the right pattern: *measure, then move toward a target*. Generalize it, and recipes become lighting-invariant — the same `moonlight_porcelain` lands correctly on an overexposed daylight shot and a dark smoke set.
 

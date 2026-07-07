@@ -963,14 +963,26 @@ RECIPES = {
     # anime_crystal_void previously carried 7 aspirational keys (background_blur,
     # background_desaturation, light_wrap, blue_shadow_grade, cyan_midtone_grade,
     # subject_sharpen, matte_black) that were never wired into the engine — they
-    # were silently ignored no-ops. Removed so the recipe only lists keys that
-    # actually do something; re-add as real ParamSpecs + engine stages if wired.
+    # were silently ignored no-ops. T1 finally wires them as real ParamSpecs
+    # (recipe path ``background.<key>``) backed by ``BackgroundReplacer``.
+    # The values below realize the original "crystal void" intent: a smoky,
+    # desaturated, blue-shadowed matte-black backdrop with a crisp subject and
+    # a soft ambient rim wrap.
     "anime_crystal_void": {
         "extends": "anime_cinematic_v1",
         "subject_separation": 0.85,
         "bloom": {"opacity": 0.35},
         "chromatic_aberration": 1.5,
         "eyes": {"iris": 0.20},
+        "background": {
+            "background_blur": 35.0,
+            "background_desaturation": 55.0,
+            "light_wrap": 25.0,
+            "blue_shadow_grade": 60.0,
+            "cyan_midtone_grade": 30.0,
+            "subject_sharpen": 40.0,
+            "matte_black": 50.0,
+        },
     },
     "anime_cinematic_fantasy": {
         "extends": "anime_cinematic_v1",

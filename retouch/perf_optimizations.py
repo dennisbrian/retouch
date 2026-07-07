@@ -551,13 +551,71 @@ def _process_face_core(
             under_eye_blush=ctx.under_eye_blush,
         )
 
-    # ---- Hair shine ----
-    if ctx.hair_enhance > 0:
-        canvas = _tr('hair.enhance', canvas)
-        canvas = hair.enhance(
-            canvas, roi_person_mask, regions.face_oval,
-            shifted_face.bbox, ctx.hair_enhance, regions.hair,
-        )
+    # ---- Hair shine (H2: deglare + anisotropic angel ring) ----
+    # hair_enhance is reinterpreted as the angel-ring strength; hair_deglare
+    # is the synthetic-glare compression strength. Both are independent and
+    # steered by the H0 strand flow field. The legacy HairEnhancer.enhance
+    # isotropic path is kept as a fallback when no hair mask is available.
+    hair_deglare_v = getattr(ctx, 'hair_deglare', 0) or 0
+    hair_ring_strength = ctx.hair_enhance
+    hair_flyaway_v = getattr(ctx, 'hair_remove_flyaways', 0) or 0
+    if hair_deglare_v > 0 or hair_ring_strength > 0 or hair_flyaway_v > 0:
+        if regions.hair is not None and _norm_mask(regions.hair).max() > 0.01:
+            from .hairwork import hair_flow, deglare_wig, add_angel_ring, remove_flyaways
+            canvas_u8_for_flow = (np.clip(canvas, 0, 255).astype(np.uint8)
+                                 if canvas.dtype != np.uint8 else canvas)
+            orientation, coherence = hair_flow(
+                canvas_u8_for_flow, hair_mask=_norm_mask(regions.hair)
+            )
+            # H1 — flyaway removal runs first so the cleaned silhouette feeds
+            # the H2 deglare/ring stages (and the flow field recomputed for
+            # those stages stays clean). Eyebrow/eyelash exclusion mirrors
+            # the deglare guard.
+            if hair_flyaway_v > 0:
+                canvas = _tr('hair.remove_flyaways', canvas)
+                eb = None
+                if regions.left_eyebrow is not None or regions.right_eyebrow is not None:
+                    eb = np.zeros((roi_h, roi_w), dtype=np.float32)
+                    if regions.left_eyebrow is not None:
+                        eb = np.clip(eb + _norm_mask(regions.left_eyebrow), 0, 1)
+                    if regions.right_eyebrow is not None:
+                        eb = np.clip(eb + _norm_mask(regions.right_eyebrow), 0, 1)
+                skin_m = _norm_mask(regions.skin) if regions.skin is not None else None
+                canvas = remove_flyaways(
+                    canvas, _norm_mask(regions.hair), orientation, coherence,
+                    strength=int(hair_flyaway_v), face_width=face_width,
+                    eyebrow_mask=eb, skin_mask=skin_m,
+                )
+            if hair_deglare_v > 0:
+                canvas = _tr('hair.deglare', canvas)
+                eb = None
+                if regions.left_eyebrow is not None or regions.right_eyebrow is not None:
+                    eb = np.zeros((roi_h, roi_w), dtype=np.float32)
+                    if regions.left_eyebrow is not None:
+                        eb = np.clip(eb + _norm_mask(regions.left_eyebrow), 0, 1)
+                    if regions.right_eyebrow is not None:
+                        eb = np.clip(eb + _norm_mask(regions.right_eyebrow), 0, 1)
+                canvas = deglare_wig(
+                    canvas, _norm_mask(regions.hair), orientation, coherence,
+                    strength=int(hair_deglare_v), face_width=face_width,
+                    eyebrow_mask=eb,
+                )
+            if hair_ring_strength > 0:
+                canvas = _tr('hair.ring', canvas)
+                ring_pos = int(getattr(ctx, 'hair_ring_position', 30) or 30)
+                ring_tint = int(getattr(ctx, 'hair_ring_tint', 40) or 40)
+                canvas = add_angel_ring(
+                    canvas, _norm_mask(regions.hair), orientation, coherence,
+                    strength=int(hair_ring_strength), position=ring_pos,
+                    tint=ring_tint, face_width=face_width,
+                    landmarks=shifted_face.landmarks,
+                )
+        else:
+            canvas = _tr('hair.enhance', canvas)
+            canvas = hair.enhance(
+                canvas, roi_person_mask, regions.face_oval,
+                shifted_face.bbox, hair_ring_strength, regions.hair,
+            )
 
     # ---- Dodge & burn ----
     if ctx.dodge_burn > 0:

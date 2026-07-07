@@ -4,7 +4,7 @@
 > Master plan row 17. **2 weeks. Depends on F1 (float32 pipeline ✅ DONE 2026-07-07).**
 > Acceptance bar: parametric re-expression of one Fuji preset within ΔE ~3 of its LUT on the corpus.
 
-**Status:** DESIGN — not yet implemented.
+**Status:** IMPLEMENTED (core engine) — 2026-07-07. `retouch/film.py` + ParamSpecs + `_stage_grade`/`_no_face_fallback` wiring + `tests/test_film.py` (25 tests, all green). LUT re-expression harness (§7.2), visual QA (§7.3), and GUI accordion (§5.4) remain.
 **Target module:** `retouch/film.py` (new) · `retouch/grading.py` (block hook) · `retouch/params.py` · `retouch/recipes.py` · `gui.py`.
 
 ---

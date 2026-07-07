@@ -3,7 +3,7 @@
 > **Master-plan row 18c** (`MASTER_PLAN.md:84`): *Wig shine shaping (deglare + anisotropic angel ring); optional depth D&B along flow — ~1.5 wk, depends on H0 ✅.*
 > **Tier-H plan source:** `PLAN_TIERH_HAIR.md:32-37` (H2 section).
 > **Type:** MEDIUM / **Visual-Critical** — touches `hairwork.py` (a pipeline stage) and reuses `skin.shine_removal` math at hair scale.
-> **Status:** DESIGN — not yet implemented.
+> **Status:** ✅ DONE 2026-07-07 — `retouch/hairwork.py` `deglare_wig()` + `add_angel_ring()` (flow-steered, float32/uint8); `retouch/params.py` `hair_deglare`/`hair_ring_position`/`hair_ring_tint` ParamSpecs; `retouch/engine.py` ProcessingContext fields + build_context kwargs; `retouch/perf_optimizations.py` hair stage wired (deglare→ring, legacy fallback). Tests: `tests/test_wig_shine.py` (16 cases) + existing hair suite (48) green.
 > **Depends on:** H0 (strand flow field) ✅ shipped — `retouch/hairwork.py:42` `hair_flow()`.
 
 ---

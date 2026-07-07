@@ -677,6 +677,98 @@ def reset_debug(recipe_name):
     return False
 
 
+def on_smart_process(img_paths, recipe, *args, prg=gr.Progress()):
+    """F10 Smart Process — analyze the first image and auto-set sliders.
+
+    Returns the new recipe value, the full slider tuple (matching
+    ``_recipe_outputs``), and a status string with the explanation text.
+    The caller (Gradio event) wires this to the recipe Radio + slider
+    outputs + status Textbox so the UI updates in place. The user can then
+    hit "Process Image(s)" to actually run the pipeline, or tweak the
+    auto-filled sliders first.
+    """
+    from retouch.smart_default import SmartProcessor
+
+    if not img_paths:
+        gr.Warning("Please upload an image first.")
+        return gr.update(), tuple([gr.update()] * len(_recipe_outputs)), \
+            "Please upload an image first."
+
+    curr_path = img_paths[0]
+    if isinstance(curr_path, dict):
+        curr_path = curr_path.get("name") or curr_path.get("path")
+
+    try:
+        img_bgr = imread_exif(curr_path)
+    except (TypeError, FileNotFoundError, OSError) as e:
+        _logger.warning("Smart Process: failed to load %s: %s", curr_path, e)
+        gr.Warning(f"Failed to load image: {e}")
+        return gr.update(), tuple([gr.update()] * len(_recipe_outputs)), \
+            f"Failed to load image: {e}"
+
+    if img_bgr is None:
+        gr.Warning("Could not read the image.")
+        return gr.update(), tuple([gr.update()] * len(_recipe_outputs)), \
+            "Could not read the image."
+
+    gr.Info("🧠 Analyzing image...")
+    sp = SmartProcessor()
+    try:
+        suggestion = sp.analyze_and_suggest(img_bgr)
+    except ValueError as e:
+        _logger.exception("Smart Process analysis failed: %s", e)
+        gr.Warning(f"Analysis failed: {e}")
+        return gr.update(), tuple([gr.update()] * len(_recipe_outputs)), \
+            f"Analysis failed: {e}"
+
+    # Start from the suggested recipe's defaults, then layer the suggestion
+    # overrides on top. This produces the full slider tuple that
+    # on_recipe_change would return, with the smart overrides applied.
+    d = recipe_defaults(suggestion.recipe)
+    for k, v in suggestion.params.items():
+        if k in d:
+            d[k] = v
+
+    # Build the slider output tuple in _recipe_outputs order.
+    slider_outputs = (
+        d["smooth"], d["mid_reduction"], d["texture_opacity"], d["pore_synthesis"], d["nose_smooth"], d["micro_restore"],
+        d["whiten"], d["equalize"], d["blemish"], d["whiten_tone"], d["nose_blush"], d["under_eye_blush"], d["white_costume_lift"],
+        d["body_smooth"], d["body_equalize"], d["body_whiten"], d["body_match_face"],
+        d["dodge_burn"], d["relight"], d["relight_azimuth"], d["relight_elevation"], d["sculpt"], d["shine_removal"], d["wrinkle_soften"], d["specular_bloom"], d["specular_bloom_tone"],
+        d["skin_flatten"], d["skin_quantize"], d["skin_unify"], d["skin_unify_hue"], d["skin_glow"],
+        d["eye_enhance"], d["catchlight"], d["dark_circles"], d["teeth_whiten"], d["lip_enhance"], d["lip_tint"], d["lip_finish"], d["blush"], d["slimming"], d["hair_enhance"],
+        d["contrast"], d["brightness"], d["highlights"], d["shadows"], d["whites"], d["blacks"], d["clarity"], d["vibrance"], d["saturation"], d["auto_exposure"],
+        d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["glow"], d["vignette"], d["sharpen"], d["sharpen_radius"], d["fade_toe"], d["highlight_drift"], d["airy_haze"], d["clarity_split_neg"], d["clarity_split_pos"], d["subject_separation"], d["impact"],
+        d["color_grade"], d["grade_intensity"],
+        d["chromatic_aberration"], d["grain"], d["halation"], d["lut"],
+        d["tonal_curve_strength"], d["skin_protect_strength"], d["grain_strength"], d["highlight_rolloff_strength"],
+        d["shadow_hue"], d["shadow_sat"], d["midtone_hue"], d["midtone_sat"], d["highlight_hue"], d["highlight_sat"],
+        d["white_balance_kelvin"], d["white_balance_tint"], d["bw_channel_mixer_r"], d["bw_channel_mixer_g"], d["bw_channel_mixer_b"],
+        d["negative_split_tone_shadow"], d["negative_split_tone_highlight"],
+        d["hsl_hue_global"], d["hsl_sat_global"], d["hsl_lum_global"],
+    )
+
+    explanation_html = _format_smart_explanations(suggestion)
+    status_msg = f"🧠 Smart suggestion applied ({suggestion.recipe}). Click Process to run."
+    gr.Info(f"Smart suggestion: {suggestion.recipe} ({len(suggestion.params)} overrides)")
+
+    return suggestion.recipe, slider_outputs, status_msg, explanation_html
+
+
+def _format_smart_explanations(suggestion) -> str:
+    """Format SmartSuggestion.explanations as an HTML readout for the GUI."""
+    if not suggestion.explanations:
+        return ""
+    items = "".join(f"<li>{e}</li>" for e in suggestion.explanations)
+    return (
+        '<div style="background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.25);'
+        'padding:8px 12px;border-radius:6px;margin:8px 0;font-size:13px">'
+        f'<strong>🧠 Smart Analysis — recipe: {suggestion.recipe}</strong>'
+        f'<ul style="margin:4px 0 0 16px;padding:0">{items}</ul>'
+        '</div>'
+    )
+
+
 
 LIP_TINTS = ["none"] + LIP_TINT_NAMES
 custom_style_choices = get_custom_style_names()
@@ -1420,6 +1512,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         
                         with gr.Row():
                             process_btn = gr.Button("Process Image(s) ⚡", variant="primary", size="lg", elem_classes=["primary-btn"])
+                            smart_process_btn = gr.Button("🧠 Smart Process", variant="primary", size="lg", elem_classes=["primary-btn"])
                             reset_btn = gr.Button("Reload Recipe Defaults 🔄", variant="secondary", size="lg", elem_classes=["secondary-btn"], elem_id="reset-btn")
 
                         with gr.Accordion("💾 Session & History", open=False):
@@ -1461,6 +1554,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         _skin_hue_unify_state = gr.State(value=0)
                         _skin_chroma_even_state = gr.State(value=0)
                         status = gr.Textbox(label="Status", interactive=False, placeholder="Upload an image and click Process to start...")
+                        smart_analysis_html = gr.HTML(visible=True)
                         qa_status = gr.HTML(visible=True)
                         export_file = gr.File(label="📥 Download Exported Assets")
 
@@ -1879,6 +1973,16 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         fn=process_image,
         inputs=_process_inputs,
         outputs=_process_outputs,
+        concurrency_limit=1,
+    )
+
+    # F10: Smart Process — analyze first image, auto-fill sliders + show
+    # explanation readout. Outputs: recipe Radio, slider tuple (matching
+    # _recipe_outputs), status Textbox, smart-analysis HTML.
+    smart_process_btn.click(
+        fn=on_smart_process,
+        inputs=[img_input, recipe] + list(_process_inputs[1:]),
+        outputs=[recipe] + list(_recipe_outputs) + [status, smart_analysis_html],
         concurrency_limit=1,
     )
 

@@ -54,6 +54,7 @@ class Session:
     image_path: Optional[str] = None
     created: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     image_hash: Optional[str] = None
+    local_adjustments: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_json(self, indent: int = 2) -> str:
         """Serialize session to JSON string."""
@@ -65,6 +66,7 @@ class Session:
                 "image_path": self.image_path,
                 "created": self.created,
                 "image_hash": self.image_hash,
+                "local_adjustments": self.local_adjustments,
             },
             indent=indent,
             sort_keys=True,
@@ -95,7 +97,7 @@ class Session:
 
         Forward-compatible: unknown keys warn, missing keys use defaults.
         """
-        known_keys = {"version", "recipe", "params", "image_path", "created", "image_hash"}
+        known_keys = {"version", "recipe", "params", "image_path", "created", "image_hash", "local_adjustments"}
         unknown = set(data.keys()) - known_keys
         if unknown:
             logger.warning(
@@ -116,6 +118,7 @@ class Session:
             image_path=data.get("image_path"),
             created=data.get("created", datetime.now(timezone.utc).isoformat()),
             image_hash=data.get("image_hash"),
+            local_adjustments=data.get("local_adjustments", []),
         )
 
     @classmethod
@@ -152,6 +155,7 @@ class Session:
             image_path=self.image_path,
             created=self.created,
             image_hash=self.image_hash,
+            local_adjustments=self.local_adjustments,
         )
 
 

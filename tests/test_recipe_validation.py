@@ -18,7 +18,7 @@ _VALID_KEYS.update(
     if spec.engine_recipe_key is not None
 )
 # Nested keys can be dicts (e.g., {"skin": {...}, "bloom": {...}})
-_VALID_NESTED_ROOTS = {"skin", "eyes", "lips", "hair", "bloom", "makeup", "frequency", "texture", "color_harmony", "finish", "body_skin"}
+_VALID_NESTED_ROOTS = {"skin", "eyes", "lips", "hair", "bloom", "makeup", "frequency", "texture", "color_harmony", "finish", "body_skin", "background", "harmony"}
 
 
 def test_no_dead_recipe_keys():
@@ -60,20 +60,41 @@ def test_recipe_resolution_no_errors():
         assert len(resolved) > 0, f"Recipe '{recipe_name}' is empty after resolution"
 
 
-def test_anime_crystal_void_dead_keys_removed():
-    """Guard: anime_crystal_void's 7 never-wired keys stay removed.
+def test_anime_crystal_void_keys_wired():
+    """Guard: anime_crystal_void's 7 previously-dead keys are now wired.
 
     These keys (background_blur, background_desaturation, light_wrap,
-    blue_shadow_grade, cyan_midtone_grade, subject_sharpen, matte_black) were
-    aspirational no-ops silently ignored by the engine. They were removed so
-    the recipe only lists keys that do something; this test ensures they don't
-    creep back in unwired.
+    blue_shadow_grade, cyan_midtone_grade, subject_sharpen, matte_black)
+    were aspirational no-ops silently ignored by the engine for years.
+    T1 wires them as real ParamSpecs (recipe path ``background.<key>``)
+    backed by ``BackgroundReplacer``. This test ensures:
+      (a) all 7 keys are present in the recipe under ``background.*``
+      (b) each key resolves to a non-zero value (the look is functional)
+      (c) each key maps to a registered ParamSpec (no longer dead)
     """
     recipe = RECIPES.get("anime_crystal_void")
-    if recipe:
-        dead_keys = {
-            "background_blur", "background_desaturation", "light_wrap",
-            "blue_shadow_grade", "cyan_midtone_grade", "subject_sharpen", "matte_black"
-        }
-        present = dead_keys & set(recipe.keys())
-        assert not present, f"Unwired dead keys reintroduced in anime_crystal_void: {sorted(present)}"
+    assert recipe is not None, "anime_crystal_void recipe missing"
+    bg = recipe.get("background")
+    assert isinstance(bg, dict), "anime_crystal_void missing 'background' dict"
+
+    wired_keys = {
+        "background_blur", "background_desaturation", "light_wrap",
+        "blue_shadow_grade", "cyan_midtone_grade", "subject_sharpen", "matte_black"
+    }
+    present = wired_keys & set(bg.keys())
+    missing = wired_keys - present
+    assert not missing, f"anime_crystal_void background.* keys missing: {sorted(missing)}"
+
+    # Each must be a non-zero number — the look must actually do something.
+    for k in wired_keys:
+        v = bg[k]
+        assert isinstance(v, (int, float)) and v > 0, (
+            f"anime_crystal_void background.{k} must be a positive number, got {v!r}"
+        )
+
+    # Each must map to a registered ParamSpec (the dead-key fix).
+    spec_names = {spec.name for spec in PROCESSING_PARAMS}
+    for k in wired_keys:
+        assert k in spec_names, (
+            f"anime_crystal_void background.{k} has no matching ParamSpec — dead key"
+        )

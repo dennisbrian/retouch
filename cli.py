@@ -70,6 +70,35 @@ def _finalize_params(params):
     return finalized
 
 
+def _smart_params_for_image(img_bgr, base_params):
+    """F10 — run smart analysis on one image, return merged engine params.
+
+    Uses :class:`retouch.smart_default.SmartProcessor` to pick a recipe +
+    parameter overrides for ``img_bgr``, then layers any explicit CLI
+    params from ``base_params`` on top (CLI flags win over smart
+    suggestions). Returns a new params dict suitable for
+    ``engine.process(**params)``.
+
+    The smart suggestion emits GUI-scale values; we convert them to
+    engine kwargs via ``gui_values_to_engine_kwargs``.
+    """
+    from retouch.smart_default import SmartProcessor
+    from retouch.params import gui_values_to_engine_kwargs
+
+    sp = SmartProcessor()
+    suggestion = sp.analyze_and_suggest(img_bgr)
+    smart_engine_kwargs = gui_values_to_engine_kwargs(suggestion.params)
+    smart_engine_kwargs["recipe"] = suggestion.recipe
+
+    # CLI explicit flags (base_params) override smart suggestions.
+    merged = dict(smart_engine_kwargs)
+    merged.update(base_params)
+    # If the CLI explicitly set a recipe, it wins; otherwise keep smart's.
+    if "recipe" in base_params:
+        merged["recipe"] = base_params["recipe"]
+    return merged, suggestion
+
+
 def _resolve_session_path(path: str) -> Path:
     """Resolve a session file path with a path-traversal guard.
 
@@ -145,7 +174,7 @@ def _init_worker():
 
 
 def _process_single(args):
-    img_path, output_dir, params, format_arg, quality, force, copy_exif_flag, max_dim, compare_flag, global_only, bit_depth, fail_on_qa, save_session = args
+    img_path, output_dir, params, format_arg, quality, force, copy_exif_flag, max_dim, compare_flag, global_only, bit_depth, fail_on_qa, save_session, smart = args
     try:
         fmt = output_format(img_path, format_arg)
         stem = img_path.stem
@@ -165,8 +194,23 @@ def _process_single(args):
         original_full = img_bgr.copy() if compare_flag else None
         img_bgr, _scale = resize_for_processing(img_bgr, max_dim)
 
+        # F10: --smart — per-image analysis overrides recipe/params.
+        # CLI explicit flags (in `params`) win over the smart suggestion.
+        effective_params = params
+        if smart:
+            try:
+                effective_params, suggestion = _smart_params_for_image(
+                    img_bgr, params
+                )
+            except (ValueError, RuntimeError) as e:
+                # Analysis failed — fall back to the base params and log.
+                tqdm.write(
+                    f"  ⚠ {img_path.name}: smart analysis failed ({e}), "
+                    f"using base params"
+                )
+
         if global_only:
-            result = _apply_global_finish(img_bgr, dict(params))
+            result = _apply_global_finish(img_bgr, dict(effective_params))
         else:
             global _worker_engine
             if _worker_engine is not None:
@@ -177,7 +221,7 @@ def _process_single(args):
                 should_close = True
 
             try:
-                result = engine.process(img_bgr, **dict(params))
+                result = engine.process(img_bgr, **dict(effective_params))
                 if fail_on_qa:
                     qa = getattr(result, 'qa', [])
                     if qa:
@@ -210,7 +254,7 @@ def _process_single(args):
         if save_session is not None:
             save_path = None if save_session is True else save_session
             try:
-                _save_session(params, img_path, out_path, save_path)
+                _save_session(effective_params, img_path, out_path, save_path)
             except (OSError, ValueError) as e:
                 return (img_path.name, f"saved_image_but_session_failed: {e}")
 
@@ -491,6 +535,12 @@ def main() -> None:
                              "<output_stem>.session.json next to each output "
                              "image. Path traversal is guarded.")
 
+    # F10: Smart Default — per-image auto-analysis + param suggestion.
+    parser.add_argument("--smart", action="store_true",
+                        help="Analyze each image with F9 (ImageAnalyzer) and "
+                             "auto-select the recipe + params. Overrides "
+                             "--recipe per-image; explicit CLI flags still win.")
+
     args = parser.parse_args()
     input_path = Path(args.input)
 
@@ -548,7 +598,7 @@ def main() -> None:
 
     if args.workers > 1 and len(files) > 1:
         pool_args = [
-            (f, output_dir, params, args.format, args.quality, args.force, not args.no_exif, args.max_dim, args.compare, args.global_only, args.bit_depth, args.fail_on_qa, args.save_session)
+            (f, output_dir, params, args.format, args.quality, args.force, not args.no_exif, args.max_dim, args.compare, args.global_only, args.bit_depth, args.fail_on_qa, args.save_session, args.smart)
             for f in files
         ]
         with ProcessPoolExecutor(
@@ -591,10 +641,27 @@ def main() -> None:
                 original_full = img_bgr.copy() if args.compare else None
                 img_bgr, _scale = resize_for_processing(img_bgr, args.max_dim)
 
+                # F10: --smart — per-image analysis overrides recipe/params.
+                effective_params = params
+                if args.smart:
+                    try:
+                        effective_params, suggestion = _smart_params_for_image(
+                            img_bgr, params
+                        )
+                        tqdm.write(
+                            f"  🧠 {f.name}: {suggestion.recipe} "
+                            f"({len(suggestion.params)} overrides)"
+                        )
+                    except (ValueError, RuntimeError) as e:
+                        tqdm.write(
+                            f"  ⚠ {f.name}: smart analysis failed ({e}), "
+                            f"using base params"
+                        )
+
                 if args.global_only:
-                    result = _apply_global_finish(img_bgr, dict(params))
+                    result = _apply_global_finish(img_bgr, dict(effective_params))
                 else:
-                    result = engine.process(img_bgr, **dict(params))
+                    result = engine.process(img_bgr, **dict(effective_params))
                     if args.fail_on_qa:
                         qa = getattr(result, 'qa', [])
                         if qa:
@@ -625,7 +692,7 @@ def main() -> None:
                 if args.save_session is not None:
                     save_path = None if args.save_session is True else args.save_session
                     try:
-                        written = _save_session(params, f, out_path, save_path)
+                        written = _save_session(effective_params, f, out_path, save_path)
                     except (OSError, ValueError) as e:
                         tqdm.write(f"  ⚠ {f.name}: could not save session: {e}")
                     else:

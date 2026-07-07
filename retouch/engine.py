@@ -107,8 +107,11 @@ from .undereye import UnderEyeRepairer
 from .lips import LipEnhancer
 from .teeth import TeethWhitener
 from .grading import ColorGrader, PRESETS
+from .harmonizer import BackgroundHarmonizer
+from .background import BackgroundReplacer
 from . import grain, highlight, tonal, qa_detectors
 from .qa_detectors import QAWarning
+from .qa_backoff import QABackoff
 from .hair import HairEnhancer
 from .relight import Relighter
 from .enhance import AIEnhancer
@@ -325,6 +328,33 @@ class ProcessingContext:
 
     # --- Subject separation ---
     subject_separation: float = 0.0
+
+    # --- C5: Skin-anchored background color harmonization ---
+    background_harmonize: float = 0.0
+    background_harmonize_mode: str = "split"
+
+    # --- T1: Background replace & scene relight (wires anime_crystal_void) ---
+    background_blur: float = 0.0
+    background_desaturation: float = 0.0
+    light_wrap: float = 0.0
+    blue_shadow_grade: float = 0.0
+    cyan_midtone_grade: float = 0.0
+    subject_sharpen: float = 0.0
+    matte_black: float = 0.0
+
+    # --- T2: Makeup v2 (eyeshadow, eyeliner, contour, brows, ombre lips) ---
+    mv2_eyeshadow: int = _DEFAULTS["mv2_eyeshadow"]
+    mv2_eyeshadow_color: str = _DEFAULTS["mv2_eyeshadow_color"]
+    mv2_eyeshadow_style: str = _DEFAULTS["mv2_eyeshadow_style"]
+    mv2_eyeliner: int = _DEFAULTS["mv2_eyeliner"]
+    mv2_eyeliner_color: str = _DEFAULTS["mv2_eyeliner_color"]
+    mv2_eyeliner_style: str = _DEFAULTS["mv2_eyeliner_style"]
+    mv2_contour: int = _DEFAULTS["mv2_contour"]
+    mv2_brows: int = _DEFAULTS["mv2_brows"]
+    mv2_brows_color: str = _DEFAULTS["mv2_brows_color"]
+    mv2_ombre: bool = _DEFAULTS["mv2_ombre"]
+    mv2_ombre_color1: str = _DEFAULTS["mv2_ombre_color1"]
+    mv2_ombre_color2: str = _DEFAULTS["mv2_ombre_color2"]
 
     # --- Finish ---
     impact: float = 0.0
@@ -678,6 +708,8 @@ class RetouchEngine:
         self._hair = HairEnhancer()
         self._relighter = Relighter()
         self._enhancer: Optional[AIEnhancer] = None
+        self._harmonizer = BackgroundHarmonizer()
+        self._background_replacer = BackgroundReplacer()
 
         # Persistent process pool for multi-face parallel processing.
         # Lazily started on first multi-face call; shut down in close().
@@ -695,6 +727,10 @@ class RetouchEngine:
         # Built once; used by _run_global_phases when use_registry=True.
         from .stage_wrappers import build_global_registry
         self._global_registry = build_global_registry(self)
+
+        # A5: QA auto-back-off. Conservative param reduction driven by QA
+        # flags (plastic-skin). Lazily reusable; stateless per image.
+        self._qa_backoff = QABackoff()
         
     # ------------------------------------------------------------------
     # Public API
@@ -1736,6 +1772,22 @@ class RetouchEngine:
             timings["subject_separation"] = (time.perf_counter() - t_subj) * 1000
 
             # ------------------------------------------------------------------
+            # Stage 3.1 — C5: Skin-anchored background harmonization
+            # ------------------------------------------------------------------
+            t_harm = time.perf_counter()
+            if ctx.background_harmonize > 0:
+                result = self._stage_harmonize(result, ctx, acc_skin, person_mask)
+            timings["background_harmonize"] = (time.perf_counter() - t_harm) * 1000
+
+            # ------------------------------------------------------------------
+            # Stage 3.2 — T1: Background replace & scene relight
+            # (wires the 7 historically-dead anime_crystal_void keys)
+            # ------------------------------------------------------------------
+            t_bg = time.perf_counter()
+            result = self._stage_background(result, ctx, person_mask)
+            timings["background"] = (time.perf_counter() - t_bg) * 1000
+
+            # ------------------------------------------------------------------
             # Stage 3.5 — Body skin retouch (now in float)
             # ------------------------------------------------------------------
             t_body = time.perf_counter()
@@ -1784,34 +1836,8 @@ class RetouchEngine:
         # ------------------------------------------------------------------
         # QA detectors
         # ------------------------------------------------------------------
-        qa_warnings: List[QAWarning] = []
-        if person_mask is not None and np.any(person_mask > 0.3):
-            qa_raw = qa_detectors.run_all(result, skin_mask=person_mask, person_mask=person_mask)
-            for detector_name, det_result in qa_raw.items():
-                if det_result.get("flagged", False):
-                    msg = {
-                        "banding": "Banding visible in smooth gradient regions",
-                        "clipping": "Highlight/shadow clipping detected",
-                        "plastic_skin": "Skin texture loss detected — may appear plastic",
-                        "halo": "Edge overshoot halos detected from sharpening",
-                        "seam": "Seam visible at subject boundary",
-                    }.get(detector_name, f"{detector_name} artifact detected")
-                    _qa_thresholds = {
-                        "banding": qa_detectors.BANDING_THRESHOLD,
-                        "clipping": qa_detectors.CLIPPING_THRESHOLD,
-                        "plastic_skin": qa_detectors.PLASTIC_SKIN_THRESHOLD,
-                        "halo": qa_detectors.HALO_THRESHOLD,
-                        "seam": qa_detectors.SEAM_THRESHOLD,
-                    }
-                    qa_warnings.append(QAWarning(
-                        detector=detector_name,
-                        score=det_result.get("score", 0.0),
-                        flagged=True,
-                        threshold=_qa_thresholds.get(detector_name, 0.0),
-                        message=msg,
-                        details={k: v for k, v in det_result.items() if k not in ("score", "flagged")},
-                    ))
-        ctx._qa_results = {d: r for d, r in qa_raw.items()} if 'qa_raw' in locals() else {}
+        qa_warnings: List[QAWarning] = self._run_qa(result, person_mask)
+        ctx._qa_results = {w.detector: w.details for w in qa_warnings}
 
         return _CoreResult(
             result=result,
@@ -1825,6 +1851,56 @@ class RetouchEngine:
             face_contexts=face_contexts,
             qa=qa_warnings,
         )
+
+    @staticmethod
+    def _run_qa(
+        result: np.ndarray,
+        person_mask: Optional[np.ndarray],
+    ) -> List[QAWarning]:
+        """Run QA detectors on a processed uint8 BGR image.
+
+        Returns a list of :class:`QAWarning` (only flagged detectors).
+        Encapsulated as a helper so :meth:`_run_core_pipeline` can re-run
+        QA after a back-off iteration without re-entering
+        :meth:`_run_global_phases`.
+        """
+        if person_mask is None or not np.any(person_mask > 0.3):
+            return []
+        qa_warnings: List[QAWarning] = []
+        try:
+            qa_raw = qa_detectors.run_all(
+                result, skin_mask=person_mask, person_mask=person_mask
+            )
+        except Exception as e:
+            logger.warning("QA detectors raised, skipping QA: %s", e)
+            return []
+        for detector_name, det_result in qa_raw.items():
+            if not det_result.get("flagged", False):
+                continue
+            msg = {
+                "banding": "Banding visible in smooth gradient regions",
+                "clipping": "Highlight/shadow clipping detected",
+                "plastic_skin": "Skin texture loss detected — may appear plastic",
+                "halo": "Edge overshoot halos detected from sharpening",
+                "seam": "Seam visible at subject boundary",
+            }.get(detector_name, f"{detector_name} artifact detected")
+            _qa_thresholds = {
+                "banding": qa_detectors.BANDING_THRESHOLD,
+                "clipping": qa_detectors.CLIPPING_THRESHOLD,
+                "plastic_skin": qa_detectors.PLASTIC_SKIN_THRESHOLD,
+                "halo": qa_detectors.HALO_THRESHOLD,
+                "seam": qa_detectors.SEAM_THRESHOLD,
+            }
+            qa_warnings.append(QAWarning(
+                detector=detector_name,
+                score=det_result.get("score", 0.0),
+                flagged=True,
+                threshold=_qa_thresholds.get(detector_name, 0.0),
+                message=msg,
+                details={k: v for k, v in det_result.items()
+                         if k not in ("score", "flagged")},
+            ))
+        return qa_warnings
 
     def _run_core_pipeline(
         self,
@@ -1865,7 +1941,7 @@ class RetouchEngine:
             )
 
         # Stages 3+: global phases (tonal, grading, finish)
-        return self._run_global_phases(
+        core = self._run_global_phases(
             core.result,
             ctx, style_ref, timings,
             acc_skin=core.acc_skin,
@@ -1876,6 +1952,75 @@ class RetouchEngine:
             person_mask=core.person_mask,
             face_contexts=core.face_contexts,
         )
+
+        # ------------------------------------------------------------------
+        # A5: "No plastic skin" guarantee — QA auto-back-off.
+        # If plastic-skin is flagged after the first pass, iteratively
+        # reduce smoothing-related params and re-process. Re-detection is
+        # skipped (face contexts are cached from pass 1) so only the
+        # per-face skin work + global phases re-run. We keep the best
+        # result: the first iteration that clears the flag wins; if none
+        # clear, the most-reduced (last) result ships since it is the
+        # least plastic.
+        # ------------------------------------------------------------------
+        backoff = getattr(self, "_qa_backoff", None)
+        if backoff is not None and core.face_contexts and not core.no_face:
+            best_core = core
+            for iteration in range(backoff.max_iterations):
+                plastic_flagged = any(
+                    w.detector == "plastic_skin" and w.flagged
+                    for w in best_core.qa
+                )
+                if not plastic_flagged:
+                    break  # flag cleared — ship this result
+
+                adjustments = backoff.check_and_backoff(
+                    best_core.result, ctx, best_core.qa
+                )
+                if not adjustments:
+                    break  # nothing to back off — give up
+
+                logger.info(
+                    "A5 back-off iteration %d: applying %s",
+                    iteration + 1, adjustments,
+                )
+                # Preserve original ctx values so we can revert if the
+                # back-off made things worse (e.g. a different artifact
+                # appeared). The last iteration's ctx is what ships.
+                QABackoff.apply_adjustments(ctx, adjustments)
+
+                # Re-use cached face contexts to skip re-detection /
+                # re-parsing — only the per-face skin work + global
+                # phases re-run with the adjusted params.
+                re_core = self._run_detection_and_faces(
+                    img_bgr, ctx, timings,
+                )
+                if re_core.no_face:
+                    break  # detection diverged — keep best_core
+                re_core = self._run_global_phases(
+                    re_core.result,
+                    ctx, style_ref, timings,
+                    acc_skin=re_core.acc_skin,
+                    acc_skin_hair=re_core.acc_skin_hair,
+                    acc_lips=re_core.acc_lips,
+                    acc_sharpen=re_core.acc_sharpen,
+                    faces=re_core.faces,
+                    person_mask=re_core.person_mask,
+                    face_contexts=re_core.face_contexts,
+                )
+                best_core = re_core
+
+                # If the flag cleared on this iteration, stop early.
+                still_plastic = any(
+                    w.detector == "plastic_skin" and w.flagged
+                    for w in best_core.qa
+                )
+                if not still_plastic:
+                    break
+
+            core = best_core
+
+        return core
 
     @staticmethod
     def _assemble_post_effects(ctx: ProcessingContext) -> Dict[str, Any]:
@@ -2394,6 +2539,126 @@ class RetouchEngine:
         else:
             result_u8 = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
             return result_u8
+
+    def _stage_harmonize(
+        self,
+        img: np.ndarray,
+        ctx: ProcessingContext,
+        acc_skin: Optional[np.ndarray],
+        person_mask: Optional[np.ndarray],
+    ) -> np.ndarray:
+        """C5: Skin-anchored background color harmonization.
+
+        Shifts background colors to complement the corrected skin tone
+        (the C1 anchor). Runs after subject_separation and before the
+        global tonal stage, so the global grade still applies on top of
+        the harmonized background.
+
+        Accepts uint8 or float32 [0,1] input, returns same dtype. The
+        harmonizer itself works in [0, 255] float32 internally, so the
+        [0,1] float path is scaled at the boundary.
+        """
+        strength = ctx.background_harmonize
+        if strength <= 0 or acc_skin is None or person_mask is None:
+            return img
+
+        is_float = img.dtype == np.float32
+        if is_float:
+            img_255 = np.clip(img * 255.0, 0.0, 255.0).astype(np.float32)
+        else:
+            img_255 = img
+
+        # background_harmonize is 0-100; harmonizer.harmonize expects [0,1].
+        s = float(strength) / 100.0
+        out_255 = self._harmonizer.harmonize(
+            img_255,
+            skin_mask=acc_skin,
+            person_mask=person_mask,
+            strength=s,
+            mode=str(ctx.background_harmonize_mode),
+        )
+
+        if is_float:
+            return np.clip(out_255 / 255.0, 0.0, 1.0).astype(np.float32)
+        return out_255
+
+    def _stage_background(
+        self,
+        img: np.ndarray,
+        ctx: ProcessingContext,
+        person_mask: Optional[np.ndarray],
+    ) -> np.ndarray:
+        """T1: Background replace & scene relight.
+
+        Runs the 7 ``anime_crystal_void`` background operations through
+        ``BackgroundReplacer``: background blur, background desaturation,
+        blue/cyan background grades, matte-black crush, light-wrap rim,
+        and subject sharpen.  Each is gated by the feathered person mask
+        so the subject is protected; the operations compose in a fixed
+        order (grade → blur → relight-free → wrap → sharpen) that
+        matches the "crystal void" intent.
+
+        Accepts uint8 or float32 [0,1] input, returns same dtype. The
+        replacer works in [0, 255] float32 internally, so the [0,1]
+        float path is scaled at the boundary.
+        """
+        # Early-out: no-op if all 7 background params are zero or there
+        # is no person mask to gate the operations.
+        bg_active = (
+            ctx.background_blur > 0
+            or ctx.background_desaturation > 0
+            or ctx.light_wrap > 0
+            or ctx.blue_shadow_grade > 0
+            or ctx.cyan_midtone_grade > 0
+            or ctx.subject_sharpen > 0
+            or ctx.matte_black > 0
+        )
+        if not bg_active or person_mask is None:
+            return img
+
+        is_float = img.dtype == np.float32
+        if is_float:
+            img_255 = np.clip(img * 255.0, 0.0, 255.0).astype(np.float32)
+        else:
+            img_255 = img
+
+        out = img_255
+        replacer = self._background_replacer
+
+        # 1. Background colour grade (desat + blue shadow + cyan midtone +
+        #    matte black) — applied first so the blur softens the grade.
+        if (
+            ctx.background_desaturation > 0
+            or ctx.blue_shadow_grade > 0
+            or ctx.cyan_midtone_grade > 0
+            or ctx.matte_black > 0
+        ):
+            out = replacer.grade_background(
+                out,
+                person_mask,
+                {
+                    "desaturation": float(ctx.background_desaturation),
+                    "blue_shadow_grade": float(ctx.blue_shadow_grade),
+                    "cyan_midtone_grade": float(ctx.cyan_midtone_grade),
+                    "matte_black": float(ctx.matte_black),
+                },
+            )
+
+        # 2. Background blur (bokeh) — subject stays sharp.
+        if ctx.background_blur > 0:
+            out = replacer.blur_background(out, person_mask, float(ctx.background_blur))
+
+        # 3. Light-wrap rim — composite integration glow around the subject.
+        if ctx.light_wrap > 0:
+            out = replacer.light_wrap(out, person_mask, float(ctx.light_wrap))
+
+        # 4. Subject sharpen — crisp the subject (background untouched).
+        if ctx.subject_sharpen > 0:
+            out = replacer.sharpen_subject(out, person_mask, float(ctx.subject_sharpen))
+
+        if is_float:
+            return np.clip(out / 255.0, 0.0, 1.0).astype(np.float32)
+        return out
 
     def _stage_body_skin(
         self,
