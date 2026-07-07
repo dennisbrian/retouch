@@ -6,6 +6,7 @@ import os
 import time
 import warnings
 from pathlib import Path
+from typing import Any, Dict, Optional
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import cpu_count
 
@@ -19,6 +20,7 @@ from retouch.engine import _adjust_contrast
 from retouch.grading import PRESETS, ColorGrader
 from retouch.io import (
     IMAGE_EXTENSIONS,
+    _resolve_safe_path,
     copy_exif,
     encode_write_params,
     imread_exif,
@@ -29,6 +31,7 @@ from retouch.io import (
 )
 from retouch.recipes import RECIPES
 from retouch.params import PROCESSING_PARAMS, recipe_to_params
+from retouch.session import Session, create_session_from_params
 
 
 class _DeprecatedAliasAction(argparse.Action):
@@ -67,6 +70,72 @@ def _finalize_params(params):
     return finalized
 
 
+def _resolve_session_path(path: str) -> Path:
+    """Resolve a session file path with a path-traversal guard.
+
+    Session files are user-supplied JSON; reject any path that resolves
+    to a system directory (mirrors the guard used for image I/O).
+    """
+    return _resolve_safe_path(path, base_dir=None)
+
+
+def _load_session_params(path: str) -> Dict[str, Any]:
+    """Load a session JSON file and return its params dict + recipe.
+
+    Returns a dict with two keys:
+        ``recipe`` — the session's recipe name (or None)
+        ``params`` — the session's params dict (engine-scale kwargs for
+                     ``engine.process``), with ``color_ref_path`` stripped
+                     (the file referenced at save time may not exist now)
+
+    Raises ValueError on path-traversal rejection; raises FileNotFoundError
+    if the session file does not exist; raises json.JSONDecodeError on
+    malformed JSON (surfaced by Session.from_file).
+    """
+    resolved = _resolve_session_path(path)
+    if not resolved.exists():
+        raise FileNotFoundError(f"Session file not found: {path}")
+    session = Session.from_file(str(resolved))
+    params = dict(session.params)
+    # ``color_ref_path`` references an image at save time; drop it so
+    # _finalize_params doesn't try to load a possibly-stale path. The
+    # caller can re-supply --color-ref on the CLI.
+    params.pop("color_ref_path", None)
+    return {"recipe": session.recipe, "params": params}
+
+
+def _save_session(
+    params: Dict[str, Any],
+    image_path: Path,
+    out_path: Path,
+    save_path: Optional[str],
+) -> str:
+    """Save the effective params as a session JSON next to the output image.
+
+    If ``save_path`` is provided, write there (after path-traversal guard);
+    otherwise auto-name it ``<output_stem>.session.json`` in the same
+    directory as ``out_path``. Returns the absolute path written.
+    """
+    recipe = params.get("recipe")
+    # Strip non-engine kwargs before saving so the session round-trips
+    # cleanly through engine.process(**session.params).
+    save_params = {
+        k: v for k, v in params.items()
+        if k not in ("color_ref", "color_ref_path")
+    }
+    if save_path:
+        resolved = _resolve_safe_path(save_path, base_dir=None)
+        target = str(resolved)
+    else:
+        target = str(out_path.with_suffix(".session.json"))
+    session = create_session_from_params(
+        save_params,
+        recipe=recipe,
+        image_path=str(image_path),
+    )
+    return session.to_file(target)
+
+
 _worker_engine = None
 
 
@@ -76,7 +145,7 @@ def _init_worker():
 
 
 def _process_single(args):
-    img_path, output_dir, params, format_arg, quality, force, copy_exif_flag, max_dim, compare_flag, global_only, bit_depth, fail_on_qa = args
+    img_path, output_dir, params, format_arg, quality, force, copy_exif_flag, max_dim, compare_flag, global_only, bit_depth, fail_on_qa, save_session = args
     try:
         fmt = output_format(img_path, format_arg)
         stem = img_path.stem
@@ -137,6 +206,13 @@ def _process_single(args):
             compare_path = (output_dir / f"{stem}_compare.{fmt}") if output_dir else \
                 img_path.parent / f"{stem}_compare.{fmt}"
             make_comparison(original_full, result, compare_path, fmt, quality)
+
+        if save_session is not None:
+            save_path = None if save_session is True else save_session
+            try:
+                _save_session(params, img_path, out_path, save_path)
+            except (OSError, ValueError) as e:
+                return (img_path.name, f"saved_image_but_session_failed: {e}")
 
         return (img_path.name, "done")
     except Exception as e:
@@ -402,6 +478,19 @@ def main() -> None:
     parser.add_argument("--fail-on-qa", action="store_true",
                         help="Exit with code 1 if any QA detector flags an artifact")
 
+    # Session save/load (F2)
+    parser.add_argument("--session", type=str, default=None,
+                        metavar="SESSION.json",
+                        help="Load params from a session JSON file. Session "
+                             "params override --recipe but are overridden by "
+                             "explicit CLI flags.")
+    parser.add_argument("--save-session", nargs="?", const=True, default=None,
+                        metavar="PATH",
+                        help="After processing, save the effective params to a "
+                             "session JSON file. With no value, saves to "
+                             "<output_stem>.session.json next to each output "
+                             "image. Path traversal is guarded.")
+
     args = parser.parse_args()
     input_path = Path(args.input)
 
@@ -415,6 +504,30 @@ def main() -> None:
         sys.exit(1)
 
     params = build_params(args)
+
+    # Session loading: session params override recipe defaults but are
+    # overridden by explicit CLI flags. Precedence: CLI > session > recipe.
+    if args.session:
+        try:
+            loaded = _load_session_params(args.session)
+        except FileNotFoundError as e:
+            print(f"✖ Could not load session: {e}")
+            sys.exit(1)
+        except ValueError as e:
+            print(f"✖ Could not load session: {e}")
+            sys.exit(1)
+        except OSError as e:
+            print(f"✖ Could not load session: {e}")
+            sys.exit(1)
+        # Start from session params, then layer CLI-provided keys on top.
+        # CLI params keys take precedence (explicit flag wins).
+        merged: Dict[str, Any] = dict(loaded["params"])
+        for k, v in params.items():
+            merged[k] = v
+        # If the CLI didn't set a recipe but the session has one, use it.
+        if "recipe" not in params and loaded["recipe"]:
+            merged["recipe"] = loaded["recipe"]
+        params = merged
 
     if args.dry_run:
         print(f"Dry run — {len(files)} image(s) found:\n")
@@ -435,7 +548,7 @@ def main() -> None:
 
     if args.workers > 1 and len(files) > 1:
         pool_args = [
-            (f, output_dir, params, args.format, args.quality, args.force, not args.no_exif, args.max_dim, args.compare, args.global_only, args.bit_depth, args.fail_on_qa)
+            (f, output_dir, params, args.format, args.quality, args.force, not args.no_exif, args.max_dim, args.compare, args.global_only, args.bit_depth, args.fail_on_qa, args.save_session)
             for f in files
         ]
         with ProcessPoolExecutor(
@@ -508,6 +621,15 @@ def main() -> None:
                     compare_path = (output_dir / f"{f.stem}_compare.{fmt}") if output_dir else \
                         f.parent / f"{f.stem}_compare.{fmt}"
                     make_comparison(original_full, result, compare_path, fmt, args.quality)
+
+                if args.save_session is not None:
+                    save_path = None if args.save_session is True else args.save_session
+                    try:
+                        written = _save_session(params, f, out_path, save_path)
+                    except (OSError, ValueError) as e:
+                        tqdm.write(f"  ⚠ {f.name}: could not save session: {e}")
+                    else:
+                        tqdm.write(f"  💾 session → {written}")
                 done += 1
         finally:
             if engine is not None:

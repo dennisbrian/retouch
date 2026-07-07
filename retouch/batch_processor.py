@@ -7,7 +7,7 @@ import json
 import logging
 import hashlib
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Callable
+from typing import Any, Dict, List, Optional, Tuple, Callable, Union
 
 import cv2
 import numpy as np
@@ -18,6 +18,44 @@ from .io import imread_exif, IMAGE_EXTENSIONS, EXPORT_RES_MAP, EXT_MAP
 from .utils import normalize_mask
 
 logger = logging.getLogger(__name__)
+
+
+_SessionInput = Optional[Union["Session", str, Path]]
+
+
+def _resolve_session(session: _SessionInput) -> Optional["Session"]:
+    """Normalize a session input into a Session object, or None.
+
+    Accepts a Session instance, or a path/str pointing to a session JSON file.
+    Returns None when session is None so callers can fall back to the legacy
+    recipe/params flow.
+
+    Thread-safety: Session.from_file reads the JSON immutably and returns a
+    fresh instance — no shared mutable state is held across calls.
+    """
+    if session is None:
+        return None
+
+    # Local import to avoid a circular dependency at module load time
+    # (session.py does not import batch_processor.py, but keeping this local
+    # makes the dependency direction explicit and lazy).
+    from .session import Session
+
+    if isinstance(session, Session):
+        return session
+
+    if isinstance(session, (str, Path)):
+        path = Path(session)
+        if not path.exists():
+            raise FileNotFoundError(f"Session file not found: {path}")
+        try:
+            return Session.from_file(str(path))
+        except (json.JSONDecodeError, OSError, ValueError) as e:
+            raise ValueError(f"Failed to load session from {path}: {e}") from e
+
+    raise TypeError(
+        f"session must be a Session, str, Path, or None — got {type(session).__name__}"
+    )
 
 
 class BatchProcessorCache:
@@ -296,11 +334,89 @@ class BatchProcessor:
         generate_sheet: bool = True,
         export_zip: bool = False,
         progress_callback: Optional[Callable[[float, str], None]] = None,
+        session: _SessionInput = None,
     ) -> Tuple[List[str], Optional[str], Optional[str], str]:
-        """Ingests, classifies, processes, and packages a folder of photos."""
+        """Ingests, classifies, processes, and packages a folder of photos.
+
+        When ``session`` is provided (a Session object or a path to a session
+        JSON file), its params dict is used as the base processing parameters
+        for every image in the batch (the "tune once, apply to 500 shots"
+        workflow). The session's recipe is used unless ``style_name_or_recipe``
+        was explicitly set by the caller — note that callers cannot distinguish
+        the default ``"natural"`` from an explicit override via this signature,
+        so to force a specific recipe alongside a session, load the session
+        with that recipe set, or pass ``custom_style_profile`` instead.
+
+        Session params are merged UNDER any explicit per-image logic: when
+        ``custom_style_profile`` is provided it takes precedence (the style
+        applier path is used). Otherwise session.params become the kwargs
+        passed to ``engine.process``.
+
+        Thread-safety: the session is resolved to an immutable params snapshot
+        once at the start of the call; no shared mutable state is mutated
+        across concurrent invocations.
+        """
         input_path = Path(input_dir)
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
+
+        # Resolve session once (immutable snapshot for the whole batch).
+        resolved_session = _resolve_session(session)
+        session_params: Dict[str, Any] = {}
+        if resolved_session is not None:
+            # Copy so we never mutate the caller's session.params — critical
+            # for Gradio thread-safety where the same Session object may be
+            # referenced by multiple worker threads.
+            raw_params = dict(resolved_session.params)
+
+            # Session is forward-compatible (unknown keys warn, don't crash),
+            # but engine.process has a fixed signature with no **kwargs. Filter
+            # to only valid process() parameter names so an older session
+            # loaded against a newer engine (or vice-versa) degrades gracefully
+            # rather than raising TypeError.
+            import inspect
+
+            try:
+                valid_keys = set(
+                    inspect.signature(self.engine.process).parameters.keys()
+                )
+            except (ValueError, TypeError) as inspect_err:
+                logger.warning(
+                    "Could not introspect engine.process signature for session "
+                    "param filtering: %s. Passing all session params through.",
+                    inspect_err,
+                )
+                valid_keys = None
+
+            if valid_keys is not None:
+                dropped = {
+                    k: v for k, v in raw_params.items() if k not in valid_keys
+                }
+                if dropped:
+                    logger.warning(
+                        "Session params not valid for engine.process (ignored): %s",
+                        sorted(dropped.keys()),
+                    )
+                session_params = {
+                    k: v for k, v in raw_params.items() if k in valid_keys
+                }
+            else:
+                session_params = raw_params
+
+            # Session's recipe takes precedence over the default "natural",
+            # but a caller who passes BOTH a session AND a non-default
+            # style_name_or_recipe is treated as explicitly overriding the
+            # recipe.
+            if (
+                resolved_session.recipe
+                and style_name_or_recipe == "natural"
+            ):
+                style_name_or_recipe = resolved_session.recipe
+            logger.info(
+                "Batch processing with session (recipe=%s, %d params)",
+                style_name_or_recipe,
+                len(session_params),
+            )
 
         # 1. Ingest files
         all_files = []
@@ -343,6 +459,18 @@ class BatchProcessor:
 
                 if custom_style_profile is not None:
                     result = applier.apply(img_bgr, custom_style_profile)
+                elif session_params:
+                    # Session params are the base; they already had unknown
+                    # keys filtered out above. engine.process treats None
+                    # values as "use recipe default", so we drop None entries
+                    # to avoid overriding recipe defaults with None (which
+                    # would be a no-op anyway, but is clearer and cheaper).
+                    kwargs = {
+                        k: v for k, v in session_params.items() if v is not None
+                    }
+                    result = self.engine.process(
+                        img_bgr, recipe=style_name_or_recipe, **kwargs
+                    )
                 else:
                     result = self.engine.process(img_bgr, recipe=style_name_or_recipe)
 
