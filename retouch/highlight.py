@@ -30,15 +30,15 @@ def soft_clip_highlights(
     below, so the join is smooth).
 
     Args:
-        img_bgr: (H, W, 3) uint8 BGR image.
+        img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR image.
         threshold: Asymptotic upper bound. Output is clamped to this value.
         rolloff_start: Pixel value where the soft shoulder begins.
 
     Returns:
-        (H, W, 3) uint8 BGR image with no value above ``threshold``.
+        Same dtype as input: (H, W, 3) BGR image with no value above ``threshold``.
     """
     if rolloff_start >= threshold:
-        return np.clip(img_bgr, 0, threshold).astype(np.uint8)
+        return np.clip(img_bgr, 0, threshold).astype(img_bgr.dtype)
 
     x = img_bgr.astype(np.float32)
     headroom = float(threshold - rolloff_start)
@@ -46,7 +46,7 @@ def soft_clip_highlights(
     excess = np.maximum(x - rolloff_start, 0.0)
     compressed = rolloff_start + headroom * (1.0 - np.exp(-k * excess))
     out = np.where(x <= rolloff_start, x, compressed)
-    return np.clip(out, 0, threshold).astype(np.uint8)
+    return np.clip(out, 0, threshold).astype(img_bgr.dtype)
 
 
 def apply_highlight_rolloff(
@@ -56,16 +56,18 @@ def apply_highlight_rolloff(
     """Blend between input and soft-clipped output by ``strength``.
 
     Args:
-        img_bgr: (H, W, 3) uint8 BGR image.
+        img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR image.
         strength: 0.0 (passthrough) to 1.0 (full rolloff).
 
     Returns:
-        (H, W, 3) uint8 BGR image.
+        Same dtype as input: (H, W, 3) BGR image.
     """
     s = float(np.clip(strength, 0.0, 1.0))
     if s <= 0.0:
         return img_bgr
     soft = soft_clip_highlights(img_bgr)
+    if img_bgr.dtype == np.float32:
+        return img_bgr * (1.0 - s) + soft * s
     return cv2.addWeighted(img_bgr, 1.0 - s, soft, s, 0)
 
 

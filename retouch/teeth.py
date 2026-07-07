@@ -11,7 +11,31 @@ from typing import Optional
 import cv2
 import numpy as np
 
-from .utils import blend_masked, feather_mask, apply_u8_op_float
+from .utils import blend_masked, feather_mask, bgr_f32_to_lab_f32, lab_f32_to_bgr_f32
+
+
+def _to_lab(img_bgr: np.ndarray, is_float: bool) -> np.ndarray:
+    if is_float:
+        return bgr_f32_to_lab_f32(img_bgr)
+    return cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+
+
+def _from_lab(lab: np.ndarray, is_float: bool) -> np.ndarray:
+    clipped = np.clip(lab, 0, 255)
+    if is_float:
+        return lab_f32_to_bgr_f32(clipped)
+    return cv2.cvtColor(clipped.astype(np.uint8), cv2.COLOR_LAB2BGR)
+
+
+def _bgr_to_hsv_uint8_scale(img_bgr: np.ndarray, is_float: bool) -> np.ndarray:
+    if is_float:
+        hsv = cv2.cvtColor(
+            np.clip(img_bgr, 0.0, 255.0) * (1.0 / 255.0), cv2.COLOR_BGR2HSV
+        ).astype(np.float32)
+        hsv[:, :, 1] *= 255.0
+        hsv[:, :, 2] *= 255.0
+        return hsv
+    return cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
 
 
 class TeethWhitener:
@@ -26,31 +50,26 @@ class TeethWhitener:
         """Whiten teeth within the mouth interior.
 
         Args:
-            img_bgr: (H, W, 3) uint8.
+            img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR.
             mouth_interior_mask: (H, W) float mask 0–1 (inner lip region).
             strength: 0–100.
 
         Returns:
-            (H, W, 3) uint8 result.
+            (H, W, 3) same dtype as input.
         """
         if strength <= 0:
             return img_bgr
         if mouth_interior_mask is None or mouth_interior_mask.max() < 0.01:
             return img_bgr
 
-        if img_bgr.dtype == np.float32:
-            # E1 delta adapter: teeth pipeline is uint8-contract. Delta is
-            # confined to the mouth interior.
-            return apply_u8_op_float(img_bgr, self.whiten, mouth_interior_mask, strength)
-
+        is_float = img_bgr.dtype == np.float32
         s = strength / 100.0
         teeth_mask = self._detect_teeth(img_bgr, mouth_interior_mask)
 
         if teeth_mask.max() < 0.01:
             return img_bgr
 
-        # LAB correction: increase L, decrease b (yellow)
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        lab = _to_lab(img_bgr, is_float)
 
         m = teeth_mask * s
 
@@ -65,8 +84,7 @@ class TeethWhitener:
         red_excess = np.clip(lab[:, :, 1] - 128, 0, 20)
         lab[:, :, 1] = np.clip(lab[:, :, 1] - m * red_excess * 0.3, 0, 255)
 
-        whitened = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
-        return whitened
+        return _from_lab(lab, is_float)
 
     def _detect_teeth(self, img_bgr: np.ndarray, mouth_mask: np.ndarray) -> np.ndarray:
         """Detect teeth pixels within mouth interior.
@@ -79,11 +97,12 @@ class TeethWhitener:
         Returns:
             (H, W) float mask 0–1.
         """
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
-        hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+        is_float = img_bgr.dtype == np.float32
+        lab = _to_lab(img_bgr, is_float)
+        hsv = _bgr_to_hsv_uint8_scale(img_bgr, is_float)
 
-        l_channel = lab[:, :, 0].astype(np.float32)
-        s_channel = hsv[:, :, 1].astype(np.float32)
+        l_channel = lab[:, :, 0]
+        s_channel = hsv[:, :, 1]
 
         # Get stats within mouth region
         mouth_pixels_l = l_channel[mouth_mask > 0.3]

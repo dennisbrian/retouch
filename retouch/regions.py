@@ -39,12 +39,16 @@ def _blend_multiply(base: np.ndarray, op: np.ndarray) -> np.ndarray:
     Formula: ``base * op / 255`` per channel, clipped to uint8.
 
     Args:
-        base: H×W×3 uint8 BGR base image.
-        op: H×W×3 uint8 BGR op image.
+        base: H×W×3 uint8 or float32 BGR base image.
+        op: H×W×3 BGR op image, same dtype as ``base``.
 
     Returns:
-        H×W×3 uint8 BGR image.
+        H×W×3 BGR image, same dtype as ``base``.
     """
+    if base.dtype == np.float32:
+        base_f = base.astype(np.float32, copy=False)
+        op_f = op.astype(np.float32, copy=False)
+        return np.clip(base_f * op_f / 255.0, 0.0, 255.0).astype(np.float32)
     base_f = base.astype(np.float32)
     op_f = op.astype(np.float32)
     return np.clip(base_f * op_f / 255.0, 0.0, 255.0).astype(np.uint8)
@@ -56,12 +60,19 @@ def _blend_screen(base: np.ndarray, op: np.ndarray) -> np.ndarray:
     Formula: ``255 - ((255 - base) * (255 - op) / 255)`` per channel.
 
     Args:
-        base: H×W×3 uint8 BGR base image.
-        op: H×W×3 uint8 BGR op image.
+        base: H×W×3 uint8 or float32 BGR base image.
+        op: H×W×3 BGR op image, same dtype as ``base``.
 
     Returns:
-        H×W×3 uint8 BGR image.
+        H×W×3 BGR image, same dtype as ``base``.
     """
+    if base.dtype == np.float32:
+        base_f = base.astype(np.float32, copy=False)
+        op_f = op.astype(np.float32, copy=False)
+        return np.clip(
+            255.0 - ((255.0 - base_f) * (255.0 - op_f) / 255.0),
+            0.0, 255.0,
+        ).astype(np.float32)
     base_f = base.astype(np.float32)
     op_f = op.astype(np.float32)
     return np.clip(255.0 - ((255.0 - base_f) * (255.0 - op_f) / 255.0), 0.0, 255.0).astype(np.uint8)
@@ -75,12 +86,17 @@ def _blend_soft_light(base: np.ndarray, op: np.ndarray) -> np.ndarray:
     Matches the formula used in :mod:`retouch.grading`.
 
     Args:
-        base: H×W×3 uint8 BGR base image.
-        op: H×W×3 uint8 BGR op image.
+        base: H×W×3 uint8 or float32 BGR base image.
+        op: H×W×3 BGR op image, same dtype as ``base``.
 
     Returns:
-        H×W×3 uint8 BGR image.
+        H×W×3 BGR image, same dtype as ``base``.
     """
+    if base.dtype == np.float32:
+        base_n = base.astype(np.float32, copy=False) * (1.0 / 255.0)
+        op_n = op.astype(np.float32, copy=False) * (1.0 / 255.0)
+        result = (1.0 - 2.0 * op_n) * base_n * base_n + 2.0 * op_n * base_n
+        return np.clip(result * 255.0, 0.0, 255.0).astype(np.float32)
     base_f = base.astype(np.float32) / 255.0
     op_f = op.astype(np.float32) / 255.0
     result = (1.0 - 2.0 * op_f) * base_f * base_f + 2.0 * op_f * base_f
@@ -95,12 +111,19 @@ def _blend_overlay(base: np.ndarray, op: np.ndarray) -> np.ndarray:
     - else: use ``255 - ((255 - base) * (255 - op) / 255)`` (screen)
 
     Args:
-        base: H×W×3 uint8 BGR base image.
-        op: H×W×3 uint8 BGR op image.
+        base: H×W×3 uint8 or float32 BGR base image.
+        op: H×W×3 BGR op image, same dtype as ``base``.
 
     Returns:
-        H×W×3 uint8 BGR image.
+        H×W×3 BGR image, same dtype as ``base``.
     """
+    if base.dtype == np.float32:
+        base_f = base.astype(np.float32, copy=False)
+        op_f = op.astype(np.float32, copy=False)
+        multiply = base_f * op_f / 255.0
+        screen = 255.0 - ((255.0 - base_f) * (255.0 - op_f) / 255.0)
+        result = np.where(base_f < 128.0, multiply, screen)
+        return np.clip(result, 0.0, 255.0).astype(np.float32)
     base_f = base.astype(np.float32)
     op_f = op.astype(np.float32)
     multiply = base_f * op_f / 255.0
@@ -245,15 +268,15 @@ def apply_to_region(
     3. ``final = img * (1 - mask * strength) + blended * (mask * strength)``
 
     Args:
-        img: H×W×3 uint8 BGR image.
+        img: H×W×3 uint8 or float32 BGR image.
         mask: H×W float32 mask in [0, 1]. 1 = full apply, 0 = untouched.
-        op: Function from H×W×3 uint8 to H×W×3 uint8.
+        op: Function from H×W×3 BGR to H×W×3 BGR, preserving dtype.
         blend_mode: One of ``"normal"``, ``"multiply"``, ``"screen"``,
             ``"soft_light"``, ``"overlay"``.
         strength: 0–1 scalar, fraction of the op to apply.
 
     Returns:
-        H×W×3 uint8 BGR image.
+        H×W×3 BGR image, same dtype as ``img``.
 
     Raises:
         ValueError: If ``blend_mode`` is not recognised or ``strength``
@@ -269,6 +292,7 @@ def apply_to_region(
             f"apply_to_region: strength must be in [0, 1], got {strength}."
         )
 
+    is_float = img.dtype == np.float32
     op_result = op(img)
     blended = _BLEND_MODES[blend_mode](img, op_result)
 
@@ -283,4 +307,7 @@ def apply_to_region(
     m3 = m[:, :, np.newaxis]
 
     out = img.astype(np.float32) * (1.0 - m3) + blended.astype(np.float32) * m3
-    return np.clip(out, 0.0, 255.0).astype(np.uint8)
+    out = np.clip(out, 0.0, 255.0)
+    if is_float:
+        return out.astype(np.float32)
+    return out.astype(np.uint8)

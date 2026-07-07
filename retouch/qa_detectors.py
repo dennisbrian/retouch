@@ -22,6 +22,22 @@ import cv2
 import numpy as np
 
 
+def _to_u8_for_analysis(img: np.ndarray) -> np.ndarray:
+    """Return a uint8 BGR snapshot of ``img`` for QA analysis.
+
+    QA detectors measure artifacts (banding, clipping, halos, ...), not pixel
+    values, so the analysis result is identical whether run on a float32
+    [0, 255] canvas or its uint8 truncation. Float32 input is truncated
+    (not rounded) to match the legacy uint8 chain's
+    ``np.clip(x, 0, 255).astype(np.uint8)`` convention so thresholds see
+    values consistent with the pre-E1 pipeline. uint8 input is returned
+    unchanged (byte-identical path).
+    """
+    if img.dtype == np.uint8:
+        return img
+    return np.clip(img, 0, 255).astype(np.uint8)
+
+
 @dataclass
 class QAWarning:
     detector: str
@@ -65,7 +81,9 @@ def detect_banding(
     L channel, indicating posterization artifacts.
 
     Args:
-        img_bgr: (H, W, 3) uint8 BGR image.
+        img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR image. Float input
+            is truncated to uint8 internally for analysis; the QA result is
+            identical to running on the uint8 snapshot.
         mask: Optional (H, W) float mask [0, 1] to restrict analysis.
 
     Returns:
@@ -79,6 +97,7 @@ def detect_banding(
         # Tiny image; cannot measure banding reliably
         return {"score": 0.0, "flagged": False, "smooth_pixels": 0, "step_pixels": 0}
 
+    img_bgr = _to_u8_for_analysis(img_bgr)
     # Convert to Lab and extract L channel
     img_lab = _bgr_to_lab(img_bgr)
     L = img_lab[:, :, 0]  # float32, [0, 100]
@@ -137,7 +156,9 @@ def detect_clipping(
     large connected blobs of clipped pixels (blown-white clusters).
 
     Args:
-        img_bgr: (H, W, 3) uint8 BGR image.
+        img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR image. Float input
+            is truncated to uint8 internally so the 0/255 clipping test is
+            consistent with the uint8 pipeline.
         mask: Optional (H, W) float mask [0, 1] to restrict analysis.
 
     Returns:
@@ -156,6 +177,7 @@ def detect_clipping(
             "clipped_blob_fraction": 0.0,
         }
 
+    img_bgr = _to_u8_for_analysis(img_bgr)
     h, w = img_bgr.shape[:2]
     total_pixels = h * w
 
@@ -209,9 +231,11 @@ def detect_plastic_skin(
     Optionally compares before/after energy ratio if reference image is provided.
 
     Args:
-        img_bgr: (H, W, 3) uint8 BGR image (output).
+        img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR image (output).
+            Float input is truncated to uint8 internally for analysis.
         mask: Optional (H, W) float mask [0, 1], typically skin mask.
-        reference_img_bgr: Optional (H, W, 3) uint8 BGR image (input) for comparison.
+        reference_img_bgr: Optional (H, W, 3) uint8 or float32 [0, 255] BGR
+            image (input) for comparison.
 
     Returns:
         dict with keys:
@@ -229,6 +253,7 @@ def detect_plastic_skin(
             "energy_loss_vs_reference": None,
         }
 
+    img_bgr = _to_u8_for_analysis(img_bgr)
     # Convert to Lab and extract L channel
     img_lab = _bgr_to_lab(img_bgr)
     L = img_lab[:, :, 0]  # float32, [0, 100]
@@ -270,7 +295,7 @@ def detect_plastic_skin(
     # Compare with reference if provided
     energy_loss = None
     if reference_img_bgr is not None and reference_img_bgr.shape == img_bgr.shape:
-        ref_lab = _bgr_to_lab(reference_img_bgr)
+        ref_lab = _bgr_to_lab(_to_u8_for_analysis(reference_img_bgr))
         L_ref = ref_lab[:, :, 0]
         L_ref_blur = cv2.GaussianBlur(L_ref, (0, 0), 2.0)
         L_ref_hf = L_ref - L_ref_blur
@@ -324,7 +349,8 @@ def detect_halo(
     sharpening halos.
 
     Args:
-        img_bgr: (H, W, 3) uint8 BGR image.
+        img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR image. Float input
+            is truncated to uint8 internally for analysis.
         mask: Optional (H, W) float mask [0, 1] to restrict analysis.
 
     Returns:
@@ -343,6 +369,7 @@ def detect_halo(
             "edge_count": 0,
         }
 
+    img_bgr = _to_u8_for_analysis(img_bgr)
     # Convert to Lab and extract L channel
     img_lab = _bgr_to_lab(img_bgr)
     L = img_lab[:, :, 0]  # float32, [0, 100]
@@ -412,8 +439,20 @@ def detect_seam(
     img_bgr: np.ndarray,
     person_mask: Optional[np.ndarray] = None,
 ) -> dict:
+    """Detect seam (gradient discontinuity) along a person-mask boundary.
+
+    Args:
+        img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR image. Float input
+            is truncated to uint8 internally for analysis.
+        person_mask: Optional (H, W) float mask [0, 1] delimiting the subject.
+
+    Returns:
+        dict with keys ``score``, ``flagged``, ``seam_gradient``,
+        ``boundary_pixels``.
+    """
     if img_bgr.shape[0] < 16 or img_bgr.shape[1] < 16:
         return {"score": 0.0, "flagged": False, "seam_gradient": 0.0, "boundary_pixels": 0}
+    img_bgr = _to_u8_for_analysis(img_bgr)
     img_lab = _bgr_to_lab(img_bgr)
     L = img_lab[:, :, 0]
     grad_x = cv2.Sobel(L, cv2.CV_32F, 1, 0, ksize=3)
@@ -456,10 +495,12 @@ def run_all(
     """Run all QA detectors and aggregate their results.
 
     Args:
-        img_bgr: (H, W, 3) uint8 BGR image.
+        img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR image. Float input
+            is truncated to uint8 internally by each detector.
         skin_mask: Optional (H, W) float mask [0, 1].
-        reference_img_bgr: Optional pre-retouch reference image, forwarded to
-            ``detect_plastic_skin`` for before/after texture-loss comparison.
+        reference_img_bgr: Optional pre-retouch reference image (uint8 or
+            float32 [0, 255]), forwarded to ``detect_plastic_skin`` for
+            before/after texture-loss comparison.
         person_mask: Optional (H, W) float mask [0, 1] for seam detection.
 
     Returns:

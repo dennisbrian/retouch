@@ -23,7 +23,7 @@ from typing import Optional, Tuple
 import cv2
 import numpy as np
 
-from .color_space import bgr_to_lab, lab_to_bgr
+from .color_space import bgr_to_lab, lab_to_bgr, bgr_f32_to_lab_f32, lab_f32_to_bgr_f32
 
 
 def apply_film_grain(
@@ -57,6 +57,7 @@ def apply_film_grain(
     if img_bgr.ndim != 3 or img_bgr.shape[2] != 3:
         raise ValueError(f"apply_film_grain: expected HxWx3 BGR, got shape {img_bgr.shape}")
 
+    is_float = img_bgr.dtype == np.float32
     strength = float(np.clip(strength, 0.0, 1.0))
     chroma = float(np.clip(chroma, 0.0, 1.0))
 
@@ -67,7 +68,10 @@ def apply_film_grain(
     g_mid = _generate_clumped_noise(h, w, clump_sigma, rng) if chroma > 0 else None
     g_high = _generate_clumped_noise(h, w, clump_sigma, rng) if chroma > 0 else None
 
-    lab = bgr_to_lab(img_bgr)
+    if is_float:
+        lab = bgr_f32_to_lab_f32(img_bgr)
+    else:
+        lab = bgr_to_lab(img_bgr)
     l = lab[:, :, 0].astype(np.float32) / 100.0
     a_chan = lab[:, :, 1].astype(np.float32)
     b_chan = lab[:, :, 2].astype(np.float32)
@@ -83,6 +87,8 @@ def apply_film_grain(
     else:
         out_lab = np.stack([l_out, a_chan, b_chan], axis=-1).astype(np.float32)
 
+    if is_float:
+        return lab_f32_to_bgr_f32(out_lab)
     return lab_to_bgr(out_lab)
 
 

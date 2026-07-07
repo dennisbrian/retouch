@@ -26,30 +26,42 @@ def inpaint_and_blend(
     Shared helper used by BlemishRemover and heal_region.
 
     Args:
-        img_bgr: (H, W, 3) uint8 BGR image.
+        img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR image.
         mask: (H, W) uint8 binary mask (255 = region to inpaint).
         inpaint_radius: Radius for cv2.inpaint.
         flags: cv2.INPAINT_TELEA or cv2.INPAINT_NS.
         blend_ksize: Gaussian blur kernel size for soft-edge blending (must be odd).
 
     Returns:
-        (H, W, 3) uint8 result with inpainted regions softly blended.
+        (H, W, 3) image matching input dtype. Float32 input returns float32
+        [0, 255]; the uint8 path is byte-identical to the legacy implementation.
     """
     if mask.sum() == 0:
         return img_bgr
 
     blend_ksize = max(blend_ksize, 3) | 1
 
-    inpainted = cv2.inpaint(img_bgr, mask, inpaintRadius=inpaint_radius, flags=flags)
+    is_float = img_bgr.dtype == np.float32
+
+    if is_float:
+        u8 = np.clip(img_bgr, 0, 255).astype(np.uint8)
+        inpainted = cv2.inpaint(u8, mask, inpaintRadius=inpaint_radius, flags=flags)
+        delta = inpainted.astype(np.float32) - u8.astype(np.float32)
+        blend_src = np.clip(img_bgr + delta, 0.0, 255.0)
+        base = img_bgr
+    else:
+        inpainted = cv2.inpaint(img_bgr, mask, inpaintRadius=inpaint_radius, flags=flags)
+        blend_src = inpainted.astype(np.float32)
+        base = img_bgr.astype(np.float32)
 
     blend_mask = cv2.GaussianBlur(
         mask.astype(np.float32) / 255.0, (blend_ksize, blend_ksize), 0
     )
     blend_mask = blend_mask[:, :, np.newaxis]
-    result = (
-        img_bgr.astype(np.float32) * (1.0 - blend_mask)
-        + inpainted.astype(np.float32) * blend_mask
-    )
+    result = base * (1.0 - blend_mask) + blend_src * blend_mask
+
+    if is_float:
+        return np.clip(result, 0.0, 255.0).astype(np.float32)
     return np.clip(result, 0, 255).astype(np.uint8)
 
 

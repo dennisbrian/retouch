@@ -266,7 +266,12 @@ RECIPES = {
         # legs) to the already-retouched face so cosplay/swimwear/summer
         # shots don't show a visible face/body color seam. Moderate
         # body_smooth + body_equalize keep body skin consistent with the
-        # porcelain face treatment; body_match_face does the actual seam fix.
+        # porcelain face treatment; light body_whiten for the same hue-
+        # stable lift the face gets (whiten_hue_stable=1 on the face side);
+        # body_match_face does the actual seam fix. Strengths kept moderate
+        # — the point is visible-but-natural body skin improvement, not an
+        # over-processed plastic look (the "more = better" anti-pattern the
+        # flagship list explicitly rejects).
         "extends": "porcelain_unified_v1",
         "skin": {
             "equalize": 0.0,
@@ -278,8 +283,63 @@ RECIPES = {
         "body_skin": {
             "smooth": 0.35,
             "equalize": 0.25,
+            "whiten": 0.15,
             "match_face": 0.70,
         },
+    },
+    "full_showcase_v1": {
+        # Flagship #10: the "if you could only run one recipe" kitchen-sink
+        # case. The design lesson stamped into the flagship list — "stacking
+        # everything at max looks WORSE than tuned single-purpose recipes" —
+        # means this is deliberately NOT a max-strength stack. Instead it's
+        # the best LIGHT-TOUCH across every stage: every primitive the other
+        # flagships isolate gets a restrained 15-30 dose here, so the
+        # combined effect reads as "thoroughly retouched but not obviously
+        # so" rather than the over-processed look a max stack produces.
+        # Built on natural_polish_v1's "barely retouched, just better" base
+        # (already the restrained template), then adds light doses of the
+        # stages natural_polish_v1 deliberately omits (S2 sculpt at 0.15
+        # reads as modeling not noise; C4 finish pack; S6 body match) plus
+        # the face/body tone-match that ties the whole image together.
+        "extends": "natural_polish_v1",
+        "skin": {
+            "equalize": 0.05,
+            "hue_unify": 0.25,
+            "chroma_even": 0.20,
+            "whiten_hue_stable": 1,
+            "shine_removal": 0.30,
+            "exposure_lock": 0.7,
+            # Light sculpt: natural_polish_v1 omits this because at low
+            # strength it reads as noise — but at 0.15 on already-unified
+            # skin it adds just enough dimension to justify "showcase".
+            "sculpt": 0.15,
+            # Light S5 wrinkle soften so the showcase covers close-up and
+            # distance shots alike, without the 0.45 wrinkle_free_glow_v1
+            # strength that would over-soften on a general-purpose recipe.
+            "wrinkle_soften": 0.20,
+        },
+        "eyes": {
+            "dark_circles": 0.15,
+            "catchlight": 0.10,
+            "iris": 0.10,
+        },
+        # Light S1 body treatment + face match — the body_match_v1 move at
+        # reduced strength so it reads on full-body shots without dominating
+        # the face-focused parts of the showcase.
+        "body_skin": {
+            "smooth": 0.25,
+            "equalize": 0.15,
+            "whiten": 0.10,
+            "match_face": 0.45,
+        },
+        # C4 finish pack: airy_haze for the "showcase" polish natural_polish
+        # deliberately omits (it's stylistic, not "natural"), kept light.
+        "finish": {
+            "airy_haze": 0.12,
+        },
+        # Subtle lash/brow sharpen inherited from natural_polish_v1 is
+        # appropriate here too — no need to push it for a showcase.
+        "hair": {"shine": 0.05},
     },
 
     # ------------------------------------------------------------------
@@ -712,7 +772,9 @@ RECIPES = {
     "anime_cinematic_v1": {
         "extends": "natural",
         "frequency": {"smooth": 0.32, "mid_reduction": 0.22},
-        "skin": {"equalize": 0.38, "porcelain": 0.42, "relight": 0.35, "relight_azimuth": 45.0, "relight_elevation": 35.0},
+        "skin": {"equalize": 0.38, "porcelain": 0.42, "relight": 0.35},
+        "relight_azimuth": 45.0,
+        "relight_elevation": 35.0,
         "eyes": {"whites": 0.18, "teeth_whiten": 0.18, "iris": 0.22, "catchlight": 0.25, "dark_circles": 0.22},
         "lips": {"tint": None, "gloss": 0.22},
         "hair": {"shine": 0.75},
@@ -1015,9 +1077,11 @@ RECIPES = {
         # so it stays "stylized yet believable" rather than fully flat.
         "extends": "anime_cinematic_v1",
         "skin": {
-            "porcelain": 0.45, "relight": 0.40, "relight_azimuth": 50.0,
-            "relight_elevation": 30.0, "shadow_lift": 0.35, "nose_restore": 0.40,
+            "porcelain": 0.45, "relight": 0.40,
+            "shadow_lift": 0.35, "nose_restore": 0.40,
         },
+        "relight_azimuth": 50.0,
+        "relight_elevation": 30.0,
         "eyes": {"whites": 0.25, "teeth_whiten": 0.20, "iris": 0.50, "catchlight": 0.55, "dark_circles": 0.15},
         "lips": {"tint": "pink", "gloss": 0.40},
         "hair": {"shine": 0.85},
@@ -1056,7 +1120,9 @@ RECIPES = {
         # Porcelain/relight nudged up but stops short of anime_v2's
         # flatten/quantize (that would cel-shade and risk identity loss).
         "extends": "zzz_anime_v1",
-        "skin": {"porcelain": 0.55, "relight": 0.55, "relight_azimuth": 55.0, "relight_elevation": 35.0},
+        "skin": {"porcelain": 0.55, "relight": 0.55},
+        "relight_azimuth": 55.0,
+        "relight_elevation": 35.0,
         "eyes": {"whites": 0.30, "teeth_whiten": 0.22, "iris": 0.62, "catchlight": 0.68, "dark_circles": 0.18},
         "lips": {"tint": "pink", "gloss": 0.50},
         "hair": {"shine": 0.95},

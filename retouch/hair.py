@@ -11,9 +11,27 @@ from typing import Optional, Tuple
 import cv2
 import numpy as np
 
-from .utils import normalize_mask, squeeze_mask, apply_u8_op_float
+from .utils import (
+    normalize_mask,
+    squeeze_mask,
+    bgr_f32_to_lab_f32,
+    lab_f32_to_bgr_f32,
+)
 
 from .hairwork import hair_flow, unify_hair_color
+
+
+def _to_lab(img_bgr: np.ndarray, is_float: bool) -> np.ndarray:
+    if is_float:
+        return bgr_f32_to_lab_f32(img_bgr)
+    return cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+
+
+def _from_lab(lab: np.ndarray, is_float: bool) -> np.ndarray:
+    clipped = np.clip(lab, 0, 255)
+    if is_float:
+        return lab_f32_to_bgr_f32(clipped)
+    return cv2.cvtColor(clipped.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
 
 class HairEnhancer:
@@ -31,7 +49,7 @@ class HairEnhancer:
         """Enhance hair shine within the hair region.
 
         Args:
-            img_bgr: (H, W, 3) uint8 image.
+            img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR image.
             person_mask: (H, W) float person mask.
             face_oval_mask: (H, W) float face oval mask.
             bbox: (x, y, w, h) face bounding box.
@@ -39,17 +57,12 @@ class HairEnhancer:
             hair_mask: Optional BiSeNet hair mask.
 
         Returns:
-            (H, W, 3) uint8 image.
+            (H, W, 3) same dtype as input.
         """
         if strength <= 0:
             return img_bgr
 
-        if img_bgr.dtype == np.float32:
-            # E1 delta adapter: hair pipeline is uint8-contract. Delta is
-            # confined to the hair region.
-            return apply_u8_op_float(img_bgr, self.enhance, person_mask,
-                                     face_oval_mask, bbox, strength,
-                                     hair_mask=hair_mask)
+        is_float = img_bgr.dtype == np.float32
 
         if hair_mask is not None and hair_mask.max() > 0.01:
             h_mask = hair_mask.copy()
@@ -90,7 +103,7 @@ class HairEnhancer:
             return img_bgr
 
         # ---- 2. Detect bright hair/wig highlights ----
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        lab = _to_lab(img_bgr, is_float)
         l_chan = lab[:, :, 0]
 
         # Apply global hair region lifts (exposure, midtones, highlights) to the L channel
@@ -149,5 +162,5 @@ class HairEnhancer:
 
         lab[:, :, 0] = l_chan_new
 
-        return cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
+        return _from_lab(lab, is_float)
 

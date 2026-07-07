@@ -7,7 +7,7 @@ from typing import Any, Optional, Tuple
 import cv2
 import numpy as np
 
-from .utils import apply_u8_op_float
+from .utils import bgr_f32_to_lab_f32, lab_f32_to_bgr_f32
 
 
 class Relighter:
@@ -159,6 +159,7 @@ class Relighter:
             Relit canvas (BGR, uint8).
         """
         h, w = canvas.shape[:2]
+        is_float = canvas.dtype == np.float32
 
         # Blinn-Phong Lighting Shader
         theta = azimuth * np.pi / 180.0
@@ -186,7 +187,10 @@ class Relighter:
             I_specular = cv2.resize(I_specular, (w, h), interpolation=cv2.INTER_LINEAR)
 
         # Composite onto LAB's Luminance (L) Channel
-        lab = cv2.cvtColor(canvas, cv2.COLOR_BGR2LAB).astype(np.float32)
+        if is_float:
+            lab = bgr_f32_to_lab_f32(canvas)
+        else:
+            lab = cv2.cvtColor(canvas, cv2.COLOR_BGR2LAB).astype(np.float32)
         L = lab[:, :, 0]
 
         # Highlight protection factor: decays from 1.0 (L <= 220) to 0.0 (L = 250)
@@ -204,10 +208,16 @@ class Relighter:
         L_new = np.clip(L * diffuse_term + specular_term, 0.0, 255.0)
         lab[:, :, 0] = L_new
 
-        relit_canvas = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
+        if is_float:
+            relit_canvas = lab_f32_to_bgr_f32(lab)
+        else:
+            relit_canvas = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
         # Blend using the soft skin mask
         mask_3d = skin_mask[:, :, np.newaxis] if skin_mask.ndim == 2 else skin_mask
+        if is_float:
+            output = np.clip(canvas * (1.0 - mask_3d) + relit_canvas * mask_3d, 0.0, 255.0)
+            return output.astype(np.float32)
         output = np.clip(canvas * (1.0 - mask_3d) + relit_canvas * mask_3d, 0, 255).astype(np.uint8)
         return output
 
@@ -245,6 +255,7 @@ class Relighter:
         h, w = canvas.shape[:2]
         h_small = N_x.shape[0]
         w_small = N_x.shape[1]
+        is_float = canvas.dtype == np.float32
 
         # 3a. Downsample canvas and compute linear luminance
         canvas_small = cv2.resize(canvas, (w_small, h_small), interpolation=cv2.INTER_AREA)
@@ -316,7 +327,8 @@ class Relighter:
         I_specular = cv2.resize(I_specular, (w, h), interpolation=cv2.INTER_LINEAR)
 
         # 3i. Apply in linear RGB
-        canvas_lin = (canvas.astype(np.float32) / 255.0) ** 2.2
+        canvas_f = canvas.astype(np.float32)
+        canvas_lin = (canvas_f / 255.0) ** 2.2
         gray_full = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY).astype(np.float32)
         prot = np.clip(1.0 - (gray_full - 220.0) / 30.0, 0.0, 1.0)
 
@@ -327,11 +339,17 @@ class Relighter:
         out_lin = canvas_lin * (1.0 + (gain_3d - 1.0) * prot_3d)
         out_lin = out_lin + (effective_strength / 100.0) * 0.35 * I_specular[..., np.newaxis] * prot_3d
         out_lin = np.clip(out_lin, 0.0, 1.0)
-        out = (out_lin ** (1.0 / 2.2) * 255.0).astype(np.uint8)
+        if is_float:
+            out = (out_lin ** (1.0 / 2.2) * 255.0).astype(np.float32)
+        else:
+            out = (out_lin ** (1.0 / 2.2) * 255.0).astype(np.uint8)
 
         # 3j. Blend with skin mask
         mask_3d = skin_mask[:, :, np.newaxis] if skin_mask.ndim == 2 else skin_mask
-        output = np.clip(canvas * (1.0 - mask_3d) + out * mask_3d, 0, 255).astype(np.uint8)
+        if is_float:
+            output = np.clip(canvas_f * (1.0 - mask_3d) + out * mask_3d, 0.0, 255.0)
+            return output.astype(np.float32)
+        output = np.clip(canvas_f * (1.0 - mask_3d) + out * mask_3d, 0, 255).astype(np.uint8)
         return output
 
     def relight(
@@ -362,20 +380,6 @@ class Relighter:
         """
         if strength <= 0.0 or skin_mask is None or skin_mask.max() < 0.01:
             return canvas
-
-        if canvas.dtype == np.float32:
-            # E1 delta adapter (see apply_u8_op_float).
-            return apply_u8_op_float(
-                canvas,
-                self.relight,
-                landmarks,
-                skin_mask,
-                face_width,
-                strength=strength,
-                azimuth=azimuth,
-                elevation=elevation,
-                engine=engine,
-            )
 
         h, w = canvas.shape[:2]
         lm = landmarks.landmark
@@ -455,19 +459,7 @@ class Relighter:
         if strength <= 0.0 or skin_mask is None or skin_mask.max() < 0.01:
             return canvas
 
-        if canvas.dtype == np.float32:
-            # E1 delta adapter (see apply_u8_op_float).
-            return apply_u8_op_float(
-                canvas,
-                self.sculpt,
-                landmarks,
-                skin_mask,
-                face_width,
-                strength=strength,
-                light_azimuth=light_azimuth,
-                light_elevation=light_elevation,
-            )
-
+        is_float = canvas.dtype == np.float32
         h, w = canvas.shape[:2]
         lm = landmarks.landmark
 
@@ -555,7 +547,10 @@ class Relighter:
         mask_full = cv2.resize(mask_small, (w, h), interpolation=cv2.INTER_LINEAR)
 
         # Apply gain correction to full-res image in LAB space
-        lab = cv2.cvtColor(canvas, cv2.COLOR_BGR2LAB).astype(np.float32)
+        if is_float:
+            lab = bgr_f32_to_lab_f32(canvas)
+        else:
+            lab = cv2.cvtColor(canvas, cv2.COLOR_BGR2LAB).astype(np.float32)
         L_full = lab[:, :, 0]
 
         # Decompose into low-band and high-band at full resolution
@@ -576,5 +571,8 @@ class Relighter:
         L_final = L_full * (1.0 - mask_full) + L_result * mask_full
         lab[:, :, 0] = np.clip(L_final, 0.0, 255.0)
 
+        if is_float:
+            result = lab_f32_to_bgr_f32(lab)
+            return result
         result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
         return result

@@ -595,10 +595,14 @@ def _process_face_core(
     # ---- Local clarity (nose/lips/eyes pop) ----
     if ctx.clarity > 0:
         canvas = _tr('local_clarity', canvas)
+        # F8.2: radius scales with face_width so the high-pass baseband is at
+        # the same physical feature scale at native res as at proxy res.
+        # 20px was the original fixed value at ~500px proxy face width.
+        clarity_radius = max(8, int(face_width * 0.04)) | 1
         canvas = skin.local_clarity(
             canvas, regions,
             strength=ctx.clarity / 100.0 * 0.20,
-            radius=20,
+            radius=clarity_radius,
         )
 
     # ---- Build sharpening mask ----

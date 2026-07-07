@@ -494,26 +494,48 @@ def vibrance(
     protected from over-saturation. *strength* is the raw intensity in
     [-1.0, 1.0]; 1.0 corresponds to the engine's vibrance=100 parameter.
 
+    Accepts uint8 [0, 255] or float32 [0, 255] BGR input; output dtype
+    matches input. float32 input is processed entirely in float32 (no
+    uint8 round-trip).
+
     Args:
-        img_bgr: (H, W, 3) uint8 BGR image.
+        img_bgr: (H, W, 3) uint8 or float32 BGR image, range [0, 255].
         mask: (H, W) float mask 0–1. None applies the effect to the full image.
         strength: -1.0–1.0 intensity (0 is a no-op).
 
     Returns:
-        (H, W, 3) uint8 BGR image.
+        (H, W, 3) BGR image, same dtype as *img_bgr*.
     """
     if strength == 0:
         return img_bgr
 
-    hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
-    h, s = hsv[:, :, 0], hsv[:, :, 1]
-    factor = 1.0 + strength * (1.0 - s / 255.0)
-    if mask is None:
-        skin_hue = ((h > 0) & (h < 25)) | (h > 160)
-        skin_factor = np.clip(1.0 - strength * 0.5, 0.5, 1.0)
-        factor = np.where(skin_hue, np.minimum(factor, skin_factor), factor)
-    hsv[:, :, 1] = np.clip(s * factor, 0, 255)
-    result = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+    is_float = img_bgr.dtype == np.float32
+
+    if is_float:
+        # OpenCV float32 HSV convention: H∈[0,360), S∈[0,1], V∈[0,255].
+        # uint8 convention:                H∈[0,180), S∈[0,255], V∈[0,255].
+        # Match the uint8 algorithm exactly in float, with S normalised to [0,1].
+        hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+        h, s = hsv[:, :, 0], hsv[:, :, 1]
+        factor = 1.0 + strength * (1.0 - s)
+        if mask is None:
+            skin_hue = ((h > 0) & (h < 50)) | (h > 320)
+            skin_factor = np.clip(1.0 - strength * 0.5, 0.5, 1.0)
+            factor = np.where(skin_hue, np.minimum(factor, skin_factor), factor)
+        hsv[:, :, 1] = np.clip(s * factor, 0.0, 1.0)
+        result = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)  # stays float32 [0,255]
+    else:
+        # uint8 path: H in [0,180) — preserved byte-identical to legacy behaviour.
+        hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
+        h, s = hsv[:, :, 0], hsv[:, :, 1]
+        factor = 1.0 + strength * (1.0 - s / 255.0)
+        if mask is None:
+            skin_hue = ((h > 0) & (h < 25)) | (h > 160)
+            skin_factor = np.clip(1.0 - strength * 0.5, 0.5, 1.0)
+            factor = np.where(skin_hue, np.minimum(factor, skin_factor), factor)
+        hsv[:, :, 1] = np.clip(s * factor, 0, 255)
+        result = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+
     return blend_masked(img_bgr, result, mask)
 
 
@@ -734,7 +756,11 @@ def apply_skin_diffusion(
     if strength <= 0 or skin_mask is None or skin_mask.max() < 0.01:
         return img_bgr
 
-    lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    is_float = img_bgr.dtype == np.float32
+    if is_float:
+        lab = bgr_f32_to_lab_f32(img_bgr)
+    else:
+        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
     l_chan = lab[:, :, 0]
 
     skin_gate = np.clip((l_chan - 110.0) / 90.0, 0.0, 1.0)
@@ -754,7 +780,8 @@ def apply_skin_diffusion(
     if highlight_mask.max() < 0.01:
         return img_bgr
 
-    highlights = img_bgr.astype(np.float32) * highlight_mask[:, :, np.newaxis]
+    img_f = img_bgr.astype(np.float32) if not is_float else img_bgr
+    highlights = img_f * highlight_mask[:, :, np.newaxis]
 
     target_min = 2000
     is_downsampled = min_dim > target_min
@@ -783,11 +810,12 @@ def apply_skin_diffusion(
     else:
         glow = glow_low
 
-    img_f = img_bgr.astype(np.float32)
     screen = screen_blend(img_f, glow)
 
     s_factor = strength / 100.0
     result = img_f * (1.0 - s_factor) + screen * s_factor
+    if is_float:
+        return np.clip(result, 0, 255).astype(np.float32)
     return np.clip(result, 0, 255).astype(np.uint8)
 
 

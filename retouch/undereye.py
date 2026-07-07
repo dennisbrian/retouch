@@ -10,7 +10,31 @@ import cv2
 import numpy as np
 
 from .parsing import FaceRegions
-from .utils import apply_u8_op_float, blend_masked
+from .utils import blend_masked, bgr_f32_to_lab_f32, lab_f32_to_bgr_f32
+
+
+def _to_lab(img_bgr: np.ndarray, is_float: bool) -> np.ndarray:
+    if is_float:
+        return bgr_f32_to_lab_f32(img_bgr)
+    return cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+
+
+def _from_lab(lab: np.ndarray, is_float: bool) -> np.ndarray:
+    clipped = np.clip(lab, 0, 255)
+    if is_float:
+        return lab_f32_to_bgr_f32(clipped)
+    return cv2.cvtColor(clipped.astype(np.uint8), cv2.COLOR_LAB2BGR)
+
+
+def _bgr_to_hsv_uint8_scale(img_bgr: np.ndarray, is_float: bool) -> np.ndarray:
+    if is_float:
+        hsv = cv2.cvtColor(
+            np.clip(img_bgr, 0.0, 255.0) * (1.0 / 255.0), cv2.COLOR_BGR2HSV
+        ).astype(np.float32)
+        hsv[:, :, 1] *= 255.0
+        hsv[:, :, 2] *= 255.0
+        return hsv
+    return cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
 
 
 class UnderEyeRepairer:
@@ -35,16 +59,13 @@ class UnderEyeRepairer:
         if strength <= 0:
             return img_bgr
 
-        if img_bgr.dtype == np.float32:
-            # E1 delta adapter (see apply_u8_op_float).
-            return apply_u8_op_float(img_bgr, self.repair, regions, strength)
-
+        is_float = img_bgr.dtype == np.float32
         s = strength / 100.0
         result = img_bgr.copy()
 
         for mask in (regions.left_under_eye, regions.right_under_eye):
             if mask is not None and mask.max() > 0.01:
-                result = self._repair_region(result, mask, s)
+                result = self._repair_region(result, mask, s, is_float)
 
         return result
 
@@ -53,6 +74,7 @@ class UnderEyeRepairer:
         img_bgr: np.ndarray,
         mask: np.ndarray,
         strength: float,
+        is_float: bool = False,
     ) -> np.ndarray:
         """Repair dark circles in one under-eye region.
 
@@ -62,8 +84,8 @@ class UnderEyeRepairer:
             3. Apply *brightness correction* to lift darkness.
             These are independent — both are needed for natural results.
         """
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
-        hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
+        lab = _to_lab(img_bgr, is_float)
+        hsv = _bgr_to_hsv_uint8_scale(img_bgr, is_float)
 
         # ---- Detect dark circle intensity ----
         # Dark circles: low L (dark), possibly shifted a or b
@@ -101,5 +123,5 @@ class UnderEyeRepairer:
         l_lift = darkness * mask * strength * 0.6
         lab[:, :, 0] = np.clip(lab[:, :, 0] + l_lift, 0, 255)
 
-        result = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
+        result = _from_lab(lab, is_float)
         return result

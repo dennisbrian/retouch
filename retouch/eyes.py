@@ -13,7 +13,39 @@ from typing import Any, Optional
 import cv2
 import numpy as np
 
-from .utils import blend_masked, feather_mask, apply_u8_op_float
+from .utils import (
+    feather_mask,
+    bgr_f32_to_lab_f32,
+    lab_f32_to_bgr_f32,
+)
+
+
+def _to_lab(img: np.ndarray, is_float: bool) -> np.ndarray:
+    if is_float:
+        return bgr_f32_to_lab_f32(img)
+    return cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
+
+
+def _from_lab(lab: np.ndarray, is_float: bool) -> np.ndarray:
+    clipped = np.clip(lab, 0, 255)
+    if is_float:
+        return lab_f32_to_bgr_f32(clipped)
+    return cv2.cvtColor(clipped.astype(np.uint8), cv2.COLOR_LAB2BGR)
+
+
+def _bgr_to_hsv_u8_conv(img: np.ndarray, is_float: bool) -> np.ndarray:
+    if is_float:
+        from .grading import _bgr_f_to_hsv_u8_conv
+        return _bgr_f_to_hsv_u8_conv(img * (1.0 / 255.0))
+    return cv2.cvtColor(img, cv2.COLOR_BGR2HSV).astype(np.float32)
+
+
+def _hsv_u8_conv_to_bgr(img: np.ndarray, is_float: bool) -> np.ndarray:
+    clipped = np.clip(img, 0, 255)
+    if is_float:
+        from .grading import _hsv_u8_conv_to_bgr_f
+        return np.clip(_hsv_u8_conv_to_bgr_f(clipped) * 255.0, 0.0, 255.0)
+    return cv2.cvtColor(clipped.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
 
 class EyeEnhancer:
@@ -29,24 +61,19 @@ class EyeEnhancer:
         """Run the full eye enhancement pipeline.
 
         Args:
-            img_bgr: (H, W, 3) uint8 BGR image.
+            img_bgr: (H, W, 3) uint8 or float32 BGR image in [0, 255].
             regions: FaceRegions from the parser.
             strength: 0–100 overall intensity.
             catchlight_strength: 0–100 catchlight-specific intensity. If None,
                 falls back to ``strength`` (backward compatible).
 
         Returns:
-            (H, W, 3) uint8 result.
+            (H, W, 3) result matching input dtype.
         """
         if strength <= 0:
             return img_bgr
 
-        if img_bgr.dtype == np.float32:
-            # E1 delta adapter: eye pipeline is uint8-contract. Run on a uint8
-            # snapshot and apply the delta to the float canvas so quantization
-            # is confined to the eye regions the op changes.
-            return apply_u8_op_float(img_bgr, self.enhance, regions, strength,
-                                     catchlight_strength=catchlight_strength)
+        is_float = img_bgr.dtype == np.float32
 
         s = strength / 100.0
         result = img_bgr.copy()
@@ -72,19 +99,19 @@ class EyeEnhancer:
         if catchlight_strength and catchlight_strength > 0:
             s_spec = catchlight_strength / 100.0
             boost = 0.10 * s_spec
-            for iris_mask in (regions.left_iris, regions.right_iris):
-                if iris_mask is None or iris_mask.max() < 0.01:
+            for iris_m in (regions.left_iris, regions.right_iris):
+                if iris_m is None or iris_m.max() < 0.01:
                     continue
-                lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB).astype(np.float32)
+                lab = _to_lab(result, is_float)
                 l_chan = lab[:, :, 0]
-                specular = np.clip((l_chan - 220.0) / 20.0, 0.0, 1.0) * (iris_mask > 0.1).astype(np.float32)
+                specular = np.clip((l_chan - 220.0) / 20.0, 0.0, 1.0) * (iris_m > 0.1).astype(np.float32)
                 if specular.max() < 0.01:
                     continue
                 h, w = l_chan.shape
                 k = max(3, int(min(h, w) * 0.005)) | 1
                 specular = cv2.GaussianBlur(specular, (k, k), 0)
                 lab[:, :, 0] = np.minimum(l_chan + 255.0 * boost * specular, 255.0)
-                result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+                result = _from_lab(lab, is_float)
 
         return result
 
@@ -104,7 +131,8 @@ class EyeEnhancer:
         if whites_mask is None or whites_mask.max() < 0.01:
             return img_bgr
 
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        is_float = img_bgr.dtype == np.float32
+        lab = _to_lab(img_bgr, is_float)
         
         # Only apply whitening to pixels that are relatively bright (L > 100)
         # to prevent eyelashes/eyeliner and dark shadow areas from turning gray/dusty.
@@ -120,8 +148,7 @@ class EyeEnhancer:
         # Subtle brightness lift
         lab[:, :, 0] = np.clip(lab[:, :, 0] + m * 6, 0, 255)
 
-        result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
-        return result
+        return _from_lab(lab, is_float)
 
     def _sculpt_iris(
         self,
@@ -134,6 +161,8 @@ class EyeEnhancer:
         """
         if iris_mask is None or iris_mask.max() < 0.01:
             return img_bgr
+
+        is_float = img_bgr.dtype == np.float32
 
         # Find center and radius of this iris
         y_indices, x_indices = np.where(iris_mask > 0.5)
@@ -174,7 +203,7 @@ class EyeEnhancer:
         limbal_mask = np.clip(1.0 - np.abs(dist - 0.9) / 0.2, 0, 1) * crop_mask
 
         # Apply edits in LAB and HSV spaces on the crop
-        lab = cv2.cvtColor(crop, cv2.COLOR_BGR2LAB).astype(np.float32)
+        lab = _to_lab(crop, is_float)
 
         # Pupil: darken
         lab[:, :, 0] = np.clip(lab[:, :, 0] - pupil_mask * 45.0 * strength, 0, 255)
@@ -185,12 +214,12 @@ class EyeEnhancer:
         # Limbal ring: darken
         lab[:, :, 0] = np.clip(lab[:, :, 0] - limbal_mask * 30.0 * strength, 0, 255)
 
-        crop_edited = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        crop_edited = _from_lab(lab, is_float)
 
         # HSV saturation boost on the iris body
-        hsv = cv2.cvtColor(crop_edited, cv2.COLOR_BGR2HSV).astype(np.float32)
+        hsv = _bgr_to_hsv_u8_conv(crop_edited, is_float)
         hsv[:, :, 1] = np.clip(hsv[:, :, 1] + body_mask * hsv[:, :, 1] * 0.45 * strength, 0, 255)
-        crop_edited = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+        crop_edited = _hsv_u8_conv_to_bgr(hsv, is_float)
 
         # Sharpness via unsharp mask on the crop
         blurred = cv2.GaussianBlur(crop_edited, (3, 3), 1.0)
@@ -199,10 +228,14 @@ class EyeEnhancer:
         # Blend the edited crop back into the image
         img_bgr_out = img_bgr.copy()
         m = crop_mask[:, :, np.newaxis]
-        img_bgr_out[y1:y2, x1:x2] = np.clip(
+        blended = np.clip(
             crop.astype(np.float32) * (1.0 - m) + crop_sharp.astype(np.float32) * m,
             0, 255
-        ).astype(np.uint8)
+        )
+        if is_float:
+            img_bgr_out[y1:y2, x1:x2] = blended
+        else:
+            img_bgr_out[y1:y2, x1:x2] = blended.astype(np.uint8)
 
         return img_bgr_out
 
@@ -221,7 +254,12 @@ class EyeEnhancer:
         if iris_mask is None or iris_mask.max() < 0.01:
             return img_bgr
 
-        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        is_float = img_bgr.dtype == np.float32
+
+        if is_float:
+            gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
 
         # Only look within iris
         iris_gray = gray * iris_mask
@@ -246,11 +284,10 @@ class EyeEnhancer:
 
         # Amplify: brighten catchlight areas using a safe soft-clipping formula
         # to subtly enhance the catchlights without blowing them out (max 0.25 boost coefficient)
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        lab = _to_lab(img_bgr, is_float)
         l_chan = lab[:, :, 0]
         
         l_boost = (255.0 - l_chan) * catchlight_mask * 0.25 * strength
         lab[:, :, 0] = np.clip(l_chan + l_boost, 0, 255)
         
-        result = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
-        return result
+        return _from_lab(lab, is_float)

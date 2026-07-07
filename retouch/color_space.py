@@ -4,6 +4,9 @@ camera sources.
 
 Public API:
     Conversion:  bgr_to_lch / lch_to_bgr / lab_to_lch / lch_to_lab
+                 bgr_to_lab / lab_to_bgr
+                 bgr_f32_to_lch_f32 / lch_f32_to_bgr_f32  (float-native, [0,255] BGR)
+                 bgr_f32_to_lab_f32 / lab_f32_to_bgr_f32  (float-native, [0,255] BGR)
     Adjustment:  adjust_luminance / adjust_chroma / adjust_hue
     Range edits: hue_range_mask / adjust_hue_range / adjust_chroma_range / adjust_luminance_range
     Tone-based:  split_tone_lch / color_balance_lch
@@ -54,6 +57,42 @@ def lab_to_bgr(lab: np.ndarray) -> np.ndarray:
     b = lab[:, :, 2] + 128.0
     lab_u8 = np.clip(np.stack([l, a, b], axis=-1), 0, 255).astype(np.uint8)
     return cv2.cvtColor(lab_u8, cv2.COLOR_LAB2BGR)
+
+
+def bgr_f32_to_lab_f32(img_bgr_f32: np.ndarray) -> np.ndarray:
+    """Convert float32 BGR [0, 255] to float32 LAB (L in [0, 100], a/b in [-128, 127]).
+
+    Float-native counterpart to :func:`bgr_to_lab`. cv2's float BGR2LAB
+    expects input in [0, 1] and returns L in [0, 100], a/b in [-128, 127]
+    directly (no rescale needed, unlike the uint8 path which carries a
+    +128 a/b offset). This helper scales [0, 255] -> [0, 1] before cvtColor
+    so the output convention matches :func:`bgr_to_lab` exactly.
+
+    Args:
+        img_bgr_f32: (H, W, 3) float32 BGR image in [0, 255].
+
+    Returns:
+        (H, W, 3) float32 LAB image, L in [0, 100], a/b in [-128, 127].
+    """
+    f01 = np.clip(img_bgr_f32, 0.0, 255.0) * (1.0 / 255.0)
+    return cv2.cvtColor(f01, cv2.COLOR_BGR2LAB).astype(np.float32)
+
+
+def lab_f32_to_bgr_f32(lab_f32: np.ndarray) -> np.ndarray:
+    """Convert float32 LAB (L in [0, 100], a/b in [-128, 127]) to float32 BGR [0, 255].
+
+    Float-native counterpart to :func:`lab_to_bgr`. cv2's float LAB2BGR
+    expects L in [0, 100], a/b in [-128, 127] and returns BGR in [0, 1];
+    this helper rescales to [0, 255] to match the float-pipeline convention.
+
+    Args:
+        lab_f32: (H, W, 3) float32 LAB image, L in [0, 100], a/b in [-128, 127].
+
+    Returns:
+        (H, W, 3) float32 BGR image clipped to [0, 255].
+    """
+    bgr_01 = cv2.cvtColor(lab_f32.astype(np.float32), cv2.COLOR_LAB2BGR)
+    return np.clip(bgr_01 * 255.0, 0.0, 255.0).astype(np.float32)
 
 
 def lab_to_lch(lab: np.ndarray) -> np.ndarray:
@@ -116,6 +155,36 @@ def lch_to_bgr(lch: np.ndarray) -> np.ndarray:
         (H, W, 3) uint8 BGR image.
     """
     return lab_to_bgr(lch_to_lab(lch))
+
+
+def bgr_f32_to_lch_f32(img_bgr_f32: np.ndarray) -> np.ndarray:
+    """Convert float32 BGR [0, 255] to float32 LCH (L in [0, 100], C in [0, ~180], H in [0, 360)).
+
+    Float-native counterpart to :func:`bgr_to_lch`. Composes
+    :func:`bgr_f32_to_lab_f32` with the dtype-agnostic :func:`lab_to_lch`.
+
+    Args:
+        img_bgr_f32: (H, W, 3) float32 BGR image in [0, 255].
+
+    Returns:
+        (H, W, 3) float32 LCH image.
+    """
+    return lab_to_lch(bgr_f32_to_lab_f32(img_bgr_f32))
+
+
+def lch_f32_to_bgr_f32(lch_f32: np.ndarray) -> np.ndarray:
+    """Convert float32 LCH to float32 BGR [0, 255].
+
+    Float-native counterpart to :func:`lch_to_bgr`. Composes the
+    dtype-agnostic :func:`lch_to_lab` with :func:`lab_f32_to_bgr_f32`.
+
+    Args:
+        lch_f32: (H, W, 3) float32 LCH image.
+
+    Returns:
+        (H, W, 3) float32 BGR image clipped to [0, 255].
+    """
+    return lab_f32_to_bgr_f32(lch_to_lab(lch_f32))
 
 
 def adjust_luminance(lch: np.ndarray, delta: float) -> np.ndarray:

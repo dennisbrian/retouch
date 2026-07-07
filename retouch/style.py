@@ -22,7 +22,7 @@ from .style_transfer import (
     subject_aware_transfer,
     weighted_mean_std,
 )
-from .utils import normalize_mask
+from .utils import bgr_f32_to_lab_f32, lab_f32_to_bgr_f32, normalize_mask
 
 
 @dataclass
@@ -573,10 +573,17 @@ class StyleApplier:
                 )
                 if regions.skin is not None:
                     s_mask = normalize_mask(regions.skin)
-                    lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB).astype(np.float32)
-                    lab[:, :, 1] += profile.skin_a_mean_delta * s_mask
-                    lab[:, :, 2] += profile.skin_b_mean_delta * s_mask
-                    result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+                    is_float = result.dtype == np.float32
+                    if is_float:
+                        lab = bgr_f32_to_lab_f32(result)
+                        lab[:, :, 1] += profile.skin_a_mean_delta * s_mask
+                        lab[:, :, 2] += profile.skin_b_mean_delta * s_mask
+                        result = lab_f32_to_bgr_f32(lab)
+                    else:
+                        lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB).astype(np.float32)
+                        lab[:, :, 1] += profile.skin_a_mean_delta * s_mask
+                        lab[:, :, 2] += profile.skin_b_mean_delta * s_mask
+                        result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
 
         return result
 

@@ -19,7 +19,7 @@ from typing import Any, List, Optional, Tuple
 import cv2
 import numpy as np
 
-from .utils import normalize_mask
+from .utils import blend_masked, bgr_f32_to_lab_f32, lab_f32_to_bgr_f32, normalize_mask
 
 
 def weighted_mean_std(data: np.ndarray, weights: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -50,8 +50,13 @@ def reinhard_transfer_masked(
     ref_mask: np.ndarray,
 ) -> np.ndarray:
     """Perform Reinhard color transfer from ref_img to src_img, restricted to the masks."""
-    src_lab = cv2.cvtColor(src_img, cv2.COLOR_BGR2LAB).astype(np.float32)
-    ref_lab = cv2.cvtColor(ref_img, cv2.COLOR_BGR2LAB).astype(np.float32)
+    is_float = src_img.dtype == np.float32
+    if is_float:
+        src_lab = bgr_f32_to_lab_f32(src_img)
+        ref_lab = bgr_f32_to_lab_f32(ref_img)
+    else:
+        src_lab = cv2.cvtColor(src_img, cv2.COLOR_BGR2LAB).astype(np.float32)
+        ref_lab = cv2.cvtColor(ref_img, cv2.COLOR_BGR2LAB).astype(np.float32)
 
     # Compute soft mask weighted statistics to avoid hard thresholds
     mean_src, std_src = weighted_mean_std(src_lab, src_mask)
@@ -73,6 +78,9 @@ def reinhard_transfer_masked(
         trans_val = (val - mean_src[c]) * ratio + mean_ref[c]
         trans_lab[:, :, c] = val * (1.0 - src_mask) + trans_val * src_mask
 
+    if is_float:
+        trans_lab = np.clip(trans_lab, 0.0, 255.0)
+        return lab_f32_to_bgr_f32(trans_lab)
     trans_lab = np.clip(trans_lab, 0.0, 255.0).astype(np.uint8)
     return cv2.cvtColor(trans_lab, cv2.COLOR_LAB2BGR)
 
@@ -133,8 +141,7 @@ def subject_aware_transfer(
             r_skin = normalize_mask(r_regions.skin)
 
             skin_trans = reinhard_transfer_masked(target_img, ref_img, t_skin, r_skin)
-            t_skin_3d = t_skin[:, :, np.newaxis]
-            result = (result.astype(np.float32) * (1.0 - t_skin_3d) + skin_trans.astype(np.float32) * t_skin_3d).astype(np.uint8)
+            result = blend_masked(result, skin_trans, t_skin)
 
         # Hair transfer (matched from original target_img and blended back)
         if t_regions.hair is not None and r_regions.hair is not None:
@@ -142,7 +149,6 @@ def subject_aware_transfer(
             r_hair = normalize_mask(r_regions.hair)
 
             hair_trans = reinhard_transfer_masked(target_img, ref_img, t_hair, r_hair)
-            t_hair_3d = t_hair[:, :, np.newaxis]
-            result = (result.astype(np.float32) * (1.0 - t_hair_3d) + hair_trans.astype(np.float32) * t_hair_3d).astype(np.uint8)
+            result = blend_masked(result, hair_trans, t_hair)
 
     return result

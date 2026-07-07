@@ -33,19 +33,27 @@ _OKLAB_M2_INV = np.linalg.inv(_OKLAB_M2)
 
 
 def bgr_to_oklab(img_bgr: np.ndarray) -> np.ndarray:
-    """Convert uint8 BGR to float32 Oklab color space.
+    """Convert BGR to float32 Oklab color space.
 
     Uses the standard Oklab matrices from Björn Ottosson's work.
     Applies sRGB EOTF, linear-to-LMS, then cube-root transform.
 
+    Dtype-aware: accepts uint8 BGR or float32 BGR in [0, 255]. The float32
+    path avoids the uint8 quantization step (E1 float path); the uint8 path
+    is byte-identical to the previous implementation.
+
     Args:
-        img_bgr: (H, W, 3) uint8 BGR image.
+        img_bgr: (H, W, 3) uint8 BGR image, or float32 BGR in [0, 255].
 
     Returns:
         (H, W, 3) float32 Oklab image with L ∈ [0, 1], a/b ∈ [-0.4, 0.4].
     """
-    # BGR -> RGB and normalize to [0, 1]
-    img_rgb = img_bgr[..., ::-1].astype(np.float32) / 255.0
+    is_float = img_bgr.dtype == np.float32
+    if is_float:
+        img_rgb = np.clip(img_bgr[..., ::-1], 0.0, 255.0).astype(np.float32) * (1.0 / 255.0)
+    else:
+        # BGR -> RGB and normalize to [0, 1]
+        img_rgb = img_bgr[..., ::-1].astype(np.float32) / 255.0
 
     # sRGB EOTF (inverse companding)
     img_linear = np.where(

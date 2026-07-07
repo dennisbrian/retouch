@@ -10,7 +10,7 @@ Reference: ``docs/FUJI_COLOR_RESEARCH.md`` section 3.2.
 
 Public API:
     hd_curve_lut(strength, toe, shoulder)  -> 256-entry uint8 LUT
-    apply_hd_curve(img_bgr, strength, ...)  -> tone-mapped uint8 BGR
+    apply_hd_curve(img_bgr, strength, ...)  -> tone-mapped BGR (dtype-preserving)
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from typing import Optional, Sequence, Tuple
 import cv2
 import numpy as np
 
-from .utils import apply_curve
+from .utils import apply_curve, bgr_f32_to_lab_f32, lab_f32_to_bgr_f32
 
 
 def hd_curve_lut(
@@ -52,7 +52,9 @@ def hd_curve_lut(
         gamma: Additional gamma applied between toe and shoulder.
 
     Returns:
-        256-element uint8 LUT suitable for ``cv2.LUT``.
+        256-element uint8 LUT suitable for ``cv2.LUT``. Always uint8:
+        ``cv2.LUT`` requires a uint8 LUT regardless of input dtype, so this
+        builder is intentionally dtype-fixed.
     """
     if strength <= 0.0:
         return np.arange(256, dtype=np.uint8)
@@ -146,8 +148,16 @@ def apply_hd_curve(
     Set ``luma_only=False`` to curve each BGR channel independently (a
     stronger, more vintage look).
 
+    Dtype-aware: accepts either uint8 BGR (legacy path, byte-identical to
+    the original implementation) or float32 BGR in [0, 255] (E1 float path).
+    The returned image matches the input dtype. ``cv2.LUT`` inherently
+    requires uint8 input, so on the float path the LUT is applied to a
+    uint8 snapshot and its *delta* (lut output minus snapshot) is added back
+    to the float canvas -- pixels the curve does not move keep full float
+    precision, and quantization is confined to the pixels actually remapped.
+
     Args:
-        img_bgr: (H, W, 3) uint8 BGR image.
+        img_bgr: (H, W, 3) uint8 or float32 BGR image in [0, 255].
         strength: Blend amount in [0, 1]. 0 = identity, 1 = full curve.
         toe: Shadow toe depth in [0, 0.5].
         shoulder: Highlight shoulder depth in [0, 0.5].
@@ -156,25 +166,45 @@ def apply_hd_curve(
         luma_only: If True (default), curve L* channel of LAB only.
 
     Returns:
-        (H, W, 3) uint8 BGR image with the H&D curve applied.
+        (H, W, 3) BGR image with the H&D curve applied, same dtype as input.
     """
     if strength <= 0.0:
         return img_bgr
     if img_bgr.ndim != 3 or img_bgr.shape[2] != 3:
         raise ValueError(f"apply_hd_curve: expected HxWx3 BGR, got shape {img_bgr.shape}")
 
+    is_float = img_bgr.dtype == np.float32
     lut = hd_curve_lut(strength=strength, toe=toe, shoulder=shoulder,
                        midpoint=midpoint, gamma=gamma)
-    if luma_only:
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
-        lab[:, :, 0] = cv2.LUT(lab[:, :, 0], lut)
-        return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
-    b, g, r = cv2.split(img_bgr)
-    b = cv2.LUT(b, lut)
-    g = cv2.LUT(g, lut)
-    r = cv2.LUT(r, lut)
-    return cv2.merge([b, g, r])
+    if not is_float:
+        if luma_only:
+            lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
+            lab[:, :, 0] = cv2.LUT(lab[:, :, 0], lut)
+            return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+        b, g, r = cv2.split(img_bgr)
+        b = cv2.LUT(b, lut)
+        g = cv2.LUT(g, lut)
+        r = cv2.LUT(r, lut)
+        return cv2.merge([b, g, r])
+
+    if luma_only:
+        lab_f32 = bgr_f32_to_lab_f32(img_bgr)
+        l_f32 = lab_f32[:, :, 0]
+        l_u8 = np.clip(l_f32, 0, 255).astype(np.uint8)
+        l_mapped_u8 = cv2.LUT(l_u8, lut)
+        delta = l_mapped_u8.astype(np.float32) - l_u8.astype(np.float32)
+        lab_f32[:, :, 0] = np.clip(l_f32 + delta, 0.0, 255.0)
+        return lab_f32_to_bgr_f32(lab_f32)
+
+    out = img_bgr.copy()
+    for c in range(3):
+        ch_f32 = out[:, :, c]
+        ch_u8 = np.clip(ch_f32, 0, 255).astype(np.uint8)
+        ch_mapped_u8 = cv2.LUT(ch_u8, lut)
+        delta = ch_mapped_u8.astype(np.float32) - ch_u8.astype(np.float32)
+        out[:, :, c] = np.clip(ch_f32 + delta, 0.0, 255.0)
+    return out
 
 
 def apply_lift_gamma_gain(

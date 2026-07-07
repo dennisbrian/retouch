@@ -15,7 +15,11 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from .utils import apply_u8_op_float, blend_masked
+from .utils import (
+    bgr_f32_to_lab_f32,
+    blend_masked,
+    lab_f32_to_bgr_f32,
+)
 
 
 class BodyRelighter:
@@ -45,11 +49,7 @@ class BodyRelighter:
         if strength <= 0 or body_skin_mask is None or body_skin_mask.max() < 0.01:
             return img_bgr
 
-        if img_bgr.dtype == np.float32:
-            return apply_u8_op_float(
-                img_bgr, self.relight, body_skin_mask, strength, azimuth, elevation
-            )
-
+        is_float = img_bgr.dtype == np.float32
         s = strength / 100.0
         gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
 
@@ -80,7 +80,10 @@ class BodyRelighter:
         # Center so mean shading is neutral (avoid a global brightness shift).
         shading -= shading.mean()
 
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        if is_float:
+            lab = bgr_f32_to_lab_f32(img_bgr)
+        else:
+            lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
         l_val = lab[:, :, 0]
 
         protection = np.clip(1.0 - (l_val - 220.0) / 30.0, 0.0, 1.0)
@@ -91,7 +94,10 @@ class BodyRelighter:
         delta = shading * 32.0 * s * protection
         lab[:, :, 0] = np.clip(l_val + delta, 0, 255)
 
-        result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        if is_float:
+            result = lab_f32_to_bgr_f32(lab)
+        else:
+            result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
         # Blend weight raised (was body_skin_mask * s, capping the visible
         # opacity at s itself) — full mask opacity now, strength only
         # controls the shading magnitude above, not a second multiplier.
@@ -122,11 +128,12 @@ class BodyRelighter:
         if strength <= 0 or body_skin_mask is None or body_skin_mask.max() < 0.01:
             return img_bgr
 
-        if img_bgr.dtype == np.float32:
-            return apply_u8_op_float(img_bgr, self.dodge_burn, body_skin_mask, strength)
-
+        is_float = img_bgr.dtype == np.float32
         s = strength / 100.0
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        if is_float:
+            lab = bgr_f32_to_lab_f32(img_bgr)
+        else:
+            lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
         l_val = lab[:, :, 0]
 
         l_u8 = np.clip(l_val, 0, 255).astype(np.uint8)
@@ -142,5 +149,8 @@ class BodyRelighter:
         # dodge_burn's visible sculpting strength (see skin.py dodge_burn).
         lab[:, :, 0] = np.clip(l_val + local_delta * 1.0 * s * protection, 0, 255)
 
-        result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        if is_float:
+            result = lab_f32_to_bgr_f32(lab)
+        else:
+            result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
         return blend_masked(img_bgr, result, body_skin_mask)

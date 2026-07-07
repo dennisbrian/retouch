@@ -23,13 +23,14 @@ def heal_region(
     """Heal a masked region using inpainting.
 
     Args:
-        img_bgr: (H, W, 3) uint8 BGR image.
+        img_bgr: (H, W, 3) uint8 BGR image or float32 [0, 255] BGR image.
         mask: (H, W) uint8 binary mask (255 = region to heal) or float32 [0,1].
         method: "telea" or "ns" (Navier-Stokes).
         radius: Inpaint radius. If None, auto-scales from mask bounding box.
 
     Returns:
-        (H, W, 3) uint8 result with healed region.
+        (H, W, 3) image matching input dtype. The uint8 path is byte-identical
+        to the legacy implementation; the float32 path returns float32 [0, 255].
     """
     if mask.sum() == 0:
         return img_bgr

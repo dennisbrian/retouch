@@ -19,7 +19,7 @@ import numpy as np
 
 from . import lut as _lut_mod
 from .lut import CubeLUT, list_available_luts, load_cube, luts_dir
-from .utils import apply_curve, blend_masked, normalize_mask, screen_blend, squeeze_mask
+from .utils import apply_curve, blend_masked, normalize_mask, screen_blend, squeeze_mask, bgr_f32_to_lab_f32, lab_f32_to_bgr_f32
 
 from . import skin_protect
 from .precision import ensure_float, to_uint8
@@ -45,6 +45,96 @@ def _apply_curve_f(channel: np.ndarray, curve_points: Sequence[Tuple[int, int]])
     xs = np.array([p[0] for p in curve_points], dtype=np.float32)
     ys = np.array([p[1] for p in curve_points], dtype=np.float32)
     return np.clip(np.interp(channel, xs, ys), 0.0, 255.0).astype(np.float32)
+
+
+def _bgr_f_to_lab_u8_conv(img_f: np.ndarray) -> np.ndarray:
+    """Convert float32 BGR [0,1] to float32 LAB in uint8 convention.
+
+    OpenCV's ``COLOR_BGR2LAB`` with float input produces L in [0,100] and
+    a/b in [-128,127].  This helper rescales the result to match the uint8
+    convention (L in [0,255], a/b in [0,255] with 128 = neutral) so that
+    existing codebase math (e.g. ``l / 128.0``, ``lab[:,:,2] + warmth*30``)
+    works identically without any uint8 round-trip.
+    """
+    lab = cv2.cvtColor(img_f, cv2.COLOR_BGR2LAB).astype(np.float32)
+    lab[:, :, 0] = lab[:, :, 0] * 2.55
+    lab[:, :, 1] = lab[:, :, 1] + 128.0
+    lab[:, :, 2] = lab[:, :, 2] + 128.0
+    return lab
+
+
+def _lab_u8_conv_to_bgr_f(lab: np.ndarray) -> np.ndarray:
+    """Inverse of :func:`_bgr_f_to_lab_u8_conv`: uint8-convention LAB to float32 BGR [0,1]."""
+    lab_f = lab.astype(np.float32, copy=True)
+    lab_f[:, :, 0] = lab_f[:, :, 0] / 2.55
+    lab_f[:, :, 1] = lab_f[:, :, 1] - 128.0
+    lab_f[:, :, 2] = lab_f[:, :, 2] - 128.0
+    bgr = cv2.cvtColor(lab_f, cv2.COLOR_LAB2BGR).astype(np.float32)
+    return bgr
+
+
+def _bgr_f_to_hsv_u8_conv(img_f: np.ndarray) -> np.ndarray:
+    """Convert float32 BGR [0,1] to float32 HSV in uint8 convention.
+
+    OpenCV's ``COLOR_BGR2HSV`` with float input produces H in [0,360] and
+    S/V in [0,1].  This helper rescales to match the uint8 convention
+    (H in [0,180], S/V in [0,255]).
+    """
+    hsv = cv2.cvtColor(img_f, cv2.COLOR_BGR2HSV).astype(np.float32)
+    hsv[:, :, 0] = hsv[:, :, 0] * 0.5
+    hsv[:, :, 1] = hsv[:, :, 1] * 255.0
+    hsv[:, :, 2] = hsv[:, :, 2] * 255.0
+    return hsv
+
+
+def _hsv_u8_conv_to_bgr_f(hsv: np.ndarray) -> np.ndarray:
+    """Inverse of :func:`_bgr_f_to_hsv_u8_conv`: uint8-convention HSV to float32 BGR [0,1]."""
+    hsv_f = hsv.astype(np.float32, copy=True)
+    hsv_f[:, :, 0] = hsv_f[:, :, 0] * 2.0
+    hsv_f[:, :, 1] = hsv_f[:, :, 1] / 255.0
+    hsv_f[:, :, 2] = hsv_f[:, :, 2] / 255.0
+    bgr = cv2.cvtColor(hsv_f, cv2.COLOR_HSV2BGR).astype(np.float32)
+    return bgr
+
+
+def _large_sigma_blur(
+    img: np.ndarray,
+    ksize: int,
+    max_compute_dim: int = 1400,
+) -> np.ndarray:
+    """GaussianBlur with compute-downsample guard for large-σ kernels.
+
+    For images where ``min(h, w) <= max_compute_dim`` the call is byte-identical
+    to ``cv2.GaussianBlur(img, (ksize, ksize), 0)`` — the exact same OpenCV call
+    is made on the exact same input. This is the safety property relied on by
+    the byte-identity tests.
+
+    For larger images the blur is computed on a downsampled copy
+    (INTER_AREA down / INTER_LINEAR up) with a proportionally-scaled kernel.
+    This is visually lossless because all call sites produce low-frequency
+    outputs (glow / haze / bloom / soft-light base) that are later composited,
+    never read as-is for detail. Mirrors the ``guided_filter max_dim`` pattern.
+
+    Args:
+        img: (H, W) or (H, W, C) float32 (or uint8) image. dtype preserved.
+        ksize: Odd kernel size in pixels (full kernel, not radius).
+        max_compute_dim: Threshold on ``min(h, w)`` above which the
+            downsampled path is taken. Default 1400 (sub-1400px == byte-identical).
+
+    Returns:
+        Blurred image, same shape and dtype as input.
+    """
+    h, w = img.shape[:2]
+    min_dim = min(h, w)
+    if min_dim <= max_compute_dim:
+        return cv2.GaussianBlur(img, (ksize, ksize), 0)
+    scale = float(max_compute_dim) / min_dim
+    h_small = max(1, int(round(h * scale)))
+    w_small = max(1, int(round(w * scale)))
+    img_small = cv2.resize(img, (w_small, h_small), interpolation=cv2.INTER_AREA)
+    ksize_small = max(3, int(round(ksize * scale))) | 1
+    blurred_small = cv2.GaussianBlur(img_small, (ksize_small, ksize_small), 0)
+    return cv2.resize(blurred_small, (w, h), interpolation=cv2.INTER_LINEAR)
 
 # ---------------------------------------------------------------------------
 # Preset loading
@@ -211,13 +301,12 @@ class ColorGrader:
                     a_target = sign * min(abs(warmth) * 10.0, 4.0)
                     b_delta = b_target - (warmth * 30.0)
                     a_delta = a_target - (warmth * 10.0)
-                    bgr_u8 = np.clip(r * 255.0, 0, 255).astype(np.uint8)
-                    lab = cv2.cvtColor(bgr_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
+                    lab = _bgr_f_to_lab_u8_conv(r)
                     skin_bool = skin_mask > 0.3
                     lab[:, :, 2] = np.where(skin_bool, lab[:, :, 2] + b_delta, lab[:, :, 2])
                     lab[:, :, 1] = np.where(skin_bool, lab[:, :, 1] + a_delta, lab[:, :, 1])
-                    lab = np.clip(lab, 0, 255)
-                    r = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR).astype(np.float32) / 255.0
+                    lab = np.clip(lab, 0.0, 255.0).astype(np.float32)
+                    r = np.clip(_lab_u8_conv_to_bgr_f(lab), 0.0, 1.0).astype(np.float32)
             if abs(settings.get("saturation_boost", 0)) > 0.001:
                 r = self._F_adjust_saturation(r, settings["saturation_boost"])
 
@@ -391,10 +480,11 @@ class ColorGrader:
     ) -> np.ndarray:
         if opacity <= 0:
             return img_bgr
-        img_f = img_bgr.astype(np.float32)
+        is_float = img_bgr.dtype == np.float32
+        img_f = img_bgr.astype(np.float32) if not is_float else img_bgr
         h, w = img_bgr.shape[:2]
         ksize = max(int(min(h, w) * 0.025), 7) | 1
-        blurred = cv2.GaussianBlur(img_f, (ksize, ksize), 0)
+        blurred = _large_sigma_blur(img_f, ksize)
 
         if tint is not None:
             tint_arr = np.array(tint, dtype=np.float32)
@@ -403,7 +493,10 @@ class ColorGrader:
             blurred = cv2.addWeighted(blurred, 0.7, tint_layer, 0.3, 0)
 
         screen = screen_blend(img_f, blurred)
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
+        if is_float:
+            lab = bgr_f32_to_lab_f32(img_bgr)
+        else:
+            lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
         l_chan = lab[:, :, 0].astype(np.float32)
         highlight_mask = np.clip((l_chan - 225.0) / 20.0, 0, 1)[:, :, np.newaxis]
 
@@ -413,6 +506,8 @@ class ColorGrader:
             highlight_mask = highlight_mask * m_f
 
         result = img_f * (1.0 - highlight_mask * opacity) + screen * (highlight_mask * opacity)
+        if is_float:
+            return np.clip(result, 0, 255).astype(np.float32)
         return np.clip(result, 0, 255).astype(np.uint8)
 
     def _apply_luminance_curve(
@@ -443,11 +538,14 @@ class ColorGrader:
         Returns:
             (H, W, 3) float32 BGR image in [0, 1].
         """
-        bgr_u8 = np.clip(img_f * 255.0, 0, 255).astype(np.uint8)
-        lab = cv2.cvtColor(bgr_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
+        is_identity = all(int(p[0]) == int(p[1]) for p in curve_points)
+        if is_identity:
+            return img_f.copy()
+        lab = _bgr_f_to_lab_u8_conv(img_f)
         lab[:, :, 0] = _apply_curve_f(lab[:, :, 0], curve_points)
-        out_u8 = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
-        return out_u8.astype(np.float32) / 255.0
+        lab = np.clip(lab, 0.0, 255.0).astype(np.float32)
+        out_f = _lab_u8_conv_to_bgr_f(lab)
+        return np.clip(out_f, 0.0, 1.0).astype(np.float32)
 
     def _lift_shadows(self, img: np.ndarray, lift: float) -> np.ndarray:
         lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
@@ -457,13 +555,12 @@ class ColorGrader:
         return cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
     def _F_lift_shadows(self, img_f: np.ndarray, lift: float) -> np.ndarray:
-        bgr_u8 = np.clip(img_f * 255.0, 0, 255).astype(np.uint8)
-        lab = cv2.cvtColor(bgr_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
+        lab = _bgr_f_to_lab_u8_conv(img_f)
         l = lab[:, :, 0]
         shadow_mask = np.clip(1.0 - l / 128.0, 0, 1)
         lab[:, :, 0] = np.clip(l + shadow_mask * lift, 0, 255)
-        out_u8 = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
-        return out_u8.astype(np.float32) / 255.0
+        out_f = _lab_u8_conv_to_bgr_f(np.clip(lab, 0.0, 255.0).astype(np.float32))
+        return np.clip(out_f, 0.0, 1.0).astype(np.float32)
 
     def _adjust_warmth(self, img: np.ndarray, warmth: float) -> np.ndarray:
         lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
@@ -472,12 +569,11 @@ class ColorGrader:
         return cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
     def _F_adjust_warmth(self, img_f: np.ndarray, warmth: float) -> np.ndarray:
-        bgr_u8 = np.clip(img_f * 255.0, 0, 255).astype(np.uint8)
-        lab = cv2.cvtColor(bgr_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
+        lab = _bgr_f_to_lab_u8_conv(img_f)
         lab[:, :, 2] = np.clip(lab[:, :, 2] + warmth * 30, 0, 255)
         lab[:, :, 1] = np.clip(lab[:, :, 1] + warmth * 10, 0, 255)
-        out_u8 = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
-        return out_u8.astype(np.float32) / 255.0
+        out_f = _lab_u8_conv_to_bgr_f(np.clip(lab, 0.0, 255.0).astype(np.float32))
+        return np.clip(out_f, 0.0, 1.0).astype(np.float32)
 
     def _adjust_saturation(self, img: np.ndarray, boost: float) -> np.ndarray:
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV).astype(np.float32)
@@ -487,13 +583,12 @@ class ColorGrader:
         return cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
     def _F_adjust_saturation(self, img_f: np.ndarray, boost: float) -> np.ndarray:
-        bgr_u8 = np.clip(img_f * 255.0, 0, 255).astype(np.uint8)
-        hsv = cv2.cvtColor(bgr_u8, cv2.COLOR_BGR2HSV).astype(np.float32)
+        hsv = _bgr_f_to_hsv_u8_conv(img_f)
         s = hsv[:, :, 1]
         factor = 1.0 + boost * (1.0 - s / 255.0)
         hsv[:, :, 1] = np.clip(s * factor, 0, 255)
-        out_u8 = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
-        return out_u8.astype(np.float32) / 255.0
+        out_f = _hsv_u8_conv_to_bgr_f(np.clip(hsv, 0.0, 255.0).astype(np.float32))
+        return np.clip(out_f, 0.0, 1.0).astype(np.float32)
 
     def _split_tone(
         self,
@@ -521,8 +616,7 @@ class ColorGrader:
         tones: Dict[str, Tuple[int, int]],
         mask: Optional[np.ndarray] = None,
     ) -> np.ndarray:
-        bgr_u8 = np.clip(img_f * 255.0, 0, 255).astype(np.uint8)
-        lab = cv2.cvtColor(bgr_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
+        lab = _bgr_f_to_lab_u8_conv(img_f)
         l = lab[:, :, 0]
         shadow_weight = np.clip(1.0 - l / 128.0, 0, 1)[:, :, np.newaxis]
         highlight_weight = np.clip((l - 128.0) / 128.0, 0, 1)[:, :, np.newaxis]
@@ -532,8 +626,8 @@ class ColorGrader:
         ab = ab + (shadow_ab - 128) * shadow_weight * 0.15
         ab = ab + (highlight_ab - 128) * highlight_weight * 0.15
         lab[:, :, 1:3] = np.clip(ab, 0, 255)
-        out_u8 = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
-        out_f = out_u8.astype(np.float32) / 255.0
+        out_f = _lab_u8_conv_to_bgr_f(np.clip(lab, 0.0, 255.0).astype(np.float32))
+        out_f = np.clip(out_f, 0.0, 1.0).astype(np.float32)
         if mask is not None:
             m = ensure_float(mask)
             if m.ndim == 2:
@@ -583,19 +677,18 @@ class ColorGrader:
     def _F_add_clarity(self, img_f: np.ndarray, strength: float) -> np.ndarray:
         if strength == 0:
             return img_f
-        bgr_u8 = np.clip(img_f * 255.0, 0, 255).astype(np.uint8)
-        lab = cv2.cvtColor(bgr_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
+        lab = _bgr_f_to_lab_u8_conv(img_f)
         l_chan = lab[:, :, 0]
-        h, w = bgr_u8.shape[:2]
+        h, w = img_f.shape[:2]
         r = max(int(min(h, w) * 0.015), 5)
         eps = 0.02
         l_norm = l_chan / 255.0
         base = self._guided_filter(l_norm, l_norm, r, eps) * 255.0
         detail = l_chan - base
         l_new = np.clip(base + detail * (1.0 + strength), 0, 255)
-        lab[:, :, 0] = l_new.astype(np.uint8)
-        out_u8 = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
-        return out_u8.astype(np.float32) / 255.0
+        lab[:, :, 0] = l_new
+        out_f = _lab_u8_conv_to_bgr_f(np.clip(lab, 0.0, 255.0).astype(np.float32))
+        return np.clip(out_f, 0.0, 1.0).astype(np.float32)
 
     def _add_vignette(self, img: np.ndarray, strength: float) -> np.ndarray:
         h, w = img.shape[:2]
@@ -657,8 +750,7 @@ class ColorGrader:
         img_f: np.ndarray,
         shifts_dict: Dict[str, float],
     ) -> np.ndarray:
-        bgr_u8 = np.clip(img_f * 255.0, 0, 255).astype(np.uint8)
-        hsv = cv2.cvtColor(bgr_u8, cv2.COLOR_BGR2HSV).astype(np.float32)
+        hsv = _bgr_f_to_hsv_u8_conv(img_f)
         h = hsv[:, :, 0]
         ranges = {"red": [(0, 10), (170, 180)], "orange": [(10, 25)], "yellow": [(25, 35)],
                   "green": [(35, 80)], "cyan": [(80, 105)], "blue": [(105, 140)], "magenta": [(140, 170)]}
@@ -668,8 +760,8 @@ class ColorGrader:
             mask = np.zeros_like(h, dtype=bool)
             for low, high in ranges[color]: mask |= (h >= low) & (h <= high)
             hsv[:, :, 0] = np.where(mask, (h + shift_cv) % 180, h)
-        out_u8 = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
-        return out_u8.astype(np.float32) / 255.0
+        out_f = _hsv_u8_conv_to_bgr_f(np.clip(hsv, 0.0, 255.0).astype(np.float32))
+        return np.clip(out_f, 0.0, 1.0).astype(np.float32)
 
     def _add_chromatic_aberration(self, img_bgr: np.ndarray, max_disp: float) -> np.ndarray:
         if max_disp <= 0: return img_bgr
@@ -762,19 +854,17 @@ class ColorGrader:
         r_mult = multipliers.get("R", 1.0)
         if all(abs(m - 1.0) < 0.001 for m in (r_mult, g_mult, b_mult)):
             return img_f
-        gray = np.array([128, 128, 128], dtype=np.float32)
-        wb = np.clip(gray * np.array([b_mult, g_mult, r_mult]), 0, 255).astype(np.uint8).reshape(1, 1, 3)
-        gray_u8 = gray.astype(np.uint8).reshape(1, 1, 3)
-        gray_lab = cv2.cvtColor(gray_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
-        wb_lab = cv2.cvtColor(wb, cv2.COLOR_BGR2LAB).astype(np.float32)
+        gray = np.array([128, 128, 128], dtype=np.float32) / 255.0
+        wb = np.clip(gray * np.array([b_mult, g_mult, r_mult]), 0.0, 1.0).astype(np.float32)
+        gray_lab = _bgr_f_to_lab_u8_conv(gray.reshape(1, 1, 3))
+        wb_lab = _bgr_f_to_lab_u8_conv(wb.reshape(1, 1, 3))
         a_off = wb_lab[0, 0, 1] - gray_lab[0, 0, 1]
         b_off = wb_lab[0, 0, 2] - gray_lab[0, 0, 2]
-        bgr_u8 = np.clip(img_f * 255.0, 0, 255).astype(np.uint8)
-        lab = cv2.cvtColor(bgr_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
+        lab = _bgr_f_to_lab_u8_conv(img_f)
         lab[:, :, 1] = np.clip(lab[:, :, 1] + a_off, 0, 255)
         lab[:, :, 2] = np.clip(lab[:, :, 2] + b_off, 0, 255)
-        out_u8 = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
-        return out_u8.astype(np.float32) / 255.0
+        out_f = _lab_u8_conv_to_bgr_f(np.clip(lab, 0.0, 255.0).astype(np.float32))
+        return np.clip(out_f, 0.0, 1.0).astype(np.float32)
 
     def _apply_calibration(
         self,
@@ -806,8 +896,7 @@ class ColorGrader:
         """
         if not calibration:
             return img_f
-        bgr_u8 = np.clip(img_f * 255.0, 0, 255).astype(np.uint8)
-        hsv = cv2.cvtColor(bgr_u8, cv2.COLOR_BGR2HSV).astype(np.float32)
+        hsv = _bgr_f_to_hsv_u8_conv(img_f)
         h = hsv[:, :, 0]
         s = hsv[:, :, 1]
         r_hue_shift = calibration.get("red", {}).get("hue", 0) * 0.15 / 2.0
@@ -830,8 +919,8 @@ class ColorGrader:
         s_new = np.clip(s * (1.0 + w_r * r_sat_shift + w_g * g_sat_shift + w_b * b_sat_shift), 0, 255)
         hsv[:, :, 0] = h_new
         hsv[:, :, 1] = s_new
-        out_u8 = cv2.cvtColor(np.clip(hsv, 0, 255).astype(np.uint8), cv2.COLOR_HSV2BGR)
-        return out_u8.astype(np.float32) / 255.0
+        out_f = _hsv_u8_conv_to_bgr_f(np.clip(hsv, 0.0, 255.0).astype(np.float32))
+        return np.clip(out_f, 0.0, 1.0).astype(np.float32)
 
     def _add_orton_glow(
         self,
@@ -844,7 +933,7 @@ class ColorGrader:
         h, w = img_bgr.shape[:2]
         img_f = img_bgr.astype(np.float32) / 255.0
         ksize = max(blur_radius, int(min(h, w) * 0.015)) | 1
-        blurred = cv2.GaussianBlur(img_f, (ksize, ksize), 0)
+        blurred = _large_sigma_blur(img_f, ksize)
         soft_light = (1.0 - 2.0 * blurred) * (img_f ** 2) + 2.0 * blurred * img_f
         result = img_f * (1.0 - opacity) + soft_light * opacity
         orton_img = np.clip(result * 255.0, 0, 255).astype(np.uint8)
@@ -890,8 +979,7 @@ class ColorGrader:
         midtones = tones.get("midtones", {})
         highlights = tones.get("highlights", {})
         balance = tones.get("balance", 0.0)
-        bgr_u8 = np.clip(img_f * 255.0, 0, 255).astype(np.uint8)
-        lab = cv2.cvtColor(bgr_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
+        lab = _bgr_f_to_lab_u8_conv(img_f)
         l_val = lab[:, :, 0]
         l_norm = l_val / 255.0
 
@@ -918,8 +1006,8 @@ class ColorGrader:
         ab[:, :, 0] += (s_a * w_shadow + m_a * w_midtone + h_a * w_highlight)
         ab[:, :, 1] += (s_b * w_shadow + m_b * w_midtone + h_b * w_highlight)
         lab[:, :, 1:3] = ab
-        out_u8 = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
-        out_f = out_u8.astype(np.float32) / 255.0
+        out_f = _lab_u8_conv_to_bgr_f(np.clip(lab, 0.0, 255.0).astype(np.float32))
+        out_f = np.clip(out_f, 0.0, 1.0).astype(np.float32)
         if mask is not None:
             m = ensure_float(mask)
             if m.ndim == 2:
@@ -1013,8 +1101,7 @@ class ColorGrader:
         img_f: np.ndarray,
         adjustments: Dict[str, Dict[str, float]],
     ) -> np.ndarray:
-        bgr_u8 = np.clip(img_f * 255.0, 0, 255).astype(np.uint8)
-        hsv = cv2.cvtColor(bgr_u8, cv2.COLOR_BGR2HSV).astype(np.float32)
+        hsv = _bgr_f_to_hsv_u8_conv(img_f)
         h = hsv[:, :, 0]; s = hsv[:, :, 1]; v = hsv[:, :, 2]
         color_centers = {"red": 0.0, "orange": 14.0, "yellow": 27.0, "green": 57.0,
                           "cyan": 92.0, "blue": 122.0, "purple": 148.0, "magenta": 156.0}
@@ -1035,8 +1122,8 @@ class ColorGrader:
             if l_shift != 0:
                 v = np.where(weight > 0.01, np.clip(v + weight * l_shift, 0, 255), v)
         hsv[:, :, 0] = h; hsv[:, :, 1] = s; hsv[:, :, 2] = v
-        out_u8 = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
-        return out_u8.astype(np.float32) / 255.0
+        out_f = _hsv_u8_conv_to_bgr_f(np.clip(hsv, 0.0, 255.0).astype(np.float32))
+        return np.clip(out_f, 0.0, 1.0).astype(np.float32)
 
     # ------------------------------------------------------------------
     # LCH HSL panel methods (Phase 1.d — perceptual uniformity replaces HSV)
@@ -1078,14 +1165,21 @@ class ColorGrader:
         """
         if abs(hue_shift) < 1e-4 and abs(sat_scale - 1.0) < 1e-4 and abs(lum_shift) < 1e-4:
             return img_bgr
-        from .color_space import bgr_to_lch, lch_to_bgr
-        lch = bgr_to_lch(img_bgr)
+        is_float = img_bgr.dtype == np.float32
+        if is_float:
+            from .color_space import bgr_f32_to_lch_f32, lch_f32_to_bgr_f32
+            lch = bgr_f32_to_lch_f32(img_bgr)
+        else:
+            from .color_space import bgr_to_lch, lch_to_bgr
+            lch = bgr_to_lch(img_bgr)
         if abs(hue_shift) > 1e-4:
             lch[:, :, 2] = np.mod(lch[:, :, 2] + hue_shift, 360.0)
         if abs(sat_scale - 1.0) > 1e-4:
             lch[:, :, 1] = lch[:, :, 1] * sat_scale
         if abs(lum_shift) > 1e-4:
             lch[:, :, 0] = np.clip(lch[:, :, 0] + lum_shift, 0.0, 100.0)
+        if is_float:
+            return lch_f32_to_bgr_f32(lch)
         return lch_to_bgr(lch)
 
     def adjust_per_channel_lch(
@@ -1121,21 +1215,34 @@ class ColorGrader:
             )
         if abs(hue_shift) < 1e-4 and abs(sat_scale - 1.0) < 1e-4 and abs(lum_shift) < 1e-4:
             return img_bgr
-        from .color_space import (
-            bgr_to_lch,
-            lch_to_bgr,
-            adjust_hue_range,
-            adjust_chroma_range,
-            adjust_luminance_range,
-        )
+        is_float = img_bgr.dtype == np.float32
+        if is_float:
+            from .color_space import (
+                bgr_f32_to_lch_f32,
+                lch_f32_to_bgr_f32,
+                adjust_hue_range,
+                adjust_chroma_range,
+                adjust_luminance_range,
+            )
+            lch = bgr_f32_to_lch_f32(img_bgr)
+        else:
+            from .color_space import (
+                bgr_to_lch,
+                lch_to_bgr,
+                adjust_hue_range,
+                adjust_chroma_range,
+                adjust_luminance_range,
+            )
+            lch = bgr_to_lch(img_bgr)
         hue_center, hue_width = self._HSL_CHANNELS[channel]
-        lch = bgr_to_lch(img_bgr)
         if abs(hue_shift) > 1e-4:
             lch = adjust_hue_range(lch, hue_center, hue_width, hue_shift)
         if abs(sat_scale - 1.0) > 1e-4:
             lch = adjust_chroma_range(lch, hue_center, hue_width, sat_scale)
         if abs(lum_shift) > 1e-4:
             lch = adjust_luminance_range(lch, hue_center, hue_width, lum_shift)
+        if is_float:
+            return lch_f32_to_bgr_f32(lch)
         return lch_to_bgr(lch)
 
     def split_tone_lch(
@@ -1166,9 +1273,20 @@ class ColorGrader:
         """
         if shadow_sat <= 1e-6 and highlight_sat <= 1e-6:
             return img_bgr
-        from .color_space import bgr_to_lch, lch_to_bgr, split_tone_lch as _st
-        lch = bgr_to_lch(img_bgr)
+        is_float = img_bgr.dtype == np.float32
+        if is_float:
+            from .color_space import (
+                bgr_f32_to_lch_f32,
+                lch_f32_to_bgr_f32,
+                split_tone_lch as _st,
+            )
+            lch = bgr_f32_to_lch_f32(img_bgr)
+        else:
+            from .color_space import bgr_to_lch, lch_to_bgr, split_tone_lch as _st
+            lch = bgr_to_lch(img_bgr)
         toned = _st(lch, shadow_hue, shadow_sat, highlight_hue, highlight_sat, balance)
+        if is_float:
+            return lch_f32_to_bgr_f32(toned)
         return lch_to_bgr(toned)
 
     def negative_split_tone(
@@ -1192,9 +1310,20 @@ class ColorGrader:
         """
         if shadow_desat <= 0.0 and highlight_desat <= 0.0:
             return img_bgr
-        from .color_space import bgr_to_lch, lch_to_bgr, negative_split_tone_lch as _nst
-        lch = bgr_to_lch(img_bgr)
+        is_float = img_bgr.dtype == np.float32
+        if is_float:
+            from .color_space import (
+                bgr_f32_to_lch_f32,
+                lch_f32_to_bgr_f32,
+                negative_split_tone_lch as _nst,
+            )
+            lch = bgr_f32_to_lch_f32(img_bgr)
+        else:
+            from .color_space import bgr_to_lch, lch_to_bgr, negative_split_tone_lch as _nst
+            lch = bgr_to_lch(img_bgr)
         toned = _nst(lch, shadow_desat, highlight_desat)
+        if is_float:
+            return lch_f32_to_bgr_f32(toned)
         return lch_to_bgr(toned)
 
     def white_balance_lch(
@@ -1221,8 +1350,13 @@ class ColorGrader:
         """
         if abs(temperature - 6500.0) < 1e-3 and abs(tint) < 1e-4:
             return img_bgr
-        from .color_space import bgr_to_lch, lch_to_bgr
-        lch = bgr_to_lch(img_bgr)
+        is_float = img_bgr.dtype == np.float32
+        if is_float:
+            from .color_space import bgr_f32_to_lch_f32, lch_f32_to_bgr_f32
+            lch = bgr_f32_to_lch_f32(img_bgr)
+        else:
+            from .color_space import bgr_to_lch, lch_to_bgr
+            lch = bgr_to_lch(img_bgr)
         t = float(np.clip(temperature, 2000.0, 50000.0))
         tint_val = float(np.clip(tint, -100.0, 100.0))
         # Mired-based white balance correction
@@ -1245,6 +1379,8 @@ class ColorGrader:
             lch[:, :, 2] = np.mod(
                 lch[:, :, 2] + delta * tint_strength, 360.0
             )
+        if is_float:
+            return lch_f32_to_bgr_f32(lch)
         return lch_to_bgr(lch)
 
     def channel_mixer_bw(
@@ -1284,7 +1420,8 @@ class ColorGrader:
             mid = 128.0
             gray = mid + (gray - mid) * (1.0 + c)
         gray = np.clip(gray + brightness, 0, 255)
-        return np.stack([gray, gray, gray], axis=-1).astype(np.uint8)
+        out_dtype = np.float32 if img_bgr.dtype == np.float32 else np.uint8
+        return np.stack([gray, gray, gray], axis=-1).astype(out_dtype)
 
     # ------------------------------------------------------------------
     # Color transfer
@@ -1298,8 +1435,14 @@ class ColorGrader:
         mask: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         if ref_bgr is None: return img_bgr
-        lab_src = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
-        lab_ref = cv2.cvtColor(ref_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        is_float = img_bgr.dtype == np.float32
+        if is_float:
+            lab_src = bgr_f32_to_lab_f32(img_bgr)
+            ref_u8 = np.clip(ref_bgr * 255.0, 0, 255).astype(np.uint8) if ref_bgr.dtype == np.float32 else ref_bgr
+            lab_ref = bgr_f32_to_lab_f32(ref_u8.astype(np.float32)) if ref_bgr.dtype != np.uint8 else cv2.cvtColor(ref_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        else:
+            lab_src = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+            lab_ref = cv2.cvtColor(ref_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
         src_l = lab_src[:, :, 0].copy(); src_a = lab_src[:, :, 1]; src_b = lab_src[:, :, 2]
         ref_a = lab_ref[:, :, 1]; ref_b = lab_ref[:, :, 2]
         mean_a_src = src_a.mean(); std_a_src = src_a.std()
@@ -1309,6 +1452,13 @@ class ColorGrader:
         a_result = (src_a - mean_a_src) * (std_a_ref / (std_a_src + 1e-6)) + mean_a_ref
         b_result = (src_b - mean_b_src) * (std_b_ref / (std_b_src + 1e-6)) + mean_b_ref
         lab_result = np.stack([src_l, a_result, b_result], axis=2)
+        if is_float:
+            result = lab_f32_to_bgr_f32(np.clip(lab_result, 0, 255))
+            if intensity < 1.0:
+                result = img_bgr * (1.0 - intensity) + result * intensity
+            if mask is not None:
+                return blend_masked(img_bgr, result, mask)
+            return result
         lab_result = np.clip(lab_result, 0, 255).astype(np.uint8)
         result = cv2.cvtColor(lab_result, cv2.COLOR_LAB2BGR)
         if intensity < 1.0: result = cv2.addWeighted(img_bgr, 1.0 - intensity, result, intensity, 0)
@@ -1348,7 +1498,7 @@ class ColorGrader:
         else:
             h, w = img_bgr.shape[:2]
             ksize = max(blur_radius, int(min(h, w) * 0.02)) | 1
-            blurred = cv2.GaussianBlur(img_bgr, (ksize, ksize), 0)
+            blurred = _large_sigma_blur(img_bgr, ksize)
             sl = soft_light_blend(img_bgr, blurred)
         if opacity >= 1.0:
             return sl
@@ -1364,7 +1514,7 @@ class ColorGrader:
         h, w = img_bgr.shape[:2]
         img_f = img_bgr.astype(np.float32)
         ksize = max(int(min(h, w) * 0.08), 25) | 1
-        blurred = cv2.GaussianBlur(img_f, (ksize, ksize), 0)
+        blurred = _large_sigma_blur(img_f, ksize)
         haze_tint = np.array([245.0, 230.0, 240.0], dtype=np.float32) / 255.0
         haze_layer = blurred * haze_tint
         screen = screen_blend(img_f, haze_layer)
@@ -1395,10 +1545,9 @@ class ColorGrader:
         if strength <= 0:
             return img_f
         h, w = img_f.shape[:2]
-        bgr_u8 = np.clip(img_f * 255.0, 0, 255).astype(np.uint8)
-        img_255 = bgr_u8.astype(np.float32)
+        img_255 = np.clip(img_f * 255.0, 0.0, 255.0).astype(np.float32)
         ksize = max(int(min(h, w) * 0.08), 25) | 1
-        blurred = cv2.GaussianBlur(img_255, (ksize, ksize), 0)
+        blurred = _large_sigma_blur(img_255, ksize)
         haze_tint = np.array([245.0, 230.0, 240.0], dtype=np.float32) / 255.0
         haze_layer = blurred * haze_tint
         screen = screen_blend(img_255, haze_layer)
@@ -1410,7 +1559,9 @@ class ColorGrader:
         else:
             haze_factor = strength
         result_255 = img_255 * (1.0 - haze_factor) + screen * haze_factor
-        lab = cv2.cvtColor(np.clip(result_255, 0, 255).astype(np.uint8), cv2.COLOR_BGR2LAB).astype(np.float32)
+        result_255 = np.clip(result_255, 0.0, 255.0).astype(np.float32)
+        result_f = np.clip(result_255 / 255.0, 0.0, 1.0).astype(np.float32)
+        lab = _bgr_f_to_lab_u8_conv(result_f)
         l = lab[:, :, 0]
         shadow_lift = 25.0 * strength
         shadow_mask = np.clip(1.0 - l / 128.0, 0, 1)
@@ -1419,8 +1570,8 @@ class ColorGrader:
             lab[:, :, 0] = np.clip(l + shadow_mask * (shadow_lift * m_2d), 0, 255)
         else:
             lab[:, :, 0] = np.clip(l + shadow_mask * shadow_lift, 0, 255)
-        out_u8 = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
-        return out_u8.astype(np.float32) / 255.0
+        out_f = _lab_u8_conv_to_bgr_f(np.clip(lab, 0.0, 255.0).astype(np.float32))
+        return np.clip(out_f, 0.0, 1.0).astype(np.float32)
 
     def _add_sparkles(self, img_bgr: np.ndarray, opacity: float) -> np.ndarray:
         if opacity <= 0: return img_bgr
@@ -1475,7 +1626,11 @@ class ColorGrader:
         """
         if strength <= 0:
             return img_bgr
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        is_float = img_bgr.dtype == np.float32
+        if is_float:
+            lab = bgr_f32_to_lab_f32(img_bgr)
+        else:
+            lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
         l = lab[:, :, 0]
         # Shadow threshold and weight: pixels with L < 50 get max lift, linear falloff to L=50
         shadow_weight = np.clip(1.0 - l / 50.0, 0, 1)
@@ -1483,7 +1638,10 @@ class ColorGrader:
         lift_amount = 20.0
         l_new = np.clip(l + shadow_weight * strength * lift_amount, 0, 255)
         lab[:, :, 0] = l_new
-        result = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
+        if is_float:
+            result = lab_f32_to_bgr_f32(lab)
+        else:
+            result = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
         if mask is not None:
             m_f = normalize_mask(mask)
             if m_f.ndim == 2:
@@ -1515,8 +1673,13 @@ class ColorGrader:
         """
         if strength <= 0:
             return img_bgr
-        from .color_space import bgr_to_lch, lch_to_bgr
-        lch = bgr_to_lch(img_bgr)
+        is_float = img_bgr.dtype == np.float32
+        if is_float:
+            from .color_space import bgr_f32_to_lch_f32, lch_f32_to_bgr_f32
+            lch = bgr_f32_to_lch_f32(img_bgr)
+        else:
+            from .color_space import bgr_to_lch, lch_to_bgr
+            lch = bgr_to_lch(img_bgr)
         l_chan = lch[:, :, 0]
         h_chan = lch[:, :, 2]
         c_chan = lch[:, :, 1]
@@ -1552,6 +1715,8 @@ class ColorGrader:
         h_rotated = h_chan + rotation * highlight_mask * (1.0 - protect_factor[:, :, 0])
         h_rotated = np.clip(h_rotated, 0, 360)
         lch[:, :, 2] = h_rotated
+        if is_float:
+            return lch_f32_to_bgr_f32(lch)
         return lch_to_bgr(lch)
 
     def airy_haze(
@@ -1582,12 +1747,16 @@ class ColorGrader:
         if strength <= 0:
             return img_bgr
         h, w = img_bgr.shape[:2]
-        img_f = img_bgr.astype(np.float32)
+        is_float = img_bgr.dtype == np.float32
+        img_f = img_bgr.astype(np.float32) if not is_float else img_bgr
         # Compute haze source from blurred image
         ksize = max(int(min(h, w) * 0.02), 7) | 1
-        blurred = cv2.GaussianBlur(img_f, (ksize, ksize), 0)
+        blurred = _large_sigma_blur(img_f, ksize)
         # Extract LAB L to threshold
-        lab_u8 = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
+        if is_float:
+            lab_u8 = bgr_f32_to_lab_f32(img_bgr)
+        else:
+            lab_u8 = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
         l_chan = lab_u8[:, :, 0].astype(np.float32)
         # Create highlight mask from L_threshold
         hl_mask = np.clip((l_chan - l_threshold) / 20.0, 0, 1)[:, :, np.newaxis]
@@ -1605,6 +1774,8 @@ class ColorGrader:
             # person_mask=1 (fg) -> opacity=0.4 (attenuated)
             glow_opacity = 1.0 - pm_f * 0.6
             result = img_f + (result - img_f) * glow_opacity * strength
+        if is_float:
+            return np.clip(result, 0, 255).astype(np.float32)
         return np.clip(result, 0, 255).astype(np.uint8)
 
     def clarity_split(
@@ -1635,7 +1806,11 @@ class ColorGrader:
         """
         if negative_strength <= 0 and positive_strength <= 0:
             return img_bgr
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        is_float = img_bgr.dtype == np.float32
+        if is_float:
+            lab = bgr_f32_to_lab_f32(img_bgr)
+        else:
+            lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
         l_chan = lab[:, :, 0]
         h, w = img_bgr.shape[:2]
         # Large radius for form band (low-frequency local contrast).
@@ -1677,8 +1852,12 @@ class ColorGrader:
         # doubled, a strength on par with _add_clarity's own scaling.
         l_new = l_new + detail_texture * positive_strength
         l_new = np.clip(l_new, 0, 255)
-        lab[:, :, 0] = l_new.astype(np.uint8)
-        result = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
+        lab[:, :, 0] = l_new
+        if is_float:
+            result = lab_f32_to_bgr_f32(lab)
+        else:
+            lab_u8 = lab.astype(np.uint8)
+            result = cv2.cvtColor(lab_u8, cv2.COLOR_LAB2BGR)
         if mask is not None:
             m_f = normalize_mask(mask)
             if m_f.ndim == 2:

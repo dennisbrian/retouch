@@ -12,7 +12,15 @@ from typing import Any, Dict, Optional, Tuple
 import cv2
 import numpy as np
 
-from .utils import blend_masked, normalize_mask, squeeze_mask, guided_filter, apply_u8_op_float
+from .utils import (
+    blend_masked,
+    normalize_mask,
+    squeeze_mask,
+    guided_filter,
+    apply_u8_op_float,
+    bgr_f32_to_lab_f32,
+    lab_f32_to_bgr_f32,
+)
 from .color_space import bgr_to_lch, lch_to_bgr, skin_mask_lch
 from .color_science import (
     bgr_to_oklab,
@@ -144,17 +152,20 @@ class SkinProcessor:
         if strength == 0 or skin_mask is None:
             return img_bgr
 
-        if img_bgr.dtype == np.float32:
-            # E1 delta adapter: run the uint8 op on a truncating snapshot and
-            # apply its delta to the float canvas (see apply_u8_op_float).
-            return apply_u8_op_float(img_bgr, self.whiten, skin_mask, strength,
-                                     tone=tone, hue_stable=hue_stable)
+        is_float = img_bgr.dtype == np.float32
+        if is_float:
+            img_u8 = np.clip(img_bgr, 0, 255).astype(np.uint8)
+        else:
+            img_u8 = img_bgr
 
         s = strength / 100.0
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        if is_float:
+            lab = bgr_f32_to_lab_f32(img_bgr)
+        else:
+            lab = cv2.cvtColor(img_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
 
         if hue_stable:
-            oklab = bgr_to_oklab(img_bgr)
+            oklab = bgr_to_oklab(img_u8)
             oklch = oklab_to_oklch(oklab)
             L = oklch[:, :, 0]
             protection = self._get_highlight_protection(lab)
@@ -170,7 +181,7 @@ class SkinProcessor:
                 L_new = L + L * skin_color_mask * lift_factor * shadow_protection
             oklch[:, :, 0] = np.clip(L_new, 0.0, 1.0)
             oklab_out = oklch_to_oklab(oklch)
-            out = oklab_to_bgr(oklab_out)
+            out = oklab_to_bgr(oklab_out, float32_out=is_float)
             return blend_masked(img_bgr, out, skin_mask)
 
         protection = self._get_highlight_protection(lab)
@@ -183,7 +194,7 @@ class SkinProcessor:
         # Fix #7: Calculate has_skin once to avoid redundant np.any calls
         skin_indices = skin_mask > 0.3
         has_skin = np.any(skin_indices)
-        
+
         median_a = 128.0
         median_b = 128.0
         if has_skin:
@@ -215,7 +226,10 @@ class SkinProcessor:
             lab[:, :, 1] = lab[:, :, 1] + (a_target - lab[:, :, 1]) * skin_mask * blend_factor
             lab[:, :, 2] = lab[:, :, 2] + (b_target - lab[:, :, 2]) * skin_mask * blend_factor
 
-        whitened = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        if is_float:
+            whitened = lab_f32_to_bgr_f32(np.clip(lab, 0, 255))
+        else:
+            whitened = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
         return blend_masked(img_bgr, whitened, skin_mask)
 
     def equalize(
@@ -243,13 +257,13 @@ class SkinProcessor:
         if strength <= 0 or skin_mask is None:
             return img_bgr
 
-        if img_bgr.dtype == np.float32:
-            # E1 delta adapter (see apply_u8_op_float).
-            return apply_u8_op_float(img_bgr, self.equalize, skin_mask, strength,
-                                     ref_lab=ref_lab)
+        is_float = img_bgr.dtype == np.float32
 
         s = math.sqrt(strength / 100.0)
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        if is_float:
+            lab = bgr_f32_to_lab_f32(img_bgr)
+        else:
+            lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
 
         skin_indices = skin_mask > 0.3
         if np.any(skin_indices):
@@ -264,7 +278,9 @@ class SkinProcessor:
             lab[:, :, 1] = lab[:, :, 1] + (median_a - lab[:, :, 1]) * pull
             lab[:, :, 2] = lab[:, :, 2] + (median_b - lab[:, :, 2]) * pull
 
-        # PERF: Run CLAHE only on the L channel to save memory
+        # PERF: Run CLAHE only on the L channel to save memory.
+        # CLAHE is a uint8 primitive (8-bit histogram bins), so L is quantized
+        # to uint8 here regardless of input dtype.
         l_chan_u8 = np.clip(lab[:, :, 0], 0, 255).astype(np.uint8)
         clip_limit = 1.0 + s * 2.0
         clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
@@ -299,7 +315,10 @@ class SkinProcessor:
         lab[:, :, 0] = np.clip(l_final_f, 0, 255)
 
         # Fix #6: Explicitly clip all channels to prevent AB wrap-around artifacts
-        equalized = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        if is_float:
+            equalized = lab_f32_to_bgr_f32(np.clip(lab, 0, 255))
+        else:
+            equalized = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
         return blend_masked(img_bgr, equalized, skin_mask * s)
 
     def dodge_burn(self, img_bgr: np.ndarray, regions: Any, strength: int = 40) -> np.ndarray:
@@ -317,12 +336,17 @@ class SkinProcessor:
         if strength <= 0 or regions is None or getattr(regions, "skin", None) is None:
             return img_bgr
 
-        if img_bgr.dtype == np.float32:
-            # E1 delta adapter (see apply_u8_op_float).
-            return apply_u8_op_float(img_bgr, self.dodge_burn, regions, strength)
+        is_float = img_bgr.dtype == np.float32
+        if is_float:
+            img_u8 = np.clip(img_bgr, 0, 255).astype(np.uint8)
+        else:
+            img_u8 = img_bgr
 
         s = strength / 100.0
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        if is_float:
+            lab = bgr_f32_to_lab_f32(img_bgr)
+        else:
+            lab = cv2.cvtColor(img_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
         protection = self._get_highlight_protection(lab)
 
         brighten_mask = self._build_dimensional_mask(
@@ -343,7 +367,10 @@ class SkinProcessor:
         lab[:, :, 0] = l_val + (255.0 - l_val) * brighten_mask * 0.05 * s * protection
         lab[:, :, 0] = np.clip(lab[:, :, 0] - lab[:, :, 0] * darken_mask * 0.04 * s, 0, 255)
 
-        result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        if is_float:
+            result = lab_f32_to_bgr_f32(np.clip(lab, 0, 255))
+        else:
+            result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
 
         # Exclude hair and eyebrows from dodge/burn output so we never
         # sculpt inside hair roots or scrub pigment off brow hairs.
@@ -383,8 +410,7 @@ class SkinProcessor:
         if strength <= 0 or regions is None or getattr(regions, "skin", None) is None:
             return img_bgr
 
-        if img_bgr.dtype == np.float32:
-            return apply_u8_op_float(img_bgr, self.wrinkle_soften, regions, strength)
+        is_float = img_bgr.dtype == np.float32
 
         h_img, w_img = img_bgr.shape[:2]
         s = strength / 100.0
@@ -426,7 +452,10 @@ class SkinProcessor:
             return img_bgr
 
         # Convert to LAB and extract L channel
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        if is_float:
+            lab = bgr_f32_to_lab_f32(img_bgr)
+        else:
+            lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
         L = lab[:, :, 0]
 
         # Detect ridges using difference-of-Gaussians at wrinkle scale
@@ -471,7 +500,10 @@ class SkinProcessor:
         # (dark wrinkles have high negative DoG values, so we lighten them)
         lab[:, :, 0] = np.clip(L + attenuation, 0.0, 255.0)
 
-        result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        if is_float:
+            result = lab_f32_to_bgr_f32(np.clip(lab, 0, 255))
+        else:
+            result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
 
         # Blend using the wrinkle mask
         return blend_masked(img_bgr, result, wrinkle_mask)
@@ -504,15 +536,14 @@ class SkinProcessor:
         if strength <= 0 or person_mask is None or face_skin_mask is None:
             return img_bgr
 
-        if img_bgr.dtype == np.float32:
-            # E1 delta adapter (see apply_u8_op_float).
-            return apply_u8_op_float(img_bgr, self.harmonize_neck, face_landmarks,
-                                     person_mask, face_skin_mask,
-                                     neck_mask=neck_mask, strength=strength)
+        is_float = img_bgr.dtype == np.float32
 
         s = strength / 100.0
         h_img, w_img = img_bgr.shape[:2]
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        if is_float:
+            lab = bgr_f32_to_lab_f32(img_bgr)
+        else:
+            lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
 
         face_skin_indices = face_skin_mask > 0.3
         if not np.any(face_skin_indices):
@@ -602,6 +633,8 @@ class SkinProcessor:
         lab[:, :, 1] = np.clip(lab[:, :, 1] + neck_mask_final * a_diff, 0, 255)
         lab[:, :, 2] = np.clip(lab[:, :, 2] + neck_mask_final * b_diff, 0, 255)
 
+        if is_float:
+            return lab_f32_to_bgr_f32(np.clip(lab, 0, 255))
         return cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
 
     def apply_specular_bloom(
@@ -625,10 +658,11 @@ class SkinProcessor:
         if strength <= 0 or skin_mask is None:
             return img_bgr
 
-        if img_bgr.dtype == np.float32:
-            return apply_u8_op_float(img_bgr, self.apply_specular_bloom, skin_mask, strength, tone=tone)
-
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        is_float = img_bgr.dtype == np.float32
+        if is_float:
+            lab = bgr_f32_to_lab_f32(img_bgr)
+        else:
+            lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
         l_chan = lab[:, :, 0]
 
         highlight_mask = np.clip((l_chan - 220.0) / 20.0, 0.0, 1.0) * (skin_mask > 0.1).astype(np.float32)
@@ -659,7 +693,10 @@ class SkinProcessor:
             b_shifted = np.clip(b_shifted - 5.0, 0, 255)
         
         lab_shifted = cv2.merge([l_shifted, a_shifted, b_shifted])
-        img_shifted_bgr = cv2.cvtColor(lab_shifted.astype(np.uint8), cv2.COLOR_LAB2BGR)
+        if is_float:
+            img_shifted_bgr = lab_f32_to_bgr_f32(lab_shifted)
+        else:
+            img_shifted_bgr = cv2.cvtColor(lab_shifted.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
         s = strength / 100.0
         return blend_masked(img_bgr, img_shifted_bgr, highlight_mask * s)
@@ -793,6 +830,8 @@ class SkinProcessor:
 
         mask_3d = local_mask[:, :, np.newaxis]
         boosted = img_f + high * float(strength) * mask_3d
+        if img_bgr.dtype == np.float32:
+            return np.clip(boosted, 0, 255)
         return np.clip(boosted, 0, 255).astype(np.uint8)
 
     def flatten(
@@ -814,16 +853,15 @@ class SkinProcessor:
         if strength <= 0 or skin_mask is None:
             return img_bgr
 
-        if img_bgr.dtype == np.float32:
-            # E1 delta adapter (see apply_u8_op_float): cv2.cvtColor expects
-            # float BGR in [0, 1], not the engine's float32 [0, 255] canvas
-            # convention, so this must not run cvtColor directly on it.
-            return apply_u8_op_float(img_bgr, self.flatten, skin_mask, strength)
+        is_float = img_bgr.dtype == np.float32
 
         s = strength / 100.0
         h, w = img_bgr.shape[:2]
 
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        if is_float:
+            lab = bgr_f32_to_lab_f32(img_bgr)
+        else:
+            lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
         L = lab[:, :, 0]
 
         r = max(8, int(min(h, w) * 0.04))
@@ -834,8 +872,11 @@ class SkinProcessor:
 
         skin_3d = skin_mask[:, :, np.newaxis]
         lab[:, :, 0] = L + (q - L) * s * skin_3d[:, :, 0]
-        lab = np.clip(lab, 0, 255).astype(np.uint8)
-        out = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+        if is_float:
+            out = lab_f32_to_bgr_f32(np.clip(lab, 0, 255))
+        else:
+            lab_u8 = np.clip(lab, 0, 255).astype(np.uint8)
+            out = cv2.cvtColor(lab_u8, cv2.COLOR_LAB2BGR)
         return blend_masked(img_bgr, out, skin_mask)
 
     def quantize_tones(
@@ -861,12 +902,13 @@ class SkinProcessor:
         if strength <= 0 or skin_mask is None:
             return img_bgr
 
-        if img_bgr.dtype == np.float32:
-            return apply_u8_op_float(img_bgr, self.quantize_tones, skin_mask, strength,
-                                      bands=bands, softness=softness)
+        is_float = img_bgr.dtype == np.float32
 
         s = strength / 100.0
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        if is_float:
+            lab = bgr_f32_to_lab_f32(img_bgr)
+        else:
+            lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
         L = lab[:, :, 0]
 
         skin_px = L[skin_mask > 0.3]
@@ -897,8 +939,11 @@ class SkinProcessor:
 
         protection = self._get_highlight_protection(lab)
         lab[:, :, 0] = L + (q - L) * s * protection * skin_mask
-        lab = np.clip(lab, 0, 255).astype(np.uint8)
-        out = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+        if is_float:
+            out = lab_f32_to_bgr_f32(np.clip(lab, 0, 255))
+        else:
+            lab_u8 = np.clip(lab, 0, 255).astype(np.uint8)
+            out = cv2.cvtColor(lab_u8, cv2.COLOR_LAB2BGR)
         return blend_masked(img_bgr, out, skin_mask)
 
     def unify_tone(
@@ -990,18 +1035,19 @@ class SkinProcessor:
         if (hue_strength <= 0 and chroma_strength <= 0) or skin_mask is None:
             return img_bgr
 
-        if img_bgr.dtype == np.float32:
-            # E1 delta adapter (see apply_u8_op_float).
-            return apply_u8_op_float(img_bgr, self.unify_hue_line, skin_mask,
-                                     hue_strength, chroma_strength, locus=locus)
+        is_float = img_bgr.dtype == np.float32
+        if is_float:
+            img_u8 = np.clip(img_bgr, 0, 255).astype(np.uint8)
+        else:
+            img_u8 = img_bgr
 
         # Convert to OKLCh
-        oklab = bgr_to_oklab(img_bgr)
+        oklab = bgr_to_oklab(img_u8)
         oklch = oklab_to_oklch(oklab)
 
         # Measure skin state to pick locus class if not provided
         if locus is None:
-            state = measure_skin_state(img_bgr, skin_mask, thresh=0.3)
+            state = measure_skin_state(img_u8, skin_mask, thresh=0.3)
             L_mean = state.L_mean
 
             # Choose locus class by L_mean
@@ -1045,7 +1091,7 @@ class SkinProcessor:
 
         # Convert back to BGR
         oklab_out = oklch_to_oklab(oklch_out)
-        out = oklab_to_bgr(oklab_out)
+        out = oklab_to_bgr(oklab_out, float32_out=is_float)
 
         return blend_masked(img_bgr, out, skin_mask)
 
@@ -1074,11 +1120,11 @@ class SkinProcessor:
         if strength <= 0 or skin_mask is None:
             return img_bgr
 
-        if img_bgr.dtype == np.float32:
-            return apply_u8_op_float(img_bgr, self.micro_dodge_burn, skin_mask, strength,
-                                      face_width=face_width)
-
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        is_float = img_bgr.dtype == np.float32
+        if is_float:
+            lab = bgr_f32_to_lab_f32(img_bgr)
+        else:
+            lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
         L = lab[:, :, 0]
 
         # Band-pass the L channel at blotch scale
@@ -1102,7 +1148,10 @@ class SkinProcessor:
         lab[:, :, 0] = np.clip(L_new, 0, 255)
 
         # Convert back and blend
-        result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        if is_float:
+            result = lab_f32_to_bgr_f32(np.clip(lab, 0, 255))
+        else:
+            result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
         return blend_masked(img_bgr, result, skin_mask)
 
     def redness_even(
@@ -1116,11 +1165,11 @@ class SkinProcessor:
         if strength <= 0 or skin_mask is None:
             return img_bgr
 
-        if img_bgr.dtype == np.float32:
-            return apply_u8_op_float(img_bgr, self.redness_even, skin_mask, strength,
-                                      face_width=face_width, lips_mask=lips_mask)
-
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        is_float = img_bgr.dtype == np.float32
+        if is_float:
+            lab = bgr_f32_to_lab_f32(img_bgr)
+        else:
+            lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
         a = lab[:, :, 1].copy()
         b = lab[:, :, 2].copy()
 
@@ -1142,7 +1191,10 @@ class SkinProcessor:
         lab[:, :, 1] = a - correction_a
         lab[:, :, 2] = b - correction_b
 
-        result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        if is_float:
+            result = lab_f32_to_bgr_f32(np.clip(lab, 0, 255))
+        else:
+            result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
         return blend_masked(img_bgr, result, skin_mask)
 
     def shine_removal(
@@ -1186,12 +1238,11 @@ class SkinProcessor:
         if strength <= 0 or skin_mask is None:
             return img_bgr
 
-        if img_bgr.dtype == np.float32:
-            # E1 delta adapter (see apply_u8_op_float).
-            return apply_u8_op_float(img_bgr, self.shine_removal, skin_mask,
-                                     strength, eyes_mask=eyes_mask)
-
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        is_float = img_bgr.dtype == np.float32
+        if is_float:
+            lab = bgr_f32_to_lab_f32(img_bgr)
+        else:
+            lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
         h_img, w_img = lab.shape[:2]
 
         L = lab[:, :, 0]
@@ -1306,7 +1357,10 @@ class SkinProcessor:
         lab[:, :, 1] = a_new
         lab[:, :, 2] = b_new
 
-        result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        if is_float:
+            result = lab_f32_to_bgr_f32(np.clip(lab, 0, 255))
+        else:
+            result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
         return blend_masked(img_bgr, result, skin_mask)
 
     def texture_transplant(
@@ -1352,15 +1406,16 @@ class SkinProcessor:
         if strength <= 0 or skin_mask is None:
             return img_bgr
 
-        if img_bgr.dtype == np.float32:
-            return apply_u8_op_float(img_bgr, self.texture_transplant, skin_mask, strength,
-                                      face_width=face_width)
+        is_float = img_bgr.dtype == np.float32
 
         s = strength / 100.0
         h_img, w_img = img_bgr.shape[:2]
 
         # Convert to LAB for processing
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        if is_float:
+            lab = bgr_f32_to_lab_f32(img_bgr)
+        else:
+            lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
         L = lab[:, :, 0]
 
         # --- Step 1: Compute blotch-band signal (for donor region detection) ---
@@ -1541,7 +1596,10 @@ class SkinProcessor:
         # --- Step 6: Assemble result and verify donor region unchanged ---
         lab[:, :, 0] = result_L
 
-        result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        if is_float:
+            result = lab_f32_to_bgr_f32(np.clip(lab, 0, 255))
+        else:
+            result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
         return blend_masked(img_bgr, result, skin_mask)
 
     @staticmethod

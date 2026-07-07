@@ -115,7 +115,7 @@ from .recipes import RECIPES
 from .recipe_loader import load_user_recipes
 from .style import StyleProfile
 from .style_transfer import subject_aware_transfer
-from .utils import correct_exposure, apply_global_bloom, apply_skin_diffusion, vibrance as _vibrance_fn, squeeze_mask, feather_mask, guided_filter, normalize_mask, blend_masked
+from .utils import correct_exposure, apply_global_bloom, apply_skin_diffusion, vibrance as _vibrance_fn, squeeze_mask, feather_mask, guided_filter, normalize_mask, blend_masked, bgr_f32_to_lab_f32, lab_f32_to_bgr_f32
 from .color_space import bgr_to_lch, skin_mask_lch
 from .color_science import bgr_to_oklab, oklab_to_oklch
 from .params import resolve_recipe, _deep_merge, PROCESSING_PARAMS  # noqa: F401  (re-export for backward compat)
@@ -306,6 +306,11 @@ class ProcessingContext:
     nose_blush: bool = _DEFAULTS["nose_blush"]
     under_eye_blush: bool = _DEFAULTS["under_eye_blush"]
     white_costume_lift: bool = _DEFAULTS["white_costume_lift"]
+
+    # F8.2: output quality tier. "full" (default) runs per-face work at native
+    # resolution (detection+segmentation stay at proxy); "draft" keeps the
+    # legacy all-proxy path for fast batch contact sheets.
+    quality: str = "full"
 
     # Cached per-face detection + parsing; None ⇒ engine detects/parses.
     face_contexts: Optional[List["FaceContext"]] = None
@@ -643,6 +648,11 @@ class RetouchEngine:
             logging.getLogger(__name__).info(f"Loaded {len(loaded)} user recipes: {loaded}")
 
         # Warm up JIT kernels on engine startup (safe fallback if Numba is missing)
+
+        # P3: Stage registry for global phases (stages 3-6).
+        # Built once; used by _run_global_phases when use_registry=True.
+        from .stage_wrappers import build_global_registry
+        self._global_registry = build_global_registry(self)
         
     # ------------------------------------------------------------------
     # Public API
@@ -766,6 +776,7 @@ class RetouchEngine:
         debug_dir: Optional[str] = None,
         face_contexts: Optional[List["FaceContext"]] = None,
         heals: Optional[List[Dict[str, Any]]] = None,
+        quality: Optional[str] = None,
     ) -> ProcessingResult:
         """Process a single image through the full Retouch pipeline.
 
@@ -909,6 +920,8 @@ class RetouchEngine:
             ctx.face_contexts = face_contexts
         if heals is not None:
             ctx.heals = heals
+        if quality is not None:
+            ctx.quality = quality
 
         if style_profile is not None:
             if overrides["contrast"] is None:
@@ -1059,15 +1072,20 @@ class RetouchEngine:
     ) -> _CoreResult:
         """Wrap the core pipeline with automatic proxy down/upscaling.
 
-        F8.1: Stages 0-2 (detection+reshape+per-face) run at proxy resolution.
-        Global phases (stages 3+) run at native resolution on a composite of
-        the upscaled face edits + pristine background.
+        F8.2 (default, ``quality="full"``): detection+segmentation run at
+        proxy resolution; face bboxes/ied scale back to native; reshape +
+        per-face work (BiSeNet parsing, frequency separation, skin ops,
+        composite) runs at native resolution. Global phases also run at
+        native. Face texture/pore detail is never resampled — the proxy is
+        only used to find faces and segment the person.
 
-        If the longest image side exceeds ``PROXY_MAX_DIM``, the image is
-        downscaled (INTER_AREA), detection+reshape+per-face process at proxy,
-        then the upscaled face-region result is pasted onto the native original
-        (face-bbox-limited composite). Masks are upscaled, and global phases run
-        on the native-resolution composite.
+        F8.1 legacy (``quality="draft"``): detection+reshape+per-face all
+        run at proxy, the result is upscaled and pasted onto the native
+        background, and F8.0 detail reinjection recovers high-band texture
+        in non-skin regions. Kept for fast batch contact sheets.
+
+        If the longest image side ≤ ``PROXY_MAX_DIM``, no proxy is used and
+        both paths collapse to the same native-resolution pipeline.
         """
         h, w = img_bgr.shape[:2]
         proxy_scale = 1.0
@@ -1080,6 +1098,17 @@ class RetouchEngine:
             new_h = int(h * proxy_scale)
             proxy_img_bgr = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
+        # ------------------------------------------------------------------
+        # F8.2 native face-crop path (default)
+        # ------------------------------------------------------------------
+        if proxy_scale < 1.0 and getattr(ctx, 'quality', 'full') == 'full':
+            return self._process_native_faces(
+                native_img_bgr, proxy_img_bgr, proxy_scale, ctx, style_ref, timings,
+            )
+
+        # ------------------------------------------------------------------
+        # F8.1 legacy / no-proxy path
+        # ------------------------------------------------------------------
         # Stages 0-2: detection+reshape+per-face at proxy resolution
         core = self._run_detection_and_faces(proxy_img_bgr, ctx, timings)
 
@@ -1164,6 +1193,165 @@ class RetouchEngine:
         # Stages 3+: global phases at native resolution (or proxy if no scaling needed)
         # When using proxy (proxy_scale < 1.0): use the composited upscaled result
         # When NOT using proxy (proxy_scale == 1.0): use the detection_and_faces result
+        core = self._run_global_phases(
+            core.result,
+            ctx, style_ref, timings,
+            acc_skin=core.acc_skin,
+            acc_skin_hair=core.acc_skin_hair,
+            acc_lips=core.acc_lips,
+            acc_sharpen=core.acc_sharpen,
+            faces=core.faces,
+            person_mask=core.person_mask,
+            face_contexts=core.face_contexts,
+        )
+
+        return core
+
+    def _process_native_faces(
+        self,
+        native_img_bgr: np.ndarray,
+        proxy_img_bgr: np.ndarray,
+        proxy_scale: float,
+        ctx: ProcessingContext,
+        style_ref: Optional[np.ndarray],
+        timings: Dict[str, float],
+    ) -> _CoreResult:
+        """F8.2: detection at proxy, per-face work at native resolution.
+
+        Stages 0 (detection + person segmentation) run on the proxy image.
+        Face bboxes and ied are then rescaled to native pixel coordinates
+        (MediaPipe landmarks are normalized [0, 1] and resolution-independent).
+        Stages 1–2 (reshape + per-face parsing/skin ops + composite) and
+        stages 3+ (global phases) all run on the native image. Face texture
+        and pore detail are never resampled through the proxy.
+        """
+        h_native, w_native = native_img_bgr.shape[:2]
+        scale_up = 1.0 / proxy_scale  # proxy → native multiplier
+
+        # ------------------------------------------------------------------
+        # Stage 0 — Detection + segmentation at proxy resolution
+        # ------------------------------------------------------------------
+        t0 = time.perf_counter()
+        cached_contexts = ctx.face_contexts
+        if cached_contexts is not None:
+            faces_proxy = [fc.face_data for fc in cached_contexts]
+            if ctx.auto_exposure:
+                bboxes = [f.bbox for f in faces_proxy] if faces_proxy else None
+                proxy_img_bgr, corrected = correct_exposure(proxy_img_bgr, face_bboxes=bboxes)
+                # Re-detect after exposure correction (bboxes may shift)
+                if corrected:
+                    faces_proxy = self._detector.detect(proxy_img_bgr)
+                    cached_contexts = None  # cache stale after re-detect
+        else:
+            if ctx.auto_exposure:
+                faces_proxy = self._detector.detect(proxy_img_bgr)
+                bboxes = [f.bbox for f in faces_proxy] if faces_proxy else None
+                proxy_img_bgr, corrected = correct_exposure(proxy_img_bgr, face_bboxes=bboxes)
+                if corrected:
+                    faces_proxy = self._detector.detect(proxy_img_bgr)
+            else:
+                faces_proxy = self._detector.detect(proxy_img_bgr)
+        person_mask_proxy = self._detector.segment_person(proxy_img_bgr)
+        timings["detection"] = (time.perf_counter() - t0) * 1000
+
+        # ------------------------------------------------------------------
+        # No-face fallback
+        # ------------------------------------------------------------------
+        if not faces_proxy:
+            h_img, w_img = native_img_bgr.shape[:2]
+            return _CoreResult(
+                result=native_img_bgr.copy(),
+                acc_skin=np.zeros((h_img, w_img), dtype=np.float32),
+                acc_skin_hair=np.zeros((h_img, w_img), dtype=np.float32),
+                acc_lips=np.zeros((h_img, w_img), dtype=np.float32),
+                acc_sharpen=np.zeros((h_img, w_img), dtype=np.float32),
+                faces=[],
+                person_mask=cv2.resize(
+                    person_mask_proxy, (w_native, h_native),
+                    interpolation=cv2.INTER_LINEAR,
+                ) if person_mask_proxy is not None else None,
+                no_face=True,
+                face_contexts=None,
+                qa=[],
+            )
+
+        # ------------------------------------------------------------------
+        # Scale face bboxes + ied to native (landmarks stay normalized [0,1])
+        # ------------------------------------------------------------------
+        def _scale_face(face: FaceData) -> FaceData:
+            x, y, bw, bh = face.bbox
+            return FaceData(
+                landmarks=face.landmarks,  # normalized [0,1] — resolution-independent
+                bbox=(
+                    int(round(x * scale_up)),
+                    int(round(y * scale_up)),
+                    int(round(bw * scale_up)),
+                    int(round(bh * scale_up)),
+                ),
+                ied=face.ied * scale_up,
+                confidence=face.confidence,
+            )
+
+        faces_native = [_scale_face(f) for f in faces_proxy]
+
+        # Upscale person mask to native (smooth, so INTER_LINEAR is fine)
+        person_mask_native = (
+            cv2.resize(
+                person_mask_proxy, (w_native, h_native),
+                interpolation=cv2.INTER_LINEAR,
+            )
+            if person_mask_proxy is not None
+            else None
+        )
+
+        # Cached contexts were built at proxy-res and cannot be reused at
+        # native — force re-parse by clearing the cache for this call only.
+        # (The cache is most valuable for repeated calls on the same image,
+        # where proxy_scale is stable; we preserve the original ctx and
+        # only bypass the cache for this F8.2 invocation.)
+        if cached_contexts is not None:
+            logger.debug(
+                "F8.2: discarding %d cached face_contexts (built at proxy res, "
+                "invalid for native face crops)", len(cached_contexts),
+            )
+            # Mutate a copy so the caller's ctx isn't permanently altered.
+            ctx = copy.copy(ctx)
+            ctx.face_contexts = None
+
+        # ------------------------------------------------------------------
+        # Stages 1–2 — Reshape + per-face + composite at NATIVE resolution
+        # ------------------------------------------------------------------
+        t1 = time.perf_counter()
+        result_native = self._stage_reshape(native_img_bgr, faces_native, ctx)
+        timings["reshape"] = (time.perf_counter() - t1) * 1000
+
+        t2 = time.perf_counter()
+        h_img, w_img = result_native.shape[:2]
+        face_results, built_contexts = self._stage_per_face(
+            result_native, faces_native, person_mask_native, ctx, h_img, w_img,
+        )
+        timings["per_face"] = (time.perf_counter() - t2) * 1000
+
+        result_native, acc_skin, acc_skin_hair, acc_lips, acc_sharpen = self._composite_faces(
+            result_native, face_results, h_img, w_img,
+        )
+
+        core = _CoreResult(
+            result=result_native,
+            acc_skin=acc_skin,
+            acc_skin_hair=acc_skin_hair,
+            acc_lips=acc_lips,
+            acc_sharpen=acc_sharpen,
+            faces=faces_native,
+            person_mask=person_mask_native,
+            no_face=False,
+            face_contexts=built_contexts,
+            qa=[],
+        )
+
+        # ------------------------------------------------------------------
+        # Stages 3+ — Global phases at native resolution
+        # ------------------------------------------------------------------
         core = self._run_global_phases(
             core.result,
             ctx, style_ref, timings,
@@ -1367,43 +1555,69 @@ class RetouchEngine:
         h_img, w_img = result.shape[:2]
 
         # ------------------------------------------------------------------
-        # Stage 3 — Subject-background separation (now in float)
+        # P3: Stage registry path (byte-identical alternative to the
+        # hardcoded stage calls below). Toggle via use_registry to A/B test.
+        # Once verified byte-identical via golden harness, this becomes
+        # the default and the hardcoded path is removed.
         # ------------------------------------------------------------------
-        t_subj = time.perf_counter()
-        if ctx.subject_separation > 0:
-            result = self._stage_subject_separation(result, person_mask, ctx)
-        timings["subject_separation"] = (time.perf_counter() - t_subj) * 1000
+        use_registry = getattr(self, "_use_global_registry", True)
+        if use_registry:
+            from .stages import PipelineState as _PS
+            state = _PS(
+                img=result,
+                ctx=ctx,
+                h_img=h_img,
+                w_img=w_img,
+                person_mask=person_mask,
+                acc_skin=acc_skin,
+                acc_skin_hair=acc_skin_hair,
+                acc_lips=acc_lips,
+                acc_sharpen=acc_sharpen,
+                faces=faces,
+                style_ref=style_ref,
+            )
+            state = self._global_registry.run(state)
+            result = state.img
+            timings.update(state.timings)
+        else:
+            # ------------------------------------------------------------------
+            # Stage 3 — Subject-background separation (now in float)
+            # ------------------------------------------------------------------
+            t_subj = time.perf_counter()
+            if ctx.subject_separation > 0:
+                result = self._stage_subject_separation(result, person_mask, ctx)
+            timings["subject_separation"] = (time.perf_counter() - t_subj) * 1000
 
-        # ------------------------------------------------------------------
-        # Stage 3.5 — Body skin retouch (now in float)
-        # ------------------------------------------------------------------
-        t_body = time.perf_counter()
-        result = self._stage_body_skin(result, ctx, person_mask, acc_skin, acc_skin_hair, acc_lips, faces, h_img, w_img)
-        timings["body_skin"] = (time.perf_counter() - t_body) * 1000
+            # ------------------------------------------------------------------
+            # Stage 3.5 — Body skin retouch (now in float)
+            # ------------------------------------------------------------------
+            t_body = time.perf_counter()
+            result = self._stage_body_skin(result, ctx, person_mask, acc_skin, acc_skin_hair, acc_lips, faces, h_img, w_img)
+            timings["body_skin"] = (time.perf_counter() - t_body) * 1000
 
-        # ------------------------------------------------------------------
-        # Stage 4 — Global tonal adjustments (now in float)
-        # ------------------------------------------------------------------
-        t3 = time.perf_counter()
-        result = self._stage_global(result, ctx)
-        timings["global"] = (time.perf_counter() - t3) * 1000
+            # ------------------------------------------------------------------
+            # Stage 4 — Global tonal adjustments (now in float)
+            # ------------------------------------------------------------------
+            t3 = time.perf_counter()
+            result = self._stage_global(result, ctx)
+            timings["global"] = (time.perf_counter() - t3) * 1000
 
-        # ------------------------------------------------------------------
-        # Stage 5 — Colour grading (now in float)
-        # ------------------------------------------------------------------
-        t4 = time.perf_counter()
-        result = self._stage_grade(
-            result, ctx, acc_skin, acc_lips, person_mask,
-            style_ref=style_ref, faces=faces,
-        )
-        timings["grading"] = (time.perf_counter() - t4) * 1000
+            # ------------------------------------------------------------------
+            # Stage 5 — Colour grading (now in float)
+            # ------------------------------------------------------------------
+            t4 = time.perf_counter()
+            result = self._stage_grade(
+                result, ctx, acc_skin, acc_lips, person_mask,
+                style_ref=style_ref, faces=faces,
+            )
+            timings["grading"] = (time.perf_counter() - t4) * 1000
 
-        # ------------------------------------------------------------------
-        # Stage 6 — Selective sharpening + impact finish (now in float)
-        # ------------------------------------------------------------------
-        t5 = time.perf_counter()
-        result = self._stage_finish(result, ctx, acc_sharpen, faces=faces, person_mask=person_mask)
-        timings["finish"] = (time.perf_counter() - t5) * 1000
+            # ------------------------------------------------------------------
+            # Stage 6 — Selective sharpening + impact finish (now in float)
+            # ------------------------------------------------------------------
+            t5 = time.perf_counter()
+            result = self._stage_finish(result, ctx, acc_sharpen, faces=faces, person_mask=person_mask)
+            timings["finish"] = (time.perf_counter() - t5) * 1000
 
         # ------------------------------------------------------------------
         # F1: Convert back to uint8 for output
@@ -1525,30 +1739,43 @@ class RetouchEngine:
         ctx: ProcessingContext,
         person_mask: Optional[np.ndarray] = None,
     ) -> np.ndarray:
-        result = img.copy()
+        """F1/E2: uint8 no-face path fixed — now converts to float32 [0,1]
+        at the top (matching _run_global_phases) so --global-only batch runs
+        get the same float-pipeline benefit as face-detected runs."""
+        from .precision import to_float, to_uint8
+        result = to_float(img.copy())
+
         if ctx.subject_separation > 0:
             result = self._stage_subject_separation(result, person_mask, ctx)
         result = self._stage_global(result, ctx)
 
         if ctx.tonal_curve_strength > 0:
-            result = tonal.apply_hd_curve(result, strength=ctx.tonal_curve_strength)
+            # tonal.apply_hd_curve expects uint8 — boundary conversion
+            result_u8 = to_uint8(result)
+            result_u8 = tonal.apply_hd_curve(result_u8, strength=ctx.tonal_curve_strength)
+            result = to_float(result_u8)
 
         # --- White balance (LCH-based, Phase 1.d) ---
         if ctx.white_balance_kelvin != _DEFAULTS["white_balance_kelvin"] or ctx.white_balance_tint != _DEFAULTS["white_balance_tint"]:
-            result = self._grader.white_balance_lch(
-                result,
+            # white_balance_lch expects uint8 — boundary conversion
+            result_u8 = to_uint8(result)
+            result_u8 = self._grader.white_balance_lch(
+                result_u8,
                 temperature=ctx.white_balance_kelvin,
                 tint=ctx.white_balance_tint,
             )
+            result = to_float(result_u8)
 
         # --- Master HSL (Phase 1.d) — global LCH adjustments ---
         if ctx.hsl_hue_global != 0 or ctx.hsl_sat_global != 0 or ctx.hsl_lum_global != 0:
-            result = self._grader.adjust_hsl_lch(
-                result,
+            result_u8 = to_uint8(result)
+            result_u8 = self._grader.adjust_hsl_lch(
+                result_u8,
                 hue_shift=ctx.hsl_hue_global * 0.6,
                 sat_scale=1.0 + ctx.hsl_sat_global / 100.0,
                 lum_shift=ctx.hsl_lum_global * 0.5,
             )
+            result = to_float(result_u8)
 
         post_effects = self._assemble_post_effects(ctx)
         skip_glows = ctx.bloom > 0.0
@@ -1562,41 +1789,45 @@ class RetouchEngine:
                 result, settings, ctx.grade_intensity,
                 skip_glows=skip_glows, skip_post_effects=True,
                 skin_protect_strength=ctx.skin_protect_strength,
+                return_float=True,
             )
 
+        # Remaining ops are uint8-contract — boundary conversions
+        result_u8 = to_uint8(result)
+
         if ctx.highlight_rolloff_strength > 0:
-            result = highlight.apply_highlight_rolloff(result, ctx.highlight_rolloff_strength)
+            result_u8 = highlight.apply_highlight_rolloff(result_u8, ctx.highlight_rolloff_strength)
 
         if ctx.bloom > 0.0:
-            result = apply_global_bloom(
-                result,
+            result_u8 = apply_global_bloom(
+                result_u8,
                 strength=ctx.bloom,
                 threshold=ctx.bloom_threshold,
                 softness=ctx.bloom_softness,
             )
 
         if ctx.glow > 0:
-            result = self._grader._add_glow(result, ctx.glow / 100.0)
+            result_u8 = self._grader._add_glow(result_u8, ctx.glow / 100.0)
 
         if post_effects:
-            result = self._grader.grade(
-                result, post_effects, 1.0,
+            result_u8 = self._grader.grade(
+                result_u8, post_effects, 1.0,
                 skin_protect_strength=ctx.skin_protect_strength,
             )
 
         if ctx.vignette > 0:
-            result = self._grader._add_vignette(result, ctx.vignette / 100.0)
+            result_u8 = self._grader._add_vignette(result_u8, ctx.vignette / 100.0)
 
         if ctx.impact > 0:
-            result = self._grader.add_impact_finish(result, ctx.impact, subject_mask=person_mask)
+            result_u8 = self._grader.add_impact_finish(result_u8, ctx.impact, subject_mask=person_mask)
 
         if ctx.grain_strength > 0:
-            result = grain.apply_film_grain(result, ctx.grain_strength)
+            result_u8 = grain.apply_film_grain(result_u8, ctx.grain_strength)
 
         # --- Negative split tone (Phase 1.d) — desaturate shadows/highlights ---
         if ctx.negative_split_tone_shadow > 0 or ctx.negative_split_tone_highlight > 0:
-            result = self._grader.negative_split_tone(
-                result,
+            result_u8 = self._grader.negative_split_tone(
+                result_u8,
                 shadow_desat=ctx.negative_split_tone_shadow / 100.0,
                 highlight_desat=ctx.negative_split_tone_highlight / 100.0,
             )
@@ -1608,14 +1839,14 @@ class RetouchEngine:
             or ctx.bw_channel_mixer_b != _DEFAULTS["bw_channel_mixer_b"]
         )
         if bw_active:
-            result = self._grader.channel_mixer_bw(
-                result,
+            result_u8 = self._grader.channel_mixer_bw(
+                result_u8,
                 r_weight=ctx.bw_channel_mixer_r / 100.0,
                 g_weight=ctx.bw_channel_mixer_g / 100.0,
                 b_weight=ctx.bw_channel_mixer_b / 100.0,
             )
 
-        return result
+        return result_u8
 
     def _stage_reshape(self, img: np.ndarray, faces, ctx: ProcessingContext) -> np.ndarray:
         if ctx.slimming > 0:
@@ -1923,6 +2154,9 @@ class RetouchEngine:
           background -= 0.4 EV * strength%
         Applied in LAB L-channel for clean exposure shifts.
         Accepts uint8 or float32 [0,1] input, returns same dtype.
+
+        F1/E2: float path is genuinely float-native (no uint8 round-trip)
+        via ``bgr_f32_to_lab_f32`` / ``lab_f32_to_bgr_f32``.
         """
         strength = ctx.subject_separation
         if strength <= 0 or person_mask is None:
@@ -1943,8 +2177,11 @@ class RetouchEngine:
         feather = max(3, int(min(h_img, w_img) * 0.02) | 1)
         pm = cv2.GaussianBlur(pm, (feather, feather), 0)
 
-        bgr_u8 = np.clip(img_255, 0, 255).astype(np.uint8)
-        lab = cv2.cvtColor(bgr_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
+        if is_float:
+            lab = bgr_f32_to_lab_f32(img_255)
+        else:
+            bgr_u8 = np.clip(img_255, 0, 255).astype(np.uint8)
+            lab = cv2.cvtColor(bgr_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
         L = lab[:, :, 0]
 
         s = strength / 100.0
@@ -1956,11 +2193,13 @@ class RetouchEngine:
 
         L_new = L * (mask_subject * subject_gain + mask_bg * background_gain)
         lab[:, :, 0] = np.clip(L_new, 0.0, 255.0)
-        result_u8 = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
-        
+
         if is_float:
-            return result_u8.astype(np.float32) / 255.0
-        return result_u8
+            result_f255 = lab_f32_to_bgr_f32(lab)
+            return np.clip(result_f255 / 255.0, 0.0, 1.0).astype(np.float32)
+        else:
+            result_u8 = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+            return result_u8
 
     def _stage_body_skin(
         self,
@@ -2372,7 +2611,6 @@ class RetouchEngine:
         is_float = img.dtype == np.float32
         result = img
 
-        # For functions that don't yet support float, convert temporarily
         def _to_uint8_if_float(x):
             if x.dtype == np.float32:
                 return np.clip(x * 255.0, 0, 255).astype(np.uint8)
@@ -2385,38 +2623,36 @@ class RetouchEngine:
 
         # Subject-Aware Color Transfer (Meitu/Xingtu-style portrait match)
         if style_ref is not None:
+            # inherently-uint8: subject_aware_transfer returns uint8 and uses cvtColor BGR2LAB internally
             result_u8 = _to_uint8_if_float(result)
             result_u8 = subject_aware_transfer(self, result_u8, style_ref, target_faces=faces, target_person=person_mask)
             result = _to_float_if_needed(result_u8, is_float)
 
         # Colour transfer (reference-based)
         if ctx.color_ref is not None:
-            result_u8 = _to_uint8_if_float(result)
-            result_u8 = self._grader.color_transfer(
-                result_u8, ctx.color_ref, intensity=ctx.color_transfer_intensity
+            # F1/E2: color_transfer now dtype-aware (float32 [0,255] path via bgr_f32_to_lab_f32)
+            result = self._grader.color_transfer(
+                result, ctx.color_ref, intensity=ctx.color_transfer_intensity
             )
-            result = _to_float_if_needed(result_u8, is_float)
 
         # --- White balance (LCH-based, Phase 1.d) ---
         if ctx.white_balance_kelvin != _DEFAULTS["white_balance_kelvin"] or ctx.white_balance_tint != _DEFAULTS["white_balance_tint"]:
-            result_u8 = _to_uint8_if_float(result)
-            result_u8 = self._grader.white_balance_lch(
-                result_u8,
+            # F1/E2: white_balance_lch now dtype-aware (float32 [0,255] path via bgr_f32_to_lch_f32)
+            result = self._grader.white_balance_lch(
+                result,
                 temperature=ctx.white_balance_kelvin,
                 tint=ctx.white_balance_tint,
             )
-            result = _to_float_if_needed(result_u8, is_float)
 
         # --- Master HSL (Phase 1.d) — global LCH adjustments ---
         if ctx.hsl_hue_global != 0 or ctx.hsl_sat_global != 0 or ctx.hsl_lum_global != 0:
-            result_u8 = _to_uint8_if_float(result)
-            result_u8 = self._grader.adjust_hsl_lch(
-                result_u8,
+            # F1/E2: adjust_hsl_lch now dtype-aware (float32 [0,255] path via bgr_f32_to_lch_f32)
+            result = self._grader.adjust_hsl_lch(
+                result,
                 hue_shift=ctx.hsl_hue_global * 0.6,
                 sat_scale=1.0 + ctx.hsl_sat_global / 100.0,
                 lum_shift=ctx.hsl_lum_global * 0.5,
             )
-            result = _to_float_if_needed(result_u8, is_float)
 
         # Build glow mask — allow glow on skin & background, preserve costume details
         pm_norm = _norm_mask(person_mask)
@@ -2431,12 +2667,14 @@ class RetouchEngine:
         post_effects = self._assemble_post_effects(ctx)
 
         if ctx.tonal_curve_strength > 0:
+            # inherently-uint8: tonal.apply_hd_curve uses cv2.LUT which requires uint8 input
             result_u8 = _to_uint8_if_float(result)
             result_u8 = tonal.apply_hd_curve(result_u8, strength=ctx.tonal_curve_strength)
             result = _to_float_if_needed(result_u8, is_float)
 
         # Run core color grading (grade() now supports float natively)
         if ctx.color_grade_stack:
+            # inherently-uint8: grade_stack always returns uint8 (no return_float param)
             result_u8 = _to_uint8_if_float(result)
             result_u8 = self._grader.grade_stack(result_u8, ctx.color_grade_stack)
             result = _to_float_if_needed(result_u8, is_float)
@@ -2462,68 +2700,60 @@ class RetouchEngine:
                 "midtones": {"hue": ctx.midtone_hue, "sat": ctx.midtone_sat},
                 "highlights": {"hue": ctx.highlight_hue, "sat": ctx.highlight_sat},
             }
-            result_u8 = _to_uint8_if_float(result)
-            result_u8 = self._grader._split_tone_three_way(result_u8, tones, mask=acc_skin)
-            result = _to_float_if_needed(result_u8, is_float)
+            if is_float:
+                result = self._grader._F_split_tone_three_way(result, tones, mask=acc_skin)
+            else:
+                result = self._grader._split_tone_three_way(result, tones, mask=acc_skin)
 
         if ctx.highlight_rolloff_strength > 0:
-            result_u8 = _to_uint8_if_float(result)
-            result_u8 = highlight.apply_highlight_rolloff(result_u8, ctx.highlight_rolloff_strength)
-            result = _to_float_if_needed(result_u8, is_float)
+            # F1/E2: apply_highlight_rolloff now dtype-aware (float32 [0,255] path)
+            result = highlight.apply_highlight_rolloff(result, ctx.highlight_rolloff_strength)
 
         # ---- Skin light-wrap diffusion (anime) ----
         if ctx.skin_glow > 0 and acc_skin is not None and acc_skin.max() > 0.01:
-            result_u8 = _to_uint8_if_float(result)
-            result_u8 = apply_skin_diffusion(result_u8, acc_skin, strength=ctx.skin_glow)
-            result = _to_float_if_needed(result_u8, is_float)
+            # F1/E2: apply_skin_diffusion now dtype-aware (float32 [0,255] path via bgr_f32_to_lab_f32)
+            result = apply_skin_diffusion(result, acc_skin, strength=ctx.skin_glow)
 
-        # Apply Global Cinematic Bloom
+        # Apply Global Cinematic Bloom (float-native: handles float32 [0,1] I/O)
         if ctx.bloom > 0.0:
-            result_u8 = _to_uint8_if_float(result)
-            result_u8 = apply_global_bloom(
-                result_u8,
+            result = apply_global_bloom(
+                result,
                 strength=ctx.bloom,
                 threshold=ctx.bloom_threshold,
                 softness=ctx.bloom_softness,
             )
-            result = _to_float_if_needed(result_u8, is_float)
 
         # Apply ctx-level atmospheric glow
         if ctx.glow > 0:
-            result_u8 = _to_uint8_if_float(result)
-            result_u8 = self._grader._add_glow(result_u8, ctx.glow / 100.0, mask=g_mask)
-            result = _to_float_if_needed(result_u8, is_float)
+            # F1/E2: _add_glow now dtype-aware (float32 [0,255] path via bgr_f32_to_lab_f32)
+            result = self._grader._add_glow(result, ctx.glow / 100.0, mask=g_mask)
 
         # ---- Stage C4: 透明感 / 空気感 Finish Pack ----
 
         # Fade toe: lifted-black with hue-locked toe (L-only in LAB)
         if ctx.fade_toe > 0:
-            result_u8 = _to_uint8_if_float(result)
-            result_u8 = self._grader.fade_toe(result_u8, ctx.fade_toe / 100.0, mask=acc_skin)
-            result = _to_float_if_needed(result_u8, is_float)
+            # F1/E2: fade_toe now dtype-aware (float32 [0,255] path via bgr_f32_to_lab_f32)
+            result = self._grader.fade_toe(result, ctx.fade_toe / 100.0, mask=acc_skin)
 
         # Highlight drift: hue rotation toward cyan in highlights, skin-protected
         if ctx.highlight_drift > 0:
-            result_u8 = _to_uint8_if_float(result)
-            result_u8 = self._grader.highlight_drift(result_u8, ctx.highlight_drift / 100.0, mask=acc_skin)
-            result = _to_float_if_needed(result_u8, is_float)
+            # F1/E2: highlight_drift now dtype-aware (float32 [0,255] path via bgr_f32_to_lch_f32)
+            result = self._grader.highlight_drift(result, ctx.highlight_drift / 100.0, mask=acc_skin)
 
         # Airy haze: L-threshold-scoped glow with person_mask-aware distance falloff
         if ctx.airy_haze > 0:
-            result_u8 = _to_uint8_if_float(result)
-            result_u8 = self._grader.airy_haze(result_u8, ctx.airy_haze / 100.0, person_mask=person_mask)
-            result = _to_float_if_needed(result_u8, is_float)
+            # F1/E2: airy_haze now dtype-aware (float32 [0,255] path via bgr_f32_to_lab_f32)
+            result = self._grader.airy_haze(result, ctx.airy_haze / 100.0, person_mask=person_mask)
 
         # Clarity split: negative form-band clarity + positive micro-contrast
         if ctx.clarity_split_neg > 0 or ctx.clarity_split_pos > 0:
-            result_u8 = _to_uint8_if_float(result)
-            result_u8 = self._grader.clarity_split(
-                result_u8,
+            # F1/E2: clarity_split now dtype-aware (float32 [0,255] path via bgr_f32_to_lab_f32)
+            result = self._grader.clarity_split(
+                result,
                 ctx.clarity_split_neg / 100.0,
                 ctx.clarity_split_pos / 100.0,
                 mask=None
             )
-            result = _to_float_if_needed(result_u8, is_float)
 
         # Apply post-effects
         if post_effects:
@@ -2537,30 +2767,25 @@ class RetouchEngine:
 
         # White costume pearl/lavender lift
         if ctx.white_costume_lift:
-            result_u8 = _to_uint8_if_float(result)
-            result_u8 = self._apply_white_costume_lift(result_u8, acc_skin, acc_lips, ctx.grade_intensity)
-            result = _to_float_if_needed(result_u8, is_float)
+            # F1/E2: _apply_white_costume_lift now dtype-aware (float32 [0,255] path via bgr_f32_to_lab_f32)
+            result = self._apply_white_costume_lift(result, acc_skin, acc_lips, ctx.grade_intensity)
 
-        # Apply ctx-level vignette
+        # Apply ctx-level vignette (float-native: _add_vignette handles float32 [0,1] I/O)
         if ctx.vignette > 0:
-            result_u8 = _to_uint8_if_float(result)
-            result_u8 = self._grader._add_vignette(result_u8, ctx.vignette / 100.0)
-            result = _to_float_if_needed(result_u8, is_float)
+            result = self._grader._add_vignette(result, ctx.vignette / 100.0)
 
         if ctx.grain_strength > 0:
-            result_u8 = _to_uint8_if_float(result)
-            result_u8 = grain.apply_film_grain(result_u8, ctx.grain_strength)
-            result = _to_float_if_needed(result_u8, is_float)
+            # F1/E2: apply_film_grain now dtype-aware (float32 [0,255] path via bgr_f32_to_lab_f32)
+            result = grain.apply_film_grain(result, ctx.grain_strength)
 
         # --- Negative split tone ---
         if ctx.negative_split_tone_shadow > 0 or ctx.negative_split_tone_highlight > 0:
-            result_u8 = _to_uint8_if_float(result)
-            result_u8 = self._grader.negative_split_tone(
-                result_u8,
+            # F1/E2: negative_split_tone now dtype-aware (float32 [0,255] path via bgr_f32_to_lch_f32)
+            result = self._grader.negative_split_tone(
+                result,
                 shadow_desat=ctx.negative_split_tone_shadow / 100.0,
                 highlight_desat=ctx.negative_split_tone_highlight / 100.0,
             )
-            result = _to_float_if_needed(result_u8, is_float)
 
         # --- B&W channel mixer ---
         bw_active = (
@@ -2569,14 +2794,13 @@ class RetouchEngine:
             or ctx.bw_channel_mixer_b != _DEFAULTS["bw_channel_mixer_b"]
         )
         if bw_active:
-            result_u8 = _to_uint8_if_float(result)
-            result_u8 = self._grader.channel_mixer_bw(
-                result_u8,
+            # F1/E2: channel_mixer_bw now dtype-aware (returns same dtype as input)
+            result = self._grader.channel_mixer_bw(
+                result,
                 r_weight=ctx.bw_channel_mixer_r / 100.0,
                 g_weight=ctx.bw_channel_mixer_g / 100.0,
                 b_weight=ctx.bw_channel_mixer_b / 100.0,
             )
-            result = _to_float_if_needed(result_u8, is_float)
 
         return result
 
@@ -2629,7 +2853,11 @@ class RetouchEngine:
         acc_lips: np.ndarray,
         grade_intensity: float,
     ) -> np.ndarray:
-        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
+        is_float = img.dtype == np.float32
+        if is_float:
+            lab = bgr_f32_to_lab_f32(img)
+        else:
+            lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
         l_val, a_val, b_val = lab[:, :, 0], lab[:, :, 1], lab[:, :, 2]
 
         non_face = 1.0 - np.clip(acc_skin_hair + acc_lips, 0.0, 1.0)
@@ -2644,6 +2872,8 @@ class RetouchEngine:
         lab[:, :, 0] = np.clip(l_val + 10.0 * s * wm_blur, 0, 255)
         lab[:, :, 1] = np.clip(a_val + 1.0 * s * wm_blur, 0, 255)
         lab[:, :, 2] = np.clip(b_val + 3.0 * s * wm_blur, 0, 255)
+        if is_float:
+            return lab_f32_to_bgr_f32(lab)
         return cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
 
     # ------------------------------------------------------------------
@@ -2675,16 +2905,17 @@ def _adjust_vibrance(img: np.ndarray, vibrance: float) -> np.ndarray:
 
 
 def _F_adjust_vibrance(img_f: np.ndarray, vibrance: float) -> np.ndarray:
-    """Float32 [0,1] variant of _adjust_vibrance.
+    """Float32 [0,1] variant of _adjust_vibrance — genuinely float-native.
 
-    ``vibrance()`` in utils.py requires uint8 [0,255] BGR input (it round-trips
-    through cv2 HSV conversion); feeding it float32 [0,1] silently corrupts the
-    image instead of raising, since cv2 accepts float32 as an already-normalized
-    HSV range. Convert at the boundary instead.
+    F1/E2: ``vibrance()`` in utils.py now accepts float32 [0,255] input
+    (dtype-aware branches), so this scales to [0,255] float32 and calls
+    it directly — no uint8 quantization.
     """
-    bgr_u8 = np.clip(img_f * 255.0, 0, 255).astype(np.uint8)
-    out_u8 = _adjust_vibrance(bgr_u8, vibrance)
-    return out_u8.astype(np.float32) / 255.0
+    bgr_f255 = np.clip(img_f * 255.0, 0.0, 255.0).astype(np.float32)
+    out_f255 = _vibrance_fn(bgr_f255, None, vibrance / 100.0)
+    if out_f255.dtype != np.float32:
+        out_f255 = out_f255.astype(np.float32)
+    return np.clip(out_f255 / 255.0, 0.0, 1.0).astype(np.float32)
 
 
 def _apply_uniform_saturation(img: np.ndarray, saturation: float) -> np.ndarray:
@@ -2698,15 +2929,23 @@ def _apply_uniform_saturation(img: np.ndarray, saturation: float) -> np.ndarray:
 
 
 def _F_apply_uniform_saturation(img_f: np.ndarray, saturation: float) -> np.ndarray:
-    """Float32 [0,1] variant of _apply_uniform_saturation."""
+    """Float32 [0,1] variant of _apply_uniform_saturation — genuinely float-native.
+
+    F1/E2: the old version round-tripped through uint8 twice (fake float). This
+    version scales to [0,255] float32 for cv2 HSV (which requires that scale),
+    operates in float, and scales back — no uint8 quantization.
+    """
     if saturation == 0:
         return img_f
-    bgr_u8 = np.clip(img_f * 255.0, 0, 255).astype(np.uint8)
-    hsv = cv2.cvtColor(bgr_u8, cv2.COLOR_BGR2HSV).astype(np.float32)
+    bgr_f255 = np.clip(img_f * 255.0, 0.0, 255.0).astype(np.float32)
+    hsv = cv2.cvtColor(bgr_f255, cv2.COLOR_BGR2HSV).astype(np.float32)
     factor = 1.0 + saturation / 100.0
-    hsv[:, :, 1] = np.clip(hsv[:, :, 1] * factor, 0, 255)
-    out_u8 = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
-    return out_u8.astype(np.float32) / 255.0
+    # cv2's float HSV returns S in [0, 1] (unlike uint8's [0, 255]), so the
+    # saturation channel must be clamped to 1.0, not 255, or scaled S exceeds
+    # gamut and HSV2BGR produces negative BGR.
+    hsv[:, :, 1] = np.clip(hsv[:, :, 1] * factor, 0.0, 1.0)
+    out_f255 = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+    return np.clip(out_f255 / 255.0, 0.0, 1.0).astype(np.float32)
 
 
 def _adjust_contrast(img: np.ndarray, contrast: float) -> np.ndarray:
