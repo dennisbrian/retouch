@@ -499,11 +499,16 @@ RECIPES = {
     },
     "studio_gel_color_v1": {
         # Colored gel wash — a cosplay-convention studio staple (blue/purple/
-        # magenta gel backgrounds). The gel cast hits skin too; C1's
-        # skin.hue_unify is the primary defense (pulls skin back toward its
-        # preferred locus regardless of the color cast the gel imposes),
-        # plus a white_balance_tint nudge and color_harmony to keep the
-        # background gel color intentional/stylized rather than muddy.
+        # magenta gel backgrounds). The gel background cast is already present
+        # in the source lighting, so C1's skin.hue_unify + white_balance_tint
+        # pull the skin back toward its preferred locus while the environment
+        # keeps its gel colour naturally.
+        #
+        # NOTE: color_harmony (blue_dream) was removed — it applied the gel
+        # cast to the FACE too, darkening it ~18 L points and stripping skin
+        # warmth (b +15 -> +1.4). The desaturated face then read as muddy /
+        # grainy. Dropping it leaves the face clean and natural while the
+        # source's own gel lighting keeps the background stylized.
         "extends": "natural",
         "frequency": {"smooth": 0.35},
         "skin": {
@@ -512,7 +517,6 @@ RECIPES = {
             "chroma_even": 0.50,
             "whiten_hue_stable": 1,
         },
-        "color_harmony": {"preset": "blue_dream", "amount": 0.35},
         "white_balance_tint": 8.0,
     },
 
