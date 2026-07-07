@@ -247,6 +247,7 @@ PROCESS_INPUT_KEYS = (
         "color_ref_img", "color_ref_strength",
         "show_compare", "fast",
         "export_fmt", "export_quality", "export_res",
+        "quality_tier",
         "debug_mode",
     ]
 )
@@ -272,6 +273,130 @@ def _coerce_float(value: object, default: float = 0.0) -> float:
     return default
 
 
+# ---------------------------------------------------------------------------
+# F2: Session handlers
+# ---------------------------------------------------------------------------
+
+def save_session_handler(*args):
+    """Save current params as a session JSON file for download."""
+    from retouch.session import create_session_from_params
+    import tempfile, os
+
+    params = dict(zip(PROCESS_INPUT_KEYS, args))
+    img_paths = params.get("img_paths")
+    image_path = None
+    if img_paths and isinstance(img_paths, list) and len(img_paths) > 0:
+        if isinstance(img_paths[0], str):
+            image_path = img_paths[0]
+        elif hasattr(img_paths[0], "name"):
+            image_path = img_paths[0].name
+
+    recipe = params.get("recipe", "natural")
+    session = create_session_from_params(params, recipe=recipe, image_path=image_path)
+
+    tmpdir = tempfile.mkdtemp()
+    filepath = os.path.join(tmpdir, f"{recipe or 'session'}.session.json")
+    session.to_file(filepath)
+
+    return gr.update(value=filepath, visible=True)
+
+
+def load_session_handler(session_file, *current_args):
+    """Load a session JSON file and return params as a tuple for Gradio."""
+    from retouch.session import Session
+    import logging
+
+    if session_file is None:
+        return current_args
+
+    try:
+        if hasattr(session_file, "name"):
+            path = session_file.name
+        else:
+            path = str(session_file)
+        session = Session.from_file(path)
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Failed to load session: {e}")
+        gr.Warning(f"Failed to load session: {e}")
+        return current_args
+
+    gr.Info(f"Loaded session (recipe: {session.recipe or 'unknown'})")
+
+    result = list(current_args)
+    for i, key in enumerate(PROCESS_INPUT_KEYS):
+        if key in session.params:
+            val = session.params[key]
+            if val is not None:
+                if i < len(result):
+                    result[i] = val
+    return tuple(result)
+
+
+def push_undo_handler(*args, undo_stack=None):
+    """Push current params onto the undo stack."""
+    from retouch.session import UndoRedoStack
+
+    params = dict(zip(PROCESS_INPUT_KEYS, args))
+    if undo_stack is None:
+        undo_stack = UndoRedoStack()
+    undo_stack.push(params)
+    return undo_stack, gr.update(interactive=undo_stack.can_undo), gr.update(interactive=undo_stack.can_redo)
+
+
+def undo_handler(undo_stack):
+    """Undo: move cursor back and return params tuple."""
+    if undo_stack is None:
+        return tuple(None for _ in PROCESS_INPUT_KEYS), None, gr.update(interactive=False), gr.update(interactive=False)
+    params = undo_stack.undo()
+    if params is None:
+        return tuple(None for _ in PROCESS_INPUT_KEYS), undo_stack, gr.update(interactive=False), gr.update(interactive=undo_stack.can_redo)
+    result = tuple(params.get(k) for k in PROCESS_INPUT_KEYS)
+    return result, undo_stack, gr.update(interactive=undo_stack.can_undo), gr.update(interactive=undo_stack.can_redo)
+
+
+def redo_handler(undo_stack):
+    """Redo: move cursor forward and return params tuple."""
+    if undo_stack is None:
+        return tuple(None for _ in PROCESS_INPUT_KEYS), None, gr.update(interactive=False), gr.update(interactive=False)
+    params = undo_stack.redo()
+    if params is None:
+        return tuple(None for _ in PROCESS_INPUT_KEYS), undo_stack, gr.update(interactive=undo_stack.can_undo), gr.update(interactive=False)
+    result = tuple(params.get(k) for k in PROCESS_INPUT_KEYS)
+    return result, undo_stack, gr.update(interactive=undo_stack.can_undo), gr.update(interactive=undo_stack.can_redo)
+
+
+def save_snapshot_handler(name, *args, snapshots=None):
+    """Save a named snapshot of current params."""
+    from retouch.session import Session, Snapshot
+
+    if not name or not name.strip():
+        gr.Warning("Please enter a snapshot name")
+        return gr.update(), snapshots or {}
+
+    params = dict(zip(PROCESS_INPUT_KEYS, args))
+    recipe = params.get("recipe", "natural")
+    session = Session(recipe=recipe, params=params)
+    snap = Snapshot(name=name.strip(), session=session)
+
+    if snapshots is None:
+        snapshots = {}
+    snapshots[name.strip()] = snap
+
+    gr.Info(f"Snapshot '{name.strip()}' saved")
+    return gr.update(choices=list(snapshots.keys())), snapshots
+
+
+def compare_snapshot_handler(selected_name, *args, snapshots=None):
+    """Compare current output with a saved snapshot."""
+    if not selected_name or snapshots is None or selected_name not in snapshots:
+        gr.Warning("Select a snapshot to compare")
+        return None
+
+    snap = snapshots[selected_name]
+    gr.Info(f"Comparing with snapshot '{selected_name}' (recipe: {snap.session.recipe})")
+    return snap.session.to_json()
+
+
 def process_image(*args):
     params = dict(zip(PROCESS_INPUT_KEYS, args))
     img_paths = params.get("img_paths")
@@ -284,6 +409,8 @@ def process_image(*args):
     export_quality = params.get("export_quality")
     export_res = params.get("export_res")
     debug_mode = params.get("debug_mode")
+    quality_tier = params.get("quality_tier")
+    quality = "draft" if quality_tier and quality_tier.startswith("Draft") else "full"
 
     if not img_paths:
         return None, gr.update(visible=False), None, None, "Please upload an image first.", None, gr.update(visible=False), ""
@@ -363,6 +490,8 @@ def process_image(*args):
                 debug_dir if (first_result_rgb is None and first_combined is None) else None
             )
 
+            engine_kwargs["quality"] = quality
+
             result = engine.process(img_bgr, **engine_kwargs)
             qa_warnings = getattr(result, 'qa', [])
 
@@ -418,12 +547,16 @@ def process_image(*args):
             ext = EXT_MAP.get(export_fmt, ".jpg")
             filename = Path(curr_path).stem
             out_path = os.path.join(temp_dir, f"{filename}_{idx:03d}_retouched{ext}")
-            write_params = []
-            if export_fmt == "JPEG":
-                write_params = [cv2.IMWRITE_JPEG_QUALITY, export_quality]
-            elif export_fmt == "WebP":
-                write_params = [cv2.IMWRITE_WEBP_QUALITY, export_quality]
-            cv2.imwrite(out_path, export_img, write_params)
+            if export_fmt == "PNG-16":
+                from retouch.io import write_image_16bit
+                write_image_16bit(out_path, export_img, format="png")
+            else:
+                write_params = []
+                if export_fmt == "JPEG":
+                    write_params = [cv2.IMWRITE_JPEG_QUALITY, export_quality]
+                elif export_fmt == "WebP":
+                    write_params = [cv2.IMWRITE_WEBP_QUALITY, export_quality]
+                cv2.imwrite(out_path, export_img, write_params)
             exported_paths.append(out_path)
 
         except Exception as e:
@@ -1289,16 +1422,32 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             process_btn = gr.Button("Process Image(s) ⚡", variant="primary", size="lg", elem_classes=["primary-btn"])
                             reset_btn = gr.Button("Reload Recipe Defaults 🔄", variant="secondary", size="lg", elem_classes=["secondary-btn"], elem_id="reset-btn")
 
+                        with gr.Accordion("💾 Session & History", open=False):
+                            with gr.Row():
+                                save_session_btn = gr.Button("Save Session", variant="secondary", size="sm")
+                                load_session_file = gr.File(label="Load Session", file_types=[".json"], file_count="single")
+                                undo_btn = gr.Button("↩ Undo", variant="secondary", size="sm")
+                                redo_btn = gr.Button("↻ Redo", variant="secondary", size="sm")
+                            with gr.Row():
+                                snapshot_name = gr.Textbox(label="Snapshot Name", placeholder="e.g. 'warm tone'", scale=3)
+                                save_snapshot_btn = gr.Button("📸 Save Snapshot", variant="secondary", size="sm", scale=1)
+                                snapshot_dropdown = gr.Dropdown(label="Snapshots", choices=[], scale=3)
+                                compare_snapshot_btn = gr.Button("Compare", variant="secondary", size="sm", scale=1)
+                            session_download = gr.File(label="Download Session", visible=False)
+                            _undo_stack_state = gr.State(value=None)
+                            _snapshot_state = gr.State(value={})
+
                     with gr.Group():
                         gr.Markdown("### ⚙️ Export Settings")
                         with gr.Row():
-                            export_fmt = gr.Radio(choices=["JPEG", "PNG", "WebP"], value="JPEG", label="Format", interactive=True)
+                            export_fmt = gr.Radio(choices=["JPEG", "PNG", "PNG-16", "WebP"], value="JPEG", label="Format", interactive=True, info="PNG-16 = 16-bit (higher precision, larger file)")
                             export_quality = gr.Slider(10, 100, 95, step=1, label="Compression Quality", info="For JPEG/WebP formats")
                         export_res = gr.Dropdown(
                             choices=["Original", "4K (3840px)", "2K (2048px)", "Full HD (1920px)", "HD (1280px)", "720px"],
                             value="Original", label="Resize / Limit Resolution", interactive=True,
                             info="Downscales image if it exceeds target dimension while maintaining aspect ratio"
                         )
+                        quality_tier = gr.Radio(choices=["Full (native face crops)", "Draft (proxy, fast)"], value="Full (native face crops)", label="Processing Quality", interactive=True, info="Full: faces processed at native resolution (F8.2). Draft: legacy proxy path for fast batch contact sheets.")
 
                 # Column 2: Workspace Canvas (Center)
                 with gr.Column(scale=4, elem_classes=["viewer-panel"]):
@@ -1714,6 +1863,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         color_ref_img, color_ref_strength,
         show_compare, fast,
         export_fmt, export_quality, export_res,
+        quality_tier,
         debug_mode,
     ]
     _process_outputs = [img_output, compare_viewer, _original_state, export_file, status, debug_gallery, debug_panel, qa_status]
@@ -1730,6 +1880,43 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         inputs=_process_inputs,
         outputs=_process_outputs,
         concurrency_limit=1,
+    )
+
+    # F2: Session wiring
+    save_session_btn.click(
+        fn=save_session_handler,
+        inputs=_process_inputs,
+        outputs=[session_download],
+    )
+
+    load_session_file.change(
+        fn=load_session_handler,
+        inputs=[load_session_file] + _process_inputs,
+        outputs=list(_process_inputs),
+    )
+
+    undo_btn.click(
+        fn=undo_handler,
+        inputs=[_undo_stack_state],
+        outputs=_process_inputs + [_undo_stack_state, undo_btn, redo_btn],
+    )
+
+    redo_btn.click(
+        fn=redo_handler,
+        inputs=[_undo_stack_state],
+        outputs=_process_inputs + [_undo_stack_state, undo_btn, redo_btn],
+    )
+
+    save_snapshot_btn.click(
+        fn=save_snapshot_handler,
+        inputs=[snapshot_name] + _process_inputs + [_snapshot_state],
+        outputs=[snapshot_dropdown, _snapshot_state],
+    )
+
+    compare_snapshot_btn.click(
+        fn=compare_snapshot_handler,
+        inputs=[snapshot_dropdown] + _process_inputs + [_snapshot_state],
+        outputs=[gr.Textbox(visible=False)],
     )
 
 if __name__ == "__main__":
