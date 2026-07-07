@@ -952,30 +952,25 @@ RECIPES = {
         "contrast": 18.0,
         "clarity": 24.0,
         "sharpen": 30.0,
-        "relight": 45.0,
+        # relight lives under skin.relight (engine reads it via that path and
+        # scales x100); a top-level "relight": 45.0 was silently ignored.
+        # 0.45 -> engine 45, preserving the intended strength.
+        "skin": {"relight": 0.45},
         "chromatic_aberration": 6.0,
         "bloom": {"opacity": 0.10},
         "vignette": 10.0,
     },
-    # NOTE: anime_crystal_void has 7 dead recipe keys that are NOT implemented in engine.py.
-    # These keys are silently ignored by the engine (not an error, just no-op):
-    # - background_blur, background_desaturation, light_wrap, blue_shadow_grade,
-    #   cyan_midtone_grade, subject_sharpen, matte_black
-    # See PLAN_MOONLIGHT_PORCELAIN.md §"Bugs found" for details.
-    # TODO(Phase 2): Wire these as real ParamSpecs + engine stages if needed.
+    # anime_crystal_void previously carried 7 aspirational keys (background_blur,
+    # background_desaturation, light_wrap, blue_shadow_grade, cyan_midtone_grade,
+    # subject_sharpen, matte_black) that were never wired into the engine — they
+    # were silently ignored no-ops. Removed so the recipe only lists keys that
+    # actually do something; re-add as real ParamSpecs + engine stages if wired.
     "anime_crystal_void": {
         "extends": "anime_cinematic_v1",
         "subject_separation": 0.85,
         "bloom": {"opacity": 0.35},
         "chromatic_aberration": 1.5,
         "eyes": {"iris": 0.20},
-        "background_blur": 0.55,  # DEAD KEY — not implemented
-        "background_desaturation": 0.40,  # DEAD KEY — not implemented
-        "light_wrap": 0.25,  # DEAD KEY — not implemented
-        "blue_shadow_grade": 0.75,  # DEAD KEY — not implemented
-        "cyan_midtone_grade": 0.45,  # DEAD KEY — not implemented
-        "subject_sharpen": 0.30,  # DEAD KEY — not implemented
-        "matte_black": 0.10,  # DEAD KEY — not implemented
     },
     "anime_cinematic_fantasy": {
         "extends": "anime_cinematic_v1",

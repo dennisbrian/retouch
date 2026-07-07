@@ -60,15 +60,14 @@ def test_recipe_resolution_no_errors():
         assert len(resolved) > 0, f"Recipe '{recipe_name}' is empty after resolution"
 
 
-def test_anime_crystal_void_dead_keys_documented():
-    """Verify that anime_crystal_void's dead keys are at least documented.
+def test_anime_crystal_void_dead_keys_removed():
+    """Guard: anime_crystal_void's 7 never-wired keys stay removed.
 
-    This recipe has 7 unimplemented keys:
-    - background_blur, background_desaturation, light_wrap
-    - blue_shadow_grade, cyan_midtone_grade, subject_sharpen, matte_black
-
-    They should be documented as dead (e.g., inline comments in recipes.py).
-    This test ensures we know about them and aren't surprised by no-op behavior.
+    These keys (background_blur, background_desaturation, light_wrap,
+    blue_shadow_grade, cyan_midtone_grade, subject_sharpen, matte_black) were
+    aspirational no-ops silently ignored by the engine. They were removed so
+    the recipe only lists keys that do something; this test ensures they don't
+    creep back in unwired.
     """
     recipe = RECIPES.get("anime_crystal_void")
     if recipe:
@@ -76,5 +75,5 @@ def test_anime_crystal_void_dead_keys_documented():
             "background_blur", "background_desaturation", "light_wrap",
             "blue_shadow_grade", "cyan_midtone_grade", "subject_sharpen", "matte_black"
         }
-        for dead_key in dead_keys:
-            assert dead_key in recipe, f"Dead key '{dead_key}' removed from anime_crystal_void (may be intentional)"
+        present = dead_keys & set(recipe.keys())
+        assert not present, f"Unwired dead keys reintroduced in anime_crystal_void: {sorted(present)}"
