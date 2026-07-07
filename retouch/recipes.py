@@ -1385,6 +1385,92 @@ RECIPES["classic_chrome"] = {
     "highlight_sat": 6.0,
 }
 
+RECIPES["studio_dream_v2"] = {
+    # Flagship #11 (Phase 3-6 showcase): integrates film simulation, makeup v2,
+    # background harmonizer, and advanced hair work — the complete Phase 3-6
+    # feature set in one "dream studio" look. Subjects shot in controlled
+    # lighting (studio, event, con-hall) with makeup get a polished editorial
+    # finish: subtle film-stock character (Fuji Astia warmth), enhanced makeup
+    # depth via eyeshadow + eyeliner, harmonized background that doesn't steal
+    # focus, and luminous hair shine. Moderate strengths across all axes to
+    # read as "professional styling" not "over-filtered."
+    "extends": "natural_polish_v1",
+    "frequency": {"smooth": 0.35},
+    "skin": {
+        "equalize": 0.12,
+        "hue_unify": 0.30,
+        "chroma_even": 0.25,
+        "whiten_hue_stable": 1,
+        "shine_removal": 0.35,
+        "relight": 0.28,  # Soft fill for studio dimensional modeling
+    },
+    "eyes": {
+        "dark_circles": 0.18,
+        "catchlight": 0.15,
+        "iris": 0.15,
+        "whites": 0.15,
+    },
+    "lips": {"gloss": 0.18},
+    "hair": {"shine": 0.40},  # Strong hair luminosity — signature of studio lighting
+    # --- Phase 3-6: Film Simulation (Fuji Astia-inspired warmth) ---
+    "film": {
+        "preset": "astia_inspired",  # Warm, saturated, slightly lifted blacks
+        "shoulder": {"r": 0.05, "g": 0.02, "b": 0.02},  # Warm shoulder curve
+        "midpoint": 0.48,  # Slightly lifted midtone
+        "gamma": 0.95,  # Gentle toe lift
+        "crosstalk": {"cy_mg": 0.08, "cy_ye": 0.05, "mg_ye": 0.06},  # Subtle cross-talk
+        "tonemap": {
+            "strength": 0.15,
+            "toe": 0.12,
+            "shoulder": 0.08,
+            "skew": 0.02,
+        },
+    },
+    # --- Phase 3-6: Makeup v2 (eyeshadow + eyeliner) ---
+    # Subtle makeup enhancement — natural eye definition without heavy shadow.
+    "makeup_v2": {
+        "eyeshadow": 35,  # Light-to-moderate eyeshadow
+        "eyeshadow_color": "bronze",  # Warm bronze complements Astia film
+        "eyeshadow_style": "gradient",  # Soft gradient (not cut-crease drama)
+        "eyeliner": 25,  # Subtle liner definition
+        "eyeliner_color": "brown",  # Warm brown matches eyeshadow palette
+        "eyeliner_style": "subtle",
+        "contour": 20,  # Light cheekbone modeling
+        "brows": 18,  # Gentle brow fill (texture, not drama)
+        "brows_color": "brown",
+    },
+    # --- Phase 3-6: Background Harmonizer ---
+    # Separate subject from background without losing context; subtle bokeh/blur.
+    "harmony": {
+        "background_harmonize": True,
+        "background_harmonize_mode": "split",  # Warm-cool separation
+    },
+    "background": {
+        "background_blur": 12,  # Moderate bokeh
+        "background_desaturation": 15,  # Slight desaturation to push subject forward
+        "light_wrap": 8,  # Subtle rim-light wrap for separation
+        "subject_sharpen": 8.0,  # Crisp subject focus
+        "matte_black": 0.05,  # Subtle black crush in deep shadows
+    },
+    # --- Grading & Finish ---
+    "tonal_curve_strength": 0.25,
+    "highlight_rolloff": 0.35,
+    "finish": {
+        "clarity_split_neg": 0.10,  # Soft form enhancement
+        "clarity_split_pos": 0.08,  # Crisp microtexture
+        "airy_haze": 0.12,  # Dreamy atmospheric glow
+    },
+    # Split-tone: warm highlights, cool shadows (classic studio look)
+    "shadow_hue": 210, "shadow_sat": 16,
+    "midtone_hue": 35, "midtone_sat": 10,
+    "highlight_hue": 45, "highlight_sat": 14,
+    # Film-stock grain
+    "grain_strength": 0.15,
+    "vignette": 12.0,
+    # Hair is the hero — shine must read through the film simulation
+    "sharpen": 14.0,
+}
+
 
 # Canonical name list for the three official Fuji film simulations.
 # Used by the GUI dropdown, CLI helpers, and integration tests.
