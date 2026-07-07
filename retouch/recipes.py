@@ -193,6 +193,56 @@ RECIPES = {
         },
         "texture": {"opacity": 0.95},
     },
+    "float32_beauty_v1": {
+        # Showcase recipe for the float32-native pipeline (F1/E2). The point
+        # is fidelity, not style: every stage here leans on smooth tonal
+        # transitions that the float path now renders without the uint8
+        # banding/quantization the old fake-float path introduced —
+        # tonal_curve + highlight_rolloff shape the highlights on a continuous
+        # curve, a gentle skin.relight adds dimension, clarity_split adds
+        # micro-definition, and a fine grain (float-native, no static) gives a
+        # clean high-fidelity film-beauty finish. Pair with 16-bit PNG export
+        # to carry the smooth gradients all the way to disk.
+        #
+        # Built on natural_polish_v1 (the restrained "just better" base) so the
+        # result reads as flawless-but-real, not over-processed.
+        "extends": "natural_polish_v1",
+        "frequency": {"smooth": 0.28, "nose_smooth": 0.24},
+        "skin": {
+            "equalize": 0.06,
+            "hue_unify": 0.22,
+            "chroma_even": 0.18,
+            "whiten_hue_stable": 1,
+            "shine_removal": 0.30,
+            "exposure_lock": 0.7,
+            # Gentle relight for soft dimensional modeling — float-native so the
+            # shading ramp stays smooth (no banding in the falloff).
+            "relight": 0.22,
+        },
+        "eyes": {
+            "dark_circles": 0.15,
+            "catchlight": 0.10,
+            "iris": 0.10,
+            "whites": 0.12,
+        },
+        "lips": {"gloss": 0.12},
+        # Smooth continuous tonal shaping — the core of the fidelity demo.
+        # tonal_curve + highlight_rolloff render highlight/shadow rolloff on a
+        # float curve; on the old path these were the most banding-prone ops.
+        "tonal_curve_strength": 0.30,
+        "highlight_rolloff": 0.40,
+        # Light finish pack (all float-fixed today): clarity_split for micro
+        # form/texture separation, a whisper of airy_haze for glow.
+        "finish": {
+            "clarity_split_neg": 0.12,
+            "clarity_split_pos": 0.10,
+            "airy_haze": 0.10,
+        },
+        # Fine film grain — float-native, clean (no full-frame static). Kept
+        # low so it reads as fidelity texture, not stylization.
+        "grain_strength": 0.10,
+    },
+
     "natural_polish_v1": {
         # Flagship #6: the "barely retouched, just better" case — proves the
         # algorithm stack doesn't require heavy strengths to be worth having.
