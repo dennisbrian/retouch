@@ -2637,12 +2637,21 @@ class RetouchEngine:
 
         # --- White balance (LCH-based, Phase 1.d) ---
         if ctx.white_balance_kelvin != _DEFAULTS["white_balance_kelvin"] or ctx.white_balance_tint != _DEFAULTS["white_balance_tint"]:
-            # F1/E2: white_balance_lch now dtype-aware (float32 [0,255] path via bgr_f32_to_lch_f32)
-            result = self._grader.white_balance_lch(
-                result,
-                temperature=ctx.white_balance_kelvin,
-                tint=ctx.white_balance_tint,
-            )
+            # white_balance_lch runs through bgr_f32_to_lch_f32, which expects
+            # float BGR in [0,255]; `result` is [0,1] here, so scale around the
+            # call or the LCh L collapses and the image crushes to black.
+            if is_float:
+                wb_in = np.clip(result * 255.0, 0.0, 255.0).astype(np.float32)
+                wb_out = self._grader.white_balance_lch(
+                    wb_in, temperature=ctx.white_balance_kelvin, tint=ctx.white_balance_tint,
+                )
+                result = np.clip(wb_out / 255.0, 0.0, 1.0).astype(np.float32)
+            else:
+                result = self._grader.white_balance_lch(
+                    result,
+                    temperature=ctx.white_balance_kelvin,
+                    tint=ctx.white_balance_tint,
+                )
 
         # --- Master HSL (Phase 1.d) — global LCH adjustments ---
         if ctx.hsl_hue_global != 0 or ctx.hsl_sat_global != 0 or ctx.hsl_lum_global != 0:
@@ -2730,30 +2739,42 @@ class RetouchEngine:
 
         # ---- Stage C4: 透明感 / 空気感 Finish Pack ----
 
+        # Finish effects run through bgr_f32_to_lab_f32 / bgr_f32_to_lch_f32,
+        # which expect float BGR in [0,255]. At this point in the float path
+        # `result` is [0,1], so scale up for the whole finish group and back —
+        # otherwise the LAB/LCh L collapses toward 0 and highlight_drift /
+        # clarity_split crush the image to black.
+        _finish_needs_scale = is_float and (
+            ctx.fade_toe > 0 or ctx.highlight_drift > 0
+            or ctx.airy_haze > 0 or ctx.clarity_split_neg > 0
+            or ctx.clarity_split_pos > 0
+        )
+        if _finish_needs_scale:
+            result = np.clip(result * 255.0, 0.0, 255.0).astype(np.float32)
+
         # Fade toe: lifted-black with hue-locked toe (L-only in LAB)
         if ctx.fade_toe > 0:
-            # F1/E2: fade_toe now dtype-aware (float32 [0,255] path via bgr_f32_to_lab_f32)
             result = self._grader.fade_toe(result, ctx.fade_toe / 100.0, mask=acc_skin)
 
         # Highlight drift: hue rotation toward cyan in highlights, skin-protected
         if ctx.highlight_drift > 0:
-            # F1/E2: highlight_drift now dtype-aware (float32 [0,255] path via bgr_f32_to_lch_f32)
             result = self._grader.highlight_drift(result, ctx.highlight_drift / 100.0, mask=acc_skin)
 
         # Airy haze: L-threshold-scoped glow with person_mask-aware distance falloff
         if ctx.airy_haze > 0:
-            # F1/E2: airy_haze now dtype-aware (float32 [0,255] path via bgr_f32_to_lab_f32)
             result = self._grader.airy_haze(result, ctx.airy_haze / 100.0, person_mask=person_mask)
 
         # Clarity split: negative form-band clarity + positive micro-contrast
         if ctx.clarity_split_neg > 0 or ctx.clarity_split_pos > 0:
-            # F1/E2: clarity_split now dtype-aware (float32 [0,255] path via bgr_f32_to_lab_f32)
             result = self._grader.clarity_split(
                 result,
                 ctx.clarity_split_neg / 100.0,
                 ctx.clarity_split_pos / 100.0,
                 mask=None
             )
+
+        if _finish_needs_scale:
+            result = np.clip(result / 255.0, 0.0, 1.0).astype(np.float32)
 
         # Apply post-effects
         if post_effects:
