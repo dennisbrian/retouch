@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import logging
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -47,8 +48,46 @@ EXT_MAP: Dict[str, str] = {
 }
 
 
+def _resolve_safe_path(path: Union[str, Path], base_dir: Optional[Union[str, Path]] = None) -> Path:
+    """Resolve *path* and reject directory-traversal escapes.
+
+    The engine must never write outside a caller-designated output tree via
+    a crafted relative path (``../../etc/foo``). When *base_dir* is provided,
+    the resolved path must stay within it. When *base_dir* is None (single-file
+    CLI/GUI case), the path must not resolve to a system directory.
+    """
+    p = Path(path).expanduser().resolve()
+    if base_dir is not None:
+        base = Path(base_dir).expanduser().resolve()
+        try:
+            p.relative_to(base)
+        except ValueError as exc:
+            raise ValueError(f"Path traversal rejected: {path!r} escapes base {base!s}") from exc
+    else:
+        # The OS temp dir is a legitimate write target (GUI/CLI export scratch).
+        # On Linux TMPDIR often resolves under /var/tmp, which would otherwise be
+        # rejected by the /var system-path guard below, so allow it explicitly.
+        tmp_root = Path(tempfile.gettempdir()).resolve()
+        try:
+            p.relative_to(tmp_root)
+            return p
+        except ValueError:
+            pass
+        for forbidden in ("/etc", "/usr", "/bin", "/sbin", "/System", "/private/etc", "/var", "/dev"):
+            try:
+                p.relative_to(forbidden)
+            except ValueError:
+                continue
+            raise ValueError(f"Path traversal rejected: {path!r} resolves to system path {p!s}")
+    return p
+
+
 def imwrite_16bit_png(path: Union[str, Path], img: np.ndarray) -> bool:
     """Write image as 16-bit PNG (uint16).
+
+    .. deprecated:: use :func:`write_image_16bit` for new callers; this
+       helper assumes float32 input is in [0, 1] (legacy convention) and
+       is retained for backwards compatibility.
 
     Args:
         path: Output file path.
@@ -67,6 +106,143 @@ def imwrite_16bit_png(path: Union[str, Path], img: np.ndarray) -> bool:
     pil_img = Image.fromarray(rgb, mode="RGB;16" if hasattr(Image, "fromarray") else "RGB")
     pil_img.save(str(path), format="PNG")
     return True
+
+
+def write_image_16bit(
+    path: Union[str, Path],
+    img: np.ndarray,
+    format: str = "png",
+) -> bool:
+    """Write *img* as a 16-bit PNG or TIFF.
+
+    The engine works internally in float32 with values in [0, 255]. This
+    function scales that range losslessly to uint16 [0, 65535] by multiplying
+    by 257.0 (65535 / 255), so a float value of 255.0 maps exactly to 65535
+    and 0.0 maps to 0. Rounding is used (not truncation) to match the
+    round-trip inverse used by :func:`read_image_16bit`.
+
+    Args:
+        path: Destination filesystem path. Extension must be ``.png``,
+            ``.tif`` or ``.tiff``; anything else raises ``ValueError``.
+        img: ``(H, W, 3)`` BGR or ``(H, W)`` grayscale image. Accepted
+            dtypes: float32/float64 in [0, 255], uint8, or uint16. uint8
+            input is upscaled to uint16 (``* 257``) but, because no real
+            precision is created, a warning is logged.
+        format: ``"png"`` or ``"tiff"``. Selects the OpenCV imwrite
+            compression flag (``IMWRITE_PNG_COMPRESSION`` /
+            ``IMWRITE_TIFF_COMPRESSION``). Default ``"png"``.
+
+    Returns:
+        True on success.
+
+    Raises:
+        ValueError: If *format* is unsupported or the path extension is
+            incompatible with 16-bit output.
+        cv2.error: If the underlying ``cv2.imwrite`` fails.
+    """
+    fmt = format.lower()
+    if fmt not in ("png", "tiff", "tif"):
+        raise ValueError(
+            f"write_image_16bit: format must be 'png' or 'tiff', got {format!r}"
+        )
+    safe = _resolve_safe_path(path)
+    ext = safe.suffix.lower()
+    if ext not in (".png", ".tif", ".tiff"):
+        raise ValueError(
+            f"write_image_16bit: path extension {ext!r} cannot hold 16-bit data; "
+            "use .png or .tif/.tiff"
+        )
+
+    if img.dtype == np.float32 or img.dtype == np.float64:
+        img_u16 = np.clip(np.round(img * 257.0), 0, 65535).astype(np.uint16)
+    elif img.dtype == np.uint8:
+        logger.warning(
+            "write_image_16bit: uint8 input upscaled to uint16 (x257); "
+            "this does not add real precision — supply float32 for true 16-bit export"
+        )
+        img_u16 = (img.astype(np.uint16) * np.uint16(257)).astype(np.uint16)
+    elif img.dtype == np.uint16:
+        img_u16 = img
+    else:
+        raise TypeError(
+            f"write_image_16bit: unsupported dtype {img.dtype!r}; "
+            "expected float32/float64, uint8 or uint16"
+        )
+
+    if img_u16.ndim == 3 and img_u16.shape[2] == 4:
+        bgr = img_u16[:, :, :3]
+    else:
+        bgr = img_u16
+
+    if fmt == "png":
+        params = [cv2.IMWRITE_PNG_COMPRESSION, 3]
+    else:
+        params = [cv2.IMWRITE_TIFF_COMPRESSION, 5]
+
+    ok = cv2.imwrite(str(safe), bgr, params)
+    if not ok:
+        raise cv2.error(f"cv2.imwrite returned False for 16-bit write to {safe}")
+    return True
+
+
+def read_image_16bit(path: Union[str, Path]) -> np.ndarray:
+    """Read a 16-bit PNG/TIFF/RAW image and return float32 BGR in [0, 255].
+
+    The inverse of :func:`write_image_16bit`: uint16 [0, 65535] is divided
+    by 257.0 to land in float32 [0, 255], preserving the engine's internal
+    working range. Files that are actually 8-bit are read as uint8 and
+    promoted to float32 [0, 255] (multiplied by 1.0, i.e. identity), so
+    callers always receive the same dtype/range regardless of source depth.
+
+    Args:
+        path: Filesystem path to a 16-bit (or 8-bit) PNG/TIFF, or a RAW
+            camera file (``.raf``/``.cr2``/``.nef``/``.dng``/…). RAW files
+            are decoded via rawpy at 16-bit when the driver supports it.
+
+    Returns:
+        ``(H, W, 3)`` float32 BGR image with values in [0, 255].
+
+    Raises:
+        FileNotFoundError: If *path* does not exist.
+        ValueError: If *path* cannot be decoded as an image.
+        cv2.error: On OpenCV-level decode failures.
+    """
+    safe = _resolve_safe_path(path)
+    if not safe.exists():
+        raise FileNotFoundError(f"read_image_16bit: {safe} not found")
+
+    ext = safe.suffix.lower()
+    if ext in RAW_EXTENSIONS:
+        import rawpy
+
+        with rawpy.imread(str(safe)) as raw:
+            rgb16 = raw.postprocess(
+                use_camera_wb=True,
+                no_auto_bright=True,
+                bright=1.0,
+                output_bps=16,
+            )
+        bgr16 = cv2.cvtColor(rgb16, cv2.COLOR_RGB2BGR)
+        return (bgr16.astype(np.float32) / 257.0).astype(np.float32, copy=False)
+
+    flag = cv2.IMREAD_UNCHANGED if ext in (".png", ".tif", ".tiff") else cv2.IMREAD_COLOR
+    img = cv2.imread(str(safe), flag)
+    if img is None:
+        raise ValueError(f"read_image_16bit: failed to decode {safe}")
+
+    if img.dtype == np.uint16:
+        out = (img.astype(np.float32) / 257.0).astype(np.float32, copy=False)
+    elif img.dtype == np.uint8:
+        out = img.astype(np.float32, copy=True)
+    else:
+        out = img.astype(np.float32, copy=False)
+
+    if out.ndim == 2:
+        out = cv2.cvtColor(out, cv2.COLOR_GRAY2BGR)
+    elif out.ndim == 3 and out.shape[2] == 4:
+        out = cv2.cvtColor(out, cv2.COLOR_BGRA2BGR)
+
+    return out
 
 
 def imread_exif(path: Union[str, Path]) -> np.ndarray:
