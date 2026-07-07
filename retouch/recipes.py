@@ -1471,6 +1471,375 @@ RECIPES["studio_dream_v2"] = {
     "sharpen": 14.0,
 }
 
+RECIPES["film_noir_cinema_v1"] = {
+    # Flagship #12 (Phase 3-6): Film noir + high-contrast cinematic look.
+    # Extreme tonal mapping (lifted blacks, crushed highlights), strong
+    # split-tone (cool shadows/warm highlights), no makeup (raw character),
+    # minimal hair shine (noir aesthetic), and moody background blur.
+    # Kodak Portra-inspired film stock color science.
+    "extends": "natural",
+    "frequency": {"smooth": 0.30},
+    "skin": {
+        "equalize": 0.20,
+        "hue_unify": 0.40,
+        "chroma_even": 0.35,
+        "whiten_hue_stable": 1,
+        "shine_removal": 0.40,
+        "relight": 0.20,
+    },
+    "eyes": {
+        "dark_circles": 0.10,
+        "catchlight": 0.20,
+        "iris": 0.20,
+        "whites": 0.18,
+    },
+    "hair": {"shine": 0.10},  # Minimal shine (noir aesthetic)
+    # --- Aggressive film simulation (Kodak Portra noir mood) ---
+    "film": {
+        "preset": "portra_noir",
+        "toe": {"r": 0.15, "g": 0.12, "b": 0.18},  # Lifted blacks, cool cast
+        "shoulder": {"r": 0.02, "g": 0.01, "b": 0.01},  # Crushed highlights
+        "midpoint": 0.50,  # Neutral midpoint
+        "gamma": 0.90,  # More toe lift than Astia
+        "crosstalk": {"cy_mg": 0.12, "cy_ye": 0.08, "mg_ye": 0.10},
+        "tonemap": {
+            "strength": 0.35,  # Aggressive tonal mapping
+            "toe": 0.25,
+            "shoulder": 0.15,
+            "skew": 0.05,
+        },
+    },
+    # --- No makeup v2 (raw, character-driven) ---
+    # --- Strong background separation ---
+    "harmony": {
+        "background_harmonize": True,
+        "background_harmonize_mode": "split",
+    },
+    "background": {
+        "background_blur": 20,  # Heavy bokeh (noir depth)
+        "background_desaturation": 35,  # Strong push-back
+        "light_wrap": 12,  # Cinematic rim light
+        "subject_sharpen": 12.0,  # Crisp subject
+        "matte_black": 0.20,  # Deep black crush
+    },
+    # Aggressive split-tone
+    "shadow_hue": 240, "shadow_sat": 35,
+    "midtone_hue": 35, "midtone_sat": 8,
+    "highlight_hue": 50, "highlight_sat": 20,
+    "tonal_curve_strength": 0.50,
+    "highlight_rolloff": 0.55,
+    "finish": {
+        "fade_toe": 0.40,
+        "clarity_split_neg": 0.15,
+        "airy_haze": 0.05,  # Minimal haze (noir is sharp)
+    },
+    "contrast": 15.0,
+    "shadows": 30.0,
+    "vignette": 25.0,
+    "grain_strength": 0.25,
+}
+
+RECIPES["editorial_elegance_v1"] = {
+    # Flagship #13 (Phase 3-6): High-fashion editorial aesthetic.
+    # Focus: sophisticated makeup depth (warm bronze eyeshadow + bold eyeliner),
+    # luminous skin (gentle relight + minimal equalize), luminous hair (35% shine),
+    # and a background that suggests luxury context without dominating.
+    # Fuji Superia-inspired film (saturated, warm, lifted).
+    "extends": "natural_polish_v1",
+    "frequency": {"smooth": 0.32},
+    "skin": {
+        "equalize": 0.08,
+        "hue_unify": 0.25,
+        "chroma_even": 0.20,
+        "whiten_hue_stable": 1,
+        "shine_removal": 0.25,
+        "relight": 0.32,  # Strong fill light for luminosity
+    },
+    "eyes": {
+        "dark_circles": 0.20,
+        "catchlight": 0.18,
+        "iris": 0.18,
+        "whites": 0.16,
+    },
+    "lips": {"gloss": 0.20},
+    "hair": {"shine": 0.35},
+    # --- Phase 3-6: Makeup v2 (bold, editorial eyeshadow) ---
+    "makeup_v2": {
+        "eyeshadow": 45,  # Strong editorial eyeshadow
+        "eyeshadow_color": "burgundy",  # Deep burgundy (luxury tone)
+        "eyeshadow_style": "cut_crease",  # High-fashion cut-crease
+        "eyeliner": 35,  # Bold eyeliner definition
+        "eyeliner_color": "black",  # Strong black liner
+        "eyeliner_style": "bold",  # Dramatic liner style
+        "contour": 25,  # Cheekbone modeling
+        "brows": 22,  # Strong brow definition
+        "brows_color": "black",
+    },
+    # --- Film (Fuji Superia warmth + saturation) ---
+    "film": {
+        "preset": "superia_warm",
+        "shoulder": {"r": 0.08, "g": 0.04, "b": 0.01},  # Warm highlights
+        "midpoint": 0.48,
+        "gamma": 0.92,
+        "crosstalk": {"cy_mg": 0.10, "cy_ye": 0.07, "mg_ye": 0.08},
+        "tonemap": {
+            "strength": 0.20,
+            "toe": 0.15,
+            "shoulder": 0.10,
+            "skew": 0.03,
+        },
+    },
+    # --- Subtle background separation (editorial context) ---
+    "harmony": {
+        "background_harmonize": True,
+        "background_harmonize_mode": "split",
+    },
+    "background": {
+        "background_blur": 8,  # Subtle bokeh (shows context)
+        "background_desaturation": 10,  # Minimal push (editorial scene matters)
+        "light_wrap": 6,  # Delicate rim light
+        "subject_sharpen": 10.0,
+    },
+    # Split-tone (warm/cool for luxury)
+    "shadow_hue": 200, "shadow_sat": 20,
+    "midtone_hue": 40, "midtone_sat": 12,
+    "highlight_hue": 50, "highlight_sat": 18,
+    "tonal_curve_strength": 0.28,
+    "highlight_rolloff": 0.40,
+    "finish": {
+        "clarity_split_neg": 0.12,
+        "clarity_split_pos": 0.10,
+        "airy_haze": 0.08,
+    },
+    "sharpen": 16.0,
+    "vignette": 14.0,
+    "grain_strength": 0.12,
+}
+
+RECIPES["wedding_timeless_v1"] = {
+    # Flagship #14 (Phase 3-6): Wedding/formal portraiture.
+    # Soft, romantic aesthetic with balanced makeup depth, luminous skin,
+    # moderate hair shine, and gentle background blur. Romantic film tone
+    # (warm shadows, soft highlights). Respects natural beauty while adding
+    # a touch of magic and elegance.
+    "extends": "natural_polish_v1",
+    "frequency": {"smooth": 0.33},
+    "skin": {
+        "equalize": 0.10,
+        "hue_unify": 0.28,
+        "chroma_even": 0.22,
+        "whiten_hue_stable": 1,
+        "shine_removal": 0.30,
+        "relight": 0.30,
+    },
+    "eyes": {
+        "dark_circles": 0.20,
+        "catchlight": 0.16,
+        "iris": 0.16,
+        "whites": 0.14,
+    },
+    "lips": {"gloss": 0.16, "tint": "rose"},
+    "hair": {"shine": 0.32},
+    # --- Makeup v2 (soft, romantic makeup) ---
+    "makeup_v2": {
+        "eyeshadow": 30,  # Soft eyeshadow
+        "eyeshadow_color": "rose",  # Romantic rose/mauve
+        "eyeshadow_style": "soft",  # Soft blended (not dramatic)
+        "eyeliner": 20,  # Subtle eyeliner
+        "eyeliner_color": "brown",  # Soft brown (not harsh)
+        "eyeliner_style": "subtle",
+        "contour": 18,  # Gentle contouring
+        "brows": 16,  # Soft brow enhancement
+        "brows_color": "brown",
+    },
+    # --- Film (Kodak Portra romance) ---
+    "film": {
+        "preset": "portra_romance",
+        "toe": {"r": 0.05, "g": 0.04, "b": 0.03},  # Warm toe
+        "shoulder": {"r": 0.04, "g": 0.03, "b": 0.02},  # Soft shoulder
+        "midpoint": 0.48,
+        "gamma": 0.94,
+        "crosstalk": {"cy_mg": 0.06, "cy_ye": 0.04, "mg_ye": 0.05},
+        "tonemap": {
+            "strength": 0.12,
+            "toe": 0.10,
+            "shoulder": 0.06,
+            "skew": 0.01,
+        },
+    },
+    # --- Gentle background separation ---
+    "harmony": {
+        "background_harmonize": True,
+        "background_harmonize_mode": "split",
+    },
+    "background": {
+        "background_blur": 10,  # Soft bokeh
+        "background_desaturation": 12,
+        "light_wrap": 5,  # Delicate rim
+        "subject_sharpen": 9.0,
+        "matte_black": 0.02,  # Minimal black crush
+    },
+    # Warm, soft split-tone
+    "shadow_hue": 210, "shadow_sat": 15,
+    "midtone_hue": 35, "midtone_sat": 10,
+    "highlight_hue": 45, "highlight_sat": 12,
+    "tonal_curve_strength": 0.22,
+    "highlight_rolloff": 0.35,
+    "finish": {
+        "clarity_split_neg": 0.10,
+        "clarity_split_pos": 0.08,
+        "airy_haze": 0.15,  # Romantic atmospheric glow
+    },
+    "bloom": {"opacity": 0.08},  # Soft bloom for romance
+    "vignette": 10.0,
+    "grain_strength": 0.10,
+}
+
+RECIPES["high_energy_glow_v1"] = {
+    # Flagship #15 (Phase 3-6): Vibrant, energetic social media aesthetic.
+    # Maximum makeup impact (bold eyeshadow + eyeliner), high hair luminosity (40%),
+    # strong background separation, vibrant saturated film (Fuji Velvia-inspired),
+    # and aggressive bloom/glow for the "influencer" look.
+    "extends": "natural",
+    "frequency": {"smooth": 0.38},
+    "skin": {
+        "equalize": 0.25,
+        "rosy": 0.25,
+        "hue_unify": 0.32,
+        "chroma_even": 0.28,
+        "whiten_hue_stable": 1,
+        "shine_removal": 0.32,
+        "relight": 0.35,  # Strong fill for luminosity
+        "glow": 0.30,  # Skin light-wrap diffusion
+    },
+    "eyes": {
+        "dark_circles": 0.22,
+        "catchlight": 0.22,
+        "iris": 0.22,
+        "whites": 0.20,
+    },
+    "lips": {"gloss": 0.25, "tint": "rose"},
+    "hair": {"shine": 0.40},
+    # --- Makeup v2 (bold, energetic) ---
+    "makeup_v2": {
+        "eyeshadow": 50,  # Bold eyeshadow
+        "eyeshadow_color": "pink",  # Vibrant pink
+        "eyeshadow_style": "gradient",  # Blended gradient
+        "eyeliner": 40,  # Bold eyeliner
+        "eyeliner_color": "black",
+        "eyeliner_style": "bold",
+        "contour": 30,  # Pronounced sculpting
+        "brows": 28,  # Strong brow definition
+        "brows_color": "black",
+    },
+    # --- Film (Velvia vibrant saturation) ---
+    "film": {
+        "preset": "velvia_vibrant",
+        "shoulder": {"r": 0.06, "g": 0.03, "b": 0.01},  # Warm highlights
+        "midpoint": 0.46,  # Lifted (energetic)
+        "gamma": 0.93,
+        "crosstalk": {"cy_mg": 0.12, "cy_ye": 0.10, "mg_ye": 0.12},
+        "tonemap": {
+            "strength": 0.25,
+            "toe": 0.20,
+            "shoulder": 0.12,
+            "skew": 0.04,
+        },
+    },
+    # --- Strong background separation ---
+    "harmony": {
+        "background_harmonize": True,
+        "background_harmonize_mode": "split",
+    },
+    "background": {
+        "background_blur": 15,  # Pronounced bokeh
+        "background_desaturation": 25,  # Strong push-back
+        "light_wrap": 10,
+        "subject_sharpen": 14.0,
+        "matte_black": 0.08,
+    },
+    # Vibrant, energetic split-tone
+    "shadow_hue": 220, "shadow_sat": 28,
+    "midtone_hue": 38, "midtone_sat": 18,
+    "highlight_hue": 48, "highlight_sat": 22,
+    "bloom": {"opacity": 0.20},  # Aggressive bloom (glow signature)
+    "specular_bloom": 35,
+    "tonal_curve_strength": 0.32,
+    "highlight_rolloff": 0.45,
+    "finish": {
+        "clarity_split_neg": 0.14,
+        "clarity_split_pos": 0.12,
+        "airy_haze": 0.18,  # Strong atmospheric glow
+    },
+    "saturation": 15.0,
+    "contrast": 12.0,
+    "vignette": 12.0,
+    "grain_strength": 0.08,
+}
+
+RECIPES["minimal_film_v1"] = {
+    # Flagship #16 (Phase 3-6): Minimal intervention + film character.
+    # Restrained skin processing (light smoothing, minimal makeup), but with
+    # strong film simulation (Ektar vibrant) and background separation to add
+    # a cinema-like polish without over-processing the face. Ideal for
+    # documentary/photojournalism with style.
+    "extends": "natural_polish_v1",
+    "frequency": {"smooth": 0.22},
+    "skin": {
+        "equalize": 0.05,
+        "hue_unify": 0.15,
+        "chroma_even": 0.10,
+        "whiten_hue_stable": 1,
+        "shine_removal": 0.20,
+        "exposure_lock": 0.7,
+    },
+    "eyes": {
+        "dark_circles": 0.10,
+        "catchlight": 0.08,
+    },
+    "hair": {"shine": 0.15},  # Minimal shine (documentary aesthetic)
+    # --- No makeup v2 (natural face) ---
+    # --- Strong film to compensate for minimal face processing ---
+    "film": {
+        "preset": "ektar_vibrant",
+        "toe": {"r": 0.02, "g": 0.01, "b": 0.02},  # Minimal toe lift
+        "shoulder": {"r": 0.06, "g": 0.04, "b": 0.02},  # Vibrant shoulders
+        "midpoint": 0.50,
+        "gamma": 0.96,  # Minimal gamma shift
+        "crosstalk": {"cy_mg": 0.08, "cy_ye": 0.05, "mg_ye": 0.07},
+        "tonemap": {
+            "strength": 0.18,
+            "toe": 0.08,
+            "shoulder": 0.12,
+            "skew": 0.02,
+        },
+    },
+    # --- Subtle background (not intrusive) ---
+    "harmony": {
+        "background_harmonize": True,
+        "background_harmonize_mode": "split",
+    },
+    "background": {
+        "background_blur": 6,  # Subtle bokeh (maintains context)
+        "background_desaturation": 8,
+        "light_wrap": 3,  # Minimal rim (natural)
+        "subject_sharpen": 7.0,
+    },
+    # Subtle split-tone (not dominant)
+    "shadow_hue": 210, "shadow_sat": 10,
+    "midtone_hue": 0, "midtone_sat": 0,
+    "highlight_hue": 35, "highlight_sat": 8,
+    "sharpen": 10.0,
+    "tonal_curve_strength": 0.15,
+    "highlight_rolloff": 0.25,
+    "finish": {
+        "clarity_split_neg": 0.08,
+        "clarity_split_pos": 0.06,
+    },
+    "grain_strength": 0.16,  # Film grain is the hero (not face processing)
+    "vignette": 6.0,
+}
+
 
 # Canonical name list for the three official Fuji film simulations.
 # Used by the GUI dropdown, CLI helpers, and integration tests.
