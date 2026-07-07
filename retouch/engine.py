@@ -2775,8 +2775,15 @@ class RetouchEngine:
             result = self._grader._add_vignette(result, ctx.vignette / 100.0)
 
         if ctx.grain_strength > 0:
-            # F1/E2: apply_film_grain now dtype-aware (float32 [0,255] path via bgr_f32_to_lab_f32)
-            result = grain.apply_film_grain(result, ctx.grain_strength)
+            # apply_film_grain's float32 branch expects [0,255] (it runs
+            # bgr_f32_to_lab_f32, which assumes that scale). At this point in
+            # the float path `result` is [0,1], so scale up around the call or
+            # grain math swamps the signal into full-frame static.
+            if is_float:
+                grained = grain.apply_film_grain(result * 255.0, ctx.grain_strength)
+                result = np.clip(grained / 255.0, 0.0, 1.0).astype(np.float32)
+            else:
+                result = grain.apply_film_grain(result, ctx.grain_strength)
 
         # --- Negative split tone ---
         if ctx.negative_split_tone_shadow > 0 or ctx.negative_split_tone_highlight > 0:
