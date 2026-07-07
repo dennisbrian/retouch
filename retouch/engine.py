@@ -111,6 +111,7 @@ from . import grain, highlight, tonal, qa_detectors
 from .qa_detectors import QAWarning
 from .hair import HairEnhancer
 from .relight import Relighter
+from .enhance import AIEnhancer
 from .recipes import RECIPES
 from .recipe_loader import load_user_recipes
 from .style import StyleProfile
@@ -227,8 +228,23 @@ class ProcessingContext:
     blush: float = 0.0
     slimming: float = 0.0
 
+    # --- Face reshape (F5 liquify sliders) ---
+    reshape_eye_size: float = 0.0
+    reshape_eye_distance: float = 0.0
+    reshape_nose_width: float = 0.0
+    reshape_nose_length: float = 0.0
+    reshape_jaw_width: float = 0.0
+    reshape_chin_length: float = 0.0
+    reshape_mouth_size: float = 0.0
+    reshape_smile: float = 0.0
+    reshape_forehead: float = 0.0
+
     # --- Hair ---
     hair_enhance: float = 0.0
+    hair_deglare: float = 0.0
+    hair_ring_position: float = 30.0
+    hair_ring_tint: float = 40.0
+    hair_remove_flyaways: float = 0.0
 
     # --- Tonal / global ---
     contrast: float = 0.0
@@ -256,6 +272,25 @@ class ProcessingContext:
     skin_protect_strength: float = _DEFAULTS["skin_protect_strength"]
     grain_strength: float = _DEFAULTS["grain_strength"]
     highlight_rolloff_strength: float = _DEFAULTS["highlight_rolloff_strength"]
+
+    # --- Film density engine (C3) ---
+    film_enable: bool = _DEFAULTS["film_enable"]
+    film_strength: float = _DEFAULTS["film_strength"]
+    film_toe_r: float = _DEFAULTS["film_toe_r"]
+    film_toe_g: float = _DEFAULTS["film_toe_g"]
+    film_toe_b: float = _DEFAULTS["film_toe_b"]
+    film_shoulder_r: float = _DEFAULTS["film_shoulder_r"]
+    film_shoulder_g: float = _DEFAULTS["film_shoulder_g"]
+    film_shoulder_b: float = _DEFAULTS["film_shoulder_b"]
+    film_midpoint: float = _DEFAULTS["film_midpoint"]
+    film_gamma: float = _DEFAULTS["film_gamma"]
+    film_crosstalk_cy_mg: float = _DEFAULTS["film_crosstalk_cy_mg"]
+    film_crosstalk_cy_ye: float = _DEFAULTS["film_crosstalk_cy_ye"]
+    film_crosstalk_mg_ye: float = _DEFAULTS["film_crosstalk_mg_ye"]
+    film_tonemap_strength: float = _DEFAULTS["film_tonemap_strength"]
+    film_tonemap_toe: float = _DEFAULTS["film_tonemap_toe"]
+    film_tonemap_shoulder: float = _DEFAULTS["film_tonemap_shoulder"]
+    film_skew: float = _DEFAULTS["film_skew"]
 
     # --- Split toning ---
     shadow_hue: float = _DEFAULTS["shadow_hue"]
@@ -317,6 +352,12 @@ class ProcessingContext:
 
     # F4: Manual heal marks — list of {"mask_png_b64": str, "method": str}
     heals: Optional[List[Dict[str, Any]]] = None
+
+    # F7: AI denoise + super-resolution.
+    # ai_denoise: 0-100 opacity blend (0 = no-op).
+    # ai_sr_scale: export-time upscale factor (1=off, 2, 4).
+    ai_denoise: float = 0.0
+    ai_sr_scale: int = 1
 
 
 # ---------------------------------------------------------------------------
@@ -636,6 +677,7 @@ class RetouchEngine:
         self._grader = ColorGrader()
         self._hair = HairEnhancer()
         self._relighter = Relighter()
+        self._enhancer: Optional[AIEnhancer] = None
 
         # Persistent process pool for multi-face parallel processing.
         # Lazily started on first multi-face call; shut down in close().
@@ -697,6 +739,10 @@ class RetouchEngine:
         micro_restore: Optional[float] = None,
         micro_dodge_burn: Optional[float] = None,
         hair_enhance: Optional[float] = None,
+        hair_deglare: Optional[float] = None,
+        hair_ring_position: Optional[float] = None,
+        hair_ring_tint: Optional[float] = None,
+        hair_remove_flyaways: Optional[float] = None,
         dodge_burn: Optional[float] = None,
         relight: Optional[float] = None,
         relight_azimuth: Optional[float] = None,
@@ -708,6 +754,15 @@ class RetouchEngine:
         clarity_split_neg: Optional[float] = None,
         clarity_split_pos: Optional[float] = None,
         slimming: Optional[float] = None,
+        reshape_eye_size: Optional[float] = None,
+        reshape_eye_distance: Optional[float] = None,
+        reshape_nose_width: Optional[float] = None,
+        reshape_nose_length: Optional[float] = None,
+        reshape_jaw_width: Optional[float] = None,
+        reshape_chin_length: Optional[float] = None,
+        reshape_mouth_size: Optional[float] = None,
+        reshape_smile: Optional[float] = None,
+        reshape_forehead: Optional[float] = None,
         blush: Optional[float] = None,
         lip_finish: Optional[str] = None,
         specular_bloom: Optional[float] = None,
@@ -767,6 +822,23 @@ class RetouchEngine:
         hsl_hue_global: Optional[int] = None,
         hsl_sat_global: Optional[int] = None,
         hsl_lum_global: Optional[int] = None,
+        film_enable: Optional[bool] = None,
+        film_strength: Optional[float] = None,
+        film_toe_r: Optional[float] = None,
+        film_toe_g: Optional[float] = None,
+        film_toe_b: Optional[float] = None,
+        film_shoulder_r: Optional[float] = None,
+        film_shoulder_g: Optional[float] = None,
+        film_shoulder_b: Optional[float] = None,
+        film_midpoint: Optional[float] = None,
+        film_gamma: Optional[float] = None,
+        film_crosstalk_cy_mg: Optional[float] = None,
+        film_crosstalk_cy_ye: Optional[float] = None,
+        film_crosstalk_mg_ye: Optional[float] = None,
+        film_tonemap_strength: Optional[float] = None,
+        film_tonemap_toe: Optional[float] = None,
+        film_tonemap_shoulder: Optional[float] = None,
+        film_skew: Optional[float] = None,
         color_grade_stack=None,
         color_ref: Optional[np.ndarray] = None,
         color_transfer_intensity: float = 1.0,
@@ -777,6 +849,9 @@ class RetouchEngine:
         face_contexts: Optional[List["FaceContext"]] = None,
         heals: Optional[List[Dict[str, Any]]] = None,
         quality: Optional[str] = None,
+        local_adjustments: Optional[List[Dict[str, Any]]] = None,
+        ai_denoise: Optional[float] = None,
+        ai_sr_scale: Optional[int] = None,
     ) -> ProcessingResult:
         """Process a single image through the full Retouch pipeline.
 
@@ -832,6 +907,10 @@ class RetouchEngine:
             "micro_restore": micro_restore,
             "micro_dodge_burn": micro_dodge_burn,
             "hair_enhance": hair_enhance,
+            "hair_deglare": hair_deglare,
+            "hair_ring_position": hair_ring_position,
+            "hair_ring_tint": hair_ring_tint,
+            "hair_remove_flyaways": hair_remove_flyaways,
             "dodge_burn": dodge_burn,
             "relight": relight,
             "relight_azimuth": relight_azimuth,
@@ -843,6 +922,15 @@ class RetouchEngine:
             "clarity_split_neg": clarity_split_neg,
             "clarity_split_pos": clarity_split_pos,
             "slimming": slimming,
+            "reshape_eye_size": reshape_eye_size,
+            "reshape_eye_distance": reshape_eye_distance,
+            "reshape_nose_width": reshape_nose_width,
+            "reshape_nose_length": reshape_nose_length,
+            "reshape_jaw_width": reshape_jaw_width,
+            "reshape_chin_length": reshape_chin_length,
+            "reshape_mouth_size": reshape_mouth_size,
+            "reshape_smile": reshape_smile,
+            "reshape_forehead": reshape_forehead,
             "blush": blush,
             "lip_finish": lip_finish,
             "specular_bloom": specular_bloom,
@@ -902,6 +990,23 @@ class RetouchEngine:
             "hsl_hue_global": hsl_hue_global,
             "hsl_sat_global": hsl_sat_global,
             "hsl_lum_global": hsl_lum_global,
+            "film_enable": film_enable,
+            "film_strength": film_strength,
+            "film_toe_r": film_toe_r,
+            "film_toe_g": film_toe_g,
+            "film_toe_b": film_toe_b,
+            "film_shoulder_r": film_shoulder_r,
+            "film_shoulder_g": film_shoulder_g,
+            "film_shoulder_b": film_shoulder_b,
+            "film_midpoint": film_midpoint,
+            "film_gamma": film_gamma,
+            "film_crosstalk_cy_mg": film_crosstalk_cy_mg,
+            "film_crosstalk_cy_ye": film_crosstalk_cy_ye,
+            "film_crosstalk_mg_ye": film_crosstalk_mg_ye,
+            "film_tonemap_strength": film_tonemap_strength,
+            "film_tonemap_toe": film_tonemap_toe,
+            "film_tonemap_shoulder": film_tonemap_shoulder,
+            "film_skew": film_skew,
             "color_grade_stack": color_grade_stack,
             "color_ref": color_ref,
             "color_transfer_intensity": color_transfer_intensity,
@@ -913,6 +1018,8 @@ class RetouchEngine:
             "sharpen": sharpen,
             "sharpen_radius": sharpen_radius,
             "subject_separation": subject_separation,
+            "ai_denoise": ai_denoise,
+            "ai_sr_scale": ai_sr_scale,
         }
 
         ctx = build_context(active_recipe, rec, overrides)
@@ -922,6 +1029,8 @@ class RetouchEngine:
             ctx.heals = heals
         if quality is not None:
             ctx.quality = quality
+        if local_adjustments is not None:
+            ctx._local_adjustments = local_adjustments
 
         if style_profile is not None:
             if overrides["contrast"] is None:
@@ -945,6 +1054,19 @@ class RetouchEngine:
                     ctx.whiten_tone = "neutral"
             if overrides["saturation"] is None:
                 ctx.saturation = np.clip(style_profile.saturation_delta, -100.0, 100.0)
+
+        # ------------------------------------------------------------------
+        # F7: Pre-pipeline AI denoise — runs before detection + heals so the
+        # whole pipeline sees a cleaner input. strength is a 0-100 opacity
+        # blend between the original and the denoised image.
+        # ------------------------------------------------------------------
+        if ctx.ai_denoise and ctx.ai_denoise > 0.0:
+            if self._enhancer is None:
+                self._enhancer = AIEnhancer()
+            t_dn = time.perf_counter()
+            strength = float(ctx.ai_denoise) / 100.0
+            img_bgr = self._enhancer.denoise(img_bgr, strength=strength)
+            timings["ai_denoise"] = (time.perf_counter() - t_dn) * 1000
 
         # ------------------------------------------------------------------
         # F4: Pre-pipeline heal hook — heals run BEFORE retouch/grade
@@ -988,6 +1110,7 @@ class RetouchEngine:
         if core.no_face:
             if fast and scale < 1.0:
                 result = cv2.resize(result, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
+            result = self._apply_sr_export(result, ctx, timings)
             timings["total"] = sum(timings.values())
             return ProcessingResult(
                 image=result,
@@ -1046,6 +1169,14 @@ class RetouchEngine:
                 cv2.imwrite(os.path.join(debug_dir, "freq_mid.png"), np.clip(layers.mid + 128, 0, 255).astype(np.uint8))
                 cv2.imwrite(os.path.join(debug_dir, "freq_high.png"), np.clip(layers.high + 128, 0, 255).astype(np.uint8))
 
+        # ------------------------------------------------------------------
+        # F7: Export-time AI super-resolution. Runs after the full pipeline
+        # (and after debug visualizations, which are at retouch resolution).
+        # Masks are NOT upscaled — they stay at retouch resolution; the SR
+        # output is the final image.
+        # ------------------------------------------------------------------
+        result = self._apply_sr_export(result, ctx, timings)
+
         return ProcessingResult(
             image=result,
             skin_mask=acc_skin,
@@ -1062,6 +1193,22 @@ class RetouchEngine:
     # ------------------------------------------------------------------
     # Stage methods
     # ------------------------------------------------------------------
+
+    def _apply_sr_export(
+        self,
+        result: np.ndarray,
+        ctx: ProcessingContext,
+        timings: Dict[str, float],
+    ) -> np.ndarray:
+        """F7 export-time super-resolution. No-op when ``ai_sr_scale <= 1``."""
+        if not ctx.ai_sr_scale or ctx.ai_sr_scale <= 1:
+            return result
+        if self._enhancer is None:
+            self._enhancer = AIEnhancer()
+        t_sr = time.perf_counter()
+        out = self._enhancer.super_resolve(result, scale=int(ctx.ai_sr_scale))
+        timings["ai_sr"] = (time.perf_counter() - t_sr) * 1000
+        return out
 
     def _process_with_proxy(
         self,
@@ -1613,6 +1760,16 @@ class RetouchEngine:
             timings["grading"] = (time.perf_counter() - t4) * 1000
 
             # ------------------------------------------------------------------
+            # Stage 5.5 — F3: Local adjustments (after grade, before finish)
+            # ------------------------------------------------------------------
+            t_local = time.perf_counter()
+            local_adjs = getattr(ctx, "_local_adjustments", None)
+            if local_adjs:
+                sem_masks = {"skin": acc_skin, "person": person_mask} if acc_skin is not None else None
+                result = self._stage_local_adjustments(result, ctx, local_adjustments=local_adjs, semantic_masks=sem_masks)
+            timings["local_adjustments"] = (time.perf_counter() - t_local) * 1000
+
+            # ------------------------------------------------------------------
             # Stage 6 — Selective sharpening + impact finish (now in float)
             # ------------------------------------------------------------------
             t5 = time.perf_counter()
@@ -1749,7 +1906,9 @@ class RetouchEngine:
             result = self._stage_subject_separation(result, person_mask, ctx)
         result = self._stage_global(result, ctx)
 
-        if ctx.tonal_curve_strength > 0:
+        film_tonemap_active = bool(ctx.film_enable and ctx.film_tonemap_strength > 0)
+
+        if ctx.tonal_curve_strength > 0 and not film_tonemap_active:
             # tonal.apply_hd_curve expects uint8 — boundary conversion
             result_u8 = to_uint8(result)
             result_u8 = tonal.apply_hd_curve(result_u8, strength=ctx.tonal_curve_strength)
@@ -1777,10 +1936,26 @@ class RetouchEngine:
             )
             result = to_float(result_u8)
 
+        # --- C3: Parametric film-density engine (no-face path) ---
+        if ctx.film_enable:
+            from .film import FilmDensityEngine
+            _film_engine = FilmDensityEngine()
+            result = _film_engine.apply_from_context(result, ctx)
+
         post_effects = self._assemble_post_effects(ctx)
         skip_glows = ctx.bloom > 0.0
 
-        if ctx.color_grade:
+        if ctx.film_enable and ctx.lut is not None and ctx.lut != "none":
+            logger.warning(
+                "film.enable=true with lut=%r: LUT skipped (mutually exclusive "
+                "with C3 film engine)", ctx.lut,
+            )
+            post_effects.pop("lut", None)
+
+        # grade_intensity == 0 means "no grade" — skip entirely so a preset set
+        # with amount 0 (e.g. color_harmony.amount: 0.0) doesn't still leak the
+        # preset's post-effects (grain/halation/CA/lut) onto the image.
+        if ctx.color_grade and ctx.grade_intensity > 0:
             settings = PRESETS.get(ctx.color_grade, PRESETS["natural"]).copy()
             for k in ["halation", "grain", "chromatic_aberration", "lut"]:
                 if k in settings and k not in post_effects:
@@ -1849,9 +2024,28 @@ class RetouchEngine:
         return result_u8
 
     def _stage_reshape(self, img: np.ndarray, faces, ctx: ProcessingContext) -> np.ndarray:
-        if ctx.slimming > 0:
-            return self._reshaper.reshape(img, faces, ctx.slimming)
+        if self._any_reshape_active(ctx):
+            return self._reshaper.reshape(img, faces, ctx)
         return img.copy()
+
+    @staticmethod
+    def _any_reshape_active(ctx: ProcessingContext) -> bool:
+        if ctx.slimming > 0:
+            return True
+        return any(
+            getattr(ctx, attr, 0.0) != 0
+            for attr in (
+                "reshape_eye_size",
+                "reshape_eye_distance",
+                "reshape_nose_width",
+                "reshape_nose_length",
+                "reshape_jaw_width",
+                "reshape_chin_length",
+                "reshape_mouth_size",
+                "reshape_smile",
+                "reshape_forehead",
+            )
+        )
 
     @staticmethod
     def _compute_face_roi_padding(
@@ -2675,7 +2869,22 @@ class RetouchEngine:
         skip_glows = ctx.bloom > 0.0
         post_effects = self._assemble_post_effects(ctx)
 
-        if ctx.tonal_curve_strength > 0:
+        # --- C3: Parametric film-density engine (between HSL and tonal curve) ---
+        film_tonemap_active = False
+        if ctx.film_enable:
+            from .film import FilmDensityEngine
+            if ctx.lut is not None and ctx.lut != "none":
+                logger.warning(
+                    "film.enable=true with lut=%r: LUT skipped (mutually exclusive "
+                    "with C3 film engine)", ctx.lut,
+                )
+                post_effects.pop("lut", None)
+            if ctx.film_tonemap_strength > 0:
+                film_tonemap_active = True
+            _film_engine = FilmDensityEngine()
+            result = _film_engine.apply_from_context(result, ctx)
+
+        if ctx.tonal_curve_strength > 0 and not film_tonemap_active:
             # inherently-uint8: tonal.apply_hd_curve uses cv2.LUT which requires uint8 input
             result_u8 = _to_uint8_if_float(result)
             result_u8 = tonal.apply_hd_curve(result_u8, strength=ctx.tonal_curve_strength)
@@ -2687,7 +2896,9 @@ class RetouchEngine:
             result_u8 = _to_uint8_if_float(result)
             result_u8 = self._grader.grade_stack(result_u8, ctx.color_grade_stack)
             result = _to_float_if_needed(result_u8, is_float)
-        elif ctx.color_grade:
+        elif ctx.color_grade and ctx.grade_intensity > 0:
+            # grade_intensity == 0 -> skip entirely so a preset at amount 0
+            # doesn't leak its grain/halation/CA/lut post-effects.
             settings = PRESETS.get(ctx.color_grade, PRESETS["natural"]).copy()
             for k in ["halation", "grain", "chromatic_aberration", "lut"]:
                 if k in settings and k not in post_effects:
@@ -2829,6 +3040,47 @@ class RetouchEngine:
                 g_weight=ctx.bw_channel_mixer_g / 100.0,
                 b_weight=ctx.bw_channel_mixer_b / 100.0,
             )
+
+        return result
+
+    def _stage_local_adjustments(
+        self,
+        img: np.ndarray,
+        ctx: ProcessingContext,
+        local_adjustments: Optional[List[Dict[str, Any]]] = None,
+        semantic_masks: Optional[Dict[str, np.ndarray]] = None,
+    ) -> np.ndarray:
+        """F3: Apply brush/radial/linear local adjustments.
+
+        Runs after _stage_grade, before _stage_finish, so local edits
+        sit on top of the global look (like Lightroom).
+
+        Each adjustment is a dict: {mask, op, strength, semantic?}
+        - mask: float32 [0,1] or uint8 [0,255] mask
+        - op: one of LOCAL_ADJUSTMENT_OPS keys (exposure, warmth, etc.)
+        - strength: float (typically -100 to 100)
+        - semantic: optional key into semantic_masks (e.g. "skin", "hair")
+        """
+        if not local_adjustments:
+            return img
+
+        from .regions import apply_local_adjustment
+
+        result = img
+        for adj in local_adjustments:
+            mask = adj.get("mask")
+            op = adj.get("op", "exposure")
+            strength = adj.get("strength", 0.0)
+            semantic = adj.get("semantic")
+
+            if mask is None or strength == 0:
+                continue
+
+            sem_mask = None
+            if semantic and semantic_masks and semantic in semantic_masks:
+                sem_mask = semantic_masks[semantic]
+
+            result = apply_local_adjustment(result, mask, op, strength, semantic_mask=sem_mask)
 
         return result
 
