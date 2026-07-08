@@ -219,6 +219,10 @@ class ProcessingContext:
     eye_enhance: float = 0.0
     dark_circles: float = 0.0
     catchlight: float = 0.0
+    eye_sclera_brighten: float = 0.0
+    eye_iris_saturate: float = 0.0
+    eye_iris_hue_shift: float = 0.0
+    eye_iris_brightness: float = 0.0
 
     # --- Lips ---
     lip_enhance: float = 0.0
