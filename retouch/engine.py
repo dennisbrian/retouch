@@ -218,6 +218,8 @@ class ProcessingContext:
     # --- Eyes ---
     eye_enhance: float = 0.0
     dark_circles: float = 0.0
+    undereye_darken_removal: float = 0.0
+    undereye_puffiness_reduction: float = 0.0
     catchlight: float = 0.0
     eye_sclera_brighten: float = 0.0
     eye_iris_saturate: float = 0.0
@@ -779,6 +781,8 @@ class RetouchEngine:
         whiten: Optional[float] = None,
         eye_enhance: Optional[float] = None,
         dark_circles: Optional[float] = None,
+        undereye_darken_removal: Optional[float] = None,
+        undereye_puffiness_reduction: Optional[float] = None,
         catchlight: Optional[float] = None,
         blemish: Optional[float] = None,
         lip_enhance: Optional[float] = None,
@@ -992,6 +996,8 @@ class RetouchEngine:
             "whiten": whiten,
             "eye_enhance": eye_enhance,
             "dark_circles": dark_circles,
+            "undereye_darken_removal": undereye_darken_removal,
+            "undereye_puffiness_reduction": undereye_puffiness_reduction,
             "catchlight": catchlight,
             "blemish": blemish,
             "lip_enhance": lip_enhance,

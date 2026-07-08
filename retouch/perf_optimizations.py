@@ -507,9 +507,22 @@ def _process_face_core(
         canvas = blemish.remove(canvas, regions.skin, ctx.blemish)
 
     # ---- Under-eye repair ----
-    if ctx.dark_circles > 0:
+    if ctx.dark_circles > 0 or ctx.undereye_darken_removal > 0 or ctx.undereye_puffiness_reduction > 0:
         canvas = _tr('undereye.repair', canvas)
-        canvas = undereye.repair(canvas, regions, ctx.dark_circles)
+        # Legacy interface for backward compatibility
+        if ctx.dark_circles > 0:
+            canvas = undereye.repair(canvas, regions, ctx.dark_circles)
+        # New advanced processing pipeline
+        if ctx.undereye_darken_removal > 0 or ctx.undereye_puffiness_reduction > 0:
+            s_darken = ctx.undereye_darken_removal / 100.0
+            s_puffiness = ctx.undereye_puffiness_reduction / 100.0
+            for mask in (regions.left_under_eye, regions.right_under_eye):
+                if mask is not None and mask.max() > 0.01:
+                    canvas = undereye._processor.process(
+                        canvas, mask,
+                        darken_removal_strength=s_darken,
+                        puffiness_reduction_strength=s_puffiness
+                    )
 
     # ---- Neck harmonisation ----
     if ctx.whiten != 0 or ctx.equalize > 0 or ctx.skin_hue_unify > 0 or ctx.skin_chroma_even > 0 or ctx.redness_even > 0:
@@ -528,6 +541,23 @@ def _process_face_core(
         canvas = _tr('eyes.enhance', canvas)
         canvas = eyes.enhance(canvas, regions, ctx.eye_enhance,
                               catchlight_strength=ctx.catchlight if ctx.catchlight > 0 else None)
+
+    # ---- Eye Enhancement v0 (sclera brightening + iris saturation/hue/brightness) ----
+    eye_v0_active = (ctx.eye_sclera_brighten > 0 or ctx.eye_iris_saturate > 0 or
+                     ctx.eye_iris_hue_shift != 0 or ctx.eye_iris_brightness > 0)
+    if eye_v0_active:
+        canvas = _tr('eye_enhancement.enhance', canvas)
+        from .eye_enhancement import EyeEnhancer as EyeEnhancerV0
+        eye_enhancer_v0 = EyeEnhancerV0()
+        canvas_uint8 = np.clip(canvas, 0, 255).astype(np.uint8)
+        canvas_uint8 = eye_enhancer_v0.enhance(
+            canvas_uint8, regions,
+            sclera_brighten=ctx.eye_sclera_brighten,
+            iris_saturate=ctx.eye_iris_saturate,
+            iris_hue_shift=ctx.eye_iris_hue_shift,
+            iris_brightness=ctx.eye_iris_brightness,
+        )
+        canvas = canvas_uint8.astype(np.float32)
 
     # ---- Teeth whitening ----
     if ctx.teeth_whiten > 0:
