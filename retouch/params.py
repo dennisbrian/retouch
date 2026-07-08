@@ -1787,6 +1787,72 @@ _MAKEUP_V2_PARAMS = [
 ]
 
 
+# --- A4: Neural boosters (PARKED — await A1 evidence) ---
+# Gated on enabled=False by default. When A1 evidence supports enabling,
+# change default to True and implement real StrayHairSegmenter/DefectSegmenter.
+# See MASTER_PLAN.md line 112 and retouch/neural_boosters.py for details.
+_NEURAL_BOOSTER_PARAMS = [
+    ParamSpec(
+        name="neural_stray_hair_boost",
+        cli_flag="neural-stray-hair-boost",
+        cli_type=int,
+        default=0,
+        gui_default=0,
+        recipe_key="neural.stray_hair_boost",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="neural_defect_boost",
+        cli_flag="neural-defect-boost",
+        cli_type=int,
+        default=0,
+        gui_default=0,
+        recipe_key="neural.defect_boost",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+]
+
+_COSPLAY_MOAT_PARAMS = [
+    ParamSpec(
+        name="cosplay_wig_lace_blend",
+        cli_flag="cosplay-wig-lace-blend",
+        cli_type=int,
+        default=0,
+        gui_default=0,
+        recipe_key="cosplay.wig_lace_blend",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="cosplay_stockings_smooth",
+        cli_flag="cosplay-stockings-smooth",
+        cli_type=int,
+        default=0,
+        gui_default=0,
+        recipe_key="cosplay.stockings_smooth",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="cosplay_consistency_strength",
+        cli_flag="cosplay-consistency-strength",
+        cli_type=int,
+        default=0,
+        gui_default=0,
+        recipe_key="cosplay.consistency_strength",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+]
+
+
 PROCESSING_PARAMS: List[ParamSpec] = (
     _SKIN_PARAMS
     + _FACE_FEATURE_PARAMS
@@ -1800,6 +1866,8 @@ PROCESSING_PARAMS: List[ParamSpec] = (
     + _WB_BW_PARAMS
     + _AI_ENHANCE_PARAMS
     + _MAKEUP_V2_PARAMS
+    + _NEURAL_BOOSTER_PARAMS
+    + _COSPLAY_MOAT_PARAMS
 )
 
 

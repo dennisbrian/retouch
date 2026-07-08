@@ -691,8 +691,8 @@ def on_smart_process(img_paths, recipe, *args, prg=gr.Progress()):
 
     if not img_paths:
         gr.Warning("Please upload an image first.")
-        return gr.update(), tuple([gr.update()] * len(_recipe_outputs)), \
-            "Please upload an image first."
+        return (gr.update(), *([gr.update()] * len(_recipe_outputs)),
+                "Please upload an image first.", gr.update())
 
     curr_path = img_paths[0]
     if isinstance(curr_path, dict):
@@ -703,13 +703,13 @@ def on_smart_process(img_paths, recipe, *args, prg=gr.Progress()):
     except (TypeError, FileNotFoundError, OSError) as e:
         _logger.warning("Smart Process: failed to load %s: %s", curr_path, e)
         gr.Warning(f"Failed to load image: {e}")
-        return gr.update(), tuple([gr.update()] * len(_recipe_outputs)), \
-            f"Failed to load image: {e}"
+        return (gr.update(), *([gr.update()] * len(_recipe_outputs)),
+                f"Failed to load image: {e}", gr.update())
 
     if img_bgr is None:
         gr.Warning("Could not read the image.")
-        return gr.update(), tuple([gr.update()] * len(_recipe_outputs)), \
-            "Could not read the image."
+        return (gr.update(), *([gr.update()] * len(_recipe_outputs)),
+                "Could not read the image.", gr.update())
 
     gr.Info("🧠 Analyzing image...")
     sp = SmartProcessor()
@@ -718,8 +718,8 @@ def on_smart_process(img_paths, recipe, *args, prg=gr.Progress()):
     except ValueError as e:
         _logger.exception("Smart Process analysis failed: %s", e)
         gr.Warning(f"Analysis failed: {e}")
-        return gr.update(), tuple([gr.update()] * len(_recipe_outputs)), \
-            f"Analysis failed: {e}"
+        return (gr.update(), *([gr.update()] * len(_recipe_outputs)),
+                f"Analysis failed: {e}", gr.update())
 
     # Start from the suggested recipe's defaults, then layer the suggestion
     # overrides on top. This produces the full slider tuple that
@@ -752,7 +752,7 @@ def on_smart_process(img_paths, recipe, *args, prg=gr.Progress()):
     status_msg = f"🧠 Smart suggestion applied ({suggestion.recipe}). Click Process to run."
     gr.Info(f"Smart suggestion: {suggestion.recipe} ({len(suggestion.params)} overrides)")
 
-    return suggestion.recipe, slider_outputs, status_msg, explanation_html
+    return (suggestion.recipe, *slider_outputs, status_msg, explanation_html)
 
 
 def _format_smart_explanations(suggestion) -> str:

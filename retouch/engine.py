@@ -389,6 +389,23 @@ class ProcessingContext:
     ai_denoise: float = 0.0
     ai_sr_scale: int = 1
 
+    # --- A4: Neural boosters (PARKED — await A1 evidence) ---
+    # stray_hair_boost: 0-100 strength for flyaway hair detection/removal.
+    #   Runs after F11 QA, gated on enabled=False by default.
+    # defect_boost: 0-100 strength for blemish/pore defect detection.
+    #   Runs after F11 QA, gated on enabled=False by default.
+    # See MASTER_PLAN.md line 112 and retouch/neural_boosters.py for status.
+    neural_stray_hair_boost: float = 0.0
+    neural_defect_boost: float = 0.0
+
+    # --- A3: Cosplay skin moat (makeup-agnostic enhancements) ---
+    # wig_lace_blend: 0-100 strength for seamless wig-lace blending at hairline.
+    # stockings_smooth: 0-100 strength for hosiery smoothing without over-blurring.
+    # consistency_strength: 0-100 shoot-consistency lock (white-balance continuity).
+    cosplay_wig_lace_blend: float = 0.0
+    cosplay_stockings_smooth: float = 0.0
+    cosplay_consistency_strength: float = 0.0
+
 
 # ---------------------------------------------------------------------------
 # ProcessingResult — rich return value
@@ -888,6 +905,37 @@ class RetouchEngine:
         local_adjustments: Optional[List[Dict[str, Any]]] = None,
         ai_denoise: Optional[float] = None,
         ai_sr_scale: Optional[int] = None,
+        # --- C5: Skin-anchored background color harmonization ---
+        background_harmonize: Optional[float] = None,
+        background_harmonize_mode: Optional[str] = None,
+        # --- T1: Background replace & scene relight ---
+        background_blur: Optional[float] = None,
+        background_desaturation: Optional[float] = None,
+        light_wrap: Optional[float] = None,
+        blue_shadow_grade: Optional[float] = None,
+        cyan_midtone_grade: Optional[float] = None,
+        subject_sharpen: Optional[float] = None,
+        matte_black: Optional[float] = None,
+        # --- T2: Makeup v2 ---
+        mv2_eyeshadow: Optional[int] = None,
+        mv2_eyeshadow_color: Optional[str] = None,
+        mv2_eyeshadow_style: Optional[str] = None,
+        mv2_eyeliner: Optional[int] = None,
+        mv2_eyeliner_color: Optional[str] = None,
+        mv2_eyeliner_style: Optional[str] = None,
+        mv2_contour: Optional[int] = None,
+        mv2_brows: Optional[int] = None,
+        mv2_brows_color: Optional[str] = None,
+        mv2_ombre: Optional[bool] = None,
+        mv2_ombre_color1: Optional[str] = None,
+        mv2_ombre_color2: Optional[str] = None,
+        # --- A3: Cosplay skin moat ---
+        cosplay_wig_lace_blend: Optional[float] = None,
+        cosplay_stockings_smooth: Optional[float] = None,
+        cosplay_consistency_strength: Optional[float] = None,
+        # --- A4: Neural boosters ---
+        neural_stray_hair_boost: Optional[float] = None,
+        neural_defect_boost: Optional[float] = None,
     ) -> ProcessingResult:
         """Process a single image through the full Retouch pipeline.
 
@@ -1056,6 +1104,32 @@ class RetouchEngine:
             "subject_separation": subject_separation,
             "ai_denoise": ai_denoise,
             "ai_sr_scale": ai_sr_scale,
+            "background_harmonize": background_harmonize,
+            "background_harmonize_mode": background_harmonize_mode,
+            "background_blur": background_blur,
+            "background_desaturation": background_desaturation,
+            "light_wrap": light_wrap,
+            "blue_shadow_grade": blue_shadow_grade,
+            "cyan_midtone_grade": cyan_midtone_grade,
+            "subject_sharpen": subject_sharpen,
+            "matte_black": matte_black,
+            "cosplay_wig_lace_blend": cosplay_wig_lace_blend,
+            "cosplay_stockings_smooth": cosplay_stockings_smooth,
+            "cosplay_consistency_strength": cosplay_consistency_strength,
+            "neural_stray_hair_boost": neural_stray_hair_boost,
+            "neural_defect_boost": neural_defect_boost,
+            "mv2_eyeshadow": mv2_eyeshadow,
+            "mv2_eyeshadow_color": mv2_eyeshadow_color,
+            "mv2_eyeshadow_style": mv2_eyeshadow_style,
+            "mv2_eyeliner": mv2_eyeliner,
+            "mv2_eyeliner_color": mv2_eyeliner_color,
+            "mv2_eyeliner_style": mv2_eyeliner_style,
+            "mv2_contour": mv2_contour,
+            "mv2_brows": mv2_brows,
+            "mv2_brows_color": mv2_brows_color,
+            "mv2_ombre": mv2_ombre,
+            "mv2_ombre_color1": mv2_ombre_color1,
+            "mv2_ombre_color2": mv2_ombre_color2,
         }
 
         ctx = build_context(active_recipe, rec, overrides)
@@ -1795,6 +1869,13 @@ class RetouchEngine:
             timings["body_skin"] = (time.perf_counter() - t_body) * 1000
 
             # ------------------------------------------------------------------
+            # Stage 3.6 — A3: Cosplay skin moat (wig-lace, stockings, consistency)
+            # ------------------------------------------------------------------
+            t_cosplay = time.perf_counter()
+            result = self._stage_cosplay_moat(result, ctx, acc_skin_hair, person_mask)
+            timings["cosplay_moat"] = (time.perf_counter() - t_cosplay) * 1000
+
+            # ------------------------------------------------------------------
             # Stage 4 — Global tonal adjustments (now in float)
             # ------------------------------------------------------------------
             t3 = time.perf_counter()
@@ -1838,6 +1919,13 @@ class RetouchEngine:
         # ------------------------------------------------------------------
         qa_warnings: List[QAWarning] = self._run_qa(result, person_mask)
         ctx._qa_results = {w.detector: w.details for w in qa_warnings}
+
+        # ------------------------------------------------------------------
+        # A4: Neural boosters (PARKED — runs only if enabled, after QA)
+        # ------------------------------------------------------------------
+        t_neural = time.perf_counter()
+        result = self._stage_neural_boosters(result, ctx, person_mask)
+        timings["neural_boosters"] = (time.perf_counter() - t_neural) * 1000
 
         return _CoreResult(
             result=result,
@@ -2995,6 +3083,97 @@ class RetouchEngine:
 
         return result
 
+    def _stage_cosplay_moat(
+        self,
+        img: np.ndarray,
+        ctx: ProcessingContext,
+        hair_mask: Optional[np.ndarray],
+        person_mask: Optional[np.ndarray],
+    ) -> np.ndarray:
+        """A3: Cosplay skin moat — makeup-agnostic enhancements.
+
+        Applies three independent operations:
+        1. Wig-lace blend: seamless transition where wig meets skin at hairline
+        2. Stockings: detect and smooth hosiery without over-blurring
+        3. Shoot-consistency lock: maintain white-balance continuity across shots
+
+        Accepts float32 [0,1] input, returns same dtype.
+
+        Args:
+            img: (H, W, 3) float32 BGR image [0, 1].
+            ctx: ProcessingContext with cosplay_* parameters.
+            hair_mask: (H, W) float32 hair region mask [0, 1].
+            person_mask: (H, W) float32 person segmentation mask [0, 1].
+
+        Returns:
+            (H, W, 3) float32 BGR image [0, 1].
+        """
+        # Early exit: all cosplay params are zero
+        if (ctx.cosplay_wig_lace_blend <= 0 and
+            ctx.cosplay_stockings_smooth <= 0 and
+            ctx.cosplay_consistency_strength <= 0):
+            return img
+
+        is_float = img.dtype == np.float32
+        if is_float:
+            img_u8 = np.clip(img * 255.0, 0, 255).astype(np.uint8)
+        else:
+            img_u8 = img
+
+        result = img_u8.astype(np.float32)
+
+        # --- Stage 1: Wig-lace blending ---
+        if ctx.cosplay_wig_lace_blend > 0 and hair_mask is not None:
+            from .cosplay_moat import WigLaceBlender
+            blender = WigLaceBlender()
+            # Detect skin mask from the processed image (for blending with natural skin)
+            lch = bgr_to_lch(img_u8)
+            skin_mask_detected = skin_mask_lch(lch, hue_center=25.0, hue_tolerance=25.0, chroma_min=8.0)
+            result_blended = blender.blend(
+                result,
+                hair_mask,
+                skin_mask_detected,
+                strength=ctx.cosplay_wig_lace_blend / 100.0,
+            )
+            result = result_blended.astype(np.float32)
+
+        # --- Stage 2: Stockings smoothing ---
+        if ctx.cosplay_stockings_smooth > 0 and person_mask is not None:
+            from .cosplay_moat import HosierySmoother
+            smoother = HosierySmoother()
+            result_smoothed = smoother.smooth(
+                result,
+                person_mask,
+                strength=ctx.cosplay_stockings_smooth / 100.0,
+            )
+            result = result_smoothed.astype(np.float32)
+
+        # --- Stage 3: Shoot consistency lock ---
+        # Note: This stage requires reference shot analysis. For now, it's wired
+        # but not actively applied (needs multi-image input which is beyond
+        # the single-image process() API). Future versions will integrate with
+        # batch_processor.py to compare consecutive shots.
+        if ctx.cosplay_consistency_strength > 0:
+            # Placeholder: analyze current shot to support future multi-frame batching
+            from .cosplay_moat import ShootConsistencyLock
+            lock = ShootConsistencyLock()
+            current_analysis = lock.analyze_shot(img_u8, face_data=None)
+            # Store for later batch-level comparison (if multi-image batch available)
+            # For now, log that we detected the parameters but need reference frame
+            if current_analysis.get("valid"):
+                logger.debug(
+                    f"shoot_consistency_lock: detected skin tone "
+                    f"L={current_analysis['lab_l']:.1f}, "
+                    f"a={current_analysis['lab_a']:.1f}, "
+                    f"b={current_analysis['lab_b']:.1f} "
+                    f"(chroma={current_analysis['chroma']:.1f})"
+                )
+
+        # Return in original dtype
+        if is_float:
+            return np.clip(result / 255.0, 0.0, 1.0).astype(np.float32)
+        return np.clip(result, 0, 255).astype(np.uint8)
+
     def _stage_global(self, img: np.ndarray, ctx: ProcessingContext) -> np.ndarray:
         """Global tonal operators (contrast, brightness, HSL tonal curve).
         Accepts uint8 or float32 [0,1] input, returns same dtype.
@@ -3452,6 +3631,79 @@ class RetouchEngine:
         if is_float:
             return lab_f32_to_bgr_f32(lab)
         return cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+
+    # =========================================================================
+    # A4: Neural boosters (PARKED — await A1 evidence)
+    # =========================================================================
+
+    def _stage_neural_boosters(
+        self,
+        img: np.ndarray,
+        ctx: ProcessingContext,
+        person_mask: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """Apply neural booster stages (stray hair, defect segmentation).
+
+        PARKED: Currently disabled (neural_stray_hair_boost=0, neural_defect_boost=0 by default).
+        Runs only if explicitly enabled via ProcessingContext. Operates after QA
+        detectors (final cosmetic pass before export).
+
+        Owner decision 2026-07-03: stay classical-only for now. Generative capabilities
+        (AI pore-detail synthesis, identity-preserving diffusion refinement) are
+        explicitly parked here, not scope-crept into S6/C5. Revisit once A1 evidence
+        exists. See MASTER_PLAN.md line 112 and retouch/neural_boosters.py.
+
+        Parameters
+        ----------
+        img : np.ndarray
+            Current result image, float32 [0,255] BGR or uint8 [0,255] BGR.
+        ctx : ProcessingContext
+            Processing context with neural_stray_hair_boost/neural_defect_boost.
+        person_mask : np.ndarray, optional
+            Binary mask of detected person (for region gating).
+
+        Returns
+        -------
+        np.ndarray
+            Image after neural boosters, same dtype/shape as input.
+        """
+        # Gate: only run if at least one booster is active
+        stray_hair_strength = float(ctx.neural_stray_hair_boost or 0.0)
+        defect_strength = float(ctx.neural_defect_boost or 0.0)
+
+        if stray_hair_strength <= 0 and defect_strength <= 0:
+            return img
+
+        # Currently disabled: placeholders return empty masks
+        from .neural_boosters import StrayHairSegmenter, DefectSegmenter
+
+        # Normalize to uint8 for processing (or use float if already float32)
+        is_float = img.dtype == np.float32
+        if is_float:
+            img_uint8 = to_uint8(img)
+        else:
+            img_uint8 = img
+
+        # Apply stray hair removal if enabled
+        if stray_hair_strength > 0:
+            segmenter = StrayHairSegmenter()
+            if segmenter.enabled:
+                mask = segmenter.detect(img_uint8)
+                # When real implementation added: apply masked healing/removal
+                # For now: placeholder returns empty mask, no-op
+                pass
+
+        # Apply defect boosting if enabled
+        if defect_strength > 0:
+            segmenter = DefectSegmenter()
+            if segmenter.enabled:
+                mask = segmenter.detect(img_uint8)
+                # When real implementation added: use mask to target additional
+                # blemish/pore refinement, texture transplant targeting, etc.
+                # For now: placeholder returns empty mask, no-op
+                pass
+
+        return img
 
     # ------------------------------------------------------------------
     # Lifecycle

@@ -1041,8 +1041,6 @@ RECIPES = {
             "rosy": 0.20,
             "porcelain": 0.15,
             "relight": 0.55,
-            "relight_azimuth": 55.0,
-            "relight_elevation": 40.0,
             "shadow_lift": 0.35,
             # Restores the real nose-bridge shadow toward the untouched
             # original (see perf_optimizations.py) — smoother surrounding
@@ -1050,6 +1048,8 @@ RECIPES = {
             # over-defined even though no single op deepens it.
             "nose_restore": 0.40,
         },
+        "relight_azimuth": 55.0,
+        "relight_elevation": 40.0,
         "eyes": {"whites": 0.25, "teeth_whiten": 0.20, "iris": 0.40, "catchlight": 0.45},
         "lips": {"tint": None, "gloss": 0.15},
         "hair": {"shine": 0.55},
@@ -1121,11 +1121,11 @@ RECIPES = {
             "whiten_hue_stable": 1,
             "texture_transplant": 0.65,
             "relight": 0.30,
-            "relight_azimuth": 40.0,
-            "relight_elevation": 45.0,
             "shadow_lift": 0.35,
             "nose_restore": 0.40,
         },
+        "relight_azimuth": 40.0,
+        "relight_elevation": 45.0,
         "eyes": {"whites": 0.15, "teeth_whiten": 0.12, "iris": 0.25, "catchlight": 0.30},
         "lips": {"tint": None, "gloss": 0.12},
         "hair": {"shine": 0.30},
