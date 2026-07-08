@@ -92,6 +92,7 @@ from .detection import FaceDetector, FaceData, FaceContext
 from .parsing import FaceParser, FaceRegions
 from .geometry import FaceReshaper
 from .makeup import MakeupEngine
+from .makeup_v2 import MakeupEngineV2
 from .frequency import FrequencySeparator, _texture_adaptation_factor
 from .perf_optimizations import (
     FaceProcessorPool,
@@ -406,6 +407,16 @@ class ProcessingContext:
     cosplay_stockings_smooth: float = 0.0
     cosplay_consistency_strength: float = 0.0
 
+    # --- T3: Body reshape (MediaPipe Pose) ---
+    # Proportional body editing via full-body pose detection.
+    # Slider range 0-100 maps to ±15% displacement of body segment length.
+    # 50 = neutral (no change), <50 = compress, >50 = expand.
+    body_reshape_arm_length: float = 50.0
+    body_reshape_leg_length: float = 50.0
+    body_reshape_torso_width: float = 50.0
+    body_reshape_shoulder_width: float = 50.0
+    body_reshape_hip_width: float = 50.0
+
 
 # ---------------------------------------------------------------------------
 # ProcessingResult — rich return value
@@ -714,6 +725,7 @@ class RetouchEngine:
         self._parser = FaceParser()
         self._reshaper = FaceReshaper()
         self._makeup = MakeupEngine()
+        self._makeup_v2 = MakeupEngineV2()
         self._frequency = FrequencySeparator()
         self._skin = SkinProcessor()
         self._blemish = BlemishRemover()
@@ -936,6 +948,12 @@ class RetouchEngine:
         # --- A4: Neural boosters ---
         neural_stray_hair_boost: Optional[float] = None,
         neural_defect_boost: Optional[float] = None,
+        # --- T3: Body reshape (MediaPipe Pose) ---
+        body_reshape_arm_length: Optional[float] = None,
+        body_reshape_leg_length: Optional[float] = None,
+        body_reshape_torso_width: Optional[float] = None,
+        body_reshape_shoulder_width: Optional[float] = None,
+        body_reshape_hip_width: Optional[float] = None,
     ) -> ProcessingResult:
         """Process a single image through the full Retouch pipeline.
 
@@ -1118,6 +1136,11 @@ class RetouchEngine:
             "cosplay_consistency_strength": cosplay_consistency_strength,
             "neural_stray_hair_boost": neural_stray_hair_boost,
             "neural_defect_boost": neural_defect_boost,
+            "body_reshape_arm_length": body_reshape_arm_length,
+            "body_reshape_leg_length": body_reshape_leg_length,
+            "body_reshape_torso_width": body_reshape_torso_width,
+            "body_reshape_shoulder_width": body_reshape_shoulder_width,
+            "body_reshape_hip_width": body_reshape_hip_width,
             "mv2_eyeshadow": mv2_eyeshadow,
             "mv2_eyeshadow_color": mv2_eyeshadow_color,
             "mv2_eyeshadow_style": mv2_eyeshadow_style,
@@ -1909,6 +1932,13 @@ class RetouchEngine:
             result = self._stage_finish(result, ctx, acc_sharpen, faces=faces, person_mask=person_mask)
             timings["finish"] = (time.perf_counter() - t5) * 1000
 
+            # ------------------------------------------------------------------
+            # Stage 7 — T3: Body reshape (now in float, native resolution)
+            # ------------------------------------------------------------------
+            t6 = time.perf_counter()
+            result = self._stage_body_reshape(result, ctx, person_mask=person_mask)
+            timings["body_reshape"] = (time.perf_counter() - t6) * 1000
+
         # ------------------------------------------------------------------
         # F1: Convert back to uint8 for output
         # ------------------------------------------------------------------
@@ -2520,6 +2550,7 @@ class RetouchEngine:
             'teeth': self._teeth,
             'lips': self._lips,
             'makeup': self._makeup,
+            'makeup_v2': self._makeup_v2,
             'hair': self._hair,
             'frequency': self._frequency,
         }
@@ -3601,6 +3632,60 @@ class RetouchEngine:
             else:
                 result = self._grader.add_impact_finish(result, ctx.impact, subject_mask=person_mask)
         return result
+
+    def _stage_body_reshape(
+        self,
+        img: np.ndarray,
+        ctx: ProcessingContext,
+        person_mask: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """T3: Body reshape stage via MediaPipe Pose (runs after finish, at native resolution).
+
+        Applies proportional body editing (arm/leg length, torso/shoulder/hip width)
+        using pose-aware warping. Accepts uint8 or float32 [0,1].
+
+        Args:
+            img: (H, W, 3) input image.
+            ctx: ProcessingContext with body_reshape_* params.
+            person_mask: optional (H, W) float32 [0,1] mask for boundary control.
+
+        Returns:
+            (H, W, 3) body-reshaped image, same dtype as input.
+        """
+        from .body_reshape import BodyReshaper
+
+        # Check if any body_reshape params are active (non-default)
+        arm_len = (ctx.body_reshape_arm_length - 50.0)  # Center at 50.0
+        leg_len = (ctx.body_reshape_leg_length - 50.0)
+        torso_w = (ctx.body_reshape_torso_width - 50.0)
+        shoulder_w = (ctx.body_reshape_shoulder_width - 50.0)
+        hip_w = (ctx.body_reshape_hip_width - 50.0)
+
+        if not any([arm_len, leg_len, torso_w, shoulder_w, hip_w]):
+            return img
+
+        # Ensure uint8 for reshaper (it will preserve dtype on output)
+        is_float = img.dtype == np.float32
+        if is_float:
+            img_u8 = np.clip(img * 255.0, 0, 255).astype(np.uint8)
+        else:
+            img_u8 = img
+
+        reshaper = BodyReshaper()
+        result_u8 = reshaper.reshape(
+            img_u8,
+            arm_length=arm_len,
+            leg_length=leg_len,
+            torso_width=torso_w,
+            shoulder_width=shoulder_w,
+            hip_width=hip_w,
+            person_mask=person_mask,
+        )
+
+        if is_float:
+            return result_u8.astype(np.float32) / 255.0
+        else:
+            return result_u8
 
     @staticmethod
     def _apply_white_costume_lift(

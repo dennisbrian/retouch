@@ -1853,6 +1853,65 @@ _COSPLAY_MOAT_PARAMS = [
 ]
 
 
+# T3 — Body reshape via MediaPipe Pose
+# body_reshape_arm_length, body_reshape_leg_length, body_reshape_torso_width,
+# body_reshape_shoulder_width, body_reshape_hip_width: all 0-100 strength scales;
+# 0 = no-op; ±100 slider causes ±15% segment displacement (proportional).
+# Recipe path is ``body_reshape.<key>`` (new nested root).
+_BODY_RESHAPE_PARAMS = [
+    ParamSpec(
+        name="body_reshape_arm_length",
+        cli_flag=None,
+        cli_type=None,
+        default=50.0,
+        recipe_key="body_reshape.arm_length",
+        conversion="gui_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="body_reshape_leg_length",
+        cli_flag=None,
+        cli_type=None,
+        default=50.0,
+        recipe_key="body_reshape.leg_length",
+        conversion="gui_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="body_reshape_torso_width",
+        cli_flag=None,
+        cli_type=None,
+        default=50.0,
+        recipe_key="body_reshape.torso_width",
+        conversion="gui_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="body_reshape_shoulder_width",
+        cli_flag=None,
+        cli_type=None,
+        default=50.0,
+        recipe_key="body_reshape.shoulder_width",
+        conversion="gui_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="body_reshape_hip_width",
+        cli_flag=None,
+        cli_type=None,
+        default=50.0,
+        recipe_key="body_reshape.hip_width",
+        conversion="gui_direct",
+        min_val=0,
+        max_val=100,
+    ),
+]
+
+
 PROCESSING_PARAMS: List[ParamSpec] = (
     _SKIN_PARAMS
     + _FACE_FEATURE_PARAMS
@@ -1868,6 +1927,7 @@ PROCESSING_PARAMS: List[ParamSpec] = (
     + _MAKEUP_V2_PARAMS
     + _NEURAL_BOOSTER_PARAMS
     + _COSPLAY_MOAT_PARAMS
+    + _BODY_RESHAPE_PARAMS
 )
 
 

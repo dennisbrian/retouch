@@ -259,6 +259,7 @@ def _process_face_core(
     teeth = processors['teeth']
     lips = processors['lips']
     makeup = processors['makeup']
+    makeup_v2 = processors.get('makeup_v2')
     hair = processors['hair']
     frequency = processors.get('frequency') or FrequencySeparator()
 
@@ -551,6 +552,61 @@ def _process_face_core(
             under_eye_blush=ctx.under_eye_blush,
         )
 
+    # ---- Makeup v2 (eyeshadow, eyeliner, contour, brows, ombre lips) ----
+    if makeup_v2 is not None:
+        # Convert canvas to uint8 for makeup_v2 operations
+        canvas_u8_for_makeup = np.clip(canvas, 0, 255).astype(np.uint8)
+
+        # Eyeshadow
+        if ctx.mv2_eyeshadow > 0:
+            canvas = _tr('makeup_v2.apply_eyeshadow', canvas)
+            canvas_u8_for_makeup = makeup_v2.apply_eyeshadow(
+                canvas_u8_for_makeup, shifted_face.landmarks,
+                color=ctx.mv2_eyeshadow_color,
+                strength=ctx.mv2_eyeshadow,
+                style=ctx.mv2_eyeshadow_style,
+            )
+
+        # Eyeliner
+        if ctx.mv2_eyeliner > 0:
+            canvas = _tr('makeup_v2.apply_eyeliner', canvas)
+            canvas_u8_for_makeup = makeup_v2.apply_eyeliner(
+                canvas_u8_for_makeup, shifted_face.landmarks,
+                color=ctx.mv2_eyeliner_color,
+                thickness=ctx.mv2_eyeliner,
+                style=ctx.mv2_eyeliner_style,
+            )
+
+        # Contour
+        if ctx.mv2_contour > 0:
+            canvas = _tr('makeup_v2.apply_contour', canvas)
+            canvas_u8_for_makeup = makeup_v2.apply_contour(
+                canvas_u8_for_makeup, shifted_face.landmarks,
+                strength=ctx.mv2_contour,
+            )
+
+        # Brows
+        if ctx.mv2_brows > 0:
+            canvas = _tr('makeup_v2.apply_brows', canvas)
+            canvas_u8_for_makeup = makeup_v2.apply_brows(
+                canvas_u8_for_makeup, shifted_face.landmarks,
+                color=ctx.mv2_brows_color,
+                thickness=ctx.mv2_brows,
+            )
+
+        # Ombre lips
+        if ctx.mv2_ombre:
+            canvas = _tr('makeup_v2.apply_ombre_lips', canvas)
+            canvas_u8_for_makeup = makeup_v2.apply_ombre_lips(
+                canvas_u8_for_makeup, shifted_face.landmarks,
+                color1=ctx.mv2_ombre_color1,
+                color2=ctx.mv2_ombre_color2,
+            )
+
+        # Convert back to float32 if any makeup_v2 ops were applied
+        if ctx.mv2_eyeshadow > 0 or ctx.mv2_eyeliner > 0 or ctx.mv2_contour > 0 or ctx.mv2_brows > 0 or ctx.mv2_ombre:
+            canvas = canvas_u8_for_makeup.astype(np.float32)
+
     # ---- Hair shine (H2: deglare + anisotropic angel ring) ----
     # hair_enhance is reinterpreted as the angel-ring strength; hair_deglare
     # is the synthetic-glare compression strength. Both are independent and
@@ -729,6 +785,7 @@ def _get_worker_processors() -> dict[str, Any]:
         from .lips import LipEnhancer
         from .teeth import TeethWhitener
         from .makeup import MakeupEngine
+        from .makeup_v2 import MakeupEngineV2
         from .hair import HairEnhancer
         from .relight import Relighter
         _WORKER_PROCESSORS = {
@@ -740,6 +797,7 @@ def _get_worker_processors() -> dict[str, Any]:
             "teeth": TeethWhitener(),
             "lips": LipEnhancer(),
             "makeup": MakeupEngine(),
+            "makeup_v2": MakeupEngineV2(),
             "hair": HairEnhancer(),
         }
     return _WORKER_PROCESSORS
