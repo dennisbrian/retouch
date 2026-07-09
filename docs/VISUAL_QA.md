@@ -233,13 +233,13 @@ in-memory (deterministic, run-to-run noise = 0 px). `natural_polish_v1` recipe.
 
 **Interpretation:**
 - [x] **anisotropic engages** measurably (7–9k px, max Δ14–23) — orientation-aware path runs.
-- [x] **region-aware engages** and was strengthened (2026-07-09): clamp widened
-  `[0.5, 1.5]` → `[0.5, 2.0]` and per-region `target` spread widened (flat regions
-  cheeks/forehead up to ~2×, detail regions nose-bridge/crows-feet/jawline down to ~0.5).
-  At `regional_modulation=1.0` on duotian: ~9k px change at >1 level (940 at >2), `maxΔ` 7→12–17.
-  Smoothing is low-pass so the per-pixel delta stays small; **view the side-by-sides**
-  `/tmp/qa_region/{DSCF7585,DSCF7590}_baseline.png` vs `_region1.0.png` (and `_diff_x8.png`)
-  to judge perceptibility. High band untouched → pores survive.
+- [x] **region-aware engages** and was strengthened twice (2026-07-09): clamp widened
+  `[0.5, 1.5]` → `[0.5, 2.5]` and per-region `target` spread widened (flat regions
+  cheeks/forehead up to ~2.5×, detail regions nose-bridge/crows-feet/jawline down to ~0.5).
+  At `regional_modulation=1.0` on duotian: ~15.7k px change at >1 level (3.6k at >2) on
+  DSCF7585 — ~3.8× the original footprint. Smoothing is low-pass so per-pixel delta stays
+  small (no halo); **view the side-by-sides** `/tmp/qa_region/{DSCF7585,DSCF7590}_baseline.png`
+  vs `_region1.0.png` (and `_diff_x8.png`) to judge perceptibility. High band untouched → pores survive.
 - [x] **undereye shadow = 0 px is CORRECT, not a bug**: `smooth_undereye_shadow` self-skips
   when shadow coverage < 30% of the under-eye zone (`skin.py:324`). These studio cosplay
   shots have bright, makeup-lit under-eyes → no dark circle → legitimately nothing to do.
