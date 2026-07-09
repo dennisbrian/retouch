@@ -321,7 +321,11 @@ class SkinProcessor:
             shadow = cv2.morphologyEx(shadow, cv2.MORPH_OPEN, morph_kernel)
 
             coverage = float(np.count_nonzero(shadow > 0.5)) / float(zone_px)
-            if coverage < 0.3:
+            # Strength-aware gate: at higher strength we treat milder dark circles
+            # (lower coverage needed), keeping low strength conservative so the
+            # feature never hollows bright, shadow-free under-eyes.
+            min_coverage = max(0.1, 0.35 - 0.25 * strength)
+            if coverage < min_coverage:
                 continue  # Too few shadow pixels: this eye has no dark circle.
 
             # Feather the shadow mask to avoid hard seams at zone edges.

@@ -962,3 +962,27 @@ class TestSmoothUndereyeShadow:
         assert out.dtype == np.float32
         assert out is img
 
+    def test_strength_aware_coverage_gate(self, proc):
+        """A mild dark circle (patch coverage ~0.2, between the old fixed 0.3
+        gate and the new 0.1 floor) is treated at high strength but skipped at
+        low strength — the gate scales with strength so faint circles only heal
+        when the user pushes the slider up."""
+        H = W = 200
+        img = np.full((H, W, 3), (200, 170, 150), np.uint8)  # bright skin
+        yy, xx = np.ogrid[:H, :W]
+        ue_mask = (((xx - 60) ** 2 / 30 ** 2 + (yy - 140) ** 2 / 18 ** 2) <= 1.0).astype(np.float32)
+        skin = np.ones((H, W), np.float32)
+        cy, cx = 140, 60  # small dark patch inside the mask -> coverage ~0.2
+        img[cy - 8:cy + 8, cx - 10:cx + 10] = (95, 75, 65)
+
+        out_high = proc.smooth_undereye_shadow(
+            img, under_eye_masks=[ue_mask], skin_mask=skin, strength=1.0, feather_radius=3
+        )
+        out_low = proc.smooth_undereye_shadow(
+            img, under_eye_masks=[ue_mask], skin_mask=skin, strength=0.2, feather_radius=3
+        )
+        d_high = int(np.abs(out_high.astype(int) - img.astype(int)).sum())
+        d_low = int(np.abs(out_low.astype(int) - img.astype(int)).sum())
+        assert d_high > 0, "high strength should treat a mild dark circle"
+        assert d_low == 0, "low strength should skip (coverage below the gate)"
+

@@ -240,10 +240,14 @@ in-memory (deterministic, run-to-run noise = 0 px). `natural_polish_v1` recipe.
   DSCF7585 — ~3.8× the original footprint. Smoothing is low-pass so per-pixel delta stays
   small (no halo); **view the side-by-sides** `/tmp/qa_region/{DSCF7585,DSCF7590}_baseline.png`
   vs `_region1.0.png` (and `_diff_x8.png`) to judge perceptibility. High band untouched → pores survive.
-- [x] **undereye shadow = 0 px is CORRECT, not a bug**: `smooth_undereye_shadow` self-skips
-  when shadow coverage < 30% of the under-eye zone (`skin.py:324`). These studio cosplay
+- [x] **undereye shadow = 0 px on these bright shots is CORRECT, not a bug**:
+  `smooth_undereye_shadow` self-skips when shadow coverage is below a strength-scaled
+  gate (`skin.py`: `min_coverage = max(0.1, 0.35 - 0.25*strength)`). These studio cosplay
   shots have bright, makeup-lit under-eyes → no dark circle → legitimately nothing to do.
-  Masks are non-empty (left 3,003 px / right 4,886 px on DSCF7585), so wiring is fine.
+  The gate is now strength-aware (was a fixed 0.3): at higher `undereye_shadow_strength`
+  milder dark circles get treated, while low strength stays conservative (no hollowing).
+  Verified: a mild dark-circle patch (coverage ~0.2) heals at strength 1.0 but is skipped
+  at strength 0.2. Masks are non-empty (left 3,003 px / right 4,886 px on DSCF7585).
 - [x] **freckle = 0 px is CORRECT on these shots**: subjects have no detectable freckles, so
   `FreckleRemover` returns the image byte-identical. The mechanism is proven by unit tests
   (551 px changed at strength 60 on a freckled synthetic) and the `recipe_direct` fix above.
