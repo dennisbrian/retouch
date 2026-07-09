@@ -464,6 +464,65 @@ RECIPES = {
         # appropriate here too — no need to push it for a showcase.
         "hair": {"shine": 0.05},
     },
+    "masterwork_v1": {
+        # Flagship #11: the maximum-quality export recipe. NOT a max-strength
+        # stack (the full_showcase_v1 lesson: stacking everything at max reads
+        # WORSE) — instead each flagship's headline move at its proven QA'd
+        # strength, sequenced so every stage feeds the next clean signal:
+        #   1. F7 NAFNet denoise (0.4) pre-pipeline — the one primitive no
+        #      earlier flagship had. Every downstream op works on clean
+        #      signal, so nothing has to over-smooth to hide sensor noise.
+        #   2. Because of (1), pore_realism_v1's over-smooth-then-rebuild
+        #      trick is NOT needed: smooth stays moderate (0.45) and
+        #      texture_transplant is a light realism assist (0.30). QA on
+        #      DSCF6102 showed transplant at 0.60 deposits speck artifacts
+        #      on made-up faces (no clean donor pores under white makeup) —
+        #      specks scale with transplant strength, gone by 0.30.
+        #   3. porcelain_unified_v1's C1 unify at full proven strength.
+        #   4. cosplay_sculpt-lineage sculpt at 0.18 (dimension, not noise)
+        #      + wrinkle_free_glow_v1's S5 at 0.30 (close-up safe).
+        #   5. body_match_v1's face/body seam fix at 0.60.
+        # Cost note: ai.denoise is CPU-pinned (~10s at 1.5MP, ~80s at 24MP;
+        # see PERFORMANCE_TUNING.md) — this is an export recipe, not an
+        # interactive-tuning one.
+        "extends": "porcelain_unified_v1",
+        "ai": {"denoise": 0.4},
+        # nose_smooth held ~10% under face smooth (natural_polish_v1 rule):
+        # nose/philtrum pores read as realism.
+        "frequency": {"smooth": 0.45, "mid_reduction": 0.40, "nose_smooth": 0.40},
+        "skin": {
+            "equalize": 0.05,
+            "rosy": 0.15,
+            "hue_unify": 0.60,
+            "chroma_even": 0.50,
+            "whiten_hue_stable": 1,
+            "shine_removal": 0.30,
+            "exposure_lock": 0.7,
+            "texture_transplant": 0.30,
+            "sculpt": 0.18,
+            "wrinkle_soften": 0.30,
+        },
+        "eyes": {
+            "whites": 0.12,
+            "teeth_whiten": 0.15,
+            "iris": 0.15,
+            "catchlight": 0.12,
+            "dark_circles": 0.25,
+        },
+        "body_skin": {
+            "smooth": 0.30,
+            "equalize": 0.20,
+            "whiten": 0.10,
+            "match_face": 0.60,
+        },
+        # Denoised natural texture carries realism (denoise-first means the
+        # original texture is clean signal worth keeping) — transplant is
+        # only a light assist on top.
+        "texture": {"opacity": 0.70},
+        "finish": {"airy_haze": 0.10},
+        "sharpen": 15.0,
+        "grain_strength": 0.06,  # thin uniform grain ties face/body/bg together
+    },
 
     # ------------------------------------------------------------------
     # Outdoor natural-light set (4) — each targets a genuinely distinct
