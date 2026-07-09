@@ -1866,6 +1866,634 @@ RECIPES["minimal_film_v1"] = {
     },
     "grain_strength": 0.16,  # Film grain is the hero (not face processing)
     "vignette": 6.0,
+
+}
+
+RECIPES["clear_skin_v1"] = {
+    # Showcase recipe for the new skin/eye feature batch: region-aware
+    # frequency smoothing, anisotropic (grain-following) smoothing,
+    # freckle/beauty-mark selective removal, strength-aware under-eye
+    # shadow lift, plus the cosplay eye-enhancement suite (sclera + iris).
+    # Built on natural_polish_v1's restrained base so the new primitives
+    # read as "flawless-but-real" rather than over-processed. The high
+    # band is never touched (frequency + eye ops preserve pore texture),
+    # so texture.opacity stays high.
+    "extends": "natural_polish_v1",
+    "frequency": {
+        "smooth": 0.35,
+        "mid_reduction": 0.30,
+        # Region-aware modulation: cheeks/forehead smooth harder, nose
+        # bridge/crow's-feet keep structure (per-region energy targets).
+        "regional_modulation": 0.6,
+        # Grain-following smoothing — preserves structure across the grain,
+        # only blurs along it. The headline skin-texture primitive.
+        "smooth_engine": "anisotropic",
+        # Selective freckle removal (beauty marks preserved); 0-100 scale.
+        "freckle_removal": 45,
+    },
+    "skin": {
+        "equalize": 0.08,
+        "hue_unify": 0.25,
+        "chroma_even": 0.20,
+        "whiten_hue_stable": 1,
+        "shine_removal": 0.30,
+        "exposure_lock": 0.7,
+    },
+    # Strength-aware under-eye shadow gate: lifts only genuine shadow,
+    # scales with the local shadow strength (no flat brightening).
+    "eyes": {
+        "undereye_shadow_strength": 0.4,
+        "dark_circles": 0.15,
+        "catchlight": 0.10,
+        "whites": 0.12,
+        "iris": 0.10,
+    },
+    # Puffiness + darken relief for tired-eye close-ups.
+    "undereye": {
+        "darken_removal": 0.30,
+        "puffiness_reduction": 0.20,
+    },
+    # Cosplay eye-enhancement suite: brighten sclera, deepen/saturate iris.
+    "eye": {
+        "sclera_brighten": 0.30,
+        "iris_saturate": 0.40,
+        "iris_brightness": 0.30,
+        "iris_hue_shift": -8,
+    },
+    "texture": {"opacity": 1.00},
+    # Subtle lash/brow sharpen rides the eye-weighted mask.
+    "sharpen": 12.0,
+    "hair": {"shine": 0.0},
+}
+
+RECIPES["freckle_free_v1"] = {
+    # Hero: selective freckle/beauty-mark removal. Heavy freckle_removal with
+    # beauty marks preserved; light region-aware smoothing keeps the rest of
+    # the skin natural (no global over-smoothing to "help" the freckles).
+    # Built on natural_polish_v1 so only the freckle op is the headline move.
+    "extends": "natural_polish_v1",
+    "frequency": {
+        "smooth": 0.25,
+        "regional_modulation": 0.3,
+        "freckle_removal": 85,  # strong, but inpainting + preserve-mask keeps moles
+    },
+    "skin": {
+        "equalize": 0.05,
+        "hue_unify": 0.20,
+        "chroma_even": 0.15,
+        "whiten_hue_stable": 1,
+        "shine_removal": 0.30,
+    },
+    "eyes": {"dark_circles": 0.12, "catchlight": 0.08},
+    "texture": {"opacity": 1.00},
+    "sharpen": 12.0,
+    "hair": {"shine": 0.0},
+}
+
+RECIPES["tired_eye_rescue_v1"] = {
+    # Hero: under-eye repair for convention/travel/tired shots. Combines all
+    # three new under-eye primitives — strength-aware shadow lift, darken
+    # removal, and puffiness reduction — at moderate-high strength. Light
+    # skin smoothing so the eye-area fix doesn't read against over-smoothed
+    # cheeks. Eye-enhancement suite added softly for awake, bright eyes.
+    "extends": "natural_polish_v1",
+    "frequency": {
+        "smooth": 0.30,
+        "regional_modulation": 0.4,
+        "smooth_engine": "anisotropic",
+    },
+    "skin": {
+        "equalize": 0.08,
+        "hue_unify": 0.25,
+        "chroma_even": 0.20,
+        "whiten_hue_stable": 1,
+        "shine_removal": 0.30,
+        "exposure_lock": 0.7,
+    },
+    "eyes": {
+        "undereye_shadow_strength": 0.7,
+        "dark_circles": 0.20,
+        "catchlight": 0.15,
+        "whites": 0.15,
+        "iris": 0.12,
+    },
+    "undereye": {
+        "darken_removal": 0.60,
+        "puffiness_reduction": 0.50,
+    },
+    "eye": {
+        "sclera_brighten": 0.25,
+        "iris_saturate": 0.30,
+        "iris_brightness": 0.25,
+        "iris_hue_shift": 0,
+    },
+    "texture": {"opacity": 1.00},
+    "sharpen": 12.0,
+    "hair": {"shine": 0.0},
+}
+
+RECIPES["aniso_pore_real_v1"] = {
+    # Hero: anisotropic (grain-following) smoothing + region-aware modulation
+    # for maximum pore-realism. Where clear_skin_v1 is balanced, this leans on
+    # the texture-preservation primitives: anisotropic blur keeps structure
+    # across the grain, per-region modulation smooths flat cheeks harder while
+    # protecting nose-bridge/crow's-feet detail. High smooth but high texture
+    # opacity + no synthetic flatten → reads as real skin, not plastic.
+    "extends": "natural_polish_v1",
+    "frequency": {
+        "smooth": 0.55,
+        "mid_reduction": 0.40,
+        "regional_modulation": 0.85,
+        "smooth_engine": "anisotropic",
+    },
+    "skin": {
+        "equalize": 0.10,
+        "hue_unify": 0.30,
+        "chroma_even": 0.25,
+        "whiten_hue_stable": 1,
+        "shine_removal": 0.35,
+        "exposure_lock": 0.7,
+    },
+    "eyes": {"dark_circles": 0.12, "catchlight": 0.10, "iris": 0.10},
+    "texture": {"opacity": 1.00},
+    "sharpen": 14.0,
+    "hair": {"shine": 0.0},
+}
+
+RECIPES["cosplay_clear_v1"] = {
+    # Cosplay base + new skin/eye primitives. Heavy cosplay makeup hides
+    # blemishes but skin texture still needs the anisotropic/grain-preserving
+    # pass (cosplay wigs + front lighting flatten pores), and the eye-enhancement
+    # suite deepens the iris under colored contacts / heavy liner. Light
+    # freckle removal in case the character is freckled under makeup.
+    "extends": "cosplay",
+    "frequency": {
+        "smooth": 0.55,
+        "mid_reduction": 0.35,
+        "regional_modulation": 0.5,
+        "smooth_engine": "anisotropic",
+        "freckle_removal": 40,
+    },
+    "eyes": {
+        "undereye_shadow_strength": 0.3,
+        "dark_circles": 0.25,
+        "catchlight": 0.25,
+        "whites": 0.30,
+        "iris": 0.35,
+    },
+    "undereye": {
+        "darken_removal": 0.25,
+        "puffiness_reduction": 0.20,
+    },
+    "eye": {
+        "sclera_brighten": 0.35,
+        "iris_saturate": 0.55,
+        "iris_brightness": 0.35,
+        "iris_hue_shift": 0,
+    },
+    "texture": {"opacity": 0.90},
+    "sharpen": 14.0,
+}
+
+RECIPES["studio_porcelain_clear_v1"] = {
+    # Studio portrait on the porcelain base + new primitives. The porcelain
+    # base unifies skin tone; anisotropic + region-aware smooth then clean the
+    # texture without plastic, and under-eye repair keeps studio close-ups
+    # crisp. Moderate eye suite for a polished-but-real studio look.
+    "extends": "porcelain_unified_v1",
+    "frequency": {
+        "smooth": 0.45,
+        "mid_reduction": 0.35,
+        "regional_modulation": 0.6,
+        "smooth_engine": "anisotropic",
+        "freckle_removal": 35,
+    },
+    "eyes": {
+        "undereye_shadow_strength": 0.5,
+        "dark_circles": 0.20,
+        "catchlight": 0.20,
+        "whites": 0.18,
+        "iris": 0.15,
+    },
+    "undereye": {
+        "darken_removal": 0.45,
+        "puffiness_reduction": 0.35,
+    },
+    "eye": {
+        "sclera_brighten": 0.30,
+        "iris_saturate": 0.35,
+        "iris_brightness": 0.30,
+        "iris_hue_shift": 0,
+    },
+    "texture": {"opacity": 0.97},
+    "sharpen": 12.0,
+}
+
+RECIPES["xhs_clear_glow_v1"] = {
+    # Xiaohongshu dreamy-glow base + new primitives. The glow/airy look loves
+    # smooth gradients; anisotropic smoothing keeps the glow from washing out
+    # pores, region-aware modulation protects nose/crow's-feet, and the eye
+    # suite makes the bright, lifted xhs eyes pop. Light freckle removal for
+    # the flawless-xhs ideal.
+    "extends": "xhs_soft_glow",
+    "frequency": {
+        "smooth": 0.70,
+        "mid_reduction": 0.55,
+        "regional_modulation": 0.5,
+        "smooth_engine": "anisotropic",
+        "freckle_removal": 50,
+    },
+    "eyes": {
+        "undereye_shadow_strength": 0.4,
+        "dark_circles": 0.25,
+        "catchlight": 0.25,
+        "whites": 0.25,
+        "iris": 0.30,
+    },
+    "undereye": {
+        "darken_removal": 0.30,
+        "puffiness_reduction": 0.25,
+    },
+    "eye": {
+        "sclera_brighten": 0.30,
+        "iris_saturate": 0.40,
+        "iris_brightness": 0.30,
+        "iris_hue_shift": 0,
+    },
+    # xhs_soft_glow already sets bloom/grain/split-tone; keep texture high
+    # so the new smoothing doesn't flatten the glow.
+    "texture": {"opacity": 0.35},
+    "sharpen": 12.0,
+}
+
+RECIPES["wedding_flawless_v1"] = {
+    # Wedding base + new primitives for flawless-but-real bridal skin.
+    # Anisotropic + region-aware smooth the cheeks/forehead (veil + flash
+    # flatten them) while protecting nose/crow's-feet; under-eye repair keeps
+    # the long-day eyes fresh; light freckle removal for the clean bridal look.
+    "extends": "wedding",
+    "frequency": {
+        "smooth": 0.50,
+        "mid_reduction": 0.35,
+        "regional_modulation": 0.5,
+        "smooth_engine": "anisotropic",
+        "freckle_removal": 40,
+    },
+    "eyes": {
+        "undereye_shadow_strength": 0.4,
+        "dark_circles": 0.18,
+        "catchlight": 0.15,
+        "whites": 0.15,
+        "iris": 0.15,
+    },
+    "undereye": {
+        "darken_removal": 0.35,
+        "puffiness_reduction": 0.30,
+    },
+    "eye": {
+        "sclera_brighten": 0.25,
+        "iris_saturate": 0.30,
+        "iris_brightness": 0.25,
+        "iris_hue_shift": 0,
+    },
+    "texture": {"opacity": 0.90},
+    "sharpen": 12.0,
+}
+
+RECIPES["korean_glass_clear_v1"] = {
+    # Korean-glass-skin base + new primitives. The glass-skin ideal is high
+    # luminosity with intact pore texture — exactly what anisotropic +
+    # region-aware modulation deliver (smooth flat zones, keep grain). Light
+    # freckle + under-eye for the polished k-beauty finish.
+    "extends": "korean_beauty",
+    "frequency": {
+        "smooth": 0.45,
+        "mid_reduction": 0.30,
+        "regional_modulation": 0.7,
+        "smooth_engine": "anisotropic",
+        "freckle_removal": 30,
+    },
+    "eyes": {
+        "undereye_shadow_strength": 0.4,
+        "dark_circles": 0.15,
+        "catchlight": 0.15,
+        "whites": 0.15,
+        "iris": 0.15,
+    },
+    "undereye": {
+        "darken_removal": 0.30,
+        "puffiness_reduction": 0.25,
+    },
+    "eye": {
+        "sclera_brighten": 0.30,
+        "iris_saturate": 0.30,
+        "iris_brightness": 0.25,
+        "iris_hue_shift": 0,
+    },
+    "texture": {"opacity": 0.95},
+    "sharpen": 12.0,
+}
+
+RECIPES["beauty_editorial_clear_v1"] = {
+    # Beauty/editorial base + new primitives. High-fashion retouching wants
+    # even skin without losing pore realism — anisotropic + region-aware do
+    # that; the eye-enhancement suite gives the crisp, defined eyes editorial
+    # shots need. Moderate freckle removal (editorial often keeps a few).
+    "extends": "beauty",
+    "frequency": {
+        "smooth": 0.50,
+        "mid_reduction": 0.40,
+        "regional_modulation": 0.6,
+        "smooth_engine": "anisotropic",
+        "freckle_removal": 55,
+    },
+    "eyes": {
+        "undereye_shadow_strength": 0.5,
+        "dark_circles": 0.20,
+        "catchlight": 0.20,
+        "whites": 0.20,
+        "iris": 0.20,
+    },
+    "undereye": {
+        "darken_removal": 0.40,
+        "puffiness_reduction": 0.30,
+    },
+    "eye": {
+        "sclera_brighten": 0.35,
+        "iris_saturate": 0.45,
+        "iris_brightness": 0.35,
+        "iris_hue_shift": 0,
+    },
+    "texture": {"opacity": 0.85},
+    "sharpen": 14.0,
+}
+
+RECIPES["fantasy_eye_pop_v1"] = {
+    # Fantasy-goddess base + new primitives, leaning hard on the eye suite
+    # (colored-contact / magical-iris looks) plus anisotropic smoothing so the
+    # heavy stylization doesn't flatten skin into plastic. Strong freckle
+    # removal for the flawless fantasy skin.
+    "extends": "fantasy_goddess",
+    "frequency": {
+        "smooth": 0.75,
+        "mid_reduction": 0.60,
+        "regional_modulation": 0.6,
+        "smooth_engine": "anisotropic",
+        "freckle_removal": 70,
+    },
+    "eyes": {
+        "undereye_shadow_strength": 0.5,
+        "dark_circles": 0.25,
+        "catchlight": 0.35,
+        "whites": 0.30,
+        "iris": 0.40,
+    },
+    "undereye": {
+        "darken_removal": 0.40,
+        "puffiness_reduction": 0.30,
+    },
+    "eye": {
+        "sclera_brighten": 0.45,
+        "iris_saturate": 0.60,
+        "iris_brightness": 0.45,
+        "iris_hue_shift": -8,
+    },
+    "texture": {"opacity": 0.25},
+    "sharpen": 16.0,
+}
+
+RECIPES["scifi_clean_v1"] = {
+    # Sci-fi cosplay base + new primitives. The synthetic scifi skin reads as
+    # plastic unless texture is preserved — anisotropic + region-aware keep it
+    # real; strong freckle removal for the flawless android look, plus the eye
+    # suite for glowing contact-lens irises.
+    "extends": "scifi_cosplay",
+    "frequency": {
+        "smooth": 0.85,
+        "mid_reduction": 0.75,
+        "regional_modulation": 0.7,
+        "smooth_engine": "anisotropic",
+        "freckle_removal": 60,
+    },
+    "eyes": {
+        "undereye_shadow_strength": 0.5,
+        "dark_circles": 0.25,
+        "catchlight": 0.50,
+        "whites": 0.35,
+        "iris": 0.55,
+    },
+    "undereye": {
+        "darken_removal": 0.40,
+        "puffiness_reduction": 0.30,
+    },
+    "eye": {
+        "sclera_brighten": 0.40,
+        "iris_saturate": 0.65,
+        "iris_brightness": 0.45,
+        "iris_hue_shift": 0,
+    },
+    "texture": {"opacity": 0.25},
+    "sharpen": 16.0,
+}
+
+RECIPES["idol_clear_v1"] = {
+    # Idol base + new primitives. Idol looks want bright, defined eyes and
+    # flawless skin; anisotropic + region-aware keep the stage-lit skin real,
+    # the eye suite pops the iris, and light freckle/under-eye for the clean look.
+    "extends": "idol",
+    "frequency": {
+        "smooth": 0.50,
+        "mid_reduction": 0.35,
+        "regional_modulation": 0.6,
+        "smooth_engine": "anisotropic",
+        "freckle_removal": 45,
+    },
+    "eyes": {
+        "undereye_shadow_strength": 0.5,
+        "dark_circles": 0.25,
+        "catchlight": 0.30,
+        "whites": 0.25,
+        "iris": 0.35,
+    },
+    "undereye": {
+        "darken_removal": 0.35,
+        "puffiness_reduction": 0.30,
+    },
+    "eye": {
+        "sclera_brighten": 0.35,
+        "iris_saturate": 0.55,
+        "iris_brightness": 0.35,
+        "iris_hue_shift": 0,
+    },
+    "texture": {"opacity": 0.90},
+    "sharpen": 14.0,
+}
+
+RECIPES["pink_dream_clear_v1"] = {
+    # Pink-dream base + new primitives. The soft pink fantasy look gets
+    # anisotropic + region-aware smoothing so the dreamy skin stays textured,
+    # plus the eye suite and light freckle for the flawless finish.
+    "extends": "pink_dream",
+    "frequency": {
+        "smooth": 0.25,
+        "mid_reduction": 0.35,
+        "regional_modulation": 0.5,
+        "smooth_engine": "anisotropic",
+        "freckle_removal": 40,
+    },
+    "eyes": {
+        "undereye_shadow_strength": 0.4,
+        "dark_circles": 0.20,
+        "catchlight": 0.25,
+        "whites": 0.30,
+        "iris": 0.40,
+    },
+    "undereye": {
+        "darken_removal": 0.30,
+        "puffiness_reduction": 0.25,
+    },
+    "eye": {
+        "sclera_brighten": 0.30,
+        "iris_saturate": 0.45,
+        "iris_brightness": 0.30,
+        "iris_hue_shift": 0,
+    },
+    "texture": {"opacity": 0.90},
+    "sharpen": 12.0,
+}
+
+RECIPES["fuji_porcelain_clear_v1"] = {
+    # Fuji-porcelain base + new primitives. The filmic porcelain look wants
+    # even, high-key skin without losing pore realism — anisotropic + region-
+    # aware deliver that; eye suite + under-eye for the polished editorial feel.
+    "extends": "fuji_porcelain",
+    "frequency": {
+        "smooth": 0.72,
+        "mid_reduction": 0.75,
+        "regional_modulation": 0.6,
+        "smooth_engine": "anisotropic",
+        "freckle_removal": 35,
+    },
+    "eyes": {
+        "undereye_shadow_strength": 0.5,
+        "dark_circles": 0.20,
+        "catchlight": 0.30,
+        "whites": 0.30,
+        "iris": 0.35,
+    },
+    "undereye": {
+        "darken_removal": 0.40,
+        "puffiness_reduction": 0.30,
+    },
+    "eye": {
+        "sclera_brighten": 0.30,
+        "iris_saturate": 0.35,
+        "iris_brightness": 0.30,
+        "iris_hue_shift": 0,
+    },
+    "texture": {"opacity": 0.35},
+    "sharpen": 12.0,
+}
+
+RECIPES["studio_hard_flash_clear_v1"] = {
+    # Studio hard-flash base + new primitives. Hard flash flattens dimension
+    # and blows highlights; anisotropic + region-aware smooth without
+    # plastic, under-eye repair recovers the flattened eye area, eye suite
+    # for crisp studio eyes.
+    "extends": "studio_hard_flash_v1",
+    "frequency": {
+        "smooth": 0.35,
+        "mid_reduction": 0.30,
+        "regional_modulation": 0.5,
+        "smooth_engine": "anisotropic",
+        "freckle_removal": 40,
+    },
+    "eyes": {
+        "undereye_shadow_strength": 0.5,
+        "dark_circles": 0.20,
+        "catchlight": 0.20,
+        "whites": 0.20,
+        "iris": 0.20,
+    },
+    "undereye": {
+        "darken_removal": 0.40,
+        "puffiness_reduction": 0.30,
+    },
+    "eye": {
+        "sclera_brighten": 0.30,
+        "iris_saturate": 0.35,
+        "iris_brightness": 0.30,
+        "iris_hue_shift": 0,
+    },
+    "texture": {"opacity": 1.00},
+    "sharpen": 12.0,
+}
+
+RECIPES["outdoor_golden_clear_v1"] = {
+    # Outdoor golden-hour base + new primitives. The warm backlight glow loves
+    # smooth gradients; anisotropic keeps pores from washing out, region-aware
+    # protects nose/crow's-feet, eye suite lifts the golden-hour eyes.
+    "extends": "outdoor_golden_hour_v1",
+    "frequency": {
+        "smooth": 0.35,
+        "mid_reduction": 0.30,
+        "regional_modulation": 0.5,
+        "smooth_engine": "anisotropic",
+        "freckle_removal": 45,
+    },
+    "eyes": {
+        "undereye_shadow_strength": 0.4,
+        "dark_circles": 0.20,
+        "catchlight": 0.20,
+        "whites": 0.20,
+        "iris": 0.20,
+    },
+    "undereye": {
+        "darken_removal": 0.30,
+        "puffiness_reduction": 0.25,
+    },
+    "eye": {
+        "sclera_brighten": 0.25,
+        "iris_saturate": 0.35,
+        "iris_brightness": 0.25,
+        "iris_hue_shift": 0,
+    },
+    "texture": {"opacity": 1.00},
+    "sharpen": 12.0,
+}
+
+RECIPES["convention_clear_v1"] = {
+    # Convention-repair base + new primitives. Con-hall lighting is harsh and
+    # tiring on the eyes; anisotropic + region-aware smooth the worn skin,
+    # under-eye repair (darken + puffiness + shadow) is the hero here, eye
+    # suite keeps cosplay eyes bright under flat venue light.
+    "extends": "convention_repair_v1",
+    "frequency": {
+        "smooth": 0.40,
+        "mid_reduction": 0.30,
+        "regional_modulation": 0.6,
+        "smooth_engine": "anisotropic",
+        "freckle_removal": 40,
+    },
+    "eyes": {
+        "undereye_shadow_strength": 0.7,
+        "dark_circles": 0.25,
+        "catchlight": 0.30,
+        "whites": 0.30,
+        "iris": 0.35,
+    },
+    "undereye": {
+        "darken_removal": 0.60,
+        "puffiness_reduction": 0.50,
+    },
+    "eye": {
+        "sclera_brighten": 0.35,
+        "iris_saturate": 0.55,
+        "iris_brightness": 0.35,
+        "iris_hue_shift": 0,
+    },
+    "texture": {"opacity": 1.00},
+    "sharpen": 12.0,
 }
 
 

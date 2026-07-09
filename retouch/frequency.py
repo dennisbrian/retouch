@@ -200,6 +200,10 @@ def _regional_modulation_factors(
     if regional_modulation <= 0.0 or regions is None:
         return {}
 
+    # MAD-based robust energy of the high band — computed once, reused for
+    # every region (avoids 12 redundant full-frame abs+mean passes on 4K).
+    high_mag = np.abs(high).mean(axis=2)
+
     factors: Dict[str, float] = {}
     for name, cfg in _REGION_MOD_CONFIG.items():
         region_mask = getattr(regions, name, None)
@@ -214,8 +218,6 @@ def _regional_modulation_factors(
             factors[name] = 1.0
             continue
 
-        # MAD-based robust energy of the high band inside the region.
-        high_mag = np.abs(high).mean(axis=2)
         vals = high_mag[sel]
         med = float(np.median(vals))
         mad = float(np.median(np.abs(vals - med)))

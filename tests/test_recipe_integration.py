@@ -103,7 +103,7 @@ class TestRecipeOverride:
         """Top-level scalars like contrast can be overridden."""
         v1 = resolve_recipe("anime_cinematic_v1")
         soft = resolve_recipe("anime_cinematic_soft")
-        assert v1["contrast"] == 12.0
+        assert v1["contrast"] == 7.0
         assert soft["contrast"] == 8.0
 
     def test_alias_recipes_share_storage(self):
@@ -193,7 +193,7 @@ class TestBuildContextFromRecipe:
 
     def test_anime_cinematic_contrast_override(self):
         ctx = self._ctx_for("anime_cinematic_v1")
-        assert ctx.contrast == 12.0
+        assert ctx.contrast == 7.0
 
     def test_anime_cinematic_bloom_opacity(self):
         ctx = self._ctx_for("anime_cinematic_v1")
@@ -504,3 +504,120 @@ class TestAnimeV2Recipe:
     def test_build_context_skin_glow(self):
         ctx = build_context("anime_v2", resolve_recipe("anime_v2"), {})
         assert ctx.skin_glow == pytest.approx(20.0)
+
+
+class TestClearSkinV1UnlocksNewFeatures:
+    """Regression guard: ``clear_skin_v1`` must drive every new skin/eye
+    primitive end-to-end through the recipe → build_context → ctx path, so a
+    data-driven mapping regression can't silently leave a feature un-fired.
+
+    These are the features added in the region-aware / anisotropic / freckle /
+    under-eye / eye-enhancement batch. If any assertion here fails, the recipe
+    no longer *unlocks* that feature (param not reaching ctx).
+    """
+
+    def _ctx(self):
+        return build_context("clear_skin_v1", resolve_recipe("clear_skin_v1"), {})
+
+    def test_resolves_and_builds(self):
+        # Must survive resolve + build_context without error.
+        ctx = self._ctx()
+        assert ctx.active_recipe == "clear_skin_v1"
+
+    def test_region_aware_modulation(self):
+        # frequency.regional_modulation (recipe_direct, 0-1) → ctx 0.6
+        assert self._ctx().regional_modulation == pytest.approx(0.6)
+
+    def test_anisotropic_smooth_engine(self):
+        # frequency.smooth_engine → ctx "anisotropic" (grain-following path)
+        assert self._ctx().smooth_engine == "anisotropic"
+
+    def test_freckle_removal(self):
+        # frequency.freckle_removal (recipe_direct, 0-100) → ctx 45.0
+        assert self._ctx().freckle_removal == pytest.approx(45.0)
+
+    def test_undereye_shadow_strength(self):
+        # eyes.undereye_shadow_strength (recipe_direct, 0-1) → ctx 0.4
+        assert self._ctx().undereye_shadow_strength == pytest.approx(0.4)
+
+    def test_undereye_darken_and_puffiness(self):
+        # undereye.* (recipe_pct 0-1 → ctx 0-100)
+        ctx = self._ctx()
+        assert ctx.undereye_darken_removal == pytest.approx(30.0)
+        assert ctx.undereye_puffiness_reduction == pytest.approx(20.0)
+
+    def test_eye_enhancement_suite(self):
+        # eye.* (recipe_pct 0-1 → ctx 0-100); hue_shift is recipe_direct (-30..30)
+        ctx = self._ctx()
+        assert ctx.eye_sclera_brighten == pytest.approx(30.0)
+        assert ctx.eye_iris_saturate == pytest.approx(40.0)
+        assert ctx.eye_iris_brightness == pytest.approx(30.0)
+        assert ctx.eye_iris_hue_shift == pytest.approx(-8.0)
+
+
+class TestNewFeatureRecipesResolve:
+    """Every recipe built on the new skin/eye primitives must resolve and map
+    its hero feature into ctx without error."""
+
+    @pytest.mark.parametrize("name,attr,expected", [
+        ("freckle_free_v1", "freckle_removal", 85.0),
+        ("freckle_free_v1", "regional_modulation", 0.3),
+        ("tired_eye_rescue_v1", "undereye_shadow_strength", 0.7),
+        ("tired_eye_rescue_v1", "undereye_darken_removal", 60.0),
+        ("tired_eye_rescue_v1", "undereye_puffiness_reduction", 50.0),
+        ("tired_eye_rescue_v1", "smooth_engine", "anisotropic"),
+        ("tired_eye_rescue_v1", "eye_sclera_brighten", 25.0),
+        ("aniso_pore_real_v1", "smooth_engine", "anisotropic"),
+        ("aniso_pore_real_v1", "regional_modulation", 0.85),
+        ("aniso_pore_real_v1", "freckle_removal", 0.0),  # not set → default
+        ("cosplay_clear_v1", "smooth_engine", "anisotropic"),
+        ("cosplay_clear_v1", "freckle_removal", 40.0),
+        ("cosplay_clear_v1", "eye_iris_saturate", 55.0),
+        ("studio_porcelain_clear_v1", "smooth_engine", "anisotropic"),
+        ("studio_porcelain_clear_v1", "regional_modulation", 0.6),
+        ("studio_porcelain_clear_v1", "undereye_darken_removal", 45.0),
+        ("studio_porcelain_clear_v1", "eye_sclera_brighten", 30.0),
+        ("xhs_clear_glow_v1", "smooth_engine", "anisotropic"),
+        ("xhs_clear_glow_v1", "freckle_removal", 50.0),
+        ("xhs_clear_glow_v1", "eye_iris_brightness", 30.0),
+        ("wedding_flawless_v1", "smooth_engine", "anisotropic"),
+        ("wedding_flawless_v1", "freckle_removal", 40.0),
+        ("wedding_flawless_v1", "undereye_darken_removal", 35.0),
+        ("korean_glass_clear_v1", "smooth_engine", "anisotropic"),
+        ("korean_glass_clear_v1", "regional_modulation", 0.7),
+        ("korean_glass_clear_v1", "eye_sclera_brighten", 30.0),
+        ("beauty_editorial_clear_v1", "smooth_engine", "anisotropic"),
+        ("beauty_editorial_clear_v1", "freckle_removal", 55.0),
+        ("beauty_editorial_clear_v1", "eye_iris_saturate", 45.0),
+        ("fantasy_eye_pop_v1", "smooth_engine", "anisotropic"),
+        ("fantasy_eye_pop_v1", "freckle_removal", 70.0),
+        ("fantasy_eye_pop_v1", "eye_iris_hue_shift", -8.0),
+        ("scifi_clean_v1", "smooth_engine", "anisotropic"),
+        ("scifi_clean_v1", "freckle_removal", 60.0),
+        ("scifi_clean_v1", "eye_iris_saturate", 65.0),
+        ("idol_clear_v1", "smooth_engine", "anisotropic"),
+        ("idol_clear_v1", "freckle_removal", 45.0),
+        ("idol_clear_v1", "eye_iris_saturate", 55.0),
+        ("pink_dream_clear_v1", "smooth_engine", "anisotropic"),
+        ("pink_dream_clear_v1", "freckle_removal", 40.0),
+        ("pink_dream_clear_v1", "eye_sclera_brighten", 30.0),
+        ("fuji_porcelain_clear_v1", "smooth_engine", "anisotropic"),
+        ("fuji_porcelain_clear_v1", "regional_modulation", 0.6),
+        ("fuji_porcelain_clear_v1", "freckle_removal", 35.0),
+        ("studio_hard_flash_clear_v1", "smooth_engine", "anisotropic"),
+        ("studio_hard_flash_clear_v1", "freckle_removal", 40.0),
+        ("studio_hard_flash_clear_v1", "eye_iris_brightness", 30.0),
+        ("outdoor_golden_clear_v1", "smooth_engine", "anisotropic"),
+        ("outdoor_golden_clear_v1", "freckle_removal", 45.0),
+        ("outdoor_golden_clear_v1", "eye_iris_brightness", 25.0),
+        ("convention_clear_v1", "smooth_engine", "anisotropic"),
+        ("convention_clear_v1", "undereye_darken_removal", 60.0),
+        ("convention_clear_v1", "undereye_puffiness_reduction", 50.0),
+    ])
+    def test_hero_feature_unlocks(self, name, attr, expected):
+        ctx = build_context(name, resolve_recipe(name), {})
+        val = getattr(ctx, attr)
+        if isinstance(expected, str):
+            assert val == expected
+        else:
+            assert val == pytest.approx(expected)

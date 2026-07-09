@@ -101,7 +101,7 @@ def apply_custom_style(style_name, current_recipe="natural"):
         d["body_smooth"], d["body_equalize"], d["body_whiten"], d["body_match_face"],
         d["dodge_burn"], d["relight"], d["relight_azimuth"], d["relight_elevation"], d["sculpt"], d["shine_removal"], d["wrinkle_soften"], d["specular_bloom"], d["specular_bloom_tone"],
         d["skin_flatten"], d["skin_quantize"], d["skin_unify"], d["skin_unify_hue"], d["skin_glow"],
-        d["eye_enhance"], d["catchlight"], d["dark_circles"], d["teeth_whiten"], d["lip_enhance"], d["lip_tint"], d["lip_finish"], d["blush"], d["slimming"], d["hair_enhance"],
+        d["eye_enhance"], d["catchlight"], d["dark_circles"], d["undereye_darken_removal"], d["undereye_puffiness_reduction"], d["eye_sclera_brighten"], d["eye_iris_saturate"], d["eye_iris_hue_shift"], d["eye_iris_brightness"], d["teeth_whiten"], d["lip_enhance"], d["lip_tint"], d["lip_finish"], d["blush"], d["slimming"], d["hair_enhance"],
         d["contrast"], d["brightness"], d["highlights"], d["shadows"], d["whites"], d["blacks"], d["clarity"], d["vibrance"], d["saturation"], d["auto_exposure"],
         d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["glow"], d["vignette"], d["sharpen"], d["sharpen_radius"], d["fade_toe"], d["highlight_drift"], d["airy_haze"], d["clarity_split_neg"], d["clarity_split_pos"], d["subject_separation"], d["impact"],
         d["color_grade"], d["grade_intensity"],
@@ -608,12 +608,12 @@ def process_image(*args):
 def on_recipe_change(recipe):
     d = recipe_defaults(recipe)
     return (
-        d["smooth"], d["mid_reduction"], d["texture_opacity"], d["pore_synthesis"], d["nose_smooth"], d["micro_restore"],
+        d["smooth"], d["mid_reduction"], d["texture_opacity"], d["pore_synthesis"], d["nose_smooth"], d["regional_modulation"], d["smooth_engine"], d["undereye_shadow_strength"], d["freckle_removal"], d["micro_restore"],
         d["whiten"], d["equalize"], d["blemish"], d["whiten_tone"], d["nose_blush"], d["under_eye_blush"], d["white_costume_lift"],
         d["body_smooth"], d["body_equalize"], d["body_whiten"], d["body_match_face"],
         d["dodge_burn"], d["relight"], d["relight_azimuth"], d["relight_elevation"], d["sculpt"], d["shine_removal"], d["wrinkle_soften"], d["specular_bloom"], d["specular_bloom_tone"],
         d["skin_flatten"], d["skin_quantize"], d["skin_unify"], d["skin_unify_hue"], d["skin_glow"],
-        d["eye_enhance"], d["catchlight"], d["dark_circles"], d["teeth_whiten"], d["lip_enhance"], d["lip_tint"], d["lip_finish"], d["blush"], d["slimming"], d["hair_enhance"],
+        d["eye_enhance"], d["catchlight"], d["dark_circles"], d["undereye_darken_removal"], d["undereye_puffiness_reduction"], d["eye_sclera_brighten"], d["eye_iris_saturate"], d["eye_iris_hue_shift"], d["eye_iris_brightness"], d["teeth_whiten"], d["lip_enhance"], d["lip_tint"], d["lip_finish"], d["blush"], d["slimming"], d["hair_enhance"],
         d["contrast"], d["brightness"], d["highlights"], d["shadows"], d["whites"], d["blacks"], d["clarity"], d["vibrance"], d["saturation"], d["auto_exposure"],
         d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["glow"], d["vignette"], d["sharpen"], d["sharpen_radius"], d["fade_toe"], d["highlight_drift"], d["airy_haze"], d["clarity_split_neg"], d["clarity_split_pos"], d["subject_separation"], d["impact"],
         d["color_grade"], d["grade_intensity"],
@@ -648,7 +648,7 @@ def reset_relighting(recipe_name):
 
 def reset_eyes_lips(recipe_name):
     d = recipe_defaults(recipe_name)
-    return d["eye_enhance"], d["catchlight"], d["dark_circles"], d["teeth_whiten"], d["lip_enhance"], d["lip_tint"], d["lip_finish"], d["blush"], d["nose_blush"], d["under_eye_blush"]
+    return d["eye_enhance"], d["catchlight"], d["dark_circles"], d["undereye_darken_removal"], d["undereye_puffiness_reduction"], d["eye_sclera_brighten"], d["eye_iris_saturate"], d["eye_iris_hue_shift"], d["eye_iris_brightness"], d["teeth_whiten"], d["lip_enhance"], d["lip_tint"], d["lip_finish"], d["blush"], d["nose_blush"], d["under_eye_blush"]
 
 def reset_face_reshaping(recipe_name):
     d = recipe_defaults(recipe_name)
@@ -736,7 +736,7 @@ def on_smart_process(img_paths, recipe, *args, prg=gr.Progress()):
         d["body_smooth"], d["body_equalize"], d["body_whiten"], d["body_match_face"],
         d["dodge_burn"], d["relight"], d["relight_azimuth"], d["relight_elevation"], d["sculpt"], d["shine_removal"], d["wrinkle_soften"], d["specular_bloom"], d["specular_bloom_tone"],
         d["skin_flatten"], d["skin_quantize"], d["skin_unify"], d["skin_unify_hue"], d["skin_glow"],
-        d["eye_enhance"], d["catchlight"], d["dark_circles"], d["teeth_whiten"], d["lip_enhance"], d["lip_tint"], d["lip_finish"], d["blush"], d["slimming"], d["hair_enhance"],
+        d["eye_enhance"], d["catchlight"], d["dark_circles"], d["undereye_darken_removal"], d["undereye_puffiness_reduction"], d["eye_sclera_brighten"], d["eye_iris_saturate"], d["eye_iris_hue_shift"], d["eye_iris_brightness"], d["teeth_whiten"], d["lip_enhance"], d["lip_tint"], d["lip_finish"], d["blush"], d["slimming"], d["hair_enhance"],
         d["contrast"], d["brightness"], d["highlights"], d["shadows"], d["whites"], d["blacks"], d["clarity"], d["vibrance"], d["saturation"], d["auto_exposure"],
         d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["glow"], d["vignette"], d["sharpen"], d["sharpen_radius"], d["fade_toe"], d["highlight_drift"], d["airy_haze"], d["clarity_split_neg"], d["clarity_split_pos"], d["subject_separation"], d["impact"],
         d["color_grade"], d["grade_intensity"],
@@ -1691,6 +1691,12 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             catchlight = gr.Slider(0, 100, 0, step=1, label="Catchlight Boost", info="Amplify existing catchlight highlights in the iris (0 = follow Eye Enhance)")
                             dark_circles = gr.Slider(0, 100, 0, step=1, label="Dark Circle Repair", info="Under-eye dark circle detection and repair")
                             undereye_shadow_strength = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Under-Eye Shadow Smooth", info="Soften under-eye shadows conservatively (0=off)")
+                            undereye_darken_removal = gr.Slider(0, 100, 0, step=1, label="Under-Eye Darken Removal", info="Lift under-eye darkening / discoloration (0=off)")
+                            undereye_puffiness_reduction = gr.Slider(0, 100, 0, step=1, label="Under-Eye Puffiness Reduction", info="Reduce under-eye puffiness / bag volume (0=off)")
+                            eye_sclera_brighten = gr.Slider(0, 100, 0, step=1, label="Sclera Brighten", info="Whiten/brighten the eye whites (sclera) for a clean look")
+                            eye_iris_saturate = gr.Slider(0, 100, 0, step=1, label="Iris Saturate", info="Deepen iris color saturation")
+                            eye_iris_brightness = gr.Slider(0, 100, 0, step=1, label="Iris Brightness", info="Brighten iris detail and reflection")
+                            eye_iris_hue_shift = gr.Slider(-30, 30, 0, step=1, label="Iris Hue Shift", info="Rotate iris hue for colored-contact effects (-30..30°)")
                             teeth_whiten = gr.Slider(0, 100, 5, step=1, label="Teeth Whiten", info="Naturally whiten and brighten teeth enamel")
                             lip_enhance = gr.Slider(0, 100, 5, step=1, label="Lip Enhance", info="Enhance lip texture definition, gloss, and contour")
                             lip_tint = gr.Dropdown(choices=LIP_TINTS, value="none", label="Lip Tint Color", interactive=True, info="Apply a natural cosmetic tint overlay")
@@ -1853,12 +1859,12 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
 
     # Event binding setup
     _recipe_outputs = [
-        smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth, micro_restore,
+        smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth, regional_modulation, smooth_engine, undereye_shadow_strength, freckle_removal, micro_restore,
         whiten, equalize, blemish, whiten_tone, nose_blush, under_eye_blush, white_costume_lift,
         body_smooth, body_equalize, body_whiten, body_match_face,
         dodge_burn, relight, relight_azimuth, relight_elevation, sculpt, shine_removal, wrinkle_soften, specular_bloom, specular_bloom_tone,
         skin_flatten, skin_quantize, skin_unify, skin_unify_hue, skin_glow,
-        eye_enhance, catchlight, dark_circles, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, slimming, hair_enhance,
+        eye_enhance, catchlight, dark_circles, undereye_darken_removal, undereye_puffiness_reduction, eye_sclera_brighten, eye_iris_saturate, eye_iris_hue_shift, eye_iris_brightness, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, slimming, hair_enhance,
         contrast, brightness, highlights, shadows, whites, blacks, clarity, vibrance, saturation, auto_exposure,
         bloom, bloom_threshold, bloom_softness, glow, vignette, sharpen, sharpen_radius, fade_toe, highlight_drift, airy_haze, clarity_split_neg, clarity_split_pos, subject_separation, impact,
         color_grade, grade_intensity,
@@ -1921,7 +1927,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     reset_eyes_lips_btn.click(
         fn=reset_eyes_lips,
         inputs=[recipe],
-        outputs=[eye_enhance, catchlight, dark_circles, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, nose_blush, under_eye_blush]
+        outputs=[eye_enhance, catchlight, dark_circles, undereye_darken_removal, undereye_puffiness_reduction, eye_sclera_brighten, eye_iris_saturate, eye_iris_hue_shift, eye_iris_brightness, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, nose_blush, under_eye_blush]
     )
 
     reset_face_reshaping_btn.click(
@@ -2002,7 +2008,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         body_smooth, body_equalize, body_whiten, body_match_face, body_relight, body_dodge_burn, shadow_lift, body_shadow_lift, nose_restore,
         specular_bloom, specular_bloom_tone,
         skin_flatten, skin_quantize, skin_unify, skin_unify_hue, _skin_hue_unify_state, _skin_chroma_even_state, skin_glow,
-        eye_enhance, catchlight, dark_circles, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, slimming,
+        eye_enhance, catchlight, dark_circles, undereye_darken_removal, undereye_puffiness_reduction, eye_sclera_brighten, eye_iris_saturate, eye_iris_hue_shift, eye_iris_brightness, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, slimming,
         _reshape_eye_size_state, _reshape_eye_distance_state, _reshape_nose_width_state, _reshape_nose_length_state,
         _reshape_jaw_width_state, _reshape_chin_length_state, _reshape_mouth_size_state, _reshape_smile_state, _reshape_forehead_state,
         hair_enhance,

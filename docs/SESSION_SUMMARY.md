@@ -84,3 +84,46 @@
 - `tests/test_gui.py` — `PROCESS_INPUT_KEYS` count assertion 112→113
 - `MASTER_PLAN.md` — row 3/3b/4 updated, `▶ RESUME HERE` note updated
 - `PLAN_F8_EXECUTION.md` — F8.2 row with DONE receipt
+
+---
+
+## Session — 2026-07-09
+
+### Done
+- **`clear_skin_v1` recipe** — added to `retouch/recipes.py`. Showcase recipe for the
+  new skin/eye feature batch, built on `natural_polish_v1` (restrained base). Exercises:
+  - `frequency.regional_modulation` (0.6) — per-region smooth modulation
+  - `frequency.smooth_engine="anisotropic"` — grain-following smoothing
+  - `frequency.freckle_removal` (45) — selective freckle removal, beauty marks preserved
+  - `eyes.undereye_shadow_strength` (0.4) — strength-aware under-eye shadow lift
+  - `undereye.darken_removal` (0.30) / `undereye.puffiness_reduction` (0.20)
+  - `eye.sclera_brighten` (0.30) / `eye.iris_saturate` (0.40) / `eye.iris_brightness` (0.30) / `eye.iris_hue_shift` (-8)
+  - High band untouched → `texture.opacity=1.0` preserves pores.
+- **`frequency.py` perf fix** — hoisted `high_mag = np.abs(high).mean(axis=2)` out of the
+  per-region loop in `_regional_modulation_factors` (was recomputed ~12× per call on 4K).
+- **Review** — reviewed recent batch (freckle/region-aware/anisotropic/under-eye/eye suite);
+  code on-convention (float32, LAB at boundary, detail band preserved, masks float32, specific
+  catches). Visual QA gates for those Visual-Critical modules still need a real-image run.
+
+- **Recipe catalog expanded (17 new showcase recipes)** — each built on a distinct base
+  style and exercising the new skin/eye primitives (anisotropic + region-aware smoothing,
+  freckle removal, under-eye darken/puffiness/shadow, eye-enhancement suite):
+  `clear_skin_v1`, `freckle_free_v1`, `tired_eye_rescue_v1`, `aniso_pore_real_v1`,
+  `cosplay_clear_v1`, `studio_porcelain_clear_v1`, `xhs_clear_glow_v1`, `wedding_flawless_v1`,
+  `korean_glass_clear_v1`, `beauty_editorial_clear_v1`, `fantasy_eye_pop_v1`, `scifi_clean_v1`,
+  `idol_clear_v1`, `pink_dream_clear_v1`, `fuji_porcelain_clear_v1`,
+  `studio_hard_flash_clear_v1`, `outdoor_golden_clear_v1`, `convention_clear_v1`.
+  Regression-guarded by `TestNewFeatureRecipesResolve` + `TestClearSkinV1UnlocksNewFeatures`.
+- **GUI fully linked** — recipes auto-appear in the dropdown (`RECIPE_NAMES =
+  list(RECIPES.keys())`); added the 6 missing sliders (sclera/iris + under-eye darken/puffiness)
+  to the Eyes & Lips accordion and wired them into `_process_inputs`, `_recipe_outputs`,
+  `on_recipe_change`, the smart-process path, and `reset_eyes_lips` so recipe selection drives
+  the sliders. Also added the 4 other new-feature params to `_recipe_outputs`/`on_recipe_change`.
+  Fixed an `eye_iris_hue_shift`/`eye_iris_brightness` order swap to match `param_names()`.
+  Verified `_process_inputs` new-param indices align with `PROCESS_INPUT_KEYS`; counts match.
+- **Stale test fix** — `anime_cinematic_v1` contrast is now 7.0 (recipe is source of truth);
+  updated two stale assertions (were 12.0). Full `test_recipe_integration.py` suite green (113).
+
+### Next Steps
+- Visual QA: run pipeline on a reference image with `clear_skin_v1` to close the
+  frequency/skin/freckle/under-eye QA gates (pixel confirmation pending).
