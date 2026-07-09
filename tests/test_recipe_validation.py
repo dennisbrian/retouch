@@ -18,7 +18,7 @@ _VALID_KEYS.update(
     if spec.engine_recipe_key is not None
 )
 # Nested keys can be dicts (e.g., {"skin": {...}, "bloom": {...}})
-_VALID_NESTED_ROOTS = {"skin", "eyes", "lips", "hair", "bloom", "makeup", "frequency", "texture", "color_harmony", "finish", "body_skin", "background", "harmony"}
+_VALID_NESTED_ROOTS = {"skin", "eyes", "lips", "hair", "bloom", "makeup", "frequency", "texture", "color_harmony", "finish", "body_skin", "background", "harmony", "ai"}
 
 
 def test_no_dead_recipe_keys():

@@ -705,6 +705,34 @@ RECIPES = {
         "vignette": 30.0,
         "finish": {"airy_haze": 0.20},
     },
+    "con_high_iso_v1": {
+        # Dim convention hall / evening hallway shoot at ISO 3200+ — luma
+        # grain and chroma speckle everywhere. F7's NAFNet denoise (SIDD
+        # sensor-noise domain) runs PRE-pipeline, so the noise is gone
+        # before frequency separation ever sees it. That is the whole
+        # trick of this recipe: because denoise carries the cleanup,
+        # frequency.smooth stays LOW (0.25) — smoothing noisy skin harder
+        # is what produces plastic skin; denoising first then smoothing
+        # gently preserves real pores. Shadow lift + equalize for the
+        # underexposure that forced the high ISO in the first place;
+        # chroma_even mops up residual low-frequency color blotch the
+        # denoiser leaves behind.
+        "extends": "natural",
+        # 0.7: a 0.5 blend left visibly speckled shadow areas on the QA photo
+        # (background noise is what actually reads as "high ISO"); 0.7 clears
+        # them while the residual 30% keeps micro-texture alive.
+        "ai": {"denoise": 0.7},
+        "frequency": {"smooth": 0.25},
+        "skin": {
+            "equalize": 0.15,
+            "hue_unify": 0.45,
+            "chroma_even": 0.40,
+            "whiten_hue_stable": 1,
+        },
+        "shadows": 25.0,
+        "blacks": 8.0,
+        "grain_strength": 0.10,  # thin uniform grain masks any denoise unevenness
+    },
 
     "idol": {
         "extends": "natural",
