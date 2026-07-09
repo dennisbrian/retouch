@@ -385,7 +385,7 @@ class TestRegionAwareModulation:
         return high
 
     def test_regional_factors_clamped(self):
-        """All returned factors stay within [0.5, 1.5]."""
+        """All returned factors stay within [0.5, 2.0]."""
         size = 120
         high = self._make_high(size, (30, 70, 30, 70), [(10, 30, 10, 30)])
         regions = _FakeRegions(
@@ -396,7 +396,7 @@ class TestRegionAwareModulation:
             high, regions, high.shape[:2], regional_modulation=1.0
         )
         for name, f in factors.items():
-            assert 0.5 <= f <= 1.5, f"{name} factor {f} out of [0.5, 1.5]"
+            assert 0.5 <= f <= 2.0, f"{name} factor {f} out of [0.5, 2.0]"
 
     def test_high_detail_region_factor_below_one(self):
         """A high-energy (detailed) detail-region factor is < 1.0 (less smoothing)."""

@@ -126,25 +126,29 @@ def _texture_adaptation_factor(
 #     actually has high energy (don't strip real wrinkles);
 #   • smooth regions (target > 1.0) pull the factor UP when that region is
 #     genuinely flat (safe to smooth more).
-# The nudge is scaled by ``regional_modulation`` and clamped to [0.5, 1.5].
+# The nudge is scaled by ``regional_modulation`` and clamped to [0.5, 2.0].
 # When ``regional_modulation == 0`` or no regions are supplied the caller's
 # path is a strict no-op (byte-identical output).
 _REGION_MOD_CONFIG: Dict[str, Dict[str, float]] = {
-    "nose_bridge":        {"target": 0.7,  "e_low": 1.0, "e_high": 4.0},
-    "forehead":           {"target": 1.1,  "e_low": 1.0, "e_high": 4.0},
-    "forehead_center":    {"target": 1.1,  "e_low": 1.0, "e_high": 4.0},
-    "cheek_highlights_l": {"target": 1.2,  "e_low": 1.0, "e_high": 4.0},
-    "cheek_highlights_r": {"target": 1.2,  "e_low": 1.0, "e_high": 4.0},
-    "left_cheek":         {"target": 1.15, "e_low": 1.0, "e_high": 4.0},
-    "right_cheek":        {"target": 1.15, "e_low": 1.0, "e_high": 4.0},
-    "jawline_contour":    {"target": 0.9,  "e_low": 1.0, "e_high": 4.0},
-    "crows_feet_l":       {"target": 0.9,  "e_low": 1.0, "e_high": 4.0},
-    "crows_feet_r":       {"target": 0.9,  "e_low": 1.0, "e_high": 4.0},
-    "nasolabial_l":       {"target": 1.1,  "e_low": 1.0, "e_high": 4.0},
-    "nasolabial_r":       {"target": 1.1,  "e_low": 1.0, "e_high": 4.0},
+    # Wide target spread so regional_modulation=1.0 is clearly visible. Flat
+    # regions (cheeks/forehead) smooth up to ~2x; detail regions (nose bridge,
+    # crows-feet, jawline) keep more structure. Bounded by the [0.5, 2.0] clamp;
+    # the high band is never touched so pores survive.
+    "nose_bridge":        {"target": 0.5,  "e_low": 1.0, "e_high": 4.0},
+    "forehead":           {"target": 1.9,  "e_low": 1.0, "e_high": 4.0},
+    "forehead_center":    {"target": 1.9,  "e_low": 1.0, "e_high": 4.0},
+    "cheek_highlights_l": {"target": 2.0,  "e_low": 1.0, "e_high": 4.0},
+    "cheek_highlights_r": {"target": 2.0,  "e_low": 1.0, "e_high": 4.0},
+    "left_cheek":         {"target": 1.8,  "e_low": 1.0, "e_high": 4.0},
+    "right_cheek":        {"target": 1.8,  "e_low": 1.0, "e_high": 4.0},
+    "jawline_contour":    {"target": 0.6,  "e_low": 1.0, "e_high": 4.0},
+    "crows_feet_l":       {"target": 0.6,  "e_low": 1.0, "e_high": 4.0},
+    "crows_feet_r":       {"target": 0.6,  "e_low": 1.0, "e_high": 4.0},
+    "nasolabial_l":       {"target": 1.8,  "e_low": 1.0, "e_high": 4.0},
+    "nasolabial_r":       {"target": 1.8,  "e_low": 1.0, "e_high": 4.0},
 }
 _REGION_MOD_FLOOR = 0.5
-_REGION_MOD_CEIL = 1.5
+_REGION_MOD_CEIL = 2.0
 
 
 def _region_mask_crop(
@@ -190,7 +194,7 @@ def _regional_modulation_factors(
         crop: Optional (y1, y2, x1, x2) slice applied to full-image masks.
 
     Returns:
-        Dict mapping region name → factor clamped to [0.5, 1.5]. Regions
+        Dict mapping region name → factor clamped to [0.5, 2.0]. Regions
         absent from ``regions`` or with too few pixels return 1.0 (no-op).
     """
     if regional_modulation <= 0.0 or regions is None:
@@ -422,7 +426,7 @@ def _region_smooth(
         low_mid: (H, W, 3) float32 BGR in [0, 255].
         smooth_engine: "guided", "bilateral" or "anisotropic".
         smooth_strength: Base 0–1 smoothing strength.
-        factor: Region modulation factor (already clamped, in [0.5, 1.5]).
+        factor: Region modulation factor (already clamped, in [0.5, 2.0]).
         sigma_color: Base sigma (color) for guided/bilateral.
         sigma_space: Base sigma (space) for guided/bilateral.
 
