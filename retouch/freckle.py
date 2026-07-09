@@ -327,8 +327,14 @@ class FreckleRemover:
             intensity = strength01 * c.confidence
             cv2.circle(removal_float, (cx, cy), radius, intensity, -1)
 
-        # cv2.inpaint is binary; keep full-strength (>=0.5) freckle pixels.
-        removal_mask = (removal_float >= 0.5).astype(np.uint8) * 255
+        # cv2.inpaint is binary, so the continuous intensity is thresholded into a
+        # heal mask. The gate is intentionally low (not 0.5) so the slider is
+        # responsive across most of its 0-100 range: a freckle is healed once
+        # ``strength01 * confidence`` clears the gate, which happens at lower
+        # strengths for high-confidence freckles and higher strengths for weaker
+        # ones — giving a natural progressive gradient instead of a dead lower half.
+        _REMOVAL_GATE = 0.12
+        removal_mask = (removal_float >= _REMOVAL_GATE).astype(np.uint8) * 255
         removal_mask = cv2.bitwise_and(removal_mask, cv2.bitwise_not(preserve_mask))
 
         if removal_mask.sum() == 0:
