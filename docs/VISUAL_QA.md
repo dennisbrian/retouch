@@ -210,6 +210,12 @@ receives the 0–100 value it expects (remover divides by 100). Pre-fix, removal
 effectively disabled via `process()`/recipe paths. Post-fix verified: `freckle_removal=60`
 changes 551 px on a duotian sample.
 
+**Heal-gate fix:** the binary inpaint mask was thresholded at `intensity >= 0.5`, so
+`freckle_removal` healed nothing below ~strength 50 (and mid-confidence freckles needed
+~83). Lowered to `>= 0.12` (`retouch/freckle.py`) so the slider engages from ~strength 20,
+with a natural progressive gradient (`intensity = strength01 * confidence` clears the gate
+at different strengths per freckle). Strength 10 stays a true no-op (unit test kept).
+
 **CLI regression fixed:** a stray over-indent dropped `--workers` inside the
 `PROCESSING_PARAMS` argparse loop in `cli.py::main`, causing
 `argparse.ArgumentError: argument --workers: conflicting option string` on every CLI
