@@ -5,9 +5,12 @@ All operations work within the skin mask to never affect hair, eyes, or backgrou
 
 from __future__ import annotations
 
+import logging
 import math
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+logger = logging.getLogger(__name__)
 
 import cv2
 import numpy as np
@@ -231,6 +234,130 @@ class SkinProcessor:
         else:
             whitened = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
         return blend_masked(img_bgr, whitened, skin_mask)
+
+    def smooth_undereye_shadow(
+        self,
+        img_bgr: np.ndarray,
+        under_eye_masks: Sequence[Optional[np.ndarray]],
+        skin_mask: Optional[np.ndarray] = None,
+        strength: float = 0.5,
+        feather_radius: int = 3,
+    ) -> np.ndarray:
+        """Selectively soften under-eye shadows (dark circles) at conservative strength.
+
+        Detects shadow pixels *inside* the under-eye region masks and applies a
+        targeted edge-preserving guided filter, blended back via a feathered mask.
+        The sclera is never touched because processing is confined to the
+        under-eye masks. Preserves shadow depth (only ~50% of ``strength`` is used).
+
+        Supports both uint8 and float32 input ([0, 255] range). Returns the same
+        dtype as input. Pixel math stays float32; no uint8 intermediates in arithmetic.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 or float32 BGR image.
+            under_eye_masks: Tuple/list of one or two float32 masks
+                (``regions.left_under_eye``, ``regions.right_under_eye``). A mask
+                that is None is skipped.
+            skin_mask: Optional (H, W) float mask 0–1. Non-skin pixels are excluded.
+            strength: 0–1 shadow smoothing strength. ``<= 0`` is a no-op (input
+                returned byte-identical).
+            feather_radius: Odd Gaussian kernel size for mask feathering. Larger =
+                softer blend boundary.
+
+        Returns:
+            (H, W, 3) BGR image, same dtype as input.
+        """
+        if strength <= 0 or under_eye_masks is None:
+            return img_bgr
+
+        # Collect valid under-eye masks (None entries skipped).
+        zones: List[np.ndarray] = []
+        for m in under_eye_masks:
+            if m is None:
+                continue
+            m_f = squeeze_mask(m.astype(np.float32, copy=False) if getattr(m, "dtype", None) != np.float32 else m)
+            if m_f.max() < 0.01:
+                continue
+            zones.append(m_f)
+        if not zones:
+            return img_bgr
+
+        is_float = img_bgr.dtype == np.float32
+
+        # Explicit colorspace boundary: BGR -> uint8 for cvtColor, then float32 LAB.
+        if is_float:
+            img_u8 = np.clip(img_bgr, 0, 255).astype(np.uint8)
+        else:
+            img_u8 = img_bgr
+        lab = cv2.cvtColor(img_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
+        L = lab[:, :, 0]
+
+        img_f = img_bgr.astype(np.float32) if not is_float else img_bgr
+        result = img_f.copy()
+
+        # Feather kernel must be an odd diameter.
+        fr = feather_radius if feather_radius % 2 == 1 else feather_radius + 1
+        if fr < 1:
+            fr = 1
+
+        skin_gate = squeeze_mask(skin_mask.astype(np.float32, copy=False)) if skin_mask is not None else None
+
+        morph_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+
+        processed_any = False
+        for ue in zones:
+            zone = ue > 0.5
+            zone_px = int(np.count_nonzero(zone))
+            if zone_px == 0:
+                continue
+
+            # Local median computed only over the under-eye zone (robust baseline).
+            local_median = float(np.median(L[zone]))
+            shadow = (
+                (L < local_median - 15.0) & (L > 40.0) & (L < 200.0) & zone
+            ).astype(np.float32)
+
+            # Morphological open strips sub-3x3 noise from the shadow map.
+            shadow = cv2.morphologyEx(shadow, cv2.MORPH_OPEN, morph_kernel)
+
+            coverage = float(np.count_nonzero(shadow > 0.5)) / float(zone_px)
+            if coverage < 0.3:
+                continue  # Too few shadow pixels: this eye has no dark circle.
+
+            # Feather the shadow mask to avoid hard seams at zone edges.
+            shadow_feathered = cv2.GaussianBlur(shadow, (fr, fr), 0)
+            shadow_feathered = np.clip(shadow_feathered, 0.0, 1.0)
+
+            # Gate by skin so non-skin (e.g. eye/sclera-adjacent) pixels are excluded.
+            if skin_gate is not None:
+                shadow_feathered = shadow_feathered * skin_gate
+
+            if shadow_feathered.max() < 0.01:
+                continue
+
+            blend = shadow_feathered * 0.5 * strength
+
+            # Conservative guided filter per channel (edge-preserving smoothing).
+            smoothed = np.empty_like(img_f)
+            try:
+                for c in range(3):
+                    smoothed[:, :, c] = guided_filter(
+                        img_f[:, :, c], radius=4, eps=1.0, guide=None
+                    )
+            except cv2.error as e:
+                logger.warning("guided_filter failed in smooth_undereye_shadow: %s; skipping eye.", e)
+                continue
+
+            blend_3d = blend[:, :, np.newaxis]
+            result = result * (1.0 - blend_3d) + smoothed * blend_3d
+            processed_any = True
+
+        if not processed_any:
+            return img_bgr
+
+        if is_float:
+            return np.clip(result, 0, 255).astype(np.float32)
+        return np.clip(result, 0, 255).astype(np.uint8)
 
     def equalize(
         self,

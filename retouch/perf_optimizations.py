@@ -26,6 +26,7 @@ import numpy as np
 import onnxruntime as ort
 
 from .frequency import FrequencySeparator
+from .freckle import FreckleRemover
 
 
 def _build_smooth_mask(
@@ -355,6 +356,9 @@ def _process_face_core(
                 pore_synthesis=ctx.pore_synthesis / 100.0,
                 roi_coords=(roi_x1, roi_y1),
                 float32_out=True,
+                regions=regions,
+                regional_modulation=getattr(ctx, 'regional_modulation', 0.0),
+                smooth_engine=getattr(ctx, 'smooth_engine', 'guided'),
             )
             nose_canvas = frequency.combine(
                 layers,
@@ -366,6 +370,9 @@ def _process_face_core(
                 pore_synthesis=ctx.pore_synthesis / 100.0,
                 roi_coords=(roi_x1, roi_y1),
                 float32_out=True,
+                regions=regions,
+                regional_modulation=getattr(ctx, 'regional_modulation', 0.0),
+                smooth_engine=getattr(ctx, 'smooth_engine', 'guided'),
             )
             nose_alpha = (nose_mask * smooth_mask)[:, :, np.newaxis]
             canvas = (
@@ -383,6 +390,9 @@ def _process_face_core(
                 pore_synthesis=ctx.pore_synthesis / 100.0,
                 roi_coords=(roi_x1, roi_y1),
                 float32_out=True,
+                regions=regions,
+                regional_modulation=getattr(ctx, 'regional_modulation', 0.0),
+                smooth_engine=getattr(ctx, 'smooth_engine', 'guided'),
             )
     else:
         canvas = frequency.combine(
@@ -395,6 +405,32 @@ def _process_face_core(
             pore_synthesis=ctx.pore_synthesis / 100.0,
             roi_coords=(roi_x1, roi_y1),
             float32_out=True,
+            regions=regions,
+            regional_modulation=getattr(ctx, 'regional_modulation', 0.0),
+            smooth_engine=getattr(ctx, 'smooth_engine', 'guided'),
+            )
+
+    # ---- Selective under-eye shadow smoothing (S5.5) ----
+    # Conservative, region-limited; no-op when strength <= 0.
+    _undereye_strength = getattr(ctx, 'undereye_shadow_strength', 0.0) or 0.0
+    if _undereye_strength > 0 and regions is not None:
+        canvas = skin.smooth_undereye_shadow(
+            canvas,
+            under_eye_masks=[regions.left_under_eye, regions.right_under_eye],
+            skin_mask=skin_n,
+            strength=_undereye_strength,
+            feather_radius=3,
+        )
+
+    # ---- Selective freckle removal (preserve beauty marks) ----
+    # Runs after smoothing so the heal stays crisp; no-op when freckle_removal <= 0.
+    _freckle_removal = getattr(ctx, 'freckle_removal', 0.0) or 0.0
+    if _freckle_removal > 0:
+        canvas = FreckleRemover().remove(
+            img_bgr=canvas,
+            face_mask=skin_n,
+            freckle_removal=_freckle_removal,
+            freckle_preserve_mask=getattr(ctx, 'freckle_preserve_mask', None),
         )
 
     # ---- Exposure-locked smoothing (recipe-only) ----

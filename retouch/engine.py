@@ -184,6 +184,8 @@ class ProcessingContext:
     mid_reduction: float = _DEFAULTS["mid_reduction"]
     texture_opacity: float = _DEFAULTS["texture_opacity"]
     pore_synthesis: float = 0.0
+    regional_modulation: float = 0.0
+    smooth_engine: str = "guided"
     specular_bloom: float = 0.0
     specular_bloom_tone: str = _DEFAULTS["specular_bloom_tone"]
     dodge_burn: float = 0.0
@@ -214,12 +216,15 @@ class ProcessingContext:
     body_shadow_lift: float = 0.0
     shadow_lift: float = 0.0
     nose_restore: float = 0.0
+    freckle_removal: float = 0.0
+    freckle_preserve_mask: Optional[np.ndarray] = None
 
     # --- Eyes ---
     eye_enhance: float = 0.0
     dark_circles: float = 0.0
     undereye_darken_removal: float = 0.0
     undereye_puffiness_reduction: float = 0.0
+    undereye_shadow_strength: float = 0.0
     catchlight: float = 0.0
     eye_sclera_brighten: float = 0.0
     eye_iris_saturate: float = 0.0
@@ -873,6 +878,11 @@ class RetouchEngine:
         body_shadow_lift: Optional[float] = None,
         shadow_lift: Optional[float] = None,
         nose_restore: Optional[float] = None,
+        regional_modulation: Optional[float] = None,
+        smooth_engine: Optional[str] = None,
+        undereye_shadow_strength: Optional[float] = None,
+        freckle_removal: Optional[float] = None,
+        freckle_preserve_mask: Optional[np.ndarray] = None,
         lut: Optional[str] = None,
         skin_locus: Optional[Dict[str, float]] = None,
         tonal_curve_strength: Optional[float] = None,
@@ -1163,6 +1173,11 @@ class RetouchEngine:
             "mv2_ombre": mv2_ombre,
             "mv2_ombre_color1": mv2_ombre_color1,
             "mv2_ombre_color2": mv2_ombre_color2,
+            "regional_modulation": regional_modulation,
+            "smooth_engine": smooth_engine,
+            "undereye_shadow_strength": undereye_shadow_strength,
+            "freckle_removal": freckle_removal,
+            "freckle_preserve_mask": freckle_preserve_mask,
         }
 
         ctx = build_context(active_recipe, rec, overrides)

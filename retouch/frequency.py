@@ -20,13 +20,16 @@ by different amounts.
 
 from __future__ import annotations
 
+import logging
 import os
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import cv2
 import numpy as np
 
-from .utils import adaptive_ksize, blend_masked, estimate_face_width, guided_filter
+from .utils import adaptive_ksize, blend_masked, estimate_face_width, guided_filter, squeeze_mask
+
+logger = logging.getLogger(__name__)
 
 # Constants for adaptive sizing and parameters
 DEFAULT_FEATHER_FACTOR = 0.015
@@ -113,6 +116,331 @@ def _texture_adaptation_factor(
     return min(1.0, max(floor, factor))
 
 
+# --- Region-aware smoothing strength modulation ---
+# Some face regions naturally carry more (nose bridge wrinkles) or less
+# (cheeks) high-frequency structure. A single global smooth_strength over-
+# smooths flat regions and under-protects detailed ones. We measure the
+# MAD-based high-band energy inside each known region and nudge the local
+# smooth_strength toward a per-region TARGET:
+#   • detail regions (target < 1.0) pull the factor DOWN when that region
+#     actually has high energy (don't strip real wrinkles);
+#   • smooth regions (target > 1.0) pull the factor UP when that region is
+#     genuinely flat (safe to smooth more).
+# The nudge is scaled by ``regional_modulation`` and clamped to [0.5, 1.5].
+# When ``regional_modulation == 0`` or no regions are supplied the caller's
+# path is a strict no-op (byte-identical output).
+_REGION_MOD_CONFIG: Dict[str, Dict[str, float]] = {
+    "nose_bridge":        {"target": 0.7,  "e_low": 1.0, "e_high": 4.0},
+    "forehead":           {"target": 1.1,  "e_low": 1.0, "e_high": 4.0},
+    "forehead_center":    {"target": 1.1,  "e_low": 1.0, "e_high": 4.0},
+    "cheek_highlights_l": {"target": 1.2,  "e_low": 1.0, "e_high": 4.0},
+    "cheek_highlights_r": {"target": 1.2,  "e_low": 1.0, "e_high": 4.0},
+    "left_cheek":         {"target": 1.15, "e_low": 1.0, "e_high": 4.0},
+    "right_cheek":        {"target": 1.15, "e_low": 1.0, "e_high": 4.0},
+    "jawline_contour":    {"target": 0.9,  "e_low": 1.0, "e_high": 4.0},
+    "crows_feet_l":       {"target": 0.9,  "e_low": 1.0, "e_high": 4.0},
+    "crows_feet_r":       {"target": 0.9,  "e_low": 1.0, "e_high": 4.0},
+    "nasolabial_l":       {"target": 1.1,  "e_low": 1.0, "e_high": 4.0},
+    "nasolabial_r":       {"target": 1.1,  "e_low": 1.0, "e_high": 4.0},
+}
+_REGION_MOD_FLOOR = 0.5
+_REGION_MOD_CEIL = 1.5
+
+
+def _region_mask_crop(
+    region_mask: np.ndarray,
+    shape: Tuple[int, int],
+    crop: Optional[Tuple[int, int, int, int]],
+) -> np.ndarray:
+    """Return a (H, W) float32 region mask aligned to the (already cropped) ``high`` band.
+
+    Args:
+        region_mask: Full-image region mask (any float/uint, (H, W) or (H, W, 1)).
+        shape: (H, W) of the cropped high band the masks must align to.
+        crop: Optional (y1, y2, x1, x2) slice applied to a full-image mask.
+
+    Returns:
+        (H, W) float32 mask in [0, 1].
+    """
+    m = squeeze_mask(region_mask.astype(np.float32, copy=False) if region_mask.dtype != np.float32 else region_mask)
+    if crop is not None:
+        y1, y2, x1, x2 = crop
+        m = m[y1:y2, x1:x2]
+    if m.shape != shape:
+        # Region mask did not align (e.g. wrong resolution); safely no-op.
+        return np.zeros(shape, dtype=np.float32)
+    return np.clip(m, 0.0, 1.0)
+
+
+def _regional_modulation_factors(
+    high: np.ndarray,
+    regions: Any,
+    shape: Tuple[int, int],
+    regional_modulation: float = 0.0,
+    crop: Optional[Tuple[int, int, int, int]] = None,
+) -> Dict[str, float]:
+    """Compute per-region smoothing-strength modulation factors.
+
+    Args:
+        high: (H, W, 3) float32 high-frequency band (may be negative).
+        regions: FaceRegions-like object exposing the attributes in
+            ``_REGION_MOD_CONFIG`` as float/uint masks.
+        shape: (H, W) shape of ``high`` the region masks must align to.
+        regional_modulation: Global modulation strength (0.0 = no-op → all 1.0).
+        crop: Optional (y1, y2, x1, x2) slice applied to full-image masks.
+
+    Returns:
+        Dict mapping region name → factor clamped to [0.5, 1.5]. Regions
+        absent from ``regions`` or with too few pixels return 1.0 (no-op).
+    """
+    if regional_modulation <= 0.0 or regions is None:
+        return {}
+
+    factors: Dict[str, float] = {}
+    for name, cfg in _REGION_MOD_CONFIG.items():
+        region_mask = getattr(regions, name, None)
+        if region_mask is None:
+            factors[name] = 1.0
+            continue
+
+        m_f = _region_mask_crop(region_mask, shape, crop)
+        sel = m_f > 0.5
+        n = int(np.count_nonzero(sel))
+        if n < 16:
+            factors[name] = 1.0
+            continue
+
+        # MAD-based robust energy of the high band inside the region.
+        high_mag = np.abs(high).mean(axis=2)
+        vals = high_mag[sel]
+        med = float(np.median(vals))
+        mad = float(np.median(np.abs(vals - med)))
+        energy = mad * _MAD_TO_STD
+
+        # Smoothstep from e_low → e_high: 0 below, 1 above.
+        span = cfg["e_high"] - cfg["e_low"]
+        t = (energy - cfg["e_low"]) / span if span > 0 else 0.0
+        t = min(1.0, max(0.0, t))
+        smooth_t = t * t * (3.0 - 2.0 * t)
+
+        target = cfg["target"]
+        # Direction of the nudge depends on whether this is a "detail" region
+        # (target < 1: reduce smoothing when energetic) or a "smooth" region
+        # (target > 1: increase smoothing when flat).
+        if target < 1.0:
+            m = (target - 1.0) * smooth_t
+        else:
+            m = (target - 1.0) * (1.0 - smooth_t)
+
+        factor = 1.0 + regional_modulation * m
+        factor = min(_REGION_MOD_CEIL, max(_REGION_MOD_FLOOR, factor))
+        factors[name] = factor
+
+    return factors
+
+
+# --- Anisotropic (orientation-aware) smoothing ---
+# Skin grain, wrinkles and pores follow directional structure. Isotropic
+# guided/bilateral filtering blurs equally in every direction, flattening
+# detail that runs across the grain. We estimate a per-pixel orientation
+# field from the luminance structure tensor and smooth preferentially ALONG
+# the local dominant grain direction while preserving structure across it.
+# The high-frequency band is never touched (callers only pass low+mid here).
+# Flat / ambiguous regions (low gradient magnitude) fall back to the existing
+# isotropic guided filter so they are not destabilised by a noisy angle.
+def _compute_orientation_field(L: np.ndarray, sigma_smooth: float = 1.0) -> Tuple[np.ndarray, np.ndarray]:
+    """Structure-tensor orientation field + confidence from a luminance map.
+
+    Args:
+        L: (H, W) float32 luminance in [0, 255].
+        sigma_smooth: Gaussian sigma used to stabilise the tensor.
+
+    Returns:
+        theta: (H, W) float32 angle in [0, π) of MAXIMUM intensity change
+            (gradient direction). The edge-tangent / grain direction is
+            ``theta + π/2``.
+        conf: (H, W) float32 confidence in [0, 1] from smoothed gradient
+            magnitude (low magnitude → unreliable orientation → 0).
+    """
+    gx = cv2.Sobel(L, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(L, cv2.CV_32F, 0, 1, ksize=3)
+
+    Ixx = gx * gx
+    Iyy = gy * gy
+    Ixy = gx * gy
+
+    s = max(0.5, float(sigma_smooth))
+    Ixx = cv2.GaussianBlur(Ixx, (0, 0), s)
+    Iyy = cv2.GaussianBlur(Iyy, (0, 0), s)
+    Ixy = cv2.GaussianBlur(Ixy, (0, 0), s)
+
+    # Principal gradient direction (0..π).
+    theta = 0.5 * np.arctan2(2.0 * Ixy, Ixx - Iyy)
+    theta = np.where(theta < 0.0, theta + np.pi, theta)
+
+    grad_mag = np.sqrt(Ixx + Iyy)
+    gm_smooth = cv2.GaussianBlur(grad_mag, (0, 0), s)
+    # Normalise: ~0 on flat areas → 1 on strong edges. SIGMA_BASE sets scale.
+    conf = gm_smooth / (gm_smooth + SIGMA_BASE * 0.5)
+    conf = np.clip(conf, 0.0, 1.0)
+
+    return theta.astype(np.float32), conf.astype(np.float32)
+
+
+def _bilinear_sample(img: np.ndarray, px: np.ndarray, py: np.ndarray) -> np.ndarray:
+    """Vectorised bilinear sample of a 2D float32 image at float coordinates."""
+    hh, ww = img.shape
+    px = np.clip(px, 0.0, ww - 1)
+    py = np.clip(py, 0.0, hh - 1)
+    x0 = np.floor(px).astype(np.int32)
+    y0 = np.floor(py).astype(np.int32)
+    x1 = np.minimum(x0 + 1, ww - 1)
+    y1 = np.minimum(y0 + 1, hh - 1)
+    fx = (px - x0).astype(np.float32)
+    fy = (py - y0).astype(np.float32)
+    v00 = img[y0, x0]
+    v01 = img[y0, x1]
+    v10 = img[y1, x0]
+    v11 = img[y1, x1]
+    return (
+        v00 * (1.0 - fx) * (1.0 - fy)
+        + v01 * fx * (1.0 - fy)
+        + v10 * (1.0 - fx) * fy
+        + v11 * fx * fy
+    )
+
+
+def _smooth_anisotropic(
+    low_mid: np.ndarray,
+    smooth_strength: float,
+    downsample_for_large: int = 2048,
+) -> np.ndarray:
+    """Orientation-aware smoothing of low+mid bands (high band untouched).
+
+    Smooths along the local grain direction via a per-pixel steered 1D
+    Gaussian; blends toward the isotropic guided filter where the gradient
+    magnitude is too low to trust the orientation. Works entirely in float32.
+
+    Args:
+        low_mid: (H, W, 3) float32 BGR in [0, 255].
+        smooth_strength: (0–1) smoothing intensity (drives sigma + fallbacks).
+        downsample_for_large: Crops larger than this are processed at this
+            max dimension for speed, then upsampled.
+
+    Returns:
+        (H, W, 3) float32 smoothed low+mid.
+    """
+    h, w = low_mid.shape[:2]
+    min_dim = min(h, w)
+    is_ds = downsample_for_large and min_dim > downsample_for_large
+    if is_ds:
+        scale = float(downsample_for_large) / min_dim
+        h2 = max(1, int(round(h * scale)) | 1)
+        w2 = max(1, int(round(w * scale)) | 1)
+        lm = cv2.resize(low_mid, (w2, h2), interpolation=cv2.INTER_LINEAR)
+    else:
+        lm = low_mid
+
+    # Explicit colorspace boundary: BGR → grayscale luminance (float32).
+    L = cv2.cvtColor(lm, cv2.COLOR_BGR2GRAY)
+
+    sigma_smooth = max(0.5, smooth_strength * 2.0)
+    theta, conf = _compute_orientation_field(L, sigma_smooth=sigma_smooth)
+
+    # Grain / edge-tangent direction = perpendicular to gradient.
+    ang = theta + np.pi / 2.0
+    ux = np.cos(ang)
+    uy = np.sin(ang)
+
+    sigma_s = 3.0 + smooth_strength * 12.0  # spatial extent along grain
+    K = max(1, int(round(3.0 * sigma_s)))
+
+    hh, ww = lm.shape[:2]
+    ys = np.arange(hh, dtype=np.float32)[:, None]
+    xs = np.arange(ww, dtype=np.float32)[None, :]
+
+    out = np.zeros_like(lm)
+    wsum = np.zeros((hh, ww), dtype=np.float32)
+    for t in range(-K, K + 1):
+        wt = np.exp(-0.5 * (t / sigma_s) ** 2)
+        if wt < 1e-3:
+            continue
+        px = xs + t * ux
+        py = ys + t * uy
+        for c in range(lm.shape[2]):
+            out[:, :, c] += wt * _bilinear_sample(lm[:, :, c], px, py)
+        wsum += wt
+    out /= wsum[:, :, None]
+
+    # Isotropic guided fallback for flat / ambiguous areas.
+    radius = max(2, int(round(SIGMA_BASE + smooth_strength * SIGMA_STRENGTH_FACTOR)))
+    eps = (SIGMA_BASE + smooth_strength * SIGMA_STRENGTH_FACTOR) ** 2
+    guided = np.zeros_like(lm)
+    for c in range(lm.shape[2]):
+        guided[:, :, c] = guided_filter(
+            lm[:, :, c], radius=radius, eps=eps, guide=None, max_dim=None
+        )
+
+    conf_3d = conf[:, :, np.newaxis]
+    out = out * conf_3d + guided * (1.0 - conf_3d)
+
+    if is_ds:
+        out = cv2.resize(out, (w, h), interpolation=cv2.INTER_LINEAR)
+    return out.astype(np.float32)
+
+
+def _guided_smooth(low_mid: np.ndarray, sigma_color: float, sigma_space: float) -> np.ndarray:
+    """Self-guided edge-preserving smoothing (per channel), float32 in/out."""
+    radius = max(2, int(round(sigma_space)))
+    eps = sigma_color ** 2
+    smoothed = np.zeros_like(low_mid)
+    for c in range(low_mid.shape[2]):
+        smoothed[:, :, c] = guided_filter(
+            low_mid[:, :, c],
+            radius=radius,
+            eps=eps,
+            guide=None,  # self-guided
+            max_dim=None,  # crops are already bounded
+        )
+    return smoothed
+
+
+def _region_smooth(
+    low_mid: np.ndarray,
+    smooth_engine: str,
+    smooth_strength: float,
+    factor: float,
+    sigma_color: float,
+    sigma_space: float,
+) -> np.ndarray:
+    """Region-scaled smoothing used by per-region modulation.
+
+    Scales the effective smoothing by ``factor`` for the active engine.
+    Only ever processes low+mid; the high band is handled by the caller.
+
+    Args:
+        low_mid: (H, W, 3) float32 BGR in [0, 255].
+        smooth_engine: "guided", "bilateral" or "anisotropic".
+        smooth_strength: Base 0–1 smoothing strength.
+        factor: Region modulation factor (already clamped, in [0.5, 1.5]).
+        sigma_color: Base sigma (color) for guided/bilateral.
+        sigma_space: Base sigma (space) for guided/bilateral.
+
+    Returns:
+        (H, W, 3) float32 smoothed low+mid.
+    """
+    if smooth_engine == "anisotropic":
+        return _smooth_anisotropic(low_mid, smooth_strength * factor)
+    if smooth_engine == "guided":
+        s_color = SIGMA_BASE + smooth_strength * factor * SIGMA_STRENGTH_FACTOR
+        s_space = s_color
+        return _guided_smooth(low_mid, s_color, s_space)
+    # bilateral
+    s_color = SIGMA_BASE + smooth_strength * factor * SIGMA_STRENGTH_FACTOR
+    s_space = s_color
+    return cv2.bilateralFilter(low_mid, -1, s_color, s_space)
+
+
 class FrequencyLayers:
     """Container for the three frequency bands."""
     __slots__ = ["low", "mid", "high"]
@@ -196,6 +524,8 @@ class FrequencySeparator:
         roi_coords: Optional[Tuple[int, int]] = None,
         smooth_engine: str = "guided",
         float32_out: bool = False,
+        regions: Optional[Any] = None,
+        regional_modulation: float = 0.0,
     ) -> np.ndarray:
         """Re-combine layers after selective processing.
 
@@ -212,8 +542,14 @@ class FrequencySeparator:
             face_width: Face width in pixels (for adaptive mask feathering).
             pore_synthesis: Strength of micro-pore texture synthesis (0-1).
             roi_coords: Tuple of (roi_x1, roi_y1) coordinates for deterministic spatial seeding.
-            smooth_engine: Smoothing method: "guided" (guided filter, default) or "bilateral" (legacy).
+            smooth_engine: Smoothing method: "guided" (guided filter, default),
+                "bilateral" (legacy isotropic) or "anisotropic" (orientation-aware,
+                smooths along local skin-grain direction). Default "guided".
             float32_out: If True, return float32 [0, 255] instead of uint8. Default False.
+            regions: Optional FaceRegions-like object for per-region smoothing
+                modulation. Ignored unless ``regional_modulation > 0``.
+            regional_modulation: Strength of per-region modulation (0.0 = no-op,
+                byte-identical to pre-feature output). Range 0.0–1.0. Default 0.0.
 
         Returns:
             (H, W, 3) uint8 BGR result, or float32 if float32_out=True.
@@ -324,33 +660,58 @@ class FrequencySeparator:
         k_smooth = adaptive_ksize(f_width, factor=SMOOTH_K_FACTOR, minimum=SMOOTH_K_MIN)
         smoothed_low_gaussian = cv2.GaussianBlur(low, (k_smooth, k_smooth), 0)
 
-        # Smoothing filter (guided or bilateral)
+        # Smoothing filter (guided / bilateral / anisotropic)
         # Keep in float32 to avoid quantization banding on gradients (uint8 artifacts).
         low_mid_f32 = np.clip(low + mid_original, 0, 255)
         sigma_color = SIGMA_BASE + smooth_strength * SIGMA_STRENGTH_FACTOR
         sigma_space = SIGMA_BASE + smooth_strength * SIGMA_STRENGTH_FACTOR
 
-        if smooth_engine == "guided":
-            # Guided filter: radius from sigma_space, eps from sigma_color^2
-            radius = max(2, int(round(sigma_space)))
-            eps = sigma_color ** 2
-
-            # Apply guided filter to each channel separately (self-guided)
-            smoothed_f32 = np.zeros_like(low_mid_f32)
-            for c in range(low_mid_f32.shape[2]):
-                smoothed_f32[:, :, c] = guided_filter(
-                    low_mid_f32[:, :, c],
-                    radius=radius,
-                    eps=eps,
-                    guide=None,  # self-guided
-                    max_dim=None  # crops are already bounded
-                )
+        if smooth_engine == "anisotropic":
+            # Orientation-aware smoothing along local skin-grain direction.
+            # Graceful fallback to guided inside _smooth_anisotropic for flat/
+            # ambiguous regions, so this never replaces the high band (it only
+            # ever receives low+mid) and never crashes on degenerate input.
+            try:
+                smoothed_f32 = _smooth_anisotropic(low_mid_f32, smooth_strength)
+            except cv2.error as e:  # pragma: no cover - defensive
+                logger.warning("Anisotropic smoothing failed (%s); falling back to guided.", e)
+                smoothed_f32 = _guided_smooth(low_mid_f32, sigma_color, sigma_space)
+            smoothed_low_bilateral = smoothed_f32 - mid_original
+        elif smooth_engine == "guided":
+            smoothed_f32 = _guided_smooth(low_mid_f32, sigma_color, sigma_space)
             smoothed_low_bilateral = smoothed_f32 - mid_original
         else:
             # Bilateral filter (legacy path)
             # Use d=-1 to let OpenCV compute an optimal, efficient kernel size.
             smoothed_f32 = cv2.bilateralFilter(low_mid_f32, -1, sigma_color, sigma_space)
             smoothed_low_bilateral = smoothed_f32 - mid_original
+
+        # Per-region modulation: blend region-scaled smoothing into the base.
+        # Strict no-op when regional_modulation == 0.0 or regions is None (or
+        # every region factor collapsed to 1.0), preserving byte-identical output.
+        if regional_modulation != 0.0 and regions is not None:
+            crop = (y1, y2, x1, x2)
+            regional_factors = _regional_modulation_factors(
+                high, regions, high.shape[:2], regional_modulation, crop=crop
+            )
+            base_smoothed = smoothed_f32
+            for name, factor in regional_factors.items():
+                if abs(factor - 1.0) < 1e-6:
+                    continue
+                region_mask = getattr(regions, name, None)
+                if region_mask is None:
+                    continue
+                rm = _region_mask_crop(region_mask, low_mid_f32.shape[:2], crop)
+                sel = rm > 0.01
+                if int(np.count_nonzero(sel)) < 16:
+                    continue
+                # Feather region boundary (allowed: mask feathering, not skin smoothing).
+                rm_f = cv2.GaussianBlur(rm, (15, 15), 0)
+                rm_3d = rm_f[:, :, np.newaxis]
+
+                scaled = _region_smooth(low_mid_f32, smooth_engine, smooth_strength, factor, sigma_color, sigma_space)
+                base_smoothed = base_smoothed * (1.0 - rm_3d) + scaled * rm_3d
+            smoothed_low_bilateral = base_smoothed - mid_original
 
         # Hybrid blend (cv2.addWeighted is slightly faster and purely SIMD optimized)
         blend_gaussian = min(1.0, smooth_strength * GAUSSIAN_BLEND_FACTOR)
@@ -398,6 +759,8 @@ def combine(
     pore_synthesis: float = 0.0,
     roi_coords: Optional[Tuple[int, int]] = None,
     smooth_engine: str = "guided",
+    regions: Optional[Any] = None,
+    regional_modulation: float = 0.0,
 ) -> np.ndarray:
     """Deprecated. Use ``FrequencySeparator().combine()`` instead."""
     return FrequencySeparator().combine(
@@ -410,4 +773,6 @@ def combine(
         pore_synthesis=pore_synthesis,
         roi_coords=roi_coords,
         smooth_engine=smooth_engine,
+        regions=regions,
+        regional_modulation=regional_modulation,
     )

@@ -8,6 +8,8 @@ from retouch.frequency import (
     FrequencyLayers,
     separate,
     combine,
+    FrequencySeparator,
+    _regional_modulation_factors,
     DEFAULT_FEATHER_MIN,
 )
 
@@ -358,3 +360,151 @@ class TestAdaptFactorCustomThresholds:
         # Lower-energy input must yield a strictly smaller factor than a
         # clearly-textured one (asymmetric lift is energy-driven).
         assert factors[0] < factors[-1]
+
+
+class _FakeRegions:
+    """Minimal FaceRegions-like object exposing mask attributes by name."""
+    def __init__(self, shape, region_specs):
+        for name, (sl) in region_specs.items():
+            m = np.zeros(shape, dtype=np.float32)
+            y0, y1, x0, x1 = sl
+            m[y0:y1, x0:x1] = 1.0
+            setattr(self, name, m)
+
+
+class TestRegionAwareModulation:
+    """Per-region smoothing-strength modulation and byte-level backward compat."""
+
+    def _make_high(self, size, detail_sl, flat_sl):
+        rng = np.random.default_rng(0)
+        high = rng.standard_normal((size, size, 3)).astype(np.float32) * 50.0
+        # Force a genuinely flat (zero-energy) zone.
+        for sl in (flat_sl or []):
+            y0, y1, x0, x1 = sl
+            high[y0:y1, x0:x1] = 0.0
+        return high
+
+    def test_regional_factors_clamped(self):
+        """All returned factors stay within [0.5, 1.5]."""
+        size = 120
+        high = self._make_high(size, (30, 70, 30, 70), [(10, 30, 10, 30)])
+        regions = _FakeRegions(
+            (size, size),
+            {"nose_bridge": (30, 70, 30, 70), "cheek_highlights_l": (10, 30, 10, 30)},
+        )
+        factors = _regional_modulation_factors(
+            high, regions, high.shape[:2], regional_modulation=1.0
+        )
+        for name, f in factors.items():
+            assert 0.5 <= f <= 1.5, f"{name} factor {f} out of [0.5, 1.5]"
+
+    def test_high_detail_region_factor_below_one(self):
+        """A high-energy (detailed) detail-region factor is < 1.0 (less smoothing)."""
+        size = 120
+        high = self._make_high(size, (30, 70, 30, 70), None)
+        regions = _FakeRegions((size, size), {"nose_bridge": (30, 70, 30, 70)})
+        factors = _regional_modulation_factors(
+            high, regions, high.shape[:2], regional_modulation=1.0
+        )
+        assert factors["nose_bridge"] < 1.0
+
+    def test_flat_region_factor_above_one(self):
+        """A flat (low-energy) smooth-region factor is > 1.0 (more smoothing)."""
+        size = 120
+        high = self._make_high(size, None, [(10, 30, 10, 30)])
+        regions = _FakeRegions((size, size), {"cheek_highlights_l": (10, 30, 10, 30)})
+        factors = _regional_modulation_factors(
+            high, regions, high.shape[:2], regional_modulation=1.0
+        )
+        assert factors["cheek_highlights_l"] > 1.0
+
+    def test_missing_region_is_noop(self):
+        """A region absent from the object returns factor 1.0 (no crash)."""
+        size = 120
+        high = self._make_high(size, None, None)
+        regions = _FakeRegions((size, size), {})  # no attributes
+        factors = _regional_modulation_factors(
+            high, regions, high.shape[:2], regional_modulation=1.0
+        )
+        assert factors == {} or all(f == 1.0 for f in factors.values())
+
+    def test_backward_compat_modulation_zero(self):
+        """regional_modulation=0.0 is byte-identical to regions=None, both = base."""
+        img = np.random.randint(0, 256, (160, 160, 3), dtype=np.uint8)
+        sep = FrequencySeparator()
+        layers = sep.separate(img, face_width=160.0)
+        mask = np.ones((160, 160), dtype=np.float32)
+        regions = _FakeRegions(
+            (160, 160),
+            {"nose_bridge": (60, 100, 60, 100), "cheek_highlights_l": (20, 50, 20, 50)},
+        )
+        base = sep.combine(layers, skin_mask=mask, smooth_strength=0.6,
+                           mid_reduction=0.3, face_width=160.0)
+        r0 = sep.combine(layers, skin_mask=mask, smooth_strength=0.6,
+                         mid_reduction=0.3, face_width=160.0, regional_modulation=0.0)
+        r0n = sep.combine(layers, skin_mask=mask, smooth_strength=0.6,
+                          mid_reduction=0.3, face_width=160.0,
+                          regional_modulation=0.0, regions=regions)
+        assert np.array_equal(base, r0)
+        assert np.array_equal(r0, r0n)
+
+
+class TestAnisotropicSmoothing:
+    """Orientation-aware smoothing engine: differs from guided, preserves high band."""
+
+    def _high_energy(self, result, mask):
+        r = result.astype(np.float32)
+        hb = r - cv2.GaussianBlur(r, (0, 0), 1.2)
+        sel = mask > 0.5
+        return float(hb[sel].std())
+
+    def test_anisotropic_differs_from_guided(self):
+        img = np.random.randint(0, 256, (160, 160, 3), dtype=np.uint8)
+        sep = FrequencySeparator()
+        layers = sep.separate(img, face_width=160.0)
+        mask = np.ones((160, 160), dtype=np.float32)
+        guided = sep.combine(layers, skin_mask=mask, smooth_strength=0.6,
+                             mid_reduction=0.3, face_width=160.0, smooth_engine="guided")
+        aniso = sep.combine(layers, skin_mask=mask, smooth_strength=0.6,
+                            mid_reduction=0.3, face_width=160.0, smooth_engine="anisotropic")
+        assert not np.array_equal(guided, aniso)
+        diff = float(np.abs(guided.astype(np.float32) - aniso.astype(np.float32)).mean())
+        assert diff > 0.5, f"anisotropic too similar to guided (diff={diff})"
+
+    def test_anisotropic_preserves_high_band(self):
+        """High-frequency band energy within the skin mask stays ~constant."""
+        img = np.random.randint(0, 256, (160, 160, 3), dtype=np.uint8)
+        sep = FrequencySeparator()
+        layers = sep.separate(img, face_width=160.0)
+        mask = np.ones((160, 160), dtype=np.float32)
+        guided = sep.combine(layers, skin_mask=mask, smooth_strength=0.6,
+                             mid_reduction=0.3, face_width=160.0, smooth_engine="guided")
+        aniso = sep.combine(layers, skin_mask=mask, smooth_strength=0.6,
+                            mid_reduction=0.3, face_width=160.0, smooth_engine="anisotropic",
+                            texture_opacity=1.0)
+        eg = self._high_energy(guided, mask)
+        ea = self._high_energy(aniso, mask)
+        # High band is re-added unmodified; deviation should be tiny.
+        assert abs(ea - eg) < max(1.0, 0.05 * eg), f"high band drift: {eg:.3f} vs {ea:.3f}"
+
+    def test_anisotropic_no_crash_on_flat(self):
+        """Anisotropic must not crash on a flat image (falls back to guided)."""
+        img = np.full((120, 120, 3), 128, dtype=np.uint8)
+        sep = FrequencySeparator()
+        layers = sep.separate(img, face_width=120.0)
+        mask = np.ones((120, 120), dtype=np.float32)
+        out = sep.combine(layers, skin_mask=mask, smooth_strength=0.6,
+                          mid_reduction=0.3, face_width=120.0, smooth_engine="anisotropic")
+        assert out.shape == (120, 120, 3)
+        assert out.dtype == np.uint8
+
+    def test_default_engine_unchanged(self):
+        """Default smooth_engine stays 'guided' (existing recipes unaffected)."""
+        img = np.random.randint(0, 256, (120, 120, 3), dtype=np.uint8)
+        sep = FrequencySeparator()
+        layers = sep.separate(img, face_width=120.0)
+        mask = np.ones((120, 120), dtype=np.float32)
+        explicit = sep.combine(layers, skin_mask=mask, smooth_strength=0.5,
+                               face_width=120.0, smooth_engine="guided")
+        default = sep.combine(layers, skin_mask=mask, smooth_strength=0.5, face_width=120.0)
+        assert np.array_equal(explicit, default)

@@ -822,3 +822,143 @@ class TestUnifyTone:
         assert result.dtype == np.uint8
         assert result.shape == img.shape
 
+
+class TestSmoothUndereyeShadow:
+    """Tests for SkinProcessor.smooth_undereye_shadow."""
+
+    @staticmethod
+    def _build_lab_image(skin_l, shadow_specs, extra_blocks=None):
+        """Build a uint8 BGR image from explicit LAB-L control.
+
+        ``shadow_specs``: list of (rows_slice, cols_slice, shadow_l, noise_std)
+        painted as textured under-eye shadows (L kept in the realistic 40-120
+        range so the ``L>40`` blemish guard never clips them). ``extra_blocks``:
+        list of (rows_slice, cols_slice, bgr) painted as plain blocks.
+        """
+        h = w = 120
+        rng = np.random.default_rng(7)
+        lab = np.zeros((h, w, 3), dtype=np.uint8)
+        lab[:, :, 0] = skin_l
+        lab[:, :, 1] = 128
+        lab[:, :, 2] = 128
+        for (rs, cs, sl, ns) in shadow_specs:
+            sl_arr = np.clip(sl + rng.normal(0.0, ns, (rs.stop - rs.start, cs.stop - cs.start)), 50, 120)
+            lab[rs, cs, 0] = sl_arr.astype(np.uint8)
+        img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+        if extra_blocks:
+            for (rs, cs, bgr) in extra_blocks:
+                img[rs, cs] = bgr
+        return img
+
+    @staticmethod
+    def _make_image():
+        """Bright skin (L=137), a textured under-eye shadow (L~88) inside the
+        mask, a plain dark spill block OUTSIDE the mask, and a bright sclera
+        block OUTSIDE the mask."""
+        return TestSmoothUndereyeShadow._build_lab_image(
+            skin_l=137,
+            shadow_specs=[(slice(56, 70), slice(40, 70), 88.0, 8.0)],
+            extra_blocks=[
+                (slice(56, 70), slice(10, 30), (60, 45, 35)),
+                (slice(40, 70), slice(80, 100), (250, 245, 240)),
+            ],
+        )
+
+    @staticmethod
+    def _make_under_eye_mask():
+        mask = np.zeros((120, 120), dtype=np.float32)
+        mask[40:70, 40:70] = 1.0  # the under-eye zone only
+        return mask
+
+    def test_detects_and_softens_under_eye_shadow(self, proc):
+        img = self._make_image()
+        ue_mask = self._make_under_eye_mask()
+        skin = np.ones((120, 120), dtype=np.float32)
+        out = proc.smooth_undereye_shadow(
+            img, under_eye_masks=[ue_mask], skin_mask=skin, strength=1.0, feather_radius=3
+        )
+        assert out.dtype == np.uint8
+        orig_lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
+        out_lab = cv2.cvtColor(out, cv2.COLOR_BGR2LAB).astype(np.float32)
+        # Shadow detected & processed: shadow-zone pixels are modified, and the
+        # high-frequency luminance variance is reduced (the filter smoothed it).
+        in_zone = out_lab[56:70, 40:70, 0]
+        orig_in = orig_lab[56:70, 40:70, 0]
+        assert not np.array_equal(in_zone, orig_in)
+        assert in_zone.std() < orig_in.std()
+        # Outside the mask: dark spill block must be byte-identical (no overspill).
+        assert np.array_equal(out[56:70, 10:30], img[56:70, 10:30])
+
+    def test_feathered_blend_has_no_hard_seam(self, proc):
+        """Feathering must soften the mask boundary: the per-pixel change at the
+        zone edge is smaller with a wide feather than with a narrow one."""
+        h = w = 120
+        rng = np.random.default_rng(11)
+        # Mask covers cols 40:80; the LEFT half is a high-contrast dark shadow
+        # (bright skin on the right pulls the within-mask median up so the whole
+        # shadow qualifies), giving the guided filter strong texture to smooth.
+        lab = np.zeros((h, w, 3), dtype=np.uint8)
+        lab[:, :, 0] = 137
+        lab[:, :, 1] = 128
+        lab[:, :, 2] = 128
+        noisy = np.clip(70 + rng.normal(0.0, 18.0, (40, 20)), 50, 120).astype(np.uint8)
+        lab[40:80, 40:60, 0] = noisy
+        img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+        mask = np.zeros((h, w), dtype=np.float32)
+        mask[40:80, 40:80] = 1.0
+
+        out_narrow = proc.smooth_undereye_shadow(
+            img, under_eye_masks=[mask], skin_mask=np.ones((h, w), np.float32),
+            strength=1.0, feather_radius=1,
+        )
+        out_wide = proc.smooth_undereye_shadow(
+            img, under_eye_masks=[mask], skin_mask=np.ones((h, w), np.float32),
+            strength=1.0, feather_radius=7,
+        )
+        # Change fields at the mask's left edge (col 40 is just inside the mask).
+        edge = 40
+        dn = out_narrow[40:80, edge].astype(np.int16) - img[40:80, edge].astype(np.int16)
+        dw = out_wide[40:80, edge].astype(np.int16) - img[40:80, edge].astype(np.int16)
+        # Wide feather pulls the blend factor toward 0 at the boundary, so the
+        # magnitude of the edge change must be strictly smaller than narrow.
+        assert np.abs(dw).max() < np.abs(dn).max()
+
+    def test_sclera_luminance_unchanged(self, proc):
+        img = self._make_image()
+        ue_mask = self._make_under_eye_mask()
+        out = proc.smooth_undereye_shadow(
+            img, under_eye_masks=[ue_mask], skin_mask=np.ones((120, 120), np.float32),
+            strength=1.0, feather_radius=3,
+        )
+        orig_lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
+        out_lab = cv2.cvtColor(out, cv2.COLOR_BGR2LAB).astype(np.float32)
+        # Sclera block sits entirely outside the under-eye mask.
+        assert np.array_equal(out_lab[40:70, 80:100, 0], orig_lab[40:70, 80:100, 0])
+
+    def test_zero_strength_byte_identical(self, proc):
+        img = self._make_image()
+        ue_mask = self._make_under_eye_mask()
+        out = proc.smooth_undereye_shadow(
+            img, under_eye_masks=[ue_mask], skin_mask=np.ones((120, 120), np.float32),
+            strength=0.0, feather_radius=3,
+        )
+        assert out is img
+        assert np.array_equal(out, img)
+
+    def test_none_mask_is_noop(self, proc):
+        img = self._make_image()
+        out = proc.smooth_undereye_shadow(
+            img, under_eye_masks=[None, None], strength=0.5
+        )
+        assert np.array_equal(out, img)
+
+    def test_float32_dtype_preserved(self, proc):
+        img = self._make_image().astype(np.float32)
+        ue_mask = self._make_under_eye_mask()
+        out = proc.smooth_undereye_shadow(
+            img, under_eye_masks=[ue_mask], skin_mask=np.ones((120, 120), np.float32),
+            strength=0.0, feather_radius=3,
+        )
+        assert out.dtype == np.float32
+        assert out is img
+

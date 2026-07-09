@@ -242,7 +242,7 @@ def on_process_folder(input_dir, output_dir, style_type, custom_style_name, reci
 # fixed-prefix transport / session keys at the end.
 PROCESS_INPUT_KEYS = (
     ["img_paths", "recipe"]
-    + [n for n in param_names() if n != "color_transfer_intensity"]
+    + [n for n in param_names() if n not in ("color_transfer_intensity", "freckle_preserve_mask")]
     + [
         "color_ref_img", "color_ref_strength",
         "show_compare", "fast",
@@ -1624,6 +1624,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             reset_skin_smooth_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                             smooth = gr.Slider(0, 100, 30, step=1, label="Smooth", info="Strength of skin smoothing (blur/median blend)")
                             nose_smooth = gr.Slider(0, 100, 0, step=1, label="Nose Smooth (0 = follow face)", info="Additional smoothing for nose bridge highlights")
+                            smooth_engine = gr.Dropdown(choices=["guided", "bilateral", "anisotropic"], value="guided", label="Smoothing Engine", info="guided=isotropic (fast); anisotropic=orientation-aware (preserves wrinkle direction)")
+                            regional_modulation = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Region-Aware Modulation", info="Per-region smoothing strength (0=off, 1=full modulation)")
                             mid_reduction = gr.Slider(0.0, 1.0, 0.45, step=0.05, label="Mid Frequency Reduction", info="Target mid-level skin blemishes while preserving high-frequency pores")
                             texture_opacity = gr.Slider(0.0, 1.0, 1.0, step=0.05, label="Texture Opacity", info="Control original pore structure opacity overlay")
                             micro_restore = gr.Slider(0, 50, 20, step=1, label="Micro-Texture Restore", info="Re-inject dimensional micro-contrast in cheek/nose/under-eye zones after smoothing (0 = off, 25 = subtle, 50 = strong)")
@@ -1632,6 +1634,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             _whiten_hue_stable_state = gr.State(value=0)
                             pore_synthesis = gr.Slider(0, 100, 0, step=1, label="Pore Synthesis", info="Add micro-texture/synthesized pores to prevent artificial plastic skin")
                             blemish = gr.Slider(0, 100, 30, step=1, label="Blemish Removal", info="AI blemish detection and inpainting for acne/spots")
+                            freckle_removal = gr.Slider(0, 100, 0, step=1, label="Freckle Removal", info="Remove freckles while preserving beauty marks (0=off)")
                             skin_flatten = gr.Slider(0, 100, 0, step=1, label="Skin Flatten (Anime)", info="Edge-preserving cel flatten for anime-style shading · 0=off, 80=aggressive")
                             skin_quantize = gr.Slider(0, 100, 0, step=1, label="Tone Quantize (Anime)", info="Cel shading colour bands on skin · 0=off, 60=dramatic bands")
 
@@ -1687,6 +1690,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             eye_enhance = gr.Slider(0, 100, 5, step=1, label="Eye Enhance", info="Boost eye clarity, iris reflection details, and whites brightness")
                             catchlight = gr.Slider(0, 100, 0, step=1, label="Catchlight Boost", info="Amplify existing catchlight highlights in the iris (0 = follow Eye Enhance)")
                             dark_circles = gr.Slider(0, 100, 0, step=1, label="Dark Circle Repair", info="Under-eye dark circle detection and repair")
+                            undereye_shadow_strength = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Under-Eye Shadow Smooth", info="Soften under-eye shadows conservatively (0=off)")
                             teeth_whiten = gr.Slider(0, 100, 5, step=1, label="Teeth Whiten", info="Naturally whiten and brighten teeth enamel")
                             lip_enhance = gr.Slider(0, 100, 5, step=1, label="Lip Enhance", info="Enhance lip texture definition, gloss, and contour")
                             lip_tint = gr.Dropdown(choices=LIP_TINTS, value="none", label="Lip Tint Color", interactive=True, info="Apply a natural cosmetic tint overlay")
@@ -1992,7 +1996,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
 
     _process_inputs = [
         img_input, recipe,
-        smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth, micro_restore, _micro_dodge_burn_state, _redness_even_state, _whiten_hue_stable_state,
+        smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth, regional_modulation, smooth_engine, undereye_shadow_strength, freckle_removal, micro_restore, _micro_dodge_burn_state, _redness_even_state, _whiten_hue_stable_state,
         whiten, equalize, blemish, whiten_tone, nose_blush, under_eye_blush, white_costume_lift,
         dodge_burn, relight, relight_azimuth, relight_elevation, sculpt, shine_removal, wrinkle_soften, texture_transplant,
         body_smooth, body_equalize, body_whiten, body_match_face, body_relight, body_dodge_burn, shadow_lift, body_shadow_lift, nose_restore,
