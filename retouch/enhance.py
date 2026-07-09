@@ -88,17 +88,23 @@ def _tile_grid(h: int, w: int, tile: int, overlap: int) -> list[list[int]]:
 
 
 def _feather_weight(h: int, w: int, overlap: int) -> np.ndarray:
-    """Linear-ramp feather mask for one tile of shape (h, w, 1)."""
+    """Linear-ramp feather mask for one tile of shape (h, w, 1).
+
+    The ramp starts strictly above zero: a tile edge that lies on the image
+    border has no neighbouring tile, so a zero weight there would survive the
+    weighted-sum normalisation as a black pixel (out=0 / acc=eps). A positive
+    minimum cancels exactly in ``out / acc`` wherever only one tile covers a
+    pixel, while seam blending between overlapping tiles is unchanged.
+    """
     if overlap <= 0 or (h <= overlap and w <= overlap):
         return np.ones((h, w, 1), dtype=np.float32)
     wx = np.ones((w,), dtype=np.float32)
     wy = np.ones((h,), dtype=np.float32)
+    ramp = np.arange(1, overlap + 1, dtype=np.float32) / float(overlap + 1)
     if w > overlap:
-        ramp = np.linspace(0.0, 1.0, overlap, dtype=np.float32)
         wx[:overlap] = ramp
         wx[-overlap:] = ramp[::-1]
     if h > overlap:
-        ramp = np.linspace(0.0, 1.0, overlap, dtype=np.float32)
         wy[:overlap] = ramp
         wy[-overlap:] = ramp[::-1]
     return (wy[:, None, None] * wx[None, :, None]).astype(np.float32)
@@ -138,13 +144,20 @@ class AIEnhancer:
     # Model loading
     # ------------------------------------------------------------------
 
-    def _load_session(self, model_name: str) -> Optional[object]:
+    def _load_session(self, model_name: str, cpu_only: bool = False) -> Optional[object]:
         """Return an ONNX InferenceSession for ``model_name`` or ``None``.
 
         Returns ``None`` (not an exception) when the model file is absent —
         callers fall back to a classical method. Any other failure is logged
         and also returns ``None`` so the pipeline never hard-fails on a
         broken model.
+
+        ``cpu_only`` pins the session to CPUExecutionProvider. The NAFNet
+        denoise graph is silently miscomputed by CoreMLExecutionProvider
+        (measured max abs error 1.7-2.4 on [0,1] data at every MLComputeUnits
+        setting; the graph also fragments into 151 partitions making CoreML
+        ~90x slower than CPU at 512px tiles) — so the denoise model must not
+        go through build_ort_providers().
         """
         try:
             if not model_fetch.model_exists(model_name):
@@ -159,7 +172,7 @@ class AIEnhancer:
             logger.warning("AIEnhancer: onnxruntime missing (%s); using fallback.", e)
             return None
         try:
-            providers = build_ort_providers()
+            providers = ["CPUExecutionProvider"] if cpu_only else build_ort_providers()
             sess = ort.InferenceSession(path, providers=providers)
             logger.info(
                 "AIEnhancer: %s loaded with providers %s", model_name, sess.get_providers()
@@ -181,7 +194,7 @@ class AIEnhancer:
         with self._denoise_lock:
             if self._denoise_loaded:
                 return self._denoise_sess
-            self._denoise_sess = self._load_session(_DENOISE_MODEL_NAME)
+            self._denoise_sess = self._load_session(_DENOISE_MODEL_NAME, cpu_only=True)
             self._denoise_loaded = True
             return self._denoise_sess
 
@@ -289,12 +302,12 @@ class AIEnhancer:
     def _run_denoise_model(self, sess: object, img: np.ndarray) -> np.ndarray:
         """Run the ONNX denoise model with tiled inference.
 
-        Most published denoise models (NAFNet, SCUNet, DnCNN) accept a
-        float32 NCHW tensor in [0, 1] and return the same shape. We normalise
-        to [0, 1], run tiled inference over HWC tiles, then map back to
-        [0, 255].
+        NAFNet and similar denoise models accept float32 RGB NCHW tensor in [0, 1]
+        and return the same shape. We convert BGR→RGB, normalise to [0, 1], run
+        tiled inference over HWC tiles, convert back to BGR, then map to [0, 255].
         """
-        hwc = (img.astype(np.float32) / 255.0)
+        bgr = img.astype(np.float32)
+        rgb = bgr[..., ::-1] / 255.0
         input_name = self._denoise_input_name(sess)
 
         def _run(tile01: np.ndarray) -> np.ndarray:
@@ -304,8 +317,9 @@ class AIEnhancer:
             out = np.transpose(out[0], (1, 2, 0))
             return out.astype(np.float32)
 
-        out01 = self._tiled_inference(_run, hwc, out_scale=1)
-        return np.clip(out01 * 255.0, 0.0, 255.0).astype(np.float32)
+        out01 = self._tiled_inference(_run, rgb, out_scale=1)
+        bgr_out = out01[..., ::-1] * 255.0
+        return np.clip(bgr_out, 0.0, 255.0).astype(np.float32)
 
     def _run_sr_model(self, sess: object, img: np.ndarray, scale: int) -> np.ndarray:
         """Run the ONNX Real-ESRGAN model with tiled inference.

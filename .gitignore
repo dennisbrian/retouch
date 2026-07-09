@@ -1,4 +1,7 @@
-models/
+# Model binaries stay untracked; the manifest is source-of-truth and IS tracked.
+# Anchored so scripts/models/ (export tooling) is not swallowed.
+/models/*
+!/models/manifest.json
 *.task
 test_output/
 benchmark_results.json

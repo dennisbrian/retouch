@@ -123,6 +123,26 @@ python3 cli.py /photos -o /out --workers 8
 
 ---
 
+## AI Denoise (F7 / NAFNet) Cost
+
+`ai_denoise > 0` runs the NAFNet-SIDD-width32 ONNX model pre-pipeline, tiled
+at 512px. It is pinned to **CPUExecutionProvider** — CoreML silently
+miscomputes this graph (measured max abs error ~1.7-2.4 on [0,1] data) and is
+~90x slower due to graph fragmentation, so do not "optimize" it back onto
+CoreML without re-verifying correctness.
+
+| Input size | Wall time (M3 Pro, CPU) |
+|------------|-------------------------|
+| 512×512 tile | ~0.6s |
+| 1560×1040 | ~10s |
+| 6240×4160 (24MP) | ~80-90s |
+
+Guidance: reserve `ai_denoise` for genuinely noisy (high-ISO) sources; it is
+opt-in per image/recipe. For interactive GUI tuning, set it once and rely on
+FaceContext caching — the denoise runs on every full `process()` call.
+
+---
+
 ## Real-World Timings
 
 ### Example 1: Interactive Portrait Session (GUI)
