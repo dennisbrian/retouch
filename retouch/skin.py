@@ -517,6 +517,31 @@ class SkinProcessor:
                 )
         return blend_masked(img_bgr, result, blend)
 
+    def face_exposure_lift(
+        self,
+        img_bgr: np.ndarray,
+        mask: np.ndarray,
+        strength: float = 0,
+    ) -> np.ndarray:
+        """Lift face luminance on the skin region (flat, non-directional).
+
+        Unlike ``relight`` (which reshades illumination directionally), this is
+        a plain L-channel lift masked to skin — used to brighten face exposure
+        beyond ``relight``'s ceiling. float32 [0,255] BGR in/out; LAB at the
+        boundary per project convention.
+        """
+        if strength <= 0 or mask is None:
+            return img_bgr
+        lab = bgr_f32_to_lab_f32(img_bgr)
+        m = np.clip(mask.astype(np.float32), 0.0, 1.0)
+        # Feather the mask so the lift blends at the skin boundary.
+        k = max(3, int(round(min(img_bgr.shape[:2]) / 64)) | 1)
+        m = cv2.GaussianBlur(m, (k, k), 0)
+        # utils.bgr_f32_to_lab_f32 uses the uint8-scale convention: L in [0,255].
+        delta = strength  # 0..100 -> up to +100 L on the 0..255 scale
+        lab[:, :, 0] = np.clip(lab[:, :, 0] + delta * m, 0.0, 255.0)
+        return lab_f32_to_bgr_f32(lab)
+
     def wrinkle_soften(
         self,
         img_bgr: np.ndarray,

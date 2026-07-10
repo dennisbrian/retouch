@@ -566,6 +566,16 @@ _SKIN_PARAMS = [
         max_val=100,
     ),
     ParamSpec(
+        name="face_exposure",
+        cli_flag="face-exposure",
+        cli_type=float,
+        default=0,
+        recipe_key="skin.face_exposure",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
         name="body_shadow_lift",
         cli_flag=None,
         cli_type=None,

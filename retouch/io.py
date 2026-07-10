@@ -221,6 +221,8 @@ def read_image_16bit(path: Union[str, Path]) -> np.ndarray:
                 no_auto_bright=True,
                 bright=1.0,
                 output_bps=16,
+                output_color=rawpy.ColorSpace.sRGB,
+                highlight_mode=rawpy.HighlightMode.ReconstructDefault,
             )
         bgr16 = cv2.cvtColor(rgb16, cv2.COLOR_RGB2BGR)
         return (bgr16.astype(np.float32) / 257.0).astype(np.float32, copy=False)
@@ -259,7 +261,18 @@ def imread_exif(path: Union[str, Path]) -> np.ndarray:
         import rawpy
 
         with rawpy.imread(str(path)) as raw:
-            rgb = raw.postprocess(use_camera_wb=True, no_auto_bright=True, bright=1.5)
+            # Faithful, neutral RAW development that matches the camera's own
+            # rendition: in-camera white balance, no auto-exposure, and a
+            # standard 1.0 brightness (rawpy's sRGB output is the closest
+            # neutral analogue to the camera JPEG). The previous bright=1.5
+            # over-lit the image ~50% vs what was shot.
+            rgb = raw.postprocess(
+                use_camera_wb=True,
+                no_auto_bright=True,
+                bright=1.0,
+                output_color=rawpy.ColorSpace.sRGB,
+                highlight_mode=rawpy.HighlightMode.ReconstructDefault,
+            )
         return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
 
     from PIL import ImageOps

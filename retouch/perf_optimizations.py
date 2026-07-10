@@ -514,6 +514,11 @@ def _process_face_core(
             elevation=ctx.relight_elevation,
         )
 
+    # ---- Face exposure lift (flat skin-L luminance, beyond relight ceiling) ----
+    if ctx.face_exposure > 0:
+        canvas = _tr('face_exposure', canvas)
+        canvas = skin.face_exposure_lift(canvas, regions.skin, ctx.face_exposure)
+
     # ---- Facial structure sculpting (C2: low-band shaping, form-frequency modulation) ----
     if ctx.sculpt > 0:
         canvas = _tr('sculpt', canvas)

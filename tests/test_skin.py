@@ -97,6 +97,41 @@ class TestWhiten:
         assert np.array_equal(result, img)
 
 
+class TestFaceExposureLift:
+    """face_exposure_lift: flat skin-L luminance lift (float32 [0,255] BGR)."""
+
+    @staticmethod
+    def _fimg():
+        return np.full((64, 64, 3), 128.0, dtype=np.float32)
+
+    def test_zero_strength_returns_input(self, proc, face_mask):
+        im = self._fimg()
+        out = proc.face_exposure_lift(im, face_mask, strength=0)
+        assert np.allclose(out, im)
+
+    def test_lifts_skin_luminance(self, proc, face_mask):
+        from retouch.utils import bgr_f32_to_lab_f32
+        im = self._fimg()
+        before = bgr_f32_to_lab_f32(im)[:, :, 0]
+        out = proc.face_exposure_lift(im, face_mask, strength=50)
+        after = bgr_f32_to_lab_f32(out)[:, :, 0]
+        sel = face_mask > 0.5
+        assert after[sel].mean() > before[sel].mean() + 5
+
+    def test_background_untouched(self, proc):
+        from retouch.utils import bgr_f32_to_lab_f32
+        im = self._fimg()
+        mask = np.zeros((64, 64), dtype=np.float32)
+        mask[16:48, 16:48] = 1.0  # hard-edged block, no blur
+        before = bgr_f32_to_lab_f32(im)[:, :, 0]
+        out = proc.face_exposure_lift(im, mask, strength=100)
+        after = bgr_f32_to_lab_f32(out)[:, :, 0]
+        # Far corner, clear of the 3px feather and the block.
+        sel = np.zeros((64, 64), dtype=bool)
+        sel[2:12, 2:12] = True
+        assert np.allclose(after[sel], before[sel], atol=1e-3)
+
+
 class TestEqualize:
     def test_zero_strength(self, proc, img, face_mask):
         result = proc.equalize(img, face_mask, strength=0)

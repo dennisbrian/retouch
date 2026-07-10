@@ -192,6 +192,7 @@ class ProcessingContext:
     relight: float = 0.0
     relight_azimuth: float = _DEFAULTS["relight_azimuth"]
     relight_elevation: float = _DEFAULTS["relight_elevation"]
+    face_exposure: float = _DEFAULTS["face_exposure"]
     sculpt: float = 0.0
     skin_flatten: float = 0.0
     skin_quantize: float = 0.0
@@ -825,6 +826,7 @@ class RetouchEngine:
         relight: Optional[float] = None,
         relight_azimuth: Optional[float] = None,
         relight_elevation: Optional[float] = None,
+        face_exposure: Optional[float] = None,
         sculpt: Optional[float] = None,
         fade_toe: Optional[float] = None,
         highlight_drift: Optional[float] = None,
@@ -1037,6 +1039,7 @@ class RetouchEngine:
             "relight": relight,
             "relight_azimuth": relight_azimuth,
             "relight_elevation": relight_elevation,
+            "face_exposure": face_exposure,
             "sculpt": sculpt,
             "fade_toe": fade_toe,
             "highlight_drift": highlight_drift,
