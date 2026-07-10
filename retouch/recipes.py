@@ -29,7 +29,7 @@ RECIPES = {
     "portrait": {
         "extends": "natural",
         "frequency": {"smooth": 0.45},
-        "skin": {"equalize": 0.35, "rosy": 0.20},
+        "skin": {"equalize": 0.35, "rosy": 0.20, "face_exposure": 0.20},
         "eyes": {"whites": 0.15, "teeth_whiten": 0.15, "iris": 0.15, "catchlight": 0.15},
         "lips": {"tint": None, "gloss": 0.10},
         "hair": {"shine": 0.10},
@@ -405,6 +405,34 @@ RECIPES = {
             "equalize": 0.25,
             "whiten": 0.15,
             "match_face": 0.70,
+        },
+    },
+    "body_reshape_demo_v1": {
+        # Wiring-debt fix (MASTER_PLAN.md wiring-debt audit): makes the five
+        # T3 body_reshape_* ParamSpecs recipe-reachable for the first time
+        # (previously only raw CLI flags / API kwargs could reach them). Built
+        # on body_match_v1 so body skin is already tone-matched to the face.
+        # body_reshape.* uses conversion="gui_direct" (engine scale 0-100,
+        # 50 = neutral), so values are stored verbatim (NOT ratios).
+        "extends": "body_match_v1",
+        "body_reshape": {
+            "arm_length": 60.0,
+            "leg_length": 65.0,
+            "torso_width": 45.0,
+            "shoulder_width": 55.0,
+            "hip_width": 45.0,
+        },
+    },
+    "cosplay_wiring_demo_v1": {
+        # Wiring-debt fix (MASTER_PLAN.md wiring-debt audit): makes the three
+        # A3 cosplay_* ParamSpecs recipe-reachable for the first time. Built on
+        # the cosplay base. cosplay.* uses conversion="recipe_pct" (ratio ×
+        # 100 → engine 0-100), so values are 0-1 ratios here.
+        "extends": "cosplay",
+        "cosplay": {
+            "wig_lace_blend": 0.30,
+            "stockings_smooth": 0.20,
+            "consistency_strength": 0.40,
         },
     },
     "full_showcase_v1": {
