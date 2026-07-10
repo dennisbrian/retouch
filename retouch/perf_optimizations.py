@@ -578,10 +578,11 @@ def _process_face_core(
         )
 
     # ---- Eye enhancement ----
-    if ctx.eye_enhance > 0:
+    if ctx.eye_enhance > 0 or ctx.eye_sclera_vessel_remove > 0:
         canvas = _tr('eyes.enhance', canvas)
         canvas = eyes.enhance(canvas, regions, ctx.eye_enhance,
-                              catchlight_strength=ctx.catchlight if ctx.catchlight > 0 else None)
+                              catchlight_strength=ctx.catchlight if ctx.catchlight > 0 else None,
+                              vessel_strength=ctx.eye_sclera_vessel_remove)
 
     # ---- Eye Enhancement v0 (sclera brightening + iris saturation/hue/brightness) ----
     eye_v0_active = (ctx.eye_sclera_brighten > 0 or ctx.eye_iris_saturate > 0 or

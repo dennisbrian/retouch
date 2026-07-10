@@ -242,3 +242,58 @@ def test_enhance_output_shape():
     enhancer = EyeEnhancer()
     result = enhancer.enhance(img, regions, strength=50)
     assert result.shape == (64, 64, 3)
+
+
+class TestScleraVesselRemoval:
+    """Sclera vessel removal: detect red vessels inside the iris-excluded
+    eye-white mask, inpaint them, leave iris/pupil/skin untouched."""
+
+    def _build(self):
+        img = np.full((64, 64, 3), 225, dtype=np.uint8)  # off-white sclera
+        r = MockFaceRegions()
+        r.left_eye = np.zeros((64, 64), dtype=np.float32)
+        r.right_eye = np.zeros((64, 64), dtype=np.float32)
+        r.left_iris = np.zeros((64, 64), dtype=np.float32)
+        r.right_iris = np.zeros((64, 64), dtype=np.float32)
+        r.left_eye[15:45, 10:45] = 1.0
+        r.left_iris[28:33, 18:23] = 1.0  # excluded from sclera mask
+        # Red vessel line in sclera (outside iris), column x=37-38
+        img[15:45, 37:39] = (60, 60, 210)
+        # Red mark INSIDE the iris (must survive)
+        img[29:32, 19:22] = (60, 60, 210)
+        return img, r
+
+    def _whites(self, r):
+        return np.clip(r.left_eye - r.left_iris, 0, 1)
+
+    def test_zero_strength_noop(self, enhancer):
+        img, r = self._build()
+        out = enhancer._remove_sclera_vessels(img, self._whites(r), 0)
+        assert np.all(out == img)
+
+    def test_removes_vessel_redness(self, enhancer):
+        img, r = self._build()
+        out = enhancer._remove_sclera_vessels(img, self._whites(r), 100)
+        orig_a = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)[:, :, 1]
+        new_a = cv2.cvtColor(out, cv2.COLOR_BGR2LAB)[:, :, 1]
+        before = float(orig_a[15:45, 37:39].mean())
+        after = float(new_a[15:45, 37:39].mean())
+        assert after < before, f"vessel redness not reduced: {before:.1f} -> {after:.1f}"
+
+    def test_iris_untouched(self, enhancer):
+        img, r = self._build()
+        out = enhancer._remove_sclera_vessels(img, self._whites(r), 100)
+        assert np.all(out[29:32, 19:22] == img[29:32, 19:22])
+
+    def test_float32_preserved(self, enhancer):
+        img, r = self._build()
+        out = enhancer._remove_sclera_vessels(img.astype(np.float32), self._whites(r), 100)
+        assert out.dtype == np.float32
+
+    def test_enhance_wiring_vessel_only(self, enhancer):
+        # eye_enhance=0 but vessel_strength=100 must still run removal
+        img, r = self._build()
+        out = enhancer.enhance(img, r, strength=0, vessel_strength=100)
+        orig_a = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)[:, :, 1]
+        new_a = cv2.cvtColor(out, cv2.COLOR_BGR2LAB)[:, :, 1]
+        assert float(new_a[15:45, 37:39].mean()) < float(orig_a[15:45, 37:39].mean())

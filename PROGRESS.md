@@ -92,6 +92,28 @@
   must add a `return_float` option to `process()` alongside 16-bit ingestion or neither end
   buys anything (`PLAN_RAW_PROCESSING.md` §5.7).
 
+- **Auto-gap backlog (owner request 2026-07-10)**: owner wants "everything auto" — manual-only
+  coverage re-scored as missing. 7-item backlog added to `MASTER_PLAN.md` Post-plan section:
+  auto backdrop cleanup, sclera vessel removal, auto fabric wrinkles (**BiSeNet cloth label 16
+  already available, unused**), per-region wrinkle sliders, auto stray hair (only true A4-class
+  item), neck/L-R reshape, one-click auto body reshape. ~7–9 wk total; items 1–4/6–7 classical.
+
+- **Wiring-debt audit (2026-07-10 discovery pass)**: 4 unwired islands all marked ✅ with green
+  tests — `raw_develop.py` (T5), `plugin_api.py` (T4, discover never called), `recipe_cookbook.py`
+  (T4 UI, no GUI), `look_extractor.py` (F6, unreachable) — plus LUT hot-reload (known). 11
+  GUI-invisible params; **T3 `body_reshape_*` and A3 `cosplay_*` appear in NO recipe either →
+  dark in both user paths.** Root cause: "✅ DONE" = module+tests, not user-reachable. ~4–6 d
+  to wire everything. Detail: MASTER_PLAN.md Post-plan "Wiring-debt audit" row.
+
+- **Recipe integrity audit (2026-07-10 final discovery pass)**: 4 dead-key classes across
+  21 recipe-instances, verified via `recipe_to_params()` — **`film.preset` (6 film-branded
+  recipes get NO film look; preset names don't exist anywhere)**, `skin.exposure_lock`
+  (9 recipes, param doesn't exist), `frequency.nose_smooth` (5 recipes; ParamSpec has no
+  recipe_key), `skin.micro_dodge_burn` (1; correct key `skin.micro_db`). **`masterwork_v1`
+  flagship carries two dead keys.** Root cause: `test_no_dead_recipe_keys` validates
+  top-level keys only, never recurses into nested roots. ~0.5–1 d to fix (+ film.preset
+  design decision). Detail: MASTER_PLAN.md Post-plan "Recipe integrity audit" row.
+
 #### Research log (2026-07-10, RAF import)
 - **Dead parallel RAW path**: `retouch/raw_develop.py` (`RawDeveloper`) decodes to 16-bit
   **linear** RGB `[0,1]` but is NOT wired into engine/cli/gui (only `tests/test_raw_develop.py`
@@ -113,7 +135,29 @@
 - **No-ops confirmed for X-Trans**: `demosaic_algorithm` (AHD==DHT; AMAZE/LMMSE need GPL packs)
   and `fbdd_noise_reduction` (Off/Light/Full identical) have zero effect — do not add.
 
+### 6. Sclera vessel removal (2026-07-10 — UNCOMMITTED)
+- **`eye_sclera_vessel_remove`** (0–100): new `eyes.py` `EyeEnhancer._remove_sclera_vessels`
+  — detects red vessels via relative LAB-a redness inside the iris-excluded sclera mask,
+  inpaints them (Telea). Iris/pupil/skin untouched. Wired `params.py`→`engine.py`→
+  `perf_optimizations.py`; gate `eye_enhance>0 OR vessel>0` so vessel-only mode works.
+  `tests/test_eyes.py::TestScleraVesselRemoval` 5/5 pass. End-to-end `process()` verified on
+  `DSCF8007.jpg`; compare `test_output/eyes_vessel/compare_off_vs_on.jpg`.
+  **[VISUAL QA PENDING]** — Visual-Critical (`eyes.py`).
+
+### 7. Auto backdrop cleanup (2026-07-10 — UNCOMMITTED)
+- **`backdrop_cleanup`** (0–100): new `retouch/backdrop.py::clean_backdrop` — detects dust/folds/dirt
+  as high-frequency luminance outliers vs `GaussianBlur` (std-dev threshold; detail band preserved,
+  only outliers removed, Telea inpaint). Subject edge protected by **eroding** `~person_mask` ~8px
+  then feathering before inpaint (fixes a subject-edge-bleed trap); composite is **hard** over the
+  eroded region. `ParamSpec backdrop_cleanup` (`cli_flag="backdrop-cleanup"`,
+  `recipe_key="background.backdrop_cleanup"`, `conversion="recipe_pct"`) wired `params.py`→`engine.py`
+  (`_run_global_phases` before `to_uint8`, both registry + hardcoded paths)→`ProcessingContext`.
+  `tests/test_backdrop.py` 6/6 pass. **[VISUAL QA PENDING]** — Visual-Critical-adjacent.
+
 ## Last updated
-2026-07-10 — RAW-processing research doc (`PLAN_RAW_PROCESSING.md`) + T5 status-audit note in
-`MASTER_PLAN.md`. Earlier same day: Post-plan section + §5 for RAF-import / `face_exposure`
-work (uncommitted). Prior: `0822b9c` RESUME + #11/showcase-family.
+2026-07-10 (end of day) — four discovery passes documented in MASTER_PLAN.md Post-plan section:
+RAW processing (`PLAN_RAW_PROCESSING.md` + T5 audit), auto-gap backlog (owner request),
+wiring-debt audit (4 unwired islands + 11 GUI-invisible params), recipe integrity audit
+(4 dead-key classes, 21 instances, guard-test blind spot). Earlier same day: Post-plan section
++ §5 for RAF-import / `face_exposure` work (committed `af54d2d`). Then §6 sclera vessel removal +
+§7 backdrop cleanup (both uncommitted). Prior: `0822b9c` RESUME.

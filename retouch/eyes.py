@@ -57,6 +57,7 @@ class EyeEnhancer:
         regions: Any,
         strength: int = 40,
         catchlight_strength: Optional[int] = None,
+        vessel_strength: Optional[int] = None,
     ) -> np.ndarray:
         """Run the full eye enhancement pipeline.
 
@@ -70,7 +71,7 @@ class EyeEnhancer:
         Returns:
             (H, W, 3) result matching input dtype.
         """
-        if strength <= 0:
+        if strength <= 0 and (vessel_strength is None or vessel_strength <= 0):
             return img_bgr
 
         is_float = img_bgr.dtype == np.float32
@@ -83,6 +84,11 @@ class EyeEnhancer:
         whites_mask_r = np.clip(regions.right_eye - regions.right_iris, 0, 1)
         whites_mask = np.clip(whites_mask_l + whites_mask_r, 0, 1)
         result = self._enhance_whites(result, whites_mask, s)
+
+        # Sclera vessel removal — iris-safe, runs only inside whites_mask
+        v_s = vessel_strength if vessel_strength is not None else strength
+        if v_s > 0:
+            result = self._remove_sclera_vessels(result, whites_mask, v_s)
 
         # Iris — sculpt each eye separately
         if regions.left_iris is not None and regions.left_iris.max() > 0.01:
@@ -114,6 +120,63 @@ class EyeEnhancer:
                 result = _from_lab(lab, is_float)
 
         return result
+
+    def _remove_sclera_vessels(
+        self,
+        img_bgr: np.ndarray,
+        whites_mask: np.ndarray,
+        strength: int,
+    ) -> np.ndarray:
+        """Remove thin red blood vessels from the sclera via inpaint.
+
+        Vessels are detected as pixels redder than the local sclera median
+        (relative redness in the LAB a-channel), kept thin via morphological
+        opening, then inpainted. Runs only inside the iris-excluded
+        ``whites_mask`` so the iris, pupil and skin are never touched.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 or float32 BGR image in [0, 255].
+            whites_mask: (H, W) float32 sclera mask (eye region minus iris).
+            strength: 0–100 removal intensity.
+
+        Returns:
+            (H, W, 3) result matching input dtype.
+        """
+        if strength <= 0:
+            return img_bgr
+        s = strength / 100.0
+        is_float = img_bgr.dtype == np.float32
+
+        lab = _to_lab(img_bgr, is_float)
+        a = lab[:, :, 1] - 128.0
+        wm = whites_mask
+        idx = wm > 0.1
+        if idx.sum() < 10:
+            return img_bgr
+
+        med = float(np.median(a[idx]))
+        sd = max(float(a[idx].std()), 1e-3)
+        k = 3.0 - 2.0 * s  # higher strength -> lower threshold -> more removed
+        vessel = (a - med > k * sd) & (wm > 0.25)
+        vessel = vessel.astype(np.uint8)
+
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        vessel = cv2.dilate(vessel, kernel, iterations=1)
+        if vessel.sum() == 0:
+            return img_bgr
+
+        img_u8 = np.clip(img_bgr, 0, 255).astype(np.uint8)
+        inp = cv2.inpaint(
+            img_u8, (vessel * 255).astype(np.uint8), 3, cv2.INPAINT_TELEA
+        )
+        inp = inp.astype(np.float32)
+
+        m = cv2.dilate(vessel, kernel, iterations=2).astype(np.float32)
+        m = feather_mask(m, radius=4) * s
+        out = img_bgr * (1.0 - m[:, :, None]) + inp * m[:, :, None]
+        if not is_float:
+            out = np.clip(out, 0, 255).astype(np.uint8)
+        return out
 
     def _enhance_whites(
         self,

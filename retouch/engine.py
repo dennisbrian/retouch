@@ -222,6 +222,8 @@ class ProcessingContext:
 
     # --- Eyes ---
     eye_enhance: float = 0.0
+    eye_sclera_vessel_remove: float = 0.0
+    backdrop_cleanup: float = 0.0
     dark_circles: float = 0.0
     undereye_darken_removal: float = 0.0
     undereye_puffiness_reduction: float = 0.0
@@ -786,6 +788,8 @@ class RetouchEngine:
         smooth: Optional[float] = None,
         whiten: Optional[float] = None,
         eye_enhance: Optional[float] = None,
+        eye_sclera_vessel_remove: Optional[float] = None,
+        backdrop_cleanup: Optional[float] = None,
         dark_circles: Optional[float] = None,
         undereye_darken_removal: Optional[float] = None,
         undereye_puffiness_reduction: Optional[float] = None,
@@ -1007,6 +1011,8 @@ class RetouchEngine:
             "smooth": smooth,
             "whiten": whiten,
             "eye_enhance": eye_enhance,
+            "eye_sclera_vessel_remove": eye_sclera_vessel_remove,
+            "backdrop_cleanup": backdrop_cleanup,
             "dark_circles": dark_circles,
             "undereye_darken_removal": undereye_darken_removal,
             "undereye_puffiness_reduction": undereye_puffiness_reduction,
@@ -1966,6 +1972,17 @@ class RetouchEngine:
             t6 = time.perf_counter()
             result = self._stage_body_reshape(result, ctx, person_mask=person_mask)
             timings["body_reshape"] = (time.perf_counter() - t6) * 1000
+
+        # ------------------------------------------------------------------
+        # Stage 7.5 — Background cleanup (dust/specks/creases via inpaint)
+        # Runs in both registry + hardcoded paths (inserted after stage run).
+        # ------------------------------------------------------------------
+        if ctx.backdrop_cleanup > 0 and person_mask is not None:
+            from .backdrop import clean_backdrop
+
+            t_bdc = time.perf_counter()
+            result = clean_backdrop(result, person_mask, ctx.backdrop_cleanup)
+            timings["backdrop_cleanup"] = (time.perf_counter() - t_bdc) * 1000
 
         # ------------------------------------------------------------------
         # F1: Convert back to uint8 for output
@@ -4020,6 +4037,8 @@ def retouch(
     smooth: float = 50,
     whiten: float = 30,
     eye_enhance: float = 30,
+    eye_sclera_vessel_remove: float = 0.0,
+    backdrop_cleanup: float = 0.0,
     contrast: float = 0,
     preset: Optional[str] = None,
     **kwargs,
