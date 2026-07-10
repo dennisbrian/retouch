@@ -340,13 +340,23 @@ def gamut_compress(oklch: np.ndarray, thr: float = 0.8, power: float = 0.6) -> n
 
 
 def apply_subtractive_saturation(img_bgr: np.ndarray, amount: float) -> np.ndarray:
-    """Film-density (subtractive) saturation in linear-RGB log-density space.
+    """Film-density (subtractive) saturation in perceptual OKLCh space.
 
-    Converts to linear RGB, takes ``D = -log10(rgb)`` (film/CMY density), scales
-    the per-pixel density deviation from neutral by ``factor = 1 + amount``
-    (additive in density => multiplicative in transmission), then returns via
-    ``10^-D``. Unlike HSV/LAB scaling this *darkens* saturated colors as chroma
-    rises (the film look). ``amount == 0`` is byte-identical to the input.
+    Boosts chroma while *darkening in proportion to chroma* -- the defining
+    trait of subtractive (CMY dye) saturation, where denser dye layers both
+    intensify colour and absorb more light. The work is done in OKLCh so that:
+
+    * **Hue is locked.** Only C (chroma) and L (lightness) move; ``h`` is
+      carried through untouched, so there is no hue slide toward whichever RGB
+      channel happens to be brightest (the earlier log-density implementation
+      pinned that channel and turned warm skin / neutral backgrounds green).
+    * **Neutrals are a fixed point.** At C == 0 the lightness term vanishes, so
+      grays are returned unchanged.
+
+    Chroma scales by ``1 + amount``; lightness drops by a fraction proportional
+    to ``amount * C`` (positive amount = the film look: saturated colours gain
+    density and darken; negative amount desaturates and lightens toward gray).
+    ``amount == 0`` is byte-identical to the input.
 
     Args:
         img_bgr: (H, W, 3) uint8 BGR or float32 BGR in [0, 1].
@@ -358,47 +368,45 @@ def apply_subtractive_saturation(img_bgr: np.ndarray, amount: float) -> np.ndarr
     if amount == 0:
         return img_bgr
     is_float = img_bgr.dtype == np.float32
+    # bgr_to_oklab expects float BGR in [0, 255] or uint8 BGR.
     if is_float:
-        img_rgb = np.clip(img_bgr[..., ::-1], 0.0, 1.0).astype(np.float32)
+        work = np.clip(img_bgr, 0.0, 1.0).astype(np.float32) * 255.0
     else:
-        img_rgb = img_bgr[..., ::-1].astype(np.float32) / 255.0
+        work = img_bgr
 
-    # sRGB EOTF -> linear
-    lin = np.where(
-        img_rgb <= 0.04045,
-        img_rgb / 12.92,
-        np.power((img_rgb + 0.055) / 1.055, 2.4),
-    )
-    lin = np.clip(lin, 1e-4, 1.0)
+    oklab = bgr_to_oklab(work)
+    oklch = oklab_to_oklch(oklab)
+    L = oklch[..., 0]
+    C = oklch[..., 1]
 
-    # Log-density (film/CMY). Saturate by scaling each channel's density
-    # *deviation from the pixel's luminance-weighted neutral density*. Anchoring
-    # on the neutral (rather than the single brightest channel) keeps the push
-    # hue-symmetric: no channel is pinned, so there is no hue slide toward
-    # whichever channel happens to be brightest. Because density grows as a
-    # channel darkens, a positive amount deepens the already-dense (absorbed)
-    # channels *and* lifts the transmitted ones about the neutral — chroma rises
-    # while saturated colors gain density (the subtractive film look). Neutrals
-    # (equal channels) are a fixed point, and amount == 0 is exact identity.
-    D = -np.log10(lin)
-    # Rec.709 luma weights on linear light give the perceptual neutral density.
-    lum = 0.2126 * lin[..., 0:1] + 0.7152 * lin[..., 1:2] + 0.0722 * lin[..., 2:3]
-    d_neutral = -np.log10(np.clip(lum, 1e-4, 1.0))
-    factor = 1.0 + float(amount)
-    D = d_neutral + (D - d_neutral) * factor
-    lin_new = np.clip(np.power(10.0, -D), 0.0, 1.0)
+    amt = float(amount)
+    # Chroma boost (hue held fixed by construction -- h is untouched).
+    C_new = np.maximum(C * (1.0 + amt), 0.0)
+    # Subtractive density: darken (positive amount) or lighten (negative) in
+    # proportion to chroma, so neutrals (C == 0) are unaffected. The 0.5 gain
+    # keeps the lightness move gentle relative to the chroma move.
+    L_new = np.clip(L - amt * C * 0.5, 0.0, 1.0)
 
-    # linear -> sRGB
-    srgb = np.where(
-        lin_new <= 0.0031308,
-        12.92 * lin_new,
-        1.055 * np.power(lin_new, 1.0 / 2.4) - 0.055,
-    )
-    srgb = np.clip(srgb, 0.0, 1.0)
-    bgr = srgb[..., ::-1]
+    oklch_new = np.stack([L_new, C_new, oklch[..., 2]], axis=-1).astype(np.float32)
+    bgr = oklab_to_bgr(oklch_to_oklab(oklch_new), float32_out=True)  # [0, 255] float
+
+    # Near-neutral pixels have numerically unstable hue and carry a small
+    # achromatic residual (uint8 grays land at C up to ~0.046 in OKLCh purely
+    # from quantization). Blend the transform back toward the source over a
+    # soft chroma ramp so true grays / near-neutral skin stay put while
+    # genuinely coloured pixels (C > ~0.09) are fully transformed. This keeps
+    # neutrals a fixed point without freezing low-chroma real colours.
+    C_LO, C_HI = 0.05, 0.09
+    w = np.clip((C - C_LO) / (C_HI - C_LO), 0.0, 1.0)[..., None]
     if is_float:
-        return np.ascontiguousarray(bgr.astype(np.float32))
-    return np.clip(bgr * 255.0, 0, 255).astype(np.uint8)
+        src = np.clip(img_bgr, 0.0, 1.0).astype(np.float32) * 255.0
+    else:
+        src = img_bgr.astype(np.float32)
+    bgr = src * (1.0 - w) + bgr * w
+
+    if is_float:
+        return np.ascontiguousarray(np.clip(bgr / 255.0, 0.0, 1.0).astype(np.float32))
+    return np.clip(np.round(bgr), 0, 255).astype(np.uint8)
 
 
 def resolve_locus_override(

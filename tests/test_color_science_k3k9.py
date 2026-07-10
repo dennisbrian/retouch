@@ -152,10 +152,53 @@ def test_k9_additive_holds_luma_flat():
     assert abs(np.mean(np.diff(lums))) < 0.02, f"additive luma drift: {lums}"
 
 
-def test_k9_negative_amount_lightens():
-    """Negative subtractive amount lightens a saturated color."""
-    bgr = _bgr_from_oklch(L=0.7, C=0.3, h=30.0).astype(np.float32) / 255.0
-    base_lum = float(np.mean(_lin_luma(bgr)))
-    light = apply_subtractive_saturation(bgr, -0.5)
-    light_lum = float(np.mean(_lin_luma(light)))
-    assert light_lum > base_lum, f"negative amount did not lighten: {base_lum} -> {light_lum}"
+def test_k9_negative_amount_desaturates():
+    """Negative subtractive amount pulls chroma toward the neutral (gray) axis.
+
+    Subtractive saturation scales chroma in OKLCh about the neutral axis while
+    holding hue fixed, so a negative amount reduces chroma (desaturates) without
+    any hue slide -- unlike the earlier per-channel log-density implementation,
+    which pinned the brightest channel and cast warm/neutral pixels green.
+    """
+    # In-gamut saturated probe (uint8 BGR -- bgr_to_oklab expects [0, 255]).
+    im = np.full((8, 8, 3), (40, 40, 200), np.uint8)  # saturated red
+    base_oklch = oklab_to_oklch(bgr_to_oklab(im))
+    out_oklch = oklab_to_oklch(bgr_to_oklab(apply_subtractive_saturation(im, -0.5)))
+    base_c = float(np.mean(base_oklch[..., 1]))
+    out_c = float(np.mean(out_oklch[..., 1]))
+    assert out_c < base_c, f"negative amount did not desaturate: C {base_c} -> {out_c}"
+    # Hue must stay put (no cast) on saturated colour.
+    dh = float(np.mean(_hue_diff_deg(base_oklch[..., 2], out_oklch[..., 2])))
+    assert dh < 3.0, f"negative amount shifted hue by {dh} deg"
+
+
+def test_k9_no_green_cast():
+    """Regression: subtractive saturation must not throw a green/hue cast.
+
+    The earlier implementation anchored on the brightest channel's density,
+    pinning that channel and sliding hue toward it -- turning warm skin and
+    neutral backgrounds green. Guard the two properties that actually matter:
+    (1) a neutral gray stays *exactly* neutral, and (2) saturated colours keep
+    their hue. (Near-neutral skin has undefined hue at C~=0, so its large
+    relative hue "drift" is imperceptible and is deliberately not asserted.)
+    """
+    # A neutral gray must remain exactly neutral -- the strongest anti-cast test.
+    gray = np.full((8, 8, 3), 128, np.uint8)
+    assert np.array_equal(apply_subtractive_saturation(gray, 0.6), gray), \
+        "neutral gray was not preserved (cast introduced)"
+
+    # Saturated, in-gamut colours must hold hue within a tight tolerance.
+    # (Work in uint8 BGR -- bgr_to_oklab expects [0, 255] scale.)
+    probes = {
+        "red": (40, 40, 200),
+        "green": (40, 180, 40),
+        "blue": (190, 60, 60),
+        "skin": (150, 180, 220),
+    }
+    for name, bgr8 in probes.items():
+        im = np.full((8, 8, 3), bgr8, np.uint8)
+        base_h = oklab_to_oklch(bgr_to_oklab(im))[..., 2]
+        out_h = oklab_to_oklch(bgr_to_oklab(
+            apply_subtractive_saturation(im, 0.6)))[..., 2]
+        dh = float(np.mean(_hue_diff_deg(base_h, out_h)))
+        assert dh < 3.0, f"hue slid {dh} deg on {name} (cast)"

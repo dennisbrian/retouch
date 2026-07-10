@@ -165,12 +165,31 @@ not just texture. Cheap, immediately useful, closes the M2/M3 measurement loop o
 **Science:** R1 ("subtractive/density saturation") backlogged the *idea*; here's the *codeable* method.
 Film saturates by dye-density multiplication in a **subtractive (CMY) log space**, so saturated colors
 darken instead of going neon.
+**Codeable plan:** convert linear RGB → density `D = -log10(clamp(rgb))` → to CMY
+density → scale CMY densities by the saturation factor (optionally per-dye for film-specific
+curves) → back to RGB via `10^-D`. ~30 LOC in `grading.py`/`film.py`. The nonlinearity *is* the
+film look — no LUT needed. Test: a saturation sweep on a bright patch shows luminance *dropping*
+as chroma rises (vs HSV/LAB scaling which holds L flat). This unblocks R1 with an actual
+implementation.
 
-**Codeable plan:** convert linear RGB → density `D = -log10(clamp(rgb))` → to CMY density → scale CMY
-densities by the saturation factor (optionally per-dye for film-specific curves) → back to RGB via
-`10^-D`. ~30 LOC in `grading.py`/`film.py`. The nonlinearity *is* the film look — no LUT needed. Test: a
-saturation sweep on a bright patch shows luminance *dropping* as chroma rises (vs HSV/LAB scaling which
-holds L flat). This unblocks R1 with an actual implementation.
+**Fix (2026-07-11) — green-cast bug in first implementation.** The original
+`apply_subtractive_saturation` worked in per-channel log-density space anchored on `d_min`
+(the brightest RGB channel). That pins the brightest channel and slides every pixel's hue
+*toward* it — on warm skin (R>G>B) and neutral backgrounds it landed on **green**, so the K9
+panel looked worse than the source. A luminance-anchor intermediate still drifted hue ~26° on
+saturated colors.
+
+Corrected implementation works in **OKLCh**: boost chroma by `(1+amount)` (hue held fixed by
+construction), darken `L` in proportion to chroma (the genuine subtractive/film-density trait —
+denser dye = more saturated *and* darker). Near-neutral pixels blend back to source over a soft
+chroma ramp so uint8 grays (residual chroma up to ~0.046 from quantization) stay an exact fixed
+point.
+
+Verified invariants: grays exact at every level; saturated red/green/blue/skin hue drift <1.2°;
+negative amount desaturates; positive darkens + saturates; `amount==0` byte-identical. Tests
+updated: replaced the buggy `test_k9_negative_amount_lightens` with a desaturation test +
+`test_k9_no_green_cast`. Regen script saved at `scripts/render_color_science_sheet.py`; output
+regenerated (`color_science_REVIEW_SHEET.png` shows clean film-density richening, no cast).
 
 ---
 
