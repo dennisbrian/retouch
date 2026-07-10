@@ -163,7 +163,6 @@ RECIPES = {
             "whiten_hue_stable": 1,
             "shine_removal": 0.70,
             "sculpt": 0.30,
-            "exposure_lock": 0.7,
         },
         "eyes": {
             "catchlight": 0.18,
@@ -214,7 +213,6 @@ RECIPES = {
             "chroma_even": 0.18,
             "whiten_hue_stable": 1,
             "shine_removal": 0.30,
-            "exposure_lock": 0.7,
             # Gentle relight for soft dimensional modeling — float-native so the
             # shading ramp stays smooth (no banding in the falloff).
             "relight": 0.22,
@@ -333,7 +331,6 @@ RECIPES = {
             "chroma_even": 0.15,
             "whiten_hue_stable": 1,
             "shine_removal": 0.30,
-            "exposure_lock": 0.7,
         },
         "eyes": {
             "dark_circles": 0.15,
@@ -431,7 +428,6 @@ RECIPES = {
             "chroma_even": 0.20,
             "whiten_hue_stable": 1,
             "shine_removal": 0.30,
-            "exposure_lock": 0.7,
             # Light sculpt: natural_polish_v1 omits this because at low
             # strength it reads as noise — but at 0.15 on already-unified
             # skin it adds just enough dimension to justify "showcase".
@@ -497,7 +493,6 @@ RECIPES = {
             "chroma_even": 0.50,
             "whiten_hue_stable": 1,
             "shine_removal": 0.30,
-            "exposure_lock": 0.7,
             "texture_transplant": 0.30,
             "sculpt": 0.18,
             "wrinkle_soften": 0.30,
@@ -1099,7 +1094,7 @@ RECIPES = {
         "skin": {
             "equalize": 0.08,
             "whiten_hue_stable": 1,
-            "micro_dodge_burn": 0.05,
+            "micro_db": 0.05,
         },
         "finish": {
             "fade_toe": 0.30,
@@ -1501,7 +1496,9 @@ RECIPES["studio_dream_v2"] = {
     "hair": {"shine": 0.40},  # Strong hair luminosity — signature of studio lighting
     # --- Phase 3-6: Film Simulation (Fuji Astia-inspired warmth) ---
     "film": {
-        "preset": "astia_inspired",  # Warm, saturated, slightly lifted blacks
+        # approximated astia_inspired film look
+        "enable": 1,
+        "strength": 0.6,  # soft, slightly warm, gentle contrast
         "shoulder": {"r": 0.05, "g": 0.02, "b": 0.02},  # Warm shoulder curve
         "midpoint": 0.48,  # Slightly lifted midtone
         "gamma": 0.95,  # Gentle toe lift
@@ -1583,7 +1580,9 @@ RECIPES["film_noir_cinema_v1"] = {
     "hair": {"shine": 0.10},  # Minimal shine (noir aesthetic)
     # --- Aggressive film simulation (Kodak Portra noir mood) ---
     "film": {
-        "preset": "portra_noir",
+        # approximated portra_noir film look
+        "enable": 1,
+        "strength": 0.8,  # high contrast, cool/desaturated
         "toe": {"r": 0.15, "g": 0.12, "b": 0.18},  # Lifted blacks, cool cast
         "shoulder": {"r": 0.02, "g": 0.01, "b": 0.01},  # Crushed highlights
         "midpoint": 0.50,  # Neutral midpoint
@@ -1664,7 +1663,9 @@ RECIPES["editorial_elegance_v1"] = {
     },
     # --- Film (Fuji Superia warmth + saturation) ---
     "film": {
-        "preset": "superia_warm",
+        # approximated superia_warm film look
+        "enable": 1,
+        "strength": 0.55,  # neutral-warm, mild
         "shoulder": {"r": 0.08, "g": 0.04, "b": 0.01},  # Warm highlights
         "midpoint": 0.48,
         "gamma": 0.92,
@@ -1741,7 +1742,9 @@ RECIPES["wedding_timeless_v1"] = {
     },
     # --- Film (Kodak Portra romance) ---
     "film": {
-        "preset": "portra_romance",
+        # approximated portra_romance film look
+        "enable": 1,
+        "strength": 0.5,  # soft warm, low contrast
         "toe": {"r": 0.05, "g": 0.04, "b": 0.03},  # Warm toe
         "shoulder": {"r": 0.04, "g": 0.03, "b": 0.02},  # Soft shoulder
         "midpoint": 0.48,
@@ -1821,7 +1824,9 @@ RECIPES["high_energy_glow_v1"] = {
     },
     # --- Film (Velvia vibrant saturation) ---
     "film": {
-        "preset": "velvia_vibrant",
+        # approximated velvia_vibrant film look
+        "enable": 1,
+        "strength": 0.85,  # punchy saturated
         "shoulder": {"r": 0.06, "g": 0.03, "b": 0.01},  # Warm highlights
         "midpoint": 0.46,  # Lifted (energetic)
         "gamma": 0.93,
@@ -1878,7 +1883,6 @@ RECIPES["minimal_film_v1"] = {
         "chroma_even": 0.10,
         "whiten_hue_stable": 1,
         "shine_removal": 0.20,
-        "exposure_lock": 0.7,
     },
     "eyes": {
         "dark_circles": 0.10,
@@ -1888,7 +1892,9 @@ RECIPES["minimal_film_v1"] = {
     # --- No makeup v2 (natural face) ---
     # --- Strong film to compensate for minimal face processing ---
     "film": {
-        "preset": "ektar_vibrant",
+        # approximated ektar_vibrant film look
+        "enable": 1,
+        "strength": 0.8,  # vibrant, slightly cool, high clarity
         "toe": {"r": 0.02, "g": 0.01, "b": 0.02},  # Minimal toe lift
         "shoulder": {"r": 0.06, "g": 0.04, "b": 0.02},  # Vibrant shoulders
         "midpoint": 0.50,
@@ -1955,9 +1961,8 @@ RECIPES["clear_skin_v1"] = {
         "hue_unify": 0.25,
         "chroma_even": 0.20,
         "whiten_hue_stable": 1,
-        "shine_removal": 0.30,
-        "exposure_lock": 0.7,
-    },
+            "shine_removal": 0.30,
+        },
     # Strength-aware under-eye shadow gate: lifts only genuine shadow,
     # scales with the local shadow strength (no flat brightening).
     "eyes": {
@@ -2026,9 +2031,8 @@ RECIPES["tired_eye_rescue_v1"] = {
         "hue_unify": 0.25,
         "chroma_even": 0.20,
         "whiten_hue_stable": 1,
-        "shine_removal": 0.30,
-        "exposure_lock": 0.7,
-    },
+            "shine_removal": 0.30,
+        },
     "eyes": {
         "undereye_shadow_strength": 0.7,
         "dark_circles": 0.20,
@@ -2070,9 +2074,8 @@ RECIPES["aniso_pore_real_v1"] = {
         "hue_unify": 0.30,
         "chroma_even": 0.25,
         "whiten_hue_stable": 1,
-        "shine_removal": 0.35,
-        "exposure_lock": 0.7,
-    },
+            "shine_removal": 0.35,
+        },
     "eyes": {"dark_circles": 0.12, "catchlight": 0.10, "iris": 0.10},
     "texture": {"opacity": 1.00},
     "sharpen": 14.0,

@@ -18,27 +18,56 @@ _VALID_KEYS.update(
     if spec.engine_recipe_key is not None
 )
 # Nested keys can be dicts (e.g., {"skin": {...}, "bloom": {...}})
-_VALID_NESTED_ROOTS = {"skin", "eyes", "lips", "hair", "bloom", "makeup", "frequency", "texture", "color_harmony", "finish", "body_skin", "background", "harmony", "ai"}
+_VALID_NESTED_ROOTS = {"skin", "eyes", "lips", "hair", "bloom", "makeup", "frequency", "texture", "color_harmony", "finish", "body_skin", "background", "harmony", "ai", "film", "eye", "undereye", "makeup_v2"}
+
+# Keys consumed directly by the engine (ad-hoc dict reads in recipes.py /
+# params.py) that are intentionally NOT registered as ParamSpecs. They are
+# legitimately live, so the dead-key audit must not flag them — but they are
+# the only such keys, and a key like ``film.preset`` or ``skin.exposure_lock``
+# is NOT here, so re-introducing those truly-dead keys still fails the audit.
+_ENGINE_DIRECT_KEYS = {"dodge_burn.amount", "eyes.iris", "eyes.teeth_whiten"}
+_VALID_KEYS.update(_ENGINE_DIRECT_KEYS)
+
+
+def _collect_leaf_paths(node, prefix=""):
+    """Yield dotted leaf paths, recursing into every nested dict.
+
+    Each scalar value becomes a leaf (``skin.micro_db``, ``film.enable``,
+    ``film.shoulder.r``). Container dicts are descended, never yielded as
+    leaves, so a nested-root key like ``skin`` is never itself flagged.
+    """
+    if isinstance(node, dict):
+        for key, value in node.items():
+            path = f"{prefix}.{key}" if prefix else key
+            if isinstance(value, dict):
+                yield from _collect_leaf_paths(value, path)
+            else:
+                yield path
+    else:
+        yield prefix
 
 
 def test_no_dead_recipe_keys():
-    """Verify that every recipe key resolves to a known ParamSpec.
+    """Verify that every recipe leaf key resolves to a known ParamSpec.
 
-    This catches misconfigurations like anime_crystal_void's 7 dead keys
-    (background_blur, background_desaturation, light_wrap, etc.) that
-    are silently ignored by the engine.
+    Recurses into nested dicts (keyed by ``_VALID_NESTED_ROOTS``) to build
+    dotted leaf paths (e.g. ``skin.micro_db``, ``frequency.nose_smooth``,
+    ``film.enable``, ``film.preset``) and compares each against the set of all
+    valid keys. A leaf path not in that set — and not ``extends`` or a
+    nested-root key — is a dead (silently-ignored) key. This catches
+    misconfigurations like ``film.preset`` or ``skin.exposure_lock`` that the
+    flat, non-recursing version could never see.
     """
     dead_keys_by_recipe = {}
 
     for recipe_name, recipe_dict in RECIPES.items():
-        # Skip "extends" since it's a meta key
         dead = []
-        for key in recipe_dict.keys():
-            if key == "extends":
+        for leaf in _collect_leaf_paths(recipe_dict):
+            # Top-level meta key, never a ParamSpec.
+            if leaf == "extends":
                 continue
-            # Check if it's a top-level param or a valid nested root
-            if key not in _VALID_KEYS and key not in _VALID_NESTED_ROOTS:
-                dead.append(key)
+            if leaf not in _VALID_KEYS:
+                dead.append(leaf)
 
         if dead:
             dead_keys_by_recipe[recipe_name] = dead
