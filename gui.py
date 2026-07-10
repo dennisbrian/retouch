@@ -26,6 +26,9 @@ from retouch.grading import list_available_presets
 from retouch.style_library import list_styles, save_style_profile, learn_dataset_style
 from retouch.batch_processor import BatchProcessor
 from retouch.style import StyleProfile
+from retouch.look_extractor import LookExtractor
+from retouch.recipe_cookbook import search_recipes, list_recipes
+from retouch.lut import get_registry
 
 _logger = logging.getLogger(__name__)
 
@@ -251,6 +254,7 @@ PROCESS_INPUT_KEYS = (
         "export_fmt", "export_quality", "export_res",
         "quality_tier",
         "debug_mode",
+        "look_params",
     ]
 )
 
@@ -479,6 +483,14 @@ def process_image(*args):
         },
     )
 
+    # F6: overlay extracted-look params over recipe defaults (look wins).
+    look_params = params.get("look_params")
+    if isinstance(look_params, dict):
+        for k, v in look_params.items():
+            if str(k).startswith("_"):
+                continue
+            engine_kwargs[k] = v
+
     for idx, path_item in enumerate(img_paths):
         try:
             curr_path = path_item
@@ -679,6 +691,98 @@ def reset_color_transfer():
 
 def reset_debug(recipe_name):
     return False
+
+
+def _resolve_image_path(value):
+    """Best-effort extraction of a filesystem path from a Gradio input value."""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value.get("name") or value.get("path")
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return None
+        return _resolve_image_path(value[0])
+    if hasattr(value, "name"):
+        return value.name
+    return str(value)
+
+
+def on_extract_look(look_ref_file, img_input):
+    """F6 — Extract an editable look from a reference image.
+
+    Loads the uploaded reference, optionally pairs it with the main input
+    image as the base, runs ``LookExtractor.extract``, strips ``_``-prefixed
+    keys (internal transport params) and returns the cleaned ``engine_params``
+    dict for storage in the hidden ``look_params`` State. The subsequent
+    Process call overlays these params over the recipe defaults (look wins).
+    Failures are reported without raising.
+    """
+    if look_ref_file is None:
+        return {}, "Please upload a reference image first."
+
+    ref_path = _resolve_image_path(look_ref_file)
+    if not ref_path:
+        return {}, "Could not resolve the reference image path."
+
+    try:
+        ref_bgr = imread_exif(ref_path)
+    except (TypeError, FileNotFoundError, OSError) as e:
+        _logger.warning("Extract Look: failed to load reference %s: %s", ref_path, e)
+        return {}, f"Extract Look failed to load reference: {e}"
+
+    base_bgr = None
+    base_path = _resolve_image_path(img_input)
+    if base_path:
+        try:
+            base_bgr = imread_exif(base_path)
+        except (TypeError, FileNotFoundError, OSError) as e:
+            _logger.warning("Extract Look: failed to load base %s: %s", base_path, e)
+            base_bgr = None
+
+    try:
+        result = LookExtractor().extract(ref_bgr, base_bgr)
+    except Exception as e:
+        _logger.exception("LookExtractor failed: %s", e)
+        return {}, f"Extract Look failed: {e}"
+
+    engine_params = result.get("engine_params") or {}
+    clean = {k: v for k, v in engine_params.items() if not str(k).startswith("_")}
+    mode = result.get("mode", "unknown")
+    return clean, f"Look extracted ({mode}) — {len(clean)} params. Click Process to apply."
+
+
+def on_search_recipes(query):
+    """T4 — Search the recipe cookbook and populate a dropdown's choices.
+
+    Returns a ``gr.update`` for the cookbook dropdown plus a status string.
+    """
+    try:
+        results = search_recipes(query or "")
+    except Exception as e:
+        _logger.exception("Recipe search failed: %s", e)
+        return gr.update(choices=[]), f"Recipe search failed: {e}"
+
+    choices = [r.name for r in results]
+    msg = f"Found {len(results)} recipe(s) matching '{query}'." if query else f"{len(results)} recipes available."
+    return gr.update(choices=choices, value=None), msg
+
+
+def on_select_cookbook(name):
+    """T4 — Apply a cookbook recipe selection to the active recipe Radio."""
+    if not name:
+        return gr.update(), ""
+    return gr.update(value=name), f"Selected recipe: {name}"
+
+
+def on_reload_luts():
+    """Trigger a LUT registry reload (clears cache, re-scans luts dir)."""
+    try:
+        get_registry().reload()
+        return "LUTs reloaded successfully."
+    except Exception as e:
+        _logger.warning("LUT reload failed: %s", e)
+        return f"LUT reload failed: {e}"
 
 
 def on_smart_process(img_paths, recipe, *args, prg=gr.Progress()):
@@ -1510,6 +1614,13 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             info="Select an extracted style from your library"
                         )
 
+                        with gr.Accordion("📖 Recipe Cookbook (87 recipes)", open=False):
+                            cookbook_search = gr.Textbox(label="Search Recipes", placeholder="e.g. cosplay, portrait, fuji", scale=3)
+                            with gr.Row():
+                                cookbook_search_btn = gr.Button("🔍 Search Recipes", variant="secondary", size="sm", elem_classes=["secondary-btn"])
+                            cookbook_dropdown = gr.Dropdown(label="Cookbook Recipe", choices=[], interactive=True, value=None, allow_custom_value=False, info="Pick a recipe from the cookbook to load it")
+                            cookbook_status = gr.Markdown("")
+
                         show_compare = gr.Checkbox(label="Show side-by-side comparison screen", value=True, info="Split view: original | separator | retouched result")
 
                         with gr.Row():
@@ -1631,6 +1742,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         _reshape_neck_length_state = gr.State(value=0.0)
                         _neural_stray_hair_boost_state = gr.State(value=0)
                         _neural_defect_boost_state = gr.State(value=0)
+                        _look_params_state = gr.State(value={})
                         status = gr.Textbox(label="Status", interactive=False, placeholder="Upload an image and click Process to start...")
                         smart_analysis_html = gr.HTML(visible=True)
                         qa_status = gr.HTML(visible=True)
@@ -1824,6 +1936,17 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             color_ref_img = gr.Image(type="filepath", label="Reference Image", show_label=True, height=160)
                             color_ref_strength = gr.Slider(0.0, 1.0, 1.0, step=0.05, label="Transfer Strength", info="Mix ratio between original grade and matched reference grade (1.0 = full transfer, 0.0 = no transfer)")
 
+                        with gr.Accordion("🎨 Look Extractor (F6)", open=False):
+                            gr.Markdown("Upload a reference image to reverse-engineer an editable tone/color look. The extracted params are applied on the next Process (overriding recipe defaults).")
+                            look_ref_file = gr.File(label="Reference Image (look source)", file_types=["image"], file_count="single")
+                            look_extract_btn = gr.Button("✨ Extract Look", variant="secondary", size="sm", elem_classes=["secondary-btn"])
+                            look_status = gr.Markdown("")
+
+                        with gr.Accordion("🎞️ LUT Library", open=False):
+                            gr.Markdown("Hot-reload the 3D LUT registry after adding/removing `.cube` files in the luts directory.")
+                            reload_luts_btn = gr.Button("🔄 Reload LUTs", variant="secondary", size="sm", elem_classes=["secondary-btn"])
+                            reload_luts_status = gr.Markdown("")
+
                         with gr.Accordion("🔍 Debug & Mask Preview", open=False):
                             reset_debug_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                             debug_mode = gr.Checkbox(label="Generate Debug Masks", value=False, info="Save skin/lips/frequency-layer masks and display them for tuning")
@@ -2015,6 +2138,32 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         outputs=[debug_mode]
     )
 
+    # F6: Look Extractor wiring
+    look_extract_btn.click(
+        fn=on_extract_look,
+        inputs=[look_ref_file, img_input],
+        outputs=[_look_params_state, look_status],
+    )
+
+    # T4: Recipe Cookbook wiring
+    cookbook_search_btn.click(
+        fn=on_search_recipes,
+        inputs=[cookbook_search],
+        outputs=[cookbook_dropdown, cookbook_status],
+    )
+    cookbook_dropdown.change(
+        fn=on_select_cookbook,
+        inputs=[cookbook_dropdown],
+        outputs=[recipe, cookbook_status],
+    )
+
+    # LUT hot-reload wiring
+    reload_luts_btn.click(
+        fn=on_reload_luts,
+        inputs=[],
+        outputs=[reload_luts_status],
+    )
+
 
     save_style_btn.click(
         fn=on_save_style,
@@ -2082,6 +2231,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         export_fmt, export_quality, export_res,
         quality_tier,
         debug_mode,
+        _look_params_state,
     ]
     _process_outputs = [img_output, compare_viewer, _original_state, export_file, status, debug_gallery, debug_panel, qa_status]
 
