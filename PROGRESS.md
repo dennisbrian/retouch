@@ -195,6 +195,26 @@
 - `tests/test_geometry.py` +16 pass (155 geometry+params total); regression backdrop/fabric/eyes/skin 130 pass.
   **[VISUAL QA PENDING]** — Visual-Critical (`geometry.py`).
 
+### 11. One-click auto body reshape (auto-gap #7, 2026-07-10 — UNCOMMITTED)
+- **`suggest_body_reshape(pose_ctx)`** (new, `retouch/body_reshape.py`): returns 0–100 suggestions
+  (50 = neutral) for `arm_length`/`leg_length`/`torso_width`/`shoulder_width`/`hip_width`. Gentle,
+  capped corrections toward balanced proportions (shoulder:hip ~1.3, leg:torso ~1.2, arm:torso ~1.0).
+  Guards: no landmarks / low-visibility / disabled `feature_flags` → all 50.0.
+- **`auto_body_reshape`** (0–100, `cli_type=float`): `ParamSpec` (`cli_flag="auto-body-reshape"`,
+  `recipe_key="body_reshape.auto"`, `conversion="gui_direct"`) wired `params.py`→`engine.py`
+  (`ProcessingContext.auto_body_reshape` default 0 + `process()` kwarg + overrides entry)→
+  `_stage_body_reshape`. When `> 0`, the stage detects pose on the uint8 frame, blends
+  `centered = (suggested − 50)·(auto/100) + (manual − 50)`, and proceeds (no early-return even if
+  manual sliders are neutral); falls back to manual-only early-return only if pose detection finds
+  nothing. `retouch()` forwards via `**kwargs`.
+- **Manual + auto combine additively** in centered (−50..+50) space: auto supplies a proportion-based
+  offset scaled by strength; manual slider offsets add on top, so a user can fine-tune the auto result.
+- `tests/test_body_reshape.py` 8 pass (7 heuristics + 1 ParamSpec; **no MediaPipe model load**);
+  full suite green: `test_body_reshape`+`test_params` 140, regression `test_geometry/backdrop/fabric/eyes/skin` 153.
+  **[VISUAL QA PENDING]** — real-photo pass deferred until a pose model is available.
+- **Auto-gap backlog status**: #1 DONE, #2 DONE, #3 DONE, #4 DONE, #6 DONE, #7 DONE (all uncommitted);
+  #5 parked (A4-gated — needs a hair-strand segmentation model / evidence gate).
+
 ## Last updated
 2026-07-10 (end of day) — four discovery passes documented in MASTER_PLAN.md Post-plan section:
 RAW processing (`PLAN_RAW_PROCESSING.md` + T5 audit), auto-gap backlog (owner request),

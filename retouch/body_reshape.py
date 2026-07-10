@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Optional, Tuple, List, Any
+from typing import Optional, Tuple, List, Any, Dict
 
 import cv2
 import mediapipe as mp
@@ -607,6 +607,96 @@ class BodyReshaper:
             reshaped = reshaped.astype(orig_dtype)
 
         return reshaped
+
+def suggest_body_reshape(pose_ctx: PoseContext) -> Dict[str, float]:
+    """Suggest balanced T3 body-reshape proportions from detected pose.
+
+    Returns 0-100 values (50 = no change) for keys
+    ``arm_length``, ``leg_length``, ``torso_width``, ``shoulder_width``,
+    ``hip_width``. Corrections are SMALL and conservative — they nudge the
+    figure toward balanced proportions, never toward extremes.
+
+    Args:
+        pose_ctx: detected pose (33 normalized [0,1]² landmarks, optional
+            visibility + per-feature ``feature_flags``).
+
+    Returns:
+        Dict with the five suggested 0-100 values. All 50.0 (neutral) when
+        the pose is unusable.
+    """
+    keys = ("arm_length", "leg_length", "torso_width", "shoulder_width", "hip_width")
+    neutral: Dict[str, float] = {k: 50.0 for k in keys}
+
+    lm = pose_ctx.landmarks
+    vis = pose_ctx.visibility
+    flags = pose_ctx.feature_flags or {}
+    if lm is None or len(lm) < 29:
+        return neutral
+
+    def dist(i: int, j: int) -> float:
+        x1, y1 = lm[i]
+        x2, y2 = lm[j]
+        return float(((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5)
+
+    def mid(i: int, j: int) -> Tuple[float, float]:
+        x1, y1 = lm[i]
+        x2, y2 = lm[j]
+        return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+
+    def dist_pt(p: Tuple[float, float], q: Tuple[float, float]) -> float:
+        return float(((q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2) ** 0.5)
+
+    def vis_ok(i: int) -> bool:
+        if vis is None or i >= len(vis):
+            return True
+        return float(vis[i]) >= _VISIBILITY_THRESHOLD
+
+    result = dict(neutral)
+
+    # --- Shoulder : hip width ratio (ideal ~1.3) ---
+    if (
+        vis_ok(11) and vis_ok(12) and vis_ok(23) and vis_ok(24)
+        and flags.get("shoulder_width", True) and flags.get("hip_width", True)
+    ):
+        sh_w = dist(11, 12)
+        hp_w = dist(23, 24)
+        if sh_w > 1e-6 and hp_w > 1e-6:
+            ratio = sh_w / hp_w
+            ideal = 1.3
+            dev = (ratio - ideal) / ideal  # + = shoulders wide vs hips
+            delta = float(np.clip(dev * 60.0, -30.0, 30.0))
+            # shoulders wide -> narrow shoulders, widen hips (opposite nudges)
+            result["shoulder_width"] = 50.0 - delta
+            result["hip_width"] = 50.0 + delta
+
+    # --- Torso length / leg length (need ankles) ---
+    if vis_ok(11) and vis_ok(12) and vis_ok(23) and vis_ok(24) and vis_ok(27) and vis_ok(28):
+        torso = dist_pt(mid(11, 12), mid(23, 24))
+        leg = dist_pt(mid(23, 24), mid(27, 28))
+        if torso > 1e-6 and leg > 1e-6:
+            # --- Leg : torso ratio (ideal ~1.2) ---
+            if flags.get("leg_length", True):
+                ratio = leg / torso
+                ideal = 1.2
+                dev = (ratio - ideal) / ideal  # - = legs short vs torso
+                delta = float(np.clip(dev * 40.0, -30.0, 30.0))
+                result["leg_length"] = 50.0 - delta
+
+            # --- Arm : torso ratio (ideal ~1.0) ---
+            if flags.get("arm_length", True):
+                arm = (dist(11, 15) + dist(12, 16)) / 2.0
+                if arm > 1e-6:
+                    ratio = arm / torso
+                    ideal = 1.0
+                    dev = (ratio - ideal) / ideal  # - = arms short vs torso
+                    delta = float(np.clip(dev * 40.0, -20.0, 20.0))
+                    result["arm_length"] = 50.0 - delta
+
+    # Clamp to a safe band; torso_width stays neutral (no auto heuristic).
+    for k in keys:
+        result[k] = float(np.clip(result[k], 20.0, 80.0))
+    return result
+
 
     @staticmethod
     def _max_radius_for_warps(

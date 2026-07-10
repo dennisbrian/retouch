@@ -2169,6 +2169,16 @@ _BODY_RESHAPE_PARAMS = [
         min_val=0,
         max_val=100,
     ),
+    ParamSpec(
+        name="auto_body_reshape",
+        cli_flag="auto-body-reshape",
+        cli_type=float,
+        default=0.0,
+        recipe_key="body_reshape.auto",
+        conversion="gui_direct",
+        min_val=0,
+        max_val=100,
+    ),
 ]
 
 

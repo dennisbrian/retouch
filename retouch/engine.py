@@ -442,6 +442,7 @@ class ProcessingContext:
     body_reshape_torso_width: float = 50.0
     body_reshape_shoulder_width: float = 50.0
     body_reshape_hip_width: float = 50.0
+    auto_body_reshape: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -1002,6 +1003,8 @@ class RetouchEngine:
         body_reshape_torso_width: Optional[float] = None,
         body_reshape_shoulder_width: Optional[float] = None,
         body_reshape_hip_width: Optional[float] = None,
+        # --- T3: Auto body reshape (one-click) ---
+        auto_body_reshape: Optional[float] = None,
     ) -> ProcessingResult:
         """Process a single image through the full Retouch pipeline.
 
@@ -1206,6 +1209,7 @@ class RetouchEngine:
             "body_reshape_torso_width": body_reshape_torso_width,
             "body_reshape_shoulder_width": body_reshape_shoulder_width,
             "body_reshape_hip_width": body_reshape_hip_width,
+            "auto_body_reshape": auto_body_reshape,
             "mv2_eyeshadow": mv2_eyeshadow,
             "mv2_eyeshadow_color": mv2_eyeshadow_color,
             "mv2_eyeshadow_style": mv2_eyeshadow_style,
@@ -3759,7 +3763,7 @@ class RetouchEngine:
         Returns:
             (H, W, 3) body-reshaped image, same dtype as input.
         """
-        from .body_reshape import BodyReshaper
+        from .body_reshape import BodyReshaper, suggest_body_reshape
 
         # Check if any body_reshape params are active (non-default)
         arm_len = (ctx.body_reshape_arm_length - 50.0)  # Center at 50.0
@@ -3768,7 +3772,10 @@ class RetouchEngine:
         shoulder_w = (ctx.body_reshape_shoulder_width - 50.0)
         hip_w = (ctx.body_reshape_hip_width - 50.0)
 
-        if not any([arm_len, leg_len, torso_w, shoulder_w, hip_w]):
+        # Early-return: manual-only path when auto is off and all sliders neutral.
+        if ctx.auto_body_reshape <= 0 and not any(
+            [arm_len, leg_len, torso_w, shoulder_w, hip_w]
+        ):
             return img
 
         # Ensure uint8 for reshaper (it will preserve dtype on output)
@@ -3779,6 +3786,25 @@ class RetouchEngine:
             img_u8 = img
 
         reshaper = BodyReshaper()
+
+        # One-click auto: detect pose, suggest balanced proportions, and blend
+        # the suggestion (scaled by strength) with any manual slider offsets.
+        if ctx.auto_body_reshape > 0:
+            pose = reshaper.detector.detect(img_u8)
+            if pose.landmarks is None:
+                # No pose detected -> fall back to manual-only behavior.
+                if not any([arm_len, leg_len, torso_w, shoulder_w, hip_w]):
+                    return img
+            else:
+                scale = ctx.auto_body_reshape / 100.0
+                sugg = suggest_body_reshape(pose)
+                arm_len += (sugg["arm_length"] - 50.0) * scale
+                leg_len += (sugg["leg_length"] - 50.0) * scale
+                torso_w += (sugg["torso_width"] - 50.0) * scale
+                shoulder_w += (sugg["shoulder_width"] - 50.0) * scale
+                hip_w += (sugg["hip_width"] - 50.0) * scale
+                reshaper.pose_ctx = pose
+
         result_u8 = reshaper.reshape(
             img_u8,
             arm_length=arm_len,
