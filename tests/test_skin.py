@@ -1021,3 +1021,124 @@ class TestSmoothUndereyeShadow:
         assert d_high > 0, "high strength should treat a mild dark circle"
         assert d_low == 0, "low strength should skip (coverage below the gate)"
 
+
+class _FakeWrinkleRegions:
+    """Minimal FaceRegions stub for wrinkle softening (no MediaPipe/ONNX)."""
+
+    def __init__(self, h: int = 128, w: int = 128) -> None:
+        self.skin = np.zeros((h, w), dtype=np.float32)
+        self.skin[:] = 1.0
+        self.hair = None
+        self.left_eyebrow = None
+        self.right_eyebrow = None
+        self.left_eye = None
+        self.right_eye = None
+        self.forehead = np.zeros((h, w), dtype=np.float32)
+        self.forehead[20:40, 30:98] = 1.0
+        self.nasolabial_l = np.zeros((h, w), dtype=np.float32)
+        self.nasolabial_l[60:80, 45:65] = 1.0
+        self.nasolabial_r = np.zeros((h, w), dtype=np.float32)
+        self.nasolabial_r[60:80, 63:83] = 1.0
+        self.neck = np.zeros((h, w), dtype=np.float32)
+        self.neck[90:110, 40:88] = 1.0
+
+
+class TestPerRegionWrinkle:
+    """Backlog #4: per-region wrinkle sliders (forehead / nasolabial / neck)."""
+
+    @staticmethod
+    def _img_with_lines() -> np.ndarray:
+        img = np.full((128, 128, 3), 140, dtype=np.uint8)
+        cv2.line(img, (30, 30), (98, 30), (30, 30, 30), 5)   # forehead zone
+        cv2.line(img, (45, 70), (65, 70), (30, 30, 30), 4)   # nasolabial zone
+        cv2.line(img, (40, 100), (88, 100), (30, 30, 30), 5)  # neck zone
+        return img
+
+    @staticmethod
+    def _lab_L(canvas: np.ndarray) -> np.ndarray:
+        return cv2.cvtColor(canvas, cv2.COLOR_BGR2LAB).astype(np.float32)[:, :, 0]
+
+    def test_forehead_only_softens_forehead(self, proc):
+        regions = _FakeWrinkleRegions()
+        img = self._img_with_lines()
+        out = proc.wrinkle_soften(
+            img, regions, 0,
+            region_strengths={"forehead": 100, "nasolabial": 0, "neck": 0},
+        )
+        L_in = self._lab_L(img)
+        L_out = self._lab_L(out)
+        # Forehead line brightened.
+        assert L_out[30, 30:98].mean() > L_in[30, 30:98].mean()
+        # Neck line (unrelated region) left sharper — residual depth preserved.
+        assert L_out[100, 40:88].mean() < L_in[100, 40:88].mean() + 1.0
+
+    def test_nasolabial_only_softens_nasolabial(self, proc):
+        regions = _FakeWrinkleRegions()
+        img = self._img_with_lines()
+        out = proc.wrinkle_soften(
+            img, regions, 0,
+            region_strengths={"forehead": 0, "nasolabial": 100, "neck": 0},
+        )
+        L_in = self._lab_L(img)
+        L_out = self._lab_L(out)
+        assert L_out[66:74, 45:83].mean() > L_in[66:74, 45:83].mean()
+        # Forehead line untouched.
+        assert L_out[30, 30:98].mean() < L_in[30, 30:98].mean() + 1.0
+
+    def test_neck_only_softens_neck(self, proc):
+        regions = _FakeWrinkleRegions()
+        img = self._img_with_lines()
+        out = proc.wrinkle_soften(
+            img, regions, 0,
+            region_strengths={"forehead": 0, "nasolabial": 0, "neck": 100},
+        )
+        L_in = self._lab_L(img)
+        L_out = self._lab_L(out)
+        assert L_out[100, 40:88].mean() > L_in[100, 40:88].mean()
+        # Forehead line untouched.
+        assert L_out[30, 30:98].mean() < L_in[30, 30:98].mean() + 1.0
+
+    def test_global_strength_backward_compat(self, proc):
+        regions = _FakeWrinkleRegions()
+        img = self._img_with_lines()
+        out = proc.wrinkle_soften(img, regions, 100)
+        L_in = self._lab_L(img)
+        L_out = self._lab_L(out)
+        # Global union path softens all zones (forehead here).
+        assert L_out[30, 30:98].mean() > L_in[30, 30:98].mean()
+
+    def test_region_strengths_precedence_over_global(self, proc):
+        # When any region strength > 0, the per-region path runs and the global
+        # `strength` is ignored for ALL regions (no double-application). Pass
+        # global=100 + only neck>0: forehead must stay untouched despite global.
+        regions = _FakeWrinkleRegions()
+        img = self._img_with_lines()
+        out = proc.wrinkle_soften(
+            img, regions, 100,
+            region_strengths={"forehead": 0, "nasolabial": 0, "neck": 100},
+        )
+        L_in = self._lab_L(img)
+        L_out = self._lab_L(out)
+        # Forehead (not in active set) untouched because global is ignored.
+        assert L_out[30, 30:98].mean() < L_in[30, 30:98].mean() + 1.0
+        # Neck (active) softened.
+        assert L_out[100, 40:88].mean() > L_in[100, 40:88].mean()
+
+    def test_all_zero_is_noop(self, proc):
+        regions = _FakeWrinkleRegions()
+        img = self._img_with_lines()
+        out = proc.wrinkle_soften(
+            img, regions, 0,
+            region_strengths={"forehead": 0, "nasolabial": 0, "neck": 0},
+        )
+        assert np.array_equal(out, img)
+
+    def test_runs_without_error_each_region(self, proc):
+        regions = _FakeWrinkleRegions()
+        img = np.full((128, 128, 3), 140, dtype=np.uint8)
+        for key in ("forehead", "nasolabial", "neck"):
+            rs = {k: (100 if k == key else 0) for k in ("forehead", "nasolabial", "neck")}
+            out = proc.wrinkle_soften(img, regions, 0, region_strengths=rs)
+            assert out.shape == img.shape
+            assert out.dtype == np.uint8
+

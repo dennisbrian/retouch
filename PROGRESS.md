@@ -166,6 +166,18 @@
   `to_uint8`, both paths)→`ProcessingContext` + `process()` kwarg + overrides entry + `retouch()` wrapper.
   `tests/test_fabric.py` 7/7 pass. **[VISUAL QA PENDING]** — Visual-Critical-adjacent.
 
+### 9. Per-region wrinkle sliders (2026-07-10 — UNCOMMITTED)
+- **`wrinkle_soften_forehead` / `wrinkle_soften_nasolabial` / `wrinkle_soften_neck`** (0–100, `cli_type=float`):
+  `retouch/skin.py::wrinkle_soften` split into `_wrinkle_soften_masked` (scoped to one zone-mask) run
+  per-region via `region_strengths={"forehead","nasolabial","neck"}`. Region path uses attrs
+  `("forehead",)`, `("nasolabial_l","nasolabial_r")`, `("neck",)`; eye/hair/eyebrow exclusion kept per-region.
+  Any region strength > 0 takes the per-region path (global `strength` ignored for those regions); all-zero/`None`
+  falls back to the global union path → `skin.wrinkle_soften` recipes stay backward compatible. Three `ParamSpec`s
+  (`cli_flag="wrinkle-soften-*"`, `recipe_key="skin.wrinkle_soften_*"`, `conversion="recipe_pct"`) wired
+  `params.py`→`engine.py` (`ProcessingContext` fields + `process()` kwargs + overrides entries + `retouch()`
+  wrapper)→`perf_optimizations.py` builds `region_strengths` from `ctx`. `tests/test_skin.py::TestPerRegionWrinkle`
+  pass. **[VISUAL QA PENDING]** — Visual-Critical (`skin.py`).
+
 ## Last updated
 2026-07-10 (end of day) — four discovery passes documented in MASTER_PLAN.md Post-plan section:
 RAW processing (`PLAN_RAW_PROCESSING.md` + T5 audit), auto-gap backlog (owner request),

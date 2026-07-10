@@ -547,6 +547,8 @@ class SkinProcessor:
         img_bgr: np.ndarray,
         regions: Any,
         strength: float = 0,
+        *,
+        region_strengths: Optional[dict] = None,
     ) -> np.ndarray:
         """Ridge-aware wrinkle and line softening via black-hat morphology.
 
@@ -555,15 +557,73 @@ class SkinProcessor:
         the ridge signal from the L channel. Depth is capped at 60% reduction
         to preserve natural facial geometry.
 
+        Per-region refinement via ``region_strengths`` is supported. When any
+        region strength is > 0 the per-region path runs (the global ``strength``
+        is ignored for those regions); otherwise the global union path runs.
+
         Args:
             img_bgr: (H, W, 3) uint8 BGR image.
             regions: FaceRegions object with wrinkle zones.
-            strength: 0–100 wrinkle softening intensity.
+            strength: 0–100 global wrinkle softening intensity (union of all zones).
+            region_strengths: optional dict
+                ``{"forehead": float, "nasolabial": float, "neck": float}``
+                (each 0–100). Any value > 0 triggers per-region processing.
 
         Returns:
             (H, W, 3) uint8 BGR image.
         """
-        if strength <= 0 or regions is None or getattr(regions, "skin", None) is None:
+        if regions is None or getattr(regions, "skin", None) is None:
+            return img_bgr
+
+        # Region path: any region strength > 0 takes precedence over global.
+        rs = region_strengths or {}
+        region_map = {
+            "forehead": ("forehead",),
+            "nasolabial": ("nasolabial_l", "nasolabial_r"),
+            "neck": ("neck",),
+        }
+        active = {
+            k: float(v) for k, v in rs.items()
+            if k in region_map and float(v) > 0
+        }
+        if active:
+            canvas = img_bgr
+            for key, attrs in region_map.items():
+                if key not in active:
+                    continue
+                canvas = self._wrinkle_soften_masked(
+                    canvas, regions, active[key], attrs
+                )
+            return canvas
+
+        # Global fallback (backward compatible with recipes setting strength).
+        if strength <= 0:
+            return img_bgr
+        return self._wrinkle_soften_masked(
+            img_bgr, regions, strength,
+            ("forehead", "nasolabial_l", "nasolabial_r",
+             "crows_feet_l", "crows_feet_r", "neck"),
+        )
+
+    def _wrinkle_soften_masked(
+        self,
+        img_bgr: np.ndarray,
+        regions: Any,
+        strength: float,
+        attrs: tuple,
+    ) -> np.ndarray:
+        """Ridge-aware wrinkle softening scoped to a specific mask (one region or union).
+
+        Args:
+            img_bgr: (H, W, 3) uint8 BGR image.
+            regions: FaceRegions object with wrinkle zones.
+            strength: 0–100 wrinkle softening intensity.
+            attrs: tuple of FaceRegions attr names to union for the treatment mask.
+
+        Returns:
+            (H, W, 3) uint8 BGR image.
+        """
+        if strength <= 0:
             return img_bgr
 
         is_float = img_bgr.dtype == np.float32
@@ -577,10 +637,9 @@ class SkinProcessor:
         wrinkle_length = int(face_height * 0.2)
         wrinkle_length = max(wrinkle_length, 8)
 
-        # Build wrinkle-eligible mask: union of all wrinkle zones
+        # Build wrinkle-eligible mask: union of the requested zones
         wrinkle_mask_attrs = []
-        for attr in ("forehead", "nasolabial_l", "nasolabial_r",
-                     "crows_feet_l", "crows_feet_r", "neck"):
+        for attr in attrs:
             if hasattr(regions, attr):
                 wrinkle_mask_attrs.append(attr)
 

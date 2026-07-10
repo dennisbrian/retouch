@@ -767,9 +767,16 @@ def _process_face_core(
         canvas = shadow_lifter.lift(canvas, lift_mask, strength=ctx.shadow_lift)
 
     # ---- Wrinkle & line softening ----
-    if ctx.wrinkle_soften > 0:
+    region_strengths = {
+        "forehead": ctx.wrinkle_soften_forehead,
+        "nasolabial": ctx.wrinkle_soften_nasolabial,
+        "neck": ctx.wrinkle_soften_neck,
+    }
+    if ctx.wrinkle_soften > 0 or any(v > 0 for v in region_strengths.values()):
         canvas = _tr('wrinkle_soften', canvas)
-        canvas = skin.wrinkle_soften(canvas, regions, ctx.wrinkle_soften)
+        canvas = skin.wrinkle_soften(
+            canvas, regions, ctx.wrinkle_soften, region_strengths=region_strengths
+        )
 
     # ---- Texture transplant (pore realism v2) ----
     if ctx.texture_transplant > 0:

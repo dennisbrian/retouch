@@ -207,6 +207,9 @@ class ProcessingContext:
     smooth_exposure_lock: float = 0.0
     shine_removal: float = 0.0
     wrinkle_soften: float = 0.0
+    wrinkle_soften_forehead: float = 0.0
+    wrinkle_soften_nasolabial: float = 0.0
+    wrinkle_soften_neck: float = 0.0
     texture_transplant: float = 0.0
     body_smooth: float = 0.0
     body_equalize: float = 0.0
@@ -876,6 +879,9 @@ class RetouchEngine:
         skin_glow: Optional[float] = None,
         shine_removal: Optional[float] = None,
         wrinkle_soften: Optional[float] = None,
+        wrinkle_soften_forehead: Optional[float] = None,
+        wrinkle_soften_nasolabial: Optional[float] = None,
+        wrinkle_soften_neck: Optional[float] = None,
         texture_transplant: Optional[float] = None,
         body_smooth: Optional[float] = None,
         body_equalize: Optional[float] = None,
@@ -1092,6 +1098,9 @@ class RetouchEngine:
             "skin_glow": skin_glow,
             "shine_removal": shine_removal,
             "wrinkle_soften": wrinkle_soften,
+            "wrinkle_soften_forehead": wrinkle_soften_forehead,
+            "wrinkle_soften_nasolabial": wrinkle_soften_nasolabial,
+            "wrinkle_soften_neck": wrinkle_soften_neck,
             "texture_transplant": texture_transplant,
             "body_smooth": body_smooth,
             "body_equalize": body_equalize,
@@ -4061,6 +4070,9 @@ def retouch(
     eye_sclera_vessel_remove: float = 0.0,
     backdrop_cleanup: float = 0.0,
     fabric_wrinkle_smooth: float = 0.0,
+    wrinkle_soften_forehead: float = 0.0,
+    wrinkle_soften_nasolabial: float = 0.0,
+    wrinkle_soften_neck: float = 0.0,
     contrast: float = 0,
     preset: Optional[str] = None,
     **kwargs,
@@ -4079,5 +4091,8 @@ def retouch(
             contrast=contrast,
             preset=preset,
             fabric_wrinkle_smooth=fabric_wrinkle_smooth,
+            wrinkle_soften_forehead=wrinkle_soften_forehead,
+            wrinkle_soften_nasolabial=wrinkle_soften_nasolabial,
+            wrinkle_soften_neck=wrinkle_soften_neck,
             **kwargs,
         )
