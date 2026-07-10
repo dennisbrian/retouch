@@ -524,6 +524,7 @@ class FrequencySeparator:
         skin_mask: Optional[np.ndarray] = None,
         smooth_strength: float = 0.5,
         mid_reduction: float = 0.4,
+        blotch_reduction: float = 0.0,
         texture_opacity: float = 1.0,
         face_width: Optional[float] = None,
         pore_synthesis: float = 0.0,
@@ -646,6 +647,26 @@ class FrequencySeparator:
         if mid_reduction > 0:
             mid = mid * (1.0 - m_3d * mid_reduction)
 
+        # --- Dedicated blotch band (R4 — D&B v2: dedicated blotch-band) ---
+        # Broad pigment/redness blotches (wavelengths ~13-40px) live in the LOW
+        # band, which S2 only *smooths* (blending blotches together) rather than
+        # *evens*. We carve a dedicated broad band as blur(k_a) - low, where
+        # k_a > k_low. Because both terms pass the lowest frequencies (true
+        # form/shading) almost equally, the difference cancels them *by
+        # construction* — so removing this band from LOW evens blotches without
+        # flattening facial form. Pores (below k_low) are absent from LOW
+        # entirely, so they survive untouched. This gives independent control
+        # of broad blotch evening (this lever) versus fine blemish reduction
+        # (mid_reduction), which until now shared one band. No-op when 0.
+        if blotch_reduction > 0 and face_width:
+            k_a = adaptive_ksize(face_width, factor=0.32, minimum=17)
+            base = low + mid_original + high
+            blur_a = cv2.GaussianBlur(base, (k_a, k_a), 0)
+            # Band = LOW minus a broader blur → the broad component that the
+            # broader blur removed. Pushing LOW toward blur_a evens it.
+            blotch_band = layers.low[y1:y2, x1:x2] - blur_a
+            low = low - m_3d * blotch_reduction * blotch_band
+
         # Early exit for no-smoothing case
         if smooth_strength <= 0:
             processed_crop = low + mid + high
@@ -760,6 +781,7 @@ def combine(
     skin_mask: Optional[np.ndarray] = None,
     smooth_strength: float = 0.5,
     mid_reduction: float = 0.4,
+    blotch_reduction: float = 0.0,
     texture_opacity: float = 1.0,
     face_width: Optional[float] = None,
     pore_synthesis: float = 0.0,
@@ -774,6 +796,7 @@ def combine(
         skin_mask=skin_mask,
         smooth_strength=smooth_strength,
         mid_reduction=mid_reduction,
+        blotch_reduction=blotch_reduction,
         texture_opacity=texture_opacity,
         face_width=face_width,
         pore_synthesis=pore_synthesis,
