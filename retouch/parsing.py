@@ -593,10 +593,20 @@ class FaceParser:
             0, 1
         )
 
-        # For sub-skin highlights/contours, intersect them with the skin mask to be perfectly clean
+        # For sub-skin highlights/contours, intersect them with the skin mask to be perfectly clean.
+        # The forehead band sits above the skin region (hairline), so it must be clipped to the
+        # broader face_oval (which includes the upper-face label) rather than skin, else it vanishes.
+        _face_oval = getattr(regions, 'face_oval', None)
         for attr in ['nose_bridge', 'forehead_center', 'cheek_highlights_l', 'cheek_highlights_r', 'jawline_contour', 'left_under_eye', 'right_under_eye', 'left_cheek', 'right_cheek', 'forehead', 'nasolabial_l', 'nasolabial_r', 'crows_feet_l', 'crows_feet_r']:
             val = getattr(regions, attr)
-            if val is not None:
+            if val is None:
+                continue
+            if attr == 'forehead':
+                # Forehead band sits above the skin region; the landmark polygon is
+                # already a clean shape, so keep it unclipped (wrinkle_soften excludes
+                # hair/eyebrows/eyes internally).
+                setattr(regions, attr, val)
+            else:
                 setattr(regions, attr, val * regions.skin)
 
     # ------------------------------------------------------------------
