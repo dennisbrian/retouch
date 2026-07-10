@@ -326,6 +326,10 @@ def _apply_global_finish(img_bgr, params):
         settings["grain"] = params["grain"]
     if params.get("lut") is not None:
         settings["lut"] = params["lut"]
+    if params.get("gamut_compress") is not None:
+        settings["gamut_compress"] = params["gamut_compress"]
+    if params.get("saturation_mode") is not None:
+        settings["saturation_mode"] = params["saturation_mode"]
 
     if settings:
         result = grader.grade(result, settings, grade_intensity)

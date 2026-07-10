@@ -55,6 +55,13 @@ PLASTIC_SKIN_THRESHOLD = 0.60  # Flag if high-freq energy ratio falls below 60%
 HALO_THRESHOLD = 15.0  # Flag if mean overshoot amplitude >15 levels
 SEAM_THRESHOLD = 5.0   # Flag if boundary gradient >5 L-levels above context
 
+# K8 — color-fidelity (Δ-E / hue-drift) gate.
+# Skin hue should shift only a few degrees under a grade; beyond these the
+# grade has wrecked skin color. COLOR_DRIFT_THRESHOLD mirrors the max-band.
+COLOR_DRIFT_HUE_MEAN_THRESHOLD = 6.0   # Flag if mean skin Δh exceeds 6°
+COLOR_DRIFT_HUE_MAX_THRESHOLD = 15.0   # Flag if any skin pixel Δh exceeds 15°
+COLOR_DRIFT_THRESHOLD = 15.0           # Max Δh (deg) considered the flag boundary
+
 
 def _bgr_to_lab(img_bgr: np.ndarray) -> np.ndarray:
     """Convert BGR uint8 image to CIELab float32.
@@ -486,6 +493,194 @@ def detect_seam(
     return {"score": 0.0, "flagged": False, "seam_gradient": 0.0, "boundary_pixels": 0}
 
 
+def _bgr_to_lab_f(img_bgr: np.ndarray) -> np.ndarray:
+    """Convert BGR (uint8 or float32 [0, 255]) image to CIELab float32.
+
+    Unlike :func:`_bgr_to_lab` this is float-safe: no truncation to uint8,
+    so the color-fidelity gate keeps full precision for the Δ-E math.
+
+    Args:
+        img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR image.
+
+    Returns:
+        (H, W, 3) float32 Lab image, L in [0, 100], a/b in ~[-128, 128].
+    """
+    if img_bgr.dtype == np.uint8:
+        bgr = img_bgr.astype(np.float32) / 255.0
+    else:
+        bgr = np.clip(img_bgr, 0.0, 255.0).astype(np.float32) / 255.0
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    return cv2.cvtColor(rgb, cv2.COLOR_RGB2Lab)
+
+
+def delta_e_2000(lab1: np.ndarray, lab2: np.ndarray) -> np.ndarray:
+    """Compute CIEDE2000 color difference (Sharma et al. 2005, closed form).
+
+    Fully vectorized — no per-pixel loops.
+
+    Args:
+        lab1: (H, W, 3) or (3,) float LAB image (L in [0, 100], a/b any range).
+        lab2: Same shape as ``lab1``.
+
+    Returns:
+        (H, W) or scalar float32 array of ΔE2000 values.
+    """
+    arr1 = np.asarray(lab1, dtype=np.float32)
+    arr2 = np.asarray(lab2, dtype=np.float32)
+    squeeze = arr1.ndim == 1
+    if squeeze:
+        arr1 = arr1.reshape(1, 3)
+        arr2 = arr2.reshape(1, 3)
+    c1 = np.sqrt(arr1[..., 1] ** 2 + arr1[..., 2] ** 2)
+    c2 = np.sqrt(arr2[..., 1] ** 2 + arr2[..., 2] ** 2)
+    ac1c2 = (c1 + c2) / 2.0
+    g = 0.5 * (1.0 - np.sqrt(ac1c2 ** 7 / (ac1c2 ** 7 + 25.0 ** 7)))
+    a1p = (1.0 + g) * arr1[..., 1]
+    a2p = (1.0 + g) * arr2[..., 1]
+    c1p = np.sqrt(a1p ** 2 + arr1[..., 2] ** 2)
+    c2p = np.sqrt(a2p ** 2 + arr2[..., 2] ** 2)
+    h1p = np.mod(np.arctan2(arr1[..., 2], a1p), 2.0 * np.pi)
+    h2p = np.mod(np.arctan2(arr2[..., 2], a2p), 2.0 * np.pi)
+    dl = arr2[..., 0] - arr1[..., 0]
+    dc = c2p - c1p
+    dh = h2p - h1p
+    dh = dh - (2.0 * np.pi) * (dh > np.pi)
+    dh = dh + (2.0 * np.pi) * (dh < -np.pi)
+    dh_term = 2.0 * np.sqrt(c1p * c2p) * np.sin(dh / 2.0)
+    zero_chroma = (c1p * c2p) == 0
+    dh_term = np.where(zero_chroma, 0.0, dh_term)
+    lbar = (arr1[..., 0] + arr2[..., 0]) / 2.0
+    cbar = (c1p + c2p) / 2.0
+    hbar = (h1p + h2p) / 2.0
+    hbar = hbar + np.where(np.abs(h1p - h2p) > np.pi, np.pi, 0.0)
+    hbar = hbar - np.where(hbar > 2.0 * np.pi, 2.0 * np.pi, 0.0)
+    # Sharma et al. 2005 closed form (correct hue-rotation terms, in radians).
+    t = (
+        1.0
+        - 0.17 * np.cos(hbar - np.pi / 6.0)
+        + 0.24 * np.cos(2.0 * hbar)
+        + 0.32 * np.cos(3.0 * hbar + np.pi / 30.0)
+        - 0.20 * np.cos(4.0 * hbar - 63.0 * np.pi / 180.0)
+    )
+    dtheta_deg = 30.0 * np.exp(-(((hbar - 275.0 * np.pi / 180.0) / (25.0 * np.pi / 180.0)) ** 2))
+    rc = 2.0 * np.sqrt(cbar ** 7 / (cbar ** 7 + 25.0 ** 7))
+    rt = -np.sin(np.radians(2.0 * dtheta_deg)) * rc
+    sl = 1.0 + (0.015 * (lbar - 50.0) ** 2) / np.sqrt(20.0 + (lbar - 50.0) ** 2)
+    sc = 1.0 + 0.045 * cbar
+    sh = 1.0 + 0.015 * cbar * t
+    de = np.sqrt(
+        (dl / sl) ** 2
+        + (dc / sc) ** 2
+        + (dh_term / sh) ** 2
+        + rt * (dc / sc) * (dh_term / sh)
+    )
+    if squeeze:
+        return float(de[0])
+    if arr1.ndim == 3:
+        return de.reshape(arr1.shape[0], arr1.shape[1])
+    return de
+
+
+def detect_color_drift(
+    img_bgr: np.ndarray,
+    skin_mask: Optional[np.ndarray] = None,
+    reference_img_bgr: Optional[np.ndarray] = None,
+) -> dict:
+    """Color-fidelity gate: measure skin hue/ΔE drift between reference and output.
+
+    Implements K8 — a CIEDE2000 + hue-angle (Δh) color-safety check. The
+    primary use is a before/after comparison (``reference_img_bgr`` given):
+    computes ΔE2000 and per-pixel hue-angle shift Δh over the skin region and
+    flags if the skin hue has wandered beyond a few degrees.
+
+    Args:
+        img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR output image.
+        skin_mask: Optional (H, W) float mask [0, 1]; analysis restricted to
+            masked pixels when a reference is supplied.
+        reference_img_bgr: Optional pre-grade reference (uint8 or float32
+            [0, 255]) BGR image of the same shape.
+
+    Returns:
+        dict with keys:
+            - "score": float in [0, 1] (higher = worse). 0 if no reference.
+            - "flagged": bool, True if mean Δh > 6° or max Δh > 15°.
+            - "deltaE_mean": float, mean ΔE2000 over (skin) region.
+            - "deltaH_mean_deg": float, mean |hue-angle shift| in degrees.
+            - "deltaH_max_deg": float, max |hue-angle shift| in degrees.
+            - "note": str, explanatory text when no reference is supplied.
+    """
+    if reference_img_bgr is None:
+        return {
+            "score": 0.0,
+            "flagged": False,
+            "deltaE_mean": 0.0,
+            "deltaH_mean_deg": 0.0,
+            "deltaH_max_deg": 0.0,
+            "note": "no reference supplied — self-check skipped; "
+                    "color_drift gate is a before/after comparison",
+        }
+
+    if reference_img_bgr.shape != img_bgr.shape:
+        return {
+            "score": 0.0,
+            "flagged": False,
+            "deltaE_mean": 0.0,
+            "deltaH_mean_deg": 0.0,
+            "deltaH_max_deg": 0.0,
+            "note": "reference shape mismatch",
+        }
+
+    out_lab = _bgr_to_lab_f(img_bgr)
+    ref_lab = _bgr_to_lab_f(reference_img_bgr)
+
+    if skin_mask is not None:
+        mask_f = skin_mask.astype(np.float32)
+        if mask_f.max() > 1.0:
+            mask_f /= 255.0
+        region = mask_f > 0.5
+    else:
+        region = np.ones(out_lab.shape[:2], dtype=bool)
+
+    if not np.any(region):
+        return {
+            "score": 0.0,
+            "flagged": False,
+            "deltaE_mean": 0.0,
+            "deltaH_mean_deg": 0.0,
+            "deltaH_max_deg": 0.0,
+            "note": "empty skin region",
+        }
+
+    out_sub = out_lab[region]
+    ref_sub = ref_lab[region]
+
+    delta_e = delta_e_2000(ref_sub, out_sub)
+    deltaE_mean = float(np.mean(delta_e))
+
+    # Hue-angle shift from a/b channels (degrees, wrapped to [-180, 180]).
+    h_ref = np.degrees(np.arctan2(ref_sub[:, 2], ref_sub[:, 1]))
+    h_out = np.degrees(np.arctan2(out_sub[:, 2], out_sub[:, 1]))
+    delta_h = h_out - h_ref
+    delta_h = (delta_h + 180.0) % 360.0 - 180.0
+    delta_h = np.abs(delta_h)
+    deltaH_mean_deg = float(np.mean(delta_h))
+    deltaH_max_deg = float(np.max(delta_h))
+
+    flagged = (
+        deltaH_mean_deg > COLOR_DRIFT_HUE_MEAN_THRESHOLD
+        or deltaH_max_deg > COLOR_DRIFT_HUE_MAX_THRESHOLD
+    )
+    score = min(1.0, deltaH_max_deg / 30.0)
+
+    return {
+        "score": float(score),
+        "flagged": bool(flagged),
+        "deltaE_mean": deltaE_mean,
+        "deltaH_mean_deg": deltaH_mean_deg,
+        "deltaH_max_deg": deltaH_max_deg,
+    }
+
+
 def run_all(
     img_bgr: np.ndarray,
     skin_mask: Optional[np.ndarray] = None,
@@ -505,7 +700,8 @@ def run_all(
 
     Returns:
         dict with keys "banding", "clipping", "plastic_skin", "halo", "seam",
-        each mapping to that detector's full result dict (score/flagged/details).
+        "color_drift", each mapping to that detector's full result dict
+        (score/flagged/details).
     """
     result: Dict[str, Dict[str, Any]] = {}
     try:
@@ -529,4 +725,10 @@ def run_all(
         result["seam"] = detect_seam(img_bgr, pm)
     except Exception:
         result["seam"] = {"score": 0.0, "flagged": False}
+    try:
+        result["color_drift"] = detect_color_drift(
+            img_bgr, skin_mask, reference_img_bgr
+        )
+    except Exception:
+        result["color_drift"] = {"score": 0.0, "flagged": False}
     return result

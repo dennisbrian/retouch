@@ -251,6 +251,156 @@ def skin_chroma_std(img_bgr: np.ndarray, skin_mask: Optional[np.ndarray]) -> flo
     return state.C_std
 
 
+def _oklab_to_linear_rgb(oklab: np.ndarray) -> np.ndarray:
+    """Oklab -> linear RGB (unclipped, float32). Internal helper for gamut tests."""
+    lms_cbrt = np.dot(oklab, _OKLAB_M2_INV.T)
+    lms = np.power(lms_cbrt, 3.0)
+    rgb = np.dot(lms, _OKLAB_M1_INV.T)
+    return rgb.astype(np.float32)
+
+
+def find_gamut_intersection(oklab: np.ndarray, eps: float = 1e-6, max_iter: int = 20) -> np.ndarray:
+    """Per-pixel max in-gamut chroma C_max(L, h) in OKLab.
+
+    For each pixel, holding L and hue fixed, bisection searches the largest
+    chroma whose OKLab->linear-sRGB conversion stays inside [0, 1]. This is the
+    standard Björn Ottosson reference method: monoticity of out-of-gamut-ness
+    in chroma makes bisection exact. Upper bound 0.5 covers the full sRGB
+    gamut (max sRGB chroma ~0.43), so the bracket is always valid.
+
+    Args:
+        oklab: (H, W, 3) float32 Oklab.
+        eps: Bisection tolerance on chroma.
+        max_iter: Maximum bisection iterations.
+
+    Returns:
+        (H, W) float32 C_max per pixel (0.0 for extreme L).
+    """
+    L = oklab[..., 0]
+    a = oklab[..., 1]
+    b = oklab[..., 2]
+    hue = np.arctan2(b, a)
+    cos_h = np.cos(hue).astype(np.float32)
+    sin_h = np.sin(hue).astype(np.float32)
+
+    lo = np.zeros_like(L, dtype=np.float32)
+    hi = np.full_like(L, 0.5, dtype=np.float32)
+    valid = (L > 0.0) & (L < 1.0)
+
+    def _in_gamut(C: np.ndarray) -> np.ndarray:
+        cand = np.stack([L, C * cos_h, C * sin_h], axis=-1).astype(np.float32)
+        rgb = _oklab_to_linear_rgb(cand)
+        return np.all((rgb >= -1e-4) & (rgb <= 1.0 + 1e-4), axis=-1)
+
+    for _ in range(int(max_iter)):
+        mid = 0.5 * (lo + hi)
+        ing = _in_gamut(mid)
+        lo = np.where(ing & valid, mid, lo)
+        hi = np.where((~ing) & valid, mid, hi)
+        span = float(np.max(hi - lo))
+        if span < eps:
+            break
+    return lo.astype(np.float32)
+
+
+def gamut_compress(oklch: np.ndarray, thr: float = 0.8, power: float = 0.6) -> np.ndarray:
+    """Gamut-aware chroma compression in OKLCh (preserves hue & lightness).
+
+    For in-gamut colors (C <= C_max) this is the exact identity — no change —
+    which keeps the golden path byte-identical. For out-of-gamut colors it
+    smoothly rolls chroma back toward the gamut boundary along a constant-hue,
+    constant-lightness line (no hue shift, no posterization). ``thr`` shapes how
+    aggressively the rolloff bites and ``power`` its softness.
+
+    Args:
+        oklch: (H, W, 3) float32 OKLCh (L, C, h).
+        thr: Knee sharpness (larger = less compression).
+        power: Rolloff softness (larger = softer near the boundary).
+
+    Returns:
+        (H, W, 3) float32 OKLCh with compressed chroma.
+    """
+    L = oklch[..., 0]
+    C = oklch[..., 1]
+    h = oklch[..., 2]
+    oklab = oklch_to_oklab(oklch)
+    Cmax = find_gamut_intersection(oklab)
+    Cmax_safe = np.where(Cmax > 1e-6, Cmax, 1.0)
+    t = C / Cmax_safe
+    # In-gamut (t <= 1): exact identity (no hue/L/C change).
+    # Out-of-gamut (t > 1): roll the excess chroma back toward the boundary.
+    x = np.clip(t - 1.0, 0.0, None)
+    denom = 1.0 + (x / max(float(thr), 1e-3)) ** power
+    new_x = x * (1.0 / denom) ** (1.0 / power)
+    t_new = np.where(t <= 1.0, t, 1.0 + new_x)
+    # Clamp so the output is never beyond the gamut boundary (far out-of-gamut
+    # colors roll all the way to C_max; near-boundary colors get the soft knee).
+    C_new = np.clip(Cmax_safe * t_new, 0.0, Cmax_safe)
+    return np.stack([L, C_new, h], axis=-1).astype(np.float32)
+
+
+def apply_subtractive_saturation(img_bgr: np.ndarray, amount: float) -> np.ndarray:
+    """Film-density (subtractive) saturation in linear-RGB log-density space.
+
+    Converts to linear RGB, takes ``D = -log10(rgb)`` (film/CMY density), scales
+    the per-pixel density deviation from neutral by ``factor = 1 + amount``
+    (additive in density => multiplicative in transmission), then returns via
+    ``10^-D``. Unlike HSV/LAB scaling this *darkens* saturated colors as chroma
+    rises (the film look). ``amount == 0`` is byte-identical to the input.
+
+    Args:
+        img_bgr: (H, W, 3) uint8 BGR or float32 BGR in [0, 1].
+        amount: Saturation amount in roughly [-1, 1] (0 = identity).
+
+    Returns:
+        Same dtype/range as ``img_bgr``.
+    """
+    if amount == 0:
+        return img_bgr
+    is_float = img_bgr.dtype == np.float32
+    if is_float:
+        img_rgb = np.clip(img_bgr[..., ::-1], 0.0, 1.0).astype(np.float32)
+    else:
+        img_rgb = img_bgr[..., ::-1].astype(np.float32) / 255.0
+
+    # sRGB EOTF -> linear
+    lin = np.where(
+        img_rgb <= 0.04045,
+        img_rgb / 12.92,
+        np.power((img_rgb + 0.055) / 1.055, 2.4),
+    )
+    lin = np.clip(lin, 1e-4, 1.0)
+
+    # Log-density (film/CMY). Saturate by scaling each channel's density
+    # *deviation from the pixel's luminance-weighted neutral density*. Anchoring
+    # on the neutral (rather than the single brightest channel) keeps the push
+    # hue-symmetric: no channel is pinned, so there is no hue slide toward
+    # whichever channel happens to be brightest. Because density grows as a
+    # channel darkens, a positive amount deepens the already-dense (absorbed)
+    # channels *and* lifts the transmitted ones about the neutral — chroma rises
+    # while saturated colors gain density (the subtractive film look). Neutrals
+    # (equal channels) are a fixed point, and amount == 0 is exact identity.
+    D = -np.log10(lin)
+    # Rec.709 luma weights on linear light give the perceptual neutral density.
+    lum = 0.2126 * lin[..., 0:1] + 0.7152 * lin[..., 1:2] + 0.0722 * lin[..., 2:3]
+    d_neutral = -np.log10(np.clip(lum, 1e-4, 1.0))
+    factor = 1.0 + float(amount)
+    D = d_neutral + (D - d_neutral) * factor
+    lin_new = np.clip(np.power(10.0, -D), 0.0, 1.0)
+
+    # linear -> sRGB
+    srgb = np.where(
+        lin_new <= 0.0031308,
+        12.92 * lin_new,
+        1.055 * np.power(lin_new, 1.0 / 2.4) - 0.055,
+    )
+    srgb = np.clip(srgb, 0.0, 1.0)
+    bgr = srgb[..., ::-1]
+    if is_float:
+        return np.ascontiguousarray(bgr.astype(np.float32))
+    return np.clip(bgr * 255.0, 0, 255).astype(np.uint8)
+
+
 def resolve_locus_override(
     locus: Dict[str, float],
     skin_state: Optional["SkinState"] = None,

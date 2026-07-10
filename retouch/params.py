@@ -239,6 +239,16 @@ _SKIN_PARAMS = [
         max_val=1.0,
     ),
     ParamSpec(
+        name="blotch_reduction",
+        cli_flag="blotch-reduction",
+        cli_type=float,
+        default=0.0,
+        recipe_key="frequency.blotch_reduction",
+        conversion="recipe_direct",
+        min_val=0.0,
+        max_val=1.0,
+    ),
+    ParamSpec(
         name="texture_opacity",
         cli_flag="texture-opacity",
         cli_type=float,
@@ -1464,6 +1474,22 @@ _GRADING_PARAMS = [
         conversion="gui_direct",
         min_val=0.0,
         max_val=1.0,
+    ),
+    ParamSpec(
+        name="gamut_compress",
+        cli_flag="gamut-compress",
+        cli_type=bool,
+        default=True,
+        recipe_key="gamut_compress",
+        conversion="bool_flag",
+    ),
+    ParamSpec(
+        name="saturation_mode",
+        cli_flag="saturation-mode",
+        cli_type=str,
+        default="additive",
+        recipe_key="saturation_mode",
+        conversion="dropdown",
     ),
 ]
 

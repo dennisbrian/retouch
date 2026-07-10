@@ -22,6 +22,7 @@ from .lut import CubeLUT, list_available_luts, load_cube, luts_dir
 from .utils import apply_curve, blend_masked, normalize_mask, screen_blend, squeeze_mask, bgr_f32_to_lab_f32, lab_f32_to_bgr_f32
 
 from . import skin_protect
+from .color_science import apply_subtractive_saturation
 from .precision import ensure_float, to_uint8
 
 logger = logging.getLogger(__name__)
@@ -308,7 +309,10 @@ class ColorGrader:
                     lab = np.clip(lab, 0.0, 255.0).astype(np.float32)
                     r = np.clip(_lab_u8_conv_to_bgr_f(lab), 0.0, 1.0).astype(np.float32)
             if abs(settings.get("saturation_boost", 0)) > 0.001:
-                r = self._F_adjust_saturation(r, settings["saturation_boost"])
+                if settings.get("saturation_mode", "additive") == "subtractive":
+                    r = apply_subtractive_saturation(r, settings["saturation_boost"] / 100.0)
+                else:
+                    r = self._F_adjust_saturation(r, settings["saturation_boost"])
 
             if "hsl_adjustments" in settings:
                 r = self._F_apply_hsl_adjustments(r, settings["hsl_adjustments"])
@@ -343,6 +347,12 @@ class ColorGrader:
                 result = skin_protect.protect_skin(result, _color_ops, skin_protect_strength)
         else:
             result = _color_ops(result)
+
+        # K3 — gamut-aware chroma compression. No-op when the graded result is
+        # fully in-gamut (byte-identical golden path); otherwise rolls over-saturated
+        # chroma back toward the sRGB boundary along a constant-hue, constant-L line.
+        if settings.get("gamut_compress", True):
+            result = self._apply_gamut_compress(result)
 
         # Track if we need float output
         want_float = return_float or is_float_input
@@ -390,6 +400,47 @@ class ColorGrader:
                 result = cv2.addWeighted(original_for_blend, 1.0 - intensity, result, intensity, 0)
 
         return result
+
+    def _apply_gamut_compress(self, img: np.ndarray) -> np.ndarray:
+        """Apply :func:`color_science.gamut_compress` to a BGR image.
+
+        Short-circuits to a true no-op (returns ``img`` untouched) when the
+        image is fully in-gamut, guaranteeing byte-identical output on the
+        golden path. Converts via Oklab/OKLCh and back; the round-trip is only
+        taken when at least one pixel is out of gamut.
+        """
+        from .color_science import (
+            bgr_to_oklab,
+            find_gamut_intersection,
+            gamut_compress,
+            oklab_to_bgr,
+            oklab_to_oklch,
+            oklch_to_oklab,
+        )
+
+        is_float = img.dtype == np.float32
+        # A uint8 BGR image is, by definition, already inside the sRGB gamut,
+        # so there is nothing to compress (and the OKLab round-trip would only
+        # introduce rounding). Short-circuit to a true no-op — this keeps the
+        # golden path byte-identical. Only the float path (where colors can be
+        # out of gamut before the final clip) actually needs gamut mapping.
+        if not is_float:
+            return img
+        # Cheap guard: a float image whose samples already lie inside [0, 1] is
+        # sRGB-in-gamut, so there is nothing to map. This avoids the (expensive)
+        # per-pixel gamut bisection on the common in-gamut float path.
+        if bool(np.all(img >= -1e-4) and np.all(img <= 1.0 + 1e-4)):
+            return img
+        oklab = bgr_to_oklab(np.clip(img, 0.0, 1.0).astype(np.float32) * 255.0)
+        oklch = oklab_to_oklch(oklab)
+        C = oklch[..., 1]
+        Cmax = find_gamut_intersection(oklab)
+        if bool(np.all(C <= Cmax + 1e-4)):
+            return img
+        oklch = gamut_compress(oklch)
+        oklab2 = oklch_to_oklab(oklch)
+        out = oklab_to_bgr(oklab2, float32_out=is_float)
+        return np.ascontiguousarray((out / 255.0).astype(np.float32))
 
     def add_impact_finish(
         self,

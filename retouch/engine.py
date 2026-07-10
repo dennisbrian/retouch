@@ -182,6 +182,7 @@ class ProcessingContext:
     micro_restore: float = _DEFAULTS["micro_restore"]
     micro_dodge_burn: float = 0.0
     mid_reduction: float = _DEFAULTS["mid_reduction"]
+    blotch_reduction: float = _DEFAULTS["blotch_reduction"]
     texture_opacity: float = _DEFAULTS["texture_opacity"]
     pore_synthesis: float = 0.0
     regional_modulation: float = 0.0
@@ -286,6 +287,11 @@ class ProcessingContext:
     clarity: float = 0.0
     vibrance: float = 0.0
     saturation: float = 0.0
+    # Color-science K3/K9 (PLAN_COLOR_SCIENCE.md): default-on gamut compression
+    # is a no-op on in-gamut colors (golden path byte-identical); additive is the
+    # legacy saturation mode.
+    gamut_compress: bool = True
+    saturation_mode: str = "additive"
     auto_exposure: bool = _DEFAULTS["auto_exposure"]
 
     # --- Colour grading ---
@@ -839,6 +845,8 @@ class RetouchEngine:
         clarity: Optional[float] = None,
         vibrance: Optional[float] = None,
         saturation: Optional[float] = None,
+        saturation_mode: Optional[str] = None,
+        gamut_compress: Optional[bool] = None,
         glow: Optional[float] = None,
         vignette: Optional[float] = None,
         sharpen: Optional[float] = None,
@@ -1094,6 +1102,8 @@ class RetouchEngine:
             "blacks": blacks,
             "color_grade": color_grade,
             "grade_intensity": grade_intensity,
+            "saturation_mode": saturation_mode,
+            "gamut_compress": gamut_compress,
             "texture_opacity": texture_opacity,
             "pore_synthesis": pore_synthesis,
             "mid_reduction": mid_reduction,
@@ -2103,7 +2113,7 @@ class RetouchEngine:
         # ------------------------------------------------------------------
         # QA detectors
         # ------------------------------------------------------------------
-        qa_warnings: List[QAWarning] = self._run_qa(result, person_mask)
+        qa_warnings: List[QAWarning] = self._run_qa(result, person_mask, img_bgr)
         ctx._qa_results = {w.detector: w.details for w in qa_warnings}
 
         # ------------------------------------------------------------------
@@ -2130,6 +2140,7 @@ class RetouchEngine:
     def _run_qa(
         result: np.ndarray,
         person_mask: Optional[np.ndarray],
+        reference_img_bgr: Optional[np.ndarray] = None,
     ) -> List[QAWarning]:
         """Run QA detectors on a processed uint8 BGR image.
 
@@ -2143,7 +2154,10 @@ class RetouchEngine:
         qa_warnings: List[QAWarning] = []
         try:
             qa_raw = qa_detectors.run_all(
-                result, skin_mask=person_mask, person_mask=person_mask
+                result,
+                skin_mask=person_mask,
+                reference_img_bgr=reference_img_bgr,
+                person_mask=person_mask,
             )
         except Exception as e:
             logger.warning("QA detectors raised, skipping QA: %s", e)
@@ -2157,6 +2171,7 @@ class RetouchEngine:
                 "plastic_skin": "Skin texture loss detected — may appear plastic",
                 "halo": "Edge overshoot halos detected from sharpening",
                 "seam": "Seam visible at subject boundary",
+                "color_drift": "Skin hue shift detected — color grade drifted beyond budget",
             }.get(detector_name, f"{detector_name} artifact detected")
             _qa_thresholds = {
                 "banding": qa_detectors.BANDING_THRESHOLD,
@@ -2164,6 +2179,7 @@ class RetouchEngine:
                 "plastic_skin": qa_detectors.PLASTIC_SKIN_THRESHOLD,
                 "halo": qa_detectors.HALO_THRESHOLD,
                 "seam": qa_detectors.SEAM_THRESHOLD,
+                "color_drift": qa_detectors.COLOR_DRIFT_THRESHOLD,
             }
             qa_warnings.append(QAWarning(
                 detector=detector_name,
@@ -2386,13 +2402,15 @@ class RetouchEngine:
             for k in ["halation", "grain", "chromatic_aberration", "lut"]:
                 if k in settings and k not in post_effects:
                     post_effects[k] = settings[k]
+            settings["gamut_compress"] = ctx.gamut_compress
+            settings["saturation_mode"] = ctx.saturation_mode
+
             result = self._grader.grade(
                 result, settings, ctx.grade_intensity,
                 skip_glows=skip_glows, skip_post_effects=True,
                 skin_protect_strength=ctx.skin_protect_strength,
                 return_float=True,
             )
-
         # Remaining ops are uint8-contract — boundary conversions
         result_u8 = to_uint8(result)
 
@@ -3570,6 +3588,8 @@ class RetouchEngine:
             for k in ["halation", "grain", "chromatic_aberration", "lut"]:
                 if k in settings and k not in post_effects:
                     post_effects[k] = settings[k]
+            settings["gamut_compress"] = ctx.gamut_compress
+            settings["saturation_mode"] = ctx.saturation_mode
 
             result = self._grader.grade(
                 result, settings, ctx.grade_intensity,
