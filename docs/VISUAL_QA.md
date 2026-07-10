@@ -262,3 +262,57 @@ in-memory (deterministic, run-to-run noise = 0 px). `natural_polish_v1` recipe.
 there is nothing to act on, gentle refinement otherwise, no halo). To *see* undereye/freckle
 effects, run on photos that actually contain dark circles / freckles (the duotian cosplay
 set is uniformly bright).
+
+## 9. Visual-QA Sign-off Batch — 2026-07-10
+
+Harness: `scripts/qa_visual_signoff.py`. Two configs per image: SmartProcessor suggestion and fixed `natural_polish_v1` baseline. Measured gates run on the SmartProcessor output (the shipping path); side-by-side comparisons emitted for both configs.
+
+**Honesty note:** Texture / Halo / Color-Drift / Highlight / Shadow are measured programmatically. Natural Output, No Edge Tearing, and Skin Tone Uniformity require a human and are reported PENDING with the inspection image paths — never as PASS.
+
+### DSCF4454
+
+- **Texture Preservation**: PASS — SSIM 0.989 on skin high-freq band (thr 0.92)
+- **No Halo**: PASS — score 0.00, flagged=False
+- **No Edge Tearing**: PENDING — human review: test_output/qa_signoff_2026-07-10/DSCF4454_edge_halo.png, DSCF4454_skin_texture.png
+- **No Color Drift**: FAIL — ΔE 10.49 (neutral gray, thr 2.0)
+- **No Highlight Clipping**: PASS — 0.000% pixels at 255 (thr 0.5%)
+- **No Shadow Crushing**: PASS — 0.000% pixels at 0 (thr 0.5%)
+- **Skin Tone Uniformity**: PENDING — human review: test_output/qa_signoff_2026-07-10/DSCF4454_skin_texture.png, DSCF4454_smart_compare.jpg
+- **Natural Output**: PENDING — human review: test_output/qa_signoff_2026-07-10/DSCF4454_smart_compare.jpg, DSCF4454_skin_texture.png, DSCF4454_diff_x8.png
+
+### DSCF4463
+
+- **Texture Preservation**: PASS — SSIM 0.980 on skin high-freq band (thr 0.92)
+- **No Halo**: PASS — score 0.00, flagged=False
+- **No Edge Tearing**: PENDING — human review: test_output/qa_signoff_2026-07-10/DSCF4463_edge_halo.png, DSCF4463_skin_texture.png
+- **No Color Drift**: FAIL — ΔE 12.74 (neutral gray, thr 2.0)
+- **No Highlight Clipping**: PASS — 0.000% pixels at 255 (thr 0.5%)
+- **No Shadow Crushing**: PASS — 0.016% pixels at 0 (thr 0.5%)
+- **Skin Tone Uniformity**: PENDING — human review: test_output/qa_signoff_2026-07-10/DSCF4463_skin_texture.png, DSCF4463_smart_compare.jpg
+- **Natural Output**: PENDING — human review: test_output/qa_signoff_2026-07-10/DSCF4463_smart_compare.jpg, DSCF4463_skin_texture.png, DSCF4463_diff_x8.png
+- Engine QA flags (smart): banding(flagged=True,score=0.839), plastic_skin(flagged=True,score=0.080), seam(flagged=True,score=1.000)
+
+### DSCF4503
+
+- **Texture Preservation**: PASS — SSIM 0.962 on skin high-freq band (thr 0.92)
+- **No Halo**: PASS — score 0.00, flagged=False
+- **No Edge Tearing**: PENDING — human review: test_output/qa_signoff_2026-07-10/DSCF4503_edge_halo.png, DSCF4503_skin_texture.png
+- **No Color Drift**: FAIL — ΔE 9.13 (neutral gray, thr 2.0)
+- **No Highlight Clipping**: PASS — 0.000% pixels at 255 (thr 0.5%)
+- **No Shadow Crushing**: PASS — 0.000% pixels at 0 (thr 0.5%)
+- **Skin Tone Uniformity**: PENDING — human review: test_output/qa_signoff_2026-07-10/DSCF4503_skin_texture.png, DSCF4503_smart_compare.jpg
+- **Natural Output**: PENDING — human review: test_output/qa_signoff_2026-07-10/DSCF4503_smart_compare.jpg, DSCF4503_skin_texture.png, DSCF4503_diff_x8.png
+- Engine QA flags (smart): banding(flagged=True,score=0.832), plastic_skin(flagged=True,score=0.073), seam(flagged=True,score=0.946)
+
+### DSCF4550
+
+- **Texture Preservation**: PASS — SSIM 0.992 on skin high-freq band (thr 0.92)
+- **No Halo**: PASS — score 0.00, flagged=False
+- **No Edge Tearing**: PENDING — human review: test_output/qa_signoff_2026-07-10/DSCF4550_edge_halo.png, DSCF4550_skin_texture.png
+- **No Color Drift**: FAIL — ΔE 16.78 (neutral gray, thr 2.0)
+- **No Highlight Clipping**: PASS — 0.000% pixels at 255 (thr 0.5%)
+- **No Shadow Crushing**: PASS — 0.000% pixels at 0 (thr 0.5%)
+- **Skin Tone Uniformity**: PENDING — human review: test_output/qa_signoff_2026-07-10/DSCF4550_skin_texture.png, DSCF4550_smart_compare.jpg
+- **Natural Output**: PENDING — human review: test_output/qa_signoff_2026-07-10/DSCF4550_smart_compare.jpg, DSCF4550_skin_texture.png, DSCF4550_diff_x8.png
+- Engine QA flags (smart): banding(flagged=True,score=0.781), plastic_skin(flagged=True,score=0.075), seam(flagged=True,score=1.000)
+
