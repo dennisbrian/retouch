@@ -154,10 +154,22 @@
   (`_run_global_phases` before `to_uint8`, both registry + hardcoded paths)→`ProcessingContext`.
   `tests/test_backdrop.py` 6/6 pass. **[VISUAL QA PENDING]** — Visual-Critical-adjacent.
 
+### 8. Auto fabric/clothing wrinkle smoothing (2026-07-10 — UNCOMMITTED)
+- **`fabric_wrinkle_smooth`** (0–100, `cli_type=float`): new `retouch/fabric.py::smooth_fabric_wrinkles`
+  — detects mid-frequency fold ridges via difference-of-Gaussians on the LAB L channel (dark folds =
+  negative DoG), lightens them capped at 60% depth reduction. Fabric weave (high-freq) and gentle
+  low-freq shading preserved; **no** GaussianBlur-on-cloth smoothing (mirrors `skin.wrinkle_soften`).
+  Cloth mask = `person_mask − acc_skin_hair` (skin/hair/neck excluded) derived in `engine._run_global_phases`;
+  `FaceRegions.cloth` also exposed from BiSeNet label 16 (feathered) in `parsing.py` `parse()`/`parse_batch()`.
+  `ParamSpec fabric_wrinkle_smooth` (`cli_flag="fabric-wrinkle-smooth"`, `recipe_key="fabric.wrinkle_smooth"`,
+  `conversion="recipe_pct"`) wired `params.py`→`engine.py` (`_run_global_phases` right after backdrop, before
+  `to_uint8`, both paths)→`ProcessingContext` + `process()` kwarg + overrides entry + `retouch()` wrapper.
+  `tests/test_fabric.py` 7/7 pass. **[VISUAL QA PENDING]** — Visual-Critical-adjacent.
+
 ## Last updated
 2026-07-10 (end of day) — four discovery passes documented in MASTER_PLAN.md Post-plan section:
 RAW processing (`PLAN_RAW_PROCESSING.md` + T5 audit), auto-gap backlog (owner request),
 wiring-debt audit (4 unwired islands + 11 GUI-invisible params), recipe integrity audit
 (4 dead-key classes, 21 instances, guard-test blind spot). Earlier same day: Post-plan section
 + §5 for RAF-import / `face_exposure` work (committed `af54d2d`). Then §6 sclera vessel removal +
-§7 backdrop cleanup (both uncommitted). Prior: `0822b9c` RESUME.
+  §7 backdrop cleanup, §8 fabric wrinkle smoothing (both uncommitted). Prior: `0822b9c` RESUME.

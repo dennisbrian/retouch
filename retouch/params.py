@@ -769,6 +769,16 @@ _FACE_FEATURE_PARAMS = [
         max_val=100,
     ),
     ParamSpec(
+        name="fabric_wrinkle_smooth",
+        cli_flag="fabric-wrinkle-smooth",
+        cli_type=float,
+        default=0.0,
+        recipe_key="fabric.wrinkle_smooth",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
         name="eye_iris_saturate",
         cli_flag="eye-iris-saturate",
         cli_type=int,

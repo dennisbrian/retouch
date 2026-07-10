@@ -122,6 +122,7 @@ class FaceRegions:
         "jawline_contour", "hair", "neck",
         "nasolabial_l", "nasolabial_r",
         "crows_feet_l", "crows_feet_r",
+        "cloth",
     ]
 
     def __init__(self) -> None:
@@ -227,6 +228,7 @@ class FaceParser:
                     bisenet_masks['lips'] = ((full_label_map == 12) | (full_label_map == 13)).astype(np.float32)
                     bisenet_masks['neck'] = (full_label_map == 14).astype(np.float32)
                     bisenet_masks['hair'] = (full_label_map == 17).astype(np.float32)
+                    bisenet_masks['cloth'] = (full_label_map == 16).astype(np.float32)
 
                     bisenet_masks['face_oval'] = (
                         (full_label_map == 1) | (full_label_map == 2) | (full_label_map == 3) |
@@ -235,9 +237,9 @@ class FaceParser:
                     ).astype(np.float32)
 
                     # Apply feathering
-                    for k in ['skin', 'left_eyebrow', 'right_eyebrow', 'left_eye', 'right_eye', 'lips', 'face_oval', 'neck', 'hair']:
+                    for k in ['skin', 'left_eyebrow', 'right_eyebrow', 'left_eye', 'right_eye', 'lips', 'face_oval', 'neck', 'hair', 'cloth']:
                         if k in bisenet_masks:
-                            r = feather // 2 if k in ['left_eye', 'right_eye', 'lips', 'left_eyebrow', 'right_eyebrow'] else feather
+                            r = feather // 2 if k in ['left_eye', 'right_eye', 'lips', 'left_eyebrow', 'right_eyebrow', 'cloth'] else feather
                             bisenet_masks[k] = feather_mask(bisenet_masks[k], radius=r)
 
                     # Clean skin mask after feathering
@@ -262,6 +264,7 @@ class FaceParser:
         regions.face_oval = bisenet_masks.get('face_oval')
         regions.neck = bisenet_masks.get('neck')
         regions.hair = bisenet_masks.get('hair')
+        regions.cloth = bisenet_masks.get('cloth')
 
         # Fallback to landmarks if BiSeNet failed or has empty skin
         if regions.skin is None or regions.skin.max() < 0.01:
@@ -452,9 +455,9 @@ class FaceParser:
 
                 # Feathering
                 feather = max(int(ieds[idx_face] * 0.08), 3)
-                for k in ['skin', 'left_eyebrow', 'right_eyebrow', 'left_eye', 'right_eye', 'lips', 'face_oval', 'neck', 'hair']:
+                for k in ['skin', 'left_eyebrow', 'right_eyebrow', 'left_eye', 'right_eye', 'lips', 'face_oval', 'neck', 'hair', 'cloth']:
                     if k in bisenet_masks:
-                        r = feather // 2 if k in ['left_eye', 'right_eye', 'lips', 'left_eyebrow', 'right_eyebrow'] else feather
+                        r = feather // 2 if k in ['left_eye', 'right_eye', 'lips', 'left_eyebrow', 'right_eyebrow', 'cloth'] else feather
                         bisenet_masks[k] = feather_mask(bisenet_masks[k], radius=r)
 
                 # Clean skin
@@ -474,6 +477,7 @@ class FaceParser:
                 regions.face_oval = bisenet_masks.get('face_oval')
                 regions.neck = bisenet_masks.get('neck')
                 regions.hair = bisenet_masks.get('hair')
+                regions.cloth = bisenet_masks.get('cloth')
 
                 # Handle fallback if skin is empty
                 if regions.skin is None or regions.skin.max() < 0.01:

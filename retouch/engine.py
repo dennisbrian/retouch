@@ -224,6 +224,7 @@ class ProcessingContext:
     eye_enhance: float = 0.0
     eye_sclera_vessel_remove: float = 0.0
     backdrop_cleanup: float = 0.0
+    fabric_wrinkle_smooth: float = 0.0
     dark_circles: float = 0.0
     undereye_darken_removal: float = 0.0
     undereye_puffiness_reduction: float = 0.0
@@ -790,6 +791,7 @@ class RetouchEngine:
         eye_enhance: Optional[float] = None,
         eye_sclera_vessel_remove: Optional[float] = None,
         backdrop_cleanup: Optional[float] = None,
+        fabric_wrinkle_smooth: Optional[float] = None,
         dark_circles: Optional[float] = None,
         undereye_darken_removal: Optional[float] = None,
         undereye_puffiness_reduction: Optional[float] = None,
@@ -1013,6 +1015,7 @@ class RetouchEngine:
             "eye_enhance": eye_enhance,
             "eye_sclera_vessel_remove": eye_sclera_vessel_remove,
             "backdrop_cleanup": backdrop_cleanup,
+            "fabric_wrinkle_smooth": fabric_wrinkle_smooth,
             "dark_circles": dark_circles,
             "undereye_darken_removal": undereye_darken_removal,
             "undereye_puffiness_reduction": undereye_puffiness_reduction,
@@ -1983,6 +1986,24 @@ class RetouchEngine:
             t_bdc = time.perf_counter()
             result = clean_backdrop(result, person_mask, ctx.backdrop_cleanup)
             timings["backdrop_cleanup"] = (time.perf_counter() - t_bdc) * 1000
+
+        # ------------------------------------------------------------------
+        # Stage 7.6 — Fabric/clothing wrinkle smoothing (mid-frequency folds)
+        # Runs in both registry + hardcoded paths (inserted after backdrop).
+        # Cloth mask = person minus skin/hair/neck (acc_skin_hair accumulator).
+        # ------------------------------------------------------------------
+        if (
+            ctx.fabric_wrinkle_smooth > 0
+            and person_mask is not None
+            and acc_skin_hair is not None
+        ):
+            cloth_mask = np.clip(person_mask - acc_skin_hair, 0.0, 1.0)
+            if cloth_mask.max() > 0.01:
+                from .fabric import smooth_fabric_wrinkles
+
+                t_fab = time.perf_counter()
+                result = smooth_fabric_wrinkles(result, cloth_mask, ctx.fabric_wrinkle_smooth)
+                timings["fabric_wrinkle_smooth"] = (time.perf_counter() - t_fab) * 1000
 
         # ------------------------------------------------------------------
         # F1: Convert back to uint8 for output
@@ -4039,6 +4060,7 @@ def retouch(
     eye_enhance: float = 30,
     eye_sclera_vessel_remove: float = 0.0,
     backdrop_cleanup: float = 0.0,
+    fabric_wrinkle_smooth: float = 0.0,
     contrast: float = 0,
     preset: Optional[str] = None,
     **kwargs,
@@ -4056,5 +4078,6 @@ def retouch(
             eye_enhance=eye_enhance,
             contrast=contrast,
             preset=preset,
+            fabric_wrinkle_smooth=fabric_wrinkle_smooth,
             **kwargs,
         )
