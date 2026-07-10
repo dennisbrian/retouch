@@ -2,8 +2,8 @@
 
 **Project:** Professional automated face retouching pipeline  
 **Repository:** https://github.com/USERNAME/REPO  
-**Status:** Mature (v2.1.0 — Fuji-quality color recipe system)  
-**Last Updated:** 2026-07-02
+**Status:** Mature (v2.0.0 — Fuji-quality color recipe system)  
+**Last Updated:** 2026-07-10
 
 ---
 
@@ -16,7 +16,7 @@ This is a **production-grade image processing engine** that applies professional
 - Color grading + Fuji film simulation presets
 - Virtual studio relighting + advanced lens effects
 
-**16.5k LOC, 40 core modules, 1,626 passing tests.**
+**~39.5k LOC (retouch/*.py + gui.py + cli.py), 66 modules in retouch/, 3,491 tests collected (pytest --collect-only, 2026-07-10).**
 
 ---
 
@@ -94,7 +94,7 @@ Cuts memory from 7.5 GB → 1.84 GB, runtime from 15.3s → 3.09s.
 ## Testing & Quality
 
 ### Test Coverage
-- **1,626 tests passing, 1 skipped** (model gate)
+- **3,491 tests collected** (`pytest --collect-only`, 2026-07-10) — full-suite pass/fail baseline not re-run at this count
 - **89% coverage** on core modules (per `pytest --cov`)
 - **Unit + integration tests** for every public API
 - **Deep algorithmic verification** (monotonicity checks, round-trip stability, etc.)
@@ -107,7 +107,6 @@ Cuts memory from 7.5 GB → 1.84 GB, runtime from 15.3s → 3.09s.
 ### Known Limitations
 - Remaining ~4% undetected faces: extreme profiles, heavy occlusion, tiny faces in distance shots
 - LUT hot-reload (daemon thread watcher) exists but not wired into GUI/CLI yet
-- `.3dl` LUT loader has no upper-bound on file size (theoretical DoS, not reachable from GUI)
 
 ---
 
@@ -226,7 +225,7 @@ Fixes #142
 ```python
 from retouch.utils import log_crash
 # Automatically called on exceptions in gui.py render loop
-# Writes timestamped file to current dir: crash_YYYYMMDD_HHMMSS.log
+# Writes to ~/.cache/retouch/crash.log
 ```
 
 ### Common Issues

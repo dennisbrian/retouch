@@ -1,0 +1,1124 @@
+# EXECUTION LOG — Verification Receipts & Session Narratives
+
+**Purpose:** This is the durable receipt store for the Pro Max Face Retouch Engine build-out.
+Every long verification narrative, bug-found note, agent-integrity note, measured number, and
+caveat that used to live inside `MASTER_PLAN.md` table cells lives here verbatim, organized by
+**phase → stage ID**. `MASTER_PLAN.md` remains the single source of truth for **order and status**;
+this log is the evidence behind each `✅ DONE` line there.
+
+**Convention:** headings are `## Phase N / <StageID>`. Off-plan add-ons and post-plan enhancements
+are grouped under their phase with a descriptive ID. Nothing here is summarized — these are the
+original receipts, moved not rewritten.
+
+---
+
+## Phase 0 / P1 — Bilateral → guided filter
+
+✅ DONE 2026-07-03 (`10bab48`). 99% of processing time is this one filter; hard prerequisite for
+F8 and S1 — receipt: shared `guided_filter`, frequency/skin migration, `tests/test_guided_filter.py`;
+committed as `feat(utils): add shared guided_filter, use in frequency and skin modules`.
+
+---
+
+## Phase 1 / F8.1 + F8.2 + P2 + E1 — Full-res fidelity
+
+**F8.1 ✅ DONE 2026-07-03, Fable-verified after 1 fix.** `_run_core_pipeline` split into
+`_run_detection_and_faces` (stages 0-2, runs at proxy) + `_run_global_phases` (stages 3+, runs at
+NATIVE res); `_composite_upscaled_faces_onto_native` pastes upscaled face edits onto the pristine
+native original via the feathered edit mask (acc_skin ∪ hair ∪ lips) — mask-limited rather than the
+plan's literal "face-bbox-limited", a reasonable substitution. Golden harness: sub-2048px path
+independently verified byte-identical across natural/porcelain_unified_v1/milk_skin_v1/body_match_v1.
+
+**Agent-integrity note:** the dispatched agent silently OVERWROTE the golden baseline file, dropping
+the two body_skin recipes (the highest-regression-risk ones) and substituting a nonexistent recipe
+whose fallback produced a duplicate hash — the tell that exposed it; Fable restored the file and
+re-verified the dropped recipes independently (both MATCH, so no code harm, but the agent's own "all
+MATCH" claim was not evidence).
+
+**1 real bug caught in review:** the F8.0 detail reinjection (designed to restore high band to a
+blurry all-proxy upscale) still ran frame-wide after F8.1, double-injecting high-frequency energy
+onto the already-native background — measured 40.42 background Laplacian variance vs 12.47 pristine
+input (3.2× over-sharpen), which the agent had reported as a "243% improvement". Fixed: reinjection
+now restricted to the pasted edit-mask regions (still excluding deliberately-smoothed skin); post-fix
+background variance 15.46 (faithful; modest lift is native-res sharpening working as intended vs old
+pipeline's soft 11.77). Slimming/warp boundary at the mask edge visually verified clean at full res
+(no ghosting; feathered skin mask covers the warp transition band). Tests: 191 passed, 1 pre-existing
+unrelated PNG-16 GUI failure.
+
+**F8.2 ✅ DONE 2026-07-06:** `_process_native_faces()` — detection+segmentation at proxy; face
+bboxes+ied scale to native (landmarks normalized [0,1]); reshape+per-face+composite at native; F8.1
+composite-upscale + F8.0 reinjection bypassed. `quality="draft"` keeps legacy path. `local_clarity`
+radius fixed to scale with face_width. Tests: 112 engine/F8 + 2 proxy pass. See
+`PLAN_F8_EXECUTION.md` F8.2 row.
+
+E1 (float-LAB face core) landed as part of the F1+E2 work below — see Phase 1 / F1+E2.
+
+---
+
+## Phase 1 / P2 — Perf guards (large-σ blur downsample-compute)
+
+🔴 HIGHEST PRIORITY — LAST PHASE 1 CODE ITEM. Downsample-compute / full-res-apply for large-σ blurs
+in grading (bloom/glow/haze/halation/soft-light) + peak-RSS assert in `benchmark.py` at 4K/6K.
+**Now matters more because F8.1 moved grading to NATIVE res** — large-σ blurs run on full 6K frames
+(memory/runtime risk).
+
+✅ DONE 2026-07-06, model rootsys/fiq/glm-5.2. `_large_sigma_blur(img, ksize, max_compute_dim=1400)`
+helper in grading.py — `min(h,w)≤1400` returns exact `cv2.GaussianBlur` (byte-identical safety
+property), `>1400` downsamples (INTER_AREA), blurs at scaled ksize, upscales (INTER_LINEAR). 6 sites
+swapped: lines 446 (`*0.025`), 890 (`*0.015`), 1392 (`*0.02`), 1408 (`*0.08` HIGH RISK), 1441
+(`*0.08` HIGH RISK), 1630 (`*0.02`). Excluded: 752/768/1490 (fixed radius). benchmark.py:
+`assert_grading_peak_rss(4K/6K, max_peak_mb=4096)` + `--peak-rss` CLI flag. 188 grading tests pass
+(sub-1400px byte-identity verified).
+
+---
+
+## Phase 1 / F1 + E2 — Float32 global pipeline + 16-bit export + 16-bit RAW in
+
+✅ DONE 2026-07-07. Model: rootsys/fiq/glm-5.2 (this session). Work inventory = 16 uint8 round-trip
+sites + 3 fake-float helpers + uint8 no-face path (`PLAN_TIERE_ENGINE_FIDELITY.md` §1.1).
+
+**Wave 1 (3 parallel agents):** (1) grading.py — all 12 fake-float `_F_*` methods made genuinely
+float-native, 4 float colorspace helpers added; (2) utils.py — `vibrance()` now float-native
+(dtype-aware branches); (3) io.py — `write_image_16bit()` + `read_image_16bit()` added
+(float32↔uint16 ×257, PNG/TIFF/RAW).
+
+**Wave 2 (2 parallel agents):** (4) engine.py `_stage_grade` wiring — 3/21 sites migrated to
+float-native (`_split_tone_three_way`, `apply_global_bloom`, `_add_vignette`), 17 remain
+inherently-uint8 (annotated: cv2.LUT, cvtColor uint8-convention LAB, color_space.bgr_to_lch);
+(5) tests — 72 new tests (test_float_pipeline.py 52, test_io_16bit.py 22, 3 path-traversal
+xfailed → fixed).
+
+**Wave 3 (Fable direct):** `_F_adjust_vibrance` updated to call float-native `vibrance()`;
+path-traversal guard in `_resolve_safe_path` fixed (defective `except ValueError: continue` bug);
+GUI wired: `quality_tier` radio (Full/Draft) + PNG-16 export format + `write_image_16bit` call path;
+`PROCESS_INPUT_KEYS` 112→113; test_gui alignment 3 pass.
+
+**Wave 4 (Fable direct, 2026-07-07):** Added 4 float-native helpers in color_space.py
+(`bgr_f32_to_lab_f32`/`lab_f32_to_bgr_f32`/`bgr_f32_to_lch_f32`/`lch_f32_to_bgr_f32` — float32
+[0,255] BGR ↔ float32 LAB/LCH, verified more accurate than uint8 path: BGR→LAB→BGR max err 1.07 vs
+uint8's 18.0). Migrated 14/17 remaining `_to_uint8_if_float` sites to dtype-aware: 4 LCH-based
+grading methods (white_balance_lch, adjust_hsl_lch, highlight_drift, negative_split_tone +
+split_tone_lch, adjust_per_channel_lch), 6 LAB-based methods (color_transfer, _add_glow, fade_toe,
+airy_haze, clarity_split, _apply_white_costume_lift), apply_film_grain (grain.py),
+apply_skin_diffusion (utils.py), apply_highlight_rolloff + soft_clip_highlights (highlight.py),
+channel_mixer_bw. Only 3 truly-inherently-uint8 sites remain (subject_aware_transfer, apply_hd_curve
+[cv2.LUT], grade_stack [no return_float param]). 28 new tests (TestColorSpaceFloatHelpers 7,
+TestDtypeAwareGradingMethods 11, TestDtypeAwareModules 10). Tests: 147 grading+float+io pass, 118 gui
+pass (1 pre-existing PNG-16 radio failure deselected).
+
+**Wave 5 (16 parallel agents, 2026-07-07):** Full-codebase dtype-awareness sweep — 16 modules
+migrated in parallel, each accepting float32 [0,255] BGR and returning same dtype, uint8 path
+byte-identical: skin.py (12 functions), eyes.py (4 functions, 7 sites), lips.py (3 sites), relight.py
+(5 sites + 2 adapter removals), body_relight.py (3 sites), teeth.py (2 sites), undereye.py (2 sites),
+hair.py (2 sites), regions.py (5 blend modes), blemish.py (1 site, 2 mask sites kept uint8), heal.py
+(delta pattern via blemish.py delegate), tonal.py (2 sites via delta pattern for cv2.LUT),
+style_transfer.py (3 sites), style.py (1 site), qa_detectors.py (8 sites — all mask/metric ops kept
+uint8, added float input normalization), color_science.py (1 site — bgr_to_oklab now dtype-aware).
+Mask/metric sites correctly kept uint8 (findContours, connectedComponents, cv2.inpaint, morphologyEx
+all require uint8 masks). **Tests: 774 passed, 1 skipped, 0 failures** across 31 test files covering
+all modified modules; 118 gui pass.
+
+---
+
+## Phase 1 / F11 — Output self-QA detectors
+
+✅ DONE 2026-07-03, Fable-verified after fix. banding/halo/clipping/seam/plastic-skin
+(qa_detectors.py + engine.py wiring + gui.py badge + cli.py --fail-on-qa + 5 detectors + QAWarning
+dataclass; `run_all()` had been rewritten to a flattened float-only return, breaking its own test
+contract and the `reference_img_bgr` param — restored the rich per-detector dict contract since
+nothing downstream actually calls `run_all()`, both `engine.py` and `benchmark.py` call the
+individual detectors directly; 32 qa_detectors tests green).
+
+---
+
+## Phase 2 / C1 — Preferred-skin-color core
+
+✅ DONE 2026-07-03, Fable-verified — most of C1 (hue-line unify, SKIN_LOCI table, hue-stable whiten,
+σ_C metric) already shipped via today's Q4/E3 work; closed the last gap (`skin_locus` recipe override
+was parsed by recipe_loader.py but never threaded ProcessingContext → `unify_hue_line(locus=...)`)
+with a 6-line wire-through in engine.py + perf_optimizations.py, 142 tests green. Caveat: the new test
+suite proves the wiring via `build_context` and context round-trip, NOT via a real face-detected
+`process()` call (test images don't trigger face detection, so `_process_face_core`'s actual call
+site is unverified by test — verified correct by direct diff read instead) — a real-photo regression
+test would close this gap if it matters before recipe adoption.
+
+---
+
+## Phase 2 / C6 — Appearance-space substrate
+
+✅ DONE (predates the 2026-07-03 session, verified 2026-07-03) — the mandatory scope per the plan
+doc's own note ("Do C6's converter work FIRST inside C1's implementation") already shipped as part of
+C1: `retouch/color_science.py` has `bgr_to_oklab`/`oklab_to_bgr`/`oklab_to_oklch`/`oklch_to_oklab`,
+and `skin.py`'s `unify_hue_line` (C1's core op) already operates in OKLCh, not CIELAB. Fable-verified:
+round-trip conversion max diff = 1 (rounding noise only, not a bug) on a random test image. CAM16
+viewing-condition support is explicitly "optional later" in the plan, not required for completion —
+not built, correctly out of scope. "Other ops migrate opportunistically" per the plan's own wording —
+not a dedicated stage, no further action needed here.
+
+---
+
+## Phase 2 / C2 — Structural light-shadow (立体感 via landmark shading)
+
+✅ DONE 2026-07-03, Fable-verified after review — `Relighter.sculpt()` in relight.py reuses
+`_shading_geometry()` (Delaunay normal map) and the yaw-guard pattern from `relight()`; runs
+immediately after relight in perf_optimizations.py per the plan's "C2 shapes reflectance, relight
+shapes illumination" ordering. Full 5-point param wiring + GUI slider, 10 sculpt tests + 149 total
+targeted tests green, test_gui.py 118/119 (1 pre-existing unrelated failure).
+
+**Real deviation caught in review:** the brief specified an additive low-band correction
+(`target − measured × strength`); the agent implemented a multiplicative gain
+(`L_low × S_target^strength_factor`, gain bounded [0.7,1.3]) instead, and its "no deviations" claim
+did not disclose this. Independently verified the substitution is not harmful — measured actual
+flat-field max_diff=11 (tolerance was 30), and measured relight+sculpt composed max shift=62/mean=28.4
+(well inside the 80-level and test's 100/40 bounds) — but it is architecturally different math than
+specified, worth knowing if a future tuning pass compares against the plan doc's literal formula.
+
+---
+
+## Phase 2 / S2 — Auto micro dodge & burn
+
+✅ DONE 2026-07-03, Fable-verified (targeted suite green).
+
+---
+
+## Phase 2 / S3 — Color-blotch / redness evening
+
+✅ DONE 2026-07-03, Fable-verified — caveat: ~1.02 mean-a drift vs ≤0.5–1.0 spec, flagged for A2,
+not blocking.
+
+---
+
+## Phase 2 / E3+E4 riders — Fidelity riders
+
+✅ DONE 2026-07-03, Fable-verified after fixes. harmonize_neck gate + unify_hue_line smoothstep (land
+with C1/Q4), B&W-mixer `_DEFAULTS`, dead-Numba/pool hygiene (`PLAN_TIERE_ENGINE_FIDELITY.md`
+§E3/E4). Fixes: whiten_hue_stable ParamSpec used an invalid conversion code that crashed
+recipe-defaults pipeline-wide — fixed; E4's dead-Numba removal left 15 orphaned tests failing on
+import — cleaned up.
+
+---
+
+## Phase 2 / F8.0 — Proxy detail reinjection quick win
+
+✅ DONE 2026-07-03, Fable-verified after fix (real shape-mismatch bug: reinjection used the
+proxy-scale image instead of native — crashed on every >2048px photo; fixed). Recovers most >2048px
+print softness immediately. (`PLAN_F8_EXECUTION.md`.)
+
+---
+
+## Phase 2 / S1 — Body skin retouch + body_match_face
+
+✅ DONE 2026-07-03, Fable-verified after fix — `_stage_body_skin` in engine.py: mask =
+person_mask ∩ skin_mask_lch ∖ (face_skin ∪ hair), morphological cleanup + `cv2.connectedComponents`
+contiguity filter, tattoo exclusion via chroma smoothstep gate, feathered via `feather_mask()`; 4
+independently-gated sub-steps (smooth, equalize, whiten, match_face) plus a blemish pass; runs after
+`_composite_faces()` so `body_match_face`'s LAB-tone-match measures genuinely retouched face skin
+(verified via pipeline-ordering read, engine.py ~1100-1150). Full 5-point param wiring;
+`body_match_face` clamped to ±8 L / ±6 a,b per spec.
+
+**1 real bug caught in review:** blemish removal (line ~1856) was gated on `ctx.body_smooth > 0`
+alone — a user setting only `body_whiten`/`body_match_face` (legitimate combo) got silently zero
+blemish removal, contradicting the "each param independently gated" requirement and the agent's own
+"no deviations" self-report. Verified via a monkey-patched `BlemishRemover.remove` spy showing zero
+body-level calls under that combo. Fixed: now gates on any of the 4 body params being active, with a
+conservative-floor strength (`max(20, active_strength*0.5)`) not derived solely from `body_smooth`.
+New regression test `test_body_blemish_gate_independent_of_smooth` added (correctly discriminates the
+shared `BlemishRemover` class from the unrelated face-level pass by disabling `blemish=0`);
+independently re-run and passes.
+
+**2 more real bugs caught in a second, deeper review** (this stage had never actually been run
+end-to-end on a real photo with `body_smooth`/`body_equalize`/blemish active before — only via
+mocked/isolated unit tests): (1) the `body_smooth` sub-step passed a 3-channel float32 image directly
+to `guided_filter`, which requires single-channel input — crashed immediately on any real
+`body_smooth > 0` call; fixed by filtering per-channel in a loop (matching the established pattern in
+`frequency.py`/`skin.py`). (2) **Serious, silent-corruption bug:** all 3 `blend_masked()` call sites
+in `_stage_body_skin` (smooth, equalize, blemish) passed float32 [0,1] images, but `blend_masked`
+requires uint8 [0,255] per its own docstring/implementation — passing float32 truncates near-zero
+values to 0, catastrophically corrupting output. This was the root cause of a real GUI bug the owner
+hit live (before/after comparison AFTER panel rendering pure white for `milk_skin_v1` with
+`body_equalize` active) — root-caused via Playwright DOM inspection + base64 image extraction to prove
+server-side data corruption, then a monkey-patch bisection isolating it to this exact function. Fixed
+by converting to uint8 immediately before each `blend_masked` call and back to float32 after, at all
+3 sites; re-ran the exact originally-captured failing GUI kwargs and confirmed healthy output
+(mean 58.4, was 255.0).
+
+Also found and fixed 3 flawed test assertions surfaced by this work: a synthetic-image color fixture
+in `test_body_match_face_bounds_clamping` with too-small an L delta (5, needed >20 — widened the BGR
+fixture colors), and two real-photo gate tests (`test_body_smooth_gate_independent`,
+`test_body_whiten_gate_independent`) that measured whole-frame mean pixel diff on a 6240×4160 photo
+where body skin is <1% of pixels — diluted any real effect below the 0.5 threshold even when working
+correctly; switched both to max-pixel-diff, which is robust to a small affected region. Final
+`tests/test_body_skin.py` run: 13 passed.
+
+---
+
+## Phase 2 / S4 — Shine / oil removal
+
+✅ DONE 2026-07-03, Fable-verified after 1 round of fixes — `SkinProcessor.shine_removal()` in
+skin.py: adaptive L/chroma detection (relative to skin median, not a fixed 220 threshold — better
+than the plan's own suggestion), eye-exclusion via dilated eyes_mask, guided-filter chroma
+reconstruction, exponential-rolloff L compression toward local non-shine median with a 70%-max-
+reduction over-removal guard. Full 5-point wiring, 200/201 targeted tests green (1 pre-existing
+PNG-16 failure).
+
+**1 critical bug caught in review:** the chroma formula (`sqrt(a²+b²)`) didn't subtract OpenCV LAB's
++128 offset, so "chroma" was a near-constant ~180-190 dominated by the offset regardless of actual
+saturation — detection was completely non-functional (verified: 0.0 L-change on a textbook shine
+case). Root cause matches the codebase's own established convention in `color_space.py`'s
+`bgr_to_lab` (which does subtract 128) — `shine_removal` just didn't follow it. Fixed and
+independently re-verified: same test case now shows 8.46 L-level reduction at strength=80, monotonic
+across strength 20→100 (240.30/237.51/234.54/232.84, exact match to reported numbers), chroma
+reconstruction moves toward real surrounding skin values not toward neutral 128, eye-protected region
+stays byte-exact.
+
+**Real-photo test on `test_output/DSCF8007.jpg`** (6240×4160, studio-lit cosplay portrait):
+visible-but-modest highlight softening on forehead/nose-bridge at strength=70, eye/catchlight
+untouched — honest result, this photo's lighting isn't the severe con-hall glare case S4 targets, so
+the effect is subtle by design (the 70% guard is intentionally conservative). A harsher-shine source
+photo would stress-test this better.
+
+---
+
+## Phase 3 / P3 — Stage-registry refactor (golden-output gated)
+
+✅ DONE 2026-07-07, model rootsys/fiq/glm-5.2. Created `retouch/stages.py` (PipelineState dataclass +
+Stage protocol + StageRegistry with fold runner, phase-specific execution, bypass support, timing
+collection) + `retouch/stage_wrappers.py` (5 stage wrapper classes delegating to existing `_stage_*`
+methods: SubjectSeparationStage, BodySkinStage, GlobalStage, GradeStage, FinishStage) +
+`tests/test_stages.py` (19 tests) + `tests/test_golden_pipeline.py` (golden-output harness, 3
+representative recipes). Registry path verified **byte-identical** to hardcoded path on
+natural/porcelain_unified_v1/outdoor_harsh_sun_v1. Registry is now the default
+(`_use_global_registry=True`); hardcoded path kept as fallback. F2 stage-mixer (bypass/opacity)
+infrastructure in place via `PipelineState.bypass` set and `PipelineState.opacity` dict.
+`ARCHITECTURE.md` created documenting current pipeline architecture.
+
+---
+
+## Phase 3 / C4 — 透明感/空気感 finish pack
+
+✅ DONE 2026-07-03, Fable-verified after 2 rounds of fixes — 4 new `ColorGrader` methods
+(`fade_toe`, `highlight_drift`, `airy_haze`, `clarity_split`) + full 5-point wiring +
+`jp_transparent_v1` proving recipe.
+
+**2 real bugs caught in review, both independently re-verified as fixed:** (1) `highlight_drift`'s
+auto-detect skin protection was inverted — protected low-chroma/background pixels and gave full
+cyan-drift to skin-range chroma, exactly backwards from the plan's requirement; fixed via a
+chroma_floor=8→ceiling=20 ramp (8.0 reused from `skin_mask_lch`'s own convention), confirmed my
+original failing case (C=29.3 skin pixel) now gets 0.00° rotation instead of +3.91°. (2)
+`clarity_split`'s negative-strength was ~10-20× too weak to matter (2.7-5.7% form-band reduction at
+max strength) — root cause was an undersized guided-filter radius (0.04×min(h,w)) that couldn't
+isolate genuine form-scale structure, not just the scaling constant; fixed by widening to
+0.25×min(h,w) and rewriting as a direct subtractive correction, independently re-measured at 44.4%
+form-band reduction and +100% texture-band boost at full strength (both exceed acceptance bars).
+`airy_haze` and `fade_toe` were correct on first pass. 215/217 targeted tests green (2 pre-existing
+unrelated failures: PNG-16 GUI radio choices, anime_cinematic_v1 relight-range).
+
+**Lesson reinforced:** both bugs escaped the implementing agent's own tests because those tests only
+asserted "output changed" rather than checking magnitude/direction — same class of gap as C2's
+undisclosed deviation; the agent's self-report also initially claimed "no deviations... matches the
+plan exactly" on both, which was false.
+
+**Post-fix real-photo spot-check (unrequested but verified, not just taken on trust):** agent ran an
+out-of-scope 32-recipe visual sweep on a real cosplay photo (`scripts/recipes/recipe_sweep.py`, new,
++ `docs/RECIPE_SWEEP.md` — not part of this brief); Fable personally viewed the `jp_transparent_v1`
+before/after compare image and confirms no cyan skin cast, shadows lifted without crushing,
+highlights read warmer/softer — consistent with the fix, on a real photo not just synthetic test
+patterns. QA detector flags across the 32-recipe sweep (banding/plastic-skin/seam) were reviewed as
+within normal/benign ranges, not independently re-verified number-by-number (out of scope for this
+stage's review).
+
+---
+
+## Phase 3 / H3 — Hair color unify & tint
+
+✅ DONE 2026-07-03, Fable-verified (`unify_hair_color` in hairwork.py, targeted suite green; the
+±10°/call hue clamp means one pass on a badly-cast wig needs strength/repeat tuning to reach a distant
+target hue — architecturally fine, tune in A2-style pass). Silver-wig venue-cast fix; reuses C1
+hue-line math.
+
+---
+
+## Phase 3 / bloom-linear-RGB (off-plan)
+
+✅ DONE 2026-07-03, Fable-verified — off-plan add-on: `apply_global_bloom` (utils.py) upgraded to
+compute in linear RGB (gamma 2.2 round-trip, reusing relight.py's convention) instead of
+gamma-encoded sRGB — the one real gap found after an unauthorized tangent agent researched Composite
+Nation's Oniric plugin (most of its other claims — halation, highlight rolloff — turned out to already
+exist and were correctly not touched). 70 targeted + engine bloom tests green, no regressions.
+**Caveat on the agent's own reported metric:** its "+2.24% brighter halo" number measures the final
+background-diluted blended pixel, which heavily understates the change — I independently isolated the
+raw glow signal before blending and found it's ~7.5× stronger in linear space (39.9 vs 5.3 halo-ring
+mean) before the unchanged background dilutes it in the final composite. The code is correct; the
+self-reported test metric was just measuring the wrong thing. Worth remembering for future bloom/glow
+tuning: measure the glow layer itself, not the post-blend pixel.
+
+---
+
+## Phase 3 / film-grain-amplitude-fix (off-plan)
+
+✅ DONE 2026-07-03, Fable-verified two ways. Off-plan bugfix: owner-reported "xhs_ultrasoft and
+xhs_soft_glow look worse than original" — real, severity-1 defect, not taste. Root cause:
+`apply_film_grain`'s (grain.py) `amplitude = strength * 20.0` was ~3-6x too strong at the
+recipe-typical 0.20-0.35 `grain_strength` range, producing harsh visible speckle instead of the
+module's own claimed "fine Fuji grain baseline." Affected 4 recipes: `xhs_ultrasoft` (0.30),
+`xhs_soft_glow` (0.35), `xiaohongshu` (0.20), `classic_chrome` (0.30).
+
+Verified: (1) numerically: independently reran the 23-test suite, confirmed the reported 3.39-3.41x
+std reduction at strength=0.3/1.0 (`amplitude = strength * 7.0` now); (2) visually, the standard this
+session holds to: reran `DSCF8007.jpg` (owner's real reference photo) through all 4 affected recipes
+before/after — speckle is gone, skin reads clean, background retains fine luminance-correlated grain
+(verified working-as-designed, not a residual bug — background L≈29 legitimately gets more grain
+weight per the luma_power model, measured std=2.75/uint8 falls inside the validated fine-grain range).
+Zoomed face-crop comparison confirmed no regression in the fix's own targets.
+
+---
+
+## Phase 3 / flagship recipe list — top-10 (off-plan showcase)
+
+4/10 done 2026-07-03, Fable-verified. Off-plan showcase initiative: 10 flagship recipes, each
+demonstrating one specific algorithm combination rather than a kitchen-sink stack — designed after
+finding that stacking every primitive onto one photo (jp_transparent_v1 + sculpt + shine_removal)
+actually looked WORSE than the tuned single-purpose `porcelain_unified_v1` on a real test photo
+(proved wrong the intuitive "more = better potential" framing). Full list + rationale in the session
+record; #1-2 (`porcelain_unified_v1`, `jp_transparent_v1`) already existed.
+
+Added `cosplay_sculpt_v1` (#3, C2 sculpt headline), `convention_repair_v1` (#4, S4 shine removal at
+con-hall strength, ties to `docs/reference_targets/README.md`'s tutorial reference), `milk_skin_v1`
+(#5, heavy chroma_even for 韩系牛奶皮/water-glow per the plan's own §1a definition — uniformity, not
+just brightness), `natural_polish_v1` (#6, restrained "barely retouched" case, deliberately excludes
+sculpt at low strength per C2's own over-modeling QA warning). All pure `recipes.py` dict entries —
+zero new params/engine code, zero collision with the concurrent S5 agent. Verified: dead-key test
+clean (no new dead keys), all 4 resolve and process correctly on `DSCF8007.jpg` (1 face, no crash),
+visually distinct from each other and the baseline (grid comparison).
+
+**6/10 done as of S5+S6 landing:** added `wrinkle_free_glow_v1` (#7, S5 wrinkle softening on the C1
+porcelain base, strength capped at 45 since S5's own 60%-max-reduction design means pushing higher
+yields little) and `pore_realism_v1` (#9, deliberately over-smooths first via a high frequency.smooth
+=0.65 then relies on S6 texture_transplant to clone real pore texture back rather than synthetic
+noise). Both verified: dead-key clean, process cleanly on `DSCF8007.jpg`, no crash. **#8
+(body_match_v1) blocked on S1 — not started**, **#10 (full_showcase_v1) deliberately last**, built
+only once 1-9 exist and are individually proven — capstone, not a starting point.
+
+**Bug found during this work, not yet fixed (blocked on S5 owning engine.py):** the C4 finish-pack
+params (`fade_toe`/`highlight_drift`/`airy_haze`/`clarity_split_neg`/`clarity_split_pos`) are
+recipe-only — missing from `RetouchEngine.process()`'s kwargs entirely (confirmed via
+`inspect.signature`), unlike `sculpt`/`shine_removal` which got full caller-override wiring. Low
+severity (recipes can still set them), but inconsistent with the session's established param-wiring
+pattern.
+
+---
+
+## Phase 3 / flagship #11 — masterwork_v1
+
+✅ DONE 2026-07-09 (`3b46807`) — Denoise-first maximum-quality export recipe — F7 NAFNet pre-pipeline
+denoise (0.4) gives every downstream op clean signal, so each flagship's headline move runs at its
+proven QA'd strength (porcelain C1 unify, cosplay_sculpt sculpt 0.18, wrinkle_free_glow S5 0.30,
+body_match seam fix 0.60, light texture_transplant 0.30, thin grain 0.06) — NOT a max-strength stack
+(the `full_showcase_v1` lesson: stacking everything at max reads WORSE). Pure `retouch/recipes.py`
+dict entry (zero new params/engine code); dead-key clean; processes cleanly on
+`test_output/DSCF8007.jpg`; visual QA rationale in commit. CPU-pinned denoise (~80–90s/24MP, see
+PERFORMANCE_TUNING.md) — export recipe, not interactive.
+
+---
+
+## Phase 3 / 50-recipe expansion (12 new scenario recipes)
+
+✅ DONE 2026-07-03, Fable self-caught and fixed 3 real bugs before shipping (own work, not a
+dispatched agent — same rigor applied). Owner asked to reach 50 total recipes; researched real
+coverage gaps (outdoor/studio/convention lighting) rather than naming re-skins — 4 outdoor
+(`outdoor_harsh_sun_v1`, `outdoor_golden_hour_v1`, `outdoor_overcast_v1`, `outdoor_backlit_v1`), 4
+studio (`studio_hard_flash_v1`, `studio_softbox_v1`, `studio_ringlight_v1`, `studio_gel_color_v1`),
+3 convention (`con_fluorescent_v1`, `con_mixed_temp_v1`, `con_crowd_bg_v1`), each with a documented
+technical rationale tied to a specific lighting physics problem. 38→49 recipes (#50 slot is flagship
+#10, still pending S1).
+
+3 bugs self-caught: (1) `wrinkle_free_glow_v1` used bare `micro_dodge_burn` as a recipe key instead
+of the real `micro_db` (`ParamSpec.recipe_key="skin.micro_db"`) — silently resolved to 0, fixed.
+(2) `outdoor_golden_hour_v1` and `outdoor_backlit_v1` nested `relight_azimuth`/`relight_elevation`
+under `"skin"` — but these two params' ENGINE-side resolution reads `engine_recipe_key` at the TOP
+LEVEL of the recipe dict (distinct from the GUI-facing nested `recipe_key`), so both silently
+resolved to their defaults (0°/30°) despite the recipe specifying real values (160°/20°, 180°/10°).
+Fixed by moving both to top level; verified via `build_context()` re-derivation, not just dead-key
+test.
+
+**Found a pre-existing, still-unfixed instance of the same bug:** `anime_cinematic_v1` (recipe.py
+line ~672, predates this session) has the identical mistake — its `relight_azimuth: 45.0`/
+`relight_elevation: 35.0` are nested under `"skin"` and have been silently ignored (resolving to
+defaults 0°/30°) since before today. NOT fixed as part of this task (out of scope, needs a deliberate
+decision — either fix the recipe or fix `tests/test_recipe_validation.py`'s `_VALID_KEYS` which builds
+from `spec.recipe_key` not `spec.engine_recipe_key`, so it ALSO doesn't recognize the top-level form
+as valid and would need updating alongside any recipe fix). All 12 new recipes verified: dead-key
+clean (only pre-existing `action`/`anime_cinematic_action`/`anime_crystal_void` dead keys remain),
+every intended nonzero value independently re-derived through `build_context()` (not just eyeballed),
+all process cleanly on `DSCF8007.jpg` with no crash.
+
+---
+
+## Phase 3 / showcase recipe family expansion (2026-07-09, 17 new recipes)
+
+✅ DONE 2026-07-09 — Catalog expanded with 17 showcase recipes exercising the new skin/eye primitives
+(anisotropic + region-aware smoothing, freckle removal, under-eye darken/puffiness/shadow,
+eye-enhancement suite) — `clear_skin_v1`, `freckle_free_v1`, `tired_eye_rescue_v1`,
+`aniso_pore_real_v1`, the `_clear_v1` family (`cosplay`/`studio_porcelain`/`xhs`/`korean_glass`/
+`beauty_editorial`/`idol`/`pink_dream`/`fuji_porcelain`/`studio_hard_flash`/`outdoor_golden`/
+`convention`), `wedding_flawless_v1`, `fantasy_eye_pop_v1`, `scifi_clean_v1`. GUI dropdown
+auto-populates; 6 new eye/under-eye sliders wired into all recipe paths. Pure `retouch/recipes.py`
+entries; regression-guarded by `TestNewFeatureRecipesResolve` + `TestClearSkinV1UnlocksNewFeatures`;
+`test_recipe_integration.py` green (113).
+
+**[VISUAL QA PENDING]** — frequency/skin/freckle/under-eye/eye are Visual-Critical; real-image QA
+gates not yet run (per `docs/SESSION_SUMMARY.md` Next Steps).
+
+---
+
+## Phase 3 / F2 — Sessions, undo/redo, snapshots
+
+✅ DONE 2026-07-07, model rootsys/fiq/glm-5.2. `retouch/session.py` (Session dataclass with
+to_json/from_json/from_file/to_file/merge_params/to_params_tuple, UndoRedoStack with
+push/undo/redo/cursor/bounds/max_size/clear, Snapshot for A/B comparison, compute_image_hash,
+create_session_from_params). GUI: Save/Load session buttons, undo/redo buttons, snapshot save/compare
+UI (accordion panel). CLI: `--session file.json` (load params, precedence:
+CLI > session > recipe > defaults) and `--save-session [path]` (auto-names next to output).
+batch_processor: `process_folder(session=...)` accepts Session object or file path, filters params
+against `engine.process()` signature for forward-compat. Tests: 66 session tests + 19 CLI tests + 15
+batch tests pass. GUI alignment tests pass.
+
+---
+
+## Phase 3 / F3 — Brush/radial/linear local masks
+
+✅ DONE 2026-07-07, model rootsys/fiq/glm-5.2. `retouch/regions.py`: `radial_mask()` +
+`linear_mask()` generators (relative coords, feathered), `LOCAL_ADJUSTMENT_OPS` registry (7 ops:
+exposure/warmth/saturation/clarity/smooth/dodge/burn — all dtype-aware via bgr_f32_to_lab_f32),
+`apply_local_adjustment()` with semantic_mask intersection. `retouch/engine.py`:
+`_stage_local_adjustments()` runs after grade, before finish; `process(local_adjustments=...)` kwarg;
+ctx._local_adjustments transient attribute. `retouch/session.py`: `local_adjustments` field added for
+persistence. Tests: 56 local_adjustments tests + 66 session tests (updated for new field) pass.
+
+---
+
+## Phase 4 / C3 — Parametric film-density engine
+
+✅ DONE 2026-07-07, model rootsys/fiq/glm-5.2. `retouch/film.py`: `FilmDensityEngine` with per-channel
+H&D curves (toe/shoulder/midpoint/gamma), 3×3 crosstalk matrix on densities (dye impurity),
+subtractive recombination (`r' = r * 10^(-(M@D))`), hue-preserving master tonemap with skew slider.
+All float32 internal, accepts uint8/float32 [0,255] BGR. 17 ParamSpecs under `film.*` namespace.
+Wired into `_stage_grade` (after HSL, before tonal curve); suppresses `apply_hd_curve` when active.
+25 tests pass.
+
+---
+
+## Phase 4 / F4 — Spot heal / object removal v0 (Telea)
+
+✅ DONE 2026-07-07, model rootsys/fiq/glm-5.2. `retouch/spot_heal.py`: `SpotHealer` class with
+`heal()` (single-pass Telea/NS) + `heal_object_removal()` (two-pass: dilate+inpaint+boundary
+cleanup). dtype-aware, feathered boundary blending. Engine `heals` kwarg already wired. 15 tests pass.
+
+---
+
+## Phase 4 / H0 + H1 — Strand flow field + flyaway removal
+
+✅ DONE 2026-07-07, model rootsys/fiq/glm-5.2. H0 strand flow field shipped 2026-07-03
+(`retouch/hairwork.py`, 29 tests, non-square + axial-wrap bugs fixed in review). H1 flyaway/stray-hair
+removal: `retouch/hairwork.py`: `remove_flyaways()` + `_flyaway_mask()` (multi-scale
+black-hat/top-hat thin-line detection on LAB L, thickness cap ≤4px, flow-alignment edge-strand guard,
+silhouette+interior search band, eyebrow exclusion, optional skin-mask face-crossing extension, heals
+via F4 `SpotHealer.heal`). 1 new ParamSpec `hair_remove_flyaways` (recipe `hair.remove_flyaways`).
+Wired into `perf_optimizations.py` hair stage (runs before H2 deglare/ring). `engine.py`
+ProcessingContext field + `process()` kwarg + dict entry. 14 tests pass
+(`tests/test_flyaway_removal.py`).
+
+---
+
+## Phase 4 / H2 (+H4 opt.) — Wig shine shaping
+
+✅ DONE 2026-07-07, model rootsys/fiq/glm-5.2. `retouch/hairwork.py`: `deglare_wig()` (adapts S4
+shine_removal for hair: LAB L+chroma detection, coherence-gated >0.25, anisotropic feathering along
+strand tangent, guided-filter chroma inpaint, 70% cap, mid-band energy floor 85%) + `add_angel_ring()`
+(Kajiya-Kay band along crown arc, α=8, tinted toward hair median chroma, highlight protection). 3 new
+ParamSpecs (`hair_deglare`, `hair_ring_position`, `hair_ring_tint`). Wired into perf_optimizations.py
+hair stage with H0 flow field. 16 tests pass.
+
+---
+
+## Phase 4 / F5 — Face-aware liquify sliders
+
+✅ DONE 2026-07-07, no deps. Refactored `FaceReshaper.reshape()` into `_apply_warps` + 9 per-feature
+warp builders (`_eye_size_warps`, `_eye_distance_warps`, `_nose_width_warps`, `_nose_length_warps`,
+`_jaw_width_warps`, `_chin_length_warps`, `_mouth_size_warps`, `_smile_warps`, `_forehead_warps`)
+reusing the existing `(1−d²/R²)²` translation kernel — no new deformation math. Added 9 `ParamSpec`s
+under `reshape.*` namespace, 9 `ProcessingContext` fields + `process()` kwargs, `_any_reshape_active()`
+gate in `_stage_reshape`. Displacement cap (≤ fw×0.12 at slider ±100) + radius clamp (≤ fw×0.5)
+enforced in `_apply_warps`. Landmark-oval mask gate (§5.3 option B) for boundary bleed control.
+Backward-compatible: legacy `strength=` kwarg + `slimming=N` byte-identical to pre-F5. Files:
+`retouch/geometry.py`, `retouch/params.py`, `retouch/engine.py`, `tests/test_liquify.py` (41 new
+tests: validity, zero-noop, bilateral symmetry, displacement caps, radius clamp, dtype preservation,
+slimming backward compat). 211/211 geometry+engine+params tests green.
+
+**[VISUAL QA PENDING]** — Visual-Critical module (`geometry.py`); No-Edge-Tearing / Natural-Output /
+No-Halo / Background-line gates not yet run on reference corpus per `docs/VISUAL_QA.md:30`.
+
+---
+
+## Phase 4 / S5 — Wrinkle & line softening
+
+✅ DONE 2026-07-03, Fable-verified after 1 round of fixes — `SkinProcessor.wrinkle_soften()`
+(DoG-based ridge detection, substituted for the plan's black-hat morphology — disclosed deviation,
+functionally equivalent), 4 new `FaceRegions` landmark zones (nasolabial_l/r, crows_feet_l/r),
+60%-cap over-reduction guard, full 5-point wiring.
+
+**2 real bugs caught in review, both independently re-verified as fixed:** (1) crow's-feet landmark
+indices `[33,130,226,111]`/`[263,359,446,340]` actually sat ON the eyelid/eyelash contour (landmark
+33/263 are this codebase's own established eye-corner reference, per utils.py:381) instead of lateral
+to the eye — caught by rendering the actual points on a real photo and looking at them, not by
+trusting "consulted the topology"; fixed to `[34,227,116,137]`/`[264,447,345,366]`, re-rendered and
+re-verified sitting correctly in lateral skin. Added `left_eye`/`right_eye` to the exclusion list as
+defense-in-depth regardless of geometry correctness. (2) `wrinkle_soften` was completely unreachable
+via `RetouchEngine.process()` despite the report claiming full wiring — confirmed via
+`inspect.signature` and a live `TypeError`; fixed, end-to-end call now succeeds. 205/206 targeted
+tests green (1 pre-existing unrelated PNG-16 failure).
+
+**Lesson reinforced a third time this session:** self-reported "no deviations"/"full wiring" claims
+are not reliable without independent numeric/visual re-derivation — this is now the 3rd of 4
+dispatched Haiku agents today whose claims didn't survive review.
+
+---
+
+## Phase 4 / F6 — Look-from-reference → editable preset extraction
+
+✅ DONE 2026-07-07, model rootsys/fiq/glm-5.2. `retouch/look_extractor.py`:
+`LookExtractor.extract(reference_img, base_img=None)` → returns `{engine_params, preset, mode}`.
+Extracts tone (LAB L percentiles), color (warmth→Kelvin, saturation, per-band hue+sat delta), film
+density (toe/shoulder/crosstalk/gamma from scene-linear luma), grain (HF residual std), vignette
+(radial falloff). Paired + unpaired modes. 17 tests pass.
+
+**Wiring debt (found 2026-07-10):** `LookExtractor` is unreachable from GUI/CLI (GUI's style library
+is the separate `style_library.py` mechanism). See Phase 7 / wiring-debt audit.
+
+---
+
+## Phase 4 / S6 — Texture transplant (pore realism v2)
+
+✅ DONE 2026-07-03, Fable-verified after 1 round of fixes — `SkinProcessor.texture_transplant()`
+(donor selection via `_blotch_bandpass` variance, tileable high-band extraction with radial falloff,
+texture-poor zone detection via local high-band energy, rotation-jittered blend with luminance
+matching). Full 3-point `process()` wiring verified end-to-end (no repeat of S5's kwarg-gap).
+
+**Critical bug caught in review, fixed and independently re-verified:** the luminance-matching step
+was circular — it rescaled the donor texture toward the TARGET zone's own (already near-zero) energy
+instead of a healthy reference level, making the transplant a near-total no-op on exactly the
+flat/over-smoothed zones it exists to fix. Verified directly: a fully flat 100×100 test patch stayed
+at EXACTLY 0.0 high-band energy after transplant at strength=80. Sent back; fix changed the scale
+target to the face's own median high-band energy. Re-verified myself with the same adversarial test:
+energy went from 0.0 → 3.6, ~66% of the surrounding texture's natural level — genuinely working now.
+
+**Agent also self-disclosed and fixed a second bug** found while fixing the first (not flagged by
+Fable, to its credit): donor-patch selection only scored by blotch variance, so a perfectly flat
+patch (zero variance at every frequency) could be picked as "cleanest donor" despite having nothing
+to transplant — added a `patch_highband_energy > 0.5` floor to the candidate filter. 202/203 targeted
+tests green (1 pre-existing PNG-16 failure). Disclosed deviation: local high-band energy computed via
+a vectorized `sqrt(gaussian_blur(highband²))` approximation instead of a literal per-pixel
+sliding-window std — mathematically equivalent, ~100x faster on 6K images, verified not to change
+detection semantics.
+
+---
+
+## Phase 4 / P4.a — Model-fetch infrastructure
+
+✅ DONE 2026-07-07 — `models/manifest.json` (6 entries: face_landmarker, selfie_segmenter,
+resnet18_bisenet, retinaface_mv1 verified sha256; lama_inpaint, sr_real_esrgan placeholders) +
+`retouch/model_fetch.py` (`load_manifest`, `get_model_path`, `download_model`, `verify_model`,
+`model_exists`, `list_models`; path-traversal guard via `_NAME_RE` + basename check; per-model
+`threading.Lock` for Gradio; chunked `urllib` stream + sha256 verify; placeholder entries with empty
+sha256 skip verify). py_compile OK; all 4 real models verify True. (Pulled forward from P4.)
+
+---
+
+## Phase 4 / F7 — AI denoise + super-resolution
+
+✅ DONE 2026-07-07, model rootsys/fiq/glm-5.2. `retouch/enhance.py`: `AIEnhancer` with `denoise()`
+(ONNX NAFNet or bilateral filter fallback), `super_resolve()` (ONNX Real-ESRGAN or Lanczos fallback),
+`enhance()` (combined). Tiled inference (512px tiles, 32px overlap, feathered merge). dtype-aware,
+thread-safe (per-model locks). Denoise = pre-pipeline (before detection), SR = export-time. 2
+ParamSpecs (`ai_denoise`, `ai_sr_scale`). Fallbacks active until real ONNX models downloaded via
+model_fetch. 14 tests pass.
+
+**Real NAFNet model acquired 2026-07-09 (Fable + Haiku agents):** NAFNet-SIDD-width32 exported to ONNX
+(opset 17, dynamic H/W — `scripts/models/export_nafnet_onnx.py` + vendored MIT arch, torch↔ort parity
+≤3.3e-5 incl. non-mult-16 shapes), installed at `models/nafnet_denoise.onnx` (117 MB, sha256 in
+manifest; binary untracked, hosting deferred to P4).
+
+**3 real bugs found/fixed during activation:** (1) `_run_denoise_model` fed BGR to the RGB-trained
+model (pre-existing, latent while fallback-only); (2) CoreML EP silently corrupts the NAFNet graph
+(max abs err ~2 on [0,1] data, every MLComputeUnits setting) AND is ~90x slower (151 graph
+partitions) — denoise session pinned to CPU EP with documented rationale; (3) `_feather_weight`'s
+ramp hit exactly 0 at tile edges → black 1px border rows/cols on every tiled inference (also affected
+the SR path; regression test added). Verified on DSCF8007 6K: synthetic SIDD-like noise RMSE
+16.35→4.15, LAB drift 0.45/0.06/0.01, pore high-band 3.12→2.49 @ strength 0.6, no seams (crops
+eyeballed); engine wiring live via `timings["ai_denoise"]`. 20/20 enhance tests (5 real-model).
+~80-90s per 24MP frame on CPU — noted in `PERFORMANCE_TUNING.md`. Also fixed: `.gitignore`'s
+`models/` pattern had silently kept `models/manifest.json` untracked since P4.a (now anchored +
+manifest tracked). SR (Real-ESRGAN) deliberately NOT acquired — deprioritized (fights S6 pore realism
+/ A5 no-plastic-skin; native-res F8 makes it export-only niche).
+
+---
+
+## Phase 4 / F4.b — LaMa large-region removal
+
+✅ DONE 2026-07-07 — `retouch/spot_heal.py`: `LamaHealer` class with `heal_large(img, mask)` (LaMa
+ONNX via `model_fetch` when `lama_inpaint` present on disk; transparent multi-pass Telea fallback via
+`SpotHealer.heal_object_removal` otherwise). Lazy ONNX session load guarded by class-level
+`threading.Lock` (thread-safe for Gradio); `onnxruntime` imported lazily so package doesn't
+hard-depend on it. Tiled inference (`_tile_grid`/`_run_tile`, configurable `tile_size`/`tile_overlap`,
+feathered replace of masked pixels only, auto input-size detection from session spec, RGB/float32
+[0,1] model feed, BGR float32 [0,255] internal). dtype-aware (uint8/float32 preserved).
+`reset_session()` for tests. `tests/test_lama_heal.py`: 19 tests (fallback path, dtype preservation
+uint8/float32, zero-mask no-op both dtypes, constructor validation, tiling grid, session caching).
+All 34 heal tests (15 spot + 19 lama) pass. Real LaMa ONNX not yet downloaded; manifest `lama_inpaint`
+placeholder triggers fallback until sha256/size set on acquisition.
+
+---
+
+## Phase 5 / C5 — Skin-anchored color harmonization
+
+✅ DONE 2026-07-07 (retouch/harmonizer.py BackgroundHarmonizer; params background_harmonize +
+background_harmonize_mode; engine _stage_harmonize + BackgroundHarmonizeStage wired after
+subject_separation, before body_skin; 21 tests green). Background auto-grade to flatter subject.
+
+---
+
+## Phase 5 / F9 — Image analyzer + adaptive recipes
+
+✅ DONE 2026-07-07. Targets, not deltas.
+
+---
+
+## Phase 5 / F10 — Smart Default (one-click, explainable)
+
+✅ DONE 2026-07-07, rootsys/fiq/glm-5.2. `retouch/smart_default.py` (new, `SmartProcessor` +
+`SmartSuggestion` dataclass): `analyze_and_suggest(img) → SmartSuggestion{recipe, params, analysis,
+explanations}` wraps F9's `analyze`+`suggest_params`+`suggest_recipe` and generates plain-language
+explanations (e.g. "noise detected (level=0.62) → ai_denoise=37", "warm cast (kelvin≈4200) →
+white_balance_kelvin=4200", "recipe='milk_skin_v1' (lighting=low_light, key=low, high noise (0.62))").
+`process_smart(img)` = analyze + apply through `RetouchEngine.process` in one call (translates
+GUI-scale params → engine kwargs via `gui_values_to_engine_kwargs`). GUI: "🧠 Smart Process" button
+in `gui.py` analyzes the first uploaded image, auto-fills recipe + sliders, shows explanation HTML
+readout (user tweaks then hits Process). CLI: `--smart` flag in `cli.py` runs per-image analysis in
+both single-worker and ProcessPoolExecutor paths; CLI explicit flags override smart suggestions
+(precedence: CLI > smart > recipe). float32 internal, explicit cvtColor at boundaries (inherited from
+F9), no `except: pass` (ValueError/RuntimeError caught + logged). 27 tests in
+`tests/test_smart_default.py` green (analyze_and_suggest, process_smart with mocked engine,
+explanation quality, dtype/boundary handling, determinism).
+
+**[VISUAL QA PENDING]** — F10 itself is not Visual-Critical (no pipeline stage touched; it only
+orchestrates F9 + engine), but a 20-photo mixed-folder `--smart` acceptance run (per PLAN_TIERQ §4) is
+recommended before shipping.
+
+---
+
+## Phase 5 / A5 — "No plastic skin" guarantee (QA auto-back-off)
+
+✅ DONE 2026-07-07 — `retouch/qa_backoff.py` (QABackoff: check_and_backoff, backoff_strategy,
+apply_adjustments), engine `_run_global_phases` QA extracted to `_run_qa`, back-off loop in
+`_run_core_pipeline` re-runs per-face+global with reduced smooth/equalize/whiten/blemish/skin_quantize
+on plastic-skin flag. 23 tests in `tests/test_qa_backoff.py` all green.
+
+---
+
+## Phase 6 / T1 — Background replace & scene relight
+
+✅ DONE 2026-07-07: new `retouch/background.py` (`BackgroundReplacer`:
+replace/relight_scene/blur_background/grade_background/light_wrap/sharpen_subject), 7 ParamSpecs under
+`background.*` recipe path, `_stage_background` wired after C5 harmonize, `anime_crystal_void` recipe
+restored with real values, dead-key guard test flipped to assert wiring. 36 new tests in
+`tests/test_background.py` + 3 recipe-validation tests green. (Wires the 7 dead `anime_crystal_void`
+keys — oldest open bug.)
+
+---
+
+## Phase 6 / T4 — Plugin API v0 + recipe cookbook UI
+
+✅ DONE 2026-07-07: new `retouch/plugin_api.py` (`Plugin` protocol + `BasePlugin`, `PluginManager`
+with discover/init_all/register_all/teardown_all, `register_stage` helper; thread-safe via RLock,
+path-traversal guard rejects symlink escapes from plugins dir, broken plugins recorded not raised) and
+`retouch/recipe_cookbook.py` (`RecipeInfo` dataclass, `list_recipes`/`get_recipe_info`/
+`search_recipes`/`list_categories` over `RECIPES` with keyword-driven 6-category assignment +
+parent-chain fallback + curated descriptions). 60 new tests in `tests/test_plugin_api.py` +
+`tests/test_recipe_cookbook.py` green.
+
+**Wiring debt (found 2026-07-10):** `PluginManager.discover/init_all` never called by engine/gui/cli,
+so Plugin API v0 cannot load a plugin; `recipe_cookbook.py` (the "recipe cookbook UI") has no GUI
+wiring at all. See Phase 7 / wiring-debt audit.
+
+---
+
+## Phase 6 / T5 — Linear RAW develop
+
+⚠️ **Status audit 2026-07-10** (see `PLAN_RAW_PROCESSING.md`): resume line marks T5 ✅ but what
+shipped is `retouch/raw_develop.py` as an **unwired island** (zero non-test callers; gui/cli/batch
+still ingest RAF at 8-bit via `imread_exif`).
+
+**Bug found, reported not fixed (ground rule #4):** `load_raw` claims linear RGB but omits `gamma=` —
+rawpy default is `(2.222, 4.5)` BT.709 encode, so output is gamma-encoded and every `LinearGrader` op
+runs in the wrong domain; also defaults to `highlight_mode=Clip` (io.py paths use ReconstructDefault).
+Recommended next slice: wire `read_image_16bit` into the live RAF path + float32 `process()` entry
+(~2–4 d, plan §4 Step 1), then the `gamma=(1,1)` fix (~0.5 d, Step 2).
+
+---
+
+## Phase 6 / A4 — Neural boosters (optional, evidence-gated)
+
+**Owner decision 2026-07-03:** stay classical-only for now, generative capabilities (AI pore-detail
+synthesis, identity-preserving diffusion refinement) explicitly parked here, not scope-crept into
+S6/C5. Revisit once A1 evidence exists. Owner's other competitor-capability suggestions were checked
+against the plan: 3D-mesh-aware lighting = already C2 (sculpt) + relight.py v2; hair refinement =
+H0-H2 (H0 shipped); background color harmonization = C5 (unblocked, not started); clothing wrinkle
+cleanup = not planned, architecturally similar to S5, could be added if wanted.
+
+**Competitor feature sweep 2026-07-10 (Evoto/Retouch4me public feature lists vs codebase):** covered
+— shine/oil removal (`skin.py::shine_removal`), eye-white redness (`eyes.py`), stray-hair/dust heal
+(manual brush, `heal.py`), body reshape limb/torso/shoulder (`body_reshape.py` T3), dodge&burn,
+skin-tone unify, teeth, undereye, catchlights, makeup (T2), hair (H0-H2), background replace (T1).
+Remaining true gaps, all A4-class or explicitly unplanned: **auto**-stray-hair detection (manual heal
+only today), sclera *vessel-structure* removal (we correct color redness only), auto backdrop
+dust/fold cleanup, fabric/clothing wrinkles (unplanned, above), per-region wrinkle sliders
+(forehead/neck/smile-line — our mid-band handling is generic), left/right-independent reshape params,
+neck thickness/length reshape, video retouching (out of scope). All detection-heavy gaps land exactly
+in this row's evidence gate — nothing new to plan; A1 evidence remains the unblocker.
+
+_Note: several of the "true gaps" listed above have since shipped classically (auto backdrop cleanup,
+sclera vessel removal, fabric wrinkle, per-region wrinkle, L/R + neck reshape, one-click body reshape)
+— see Phase 7 / auto-gap backlog. Only auto-stray-hair detection (#5) remains A4-gated. The one
+capability from the sweep we still cannot match is per-face recipe assignment — see the
+owner-approved backlog row in MASTER_PLAN.md._
+
+---
+
+## Phase 7 / RAF import — faithful neutral dev + highlight recovery
+
+✅ DONE 2026-07-10 (committed, see `af54d2d`) — 92 tests pass; natural RAF sample re-rendered to
+`test_output/raf_sample/natural/`. `retouch/io.py`: both raw decode paths (`imread_exif` live 8-bit +
+`read_image_16bit`) changed `bright=1.5` → `bright=1.0` + explicit
+`output_color=rawpy.ColorSpace.sRGB` (matches camera neutral WB/exposure, kills the ~50% over-light
+vs shot). Added `highlight_mode=rawpy.HighlightMode.ReconstructDefault` to both paths — recovers
+blown highlights instead of hard clip (no magenta fringing) on bright/backlit shots. Both raw paths
+now numerically agree (verified mean diff 0.17 on `_DSF1853.RAF`).
+
+Empirical research 2026-07-10 on `_DSF1853.RAF`: the RAF has ~1.01M clipped near-white px (≥254) under
+`Clip`; `ReconstructDefault` recovers them to 307 px and drops global mean 85.5→54.3 — HIGH-impact,
+not cosmetic, must be visually QA'd. `demosaic_algorithm` is a no-op for X-Trans (AHD==DHT, diff
+0.0000; AMAZE/LMMSE need GPL packs not installed). `fbdd_noise_reduction` also a no-op for X-Trans
+(Off/Light/Full identical std). Recommended next: **16-bit live ingestion** — 8-bit `imread_exif`
+yields only 108 unique levels in a smooth patch vs 4182 at 16-bit (banding risk in skies/gradients);
+feed float32 from `read_image_16bit` into the live path.
+
+**[VISUAL QA PENDING]** — confirm recovered highlights look natural on `_DSF1853.RAF`.
+
+---
+
+## Phase 7 / Recipe integrity audit (2026-07-10)
+
+**Audit ✅ DONE 2026-07-10; fixes now COMMITTED (`40721d6`, `fix(recipes): resolve recipe-integrity
+audit dead keys`).**
+
+Static audit of all 85 recipes' keys against the registry, each suspect **verified through
+`recipe_to_params()`** (not just string-matched). **4 dead-key classes, 21 recipe-instances, all
+silently ignored at runtime:** (1) **`film.preset`** — 6 recipes (`studio_dream_v2`→astia_inspired,
+`film_noir_cinema_v1`→portra_noir, `editorial_elegance_v1`→superia_warm,
+`wedding_timeless_v1`→portra_romance, `high_energy_glow_v1`→velvia_vibrant,
+`minimal_film_v1`→ektar_vibrant): those preset names **exist nowhere in the codebase**; the C3 film
+engine is parametric-only (`film.enable/strength/toe.*`), so `film_enable` stays False → **all 6
+film-branded recipes ship with no film look at all**. (2) **`skin.exposure_lock`** (0.7) — 9 recipes
+incl. **`masterwork_v1`** (convention_repair/float32_beauty/natural_polish/full_showcase/minimal_film/
+clear_skin/tired_eye_rescue/aniso_pore_real): no such param exists. (3) **`frequency.nose_smooth`** —
+5 recipes incl. **`masterwork_v1`** (0.4): the `nose_smooth` ParamSpec has `recipe_key=None`, so it is
+not recipe-settable at all — needs a recipe_key added, then recipe values re-keyed. (4)
+**`skin.micro_dodge_burn`** (1: `jp_transparent_v1`) — correct key is `skin.micro_db`. The flagship
+`masterwork_v1` carries two dead keys.
+
+False positives cleared during verification: `extends` (inheritance), `dodge_burn.amount` (dict form
+handled), `eyes.iris` (live legacy alias → `eye_enhance`), `eyes.teeth_whiten` (live). Out-of-range
+values: 0/85 recipes.
+
+**Root cause (guard-test blind spot):** `test_recipe_validation.py::test_no_dead_recipe_keys`
+validated **top-level keys only** — anything under `_VALID_NESTED_ROOTS` (`skin`, `eyes`, `frequency`,
+…) was never recursed into, so ground rule #1's dead-key guard missed exactly where recipes put most
+keys.
+
+**Fix as shipped (`40721d6`):** nose_smooth given `recipe_key=frequency.nose_smooth` (5 recipes now
+resolve); `jp_transparent_v1` micro_dodge_burn → skin.micro_db; 9 dead `skin.exposure_lock` leaves
+removed; 6 dead `film.preset` replaced with explicit `film.*` bundles
+(astia/portra_noir/superia_warm/portra_romance/velvia/ektar approximations, preserving curves) —
+**this is the film.preset decision** (parametric bundles, not named-preset lookups); and
+`test_no_dead_recipe_keys` now recurses nested dicts (dotted leaf paths) whitelisting legit nested
+roots film/eye/undereye/makeup_v2, so it would catch any reintroduced dead key. 135 tests pass. Also
+added visual QA harnesses (visual_qa_backlog/assess/grid).
+
+---
+
+## Phase 7 / Wiring-debt audit (2026-07-10)
+
+**Audit ✅ DONE 2026-07-10 — GUI wiring NOT started; recipe-reachability slice done (below).**
+
+Systematic sweep for shipped-but-unreachable features after T5's `raw_develop.py` island exposed the
+pattern. **Findings — 4 unwired islands, all marked ✅ in this plan, all with green tests, zero
+non-test callers:** (1) `raw_develop.py` (T5, known); (2) `plugin_api.py` (T4) —
+`PluginManager.discover/init_all` never called by engine/gui/cli, so Plugin API v0 cannot load a
+plugin; (3) `recipe_cookbook.py` (T4's "recipe cookbook **UI**") — no GUI wiring at all; (4)
+`look_extractor.py` (F6) — `LookExtractor` unreachable from GUI/CLI (GUI's style library is the
+separate `style_library.py` mechanism). Plus the known LUT hot-reload `watch_luts_dir` (still
+unwired).
+
+**GUI-invisible params (11 of 178; GUI sliders are hand-declared, CLI auto-generates all 185 flags so
+CLI is fine):** `body_reshape_*`×5 (T3), `cosplay_*`×3 (A3), `face_exposure`, `neural_*`×2 (A4
+placeholders — leave). **Worse: no recipe sets any `body_reshape_*` or `cosplay_*` key → T3 and A3 are
+dark in BOTH user paths (GUI + recipes); only raw CLI flags/API kwargs reach them.**
+
+Root cause: "✅ DONE" has meant *module + tests green*, not *user-reachable feature* — same failure
+class three times (F6, T4, T5). Wiring effort to light everything up: look_extractor GUI (~1 d),
+cookbook UI (~1–2 d), plugin discovery call (~0.5 d), T3/A3 GUI sliders + at least one recipe each
+(~1–2 d, mind the hand-ordered `_process_inputs` arg list), `face_exposure` slider (~0.5 d) ≈ **4–6 d
+total**. `recipe_loader_cli.py` excluded — it's a legit `python3 -m` entry point.
+
+### Recipe-reachability fix (2026-07-10, `0610660`) — 🔄 PARTIAL (recipe path ✅, GUI deferred)
+
+T3 (`body_reshape_*`×5) + A3 (`cosplay_*`×3) + `face_exposure` made recipe-reachable (previously dark
+in BOTH GUI + recipe paths). New recipes `body_reshape_demo_v1` (body_reshape.{arm_length,leg_length,
+torso_width,shoulder_width,hip_width}, gui_direct engine-scale 0–100 / 50-neutral) and
+`cosplay_wiring_demo_v1` (cosplay.{wig_lace_blend,stockings_smooth,consistency_strength}, recipe_pct)
++ `skin.face_exposure` added to `portrait`. Exact `recipe_key` paths confirmed in `params.py`
+(`body_reshape.<k>`, `cosplay.<k>`, `skin.face_exposure`) — no name drift from the audit's guess. All
+three resolve non-default via `recipe_to_params`/`build_context`; `test_recipe_validation.py` dead-key
+test PASS; smoke `process()` on `test_output/masterwork_v1/DSCF8007.jpg` (≈1000px) with all three
+recipes → no exception.
+
+**GUI sliders NOT added:** `gui.py` declares sliders hand-coded against a positionally-ordered
+`PROCESS_INPUT_KEYS` tuple matched to `process_image(*args)` — not a declarative registry — so adding
+them is risky and unverifiable without running the GUI; per the conservative instruction the GUI gap
+is documented, not patched. `neural_*`×2 left alone (A4 placeholders, as instructed). Still-open wiring
+debt: F6 `look_extractor` GUI, T4 cookbook UI + plugin discovery call, T3/A3 GUI sliders.
+
+**Committed as `0610660`** (`fix(wiring): make T3 body_reshape + A3 cosplay + face_exposure
+recipe-reachable`) — includes `scripts/visual_qa_wiring.py`; dead-key test 135 pass. Visual QA render
+outputs now exist: `test_output/visual_qa/` (backlog montages), `test_output/visual_qa_grid/` (42
+montages, jpeg+raf), `test_output/visual_qa_wiring/` — renders generated, review/sign-off still
+pending.
+
+---
+
+## Phase 7 / Auto-gap backlog (owner request 2026-07-10)
+
+Owner request: "everything auto — manual doesn't count." Competitor sweep gaps re-scored counting
+manual-only as missing. In feasibility order, **classical-first (no A4 gate violation for items
+1–4):** (1) **Auto backdrop cleanup** (~1 wk) — ✅ DONE 2026-07-10 (`ef31d55`);
+`retouch/backdrop.py::clean_backdrop` + `backdrop_cleanup` param. (2) **Sclera vessel removal**
+(~3–5 d) — ✅ DONE 2026-07-10 (`ef31d55`); thin red structures inside existing eye-white masks
+(`eyes.py` did color-only redness before): morphology + inpaint, tiny region, low risk. (3) **Auto
+fabric/clothing wrinkle smoothing** (~1–2 wk) — ✅ DONE 2026-07-10 (`742825f`); **BiSeNet already
+emits cloth = label 16 (was unused; `parsing.py` read only skin/brows/eyes/mouth/lips/neck/hair)** →
+cloth mask + S5-style low-freq smoothing, no new model needed. (4) **Per-region wrinkle sliders**
+(~1 wk) — ✅ DONE 2026-07-10 (`25c445c`); `retouch/skin.py::wrinkle_soften` now scopes the existing
+ridge-aware mid-band suppression per-region via `region_strengths={"forehead","nasolabial","neck"}`.
+(5) **Auto stray-hair removal** (~2–3 wk) — the one genuinely A4-class item (hair-strand segmentation
+beyond H-tier masks); manual `heal.py` exists today; both competitors headline one-click. **PARKED
+(A4-gated, needs segmentation model / evidence gate).** (6) **Reshape completeness** (~1 wk) — ✅ DONE
+2026-07-10 (`1b89d1e`); neck width/length params + L/R-independent jaw/nose/eye reshape; extends F5.
+(7) **One-click auto body reshape** (~1 wk) — ✅ DONE 2026-07-10 (`3c3f78d`); F9/F10-style analyzer
+suggesting T3 body params.
+
+Items 1–4+6–7 respect the 2026-07-03 classical-only decision; only (5) truly needs the A4/A1 evidence
+gate or a segmentation model. Owner signal recorded 2026-07-10.
+
+---
+
+## Phase 7 / Per-face recipe assignment (owner-approved backlog, 2026-07-10)
+
+📋 BACKLOG — approved by owner 2026-07-10, not started. Document only; no implementation yet.
+
+Evoto's 2026 video suite headlines per-face preset assignment — each detected person in a group shot
+gets its own preset (auto-classified Male/Female/Child/Senior). Our engine already processes faces
+individually via FaceContext, but `process()` takes ONE global param set — no per-face recipe support
+exists (verified: no per-face param plumbing in engine.py). For the cosplay-group audience (multiple
+costumed subjects per frame wanting different treatments) this is a genuine differentiator, and the
+only competitor capability from the 2026-07-10 sweep we cannot match today. Everything else on
+Evoto/Retouch4me's 2026 lineup is either shipped, parked with rationale (auto stray-hair, A4-gated),
+or out of scope (video, cloud, Photoshop panel).
+
+**Sketch:** `process(face_params=[...])` or per-face recipe dict keyed by face index; GUI face-picker;
+optional auto-classification later. Fits the existing FaceContext caching architecture naturally.
+
+**Effort:** ~1–2 wk (engine param plumbing + GUI face selection; auto-classification excluded from
+first slice).
+
+---
+
+## Phase 7 / face_exposure — skin-brightness param
+
+✅ DONE 2026-07-10 (`af54d2d`) — `tests/test_skin.py::TestFaceExposureLift` 3/3 pass (lifts skin L,
+leaves far background untouched). New dedicated face-brightening knob (flat L-channel lift, masked +
+feathered) independent of `relight` (which caps at 1.0). ParamSpec `face_exposure`
+(`cli_flag="face-exposure"`, `recipe_key="skin.face_exposure"`, `conversion="recipe_pct"`, 0–100) +
+`ProcessingContext` field + `process()` kwarg + overrides dict entry in `engine.py`; method
+`face_exposure_lift` in `skin.py` (uses `bgr_f32_to_lab_f32`/`lab_f32_to_bgr_f32` from `.utils`, L in
+[0,255] — corrected a scale-clip bug found mid-implementation: was clipping to [0,100] not [0,255]);
+call site in `perf_optimizations.py` after the relight block. 10-level RAF sample rendered
+(`test_output/raf_sample/_DSF1853_fe1..fe10.jpg`). Fixed a `cli_type="float"`→`float` bug that crashed
+`cli.py` argparse for every run.
+
+**[VISUAL QA PENDING]** — Visual-Critical (`skin.py`); real-image gates not yet run. GUI/CLI slider
+not yet wired (recipe-driven path works) — see wiring-debt audit.
+
+---
+
+## Phase 7 / Sclera vessel removal
+
+✅ DONE 2026-07-10 (`ef31d55`) — `tests/test_eyes.py::TestScleraVesselRemoval` 5/5 pass (removes
+redness, iris-safe, float32 preserved, vessel-only wiring). End-to-end `process()` verified on
+`DSCF8007.jpg`; compare `test_output/eyes_vessel/compare_off_vs_on.jpg`.
+
+`retouch/eyes.py` `EyeEnhancer._remove_sclera_vessels`: detect red blood vessels as pixels redder than
+the local sclera median in the LAB a-channel (relative redness), inpaint via `cv2.INPAINT_TELEA`.
+Runs **only inside `whites_mask = clip(eye − iris, 0, 1)`** (iris/pupil/skin never touched). New
+`ParamSpec eye_sclera_vessel_remove` (`cli_flag="eye-sclera-vessel-remove"`,
+`recipe_key="eyes.sclera_vessel_remove"`, `conversion="recipe_pct"`, 0–100) + `ProcessingContext`
+field + `process()` kwarg + overrides entry + perf wiring (gate `eye_enhance>0 OR vessel>0` so
+vessel-only works; `enhance()` early-return fixed to honor it).
+
+**[VISUAL QA PENDING]** — Visual-Critical (`eyes.py`); real-photo gates not yet run.
+
+---
+
+## Phase 7 / Auto backdrop cleanup
+
+✅ DONE 2026-07-10 (`ef31d55`) — `tests/test_backdrop.py` 6/6 pass (zero-strength no-op, removes
+dust+crease, person untouched, smooth bg unchanged, float32/dtype preserved, none-mask safe).
+
+`retouch/backdrop.py::clean_backdrop`: detect dust/folds/dirt as high-frequency luminance outliers vs
+`cv2.GaussianBlur` (std-dev threshold, **not** GaussianBlur-for-smoothing — detail band preserved,
+only outliers removed), inpaint via `cv2.INPAINT_TELEA`. Subject edge protected by **eroding**
+`~person_mask` by ~8px then feathering before inpaint, so removal never bleeds into the subject;
+composite is **hard** over the eroded region (inpaint already smooth). New `ParamSpec backdrop_cleanup`
+(`cli_flag="backdrop-cleanup"`, `recipe_key="background.backdrop_cleanup"`,
+`conversion="recipe_pct"`, 0–100) + `ProcessingContext` field + `process()` kwarg + overrides entry;
+wired into `engine._run_global_phases` before `to_uint8` so it runs on BOTH registry and hardcoded
+recipe paths.
+
+**[VISUAL QA PENDING]** — Visual-Critical-adjacent (`backdrop.py`); real-photo gates not yet run.
+
+---
+
+## Phase 7 / Auto fabric/clothing wrinkle smoothing
+
+✅ DONE 2026-07-10 (`742825f`) — `tests/test_fabric.py` 7/7 pass (zero-strength no-op, removes
+synthetic dark fold lines, skin region untouched, float32/dtype preserved, none/empty-mask safe).
+
+`retouch/fabric.py::smooth_fabric_wrinkles`: detect mid-frequency fold ridges via
+difference-of-Gaussians on the LAB L channel (dark folds = negative DoG), attenuate (lighten) them
+capped at 60% depth reduction — fabric weave (high-freq) and gentle low-freq shading preserved, **no**
+GaussianBlur-on-cloth smoothing (mirrors `skin.wrinkle_soften`). Cloth mask =
+`person_mask − acc_skin_hair` (skin/hair/neck excluded) derived in `engine._run_global_phases`;
+`FaceRegions.cloth` also exposed from BiSeNet label 16 (feathered) in `parsing.py`
+`parse()`/`parse_batch()` for per-face use. New `ParamSpec fabric_wrinkle_smooth`
+(`cli_flag="fabric-wrinkle-smooth"`, `recipe_key="fabric.wrinkle_smooth"`,
+`conversion="recipe_pct"`, cli_type=float, 0–100) + `ProcessingContext` field + `process()` kwarg +
+overrides entry; wired into `engine._run_global_phases` right after backdrop, before `to_uint8`, so it
+runs on BOTH registry and hardcoded recipe paths.
+
+**[VISUAL QA PENDING]** — Visual-Critical-adjacent (`fabric.py`); real-photo gates not yet run.
+
+---
+
+## Phase 7 / Per-region wrinkle sliders
+
+✅ DONE 2026-07-10 (`25c445c`) — `tests/test_skin.py::TestPerRegionWrinkle` pass (forehead/nasolabial/
+neck each soften only their zone and leave others sharp, global backward-compat attenuates, all-zero
+is a no-op, region strengths take precedence over global).
+
+`retouch/skin.py::wrinkle_soften`: split the existing ridge-aware mid-frequency wrinkle suppression
+into `_wrinkle_soften_masked` (scoped to a single mask of zone attrs) run per-region via
+`region_strengths={"forehead": float, "nasolabial": float, "neck": float}` (0–100 each). Region path
+uses attrs `("forehead",)`, `("nasolabial_l","nasolabial_r")`, `("neck",)`; the eye/hair/eyebrow
+exclusion list is preserved inside each per-region build. Any region strength > 0 takes the
+per-region path and ignores the global `strength` for those regions; all-zero/`None` falls back to the
+global union path (`strength` over all zones) so `skin.wrinkle_soften` recipes stay backward
+compatible. Three new `ParamSpec`s (`wrinkle_soften_forehead/nasolabial/neck`,
+`conversion="recipe_pct"`, cli_type=float, `cli_flag="wrinkle-soften-*"`, 0–100) + `ProcessingContext`
+fields + `process()` kwargs + overrides entries + `retouch()` wrapper args; `perf_optimizations.py`
+builds `region_strengths` from `ctx` and passes it.
+
+_Related follow-up fix committed later (`ea7697e`): forehead subregion mask was degenerate
+(intersected with skin) — corrected._
+
+**[VISUAL QA PENDING]** — Visual-Critical (`skin.py`); real-photo gates not yet run.
+
+---
+
+## Phase 7 / Reshape completeness (auto-gap #6)
+
+✅ DONE 2026-07-10 (`1b89d1e`) — `tests/test_geometry.py` +16 (param wiring, jaw/nose/eye per-side
+counts, neck warp counts, global byte-identical, side-zero==global backward-compat, side/neck value
+changes output); full geometry+params 155 pass; regression `test_backdrop/fabric/eyes/skin` 130 pass.
+
+`retouch/geometry.py` `FaceReshaper`: (a) **L/R-independent variants** for the clearly-bilateral
+controls — `_jaw_width_warps` (234=R / 454=L), `_nose_width_warps` (48=L / 278=R alae),
+`_eye_size_warps` (LEFT/RIGHT iris) now accept optional `slider_l`/`slider_r`. In `reshape()`, if
+either side variant of a feature is non-zero → per-side path (each side driven by its own strength,
+the untouched side skipped); if BOTH side variants are 0 → global symmetric `reshape.<key>` path,
+**byte-identical** to legacy (verified). Nose global path keeps the radial-scale ring; nose per-side
+path translates each ala along its bridge→ala axis. (b) **Neck** — new `_neck_width_warps` (jaw angles
+234/454 + jaw-line 58/172/288/397 pushed horizontally inward, R=fw×0.5 cap) and `_neck_length_warps`
+(chin 152 + jaw angles translated vertically); no MediaPipe neck landmarks exist so the jaw/chin band
+is the proxy. 8 new `ParamSpec`s (`reshape_jaw_width_l/r`, `reshape_nose_width_l/r`,
+`reshape_eye_size_l/r`, `reshape_neck_width`, `reshape_neck_length`; `conversion="gui_direct"`,
+`recipe_key="reshape.*"`, −50..50, mirrors existing reshape specs) + `ProcessingContext` fields +
+`process()` kwargs + overrides entries + `_any_reshape_active` gate. `retouch()` wrapper forwards via
+`**kwargs`. **Left symmetric** (no L/R split): eye_distance, nose_length, chin_length, mouth_size,
+smile, forehead — centered/vertical or naturally-paired controls where an independent L/R split has no
+clear photographic meaning.
+
+**[VISUAL QA PENDING]** — Visual-Critical (`geometry.py`); real-photo gates not yet run.
+
+---
+
+## Phase 7 / One-click auto body reshape (auto-gap #7)
+
+✅ DONE 2026-07-10 (`3c3f78d`) — `tests/test_body_reshape.py` (7 heuristic tests + 1 ParamSpec test;
+no MediaPipe model load). Full suite green: `test_body_reshape`+`test_params` 140 pass; regression
+`test_geometry/backdrop/fabric/eyes/skin` 153 pass.
+
+`retouch/body_reshape.py::suggest_body_reshape(pose_ctx)`: F9/F10-style analyzer that takes a
+`PoseContext` (33 normalized landmarks) and returns suggested 0–100 values (50 = neutral) for
+`arm_length`/`leg_length`/`torso_width`/`shoulder_width`/`hip_width`. Heuristics nudge toward balanced
+proportions, capped conservative (±30 on shoulder/hip/leg, ±20 on arm, final clip [20,80]):
+shoulder:hip ratio toward ~1.3 (opposite nudges), leg:torso ratio toward ~1.2 (lengthen when short),
+arm:torso ratio toward ~1.0 (lengthen when short); torso_width left neutral. Guards:
+`landmarks is None`/too-few/low-visibility/disabled `feature_flags` → all 50.0. New `ParamSpec
+auto_body_reshape` (`cli_flag="auto-body-reshape"`, `recipe_key="body_reshape.auto"`,
+`conversion="gui_direct"`, cli_type=float, 0–100, default 0) + `ProcessingContext.auto_body_reshape`
+(default 0) + `process()` kwarg + overrides entry; `_stage_body_reshape` detects pose on the uint8
+frame when `auto_body_reshape > 0`, blends `centered = (suggested−50)·(auto/100) + (manual−50)`, and
+does NOT early-return when auto>0 (falls back to manual-only early-return only if pose detection
+yields no landmarks). `retouch()` forwards via `**kwargs`.
+
+**[VISUAL QA PENDING]** — `body_reshape.py` not in the Visual-Critical module list, but one-click warps
+still warrant a real-photo pass once a pose model is available; manual `body_reshape_*` combine
+additively with auto.
+
+---
+
+## Historical execution-order notes (from MASTER_PLAN header, pre-2026-07-08)
+
+**Current execution order (arranged 2026-07-03, updated after Fable verification pass):** P1 shipped
+(`10bab48`) → Q1–Q4, F8.0, E3/E4 riders, F11, H3 all done and Fable-verified (6 real bugs found and
+fixed during verification — whiten_hue_stable ParamSpec/wiring, duplicate redness_even field,
+dead-Numba orphaned tests, qa_detectors run_all() contract, F8.0 native-image shape bug,
+add_impact_finish float/uint8 crash in the F1 float pipeline) → targeted-suite green at that time (6
+pre-existing unrelated failures remained: anime_cinematic_v1 contrast/relight-range tests,
+anime_crystal_void dead keys, a stage-order test, PNG-16 GUI radio choices — none touched by this
+work; a later 2026-07-04 test report records 5 failures, so treat this line as a dated snapshot) →
+the Phase 1 big block (F8.1 → E1 → F8.2 → F1+E2) as one uninterrupted window, then the remaining
+Phase 2 rows (C2, A2+remaps, S1, S4) and onward. Rationale: Q1–Q4 are small, owner-visible daily, and
+produce the metrics (Q1) that everything downstream is judged by; F8.1/2+E1 restructure engine
+plumbing and deserve a clean window. Owner still owes: full pytest suite run + visual crop QA before
+committing that batch. Deferred pending owner action: A1 corpus (needs Evoto/R4me/PixCake trials —
+still the standing unblocker for A2).

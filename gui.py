@@ -111,6 +111,8 @@ def apply_custom_style(style_name, current_recipe="natural"):
         d["white_balance_kelvin"], d["white_balance_tint"], d["bw_channel_mixer_r"], d["bw_channel_mixer_g"], d["bw_channel_mixer_b"],
         d["negative_split_tone_shadow"], d["negative_split_tone_highlight"],
         d["hsl_hue_global"], d["hsl_sat_global"], d["hsl_lum_global"],
+        d["face_exposure"], d["cosplay_wig_lace_blend"], d["cosplay_stockings_smooth"], d["cosplay_consistency_strength"],
+        d["body_reshape_arm_length"], d["body_reshape_leg_length"], d["body_reshape_torso_width"], d["body_reshape_shoulder_width"], d["body_reshape_hip_width"], d["auto_body_reshape"],
     )
 
 
@@ -623,6 +625,8 @@ def on_recipe_change(recipe):
         d["white_balance_kelvin"], d["white_balance_tint"], d["bw_channel_mixer_r"], d["bw_channel_mixer_g"], d["bw_channel_mixer_b"],
         d["negative_split_tone_shadow"], d["negative_split_tone_highlight"],
         d["hsl_hue_global"], d["hsl_sat_global"], d["hsl_lum_global"],
+        d["face_exposure"], d["cosplay_wig_lace_blend"], d["cosplay_stockings_smooth"], d["cosplay_consistency_strength"],
+        d["body_reshape_arm_length"], d["body_reshape_leg_length"], d["body_reshape_torso_width"], d["body_reshape_shoulder_width"], d["body_reshape_hip_width"], d["auto_body_reshape"],
     )
 
 
@@ -746,6 +750,8 @@ def on_smart_process(img_paths, recipe, *args, prg=gr.Progress()):
         d["white_balance_kelvin"], d["white_balance_tint"], d["bw_channel_mixer_r"], d["bw_channel_mixer_g"], d["bw_channel_mixer_b"],
         d["negative_split_tone_shadow"], d["negative_split_tone_highlight"],
         d["hsl_hue_global"], d["hsl_sat_global"], d["hsl_lum_global"],
+        d["face_exposure"], d["cosplay_wig_lace_blend"], d["cosplay_stockings_smooth"], d["cosplay_consistency_strength"],
+        d["body_reshape_arm_length"], d["body_reshape_leg_length"], d["body_reshape_torso_width"], d["body_reshape_shoulder_width"], d["body_reshape_hip_width"], d["auto_body_reshape"],
     )
 
     explanation_html = _format_smart_explanations(suggestion)
@@ -1606,6 +1612,25 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         _mv2_ombre_state = gr.State(value=0.0)
                         _mv2_ombre_color1_state = gr.State(value="red")
                         _mv2_ombre_color2_state = gr.State(value="pink")
+                        # Hidden states for params present in params.py but with no visible
+                        # slider yet (wiring-debt alignment: every PROCESSING_PARAMS name
+                        # must appear in _process_inputs in param_names() order).
+                        _wrinkle_soften_forehead_state = gr.State(value=0)
+                        _wrinkle_soften_nasolabial_state = gr.State(value=0)
+                        _wrinkle_soften_neck_state = gr.State(value=0)
+                        _eye_sclera_vessel_remove_state = gr.State(value=0)
+                        _backdrop_cleanup_state = gr.State(value=0)
+                        _fabric_wrinkle_smooth_state = gr.State(value=0.0)
+                        _reshape_jaw_width_l_state = gr.State(value=0.0)
+                        _reshape_jaw_width_r_state = gr.State(value=0.0)
+                        _reshape_nose_width_l_state = gr.State(value=0.0)
+                        _reshape_nose_width_r_state = gr.State(value=0.0)
+                        _reshape_eye_size_l_state = gr.State(value=0.0)
+                        _reshape_eye_size_r_state = gr.State(value=0.0)
+                        _reshape_neck_width_state = gr.State(value=0.0)
+                        _reshape_neck_length_state = gr.State(value=0.0)
+                        _neural_stray_hair_boost_state = gr.State(value=0)
+                        _neural_defect_boost_state = gr.State(value=0)
                         status = gr.Textbox(label="Status", interactive=False, placeholder="Upload an image and click Process to start...")
                         smart_analysis_html = gr.HTML(visible=True)
                         qa_status = gr.HTML(visible=True)
@@ -1649,6 +1674,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             skin_unify_hue = gr.Slider(-1.0, 360.0, -1.0, step=1.0, label="Target Hue (Anime)", info="Target skin hue angle · -1=auto (detect from face), 0=red, 50=orange, 180=cyan")
                             auto_exposure = gr.Checkbox(label="Auto Exposure Correction", value=False, info="Automatically correct under/over-exposed images before processing")
                             white_costume_lift = gr.Checkbox(label="White Costume Lift", value=False, info="Selectively boost bright clothing to create separation")
+                            face_exposure = gr.Slider(0, 100, 0, step=1, label="Face Exposure Lift", info="Brighten/darken the exposed face relative to the body (skin.face_exposure) · 0 = off")
 
                         with gr.Accordion("🦵 Body Skin", open=False):
                             reset_body_skin_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
@@ -1731,6 +1757,21 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             clarity_split_neg = gr.Slider(0, 100, 0, step=1, label="Clarity Split (Form)", info="Reduce form-band local contrast for soft look")
                             clarity_split_pos = gr.Slider(0, 100, 0, step=1, label="Clarity Split (Texture)", info="Boost texture-band micro-contrast for detail")
                             subject_separation = gr.Slider(0, 100, 0, step=1, label="Subject-Background Separation", info="Brighten subject / darken background using person segmentation mask")
+
+                        with gr.Accordion("🎭 Cosplay Moat (A3)", open=False):
+                            gr.Markdown("Cosplay-specific skin / wardrobe continuity (wig lace blend, stockings smooth, cross-shot consistency).")
+                            cosplay_wig_lace_blend = gr.Slider(0, 100, 0, step=1, label="Wig Lace Blend", info="Fade wig lace edge into forehead skin")
+                            cosplay_stockings_smooth = gr.Slider(0, 100, 0, step=1, label="Stockings Smooth", info="Smooth hosiery / stocking texture")
+                            cosplay_consistency_strength = gr.Slider(0, 100, 0, step=1, label="Consistency Strength", info="Cross-shot lighting / white-balance continuity for a cosplay set")
+
+                        with gr.Accordion("🦵 Body Reshape (T3)", open=False):
+                            gr.Markdown("Landmark-driven body reshape via MediaPipe Pose (±15% segment displacement at ±100). 50 = no change.")
+                            body_reshape_arm_length = gr.Slider(0, 100, 50, step=1, label="Arm Length", info="0 = shorter, 100 = longer arms")
+                            body_reshape_leg_length = gr.Slider(0, 100, 50, step=1, label="Leg Length", info="0 = shorter, 100 = longer legs")
+                            body_reshape_torso_width = gr.Slider(0, 100, 50, step=1, label="Torso Width", info="0 = narrower, 100 = wider torso")
+                            body_reshape_shoulder_width = gr.Slider(0, 100, 50, step=1, label="Shoulder Width", info="0 = narrower, 100 = wider shoulders")
+                            body_reshape_hip_width = gr.Slider(0, 100, 50, step=1, label="Hip Width", info="0 = narrower, 100 = wider hips")
+                            auto_body_reshape = gr.Slider(0, 100, 0, step=1, label="Auto Body Reshape", info="Automatic proportional reshape strength (0 = off)")
 
                         with gr.Accordion("🎬 Film Color Grading", open=False):
                             reset_color_grading_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
@@ -1874,6 +1915,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         white_balance_kelvin, white_balance_tint, bw_channel_mixer_r, bw_channel_mixer_g, bw_channel_mixer_b,
         negative_split_tone_shadow, negative_split_tone_highlight,
         hsl_hue_global, hsl_sat_global, hsl_lum_global,
+        face_exposure, cosplay_wig_lace_blend, cosplay_stockings_smooth, cosplay_consistency_strength,
+        body_reshape_arm_length, body_reshape_leg_length, body_reshape_torso_width, body_reshape_shoulder_width, body_reshape_hip_width, auto_body_reshape,
     ]
 
     recipe.change(
@@ -2004,17 +2047,18 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         img_input, recipe,
         smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth, regional_modulation, smooth_engine, undereye_shadow_strength, freckle_removal, micro_restore, _micro_dodge_burn_state, _redness_even_state, _whiten_hue_stable_state,
         whiten, equalize, blemish, whiten_tone, nose_blush, under_eye_blush, white_costume_lift,
-        dodge_burn, relight, relight_azimuth, relight_elevation, sculpt, shine_removal, wrinkle_soften, texture_transplant,
-        body_smooth, body_equalize, body_whiten, body_match_face, body_relight, body_dodge_burn, shadow_lift, body_shadow_lift, nose_restore,
+        dodge_burn, relight, relight_azimuth, relight_elevation, sculpt, shine_removal, wrinkle_soften, _wrinkle_soften_forehead_state, _wrinkle_soften_nasolabial_state, _wrinkle_soften_neck_state,
+        texture_transplant, body_smooth, body_equalize, body_whiten, body_match_face, body_relight, body_dodge_burn, shadow_lift, face_exposure, body_shadow_lift, nose_restore,
         specular_bloom, specular_bloom_tone,
         skin_flatten, skin_quantize, skin_unify, skin_unify_hue, _skin_hue_unify_state, _skin_chroma_even_state, skin_glow,
-        eye_enhance, catchlight, dark_circles, undereye_darken_removal, undereye_puffiness_reduction, eye_sclera_brighten, eye_iris_saturate, eye_iris_hue_shift, eye_iris_brightness, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, slimming,
+        eye_enhance, catchlight, dark_circles, undereye_darken_removal, undereye_puffiness_reduction, eye_sclera_brighten, _eye_sclera_vessel_remove_state, _backdrop_cleanup_state, _fabric_wrinkle_smooth_state, eye_iris_saturate, eye_iris_hue_shift, eye_iris_brightness, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, slimming,
         _reshape_eye_size_state, _reshape_eye_distance_state, _reshape_nose_width_state, _reshape_nose_length_state,
         _reshape_jaw_width_state, _reshape_chin_length_state, _reshape_mouth_size_state, _reshape_smile_state, _reshape_forehead_state,
+        _reshape_jaw_width_l_state, _reshape_jaw_width_r_state, _reshape_nose_width_l_state, _reshape_nose_width_r_state, _reshape_eye_size_l_state, _reshape_eye_size_r_state, _reshape_neck_width_state, _reshape_neck_length_state,
         hair_enhance,
         _hair_deglare_state, _hair_ring_position_state, _hair_ring_tint_state, _hair_remove_flyaways_state,
         contrast, brightness, highlights, shadows, whites, blacks, clarity, vibrance, saturation, auto_exposure,
-        bloom, bloom_threshold, bloom_softness, glow, vignette, sharpen, sharpen_radius, fade_toe, highlight_drift, airy_haze, clarity_split_neg, clarity_split_pos, subject_separation, impact,
+        bloom, bloom_threshold, bloom_softness, glow, vignette, sharpen, sharpen_radius, subject_separation, impact, fade_toe, highlight_drift, airy_haze, clarity_split_neg, clarity_split_pos,
         color_grade, grade_intensity, chromatic_aberration, grain, halation, lut,
         tonal_curve_strength, skin_protect_strength, grain_strength, highlight_rolloff_strength,
         _film_enable_state, _film_strength_state, _film_toe_r_state, _film_toe_g_state, _film_toe_b_state,
@@ -2032,6 +2076,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         _mv2_eyeliner_state, _mv2_eyeliner_color_state, _mv2_eyeliner_style_state,
         _mv2_contour_state, _mv2_brows_state, _mv2_brows_color_state,
         _mv2_ombre_state, _mv2_ombre_color1_state, _mv2_ombre_color2_state,
+        _neural_stray_hair_boost_state, _neural_defect_boost_state, cosplay_wig_lace_blend, cosplay_stockings_smooth, cosplay_consistency_strength, body_reshape_arm_length, body_reshape_leg_length, body_reshape_torso_width, body_reshape_shoulder_width, body_reshape_hip_width, auto_body_reshape,
         color_ref_img, color_ref_strength,
         show_compare, fast,
         export_fmt, export_quality, export_res,

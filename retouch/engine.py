@@ -407,6 +407,12 @@ class ProcessingContext:
     # Cached per-face detection + parsing; None ⇒ engine detects/parses.
     face_contexts: Optional[List["FaceContext"]] = None
 
+    # 16-bit RAF ingest: full-precision float32 [0,255] BGR source at the
+    # native processing resolution. Set by process() when the input is
+    # float32; threaded into global grading so the extra tonal headroom
+    # survives inter-stage uint8 quantization. None ⇒ uint8 ingest.
+    hi_ref: Optional[np.ndarray] = None
+
     # F4: Manual heal marks — list of {"mask_png_b64": str, "method": str}
     heals: Optional[List[Dict[str, Any]]] = None
 
@@ -777,6 +783,17 @@ class RetouchEngine:
             import logging
             logging.getLogger(__name__).info(f"Loaded {len(loaded)} user recipes: {loaded}")
 
+        # T4: best-effort plugin discovery + init. A broken or missing plugin
+        # must never crash engine startup; failures are logged and swallowed.
+        try:
+            from .plugin_api import PluginManager
+            self._plugin_manager = PluginManager()
+            self._plugin_manager.discover()
+            self._plugin_manager.init_all(self)
+        except Exception as exc:  # noqa: BLE001 — plugins are optional
+            import logging as _logging
+            _logging.getLogger(__name__).warning("Plugin discovery failed: %s", exc)
+
         # Warm up JIT kernels on engine startup (safe fallback if Numba is missing)
 
         # P3: Stage registry for global phases (stages 3-6).
@@ -1016,6 +1033,20 @@ class RetouchEngine:
         # ------------------------------------------------------------------
         # PERF-1: downscale *before* detection when fast=True
         # ------------------------------------------------------------------
+        from .precision import to_uint8
+
+        # ------------------------------------------------------------------
+        # 16-bit ingest: accept float32 [0,255] BGR (from io.read_image_16bit /
+        # imread_engine). The uint8-oriented detection/reshape/per-face stages
+        # consume a rounded uint8 view; the full-precision source (hi_ref) is
+        # threaded into global grading (see _run_global_phases) so the extra
+        # tonal headroom survives inter-stage quantization instead of banding.
+        # ------------------------------------------------------------------
+        hi_ref: Optional[np.ndarray] = None
+        if img_bgr.dtype != np.uint8:
+            hi_ref = np.clip(img_bgr.astype(np.float32, copy=False), 0.0, 255.0)
+            img_bgr = to_uint8(hi_ref / 255.0)
+
         orig_h, orig_w = img_bgr.shape[:2]
         scale = 1.0
         if fast:
@@ -1025,6 +1056,11 @@ class RetouchEngine:
                 img_bgr = cv2.resize(
                     img_bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA
                 )
+                if hi_ref is not None:
+                    hi_ref = cv2.resize(
+                        hi_ref, (img_bgr.shape[1], img_bgr.shape[0]),
+                        interpolation=cv2.INTER_AREA,
+                    )
 
         # ------------------------------------------------------------------
         # Recipe resolution (RECIPE-1)
@@ -1230,6 +1266,7 @@ class RetouchEngine:
         }
 
         ctx = build_context(active_recipe, rec, overrides)
+        ctx.hi_ref = hi_ref
         if face_contexts is not None:
             ctx.face_contexts = face_contexts
         if heals is not None:
@@ -1904,7 +1941,23 @@ class RetouchEngine:
         # F1: Convert to float32 [0,1] for Phase 3 global stages
         # This eliminates inter-stage uint8 quantization banding
         # ------------------------------------------------------------------
-        result = to_float(img_bgr)
+        # 16-bit ingest: outside the edited (face) regions the retouched
+        # uint8 result is just a quantized copy of the full-precision source,
+        # so restore hi_ref there before global grading. Edited regions keep
+        # the retouched pixels. This lets the extra RAF headroom survive the
+        # tonal moves (highlights/shadows/curves) without banding.
+        hi_ref = getattr(ctx, "hi_ref", None)
+        if hi_ref is not None and hi_ref.shape[:2] == img_bgr.shape[:2]:
+            edited = to_float(img_bgr)
+            base = np.clip(hi_ref.astype(np.float32) / 255.0, 0.0, 1.0)
+            edit = np.zeros(img_bgr.shape[:2], dtype=np.float32)
+            for _m in (acc_skin, acc_skin_hair, acc_lips, acc_sharpen):
+                if _m is not None and _m.shape[:2] == img_bgr.shape[:2]:
+                    edit = np.maximum(edit, _m.astype(np.float32))
+            edit = np.clip(edit, 0.0, 1.0)[:, :, np.newaxis]
+            result = (edited * edit + base * (1.0 - edit)).astype(np.float32)
+        else:
+            result = to_float(img_bgr)
 
         h_img, w_img = result.shape[:2]
 
@@ -2266,7 +2319,14 @@ class RetouchEngine:
         at the top (matching _run_global_phases) so --global-only batch runs
         get the same float-pipeline benefit as face-detected runs."""
         from .precision import to_float, to_uint8
-        result = to_float(img.copy())
+        # 16-bit ingest: no faces ⇒ nothing is edited, so start global grading
+        # from the full-precision source when available (no banding on skies/
+        # gradients under heavy grade).
+        hi_ref = getattr(ctx, "hi_ref", None)
+        if hi_ref is not None and hi_ref.shape[:2] == img.shape[:2]:
+            result = np.clip(hi_ref.astype(np.float32) / 255.0, 0.0, 1.0)
+        else:
+            result = to_float(img.copy())
 
         if ctx.subject_separation > 0:
             result = self._stage_subject_separation(result, person_mask, ctx)

@@ -11,6 +11,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import cpu_count
 
 import cv2
+import numpy as np
 from tqdm import tqdm
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -23,6 +24,7 @@ from retouch.io import (
     _resolve_safe_path,
     copy_exif,
     encode_write_params,
+    imread_engine,
     imread_exif,
     make_comparison,
     output_format,
@@ -32,6 +34,8 @@ from retouch.io import (
 from retouch.recipes import RECIPES
 from retouch.params import PROCESSING_PARAMS, recipe_to_params
 from retouch.session import Session, create_session_from_params
+from retouch.recipe_cookbook import list_recipes, search_recipes
+from retouch.look_extractor import LookExtractor
 
 
 class _DeprecatedAliasAction(argparse.Action):
@@ -189,9 +193,14 @@ def _process_single(args):
         if out_path.exists() and not force:
             return (img_path.name, "skipped")
 
-        img_bgr = imread_exif(img_path)
+        img_bgr = imread_engine(img_path)
         orig_shape = img_bgr.shape[:2]
-        original_full = img_bgr.copy() if compare_flag else None
+        # 16-bit RAF ingest returns float32 [0,255]; comparison stitching is
+        # uint8-only, so snapshot a uint8 original for the compare image.
+        original_full = (
+            (np.clip(img_bgr, 0, 255).astype(np.uint8) if img_bgr.dtype != np.uint8 else img_bgr.copy())
+            if compare_flag else None
+        )
         img_bgr, _scale = resize_for_processing(img_bgr, max_dim)
 
         # F10: --smart — per-image analysis overrides recipe/params.
@@ -463,7 +472,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Professional batch face retouching tool"
     )
-    parser.add_argument("input", help="Image file or directory")
+    parser.add_argument("input", nargs="?", help="Image file or directory")
     parser.add_argument("-o", "--output", help="Output directory")
     parser.add_argument("-q", "--quality", type=int, default=95,
                         help="Output quality 1-100 (default: 95)")
@@ -541,7 +550,42 @@ def main() -> None:
                              "auto-select the recipe + params. Overrides "
                              "--recipe per-image; explicit CLI flags still win.")
 
+    # T4: Recipe cookbook browsing (no processing).
+    parser.add_argument("--list-recipes", nargs="?", const="", default=None,
+                        metavar="CATEGORY",
+                        help="List all recipes (optionally filtered by CATEGORY) and exit")
+    parser.add_argument("--search-recipes", type=str, default=None,
+                        metavar="QUERY",
+                        help="Search recipes by name/description and exit")
+
+    # F6: Look extraction from a reference image.
+    parser.add_argument("--extract-look", type=str, default=None,
+                        metavar="REF_IMG",
+                        help="Extract a look from REF_IMG and apply it to the processed images")
+    parser.add_argument("--look-base", type=str, default=None,
+                        metavar="BASE_IMG",
+                        help="Optional original image for paired look extraction (delta vs REF_IMG)")
+
     args = parser.parse_args()
+
+    # T4: recipe cookbook browse mode — exit before requiring an input image.
+    if args.list_recipes is not None:
+        infos = list_recipes(args.list_recipes or None)
+        if not infos:
+            print("No recipes found"
+                  + (f" in category '{args.list_recipes}'" if args.list_recipes else ""))
+            return
+        print(f"Recipes ({len(infos)}):")
+        for info in infos:
+            print(f"  [{info.category}] {info.name}: {info.description}")
+        return
+    if args.search_recipes:
+        infos = search_recipes(args.search_recipes)
+        print(f"Search '{args.search_recipes}' -> {len(infos)} match(es):")
+        for info in infos:
+            print(f"  [{info.category}] {info.name}: {info.description}")
+        return
+
     input_path = Path(args.input)
 
     if not input_path.exists():
@@ -578,6 +622,27 @@ def main() -> None:
         if "recipe" not in params and loaded["recipe"]:
             merged["recipe"] = loaded["recipe"]
         params = merged
+
+    # F6: extract a look from a reference image and apply it over the current
+    # params (look wins). Drops internal keys (e.g. _split_tone_three_way) that
+    # are not valid engine kwargs. Failure exits loudly so the user knows.
+    if getattr(args, "extract_look", None):
+        try:
+            ref = imread_exif(Path(args.extract_look))
+            base = imread_exif(Path(args.look_base)) if args.look_base else None
+            look = LookExtractor().extract(ref, base)
+            look_params = {
+                k: v for k, v in look["engine_params"].items()
+                if not k.startswith("_")
+            }
+            params.update(look_params)
+            print(
+                f"Applied extracted look ({look['mode']}): "
+                f"{ {k: (round(v, 3) if isinstance(v, float) else v) for k, v in look_params.items()} }"
+            )
+        except Exception as e:
+            print(f"✖ Look extraction failed: {e}")
+            sys.exit(1)
 
     if args.dry_run:
         print(f"Dry run — {len(files)} image(s) found:\n")

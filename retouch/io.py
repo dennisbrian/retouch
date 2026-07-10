@@ -284,6 +284,42 @@ def imread_exif(path: Union[str, Path]) -> np.ndarray:
     return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
 
+def imread_engine(
+    path: Union[str, Path],
+    prefer_16bit: bool = True,
+) -> np.ndarray:
+    """Load an image for the engine, using the 16-bit path for RAW.
+
+    This is the wired ingest entry: RAW camera files (``.raf``/``.cr2``/…)
+    are decoded through the 16-bit pipeline (:func:`read_image_16bit`),
+    returning **float32 [0, 255] sRGB BGR** so the extra tonal headroom
+    reaches ``RetouchEngine.process()`` (which now accepts float32 and
+    threads that precision through global grading). Non-RAW formats fall
+    back to :func:`imread_exif` (uint8 BGR with EXIF orientation applied),
+    so JPEG/PNG/TIFF loading is byte-identical to before.
+
+    Note: the 16-bit RAW decode stays in the engine's native sRGB
+    (display-referred) domain — it is *not* gamma-linearised — because the
+    pipeline's tonal/skin-LAB math is sRGB-native. Feeding linear RGB here
+    would look dramatically under-toned. The true-linear develop
+    (``raw_develop.py``) is a separate, LinearGrader-only path.
+
+    Args:
+        path: Filesystem path to any supported image or RAW file.
+        prefer_16bit: When True (default), route RAW files through the
+            16-bit float32 decode. Set False to force the legacy uint8
+            RAW path (:func:`imread_exif`).
+
+    Returns:
+        ``(H, W, 3)`` BGR image: float32 [0, 255] for RAW when
+        *prefer_16bit*, else uint8.
+    """
+    p = Path(path)
+    if prefer_16bit and p.suffix.lower() in RAW_EXTENSIONS:
+        return read_image_16bit(p)
+    return imread_exif(p)
+
+
 def resize_for_processing(
     img_bgr: np.ndarray,
     max_dim: Optional[int],

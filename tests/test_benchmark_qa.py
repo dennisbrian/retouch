@@ -23,19 +23,19 @@ requires_retouch = pytest.mark.skipif(
 
 def test_skin_quality_metrics_import():
     """skin_quality_metrics should be importable from benchmark."""
-    from scripts.benchmark import skin_quality_metrics
+    from scripts.bench.benchmark import skin_quality_metrics
     assert callable(skin_quality_metrics)
 
 
 def test_qa_detector_metrics_import():
     """qa_detector_metrics should be importable from benchmark."""
-    from scripts.benchmark import qa_detector_metrics
+    from scripts.bench.benchmark import qa_detector_metrics
     assert callable(qa_detector_metrics)
 
 
 @requires_retouch
 def test_qa_detector_metrics_none_mask():
-    from scripts.benchmark import qa_detector_metrics
+    from scripts.bench.benchmark import qa_detector_metrics
     img = np.random.RandomState(42).randint(0, 255, (50, 50, 3), dtype=np.uint8)
     result = qa_detector_metrics(img, None)
     assert isinstance(result, dict)
@@ -44,7 +44,7 @@ def test_qa_detector_metrics_none_mask():
 
 @requires_retouch
 def test_qa_detector_metrics_with_mask():
-    from scripts.benchmark import qa_detector_metrics
+    from scripts.bench.benchmark import qa_detector_metrics
     img = np.random.RandomState(42).randint(0, 255, (100, 100, 3), dtype=np.uint8)
     mask = np.ones((100, 100), dtype=np.float32)
     result = qa_detector_metrics(img, mask)
@@ -53,7 +53,7 @@ def test_qa_detector_metrics_with_mask():
 
 @requires_retouch
 def test_qa_detector_metrics_empty_mask():
-    from scripts.benchmark import qa_detector_metrics
+    from scripts.bench.benchmark import qa_detector_metrics
     img = np.random.RandomState(42).randint(0, 255, (50, 50, 3), dtype=np.uint8)
     mask = np.zeros((50, 50), dtype=np.float32)
     result = qa_detector_metrics(img, mask)
@@ -63,7 +63,7 @@ def test_qa_detector_metrics_empty_mask():
 @requires_retouch
 def test_skin_quality_metrics_accepts_inputs():
     """Verify skin_quality_metrics works with its signature."""
-    from scripts.benchmark import skin_quality_metrics
+    from scripts.bench.benchmark import skin_quality_metrics
     img = np.random.RandomState(42).randint(0, 255, (100, 100, 3), dtype=np.uint8)
     mask = np.ones((100, 100), dtype=np.float32)
     result = skin_quality_metrics(img, mask, face_width=80.0)
@@ -77,7 +77,7 @@ def test_skin_quality_metrics_accepts_inputs():
 @requires_retouch
 def test_skin_quality_metrics_uniform_image():
     """Uniform image should have near-zero blotch_std."""
-    from scripts.benchmark import skin_quality_metrics
+    from scripts.bench.benchmark import skin_quality_metrics
     img = np.full((100, 100, 3), 128, dtype=np.uint8)
     mask = np.ones((100, 100), dtype=np.float32)
     result = skin_quality_metrics(img, mask, face_width=80.0)
@@ -86,7 +86,7 @@ def test_skin_quality_metrics_uniform_image():
 
 def test_parse_skin_quality_benchmark_lines():
     """parse_benchmark_lines should handle skin_quality output."""
-    from scripts.benchmark import parse_benchmark_lines
+    from scripts.bench.benchmark import parse_benchmark_lines
 
     output = (
         "[benchmark] skin_quality_input: blotch_std=12.345600 chroma_std=0.789000\n"
@@ -103,7 +103,7 @@ def test_parse_skin_quality_benchmark_lines():
 
 def test_parse_qa_detector_benchmark_lines():
     """parse_benchmark_lines should handle QA detector output."""
-    from scripts.benchmark import parse_benchmark_lines
+    from scripts.bench.benchmark import parse_benchmark_lines
 
     output = "[benchmark] qa_detector_output: banding=0.1200 clipping=0.0500 plastic=0.3400"
     results = parse_benchmark_lines(output)

@@ -374,18 +374,31 @@ class RAWDeveloper:
 
         try:
             with rawpy.imread(str(path)) as raw:
-                # Postprocess to 16-bit linear RGB
+                # Postprocess to 16-bit *linear* RGB. gamma=(1, 1) disables
+                # rawpy's default BT.709 encode (2.222, 4.5) so the output is
+                # true linear tristimulus RGB — the domain LinearGrader assumes.
+                # Without this the values are gamma-encoded and every linear
+                # op runs in the wrong domain. highlight_mode=ReconstructDefault
+                # recovers blown channels instead of the default hard Clip.
                 rgb16 = raw.postprocess(
                     use_camera_wb=use_camera_wb,
                     no_auto_bright=not auto_brightness,
                     output_bps=16,
+                    gamma=(1, 1),
+                    output_color=rawpy.ColorSpace.sRGB,
+                    highlight_mode=rawpy.HighlightMode.ReconstructDefault,
                 )
 
-                # Extract metadata
+                # Extract metadata. rawpy exposes these via attributes that
+                # vary across versions (e.g. no top-level `raw.iso`/`raw.wb`
+                # in 0.27), so read defensively — missing fields must not fail
+                # the decode.
+                cam_wb = getattr(raw, "camera_whitebalance", None)
+                iso_other = getattr(getattr(raw, "other", None), "iso_speed", None)
                 metadata = {
-                    "iso": raw.iso,
-                    "camera_model": raw.camera_model,
-                    "wb": np.array([raw.wb[0], raw.wb[1], raw.wb[2]], dtype=np.float32) if hasattr(raw, 'wb') else None,
+                    "iso": getattr(raw, "iso", None) if iso_other is None else iso_other,
+                    "camera_model": getattr(raw, "camera_model", None),
+                    "wb": np.asarray(cam_wb[:3], dtype=np.float32) if cam_wb is not None else None,
                     "bit_depth": 16,
                 }
         except Exception as e:

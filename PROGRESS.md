@@ -9,26 +9,52 @@
 - All **6 phases ✅ COMPLETE** + P4.a ✅. 37 numbered stage rows, all `✅ DONE`.
 - **11/11 flagship recipes**, **85 recipes** total.
 - Core engine is **feature-complete and unit-tested**.
-- **Post-plan (2026-07-10, UNCOMMITTED)**: RAF import faithful neutral dev + highlight
-  recovery, and a new `face_exposure` skin-brightness param. Both implemented; visual QA
-  pending; not yet committed (3 commits already ahead of origin are recipe/doc only).
+- **Post-plan (2026-07-10) — all COMMITTED**: `af54d2d` RAF import faithful neutral dev +
+  highlight recovery + `face_exposure` param; `ef31d55` sclera vessel removal + auto backdrop
+  cleanup; `742825f` fabric wrinkles; `25c445c` per-region wrinkles; `1b89d1e` reshape
+  completeness (L/R + neck); `3c3f78d` auto body reshape; `ea7697e` forehead-mask fix;
+  `40721d6` recipe-integrity dead-key fixes; `0610660` wiring fix — T3 `body_reshape_*` +
+  A3 `cosplay_*` + `face_exposure` now recipe-reachable (`body_reshape_demo_v1`,
+  `cosplay_wiring_demo_v1`, `portrait` `skin.face_exposure`); GUI sliders deferred.
+  Visual-QA renders generated under `test_output/visual_qa*/`; review/sign-off still pending.
 
 ## Phase status
 
 | Phase | Status |
 |---|---|
-| Phase 1 (foundations) | ✅ |
-| Phase 2 (manual tools) | ✅ (except A2, blocked on A1) |
-| Phase 3 (creative ecosystem) | ✅ |
-| Phase 4 (fidelity: C3/F4/F4.b/F5/F6/F7/H1/H2) | ✅ |
-| Phase 5 (harmonize/F9/F10/A5) | ✅ |
-| Phase 6 (T1/T2/T3/T4/T5/A3/A4) | ✅ |
+| Phase 1 — Quality Floor | ✅ |
+| Phase 2 — Skin Supremacy | ✅ (except A2, blocked on A1) |
+| Phase 3 — Architecture & Workflow | ✅ |
+| Phase 4 — Manual Tools | ✅ |
+| Phase 5 — Intelligence | ✅ |
+| Phase 6 — Creative Expansion & Moat | ✅ |
 | P4.a (model-fetch infra) | ✅ |
-| Phase 7 (P4 distribution hardening) | 🔴 not started |
+| Phase 7 — Ship | 🔴 not started |
 
 ## Leftover (~5%)
 
-### 1. Phase 7 — P4 distribution hardening (0% started)
+### 0. Wiring debt + distribution gaps (2026-07-10 snapshot)
+- **Unwired islands — mostly resolved (2nd pass, UNCOMMITTED)**: `plugin_api.py` (T4) now
+  discovered+initialised in `RetouchEngine.__init__` (guarded, never fatal); `recipe_cookbook.py`
+  (T4) + `look_extractor.py` (F6) now reachable via new `cli.py` flags (`--list-recipes`,
+  `--search-recipes`, `--extract-look`/`--look-base`). `raw_develop.py` (T5) still unwired (gamma
+  bug, out of scope).
+- **GUI sliders for the 9 audit params** (`face_exposure`, `cosplay_wig_lace_blend`/
+  `cosplay_stockings_smooth`/`cosplay_consistency_strength`, `body_reshape_arm/leg/torso/
+  shoulder/hip_width` + `auto_body_reshape`) added as visible sliders. Fixing the GUI also
+  required restoring `_process_inputs` ↔ `param_names()` alignment — 26 params were missing
+  from `_process_inputs` (incl. the 9 audit params + 17 others: `wrinkle_soften_*`,
+  `reshape_*_l/r`, `eye_sclera_vessel_remove`, `backdrop_cleanup`, `fabric_wrinkle_smooth`,
+  `neural_*`). All 26 now present (9 visible, 17 hidden `gr.State`), so transport keys
+  (`show_compare`/`fast`/export/debug) map correctly again. `test_params_gui_wiring` passes.
+- **2 still GUI-invisible params**: `color_transfer_intensity`, `freckle_preserve_mask`
+  (excluded from `PROCESS_INPUT_KEYS` by design).
+- **Remaining auto-gap backlog item**: #5 auto stray-hair (A4-gated — needs a hair-strand
+  segmentation model / evidence gate).
+- **`models/manifest.json` URLs are placeholders** (`github.com/owner/retouch-models`).
+- **No packaging metadata**: no `pyproject.toml` / `setup.py`; requirements unpinned.
+
+### 1. Phase 7 — Ship (0% started)
 - Code signing, update-check, diagnostics, Windows build.
 - Packaging/shipping work, not algorithm.
 
@@ -57,7 +83,7 @@
   `scripts/recipes/recipe_sweep.py` or a per-recipe CLI loop. Output subdirs
   `test_output/recipes/<recipe>/` are partially populated.
 
-### 5. Post-plan RAF-import + `face_exposure` work (2026-07-10 — UNCOMMITTED)
+### 5. Post-plan RAF-import + `face_exposure` work (2026-07-10 — COMMITTED in `af54d2d`)
 - **RAF import (`retouch/io.py`)**: `bright=1.5→1.0` + `output_color=sRGB` on both raw
   paths (faithful neutral dev, no over-light); added `highlight_mode=ReconstructDefault`
   (recover blown highlights, no magenta clip). 92 tests pass. **Research 2026-07-10 on
@@ -70,7 +96,7 @@
   + `tests/test_skin.py::TestFaceExposureLift` (3/3). 10-level RAF sample rendered
   (`_DSF1853_fe1..fe10.jpg`). Fixed `cli_type="float"`→`float` argparse crash.
   **[VISUAL QA PENDING]** (Visual-Critical `skin.py`); GUI/CLI slider not wired.
-- All 6 modified files are **uncommitted** (3 commits already ahead of origin: recipe/doc only).
+- Post-plan feature work is **committed and pushed** through `0610660`; current uncommitted tree is the in-flight 2nd-pass wiring + RAW-ingest work.
 - `MASTER_PLAN.md` updated with a "Post-plan enhancements (2026-07-10)" section.
 - **RAW research (2026-07-10)**: new `PLAN_RAW_PROCESSING.md` — full-data RAF ingestion
   audit + rawpy parameter research + wiring plan. Key findings: T5's `raw_develop.py` is an
@@ -135,7 +161,7 @@
 - **No-ops confirmed for X-Trans**: `demosaic_algorithm` (AHD==DHT; AMAZE/LMMSE need GPL packs)
   and `fbdd_noise_reduction` (Off/Light/Full identical) have zero effect — do not add.
 
-### 6. Sclera vessel removal (2026-07-10 — UNCOMMITTED)
+### 6. Sclera vessel removal (2026-07-10, committed)
 - **`eye_sclera_vessel_remove`** (0–100): new `eyes.py` `EyeEnhancer._remove_sclera_vessels`
   — detects red vessels via relative LAB-a redness inside the iris-excluded sclera mask,
   inpaints them (Telea). Iris/pupil/skin untouched. Wired `params.py`→`engine.py`→
@@ -144,7 +170,7 @@
   `DSCF8007.jpg`; compare `test_output/eyes_vessel/compare_off_vs_on.jpg`.
   **[VISUAL QA PENDING]** — Visual-Critical (`eyes.py`).
 
-### 7. Auto backdrop cleanup (2026-07-10 — UNCOMMITTED)
+### 7. Auto backdrop cleanup (2026-07-10, committed)
 - **`backdrop_cleanup`** (0–100): new `retouch/backdrop.py::clean_backdrop` — detects dust/folds/dirt
   as high-frequency luminance outliers vs `GaussianBlur` (std-dev threshold; detail band preserved,
   only outliers removed, Telea inpaint). Subject edge protected by **eroding** `~person_mask` ~8px
@@ -154,7 +180,7 @@
   (`_run_global_phases` before `to_uint8`, both registry + hardcoded paths)→`ProcessingContext`.
   `tests/test_backdrop.py` 6/6 pass. **[VISUAL QA PENDING]** — Visual-Critical-adjacent.
 
-### 8. Auto fabric/clothing wrinkle smoothing (2026-07-10 — UNCOMMITTED)
+### 8. Auto fabric/clothing wrinkle smoothing (2026-07-10, committed)
 - **`fabric_wrinkle_smooth`** (0–100, `cli_type=float`): new `retouch/fabric.py::smooth_fabric_wrinkles`
   — detects mid-frequency fold ridges via difference-of-Gaussians on the LAB L channel (dark folds =
   negative DoG), lightens them capped at 60% depth reduction. Fabric weave (high-freq) and gentle
@@ -166,7 +192,7 @@
   `to_uint8`, both paths)→`ProcessingContext` + `process()` kwarg + overrides entry + `retouch()` wrapper.
   `tests/test_fabric.py` 7/7 pass. **[VISUAL QA PENDING]** — Visual-Critical-adjacent.
 
-### 9. Per-region wrinkle sliders (2026-07-10 — UNCOMMITTED)
+### 9. Per-region wrinkle sliders (2026-07-10, committed)
 - **`wrinkle_soften_forehead` / `wrinkle_soften_nasolabial` / `wrinkle_soften_neck`** (0–100, `cli_type=float`):
   `retouch/skin.py::wrinkle_soften` split into `_wrinkle_soften_masked` (scoped to one zone-mask) run
   per-region via `region_strengths={"forehead","nasolabial","neck"}`. Region path uses attrs
@@ -178,7 +204,7 @@
   wrapper)→`perf_optimizations.py` builds `region_strengths` from `ctx`. `tests/test_skin.py::TestPerRegionWrinkle`
   pass. **[VISUAL QA PENDING]** — Visual-Critical (`skin.py`).
 
-### 10. Reshape completeness — L/R variants + neck (auto-gap #6, 2026-07-10 — UNCOMMITTED)
+### 10. Reshape completeness — L/R variants + neck (auto-gap #6, 2026-07-10, committed)
 - **8 new reshape params** (all `conversion="gui_direct"`, `recipe_key="reshape.*"`, −50..50, mirror existing
   reshape specs): `reshape_jaw_width_l/r`, `reshape_nose_width_l/r`, `reshape_eye_size_l/r`,
   `reshape_neck_width`, `reshape_neck_length`. Wired `params.py`→`engine.py` (`ProcessingContext` fields +
@@ -195,7 +221,7 @@
 - `tests/test_geometry.py` +16 pass (155 geometry+params total); regression backdrop/fabric/eyes/skin 130 pass.
   **[VISUAL QA PENDING]** — Visual-Critical (`geometry.py`).
 
-### 11. One-click auto body reshape (auto-gap #7, 2026-07-10 — UNCOMMITTED)
+### 11. One-click auto body reshape (auto-gap #7, 2026-07-10, committed)
 - **`suggest_body_reshape(pose_ctx)`** (new, `retouch/body_reshape.py`): returns 0–100 suggestions
   (50 = neutral) for `arm_length`/`leg_length`/`torso_width`/`shoulder_width`/`hip_width`. Gentle,
   capped corrections toward balanced proportions (shoulder:hip ~1.3, leg:torso ~1.2, arm:torso ~1.0).
@@ -212,7 +238,7 @@
 - `tests/test_body_reshape.py` 8 pass (7 heuristics + 1 ParamSpec; **no MediaPipe model load**);
   full suite green: `test_body_reshape`+`test_params` 140, regression `test_geometry/backdrop/fabric/eyes/skin` 153.
   **[VISUAL QA PENDING]** — real-photo pass deferred until a pose model is available.
-- **Auto-gap backlog status**: #1 DONE, #2 DONE, #3 DONE, #4 DONE, #6 DONE, #7 DONE (all uncommitted);
+- **Auto-gap backlog status**: #1 DONE, #2 DONE, #3 DONE, #4 DONE, #6 DONE, #7 DONE (all committed & pushed, `af54d2d`..`0610660`);
   #5 parked (A4-gated — needs a hair-strand segmentation model / evidence gate).
 
 ## Last updated
@@ -221,4 +247,4 @@ RAW processing (`PLAN_RAW_PROCESSING.md` + T5 audit), auto-gap backlog (owner re
 wiring-debt audit (4 unwired islands + 11 GUI-invisible params), recipe integrity audit
 (4 dead-key classes, 21 instances, guard-test blind spot). Earlier same day: Post-plan section
 + §5 for RAF-import / `face_exposure` work (committed `af54d2d`). Then §6 sclera vessel removal +
-  §7 backdrop cleanup, §8 fabric wrinkle smoothing (both uncommitted). Prior: `0822b9c` RESUME.
+  §7 backdrop cleanup, §8 fabric wrinkle smoothing (both committed). Prior: `0822b9c` RESUME.

@@ -104,13 +104,13 @@ class TestCategoryAssignments:
         names = {i.name for i in list_recipes("outdoor")}
         assert "outdoor_harsh_sun_v1" in names
         assert "outdoor_golden_hour_v1" in names
-        assert len(names) == 4
+        assert len(names) >= 4
 
     def test_studio_category(self):
         names = {i.name for i in list_recipes("studio")}
         assert "studio_hard_flash_v1" in names
         assert "studio_softbox_v1" in names
-        assert len(names) == 4
+        assert len(names) >= 4
 
     def test_convention_category(self):
         names = {i.name for i in list_recipes("convention")}

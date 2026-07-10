@@ -1,5 +1,9 @@
 # Future Roadmap
 
+**SUPERSEDED (2026-07-10):** execution order and status now live in `MASTER_PLAN.md`; this document is preserved as the original v1 scoping record. Checkbox states below are frozen as of 2026-06-23 and no longer reflect reality.
+
+---
+
 **Date:** 2026-06-23 (revised — Session 2, v1 scope locked)
 **Horizon:** 10-12 weeks (v1 only); 18-24 months (full vision)
 **Status:** Planning document — v1 scope is locked, v2+ is aspirational
