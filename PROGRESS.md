@@ -178,6 +178,23 @@
   wrapper)→`perf_optimizations.py` builds `region_strengths` from `ctx`. `tests/test_skin.py::TestPerRegionWrinkle`
   pass. **[VISUAL QA PENDING]** — Visual-Critical (`skin.py`).
 
+### 10. Reshape completeness — L/R variants + neck (auto-gap #6, 2026-07-10 — UNCOMMITTED)
+- **8 new reshape params** (all `conversion="gui_direct"`, `recipe_key="reshape.*"`, −50..50, mirror existing
+  reshape specs): `reshape_jaw_width_l/r`, `reshape_nose_width_l/r`, `reshape_eye_size_l/r`,
+  `reshape_neck_width`, `reshape_neck_length`. Wired `params.py`→`engine.py` (`ProcessingContext` fields +
+  `process()` kwargs + overrides entries + `_any_reshape_active` gate; `retouch()` wrapper forwards via `**kwargs`).
+- **L/R got a split:** jaw_width (234=R/454=L), nose_width (48=L/278=R alae), eye_size (LEFT/RIGHT iris).
+  `_jaw_width_warps`/`_nose_width_warps`/`_eye_size_warps` accept optional `slider_l`/`slider_r`.
+- **Precedence:** in `reshape()`, if either side variant of a feature ≠ 0 → per-side path (each side driven by
+  its own strength, untouched side skipped); if BOTH side variants = 0 → global symmetric `reshape.<key>` path,
+  **byte-identical to legacy** (test `test_jaw_global_byte_identical`, `test_side_zero_matches_global`).
+- **Neck:** `_neck_width_warps` (jaw angles 234/454 + jaw-line 58/172/288/397, horizontal inward, R=fw×0.5 cap),
+  `_neck_length_warps` (chin 152 + jaw angles, vertical). No MediaPipe neck landmarks → jaw/chin band is the proxy.
+- **Left symmetric (no L/R split), by design:** eye_distance, nose_length, chin_length, mouth_size, smile,
+  forehead — centered/vertical or naturally-paired controls where independent L/R has no clear photographic meaning.
+- `tests/test_geometry.py` +16 pass (155 geometry+params total); regression backdrop/fabric/eyes/skin 130 pass.
+  **[VISUAL QA PENDING]** — Visual-Critical (`geometry.py`).
+
 ## Last updated
 2026-07-10 (end of day) — four discovery passes documented in MASTER_PLAN.md Post-plan section:
 RAW processing (`PLAN_RAW_PROCESSING.md` + T5 audit), auto-gap backlog (owner request),

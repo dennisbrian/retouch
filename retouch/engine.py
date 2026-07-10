@@ -260,6 +260,14 @@ class ProcessingContext:
     reshape_mouth_size: float = 0.0
     reshape_smile: float = 0.0
     reshape_forehead: float = 0.0
+    reshape_jaw_width_l: float = 0.0
+    reshape_jaw_width_r: float = 0.0
+    reshape_nose_width_l: float = 0.0
+    reshape_nose_width_r: float = 0.0
+    reshape_eye_size_l: float = 0.0
+    reshape_eye_size_r: float = 0.0
+    reshape_neck_width: float = 0.0
+    reshape_neck_length: float = 0.0
 
     # --- Hair ---
     hair_enhance: float = 0.0
@@ -852,6 +860,14 @@ class RetouchEngine:
         reshape_mouth_size: Optional[float] = None,
         reshape_smile: Optional[float] = None,
         reshape_forehead: Optional[float] = None,
+        reshape_jaw_width_l: Optional[float] = None,
+        reshape_jaw_width_r: Optional[float] = None,
+        reshape_nose_width_l: Optional[float] = None,
+        reshape_nose_width_r: Optional[float] = None,
+        reshape_eye_size_l: Optional[float] = None,
+        reshape_eye_size_r: Optional[float] = None,
+        reshape_neck_width: Optional[float] = None,
+        reshape_neck_length: Optional[float] = None,
         blush: Optional[float] = None,
         lip_finish: Optional[str] = None,
         specular_bloom: Optional[float] = None,
@@ -1071,6 +1087,14 @@ class RetouchEngine:
             "reshape_mouth_size": reshape_mouth_size,
             "reshape_smile": reshape_smile,
             "reshape_forehead": reshape_forehead,
+            "reshape_jaw_width_l": reshape_jaw_width_l,
+            "reshape_jaw_width_r": reshape_jaw_width_r,
+            "reshape_nose_width_l": reshape_nose_width_l,
+            "reshape_nose_width_r": reshape_nose_width_r,
+            "reshape_eye_size_l": reshape_eye_size_l,
+            "reshape_eye_size_r": reshape_eye_size_r,
+            "reshape_neck_width": reshape_neck_width,
+            "reshape_neck_length": reshape_neck_length,
             "blush": blush,
             "lip_finish": lip_finish,
             "specular_bloom": specular_bloom,
@@ -2382,6 +2406,14 @@ class RetouchEngine:
                 "reshape_mouth_size",
                 "reshape_smile",
                 "reshape_forehead",
+                "reshape_jaw_width_l",
+                "reshape_jaw_width_r",
+                "reshape_nose_width_l",
+                "reshape_nose_width_r",
+                "reshape_eye_size_l",
+                "reshape_eye_size_r",
+                "reshape_neck_width",
+                "reshape_neck_length",
             )
         )
 

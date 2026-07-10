@@ -51,6 +51,8 @@ _CHIN_LENGTH_K = 0.08
 _MOUTH_SIZE_K = 0.18
 _SMILE_K = 0.10
 _FOREHEAD_K = 0.08
+_NECK_WIDTH_K = 0.10
+_NECK_LENGTH_K = 0.08
 
 
 Warp = Tuple[Tuple[int, int], Tuple[int, int], int]
@@ -91,6 +93,7 @@ class FaceReshaper:
 
         slimming_val: float
         reshape_vals: dict[str, float]
+        side_vals: dict[str, float]
         if ctx is not None:
             slimming_val = float(getattr(ctx, "slimming", 0.0) or 0.0)
             reshape_vals = {
@@ -104,14 +107,32 @@ class FaceReshaper:
                 "smile": float(getattr(ctx, "reshape_smile", 0.0) or 0.0),
                 "forehead": float(getattr(ctx, "reshape_forehead", 0.0) or 0.0),
             }
+            side_vals = {
+                "jaw_width_l": float(getattr(ctx, "reshape_jaw_width_l", 0.0) or 0.0),
+                "jaw_width_r": float(getattr(ctx, "reshape_jaw_width_r", 0.0) or 0.0),
+                "nose_width_l": float(getattr(ctx, "reshape_nose_width_l", 0.0) or 0.0),
+                "nose_width_r": float(getattr(ctx, "reshape_nose_width_r", 0.0) or 0.0),
+                "eye_size_l": float(getattr(ctx, "reshape_eye_size_l", 0.0) or 0.0),
+                "eye_size_r": float(getattr(ctx, "reshape_eye_size_r", 0.0) or 0.0),
+                "neck_width": float(getattr(ctx, "reshape_neck_width", 0.0) or 0.0),
+                "neck_length": float(getattr(ctx, "reshape_neck_length", 0.0) or 0.0),
+            }
         else:
             slimming_val = float(strength or 0)
             reshape_vals = {k: 0.0 for k in (
                 "eye_size", "eye_distance", "nose_width", "nose_length",
                 "jaw_width", "chin_length", "mouth_size", "smile", "forehead",
             )}
+            side_vals = {k: 0.0 for k in (
+                "jaw_width_l", "jaw_width_r", "nose_width_l", "nose_width_r",
+                "eye_size_l", "eye_size_r", "neck_width", "neck_length",
+            )}
 
-        if slimming_val <= 0 and not any(v != 0 for v in reshape_vals.values()):
+        if (
+            slimming_val <= 0
+            and not any(v != 0 for v in reshape_vals.values())
+            and not any(v != 0 for v in side_vals.values())
+        ):
             return img_bgr
 
         h, w = img_bgr.shape[:2]
@@ -130,15 +151,45 @@ class FaceReshaper:
                 max_face_width = fw
 
             warps.extend(self._slimming_warps(landmarks, fw, slimming_val, h, w))
-            warps.extend(self._eye_size_warps(lm_obj, landmarks, fw, reshape_vals["eye_size"], h, w))
+
+            # Eye size: per-side L/R override when either side variant is set,
+            # else global symmetric path (byte-identical to legacy).
+            if side_vals["eye_size_l"] != 0 or side_vals["eye_size_r"] != 0:
+                warps.extend(self._eye_size_warps(
+                    lm_obj, landmarks, fw, 0.0, h, w,
+                    slider_l=side_vals["eye_size_l"], slider_r=side_vals["eye_size_r"],
+                ))
+            else:
+                warps.extend(self._eye_size_warps(lm_obj, landmarks, fw, reshape_vals["eye_size"], h, w))
+
             warps.extend(self._eye_distance_warps(landmarks, fw, reshape_vals["eye_distance"], h, w))
-            warps.extend(self._nose_width_warps(landmarks, fw, reshape_vals["nose_width"], h, w))
+
+            # Nose width: per-side L/R override or global symmetric path.
+            if side_vals["nose_width_l"] != 0 or side_vals["nose_width_r"] != 0:
+                warps.extend(self._nose_width_warps(
+                    landmarks, fw, 0.0, h, w,
+                    slider_l=side_vals["nose_width_l"], slider_r=side_vals["nose_width_r"],
+                ))
+            else:
+                warps.extend(self._nose_width_warps(landmarks, fw, reshape_vals["nose_width"], h, w))
+
             warps.extend(self._nose_length_warps(landmarks, fw, reshape_vals["nose_length"], h, w))
-            warps.extend(self._jaw_width_warps(landmarks, fw, reshape_vals["jaw_width"], h, w))
+
+            # Jaw width: per-side L/R override or global symmetric path.
+            if side_vals["jaw_width_l"] != 0 or side_vals["jaw_width_r"] != 0:
+                warps.extend(self._jaw_width_warps(
+                    landmarks, fw, 0.0, h, w,
+                    slider_l=side_vals["jaw_width_l"], slider_r=side_vals["jaw_width_r"],
+                ))
+            else:
+                warps.extend(self._jaw_width_warps(landmarks, fw, reshape_vals["jaw_width"], h, w))
+
             warps.extend(self._chin_length_warps(landmarks, fw, reshape_vals["chin_length"], h, w))
             warps.extend(self._mouth_size_warps(lm_obj, landmarks, fw, reshape_vals["mouth_size"], h, w))
             warps.extend(self._smile_warps(landmarks, fw, reshape_vals["smile"], h, w))
             warps.extend(self._forehead_warps(lm_obj, landmarks, fw, reshape_vals["forehead"], h, w))
+            warps.extend(self._neck_width_warps(landmarks, fw, side_vals["neck_width"], h, w))
+            warps.extend(self._neck_length_warps(landmarks, fw, side_vals["neck_length"], h, w))
 
             face_oval_pts_per_face.append(
                 get_points(lm_obj, FACE_OVAL, w, h)
@@ -307,20 +358,28 @@ class FaceReshaper:
         slider: float,
         h: int,
         w: int,
+        slider_l: Optional[float] = None,
+        slider_r: Optional[float] = None,
     ) -> List[Warp]:
         """Radial scale of both eye outlines. Positive = enlarge, negative = shrink.
 
         Composed from N=8 radial translation warps per eye around the iris
-        center (§2.3 of the plan).
+        center (§2.3 of the plan). When ``slider_l``/``slider_r`` are provided,
+        each eye is driven by its own strength; otherwise both use ``slider``
+        (byte-identical to the legacy symmetric path).
         """
-        if slider == 0:
+        s_left = slider_l if slider_l is not None else slider
+        s_right = slider_r if slider_r is not None else slider
+        if s_left == 0 and s_right == 0:
             return []
-        k = np.clip(slider / 100.0, -1.0, 1.0) * _EYE_SIZE_K
         warps: List[Warp] = []
-        for iris_indices, eye_indices in (
-            (LEFT_IRIS, LEFT_EYE),
-            (RIGHT_IRIS, RIGHT_EYE),
+        for iris_indices, eye_indices, s_eye in (
+            (LEFT_IRIS, LEFT_EYE, s_left),
+            (RIGHT_IRIS, RIGHT_EYE, s_right),
         ):
+            if s_eye == 0:
+                continue
+            k = np.clip(s_eye / 100.0, -1.0, 1.0) * _EYE_SIZE_K
             center = self._centroid(landmarks, iris_indices, w, h)
             if center is None:
                 center = self._centroid(landmarks, eye_indices, w, h)
@@ -375,19 +434,46 @@ class FaceReshaper:
         slider: float,
         h: int,
         w: int,
+        slider_l: Optional[float] = None,
+        slider_r: Optional[float] = None,
     ) -> List[Warp]:
-        """Radial scale of the alae around the nose bridge (168). Negative = narrow."""
-        if slider == 0:
-            return []
-        k = np.clip(slider / 100.0, -1.0, 1.0) * _NOSE_WIDTH_K
-        center = (int(landmarks[168].x * w), int(landmarks[168].y * h))
-        ala_l = (landmarks[48].x * w, landmarks[48].y * h)
-        ala_r = (landmarks[278].x * w, landmarks[278].y * h)
-        pts = np.array([ala_l, ala_r], dtype=np.float32)
-        r0 = float(np.max(np.linalg.norm(pts - np.array(center, dtype=np.float32), axis=1)))
-        if r0 < 2.0:
-            return []
-        return self._radial_scale_warps(center, r0, k, int(fw * 0.4))
+        """Radial scale of the alae around the nose bridge (168). Negative = narrow.
+
+        When ``slider_l``/``slider_r`` are provided, each ala (48=left, 278=right)
+        is translated independently along its bridge→ala axis; otherwise the
+        legacy symmetric radial-scale path is used (byte-identical).
+        """
+        if slider_l is None and slider_r is None:
+            if slider == 0:
+                return []
+            k = np.clip(slider / 100.0, -1.0, 1.0) * _NOSE_WIDTH_K
+            center = (int(landmarks[168].x * w), int(landmarks[168].y * h))
+            ala_l = (landmarks[48].x * w, landmarks[48].y * h)
+            ala_r = (landmarks[278].x * w, landmarks[278].y * h)
+            pts = np.array([ala_l, ala_r], dtype=np.float32)
+            r0 = float(np.max(np.linalg.norm(pts - np.array(center, dtype=np.float32), axis=1)))
+            if r0 < 2.0:
+                return []
+            return self._radial_scale_warps(center, r0, k, int(fw * 0.4))
+
+        s_left = slider_l if slider_l is not None else slider
+        s_right = slider_r if slider_r is not None else slider
+        cx = int(landmarks[168].x * w)
+        cy = int(landmarks[168].y * h)
+        R = int(fw * 0.4)
+        warps: List[Warp] = []
+        for ala_idx, s_ala in ((48, s_left), (278, s_right)):
+            if s_ala == 0:
+                continue
+            k = np.clip(s_ala / 100.0, -1.0, 1.0) * _NOSE_WIDTH_K
+            px = landmarks[ala_idx].x * w
+            py = landmarks[ala_idx].y * h
+            vx = px - cx
+            vy = py - cy
+            tx = int(cx + (1.0 + k) * vx)
+            ty = int(cy + (1.0 + k) * vy)
+            warps.append(((int(px), int(py)), (tx, ty), R))
+        return warps
 
     def _nose_length_warps(
         self,
@@ -415,20 +501,34 @@ class FaceReshaper:
         slider: float,
         h: int,
         w: int,
+        slider_l: Optional[float] = None,
+        slider_r: Optional[float] = None,
     ) -> List[Warp]:
         """Inward (positive) / outward (negative) compression at jaw angles
-        (234 / 454). Independent of slimming."""
-        if slider == 0:
+        (234=right / 454=left). Independent of slimming.
+
+        When ``slider_l``/``slider_r`` are provided, each jaw angle is driven by
+        its own strength; otherwise both use ``slider`` (byte-identical to the
+        legacy symmetric path).
+        """
+        s_right = slider_r if slider_r is not None else slider
+        s_left = slider_l if slider_l is not None else slider
+        if s_right == 0 and s_left == 0:
             return []
-        k = np.clip(slider / 100.0, -1.0, 1.0) * _JAW_WIDTH_K
-        disp = fw * k
+        R = int(fw * 0.5)
         warps: List[Warp] = []
-        c_rjaw = (int(landmarks[234].x * w), int(landmarks[234].y * h))
-        t_rjaw = (int(c_rjaw[0] + disp), c_rjaw[1])
-        warps.append((c_rjaw, t_rjaw, int(fw * 0.5)))
-        c_ljaw = (int(landmarks[454].x * w), int(landmarks[454].y * h))
-        t_ljaw = (int(c_ljaw[0] - disp), c_ljaw[1])
-        warps.append((c_ljaw, t_ljaw, int(fw * 0.5)))
+        if s_right != 0:
+            k_r = np.clip(s_right / 100.0, -1.0, 1.0) * _JAW_WIDTH_K
+            disp_r = fw * k_r
+            c_rjaw = (int(landmarks[234].x * w), int(landmarks[234].y * h))
+            t_rjaw = (int(c_rjaw[0] + disp_r), c_rjaw[1])
+            warps.append((c_rjaw, t_rjaw, R))
+        if s_left != 0:
+            k_l = np.clip(s_left / 100.0, -1.0, 1.0) * _JAW_WIDTH_K
+            disp_l = fw * k_l
+            c_ljaw = (int(landmarks[454].x * w), int(landmarks[454].y * h))
+            t_ljaw = (int(c_ljaw[0] - disp_l), c_ljaw[1])
+            warps.append((c_ljaw, t_ljaw, R))
         return warps
 
     def _chin_length_warps(
@@ -524,6 +624,59 @@ class FaceReshaper:
         tx = cx
         ty = int(cy + disp)
         return [((cx, cy), (tx, ty), int(fw * 0.4))]
+
+    def _neck_width_warps(
+        self,
+        landmarks: Any,
+        fw: float,
+        strength: float,
+        h: int,
+        w: int,
+    ) -> List[Warp]:
+        """Narrow (positive) / widen (negative) the neck/lower-face band.
+
+        No dedicated neck landmarks exist in the MediaPipe mesh, so the jaw
+        angles (234/454) plus lower jaw-line points are translated horizontally
+        inward with a large downward-reaching radius (R = fw × 0.5, at the
+        _MAX_RADIUS_FRAC cap).
+        """
+        if strength == 0:
+            return []
+        k = np.clip(strength / 100.0, -1.0, 1.0) * _NECK_WIDTH_K
+        disp = fw * k
+        R = int(fw * _MAX_RADIUS_FRAC)
+        warps: List[Warp] = []
+        for idx in (234, 58, 172):  # subject-right jaw/neck → push inward (+x)
+            cx = int(landmarks[idx].x * w)
+            cy = int(landmarks[idx].y * h)
+            warps.append(((cx, cy), (int(cx + disp), cy), R))
+        for idx in (454, 288, 397):  # subject-left jaw/neck → push inward (−x)
+            cx = int(landmarks[idx].x * w)
+            cy = int(landmarks[idx].y * h)
+            warps.append(((cx, cy), (int(cx - disp), cy), R))
+        return warps
+
+    def _neck_length_warps(
+        self,
+        landmarks: Any,
+        fw: float,
+        strength: float,
+        h: int,
+        w: int,
+    ) -> List[Warp]:
+        """Lengthen (positive) / shorten (negative) the neck by translating the
+        chin (152) and jaw angles (234/454) vertically downward."""
+        if strength == 0:
+            return []
+        k = np.clip(strength / 100.0, -1.0, 1.0) * _NECK_LENGTH_K
+        disp = fw * k  # positive = down (lengthen)
+        R = int(fw * _MAX_RADIUS_FRAC)
+        warps: List[Warp] = []
+        for idx in (152, 234, 454):
+            cx = int(landmarks[idx].x * w)
+            cy = int(landmarks[idx].y * h)
+            warps.append(((cx, cy), (cx, int(cy + disp)), R))
+        return warps
 
     # ------------------------------------------------------------------
     # Helpers
