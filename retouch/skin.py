@@ -955,9 +955,9 @@ class SkinProcessor:
         feather = max(3, int(min(h, w) * 0.01)) | 1
 
         # Build a dimensional mask: where micro-contrast actually matters
-        # (cheek highlights, nose bridge, under-eye transition). These are
-        # the zones the bilateral+mid_reduction step is most likely to
-        # flatten, and where restoration is perceptually most valuable.
+        # (cheek highlights, nose bridge, under-eye transition, eye detail).
+        # These are the zones the bilateral+mid_reduction step is most likely
+        # to flatten, and where restoration is perceptually most valuable.
         dim_mask = self._build_dimensional_mask(
             regions,
             shape=smoothed_bgr.shape[:2],
@@ -967,6 +967,10 @@ class SkinProcessor:
                 "cheek_highlights_r",
                 "left_under_eye",
                 "right_under_eye",
+                "left_eye",
+                "right_eye",
+                "crows_feet_l",
+                "crows_feet_r",
             ),
             feather=feather,
         )
@@ -1577,6 +1581,57 @@ class SkinProcessor:
         else:
             result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
         return blend_masked(img_bgr, result, skin_mask)
+
+    def apply_specular_finish(
+        self,
+        img_bgr: np.ndarray,
+        skin_mask: Optional[np.ndarray],
+        mode: str = "matte",
+        strength: float = 0.5,
+        recolor: float = 0.0,
+    ) -> np.ndarray:
+        """R12 — re-render the specular finish after S4 shine removal.
+
+        Extracts the per-pixel specular layer from the (post-S4) canvas and
+        re-emits the requested finish via ``retouch.specular.render_finish``.
+
+        At the default ``("matte", 0.5, 0)`` this is a no-op-equivalent: the
+        S4 step has already removed shine, so the re-extracted specular layer
+        is ~0 and ``img - 0.5 * ~0 == img`` (byte-identical golden path).
+
+        Args:
+            img_bgr: (H, W, 3) uint8 or float32 BGR image (post S4).
+            skin_mask: (H, W) float mask 0-1. May be None to skip.
+            mode: One of {"matte","powder","dewy","glass_skin"}.
+            strength: 0-1 re-emit strength.
+            recolor: 0-1 specular colour-cast neutralisation.
+
+        Returns:
+            (H, W, 3) BGR image, same dtype as input.
+        """
+        if skin_mask is None or (strength == 0.0 and recolor == 0.0):
+            return img_bgr
+
+        from .specular import extract_specular, render_finish
+
+        is_float = img_bgr.dtype == np.float32
+        work = img_bgr.astype(np.float32) if not is_float else img_bgr
+
+        spec = extract_specular(work)
+        out = render_finish(
+            work, spec, mode, strength, recolor_strength=recolor
+        )
+
+        m = normalize_mask(
+            skin_mask.astype(np.float32, copy=False)
+            if skin_mask.dtype != np.float32
+            else skin_mask
+        )
+        result = blend_masked(work, out, m)
+
+        if is_float:
+            return result.astype(np.float32)
+        return result.astype(np.uint8)
 
     def texture_transplant(
         self,

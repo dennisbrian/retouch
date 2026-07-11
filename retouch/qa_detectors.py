@@ -62,6 +62,11 @@ COLOR_DRIFT_HUE_MEAN_THRESHOLD = 6.0   # Flag if mean skin Δh exceeds 6°
 COLOR_DRIFT_HUE_MAX_THRESHOLD = 15.0   # Flag if any skin pixel Δh exceeds 15°
 COLOR_DRIFT_THRESHOLD = 15.0           # Max Δh (deg) considered the flag boundary
 
+# R15 — QA extensions (read-only analysis detectors).
+PORE_SPECTRUM_THRESHOLD = 0.50  # Flag if pore-energy loss ratio > 50%
+ASYMMETRY_THRESHOLD = 0.40      # Flag if a zone < 60% of face texture energy
+SKIN_SCORE_FLOOR = 25.0         # Below this 0-100 skin score = clearly plastic
+
 
 def _bgr_to_lab(img_bgr: np.ndarray) -> np.ndarray:
     """Convert BGR uint8 image to CIELab float32.
@@ -681,6 +686,308 @@ def detect_color_drift(
     }
 
 
+def _gray_f32(img_bgr: np.ndarray) -> np.ndarray:
+    """Convert BGR (uint8 or float32) to float32 luminance for spectrum analysis.
+
+    Explicit colorspace conversion at the boundary; no uint8 arithmetic.
+    """
+    u = _to_u8_for_analysis(img_bgr)
+    gray = cv2.cvtColor(u, cv2.COLOR_BGR2GRAY)
+    return gray.astype(np.float32)
+
+
+def _pore_band_energy(gray_f: np.ndarray) -> float:
+    """Total power in the pore radial-frequency band (period ~2-8 px).
+
+    Computes the 2D FFT power spectrum, averages over angular bins to a radial
+    PSD, and sums power whose radial frequency falls in the pore band. Float32
+    internal throughout.
+    """
+    h, w = gray_f.shape
+    f = gray_f - gray_f.mean()
+    F = np.fft.fftshift(np.fft.fft2(f))
+    power = F.real ** 2 + F.imag ** 2  # magnitude squared
+
+    yy, xx = np.mgrid[0:h, 0:w]
+    cy, cx = h / 2.0, w / 2.0
+    fx = (xx - cx) / w
+    fy = (yy - cy) / h
+    r = np.sqrt(fx ** 2 + fy ** 2)  # cycles per pixel
+
+    # Period 2-8 px  ->  frequency 1/8 .. 1/2 cycles/px
+    pore_mask = (r >= (1.0 / 8.0)) & (r <= 0.5)
+    return float(power[pore_mask].sum())
+
+
+def _pore_fraction(gray_f: np.ndarray) -> float:
+    """Fraction of total FFT power residing in the pore band (scale-invariant)."""
+    h, w = gray_f.shape
+    f = gray_f - gray_f.mean()
+    F = np.fft.fftshift(np.fft.fft2(f))
+    power = F.real ** 2 + F.imag ** 2
+    total = float(power.sum())
+    if total < 1e-9:
+        return 0.0
+    yy, xx = np.mgrid[0:h, 0:w]
+    cy, cx = h / 2.0, w / 2.0
+    fx = (xx - cx) / w
+    fy = (yy - cy) / h
+    r = np.sqrt(fx ** 2 + fy ** 2)
+    pore_mask = (r >= (1.0 / 8.0)) & (r <= 0.5)
+    return float(power[pore_mask].sum()) / total
+
+
+def detect_pore_spectrum_distance(
+    img_bgr: np.ndarray,
+    skin_mask: Optional[np.ndarray] = None,
+    reference_img_bgr: Optional[np.ndarray] = None,
+) -> dict:
+    """Plastic-skin metric v2 — pore-spectrum distance (texture-spectrum backoff).
+
+    Measures the texture-spectrum backoff directly: compares pore-band FFT
+    energy of the processed image against the un-retouched reference. Low
+    pore energy = pores erased = plastic. Pure analysis; never mutates input.
+
+    Args:
+        img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR processed image.
+        skin_mask: Optional (H, W) float mask [0, 1] (unused; kept for API symmetry).
+        reference_img_bgr: Optional un-retouched before-image (same shape).
+
+    Returns:
+        dict with keys:
+            - "score": float in [0, 1]; ~0 pores intact, ->1 plastic.
+            - "flagged": bool, True if score > PORE_SPECTRUM_THRESHOLD.
+            - "pore_energy_ratio": float, processed / reference pore energy.
+            - "pore_band_energy": float.
+            - "ref_pore_band_energy": float or None.
+            - "note": str when no reference is supplied.
+    """
+    if reference_img_bgr is None:
+        return {
+            "score": 0.0,
+            "flagged": False,
+            "pore_energy_ratio": 0.0,
+            "pore_band_energy": 0.0,
+            "ref_pore_band_energy": None,
+            "note": "no reference",
+        }
+
+    if reference_img_bgr.shape != img_bgr.shape:
+        return {
+            "score": 0.0,
+            "flagged": False,
+            "pore_energy_ratio": 0.0,
+            "pore_band_energy": 0.0,
+            "ref_pore_band_energy": None,
+            "note": "reference shape mismatch",
+        }
+
+    proc_energy = _pore_band_energy(_gray_f32(img_bgr))
+    ref_energy = _pore_band_energy(_gray_f32(reference_img_bgr))
+
+    if ref_energy < 1e-9:
+        ratio = 0.0
+    else:
+        ratio = proc_energy / ref_energy
+    ratio = min(1.0, max(0.0, ratio))
+    score = 1.0 - ratio
+    flagged = score > PORE_SPECTRUM_THRESHOLD
+
+    return {
+        "score": float(score),
+        "flagged": bool(flagged),
+        "pore_energy_ratio": float(ratio),
+        "pore_band_energy": float(proc_energy),
+        "ref_pore_band_energy": float(ref_energy),
+    }
+
+
+def detect_over_retouch_asymmetry(
+    img_bgr: np.ndarray,
+    skin_mask: Optional[np.ndarray] = None,
+    zone_masks: Optional[Dict[str, np.ndarray]] = None,
+) -> dict:
+    """Detect the 'one perfect cheek' tell: one zone over-smoothed vs face average.
+
+    Computes per-zone texture-energy (mean Sobel-magnitude std on luminance) and
+    reports the maximum drop below the face mean. Asymmetric over-smoothing is a
+    classic over-retouch artifact. Pure analysis; never mutates input.
+
+    Args:
+        img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR image.
+        skin_mask: Optional (H, W) float mask [0, 1]; auto-partitioned into a
+            3x3 grid of subregions when ``zone_masks`` is not supplied.
+        zone_masks: Optional dict name -> (H, W) mask for explicit zones.
+
+    Returns:
+        dict with keys:
+            - "score": float in [0, 1]; asymmetry magnitude.
+            - "flagged": bool, True if score > ASYMMETRY_THRESHOLD.
+            - "zone_energies": dict name -> energy.
+            - "face_mean_energy": float.
+            - "min_zone_ratio": float, min zone/face_mean.
+    """
+    if img_bgr.shape[0] < 8 or img_bgr.shape[1] < 8:
+        return {
+            "score": 0.0,
+            "flagged": False,
+            "zone_energies": {},
+            "face_mean_energy": 0.0,
+            "min_zone_ratio": 1.0,
+        }
+
+    gray = _gray_f32(img_bgr)
+    gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    hf = np.sqrt(gx ** 2 + gy ** 2)  # high-frequency energy map
+
+    if zone_masks is not None:
+        zones = {name: (m.astype(np.float32)) for name, m in zone_masks.items()}
+    elif skin_mask is not None:
+        sm = skin_mask.astype(np.float32)
+        if sm.max() > 1.0:
+            sm /= 255.0
+        sm = sm > 0.5
+        if not np.any(sm):
+            return {
+                "score": 0.0,
+                "flagged": False,
+                "zone_energies": {},
+                "face_mean_energy": 0.0,
+                "min_zone_ratio": 1.0,
+            }
+        h, w = sm.shape
+        zones = {}
+        for iy in range(3):
+            for ix in range(3):
+                cell = np.zeros_like(sm)
+                r0, r1 = iy * h // 3, (iy + 1) * h // 3
+                c0, c1 = ix * w // 3, (ix + 1) * w // 3
+                cell[r0:r1, c0:c1] = True
+                zones[f"z{iy}{ix}"] = (cell & sm).astype(np.float32)
+    else:
+        return {
+            "score": 0.0,
+            "flagged": False,
+            "zone_energies": {},
+            "face_mean_energy": 0.0,
+            "min_zone_ratio": 1.0,
+        }
+
+    zone_energies: Dict[str, float] = {}
+    for name, m in zones.items():
+        m = m.astype(np.float32)
+        if m.max() > 1.0:
+            m /= 255.0
+        idx = m > 0.5
+        if idx.sum() < 4:
+            continue
+        zone_energies[name] = float(np.mean(hf[idx]))
+
+    if len(zone_energies) == 0:
+        return {
+            "score": 0.0,
+            "flagged": False,
+            "zone_energies": {},
+            "face_mean_energy": 0.0,
+            "min_zone_ratio": 1.0,
+        }
+
+    energies = np.array(list(zone_energies.values()), dtype=np.float32)
+    face_mean = float(np.mean(energies))
+    if face_mean < 1e-6:
+        return {
+            "score": 0.0,
+            "flagged": False,
+            "zone_energies": zone_energies,
+            "face_mean_energy": face_mean,
+            "min_zone_ratio": 1.0,
+        }
+
+    mins = np.min(energies) / face_mean
+    asymmetry = float(np.max((face_mean - energies) / face_mean))
+    asymmetry = min(1.0, max(0.0, asymmetry))
+    flagged = asymmetry > ASYMMETRY_THRESHOLD
+
+    return {
+        "score": float(asymmetry),
+        "flagged": bool(flagged),
+        "zone_energies": zone_energies,
+        "face_mean_energy": face_mean,
+        "min_zone_ratio": float(mins),
+    }
+
+
+def gui_skin_score(
+    img_bgr: np.ndarray,
+    skin_mask: Optional[np.ndarray] = None,
+    reference_img_bgr: Optional[np.ndarray] = None,
+) -> Dict[str, Any]:
+    """Single trustworthy 0-100 skin-quality number for auto-strength.
+
+    Combines chroma variance (over-evens -> plastic) and texture presence
+    (pore-band energy, vs reference when supplied else absolute fraction).
+    Informational only — does NOT mutate inputs and is not a hard gate.
+
+    Args:
+        img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR image.
+        skin_mask: Optional (H, W) float mask [0, 1] restricting chroma analysis.
+        reference_img_bgr: Optional un-retouched reference for texture compare.
+
+    Returns:
+        dict with keys "score" (0-100), "chroma_var", "texture_metric",
+        "flagged" (True if score < SKIN_SCORE_FLOOR).
+    """
+    if img_bgr.shape[0] < 8 or img_bgr.shape[1] < 8:
+        return {
+            "score": 100.0,
+            "chroma_var": 0.0,
+            "texture_metric": 1.0,
+            "flagged": False,
+        }
+
+    u = _to_u8_for_analysis(img_bgr)
+    lab = _bgr_to_lab(u)
+    if skin_mask is not None:
+        sm = skin_mask.astype(np.float32)
+        if sm.max() > 1.0:
+            sm /= 255.0
+        region = sm > 0.5
+    else:
+        region = np.ones(lab.shape[:2], dtype=bool)
+
+    a = lab[region, 1]
+    b = lab[region, 2]
+    if len(a) < 4:
+        chroma_var = 0.0
+    else:
+        chroma = np.sqrt(a.astype(np.float32) ** 2 + b.astype(np.float32) ** 2)
+        chroma_var = float(np.std(chroma))
+
+    proc_frac = _pore_fraction(_gray_f32(img_bgr))
+    if reference_img_bgr is not None and reference_img_bgr.shape == img_bgr.shape:
+        ref_frac = _pore_fraction(_gray_f32(reference_img_bgr))
+        if ref_frac < 1e-9:
+            texture_metric = 0.0
+        else:
+            texture_metric = float(min(1.0, max(0.0, proc_frac / ref_frac)))
+    else:
+        texture_metric = float(min(1.0, max(0.0, proc_frac)))
+
+    CHROMA_HEALTHY = 10.0  # std of chroma (Lab units) considered healthy
+    chroma_metric = float(min(1.0, max(0.0, chroma_var / CHROMA_HEALTHY)))
+    score01 = 0.45 * chroma_metric + 0.55 * texture_metric
+    score = float(min(100.0, max(0.0, score01 * 100.0)))
+    flagged = score < SKIN_SCORE_FLOOR
+
+    return {
+        "score": score,
+        "chroma_var": chroma_var,
+        "texture_metric": texture_metric,
+        "flagged": bool(flagged),
+    }
+
+
 def run_all(
     img_bgr: np.ndarray,
     skin_mask: Optional[np.ndarray] = None,
@@ -731,4 +1038,25 @@ def run_all(
         )
     except Exception:
         result["color_drift"] = {"score": 0.0, "flagged": False}
+    try:
+        result["pore_spectrum"] = detect_pore_spectrum_distance(
+            img_bgr, skin_mask, reference_img_bgr
+        )
+    except Exception:
+        result["pore_spectrum"] = {"score": 0.0, "flagged": False}
+    try:
+        result["asymmetry"] = detect_over_retouch_asymmetry(img_bgr, skin_mask)
+    except Exception:
+        result["asymmetry"] = {"score": 0.0, "flagged": False}
+    try:
+        result["skin_score"] = gui_skin_score(
+            img_bgr, skin_mask, reference_img_bgr
+        )
+    except Exception:
+        result["skin_score"] = {
+            "score": 100.0,
+            "chroma_var": 0.0,
+            "texture_metric": 1.0,
+            "flagged": False,
+        }
     return result

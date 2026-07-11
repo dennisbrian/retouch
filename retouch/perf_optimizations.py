@@ -505,6 +505,24 @@ def _process_face_core(
         )
         canvas = skin.shine_removal(canvas, regions.skin, int(ctx.shine_removal), eyes_mask=eyes_mask)
 
+    # ---- R12: Specular finish re-render (matte / powder / dewy / glass_skin) ----
+    # Default ("matte", 0.5, 0) is a no-op-equivalent (post-S4 specular ~ 0),
+    # so the golden path stays byte-identical. Only re-render when the caller
+    # deviates from the default.
+    if (
+        ctx.specular_finish != "matte"
+        or abs(ctx.specular_finish_strength - 0.5) > 1e-6
+        or ctx.specular_recolor != 0.0
+    ):
+        canvas = _tr('specular_finish', canvas)
+        canvas = skin.apply_specular_finish(
+            canvas,
+            regions.skin,
+            mode=ctx.specular_finish,
+            strength=ctx.specular_finish_strength,
+            recolor=ctx.specular_recolor,
+        )
+
     # ---- Virtual studio relighting ----
     if ctx.relight > 0:
         canvas = _tr('relight', canvas)

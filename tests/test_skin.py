@@ -581,12 +581,24 @@ class _FakeRestoreMicroTextureRegions:
             self.cheek_highlights_r[h // 2:h * 2 // 3, 3 * w // 4 - 30:3 * w // 4] = 0.8
             self.left_under_eye = None
             self.right_under_eye = None
+            self.left_eye = np.zeros((h, w), dtype=np.float32)
+            self.left_eye[h // 4:h // 4 + 24, w // 4:w // 4 + 30] = 1.0
+            self.right_eye = np.zeros((h, w), dtype=np.float32)
+            self.right_eye[h // 4:h // 4 + 24, 3 * w // 4 - 30:3 * w // 4] = 1.0
+            self.crows_feet_l = np.zeros((h, w), dtype=np.float32)
+            self.crows_feet_l[h // 4 + 18:h // 4 + 34, w // 4 - 18:w // 4 + 6] = 1.0
+            self.crows_feet_r = np.zeros((h, w), dtype=np.float32)
+            self.crows_feet_r[h // 4 + 18:h // 4 + 34, 3 * w // 4 - 6:3 * w // 4 + 18] = 1.0
         else:
             self.nose_bridge = None
             self.cheek_highlights_l = None
             self.cheek_highlights_r = None
             self.left_under_eye = None
             self.right_under_eye = None
+            self.left_eye = None
+            self.right_eye = None
+            self.crows_feet_l = None
+            self.crows_feet_r = None
 
 
 class TestRestoreMicroTexture:
@@ -648,6 +660,24 @@ class TestRestoreMicroTexture:
         assert inside > outside * 5, (
             f"expected restoration concentrated in nose region; "
             f"inside={inside:.3f} outside={outside:.3f}"
+        )
+
+    def test_eye_detail_region_restored(self):
+        proc = SkinProcessor()
+        original, smoothed = self._build_test_pair()
+        regions = _FakeRestoreMicroTextureRegions()
+        result = proc.restore_micro_texture(
+            smoothed, original, regions, strength=40, smooth_strength=0.5
+        )
+
+        diff = np.abs(result.astype(np.float32) - smoothed.astype(np.float32))
+        eye_inside = diff[regions.left_eye == 1.0].mean()
+        eye_outside = diff[0:50, 0:50].mean()
+
+        assert eye_inside > 1.0, f"expected restoration inside eye region; inside={eye_inside:.3f}"
+        assert eye_inside > eye_outside * 5, (
+            f"expected restoration concentrated in eye region; "
+            f"inside={eye_inside:.3f} outside={eye_outside:.3f}"
         )
 
     def test_restoration_proportional_to_strength(self):
@@ -1141,4 +1171,3 @@ class TestPerRegionWrinkle:
             out = proc.wrinkle_soften(img, regions, 0, region_strengths=rs)
             assert out.shape == img.shape
             assert out.dtype == np.uint8
-

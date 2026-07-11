@@ -6,8 +6,9 @@ matrices, plus skin-tone classification and chroma variance metrics.
 
 from __future__ import annotations
 
+import cv2
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import numpy as np
 
@@ -428,3 +429,108 @@ def resolve_locus_override(
     out["C_target"] = float(locus.get("C_target", SKIN_LOCI["fair"]["C_target"]))
     out["L_min"] = float(locus.get("L_min", SKIN_LOCI["fair"]["L_min"]))
     return out
+
+
+def ita_value(lab_patch: np.ndarray) -> float:
+    """Individual Typology Angle (ITA) of a CIELAB skin patch, in DEGREES.
+
+    ITA = arctan((L* - 50) / b*) measured per pixel, then averaged over the
+    patch. Pixels with near-zero b* are excluded from the mean (the angle is
+    numerically unstable there and carries no useful skin-tone information).
+
+    Args:
+        lab_patch: (H, W, 3) float32 CIELAB, L* in [0, 100], a*/b* in [-128, 128].
+
+    Returns:
+        Mean ITA in degrees (float). Positive = lighter skin, negative = darker.
+    """
+    lab = np.asarray(lab_patch, dtype=np.float32)
+    if lab.ndim != 3 or lab.shape[-1] != 3:
+        raise ValueError("lab_patch must be (H, W, 3) CIELAB")
+    L = lab[..., 0].astype(np.float32)
+    b = lab[..., 2].astype(np.float32)
+    valid = np.abs(b) >= 1e-3
+    if not np.any(valid):
+        return 0.0
+    ita = np.degrees(np.arctan((L[valid] - 50.0) / b[valid]))
+    return float(np.mean(ita))
+
+
+_FITZ_TONE: Dict[int, Dict[str, Any]] = {
+    1: {"smooth_scale": 1.00, "highlight_scale": 1.10, "locus_target": 45.0},
+    2: {"smooth_scale": 0.95, "highlight_scale": 1.05, "locus_target": 48.0},
+    3: {"smooth_scale": 0.90, "highlight_scale": 1.00, "locus_target": 52.0},
+    4: {"smooth_scale": 0.80, "highlight_scale": 0.95, "locus_target": 55.0},
+    5: {"smooth_scale": 0.70, "highlight_scale": 0.90, "locus_target": 58.0},
+    6: {"smooth_scale": 0.60, "highlight_scale": 0.85, "locus_target": None},
+}
+
+
+def classify_fitzpatrick(bgr_patch: np.ndarray) -> Dict[str, Any]:
+    """Auto-classify a skin patch into a Fitzpatrick phototype via ITA.
+
+    Input: skin patch as (H, W, 3) uint8 BGR OR float32 BGR in [0, 255].
+    Converts BGR -> RGB -> CIELAB (float32) via cv2, computes mean L*, mean b*,
+    the patch ITA (see :func:`ita_value`), and maps it to a Fitzpatrick type
+    using the standard Chardon ITA ranges.
+
+    Args:
+        bgr_patch: (H, W, 3) uint8 BGR or float32 BGR in [0, 255].
+
+    Returns:
+        Dict with keys: ``ita`` (float), ``type_index`` (1-6),
+        ``label`` ("I".."VI"), ``L_star`` (float), ``b_star`` (float).
+    """
+    img = np.asarray(bgr_patch)
+    if img.ndim != 3 or img.shape[-1] != 3:
+        raise ValueError("bgr_patch must be (H, W, 3) BGR")
+    if img.dtype != np.uint8:
+        rgb = np.clip(img.astype(np.float32), 0.0, 255.0)[..., ::-1] / 255.0
+        lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB).astype(np.float32)
+    else:
+        lab = cv2.cvtColor(img[..., ::-1], cv2.COLOR_RGB2LAB).astype(np.float32)
+
+    L_mean = float(np.mean(lab[..., 0]))
+    b_mean = float(np.mean(lab[..., 2]))
+    ita = ita_value(lab)
+
+    if ita > 55:
+        idx, label = 1, "I"
+    elif ita > 41:
+        idx, label = 2, "II"
+    elif ita > 28:
+        idx, label = 3, "III"
+    elif ita > 10:
+        idx, label = 4, "IV"
+    elif ita > -30:
+        idx, label = 5, "V"
+    else:
+        idx, label = 6, "VI"
+
+    return {
+        "ita": ita,
+        "type_index": idx,
+        "label": label,
+        "L_star": L_mean,
+        "b_star": b_mean,
+    }
+
+
+def tone_adaptation_params(type_index: int) -> Dict[str, float]:
+    """Recommended relative scales per Fitzpatrick type for auto-adaptation.
+
+    Seed table for the R14 "ITA/Fitzpatrick auto-adaptation" behavior. Darker
+    types receive slightly lower default smoothing and a warmer/neutral locus
+    target (``locus_target`` is a hue in degrees, or ``None`` for the darkest
+    type where a hue target is unstable). Full engine wiring is a documented
+    follow-up, not done here.
+
+    Args:
+        type_index: Fitzpatrick type 1-6.
+
+    Returns:
+        Dict with keys ``smooth_scale``, ``highlight_scale``, ``locus_target``.
+    """
+    if type_index not in _FITZ_TONE:
+        raise ValueError("type_index must be in 1..6")
+    return dict(_FITZ_TONE[type_index])

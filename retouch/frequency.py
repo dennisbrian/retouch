@@ -395,6 +395,80 @@ def _smooth_anisotropic(
     return out.astype(np.float32)
 
 
+def _directional_wrinkle_2d(
+    b: np.ndarray,
+    strength: float,
+    retention_floor: float,
+    sigma: float,
+) -> np.ndarray:
+    """Per-channel oriented wrinkle attenuation (R13 texture v2 core).
+
+    Wrinkles are *anisotropic* mid-frequency structure (roughly straight
+    edges); pores / stray hair are *isotropic* noise. We measure local
+    anisotropy from the structure tensor and attenuate only the anisotropic,
+    oriented energy — so wrinkles soften while pores and fine texture
+    survive. A per-pixel retention floor guarantees at least
+    ``retention_floor`` of the original band is always kept (no plastic
+    wipe-out of legitimate skin microstructure).
+    """
+    gx = cv2.Sobel(b, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(b, cv2.CV_32F, 0, 1, ksize=3)
+    s = max(0.5, float(sigma))
+    Ixx = cv2.GaussianBlur(gx * gx, (0, 0), s)
+    Iyy = cv2.GaussianBlur(gy * gy, (0, 0), s)
+    Ixy = cv2.GaussianBlur(gx * gy, (0, 0), s)
+    tr = Ixx + Iyy
+    det = Ixx * Iyy - Ixy * Ixy
+    disc = np.sqrt(np.maximum(tr * tr / 4.0 - det, 0.0))
+    l1 = tr / 2.0 + disc
+    l2 = tr / 2.0 - disc
+    # Anisotropy: 0 = isotropic (pores / noise), 1 = fully oriented
+    # (a wrinkle edge). This is the real wrinkle signal — it is
+    # amplitude-independent, so isotropic fine texture survives even
+    # when its gradient magnitude is large.
+    aniso = (l1 - l2) / (tr + 1e-6)
+    # Attenuate only STRONGLY-oriented structure (wrinkles). Isotropic
+    # noise/pores sit below the knee and pass through untouched.
+    t = (aniso - 0.55) / 0.40
+    t = np.clip(t, 0.0, 1.0)
+    t = t * t * (3.0 - 2.0 * t)  # smoothstep
+    max_att = 1.0 - retention_floor
+    att = np.clip(strength * t, 0.0, max_att)
+    return (b * (1.0 - att)).astype(np.float32)
+
+
+def directional_wrinkle_attenuate(
+    band: np.ndarray,
+    strength: float = 0.5,
+    retention_floor: float = 0.3,
+    sigma: float = 1.0,
+) -> np.ndarray:
+    """Oriented wrinkle attenuation with a retention floor (R13 texture v2).
+
+    Promotes S5 (wrinkle softening) from "blur" to "pro standard":
+    only anisotropic, oriented structure (wrinkles) is attenuated, and
+    never by more than ``1 - retention_floor`` at any pixel. Isotropic
+    fine texture (pores) is untouched.
+
+    Args:
+        band: (H, W) or (H, W, 3) float32 frequency band (e.g. the
+            wrinkle-scale layer). Processed per channel when 3D.
+        strength: 0–1 attenuation strength.
+        retention_floor: minimum fraction of the original band kept at every
+            pixel (0.3 = never remove more than 70%).
+        sigma: tensor-smoothing sigma (stabilises orientation).
+
+    Returns:
+        (H, W) or (H, W, 3) float32 attenuated band.
+    """
+    if band.ndim == 2:
+        return _directional_wrinkle_2d(band, strength, retention_floor, sigma)
+    out = np.empty_like(band)
+    for c in range(band.shape[2]):
+        out[..., c] = _directional_wrinkle_2d(band[..., c], strength, retention_floor, sigma)
+    return out
+
+
 def _guided_smooth(low_mid: np.ndarray, sigma_color: float, sigma_space: float) -> np.ndarray:
     """Self-guided edge-preserving smoothing (per channel), float32 in/out."""
     radius = max(2, int(round(sigma_space)))

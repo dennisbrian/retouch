@@ -189,6 +189,9 @@ class ProcessingContext:
     smooth_engine: str = "guided"
     specular_bloom: float = 0.0
     specular_bloom_tone: str = _DEFAULTS["specular_bloom_tone"]
+    specular_finish: str = _DEFAULTS["specular_finish"]
+    specular_finish_strength: float = _DEFAULTS["specular_finish_strength"]
+    specular_recolor: float = _DEFAULTS["specular_recolor"]
     dodge_burn: float = 0.0
     relight: float = 0.0
     relight_azimuth: float = _DEFAULTS["relight_azimuth"]
@@ -898,6 +901,9 @@ class RetouchEngine:
         lip_finish: Optional[str] = None,
         specular_bloom: Optional[float] = None,
         specular_bloom_tone: Optional[str] = None,
+        specular_finish: Optional[str] = None,
+        specular_finish_strength: Optional[float] = None,
+        specular_recolor: Optional[float] = None,
         whiten_tone: Optional[str] = None,
         nose_blush: Optional[bool] = None,
         under_eye_blush: Optional[bool] = None,
@@ -1148,6 +1154,9 @@ class RetouchEngine:
             "lip_finish": lip_finish,
             "specular_bloom": specular_bloom,
             "specular_bloom_tone": specular_bloom_tone,
+            "specular_finish": specular_finish,
+            "specular_finish_strength": specular_finish_strength,
+            "specular_recolor": specular_recolor,
             "whiten_tone": whiten_tone,
             "nose_blush": nose_blush,
             "under_eye_blush": under_eye_blush,
@@ -2172,6 +2181,9 @@ class RetouchEngine:
                 "halo": "Edge overshoot halos detected from sharpening",
                 "seam": "Seam visible at subject boundary",
                 "color_drift": "Skin hue shift detected — color grade drifted beyond budget",
+                "pore_spectrum": "Skin pore-spectrum loss detected — may appear plastic",
+                "asymmetry": "Asymmetric over-smoothing detected — one face zone over-retouched",
+                "skin_score": "Skin quality score low — plastic/over-evolved appearance",
             }.get(detector_name, f"{detector_name} artifact detected")
             _qa_thresholds = {
                 "banding": qa_detectors.BANDING_THRESHOLD,
@@ -2180,6 +2192,9 @@ class RetouchEngine:
                 "halo": qa_detectors.HALO_THRESHOLD,
                 "seam": qa_detectors.SEAM_THRESHOLD,
                 "color_drift": qa_detectors.COLOR_DRIFT_THRESHOLD,
+                "pore_spectrum": qa_detectors.PORE_SPECTRUM_THRESHOLD,
+                "asymmetry": qa_detectors.ASYMMETRY_THRESHOLD,
+                # skin_score is informational (soft); no hard gate threshold.
             }
             qa_warnings.append(QAWarning(
                 detector=detector_name,

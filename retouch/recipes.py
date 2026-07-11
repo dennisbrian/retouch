@@ -2587,6 +2587,106 @@ RECIPES["convention_clear_v1"] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Recipe-reachability follow-up (2026-07-11 audit): the 2026-07-10 wiring-debt
+# fix lit up T3 body_reshape + A3 cosplay + face_exposure. This batch lights up
+# the remaining uncovered feature families surfaced by the audit so each is
+# reachable from a recipe (CLI/engine path; GUI sliders remain deferred like the
+# prior fix). Group paths mirror spec.recipe_key (e.g. "reshape.<k>",
+# "fabric.wrinkle_smooth", "neural.<k>", "body_reshape.auto").
+# ---------------------------------------------------------------------------
+
+RECIPES["face_reshape_demo_v1"] = {
+    # Makes the entire F5 liquify / face-reshape family recipe-reachable.
+    # Reshape sliders are engine-scale [-100, +100] (0 = neutral) per
+    # geometry.py's per-slider scale coefficients. Modest deltas so the demo
+    # reads as "tunable", not a caricature. Built on natural so skin stays
+    # untouched and the geometric change is the only variable.
+    "extends": "natural",
+    "frequency": {"smooth": 0.20},
+    "reshape": {
+        "eye_size": 12, "eye_distance": -8, "nose_width": -10, "nose_length": -6,
+        "jaw_width": -12, "chin_length": 8, "mouth_size": -6, "smile": 10,
+        "forehead": -8, "jaw_width_l": -6, "jaw_width_r": -10,
+        "nose_width_l": -5, "nose_width_r": -8,
+        "eye_size_l": 8, "eye_size_r": 10,
+        "neck_width": -6, "neck_length": 5,
+    },
+}
+
+RECIPES["mono_noir_v1"] = {
+    # Monochrome / film-noir creative grade. Lights up the B&W channel mixer
+    # (bw_channel_mixer_r/g/b) + negative split-tone (negative_split_tone_*).
+    # Channel-mixer weights are engine-scale 0-100 (default luminance
+    # 30/59/11 = no-op, so a non-luminance mix activates it); negative split
+    # tone desaturates shadows/highlights for the silver-gelatin look.
+    "extends": "natural",
+    "frequency": {"smooth": 0.25},
+    "bw_channel_mixer_r": 22,
+    "bw_channel_mixer_g": 56,
+    "bw_channel_mixer_b": 22,
+    "negative_split_tone_shadow": 22,
+    "negative_split_tone_highlight": 16,
+    "contrast": 18,
+    "highlight_rolloff": 0.55,
+    "grain_strength": 0.30,
+    "vignette": 18.0,
+}
+
+RECIPES["creative_grade_v1"] = {
+    # Global creative color grade: HSL shifts (hsl_*_global), subtractive
+    # saturation mode (saturation_mode), and halation bleed (halation).
+    # saturation_mode default is "additive"; "subtractive" is the non-default
+    # path. halation is gui_div100 (recipe value 0-1). HSL are integer degrees
+    # / percent deltas around 0.
+    "extends": "natural",
+    "hsl_hue_global": 14,
+    "hsl_sat_global": -12,
+    "hsl_lum_global": 6,
+    "saturation_mode": "subtractive",
+    "halation": 0.25,
+}
+
+RECIPES["auto_clean_v1"] = {
+    # Ties the Phase-7 "everything auto" feature batch into one recipe so the
+    # whole family is reachable: fabric wrinkle smoothing (fabric.*),
+    # auto backdrop cleanup (background.backdrop_cleanup), sclera vessel
+    # removal (eyes.sclera_vessel_remove), hair deglare / ring / flyaway
+    # removal (hair.*), neural stray-hair + defect boost (neural.*), one-click
+    # auto body reshape (body_reshape.auto), plus the leftover skin/texture
+    # primitives (redness_even, wrinkle_soften_*, pore_synthesis,
+    # blotch_reduction, bloom.softness). Built on natural so the auto ops are
+    # the headline; strengths kept moderate to stay non-destructive.
+    "extends": "natural",
+    "frequency": {"smooth": 0.30, "blotch_reduction": 0.40},
+    "skin": {
+        "equalize": 0.10,
+        "hue_unify": 0.25,
+        "chroma_even": 0.20,
+        "whiten_hue_stable": 1,
+        "redness_even": 30,
+        "wrinkle_soften_forehead": 0.30,
+        "wrinkle_soften_nasolabial": 0.35,
+        "wrinkle_soften_neck": 0.30,
+    },
+    "texture": {"pore_synthesis": 0.30},
+    "fabric": {"wrinkle_smooth": 40},
+    "background": {"backdrop_cleanup": 35},
+    "eyes": {"sclera_vessel_remove": 40, "whites": 0.10, "dark_circles": 0.10},
+    "hair": {
+        "shine": 0.20,
+        "deglare": 30,
+        "ring_position": 45,
+        "ring_tint": 55,
+        "remove_flyaways": 35,
+    },
+    "neural": {"stray_hair_boost": 30, "defect_boost": 30},
+    "body_reshape": {"auto": 30},
+    "bloom": {"opacity": 0.03, "softness": 45},
+    "sharpen": 10.0,
+}
+
+
 # Canonical name list for the three official Fuji film simulations.
 # Used by the GUI dropdown, CLI helpers, and integration tests.
 FUJI_SIM_NAMES: List[str] = ["classic_chrome", "astia", "provia"]
