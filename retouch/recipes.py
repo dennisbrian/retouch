@@ -2638,13 +2638,17 @@ RECIPES["creative_grade_v1"] = {
     # saturation mode (saturation_mode), and halation bleed (halation).
     # saturation_mode default is "additive"; "subtractive" is the non-default
     # path. halation is gui_div100 (recipe value 0-1). HSL are integer degrees
-    # / percent deltas around 0.
+    # / percent deltas around 0. grain is engine-scale fraction (sigma = 255*strength,
+    # keep ≤0.1). lut resolves a bare name against luts/<name>.cube and raises
+    # FileNotFoundError for unknown names ("kodak" ships in luts/).
     "extends": "natural",
     "hsl_hue_global": 14,
     "hsl_sat_global": -12,
     "hsl_lum_global": 6,
     "saturation_mode": "subtractive",
     "halation": 0.25,
+    "grain": 0.05,
+    "lut": "kodak",
 }
 
 RECIPES["auto_clean_v1"] = {
@@ -2657,33 +2661,78 @@ RECIPES["auto_clean_v1"] = {
     # primitives (redness_even, wrinkle_soften_*, pore_synthesis,
     # blotch_reduction, bloom.softness). Built on natural so the auto ops are
     # the headline; strengths kept moderate to stay non-destructive.
+    # auto_exposure is now recipe-reachable (2026-07-12 build_context fix).
+    #
+    # REMOVED 2026-07-12 (bonodori visual QA — visually destructive on real
+    # photos at any strength; these params move back to "gap (implementation
+    # broken)" in docs/RECIPE_COVERAGE_AUDIT.md):
+    #   fabric.wrinkle_smooth 40     — painted posterized white outlines over
+    #                                  costume + hair (fires on fabric print
+    #                                  edges, not wrinkles)
+    #   skin.redness_even 30         — mottled cyan/pink chroma noise across
+    #                                  the whole face
+    #   eyes.sclera_vessel_remove 40 — opaque white/red ellipses painted over
+    #                                  both eyes ("demon eyes")
+    #   hair.ring_position 45 +
+    #   hair.ring_tint 55            — solid blue streak painted into the
+    #                                  bangs; resolution-dependent (exact
+    #                                  no-op on ≤1600px inputs, fires at
+    #                                  full res)
     "extends": "natural",
+    "auto_exposure": True,
     "frequency": {"smooth": 0.30, "blotch_reduction": 0.40},
     "skin": {
         "equalize": 0.10,
         "hue_unify": 0.25,
         "chroma_even": 0.20,
         "whiten_hue_stable": 1,
-        "redness_even": 30,
         "wrinkle_soften_forehead": 0.30,
         "wrinkle_soften_nasolabial": 0.35,
         "wrinkle_soften_neck": 0.30,
     },
     "texture": {"pore_synthesis": 0.30},
-    "fabric": {"wrinkle_smooth": 40},
     "background": {"backdrop_cleanup": 35},
-    "eyes": {"sclera_vessel_remove": 40, "whites": 0.10, "dark_circles": 0.10},
+    "eyes": {"whites": 0.10, "dark_circles": 0.10},
     "hair": {
         "shine": 0.20,
         "deglare": 30,
-        "ring_position": 45,
-        "ring_tint": 55,
         "remove_flyaways": 35,
     },
     "neural": {"stray_hair_boost": 30, "defect_boost": 30},
     "body_reshape": {"auto": 30},
     "bloom": {"opacity": 0.03, "softness": 45},
     "sharpen": 10.0,
+}
+
+RECIPES["matsuri_glow_v1"] = {
+    # Summer-festival (Bon Odori) evening portrait. Lights up the last
+    # uncovered recipe family from the 2026-07-11 coverage audit —
+    # makeup_v2 ombre lips (mv2_ombre / mv2_ombre_color1 / mv2_ombre_color2,
+    # group "makeup_v2.ombre*") — plus the newly recipe-reachable
+    # post-effects (halation / grain via the 2026-07-12 build_context fix)
+    # for a warm lantern-light glow. Ombre colors are EYESHADOW_COLORS
+    # palette keys (makeup_v2.py): color1 = outer edge, color2 = center.
+    # 2026-07-12 bonodori QA: plum outer read distinctly purple on subjects
+    # with pale lip makeup (DSCF8226/8257) — default is now the classic
+    # soft-gradient nude edge / rose center; use plum only as a deliberate
+    # per-shot override.
+    "extends": "natural",
+    "frequency": {"smooth": 0.30},
+    "skin": {"hue_unify": 0.20, "chroma_even": 0.15},
+    "makeup_v2": {
+        "ombre": True,
+        "ombre_color1": "nude",
+        "ombre_color2": "rose",
+    },
+    "eyes": {"catchlight": 0.20, "whites": 0.10},
+    "white_balance_kelvin": 6900,
+    "vibrance": 12,
+    "contrast": 8,
+    "halation": 0.20,
+    "grain": 0.04,
+    "highlight_rolloff": 0.40,
+    "vignette": 12.0,
+    "bloom": {"opacity": 0.04, "softness": 40},
 }
 
 

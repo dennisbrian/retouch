@@ -203,8 +203,8 @@ def _e1_to_u8(canvas: np.ndarray) -> np.ndarray:
 
 
 _E1_U8_FROM = os.environ.get("E1_U8_FROM", "")
-_E1_CHAIN_ORDER = ['post_freq', 'flatten', 'restore_micro_texture', 'micro_dodge_burn',
-                   'redness_even', 'equalize', 'unify_hue_line', 'unify_tone', 'whiten',
+_E1_CHAIN_ORDER = ['albedo_even', 'post_freq', 'flatten', 'restore_micro_texture', 'micro_dodge_burn',
+                   'redness_even', 'hemoglobin_smooth', 'vein_attenuate', 'equalize', 'unify_hue_line', 'unify_tone', 'whiten',
                    'shine_removal', 'relight', 'sculpt', 'quantize_tones',
                    'apply_specular_bloom', 'blemish.remove', 'undereye.repair',
                    'harmonize_neck', 'eyes.enhance', 'teeth.whiten', 'lips.enhance',
@@ -303,6 +303,11 @@ def _process_face_core(
     if isinstance(ctx, dict):
         ctx = SimpleNamespace(**ctx)
 
+    # ---- R9: Even-albedo (condition input before frequency separation) ----
+    if ctx.albedo_even > 0:
+        canvas = _tr('albedo_even', canvas)
+        canvas = skin.apply_albedo_even(canvas, regions.skin, ctx.albedo_even, face_width)
+
     # ---- Frequency separation ----
     # Note: frequency.separate expects uint8, so convert temporarily
     canvas_u8_for_freq = np.clip(canvas, 0, 255).astype(np.uint8)
@@ -311,6 +316,7 @@ def _process_face_core(
     # The restoration step compares the smoothed result against this original
     # to recover dimensional detail the bilateral+mid_reduction can wash out.
     pre_smooth_canvas = canvas.copy()
+
     layers = frequency.separate(canvas_u8_for_freq, face_width)
 
     # ---- Build smooth mask (protect eyes/brows/lips/hair) ----
@@ -476,6 +482,16 @@ def _process_face_core(
         canvas = _tr('redness_even', canvas)
         canvas = skin.redness_even(canvas, _norm_mask(regions.skin), ctx.redness_even, face_width, lips_mask=_norm_mask(regions.lips))
 
+    # ---- R10: Hemoglobin-guided smoothing (edge-preserving freckle-aware smoothing) ----
+    if ctx.hemoglobin_smooth > 0:
+        canvas = _tr('hemoglobin_smooth', canvas)
+        canvas = skin.apply_hemoglobin_guided_smooth(canvas, regions.skin, ctx.hemoglobin_smooth)
+
+    # ---- R10: Vein attenuation (reduce blue-green veins) ----
+    if ctx.vein_attenuate > 0:
+        canvas = _tr('vein_attenuate', canvas)
+        canvas = skin.apply_vein_attenuate(canvas, regions.skin, ctx.vein_attenuate)
+
     # ---- Skin equalization ----
     if ctx.equalize > 0:
         canvas = _tr('equalize', canvas)
@@ -564,10 +580,20 @@ def _process_face_core(
             canvas, regions.skin, ctx.specular_bloom, tone=ctx.specular_bloom_tone
         )
 
+    # ---- R10: Blemish vs mole protection ----
+    # Compute mole mask if mole_protect is active; subtract from blemish skin region
+    blemish_skin_mask = regions.skin
+    if ctx.mole_protect > 0:
+        _, mole_mask = skin.apply_mole_protect(canvas, regions.skin, ctx.mole_protect)
+        if mole_mask is not None:
+            # Subtract mole region from the blemish eligibility mask
+            mole_norm = mole_mask.astype(np.float32) / 255.0
+            blemish_skin_mask = np.clip(regions.skin - mole_norm, 0.0, 1.0)
+
     # ---- Blemish removal ----
     if ctx.blemish > 0:
         canvas = _tr('blemish.remove', canvas)
-        canvas = blemish.remove(canvas, regions.skin, ctx.blemish)
+        canvas = blemish.remove(canvas, blemish_skin_mask, ctx.blemish)
 
     # ---- Under-eye repair ----
     if ctx.dark_circles > 0 or ctx.undereye_darken_removal > 0 or ctx.undereye_puffiness_reduction > 0:

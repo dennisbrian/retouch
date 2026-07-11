@@ -52,33 +52,49 @@ def isolated_styles_dir():
 # ---------------------------------------------------------------------------
 
 EXPECTED_RECIPE_KEYS = [
-    "smooth", "mid_reduction", "texture_opacity", "pore_synthesis", "nose_smooth", "micro_restore",
-    "whiten", "equalize", "relight", "relight_azimuth", "relight_elevation", "sculpt", "shine_removal", "wrinkle_soften", "texture_transplant",
-    "body_smooth", "body_equalize", "body_whiten", "body_match_face",
-    "body_relight", "body_dodge_burn", "body_shadow_lift", "shadow_lift", "nose_restore",
-    "eye_enhance", "lip_enhance", "lip_tint", "blush", "teeth_whiten",
-    "hair_enhance", "dodge_burn", "specular_bloom", "bloom", "bloom_threshold",
-    "bloom_softness", "contrast", "brightness", "highlights", "shadows",
-    "whites", "blacks", "nose_blush", "under_eye_blush", "white_costume_lift",
-    "blemish", "dark_circles", "catchlight", "whiten_tone", "auto_exposure",
-    "lip_finish", "slimming", "impact", "clarity", "vibrance", "saturation",
-    "glow", "vignette", "sharpen", "sharpen_radius", "subject_separation",
-    "fade_toe", "highlight_drift", "airy_haze", "clarity_split_neg", "clarity_split_pos",
-    "specular_bloom_tone", "color_grade", "grade_intensity", "color_transfer_intensity",
-    "chromatic_aberration", "grain", "halation", "lut",
-    "shadow_hue", "shadow_sat", "midtone_hue", "midtone_sat",
-    "highlight_hue", "highlight_sat",
-    "white_balance_kelvin", "white_balance_tint",
-    "bw_channel_mixer_r", "bw_channel_mixer_g", "bw_channel_mixer_b",
-    "negative_split_tone_shadow", "negative_split_tone_highlight",
-    "hsl_hue_global", "hsl_sat_global", "hsl_lum_global",
-    "skin_flatten", "skin_quantize", "skin_unify", "skin_unify_hue", "skin_glow",
-    "skin_hue_unify", "skin_chroma_even", "micro_dodge_burn",
-    "redness_even", "whiten_hue_stable",
-    "tonal_curve_strength", "skin_protect_strength",
-    "highlight_rolloff_strength", "grain_strength",
+    "ai_denoise", "ai_sr_scale", "airy_haze", "albedo_even", "auto_body_reshape",
+    "auto_exposure", "backdrop_cleanup", "background_blur", "background_desaturation", "background_harmonize",
+    "background_harmonize_mode", "blacks", "blemish", "bloom", "bloom_softness",
+    "bloom_threshold", "blotch_reduction", "blue_shadow_grade", "blush", "body_dodge_burn",
+    "body_equalize", "body_match_face", "body_relight", "body_reshape_arm_length", "body_reshape_hip_width",
+    "body_reshape_leg_length", "body_reshape_shoulder_width", "body_reshape_torso_width", "body_shadow_lift", "body_smooth",
+    "body_whiten", "brightness", "bw_channel_mixer_b", "bw_channel_mixer_g", "bw_channel_mixer_r",
+    "catchlight", "chromatic_aberration", "clarity", "clarity_split_neg", "clarity_split_pos",
+    "color_grade", "color_transfer_intensity", "contrast", "cosplay_consistency_strength", "cosplay_stockings_smooth",
+    "cosplay_wig_lace_blend", "cyan_midtone_grade", "dark_circles", "dodge_burn", "equalize",
+    "eye_enhance", "eye_iris_brightness", "eye_iris_hue_shift", "eye_iris_saturate", "eye_sclera_brighten",
+    "eye_sclera_vessel_remove", "fabric_wrinkle_smooth", "face_exposure", "fade_toe", "film_crosstalk_cy_mg",
+    "film_crosstalk_cy_ye", "film_crosstalk_mg_ye", "film_enable", "film_gamma", "film_midpoint",
+    "film_shoulder_b", "film_shoulder_g", "film_shoulder_r", "film_skew", "film_strength",
+    "film_toe_b", "film_toe_g", "film_toe_r", "film_tonemap_shoulder", "film_tonemap_strength",
+    "film_tonemap_toe", "freckle_preserve_mask", "freckle_removal", "gamut_compress", "glow",
+    "grade_intensity", "grain", "grain_strength", "hair_deglare", "hair_enhance",
+    "hair_remove_flyaways", "hair_ring_position", "hair_ring_tint", "halation", "hemoglobin_smooth",
+    "highlight_drift", "highlight_hue", "highlight_rolloff_strength", "highlight_sat", "highlights",
+    "hsl_hue_global", "hsl_lum_global", "hsl_sat_global", "impact", "light_wrap",
+    "lip_enhance", "lip_finish", "lip_tint", "lut", "matte_black",
+    "micro_dodge_burn", "micro_restore", "mid_reduction", "midtone_hue", "midtone_sat",
+    "mole_protect", "mv2_brows", "mv2_brows_color", "mv2_contour", "mv2_eyeliner",
+    "mv2_eyeliner_color", "mv2_eyeliner_style", "mv2_eyeshadow", "mv2_eyeshadow_color", "mv2_eyeshadow_style",
+    "mv2_ombre", "mv2_ombre_color1", "mv2_ombre_color2", "negative_split_tone_highlight", "negative_split_tone_shadow",
+    "neural_defect_boost", "neural_stray_hair_boost", "nose_blush", "nose_restore", "nose_smooth",
+    "pore_synthesis", "redness_even", "regional_modulation", "relight", "relight_azimuth",
+    "relight_elevation", "reshape_chin_length", "reshape_eye_distance", "reshape_eye_size", "reshape_eye_size_l",
+    "reshape_eye_size_r", "reshape_forehead", "reshape_jaw_width", "reshape_jaw_width_l", "reshape_jaw_width_r",
+    "reshape_mouth_size", "reshape_neck_length", "reshape_neck_width", "reshape_nose_length", "reshape_nose_width",
+    "reshape_nose_width_l", "reshape_nose_width_r", "reshape_smile", "saturation", "saturation_mode",
+    "sculpt", "shadow_hue", "shadow_lift", "shadow_sat", "shadows",
+    "sharpen", "sharpen_radius", "shine_removal", "skin_chroma_even", "skin_flatten",
+    "skin_glow", "skin_hue_unify", "skin_protect_strength", "skin_quantize", "skin_unify",
+    "skin_unify_hue", "slimming", "smooth", "smooth_engine", "specular_bloom",
+    "specular_bloom_tone", "specular_finish", "specular_finish_strength", "specular_recolor", "subject_separation",
+    "subject_sharpen", "teeth_whiten", "texture_opacity", "texture_transplant", "tonal_curve_strength",
+    "under_eye_blush", "undereye_darken_removal", "undereye_puffiness_reduction", "undereye_shadow_strength", "vein_attenuate",
+    "vibrance", "vignette", "white_balance_kelvin", "white_balance_tint", "white_costume_lift",
+    "whiten", "whiten_hue_stable", "whiten_tone", "whites", "wrinkle_soften",
+    "wrinkle_soften_forehead", "wrinkle_soften_nasolabial", "wrinkle_soften_neck",
 ]
-EXPECTED_RECIPE_KEY_COUNT = 103
+EXPECTED_RECIPE_KEY_COUNT = 203
 EXPECTED_UI_OUTPUT_COUNT = 91
 
 
@@ -135,18 +151,39 @@ class TestRecipeDefaults:
 
     def test_all_recipes_numeric_fields_are_numeric(self):
         """Slider/box fields should be int or float, not None or strings."""
+        # String fields in recipe_defaults
+        string_fields = {
+            "lip_tint", "whiten_tone", "lip_finish", "specular_bloom_tone", "color_grade", "lut",
+            "background_harmonize_mode", "saturation_mode", "smooth_engine", "specular_finish",
+            "mv2_brows_color", "mv2_eyeliner_color", "mv2_eyeliner_style",
+            "mv2_eyeshadow_color", "mv2_eyeshadow_style", "mv2_ombre_color1", "mv2_ombre_color2"
+        }
+        # Boolean fields in recipe_defaults
+        bool_fields = {
+            "nose_blush", "under_eye_blush", "white_costume_lift", "auto_exposure",
+            "film_enable", "whiten_hue_stable", "mv2_ombre"
+        }
+        # Optional-mask / passthrough fields that legitimately default to None
+        # (not slider/box values, so they are not required to be numeric).
+        nullable_fields = {
+            "freckle_preserve_mask",
+        }
+
         for name in gui.RECIPES:
             d = gui.recipe_defaults(name)
             for key in EXPECTED_RECIPE_KEYS:
                 val = d[key]
-                if key in ("lip_tint", "whiten_tone", "lip_finish",
-                           "specular_bloom_tone", "color_grade", "lut"):
+                if key in nullable_fields:
+                    assert val is None or isinstance(val, (int, float)), (
+                        f"Recipe {name!r}.{key!r} should be None or numeric, "
+                        f"got {type(val).__name__}"
+                    )
+                elif key in string_fields:
                     # These are string fields
                     assert isinstance(val, str), (
                         f"Recipe {name!r}.{key!r} should be str, got {type(val).__name__}"
                     )
-                elif key in ("nose_blush", "under_eye_blush", "white_costume_lift",
-                             "auto_exposure"):
+                elif key in bool_fields:
                     assert isinstance(val, bool), (
                         f"Recipe {name!r}.{key!r} should be bool, got {type(val).__name__}"
                     )

@@ -33,6 +33,7 @@ from .color_science import (
     measure_skin_state,
     SKIN_LOCI,
 )
+from . import intrinsic, chromophore, skin_chromophore
 
 
 def _blotch_bandpass(L: np.ndarray, face_width: float) -> np.ndarray:
@@ -1632,6 +1633,160 @@ class SkinProcessor:
         if is_float:
             return result.astype(np.float32)
         return result.astype(np.uint8)
+
+    def apply_albedo_even(
+        self,
+        img_bgr: np.ndarray,
+        skin_mask: Optional[np.ndarray],
+        strength: float = 0.0,
+        face_width: Optional[float] = None,
+    ) -> np.ndarray:
+        """R9 — even-out-albedo: blur pigment map, preserve form.
+
+        Decomposes into albedo x shading, Gaussian-blurs the albedo (pigment
+        only), then re-multiplies by shading. This evens blotches while
+        preserving skin form.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 or float32 [0,255] BGR image.
+            skin_mask: (H, W) float mask 0-1. May be None to skip.
+            strength: 0-1 albedo blur strength.
+            face_width: Optional face width for scaling the decomposition.
+
+        Returns:
+            (H, W, 3) BGR image, same dtype as input.
+        """
+        if skin_mask is None or strength <= 0.0:
+            return img_bgr
+
+        is_float = img_bgr.dtype == np.float32
+        work = img_bgr.astype(np.float32) if not is_float else img_bgr
+
+        # intrinsic.even_albedo expects uint8 or float32[0,1]; convert [0,255] float to uint8 first
+        # to ensure correct color space interpretation
+        u8_input = np.clip(work, 0, 255).astype(np.uint8)
+        out = intrinsic.even_albedo(u8_input, strength, face_width=face_width)
+        out = out * 255.0  # Scale from [0,1] to [0,255]
+
+        m = normalize_mask(
+            skin_mask.astype(np.float32, copy=False)
+            if skin_mask.dtype != np.float32
+            else skin_mask
+        )
+        result = blend_masked(work, out, m)
+
+        if is_float:
+            return result.astype(np.float32)
+        return result.astype(np.uint8)
+
+    def apply_hemoglobin_guided_smooth(
+        self,
+        img_bgr: np.ndarray,
+        skin_mask: Optional[np.ndarray],
+        strength: float = 0.0,
+    ) -> np.ndarray:
+        """R10 — hemoglobin-guided smoothing: smooth luminance guided by hemoglobin map.
+
+        The hemoglobin map is the smoothing guide, so smoothing never bleeds
+        across a freckle/mole boundary.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 or float32 BGR image.
+            skin_mask: (H, W) float mask 0-1. May be None to skip.
+            strength: 0-1 smoothing strength.
+
+        Returns:
+            (H, W, 3) BGR image, same dtype as input.
+        """
+        if skin_mask is None or strength <= 0.0:
+            return img_bgr
+
+        is_float = img_bgr.dtype == np.float32
+        work = img_bgr.astype(np.float32) if not is_float else img_bgr
+
+        # Decompose chromophores once per call
+        melanin, hemoglobin = chromophore.decompose_chromophores(work)
+
+        # Invoke the R10 guided-smooth with the hemoglobin map
+        out = skin_chromophore.hemoglobin_guided_smooth(
+            work, hemoglobin, mask=skin_mask, strength=strength
+        )
+
+        if is_float:
+            return out.astype(np.float32)
+        return out.astype(np.uint8)
+
+    def apply_mole_protect(
+        self,
+        img_bgr: np.ndarray,
+        skin_mask: Optional[np.ndarray],
+        strength: float = 0.0,
+    ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+        """R10 — blemish-vs-mole detection: return (blemish_mask, mole_mask).
+
+        This is not a destructive operation; it returns masks to be used as
+        guards during blemish removal (moles are protected, only hemoglobin
+        blemishes are healed).
+
+        Args:
+            img_bgr: (H, W, 3) uint8 or float32 BGR image.
+            skin_mask: (H, W) float mask 0-1. May be None.
+            strength: 0-1 toggle (0 = off, >0 = on).
+
+        Returns:
+            Tuple of (blemish_mask, mole_mask), both uint8 [0,1] or None if off.
+        """
+        if strength <= 0.0 or skin_mask is None:
+            return None, None
+
+        work = img_bgr.astype(np.float32) if img_bgr.dtype != np.float32 else img_bgr
+
+        # Decompose chromophores
+        melanin, hemoglobin = chromophore.decompose_chromophores(work)
+
+        # Invoke blemish_vs_mole detector
+        blemish_mask, mole_mask = skin_chromophore.blemish_vs_mole(
+            hemoglobin, melanin, mask=skin_mask
+        )
+
+        return blemish_mask, mole_mask
+
+    def apply_vein_attenuate(
+        self,
+        img_bgr: np.ndarray,
+        skin_mask: Optional[np.ndarray],
+        strength: float = 0.0,
+    ) -> np.ndarray:
+        """R10 — vein attenuation: reduce blue-green low-freq veins.
+
+        Attenuates subsurface deoxygenated (blue-green) veins by subtracting
+        low-frequency hemoglobin from green/blue channels.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 or float32 BGR image.
+            skin_mask: (H, W) float mask 0-1. May be None to skip.
+            strength: 0-1 attenuation strength.
+
+        Returns:
+            (H, W, 3) BGR image, same dtype as input.
+        """
+        if skin_mask is None or strength <= 0.0:
+            return img_bgr
+
+        is_float = img_bgr.dtype == np.float32
+        work = img_bgr.astype(np.float32) if not is_float else img_bgr
+
+        # Decompose chromophores
+        melanin, hemoglobin = chromophore.decompose_chromophores(work)
+
+        # Invoke vein attenuate
+        out = skin_chromophore.vein_attenuate(
+            work, hemoglobin, mask=skin_mask, strength=strength
+        )
+
+        if is_float:
+            return out.astype(np.float32)
+        return out.astype(np.uint8)
 
     def texture_transplant(
         self,

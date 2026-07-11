@@ -1670,6 +1670,16 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         # These maintain alignment with PROCESS_INPUT_KEYS but don't have visible UI yet.
                         _skin_hue_unify_state = gr.State(value=0)
                         _skin_chroma_even_state = gr.State(value=0)
+                        _blotch_reduction_state = gr.State(value=0.0)
+                        _specular_finish_state = gr.State(value="matte")
+                        _specular_finish_strength_state = gr.State(value=0.5)
+                        _specular_recolor_state = gr.State(value=0.0)
+                        _albedo_even_state = gr.State(value=0.0)
+                        _hemoglobin_smooth_state = gr.State(value=0.0)
+                        _mole_protect_state = gr.State(value=0.0)
+                        _vein_attenuate_state = gr.State(value=0.0)
+                        _gamut_compress_state = gr.State(value=True)
+                        _saturation_mode_state = gr.State(value="additive")
                         _reshape_eye_size_state = gr.State(value=0.0)
                         _reshape_eye_distance_state = gr.State(value=0.0)
                         _reshape_nose_width_state = gr.State(value=0.0)
@@ -2194,11 +2204,13 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
 
     _process_inputs = [
         img_input, recipe,
-        smooth, mid_reduction, texture_opacity, pore_synthesis, nose_smooth, regional_modulation, smooth_engine, undereye_shadow_strength, freckle_removal, micro_restore, _micro_dodge_burn_state, _redness_even_state, _whiten_hue_stable_state,
+        smooth, mid_reduction, _blotch_reduction_state, texture_opacity, pore_synthesis, nose_smooth, regional_modulation, smooth_engine, undereye_shadow_strength, freckle_removal, micro_restore, _micro_dodge_burn_state, _redness_even_state, _whiten_hue_stable_state,
         whiten, equalize, blemish, whiten_tone, nose_blush, under_eye_blush, white_costume_lift,
         dodge_burn, relight, relight_azimuth, relight_elevation, sculpt, shine_removal, wrinkle_soften, _wrinkle_soften_forehead_state, _wrinkle_soften_nasolabial_state, _wrinkle_soften_neck_state,
         texture_transplant, body_smooth, body_equalize, body_whiten, body_match_face, body_relight, body_dodge_burn, shadow_lift, face_exposure, body_shadow_lift, nose_restore,
         specular_bloom, specular_bloom_tone,
+        _specular_finish_state, _specular_finish_strength_state, _specular_recolor_state,
+        _albedo_even_state, _hemoglobin_smooth_state, _mole_protect_state, _vein_attenuate_state,
         skin_flatten, skin_quantize, skin_unify, skin_unify_hue, _skin_hue_unify_state, _skin_chroma_even_state, skin_glow,
         eye_enhance, catchlight, dark_circles, undereye_darken_removal, undereye_puffiness_reduction, eye_sclera_brighten, _eye_sclera_vessel_remove_state, _backdrop_cleanup_state, _fabric_wrinkle_smooth_state, eye_iris_saturate, eye_iris_hue_shift, eye_iris_brightness, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, slimming,
         _reshape_eye_size_state, _reshape_eye_distance_state, _reshape_nose_width_state, _reshape_nose_length_state,
@@ -2210,6 +2222,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         bloom, bloom_threshold, bloom_softness, glow, vignette, sharpen, sharpen_radius, subject_separation, impact, fade_toe, highlight_drift, airy_haze, clarity_split_neg, clarity_split_pos,
         color_grade, grade_intensity, chromatic_aberration, grain, halation, lut,
         tonal_curve_strength, skin_protect_strength, grain_strength, highlight_rolloff_strength,
+        _gamut_compress_state, _saturation_mode_state,
         _film_enable_state, _film_strength_state, _film_toe_r_state, _film_toe_g_state, _film_toe_b_state,
         _film_shoulder_r_state, _film_shoulder_g_state, _film_shoulder_b_state,
         _film_midpoint_state, _film_gamma_state, _film_crosstalk_cy_mg_state, _film_crosstalk_cy_ye_state,

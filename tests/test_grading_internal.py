@@ -180,6 +180,24 @@ class TestAddHalation:
         result = grader._add_halation(img, threshold=200, radius=15, intensity=0.3)
         assert result.shape == img.shape
 
+    def test_float_input_parity(self, grader, varied_img):
+        """E1 float canvas: float32 [0,1] input must match the uint8 path
+        (regression for the recipe-halation solid-black bug, 2026-07-12)."""
+        u8 = grader._add_halation(varied_img, threshold=150, radius=15, intensity=0.5)
+        f = grader._add_halation(
+            varied_img.astype(np.float32) / 255.0,
+            threshold=150, radius=15, intensity=0.5,
+        )
+        assert f.dtype == np.float32
+        assert f.min() >= 0.0 and f.max() <= 1.0
+        np.testing.assert_allclose(f * 255.0, u8.astype(np.float32), atol=1.0)
+
+    def test_float_input_not_black(self, grader):
+        """A bright float [0,1] canvas must not be floored to black."""
+        bright = np.full((64, 64, 3), 0.85, dtype=np.float32)
+        out = grader._add_halation(bright, threshold=200, radius=15, intensity=0.25)
+        assert float(out.mean()) > 0.5
+
 
 class TestAddGrain:
     def test_zero_strength(self, grader, img):

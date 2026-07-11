@@ -192,6 +192,10 @@ class ProcessingContext:
     specular_finish: str = _DEFAULTS["specular_finish"]
     specular_finish_strength: float = _DEFAULTS["specular_finish_strength"]
     specular_recolor: float = _DEFAULTS["specular_recolor"]
+    albedo_even: float = _DEFAULTS["albedo_even"]
+    hemoglobin_smooth: float = _DEFAULTS["hemoglobin_smooth"]
+    mole_protect: float = _DEFAULTS["mole_protect"]
+    vein_attenuate: float = _DEFAULTS["vein_attenuate"]
     dodge_burn: float = 0.0
     relight: float = 0.0
     relight_azimuth: float = _DEFAULTS["relight_azimuth"]
@@ -532,7 +536,7 @@ def build_context(
     """
 
     from .params import PROCESSING_PARAMS, _resolve_recipe_value, _lookup_recipe
-    from .params import _resolve_dodge_burn
+    from .params import _resolve_dodge_burn, _engine_for_recipe_value
 
     def _ov(key, recipe_val):
         v = overrides.get(key)
@@ -641,10 +645,15 @@ def build_context(
 
     # Build the ProcessingContext.  Everything we resolved from the recipe
     # goes through the spec list; everything that comes purely from the
-    # caller (color_ref, auto_exposure, …) is forwarded verbatim.
-    # The ``_CALLER_ONLY`` set lists spec names whose value is intentionally
-    # NOT taken from the recipe — the engine reads them from the override
-    # dict directly (with the recipe default as the implicit default).
+    # caller (color_ref, …) is forwarded verbatim.
+    # The ``_CALLER_ONLY`` set lists spec names that are excluded from the
+    # generic spec_kwargs loop and hand-wired below.  Some are truly
+    # caller-only (color_ref, skin_locus); the post-effects family
+    # (halation / grain / lut) plus auto_exposure and
+    # color_transfer_intensity may also come from the recipe — the caller
+    # override wins, and when neither supplies a value the historical
+    # caller-only default is kept (so absent-from-recipe stays a no-op
+    # instead of picking up the spec default).
     _CALLER_ONLY = {
         "nose_smooth",
         "auto_exposure",
@@ -663,6 +672,22 @@ def build_context(
         for spec in PROCESSING_PARAMS
         if spec.name not in _CALLER_ONLY
     }
+
+    # Recipe-or-caller resolution for the formerly caller-only params
+    # (2026-07-12 recipe-coverage fix).  Caller override wins; otherwise the
+    # recipe value (via the spec's recipe_key + conversion); otherwise the
+    # historical fallback.
+    _spec_by_name = {spec.name: spec for spec in PROCESSING_PARAMS}
+
+    def _recipe_or_caller(name: str, fallback: Any) -> Any:
+        v = overrides.get(name)
+        if v is not None:
+            return v
+        spec = _spec_by_name[name]
+        raw = _lookup_recipe(rec, spec.recipe_key) if spec.recipe_key else None
+        if raw is None:
+            return fallback
+        return _engine_for_recipe_value(spec.conversion, raw)
     # Extract skin_locus from recipe (if present) or overrides (if caller-supplied).
     # Caller overrides win over recipe defaults.
     recipe_skin_locus = rec.get("skin", {}).get("locus")
@@ -682,15 +707,15 @@ def build_context(
         # Recipe-derived fields (data-driven) — the bulk of the context.
         **spec_kwargs,
         # Caller-only fields (no recipe source)
-        auto_exposure=overrides.get("auto_exposure", False),
+        auto_exposure=_recipe_or_caller("auto_exposure", False),
         color_grade_stack=overrides.get("color_grade_stack"),
         # BUGFIX-2: color_ref comes only from the caller override, never None-initialised twice
         color_ref=overrides.get("color_ref"),
-        color_transfer_intensity=overrides.get("color_transfer_intensity", 1.0),
+        color_transfer_intensity=_recipe_or_caller("color_transfer_intensity", 1.0),
         chromatic_aberration=overrides.get("chromatic_aberration"),
-        halation=overrides.get("halation"),
-        grain=overrides.get("grain"),
-        lut=overrides.get("lut"),
+        halation=_recipe_or_caller("halation", None),
+        grain=_recipe_or_caller("grain", None),
+        lut=_recipe_or_caller("lut", None),
         skin_locus=final_skin_locus,
         smooth_exposure_lock=final_exposure_lock,
         # ``nose_smooth`` reads the caller override first, then the recipe's
@@ -828,6 +853,10 @@ class RetouchEngine:
         whiten: Optional[float] = None,
         eye_enhance: Optional[float] = None,
         eye_sclera_vessel_remove: Optional[float] = None,
+        eye_sclera_brighten: Optional[float] = None,
+        eye_iris_saturate: Optional[float] = None,
+        eye_iris_hue_shift: Optional[float] = None,
+        eye_iris_brightness: Optional[float] = None,
         backdrop_cleanup: Optional[float] = None,
         fabric_wrinkle_smooth: Optional[float] = None,
         dark_circles: Optional[float] = None,
@@ -835,6 +864,7 @@ class RetouchEngine:
         undereye_puffiness_reduction: Optional[float] = None,
         catchlight: Optional[float] = None,
         blemish: Optional[float] = None,
+        blotch_reduction: Optional[float] = None,
         lip_enhance: Optional[float] = None,
         lip_tint: Optional[Any] = None,
         teeth_whiten: Optional[float] = None,
@@ -904,11 +934,15 @@ class RetouchEngine:
         specular_finish: Optional[str] = None,
         specular_finish_strength: Optional[float] = None,
         specular_recolor: Optional[float] = None,
+        albedo_even: Optional[float] = None,
+        hemoglobin_smooth: Optional[float] = None,
+        mole_protect: Optional[float] = None,
+        vein_attenuate: Optional[float] = None,
         whiten_tone: Optional[str] = None,
         nose_blush: Optional[bool] = None,
         under_eye_blush: Optional[bool] = None,
         white_costume_lift: Optional[bool] = None,
-        auto_exposure: bool = False,
+        auto_exposure: Optional[bool] = None,
         bloom: Optional[float] = None,
         bloom_threshold: Optional[float] = None,
         bloom_softness: Optional[float] = None,
@@ -986,7 +1020,7 @@ class RetouchEngine:
         film_skew: Optional[float] = None,
         color_grade_stack=None,
         color_ref: Optional[np.ndarray] = None,
-        color_transfer_intensity: float = 1.0,
+        color_transfer_intensity: Optional[float] = None,
         fast: bool = False,
         style_profile: Optional[StyleProfile] = None,
         style_ref: Optional[np.ndarray] = None,
@@ -1089,6 +1123,10 @@ class RetouchEngine:
             "whiten": whiten,
             "eye_enhance": eye_enhance,
             "eye_sclera_vessel_remove": eye_sclera_vessel_remove,
+            "eye_sclera_brighten": eye_sclera_brighten,
+            "eye_iris_saturate": eye_iris_saturate,
+            "eye_iris_hue_shift": eye_iris_hue_shift,
+            "eye_iris_brightness": eye_iris_brightness,
             "backdrop_cleanup": backdrop_cleanup,
             "fabric_wrinkle_smooth": fabric_wrinkle_smooth,
             "dark_circles": dark_circles,
@@ -1096,6 +1134,7 @@ class RetouchEngine:
             "undereye_puffiness_reduction": undereye_puffiness_reduction,
             "catchlight": catchlight,
             "blemish": blemish,
+            "blotch_reduction": blotch_reduction,
             "lip_enhance": lip_enhance,
             "lip_tint": lip_tint,
             "teeth_whiten": teeth_whiten,
@@ -1157,6 +1196,10 @@ class RetouchEngine:
             "specular_finish": specular_finish,
             "specular_finish_strength": specular_finish_strength,
             "specular_recolor": specular_recolor,
+            "albedo_even": albedo_even,
+            "hemoglobin_smooth": hemoglobin_smooth,
+            "mole_protect": mole_protect,
+            "vein_attenuate": vein_attenuate,
             "whiten_tone": whiten_tone,
             "nose_blush": nose_blush,
             "under_eye_blush": under_eye_blush,

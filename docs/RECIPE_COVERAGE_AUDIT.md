@@ -68,3 +68,61 @@ creative_grade 94, auto_clean 942 (all active); face_reshape MSE 0.6 but max pix
 89 (localized geo warp, working).
 
 **Visual QA:** PENDING (skin/grading/geometry are Visual-Critical).
+
+## Update 2026-07-12 — caller-only params wired + matsuri_glow_v1
+
+`build_context()` (engine.py) previously took `halation`, `grain`, `lut`, `auto_exposure`,
+and `color_transfer_intensity` ONLY from caller overrides (`_CALLER_ONLY`) — recipe values
+for these were silently dead (creative_grade_v1's `halation: 0.25` never fired). Fixed via
+`_recipe_or_caller()`: caller override wins → recipe value (spec recipe_key + conversion) →
+historical fallback (None/None/None/False/1.0). `auto_exposure` gained
+`recipe_key="auto_exposure"`; `process()` defaults for `auto_exposure` /
+`color_transfer_intensity` changed to None so they no longer clobber recipe values.
+
+- creative_grade_v1 now also sets `grain: 0.05` + `lut: "kodak"` → creative-grade family fully covered except `color_transfer_intensity` (needs a `--color-ref` image to act) and `gamut_compress` (default-True no-op).
+- auto_clean_v1 now sets `auto_exposure: true` → Phase-7 family fully covered.
+- NEW `matsuri_glow_v1` (Bon Odori festival evening portrait) covers the last family: makeup_v2 ombre (`mv2_ombre`, `mv2_ombre_color1`, `mv2_ombre_color2`), plus live halation/grain.
+- Still unreachable by design: `ai_sr_scale` (export-time, caller opt-in per params.py comment), `freckle_preserve_mask` (ndarray mask — cannot be expressed in recipe JSON).
+- Regression tests: `tests/test_recipe_posteffects_wiring.py` (20 tests).
+- **BUG FOUND & FIXED during render QA:** the first renders came out solid black for any
+  recipe with `halation` — `ColorGrader._add_halation` (grading.py) was not float-aware:
+  on the per-face E1 float32 [0,1] canvas the uint8-scale threshold (200) zeroed the bleed
+  and the final `astype(np.uint8)` floored the whole [0,1] image to black. Never triggered
+  before because halation was caller-only and the caller paths hit uint8 inputs. Fixed with
+  the standard E1 dtype adapter (same pattern as `_add_grain`); regression tests
+  `tests/test_grading_internal.py::TestAddHalation::test_float_input_parity` / `test_float_input_not_black`.
+- Rendered on `~/Desktop/bonodori/DSCF8083.jpg` + `DSCF8114.jpg` → `test_output/bonodori_recipe_wiring/`.
+  Mean-abs delta vs `natural` (post-fix): DSCF8083 — matsuri_glow 7.34, creative_grade 13.52,
+  auto_clean 17.65, mono_noir 15.64; DSCF8114 — matsuri_glow 6.71, creative_grade 12.48,
+  auto_clean 12.02, mono_noir 19.56. fx_off wiring proof: creative_grade_v1 vs the same recipe
+  with caller overrides `lut="none", grain=1e-6, halation=1e-6` → delta 8.25 (clearly non-zero
+  → recipe-supplied lut/grain/halation now fire). auto_exposure proof: no-op on the
+  well-exposed originals (delta 0.00 — `correct_exposure` is bounded, by design), but on a
+  0.35×-darkened 1200px render auto_clean_v1 with recipe `auto_exposure` vs override False
+  gives delta 23.03 (mean luma 67.4 → 90.3) → recipe-supplied auto_exposure fires.
+- **auto_clean_v1 artifacts bisected & fixed (2026-07-12, DSCF8114 knockout bisect):**
+  the solarized/posterized look was FOUR broken ops, each visually destructive at any
+  strength, now REMOVED from the recipe (coverage for these params moves back to
+  **gap (implementation broken)**):
+  - `fabric.wrinkle_smooth: 40` — painted posterized white outlines over costume + hair
+    (fires on fabric print edges, not wrinkles). Knockout collapsed the global delta:
+    vs-full 13.16, vs-natural 0.39 (every other family knockout ≤0.21 global).
+  - `skin.redness_even: 30` — mottled cyan/pink chroma noise across the whole face
+    (face-crop bisect: removing it dropped face delta 3.34 → 2.07; visually clean).
+  - `eyes.sclera_vessel_remove: 40` — opaque white/red ellipses painted over both eyes
+    ("demon eyes"; face-crop knockout delta 0.85, visually unmistakable).
+  - `hair.ring_position: 45` + `hair.ring_tint: 55` — solid blue streak painted into the
+    bangs. Resolution-dependent: exact no-op at ≤1600px input (round-1 bisect missed it),
+    fires at full 6240px (bangs-crop on/off delta 11.57).
+  Everything else stays, incl. `auto_exposure`, `hair.deglare`, `hair.remove_flyaways`,
+  `background.backdrop_cleanup`, `neural.*`, `body_reshape.auto` — note the bisect showed
+  neural.*, body_reshape.auto, hair.deglare/remove_flyaways and auto_exposure as exact
+  no-ops on these photos (deltas 0.00), consistent with the A4 "parked stub" comments in
+  params.py: covered but inert. Post-fix full-res deltas vs natural: DSCF8083 **0.10**,
+  DSCF8114 **0.33** (remaining ops are face-local + subtle bloom/sharpen). Bisect renders:
+  `test_output/bonodori_recipe_wiring/bisect/`.
+
+**Visual QA:** PENDING (grading/makeup are Visual-Critical). matsuri_glow_v1 /
+creative_grade_v1 spot-checked on the two Bon Odori photos post-fix — natural skin, warm
+lantern grade, no artifacts. auto_clean_v1 re-inspected post-bisect-fix on both photos:
+face, eyes, costume and hair all render normally.

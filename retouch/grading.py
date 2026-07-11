@@ -840,16 +840,27 @@ class ColorGrader:
         intensity: float = 0.3,
     ) -> np.ndarray:
         if intensity <= 0: return img_bgr
-        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        # E1 float-canvas adapter: grade()'s float path hands us float32 [0,1].
+        # The uint8-scale threshold (200) and the final astype(np.uint8) would
+        # otherwise floor the whole [0,1] canvas to black.
+        is_float = img_bgr.dtype == np.float32
+        if is_float:
+            img_u8 = np.clip(img_bgr * 255.0, 0, 255).astype(np.uint8)
+        else:
+            img_u8 = img_bgr
+        gray = cv2.cvtColor(img_u8, cv2.COLOR_BGR2GRAY)
         _, thresh = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
-        halation_color = np.zeros_like(img_bgr, dtype=np.uint8)
+        halation_color = np.zeros_like(img_u8, dtype=np.uint8)
         halation_color[:, :, 2] = thresh
         halation_color[:, :, 1] = (thresh * 0.45).astype(np.uint8)
         ksize = radius | 1
         blurred_halation = cv2.GaussianBlur(halation_color, (ksize, ksize), 0).astype(np.float32)
-        img_f = img_bgr.astype(np.float32)
+        img_f = img_u8.astype(np.float32)
         screen = screen_blend(img_f, blurred_halation * intensity)
-        return np.clip(screen, 0, 255).astype(np.uint8)
+        result = np.clip(screen, 0, 255).astype(np.uint8)
+        if is_float:
+            return result.astype(np.float32) / 255.0
+        return result
 
     def _add_grain(self, img_bgr: np.ndarray, strength: float) -> np.ndarray:
         if strength <= 0: return img_bgr
