@@ -1,5 +1,10 @@
-# Scripts Layout
-- `bench/` for benchmark and performance tooling
-- `review/` for visual-validation and review-support scripts
-- `recipes/` for recipe and LUT generation/sweep tooling
-- `batch/` for one-off batch processing helpers
+# Scripts & Build Tools
+
+## Build Scripts (`build/`)
+- `build_app.sh` — Build executable bundle
+- `*.spec` — PyInstaller configuration files
+
+## Development Scripts (`dev/`)
+- `benchmark.py` — Performance benchmarking
+- `benchmark_results.json` — Benchmark results
+

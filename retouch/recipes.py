@@ -2705,34 +2705,37 @@ RECIPES["auto_clean_v1"] = {
 }
 
 RECIPES["matsuri_glow_v1"] = {
-    # Summer-festival (Bon Odori) evening portrait. Lights up the last
-    # uncovered recipe family from the 2026-07-11 coverage audit —
-    # makeup_v2 ombre lips (mv2_ombre / mv2_ombre_color1 / mv2_ombre_color2,
-    # group "makeup_v2.ombre*") — plus the newly recipe-reachable
-    # post-effects (halation / grain via the 2026-07-12 build_context fix)
-    # for a warm lantern-light glow. Ombre colors are EYESHADOW_COLORS
-    # palette keys (makeup_v2.py): color1 = outer edge, color2 = center.
-    # 2026-07-12 bonodori QA: plum outer read distinctly purple on subjects
-    # with pale lip makeup (DSCF8226/8257) — default is now the classic
-    # soft-gradient nude edge / rose center; use plum only as a deliberate
-    # per-shot override.
+    # Bon Odori (summer-festival) evening EVENT portrait — light, true-to-
+    # scene treatment, NOT a beauty retouch. The festival atmosphere (lantern
+    # glow, warm light, night grain) already lives in the photograph; this
+    # recipe only takes the rough edges off and keeps the subject looking
+    # like themselves. Heavy flattening / painted lips / dreamy bloom were
+    # all stripped after review — an event photo should preserve the moment.
     "extends": "natural",
-    "frequency": {"smooth": 0.30},
-    "skin": {"hue_unify": 0.20, "chroma_even": 0.15},
-    "makeup_v2": {
-        "ombre": True,
-        "ombre_color1": "nude",
-        "ombre_color2": "rose",
-    },
-    "eyes": {"catchlight": 0.20, "whites": 0.10},
-    "white_balance_kelvin": 6900,
-    "vibrance": 12,
-    "contrast": 8,
-    "halation": 0.20,
-    "grain": 0.04,
-    "highlight_rolloff": 0.40,
-    "vignette": 12.0,
-    "bloom": {"opacity": 0.04, "softness": 40},
+    # Skin: barely-there polish, real texture and tone kept. No hue_unify /
+    # chroma_even (those flatten skin colour into a filter look); just a light
+    # smoothing and a whisper of equalize for flash-shadow evenness.
+    "frequency": {"smooth": 0.10},
+    "skin": {"equalize": 0.05},
+    # Eyes: evening low light dulls them — a subtle catchlight + white lift
+    # (not a glam opening) keeps the subject present.
+    "eyes": {"catchlight": 0.10, "whites": 0.05},
+    # Warm, lantern-true WB. grading.white_balance_lch: 6500 = neutral,
+    # LOWER = warmer. 6900 (prior) actually cooled the frame — wrong for a
+    # lantern festival. 6200 keeps a gentle warm bias without orange skin.
+    "white_balance_kelvin": 6200,
+    # Global grade: alive but real. Slight vibrance/contrast, no crushing.
+    "vibrance": 8,
+    "contrast": 4,
+    # Atmosphere, restrained: a hint of halation to bloom the lanterns
+    # (not a full glow filter), faint night grain for filmic character,
+    # modest highlight rolloff so bright lanterns don't clip, light vignette
+    # to settle the frame. Bloom dropped to a near-zero whisper.
+    "halation": 0.08,
+    "grain": 0.03,
+    "highlight_rolloff": 0.25,
+    "vignette": 6.0,
+    "bloom": {"opacity": 0.02, "softness": 40},
 }
 
 
