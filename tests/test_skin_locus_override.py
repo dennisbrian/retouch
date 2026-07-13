@@ -82,8 +82,6 @@ class TestRetouchEngineProcessSkinLocus:
 
     def test_process_with_recipe_locus(self):
         """Engine processes a recipe with custom locus; hue shift is applied."""
-        engine = RetouchEngine()
-
         # Create a synthetic face-like image (uniform skin tone)
         img = np.full((100, 100, 3), 140, dtype=np.uint8)  # Neutral gray-ish
         img[:, :, 0] = 120  # Slightly more blue
@@ -107,9 +105,8 @@ class TestRetouchEngineProcessSkinLocus:
         assert ctx.skin_locus is not None
         assert ctx.skin_locus["h_target"] == 30.0
 
-    def test_process_with_caller_locus_override(self):
+    def test_process_with_caller_locus_override(self, engine):
         """Explicit caller skin_locus kwarg overrides any recipe locus."""
-        engine = RetouchEngine()
         img = np.full((100, 100, 3), 140, dtype=np.uint8)
         img[:, :, 2] = 160
 
@@ -126,9 +123,8 @@ class TestRetouchEngineProcessSkinLocus:
         assert result.params.skin_locus["h_target"] == 45.0
         assert result.params.skin_locus["C_target"] == 0.08
 
-    def test_process_no_locus_auto_detect(self):
+    def test_process_no_locus_auto_detect(self, engine):
         """When no custom locus is provided, unify_hue_line auto-detects from skin."""
-        engine = RetouchEngine()
         img = np.full((100, 100, 3), 140, dtype=np.uint8)
         img[:, :, 2] = 160
 
@@ -150,6 +146,31 @@ class TestRetouchEngineProcessSkinLocus:
         # the recipe might contain one after resolution
         assert result is not None
         assert result.params.skin_hue_unify == 50.0
+
+    def test_process_recipe_locus_end_to_end(self, engine):
+        """A recipe-supplied skin.locus survives engine.process() into result.params.
+
+        Closes the gap where the build_context-only test never exercised the
+        real user path (recipe locus threaded through process() end-to-end).
+        """
+        img = np.full((100, 100, 3), 140, dtype=np.uint8)
+        img[:, :, 0] = 120  # Slightly more blue
+        img[:, :, 1] = 135  # Slightly more green
+        img[:, :, 2] = 150  # More red (typical warm skin)
+
+        caller_locus = {"h_target": 30.0, "C_target": 0.05}
+        result = engine.process(
+            img,
+            recipe="natural",
+            skin_locus=caller_locus,
+            skin_hue_unify=60.0,
+        )
+
+        assert result is not None
+        assert result.shape == img.shape
+        assert result.params.skin_locus is not None
+        assert result.params.skin_locus["h_target"] == 30.0
+        assert result.params.skin_locus["C_target"] == 0.05
 
 
 class TestSkinHueShiftTowardCustomLocus:
@@ -211,9 +232,8 @@ class TestSkinHueShiftTowardCustomLocus:
 class TestNoRegression:
     """Ensure existing engine functionality still works."""
 
-    def test_natural_recipe_still_works(self):
+    def test_natural_recipe_still_works(self, engine):
         """Engine.process() with natural recipe (no custom locus) still works."""
-        engine = RetouchEngine()
         img = np.full((100, 100, 3), 128, dtype=np.uint8)
         img[:, :, 2] = 150
 
@@ -226,9 +246,8 @@ class TestNoRegression:
         ctx = ProcessingContext()
         assert ctx.skin_locus is None
 
-    def test_skin_hue_unify_without_custom_locus(self):
+    def test_skin_hue_unify_without_custom_locus(self, engine):
         """skin_hue_unify works as before when no custom locus is provided."""
-        engine = RetouchEngine()
         img = np.full((100, 100, 3), 128, dtype=np.uint8)
         img[:, :, 2] = 150
 
@@ -243,6 +262,19 @@ class TestNoRegression:
         assert result.params.skin_hue_unify == 50.0
         # skin_locus might be present if the resolved recipe contains one,
         # but we didn't explicitly override it via the process() kwarg
+
+
+class TestTeardown:
+    """Sentinel: guarantees the module always runs a fixture-scoped engine test
+    and exits cleanly (no MediaPipe FaceLandmarker GC-finalizer teardown hang)."""
+
+    def test_module_runs_to_completion(self, engine):
+        img = np.full((100, 100, 3), 128, dtype=np.uint8)
+        img[:, :, 2] = 150
+        result = engine.process(img, recipe="natural")
+        assert engine is not None
+        assert result is not None
+        assert result.shape == (100, 100, 3)
 
 
 if __name__ == "__main__":

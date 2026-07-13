@@ -168,7 +168,7 @@ Shape-aware fix is merged (`skin.py:31-61` takes a `shape` param); working tree 
 ### ✅ RESOLVED 2026-07-03: `skin.locus` recipe override wiring
 Nested `skin.locus` recipe data now passes through `recipe_loader.py`, `build_context()`, `ProcessingContext.skin_locus`, and `_process_face_core()` into `unify_hue_line(locus=...)`.
 
-**Verified:** focused non-MediaPipe tests for context, hue-shift behavior, and GUI/params wiring pass (22 tests). Full `tests/test_skin_locus_override.py` still aborts locally inside MediaPipe engine initialization, so keep real-photo visual QA as the final confidence gate.
+**Verified:** focused non-MediaPipe tests for context, hue-shift behavior, and GUI/params wiring pass. The formerly-unrunnable `tests/test_skin_locus_override.py` now runs to completion (14 passed, 2026-07-13) — it did **not** abort at MediaPipe init; it hung at teardown because bare `RetouchEngine()` constructions never closed, leaving the MediaPipe `FaceLandmarker` to be GC-finalized into a deadlock. Routing those tests through the module-scoped `engine` fixture (which guarantees `with RetouchEngine()` teardown) fixed it. Keep real-photo visual QA as the final confidence gate.
 
 ### MINOR: LUT Hot-Reload Unwired
 **Status:** `watch_luts_dir()` daemon exists in `lut.py` but not integrated into GUI/CLI.
