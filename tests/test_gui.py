@@ -598,12 +598,11 @@ class TestProcessInputKeys:
 
     def test_count_matches_process_image_arity(self):
         """PROCESS_INPUT_KEYS length must equal the arity of process_image."""
-        import inspect
-        sig = inspect.signature(gui.process_image)
-        # process_image takes *args — but PROCESS_INPUT_KEYS is the canonical list
-        # 5 new params added (body_relight, body_dodge_burn, body_shadow_lift,
-        # shadow_lift, nose_restore)
-        assert len(gui.PROCESS_INPUT_KEYS) == 113
+        from retouch.params import param_names
+        # 2 leading transport keys + registry params (minus the 2 excluded from
+        # PROCESS_INPUT_KEYS) + 10 trailing transport/session keys.
+        expected = 2 + (len(param_names()) - 2) + 10
+        assert len(gui.PROCESS_INPUT_KEYS) == expected
 
     def test_first_key_is_img_paths(self):
         assert gui.PROCESS_INPUT_KEYS[0] == "img_paths"
@@ -611,8 +610,8 @@ class TestProcessInputKeys:
     def test_second_key_is_recipe(self):
         assert gui.PROCESS_INPUT_KEYS[1] == "recipe"
 
-    def test_last_key_is_debug_mode(self):
-        assert gui.PROCESS_INPUT_KEYS[-1] == "debug_mode"
+    def test_last_key_is_look_params(self):
+        assert gui.PROCESS_INPUT_KEYS[-1] == "look_params"
 
     def test_no_duplicate_keys(self):
         assert len(gui.PROCESS_INPUT_KEYS) == len(set(gui.PROCESS_INPUT_KEYS))
@@ -625,6 +624,107 @@ class TestProcessInputKeys:
         for k in gui.PROCESS_INPUT_KEYS:
             assert k == k.lower(), f"Key {k!r} should be lowercase"
             assert " " not in k, f"Key {k!r} should not contain spaces"
+
+    # --- _process_inputs de-footgun (name-keyed dict + drift guard) ----------
+
+    @staticmethod
+    def _extract_components(src):
+        """Parse the gui.py source and pull the `_process_input_components`
+        dict back out as (keys_list, value_token_list) without executing Gradio."""
+        import ast
+        tree = ast.parse(src)
+        dict_node = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for t in node.targets:
+                    if isinstance(t, ast.Name) and t.id == "_process_input_components":
+                        dict_node = node.value
+        assert dict_node is not None, "_process_input_components dict not found in gui.py"
+        keys = [k.value for k in dict_node.keys]
+        # Values are the Gradio component variable names (source text).
+        import re
+        m = re.search(r"_process_input_components = \{(.*?)\n    \}", src, re.S)
+        body = m.group(1)
+        pairs, depth, cur = [], 0, ""
+        for ch in body:
+            if ch == ",":
+                if depth == 0:
+                    pairs.append(cur.strip()); cur = ""
+                else:
+                    cur += ch
+            elif ch in "([{":
+                depth += 1; cur += ch
+            elif ch in ")]}":
+                depth -= 1; cur += ch
+            else:
+                cur += ch
+        if cur.strip():
+            pairs.append(cur.strip())
+        values = [p.split(":", 1)[1].strip() for p in pairs]
+        return keys, values
+
+    def test_component_dict_keys_match_process_input_keys(self):
+        """Every PROCESS_INPUT_KEYS name maps to exactly one component, and
+        the dict keys are in the same order (so the derived positional list
+        is identical to the old hand-ordered list)."""
+        src = open(gui.__file__).read()
+        dict_keys, dict_values = self._extract_components(src)
+        assert len(dict_keys) == len(gui.PROCESS_INPUT_KEYS) == 213
+        assert set(dict_keys) == set(gui.PROCESS_INPUT_KEYS)
+        assert dict_keys == list(gui.PROCESS_INPUT_KEYS)
+        assert len(dict_values) == 213
+
+    def test_derived_process_inputs_is_byte_identical(self):
+        """The positional `_process_inputs` list is derived from the dict in
+        PROCESS_INPUT_KEYS order, and must reproduce the original 213-slot
+        ordering exactly (no silent argument shift)."""
+        src = open(gui.__file__).read()
+        dict_keys, dict_values = self._extract_components(src)
+        derived = [dict_values[dict_keys.index(k)] for k in gui.PROCESS_INPUT_KEYS]
+        assert derived == dict_values  # dict order == keys order by construction
+        # The first two slots are the special img_paths->img_input and recipe.
+        assert dict_keys[0] == "img_paths" and dict_values[0] == "img_input"
+        assert dict_keys[1] == "recipe" and dict_values[1] == "recipe"
+        assert dict_keys[-1] == "look_params" and dict_values[-1] == "_look_params_state"
+
+    def _run_guard(self, dict_keys, process_keys):
+        """Replicate the exact import-time drift guard from build_app()."""
+        missing = set(process_keys) - set(dict_keys)
+        extra = set(dict_keys) - set(process_keys)
+        if missing or extra:
+            raise AssertionError(
+                f"_process_input_components drift: missing={sorted(missing)} extra={sorted(extra)}"
+            )
+
+    def test_drift_guard_raises_on_missing_component(self):
+        """If a new ParamSpec adds a name to PROCESS_INPUT_KEYS but no matching
+        component entry exists, the import-time guard must raise loudly."""
+        dict_keys, _ = self._extract_components(open(gui.__file__).read())
+        keys = list(gui.PROCESS_INPUT_KEYS)
+        # Simulate forgetting to add the component for the last key.
+        with pytest.raises(AssertionError):
+            self._run_guard(dict_keys[:-1], keys)
+
+    def test_drift_guard_raises_on_orphan_component(self):
+        """If a component is added to the dict for a key not in
+        PROCESS_INPUT_KEYS, the guard must raise."""
+        dict_keys, _ = self._extract_components(open(gui.__file__).read())
+        keys = list(gui.PROCESS_INPUT_KEYS)
+        # Simulate an orphan key present only in the dict.
+        with pytest.raises(AssertionError):
+            self._run_guard(dict_keys + ["nonexistent_param"], keys)
+
+    def test_drift_guard_passes_on_clean_dict(self):
+        """With the real dict and real keys, the guard must NOT raise."""
+        dict_keys, _ = self._extract_components(open(gui.__file__).read())
+        self._run_guard(dict_keys, list(gui.PROCESS_INPUT_KEYS))
+
+    def test_no_hand_ordered_process_inputs_literal(self):
+        """The positional list is derived via comprehension, not a hand-ordered
+        literal — so the historical position-based footgun cannot recur."""
+        src = open(gui.__file__).read()
+        assert "_process_inputs = [img_input, recipe," not in src
+        assert "_process_inputs = [_process_input_components[k] for k in PROCESS_INPUT_KEYS]" in src
 
 
 # ---------------------------------------------------------------------------

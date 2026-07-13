@@ -1,9 +1,9 @@
 # Claude.md — Pro Max Face Retouch Engine
 
 **Project:** Professional automated face retouching pipeline  
-**Repository:** https://github.com/USERNAME/REPO  
+**Repository:** https://github.com/dennisbrian/retouch  
 **Status:** Mature (v2.0.0 — Fuji-quality color recipe system)  
-**Last Updated:** 2026-07-10
+**Last Updated:** 2026-07-13
 
 ---
 
@@ -16,7 +16,7 @@ This is a **production-grade image processing engine** that applies professional
 - Color grading + Fuji film simulation presets
 - Virtual studio relighting + advanced lens effects
 
-**~39.5k LOC (retouch/*.py + gui.py + cli.py), 66 modules in retouch/, 3,491 tests collected (pytest --collect-only, 2026-07-10).**
+**~42.5k LOC (retouch/*.py + gui.py + cli.py), 70 modules in retouch/, 3,630 tests collected (pytest --collect-only, 2026-07-13).**
 
 ---
 
@@ -62,8 +62,28 @@ Every tunable parameter is registered in `PROCESSING_PARAMS` (a list of `ParamSp
 
 **When adding a new parameter:**
 1. Add one `ParamSpec` entry to `PROCESSING_PARAMS` in `params.py`
-2. CLI flag, GUI slider, and engine defaults auto-wire
-3. No other file edits needed
+2. The **CLI flag and engine defaults auto-wire** from the spec (argparse and
+   `ProcessingContext` derive from the registry).
+3. The **GUI slider does NOT fully auto-wire.** The new name is inserted into
+   `gui.PROCESS_INPUT_KEYS` automatically (it comes from `param_names()`), but
+   the Gradio component that supplies its value must be added by hand to the
+   `_process_input_components` dict in `gui.py` — either a real slider/dropdown
+   or, for not-yet-visible params, a `gr.State(...)` placeholder named
+   `_<name>_state`. Add it under the correct name key; **order is handled for
+   you** because the positional list is built as
+   `[components[k] for k in PROCESS_INPUT_KEYS]`.
+ 4. The `_process_inputs` de-footgun refactor **landed 2026-07-13**: `_process_inputs`
+    is now derived as `[_process_input_components[k] for k in PROCESS_INPUT_KEYS]`
+    from a name→component dict, with an import-time assertion that the dict's
+    keys are exactly `PROCESS_INPUT_KEYS`. Forgetting the GUI entry now makes
+    importing `gui` **fail loudly** with an `AssertionError` naming the missing
+    or extra key, instead of silently shifting every later slider's value into
+    the wrong parameter. (Per-position parity tests live in
+    `tests/test_gui.py::TestProcessInputKeys`.)
+
+> Note: a second hand-ordered list, `_recipe_outputs` in `gui.py` (recipe/reset
+> handlers), is *not* covered by this guard yet — keep it in sync manually when
+> adding **visible** sliders.
 
 ### Modular Pipeline (7 Stages)
 ```
@@ -94,8 +114,8 @@ Cuts memory from 7.5 GB → 1.84 GB, runtime from 15.3s → 3.09s.
 ## Testing & Quality
 
 ### Test Coverage
-- **3,491 tests collected** (`pytest --collect-only`, 2026-07-10) — full-suite pass/fail baseline not re-run at this count
-- **89% coverage** on core modules (per `pytest --cov`)
+- **3,630 tests collected** (`pytest --collect-only`, 2026-07-13) — full-suite pass/fail baseline not re-run at this count
+- **89% coverage** on core modules (per `pytest --cov`; last measured 2026-07-01)
 - **Unit + integration tests** for every public API
 - **Deep algorithmic verification** (monotonicity checks, round-trip stability, etc.)
 
@@ -154,6 +174,41 @@ Nested `skin.locus` recipe data now passes through `recipe_loader.py`, `build_co
 **Status:** `watch_luts_dir()` daemon exists in `lut.py` but not integrated into GUI/CLI.
 
 **Action:** Can defer — not on the critical path.
+
+### ✅ RESOLVED 2026-07-13: `_process_inputs` argument-order footgun (gui.py)
+
+**Issue:** `gui.PROCESS_INPUT_KEYS` (names, derived from `param_names()`) and the
+`_process_inputs` component list (the Gradio `inputs=` for `process_image`) are
+bound by POSITION only — Gradio calls `process_image(*values)` with no
+name-based binding. `_process_inputs` was a hand-ordered 213-element
+list, so adding a `ParamSpec` to `params.py` (which auto-inserts a name into
+`PROCESS_INPUT_KEYS`) required manually inserting the matching component at the
+exact same index. Miss the position and every later argument shifts by one — a
+brightness slider silently read as contrast, no crash, corrupted output. This
+recurred at least twice historically.
+
+**Structure (AST-verified 2026-07-13):** 213 slots = 127 identity-named vars +
+85 `gr.State` placeholders named `_<paramname>_state` + 1 special case
+(`img_paths → img_input`). All 213 component vars are unique; no constants or
+inline expressions in the list. The `gr.State` placeholders are live `outputs=`
+targets (session-load / undo / redo / snapshot), so every slot must remain a
+real component in identical order.
+
+**Fix:** replaced the list literal with a name→component dict `_process_input_components`
+keyed by `PROCESS_INPUT_KEYS`, derive the positional list via
+`[_process_input_components[k] for k in PROCESS_INPUT_KEYS]`, and added an
+import-time set-equality assertion so a forgotten/renamed entry raises an
+`AssertionError` at import (loud) instead of shifting arguments (silent).
+Byte-identical runtime (same components, same order, same list type; all seven
+downstream `inputs=`/`outputs=` consumers untouched). Per-position parity tests
+live in `tests/test_gui.py::TestProcessInputKeys`.
+
+**Verified:** derived list is byte-identical to the former hand-ordered 213-slot
+list (set + order), and the guard raises on both a missing-key and an orphan-key
+simulation; `TestProcessInputKeys` green (13 tests).
+
+**Not covered:** the separate hand-ordered `_recipe_outputs` list (gui.py) still
+has the same class of risk and is deferred to a follow-up.
 
 ---
 
@@ -251,20 +306,21 @@ from retouch.utils import log_crash
 | File | Purpose | Audience |
 |------|---------|----------|
 | `README.md` | Quick start, install, examples | End users |
-| `ARCHITECTURE.md` | Deep-dive pipeline, modules, design | Engineers |
+| `docs/architecture/ARCHITECTURE.md` | Deep-dive pipeline, modules, design | Engineers |
 | `docs/review/AUDIT_REPORT.md` | Security, test coverage, findings | Code reviewers, maintainers |
-| `API.md` | Python API reference | API consumers |
-| `RECIPE_GUIDE.md` | Creating custom presets | Content creators |
-| `GUI.md` | Gradio UI layout & components | Frontend work |
-| `BATCH_GUIDE.md` | Batch processing via CLI | Power users |
-| `FUJI_SIMS_GUIDE.md` | Fuji film simulation recipes | Portrait photographers |
+| `docs/architecture/API.md` | Python API reference | API consumers |
+| `docs/guides/RECIPE_GUIDE.md` | Creating custom presets | Content creators |
+| `docs/guides/GUI.md` | Gradio UI layout & components | Frontend work |
+| `docs/guides/BATCH_GUIDE.md` | Batch processing via CLI | Power users |
+| `docs/FUJI_SIMS_GUIDE.md` | Fuji film simulation recipes | Portrait photographers |
+| `docs/INDEX.md` | Full documentation map | All |
 | `.github/workflows/` | CI/CD (test + benchmarks) | DevOps, reviewers |
 
 ---
 
 ## For New Contributors
 
-1. **Read ARCHITECTURE.md first** — understand the 7 stages and module responsibilities
+1. **Read `docs/architecture/ARCHITECTURE.md` first** — understand the 7 stages and module responsibilities
 2. **Run the test suite** — `pytest tests/ -q` (should be green)
 3. **Follow the Code Style section** — naming, structure, performance conventions
 4. **Before pushing:**
@@ -277,6 +333,6 @@ from retouch.utils import log_crash
 
 ## Contact & Support
 
-- **Issues:** https://github.com/USERNAME/REPO/issues
-- **Discussions:** https://github.com/USERNAME/REPO/discussions
+- **Issues:** https://github.com/dennisbrian/retouch/issues
+- **Discussions:** https://github.com/dennisbrian/retouch/discussions
 - **Security:** Contact maintainers privately (no public disclosures)
