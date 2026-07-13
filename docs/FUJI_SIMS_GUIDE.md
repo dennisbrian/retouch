@@ -262,7 +262,7 @@ python3 cli.py photo.jpg -o photo_out.jpg --recipe provia
 
 `--recipe` accepts any of the three sim names, plus the older
 presets (`natural`, `cosplay`, `fuji_porcelain`, etc.). See
-`RECIPE_GUIDE.md` for the full list.
+`guides/RECIPE_GUIDE.md` for the full list.
 
 ### CLI (batch)
 
@@ -273,7 +273,7 @@ python3 cli.py /path/to/input_dir -o /path/to/output_dir \
 
 The batch processor honours `--recipe` exactly the same way — pick
 a sim, point it at a directory, and process everything in parallel.
-See `BATCH_GUIDE.md` for full batch options.
+See `guides/BATCH_GUIDE.md` for full batch options.
 
 ### Python API
 
@@ -291,7 +291,7 @@ result = engine.process(image_bgr, recipe="astia")
 
 Each sim is a JSON file in `presets/`. Edit the file, reload the
 engine, and your changes are picked up. For a full schema reference
-see `RECIPE_GUIDE.md`.
+see `guides/RECIPE_GUIDE.md`.
 
 ```bash
 # Edit Astia

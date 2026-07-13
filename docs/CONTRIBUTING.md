@@ -8,7 +8,7 @@ Welcome! This guide walks new contributors through setup, workflow, and best pra
 
 ### 1. Clone & Virtual Environment
 ```bash
-git clone https://github.com/USERNAME/REPO.git
+git clone https://github.com/dennisbrian/retouch.git
 cd retouch
 python3 -m venv venv
 source venv/bin/activate
@@ -16,8 +16,7 @@ source venv/bin/activate
 
 ### 2. Install Dependencies
 ```bash
-pip install -r requirements-gui.txt  # GUI + all extras
-pip install pytest pytest-cov        # Testing
+pip install -r requirements/base.txt -r requirements/gui.txt -r requirements/dev.txt
 ```
 
 ### 3. Download Model Assets
@@ -29,7 +28,7 @@ python3 -c "from retouch import RetouchEngine; RetouchEngine()"
 Or manually:
 ```bash
 mkdir -p models
-# Download from S3 or local mirror (see ARCHITECTURE.md for URLs)
+# Download from S3 or local mirror (see docs/architecture/ARCHITECTURE.md for URLs)
 ```
 
 ### 4. Verify Setup
@@ -251,16 +250,18 @@ This project runs on a **$20/month Claude budget**. To stay sustainable:
 | File | Purpose |
 |------|---------|
 | `README.md` | Quick start & examples |
-| `ARCHITECTURE.md` | Deep-dive pipeline & modules |
+| `docs/architecture/ARCHITECTURE.md` | Deep-dive pipeline & modules |
 | `CLAUDE.md` | Contributor playbook |
-| `API.md` | Python API reference |
-| `PERFORMANCE_TUNING.md` | GUI/CLI speed/memory trade-offs |
+| `docs/architecture/API.md` | Python API reference |
+| `docs/guides/PERFORMANCE_TUNING.md` | GUI/CLI speed/memory trade-offs |
+| `docs/FUJI_SIMS_GUIDE.md` | Fuji film simulation recipes |
 | `docs/review/AUDIT_REPORT.md` | Security & test coverage audit |
+| `docs/INDEX.md` | Full documentation map |
 
 ### Common Questions
 
 **Q: How do I add a new Fuji film simulation?**  
-A: See `FUJI_SIMS_GUIDE.md`. Copy an existing recipe, adjust LUT paths + grade values, test against reference Fuji JPEG.
+A: See `docs/FUJI_SIMS_GUIDE.md`. Copy an existing recipe, adjust LUT paths + grade values, test against reference Fuji JPEG.
 
 **Q: How do I optimize something slow?**  
 A: Profile with `scripts/bench/benchmark.py` first. Common bottlenecks: detection (switch to faster fallback), frequency separation (vectorize loops), grading (cache LUTs).
@@ -269,7 +270,7 @@ A: Profile with `scripts/bench/benchmark.py` first. Common bottlenecks: detectio
 A: Probably not without breaking existing recipes. The pipeline is locked for v1. New stages planned for v2 (face editing).
 
 **Q: What's the deal with `fast=True` vs `fast=False`?**  
-A: See `PERFORMANCE_TUNING.md`. `fast=True` downscales to 800px for interactive GUI work (3-5× faster, softer details). `fast=False` uses full resolution for final exports.
+A: See `docs/guides/PERFORMANCE_TUNING.md`. `fast=True` downscales to 800px for interactive GUI work (3-5× faster, softer details). `fast=False` uses full resolution for final exports.
 
 ---
 

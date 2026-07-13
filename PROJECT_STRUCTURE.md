@@ -20,13 +20,14 @@ retouch/
 ├── segmentation.py     # Semantic segmentation
 ├── skin.py             # Skin processing
 ├── color.py            # Color grading
-└── [66 other modules]
+└── [~70 modules total]
 ```
 
 ## Documentation (`docs/`)
 ```
 docs/
 ├── INDEX.md                    # Navigation guide
+├── FUJI_SIMS_GUIDE.md          # Fuji film simulation recipes
 ├── guides/                     # User guides
 │   ├── RECIPE_GUIDE.md
 │   ├── GUI.md
@@ -78,13 +79,13 @@ scripts/
 ├── meta/             # Metadata & config
 ├── prompts/          # AI generation prompts
 ├── styles/           # Style definitions
-├── tests/            # Test suite (3,491 tests)
+├── tests/            # Test suite (3,630 tests collected 2026-07-13)
 └── test_output/      # Test artifacts
 ```
 
 ## Quality Assurance
-- **Test Coverage:** 89% on core modules
-- **Test Count:** 3,491 tests
+- **Test Coverage:** 89% on core modules (last measured 2026-07-01)
+- **Test Count:** 3,630 collected (`pytest --collect-only`, 2026-07-13)
 - **Performance:** 702ms per-face (400×400)
 - **CI/CD:** Weekly syntax checks, monthly audits
 

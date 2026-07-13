@@ -17,6 +17,9 @@
 - `API.md` — Python API reference
 - `PIPELINE_FLOW.md` — Data flow diagram
 
+## Film / color (`docs/`)
+- `FUJI_SIMS_GUIDE.md` — Fuji film simulation recipes
+
 ## Plans (`docs/plans/`)
 - `MASTER_PLAN.md` — Overall roadmap
 - `PLAN_*.md` — Tier-based initiatives

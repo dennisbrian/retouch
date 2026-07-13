@@ -20,7 +20,7 @@ pip install -e .  # Install in editable mode
 
 **Fix:**
 1. ✅ Just wait (takes 5-15 min depending on connection)
-2. Or manually download from S3 (see ARCHITECTURE.md for URLs)
+2. Or manually download from S3 (see docs/architecture/ARCHITECTURE.md for URLs)
 3. Place in `models/` directory
 
 **Check status:**
@@ -228,7 +228,7 @@ top  # Watch %MEM column
 
 2. ✅ **Reinstall dependencies**
    ```bash
-   pip install --upgrade -r requirements-gui.txt
+   pip install --upgrade -r requirements/gui.txt
    ```
 
 3. ✅ **Download models**
@@ -444,10 +444,10 @@ python3 -m pytest tests/test_recipe_validation.py -v
 
 ## Still Stuck?
 
-1. **Check ARCHITECTURE.md** for pipeline design & module responsibilities
+1. **Check docs/architecture/ARCHITECTURE.md** for pipeline design & module responsibilities
 2. **Check PERFORMANCE_TUNING.md** for speed/quality trade-offs
 3. **Check CLAUDE.md § Debugging** for crash logging & common issues
-4. **Check API.md** for Python API reference
+4. **Check docs/architecture/API.md** for Python API reference
 5. **Open an issue** with debug logs, environment, and reproduction steps
 
 ---

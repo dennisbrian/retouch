@@ -1,7 +1,7 @@
 # Pro Max Face Retouch Engine
 
-[![Tests](https://github.com/USERNAME/REPO/actions/workflows/test.yml/badge.svg)](https://github.com/USERNAME/REPO/actions/workflows/test.yml)
-[![Benchmarks](https://github.com/USERNAME/REPO/actions/workflows/benchmarks.yml/badge.svg)](https://github.com/USERNAME/REPO/actions/workflows/benchmarks.yml)
+[![Tests](https://github.com/dennisbrian/retouch/actions/workflows/test.yml/badge.svg)](https://github.com/dennisbrian/retouch/actions/workflows/test.yml)
+[![Benchmarks](https://github.com/dennisbrian/retouch/actions/workflows/benchmarks.yml/badge.svg)](https://github.com/dennisbrian/retouch/actions/workflows/benchmarks.yml)
 
 Professional automated face retouching for portraits, cosplay, and batch workflows. Combines MediaPipe landmarks, BiSeNet semantic segmentation, frequency-separation skin work, and global color grading.
 
@@ -13,15 +13,15 @@ Professional automated face retouching for portraits, cosplay, and batch workflo
 ## Install
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements/base.txt
 ```
 
 Optional extras:
 
 ```bash
-pip install -r requirements-dev.txt   # pytest
-pip install -r requirements-gui.txt   # Gradio web UI
-pip install -r requirements-raw.txt   # RAW camera file support
+pip install -r requirements/dev.txt   # pytest
+pip install -r requirements/gui.txt   # Gradio web UI
+pip install -r requirements/raw.txt   # RAW camera file support
 pip install retinaface                # improved face detection (optional)
 ```
 
@@ -67,12 +67,12 @@ cv2.imwrite("portrait_retouched.jpg", result)
 python3 cli.py /path/to/photos -o /path/to/output --recipe cosplay --workers 4
 ```
 
-See [BATCH_GUIDE.md](BATCH_GUIDE.md) for full CLI options.
+See [BATCH_GUIDE.md](docs/guides/BATCH_GUIDE.md) for full CLI options.
 
 ### Web GUI
 
 ```bash
-pip install -r requirements-gui.txt
+pip install -r requirements/gui.txt
 python3 gui.py
 ```
 
@@ -93,7 +93,7 @@ python3 cli.py --help
 ## Tests
 
 ```bash
-pip install -r requirements-dev.txt
+pip install -r requirements/dev.txt
 python3 -m pytest tests/ -v
 ```
 
@@ -110,8 +110,9 @@ The dev server watches `.` and `retouch/` for `.py` changes and restarts the Gra
 
 ## Documentation
 
-- [API.md](API.md) — Python API reference and parameter list
-- [ARCHITECTURE.md](ARCHITECTURE.md) — pipeline design and module breakdown
-- [BATCH_GUIDE.md](BATCH_GUIDE.md) — batch processing examples
-- [GUI.md](GUI.md) — Gradio web UI layout, components, and styling
-- [RECIPE_GUIDE.md](RECIPE_GUIDE.md) — recipe authoring reference
+- [API.md](docs/architecture/API.md) — Python API reference and parameter list
+- [ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) — pipeline design and module breakdown
+- [BATCH_GUIDE.md](docs/guides/BATCH_GUIDE.md) — batch processing examples
+- [GUI.md](docs/guides/GUI.md) — Gradio web UI layout, components, and styling
+- [RECIPE_GUIDE.md](docs/guides/RECIPE_GUIDE.md) — recipe authoring reference
+- [docs/INDEX.md](docs/INDEX.md) — full documentation map
