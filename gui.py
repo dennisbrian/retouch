@@ -237,6 +237,7 @@ PROCESS_INPUT_KEYS = (
         "quality_tier",
         "debug_mode",
         "look_params",
+        "face_params",
         "face_params_json",
     ]
 )
@@ -474,19 +475,22 @@ def process_image(*args):
                 continue
             engine_kwargs[k] = v
 
-    # Per-face overrides (JSON textbox → face_params dict). Not in PROCESS
-    # ParamSpecs — transport key only (same pattern as look_params).
-    face_params_json = params.get("face_params_json") or ""
-    if isinstance(face_params_json, str) and face_params_json.strip():
-        try:
-            import json as _json
-            from retouch.face_params import coerce_face_params
-            raw_fp = _json.loads(face_params_json)
-            fp = coerce_face_params(raw_fp)
-            if fp:
-                engine_kwargs["face_params"] = fp
-        except Exception as e:
-            _logger.warning("face_params_json parse failed: %s", e)
+    # Per-face overrides: State dict wins; JSON textbox is advanced fallback.
+    from retouch.face_params import coerce_face_params
+    fp = params.get("face_params")
+    if not fp:
+        face_params_json = params.get("face_params_json") or ""
+        if isinstance(face_params_json, str) and face_params_json.strip():
+            try:
+                import json as _json
+                fp = _json.loads(face_params_json)
+            except Exception as e:
+                _logger.warning("face_params_json parse failed: %s", e)
+                fp = None
+    if fp:
+        coerced = coerce_face_params(fp)
+        if coerced:
+            engine_kwargs["face_params"] = coerced
 
     for idx, path_item in enumerate(img_paths):
         try:
@@ -690,6 +694,71 @@ def _resolve_image_path(value):
     if hasattr(value, "name"):
         return value.name
     return str(value)
+
+
+def on_detect_faces(img_paths):
+    """Detect faces → Gallery thumbs + face index choices. Clears face_params."""
+    if not img_paths:
+        return [], {}, gr.update(choices=[], value=None), "Upload an image first."
+    path = _resolve_image_path(img_paths)
+    if not path:
+        return [], {}, gr.update(choices=[], value=None), "Could not resolve image path."
+    try:
+        img = imread_engine(path)
+        if img.dtype != np.uint8:
+            img = np.clip(img, 0, 255).astype(np.uint8)
+        faces = get_engine()._detector.detect(img)
+    except Exception as e:
+        _logger.warning("Detect faces failed: %s", e)
+        return [], {}, gr.update(choices=[], value=None), f"Detect failed: {e}"
+    if not faces:
+        return [], {}, gr.update(choices=[], value=None), "No faces detected."
+    thumbs = []
+    choices = []
+    for i, f in enumerate(faces):
+        x, y, w, h = f.bbox
+        x1, y1 = max(0, x), max(0, y)
+        x2, y2 = min(img.shape[1], x + w), min(img.shape[0], y + h)
+        crop = img[y1:y2, x1:x2]
+        if crop.size == 0:
+            continue
+        rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+        thumbs.append((rgb, f"Face {i}"))
+        choices.append(str(i))
+    return (
+        thumbs,
+        {},
+        gr.update(choices=choices, value=choices[0] if choices else None),
+        f"{len(choices)} face(s). Assign a recipe per face, then Process.",
+    )
+
+
+def on_apply_face_recipe(face_idx, recipe_name, face_params):
+    """Merge {idx: {recipe: name}} into face_params State."""
+    fp = dict(face_params or {})
+    if face_idx is None or face_idx == "":
+        return fp, "Select a face index first."
+    if not recipe_name:
+        return fp, "Select a recipe."
+    try:
+        i = int(face_idx)
+    except (TypeError, ValueError):
+        return fp, f"Bad face index: {face_idx!r}"
+    entry = dict(fp.get(i) or fp.get(str(i)) or {})
+    entry["recipe"] = recipe_name
+    fp[i] = entry
+    # drop string-key duplicate if any
+    fp.pop(str(i), None)
+    summary = ", ".join(f"{k}→{v.get('recipe', v)}" for k, v in sorted(fp.items()))
+    return fp, f"Face {i} → {recipe_name}. Active: {summary}"
+
+
+def on_clear_face_params():
+    return {}, [], gr.update(choices=[], value=None), "Per-face overrides cleared."
+
+
+def on_img_change_clear_faces():
+    return {}, [], gr.update(choices=[], value=None), "Image changed — re-detect faces."
 
 
 def on_extract_look(look_ref_file, img_input):
@@ -1643,13 +1712,32 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         _specular_recolor_state = gr.State(value=0.0)
                         _albedo_even_state = gr.State(value=0.0)
                         _makeup_coverage_even_state = gr.State(value=0.0)
+                        _makeup_cake_reduce_state = gr.State(value=0.0)
                         _hemoglobin_smooth_state = gr.State(value=0.0)
-                        face_params_json = gr.Textbox(
-                            label="Per-face params (JSON)",
-                            placeholder='{"0": {"recipe": "cosplay", "smooth": 70}, "1": {"recipe": "natural"}}',
-                            lines=2,
-                            info="Optional. Face index = detection order. Engine units 0–100. Empty = global only.",
-                        )
+                        with gr.Accordion("👥 Per-face recipes", open=False):
+                            detect_faces_btn = gr.Button("Detect Faces", size="sm", variant="secondary")
+                            face_gallery = gr.Gallery(
+                                label="Detected faces (detection order)",
+                                columns=4, height=140, object_fit="cover",
+                            )
+                            with gr.Row():
+                                face_select = gr.Dropdown(
+                                    label="Face index", choices=[], interactive=True, scale=1,
+                                )
+                                face_recipe = gr.Dropdown(
+                                    label="Recipe for face",
+                                    choices=RECIPE_NAMES, value=None, scale=2,
+                                )
+                                apply_face_btn = gr.Button("Apply to face", size="sm", scale=1)
+                            clear_faces_btn = gr.Button("Clear per-face", size="sm")
+                            face_params_status = gr.Markdown("")
+                            _face_params_state = gr.State(value={})
+                            face_params_json = gr.Textbox(
+                                label="Advanced: face_params JSON",
+                                placeholder='{"0": {"recipe": "cosplay", "smooth": 70}}',
+                                lines=2,
+                                info="Optional. State from picker wins if set. Engine units 0–100.",
+                            )
                         _mole_protect_state = gr.State(value=0.0)
                         _vein_attenuate_state = gr.State(value=0.0)
                         _gamut_compress_state = gr.State(value=True)
@@ -2356,6 +2444,28 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         outputs=[_look_params_state, look_status],
     )
 
+    # Per-face recipe picker
+    detect_faces_btn.click(
+        fn=on_detect_faces,
+        inputs=[img_input],
+        outputs=[face_gallery, _face_params_state, face_select, face_params_status],
+    )
+    apply_face_btn.click(
+        fn=on_apply_face_recipe,
+        inputs=[face_select, face_recipe, _face_params_state],
+        outputs=[_face_params_state, face_params_status],
+    )
+    clear_faces_btn.click(
+        fn=on_clear_face_params,
+        inputs=[],
+        outputs=[_face_params_state, face_gallery, face_select, face_params_status],
+    )
+    img_input.change(
+        fn=on_img_change_clear_faces,
+        inputs=[],
+        outputs=[_face_params_state, face_gallery, face_select, face_params_status],
+    )
+
     # T4: Recipe Cookbook wiring
     cookbook_search_btn.click(
         fn=on_search_recipes,
@@ -2463,6 +2573,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "specular_recolor": _specular_recolor_state,
         "albedo_even": _albedo_even_state,
         "makeup_coverage_even": _makeup_coverage_even_state,
+        "makeup_cake_reduce": _makeup_cake_reduce_state,
         "hemoglobin_smooth": _hemoglobin_smooth_state,
         "mole_protect": _mole_protect_state,
         "vein_attenuate": _vein_attenuate_state,
@@ -2626,6 +2737,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "quality_tier": quality_tier,
         "debug_mode": debug_mode,
         "look_params": _look_params_state,
+        "face_params": _face_params_state,
         "face_params_json": face_params_json,
     }
     # Drift guard: every PROCESS_INPUT_KEYS name must map to exactly one

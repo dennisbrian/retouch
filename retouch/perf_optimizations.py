@@ -303,12 +303,32 @@ def _process_face_core(
     if isinstance(ctx, dict):
         ctx = SimpleNamespace(**ctx)
 
-    # ---- P4: Makeup coverage evening (before albedo_even so paint ≠ blotch) ----
+    # ---- P4: Makeup unmix (before albedo_even so paint ≠ blotch) ----
     _mce = float(getattr(ctx, "makeup_coverage_even", 0.0) or 0.0)
-    if _mce > 0:
+    _mcr = float(getattr(ctx, "makeup_cake_reduce", 0.0) or 0.0)
+    if _mce > 0 or _mcr > 0:
         canvas = _tr('makeup_coverage_even', canvas)
         from .makeup_unmix import apply_makeup_coverage_even
-        canvas = apply_makeup_coverage_even(canvas, regions.skin, _mce)
+        excl = None
+        try:
+            parts = [
+                getattr(regions, n, None)
+                for n in ("left_eye", "right_eye", "left_eyebrow", "right_eyebrow",
+                          "lips", "mouth_interior", "hair")
+            ]
+            parts = [p for p in parts if p is not None]
+            if parts:
+                excl = np.maximum.reduce([
+                    (p.astype(np.float32) / 255.0 if p.max() > 1 else p.astype(np.float32))
+                    for p in parts
+                ])
+        except Exception:
+            excl = None
+        canvas = apply_makeup_coverage_even(
+            canvas, regions.skin, _mce,
+            cake_reduce_strength=_mcr,
+            exclude_mask=excl,
+        )
 
     # ---- R9: Even-albedo (condition input before frequency separation) ----
     if ctx.albedo_even > 0:

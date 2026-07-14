@@ -704,6 +704,16 @@ _SKIN_PARAMS = [
         max_val=1.0,
     ),
     ParamSpec(
+        name="makeup_cake_reduce",
+        cli_flag="makeup-cake-reduce",
+        cli_type=float,
+        default=0.0,
+        recipe_key="skin.makeup_cake_reduce",
+        conversion="recipe_direct",
+        min_val=0.0,
+        max_val=1.0,
+    ),
+    ParamSpec(
         name="hemoglobin_smooth",
         cli_flag="hemoglobin-smooth",
         cli_type=float,

@@ -606,9 +606,9 @@ class TestProcessInputKeys:
     def test_count_matches_process_image_arity(self):
         """PROCESS_INPUT_KEYS length must equal the arity of process_image."""
         from retouch.params import param_names
-        # 2 leading + registry (minus 2 excluded) + 11 trailing transport keys
-        # (look_params + face_params_json).
-        expected = 2 + (len(param_names()) - 2) + 11
+        # 2 leading + registry (minus 2 excluded) + 12 trailing transport keys
+        # (look_params + face_params State + face_params_json).
+        expected = 2 + (len(param_names()) - 2) + 12
         assert len(gui.PROCESS_INPUT_KEYS) == expected
 
     def test_first_key_is_img_paths(self):
@@ -617,9 +617,10 @@ class TestProcessInputKeys:
     def test_second_key_is_recipe(self):
         assert gui.PROCESS_INPUT_KEYS[1] == "recipe"
 
-    def test_last_key_is_face_params_json(self):
+    def test_last_keys_are_face_params(self):
         assert gui.PROCESS_INPUT_KEYS[-1] == "face_params_json"
-        assert gui.PROCESS_INPUT_KEYS[-2] == "look_params"
+        assert gui.PROCESS_INPUT_KEYS[-2] == "face_params"
+        assert gui.PROCESS_INPUT_KEYS[-3] == "look_params"
 
     def test_no_duplicate_keys(self):
         assert len(gui.PROCESS_INPUT_KEYS) == len(set(gui.PROCESS_INPUT_KEYS))
@@ -694,7 +695,8 @@ class TestProcessInputKeys:
         assert dict_keys[0] == "img_paths" and dict_values[0] == "img_input"
         assert dict_keys[1] == "recipe" and dict_values[1] == "recipe"
         assert dict_keys[-1] == "face_params_json" and dict_values[-1] == "face_params_json"
-        assert dict_keys[-2] == "look_params" and dict_values[-2] == "_look_params_state"
+        assert dict_keys[-2] == "face_params" and dict_values[-2] == "_face_params_state"
+        assert dict_keys[-3] == "look_params" and dict_values[-3] == "_look_params_state"
 
     def _run_guard(self, dict_keys, process_keys):
         """Replicate the exact import-time drift guard from build_app()."""

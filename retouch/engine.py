@@ -194,6 +194,7 @@ class ProcessingContext:
     specular_recolor: float = _DEFAULTS["specular_recolor"]
     albedo_even: float = _DEFAULTS["albedo_even"]
     makeup_coverage_even: float = _DEFAULTS["makeup_coverage_even"]
+    makeup_cake_reduce: float = _DEFAULTS["makeup_cake_reduce"]
     hemoglobin_smooth: float = _DEFAULTS["hemoglobin_smooth"]
     mole_protect: float = _DEFAULTS["mole_protect"]
     vein_attenuate: float = _DEFAULTS["vein_attenuate"]
@@ -944,6 +945,7 @@ class RetouchEngine:
         specular_recolor: Optional[float] = None,
         albedo_even: Optional[float] = None,
         makeup_coverage_even: Optional[float] = None,
+        makeup_cake_reduce: Optional[float] = None,
         hemoglobin_smooth: Optional[float] = None,
         mole_protect: Optional[float] = None,
         vein_attenuate: Optional[float] = None,
@@ -1209,6 +1211,7 @@ class RetouchEngine:
             "specular_recolor": specular_recolor,
             "albedo_even": albedo_even,
             "makeup_coverage_even": makeup_coverage_even,
+            "makeup_cake_reduce": makeup_cake_reduce,
             "hemoglobin_smooth": hemoglobin_smooth,
             "mole_protect": mole_protect,
             "vein_attenuate": vein_attenuate,

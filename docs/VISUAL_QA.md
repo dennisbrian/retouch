@@ -428,7 +428,9 @@ Harness: `scripts/qa_visual_signoff.py`. Two configs per image: SmartProcessor s
 ## 10. Visual-QA Sign-off — 2026-07-14 v2 (post smart-path fix)
 
 **Status**: AUTO GATES **50/50 PASS** (texture / halo / color_drift_ab / highlight / shadow × 10 images).
-Human gates (Natural Output / No Edge Tearing / Skin Tone Uniformity) still **PENDING**.
+Human gates (Natural Output / No Edge Tearing / Skin Tone Uniformity) **30/30 PASS** — all 10 images reviewed
+2026-07-14 (`*_smart_compare.jpg`, `*_skin_texture.png`, `*_edge_halo.png`): no plastic smoothing, no edge
+halos, no color drift artifacts, detail preserved (e.g. braces/teeth in DSCF8062) across both recipe branches.
 
 **Corpus:** 6× `~/Desktop/bonodori2026` + 4× `~/Desktop/duotian nikke`
 **Out:** `test_output/qa_signoff_2026-07-14_v2/` · full handoff: `test_output/qa_signoff_2026-07-14_v2/HANDOFF.md`

@@ -52,7 +52,7 @@ A2 (blocked on A1), wiring leftovers (T5), **Phase 7** P4 ship.
 3. Module-level visual QA backlog still open (F5/showcase/RAF/…).
 4. **Owner: A1 competitor-corpus** (Evoto/R4me/PixCake) — unblocks A2.
 5. **Phase 7 — distribution hardening** (signing/Windows).
-6. ~~Per-face Slice 1~~ `53d973e` + GUI JSON textbox; P4 `makeup_coverage_even` minimal wire; T5 ingest via `imread_engine` in GUI/CLI serial.
+6. ~~Per-face Slice 1+GUI picker~~ Detect Faces → Gallery → recipe Apply → State; full P4 unmix+cake; `scripts/visual_qa_modules.py` REPORT (MAE + montage paths).
 
 _(The 2026-07-10 in-flight dead-key guard fix + recipe re-keying + film.preset decision is DONE —
 committed as `40721d6`; no longer a pending action.)_
