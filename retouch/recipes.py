@@ -1495,6 +1495,359 @@ RECIPES["classic_chrome"] = {
     "highlight_sat": 6.0,
 }
 
+RECIPES["velvia"] = {
+    # Fuji Velvia: punchy saturated reversal film, deep greens/blues,
+    # pronounced S-curve (deep toe, soft-but-firm shoulder).
+    "extends": "natural",
+    "frequency": {"smooth": 0.20, "mid_reduction": 0.20},
+    "skin": {"equalize": 0.10, "rosy": 0.10},
+    "eyes": {"whites": 0.15, "teeth_whiten": 0.10, "iris": 0.20, "catchlight": 0.15},
+    "lips": {"tint": None, "gloss": 0.05},
+    "hair": {"shine": 0.15},
+    "dodge_burn": {"amount": 0.10},
+    "color_harmony": {"preset": "natural", "amount": 0.05},
+    "bloom": {"opacity": 0.02},
+    "texture": {"opacity": 0.98},
+    "tonal_curve_strength": 0.70,
+    "skin_protect": 0.15,
+    "highlight_rolloff": 0.30,
+    "grain_strength": 0.05,
+    "saturation": 28.0,
+    "contrast": 20.0,
+    "highlights": -5.0,
+    "shadows": -8.0,
+    "sharpen": 45.0,
+    "sharpen_radius": 1.0,
+    "vignette": 4.0,
+    "midtone_hue": 150.0,
+    "midtone_sat": 8.0,
+    "shadow_hue": 220.0,
+    "shadow_sat": 6.0,
+    "highlight_hue": 40.0,
+    "highlight_sat": 4.0,
+}
+
+RECIPES["classic_neg"] = {
+    # Fuji Classic Negative: Superia-style consumer negative emulation —
+    # saturated greens, warm yellows, gentle grain, "travel-snapshot" look.
+    "extends": "natural",
+    "frequency": {"smooth": 0.35, "mid_reduction": 0.30},
+    "skin": {"equalize": 0.20, "rosy": 0.20},
+    "eyes": {"whites": 0.10, "teeth_whiten": 0.10, "iris": 0.15, "catchlight": 0.10},
+    "lips": {"tint": None, "gloss": 0.10},
+    "hair": {"shine": 0.10},
+    "dodge_burn": {"amount": 0.10},
+    "color_harmony": {"preset": "natural", "amount": 0.15},
+    "bloom": {"opacity": 0.02},
+    "texture": {"opacity": 0.92},
+    "tonal_curve_strength": 0.60,
+    "skin_protect": 0.40,
+    "highlight_rolloff": 0.35,
+    "grain_strength": 0.20,
+    "saturation": 10.0,
+    "contrast": 12.0,
+    "highlights": -8.0,
+    "shadows": -10.0,
+    "sharpen": 30.0,
+    "sharpen_radius": 1.1,
+    "vignette": 5.0,
+    "midtone_hue": 55.0,
+    "midtone_sat": 6.0,
+    "shadow_hue": 180.0,
+    "shadow_sat": 8.0,
+    "highlight_hue": 50.0,
+    "highlight_sat": 5.0,
+}
+
+RECIPES["nostalgic_neg"] = {
+    # Fuji Nostalgic Negative: lifted amber shadows, muted highlights,
+    # softer contrast than Classic Negative — "70s snapshot" warmth.
+    "extends": "natural",
+    "frequency": {"smooth": 0.35, "mid_reduction": 0.30},
+    "skin": {"equalize": 0.20, "rosy": 0.25},
+    "eyes": {"whites": 0.10, "teeth_whiten": 0.08, "iris": 0.12, "catchlight": 0.10},
+    "lips": {"tint": None, "gloss": 0.10},
+    "hair": {"shine": 0.08},
+    "dodge_burn": {"amount": 0.08},
+    "color_harmony": {"preset": "natural", "amount": 0.15},
+    "bloom": {"opacity": 0.03},
+    "texture": {"opacity": 0.92},
+    "tonal_curve_strength": 0.45,
+    "skin_protect": 0.45,
+    "highlight_rolloff": 0.45,
+    "grain_strength": 0.15,
+    "saturation": 4.0,
+    "contrast": 4.0,
+    "highlights": -12.0,
+    "shadows": 12.0,
+    "sharpen": 22.0,
+    "sharpen_radius": 1.2,
+    "vignette": 4.0,
+    "midtone_hue": 45.0,
+    "midtone_sat": 8.0,
+    "shadow_hue": 50.0,
+    "shadow_sat": 10.0,
+    "highlight_hue": 45.0,
+    "highlight_sat": 4.0,
+}
+
+RECIPES["pro_neg_hi"] = {
+    # Fuji Pro Neg Hi: portrait-negative emulation with firmer contrast
+    # than Pro Neg Std — studio/editorial portraits.
+    "extends": "natural",
+    "frequency": {"smooth": 0.40, "mid_reduction": 0.35},
+    "skin": {"equalize": 0.25, "rosy": 0.20},
+    "eyes": {"whites": 0.12, "teeth_whiten": 0.12, "iris": 0.15, "catchlight": 0.12},
+    "lips": {"tint": None, "gloss": 0.12},
+    "hair": {"shine": 0.10},
+    "dodge_burn": {"amount": 0.10},
+    "color_harmony": {"preset": "natural", "amount": 0.15},
+    "bloom": {"opacity": 0.03},
+    "texture": {"opacity": 0.92},
+    "tonal_curve_strength": 0.50,
+    "skin_protect": 0.65,
+    "highlight_rolloff": 0.40,
+    "grain_strength": 0.00,
+    "saturation": 3.0,
+    "contrast": 10.0,
+    "highlights": -6.0,
+    "shadows": -2.0,
+    "sharpen": 28.0,
+    "sharpen_radius": 1.15,
+    "vignette": 0.0,
+    "midtone_hue": 35.0,
+    "midtone_sat": 3.0,
+    "shadow_hue": 30.0,
+    "shadow_sat": 4.0,
+    "highlight_hue": 40.0,
+    "highlight_sat": 3.0,
+}
+
+RECIPES["pro_neg_std"] = {
+    # Fuji Pro Neg Std: softer, flatter portrait-negative emulation —
+    # gentler contrast than Pro Neg Hi, for high-key/soft-light portraits.
+    "extends": "natural",
+    "frequency": {"smooth": 0.45, "mid_reduction": 0.40},
+    "skin": {"equalize": 0.28, "rosy": 0.22},
+    "eyes": {"whites": 0.12, "teeth_whiten": 0.12, "iris": 0.15, "catchlight": 0.12},
+    "lips": {"tint": None, "gloss": 0.12},
+    "hair": {"shine": 0.10},
+    "dodge_burn": {"amount": 0.08},
+    "color_harmony": {"preset": "natural", "amount": 0.15},
+    "bloom": {"opacity": 0.03},
+    "texture": {"opacity": 0.90},
+    "tonal_curve_strength": 0.35,
+    "skin_protect": 0.70,
+    "highlight_rolloff": 0.45,
+    "grain_strength": 0.00,
+    "saturation": 1.0,
+    "contrast": 3.0,
+    "highlights": -3.0,
+    "shadows": 2.0,
+    "sharpen": 20.0,
+    "sharpen_radius": 1.2,
+    "vignette": 0.0,
+    "midtone_hue": 35.0,
+    "midtone_sat": 2.0,
+    "shadow_hue": 30.0,
+    "shadow_sat": 3.0,
+    "highlight_hue": 40.0,
+    "highlight_sat": 2.0,
+}
+
+RECIPES["eterna"] = {
+    # Fuji Eterna: motion-picture film stock emulation — low contrast,
+    # log-style flat tonal response, muted color, built for grading.
+    "extends": "natural",
+    "frequency": {"smooth": 0.35, "mid_reduction": 0.30},
+    "skin": {"equalize": 0.20, "rosy": 0.12},
+    "eyes": {"whites": 0.08, "teeth_whiten": 0.08, "iris": 0.10, "catchlight": 0.08},
+    "lips": {"tint": None, "gloss": 0.05},
+    "hair": {"shine": 0.08},
+    "dodge_burn": {"amount": 0.05},
+    "color_harmony": {"preset": "natural", "amount": 0.08},
+    "bloom": {"opacity": 0.04},
+    "texture": {"opacity": 0.92},
+    "tonal_curve_strength": 0.20,
+    "skin_protect": 0.35,
+    "highlight_rolloff": 0.55,
+    "grain_strength": 0.05,
+    "saturation": -20.0,
+    "contrast": -12.0,
+    "highlights": -15.0,
+    "shadows": 15.0,
+    "sharpen": 15.0,
+    "sharpen_radius": 1.3,
+    "vignette": 0.0,
+    "midtone_hue": 190.0,
+    "midtone_sat": 4.0,
+    "shadow_hue": 210.0,
+    "shadow_sat": 6.0,
+    "highlight_hue": 45.0,
+    "highlight_sat": 3.0,
+}
+
+RECIPES["eterna_bleach_bypass"] = {
+    # Fuji Eterna Bleach Bypass: darkroom bleach-bypass look — high
+    # contrast, near-desaturated, gritty/stylized.
+    "extends": "natural",
+    "frequency": {"smooth": 0.25, "mid_reduction": 0.20},
+    "skin": {"equalize": 0.12, "rosy": 0.05},
+    "eyes": {"whites": 0.10, "teeth_whiten": 0.08, "iris": 0.15, "catchlight": 0.10},
+    "lips": {"tint": None, "gloss": 0.02},
+    "hair": {"shine": 0.05},
+    "dodge_burn": {"amount": 0.15},
+    "color_harmony": {"preset": "natural", "amount": 0.05},
+    "bloom": {"opacity": 0.01},
+    "texture": {"opacity": 0.98},
+    "tonal_curve_strength": 0.80,
+    "skin_protect": 0.10,
+    "highlight_rolloff": 0.20,
+    "grain_strength": 0.35,
+    "saturation": -45.0,
+    "contrast": 35.0,
+    "highlights": -10.0,
+    "shadows": -25.0,
+    "sharpen": 35.0,
+    "sharpen_radius": 1.0,
+    "vignette": 10.0,
+    "midtone_hue": 160.0,
+    "midtone_sat": 3.0,
+    "shadow_hue": 200.0,
+    "shadow_sat": 4.0,
+    "highlight_hue": 50.0,
+    "highlight_sat": 2.0,
+}
+
+RECIPES["acros"] = {
+    # Fuji Acros: fine-grain B&W emulation — smooth tonal transition,
+    # slight warm/neutral bias, true grayscale via channel mixer.
+    "extends": "natural",
+    "frequency": {"smooth": 0.30, "mid_reduction": 0.30},
+    "skin": {"equalize": 0.15, "rosy": 0.00},
+    "eyes": {"whites": 0.10, "teeth_whiten": 0.10, "iris": 0.10, "catchlight": 0.15},
+    "lips": {"tint": None, "gloss": 0.00},
+    "hair": {"shine": 0.10},
+    "dodge_burn": {"amount": 0.15},
+    "color_harmony": {"preset": "natural", "amount": 0.00},
+    "bloom": {"opacity": 0.01},
+    "texture": {"opacity": 0.95},
+    "tonal_curve_strength": 0.55,
+    "skin_protect": 0.20,
+    "highlight_rolloff": 0.35,
+    "grain_strength": 0.15,
+    "saturation": 0.0,
+    "contrast": 15.0,
+    "highlights": -8.0,
+    "shadows": -5.0,
+    "sharpen": 30.0,
+    "sharpen_radius": 1.1,
+    "vignette": 5.0,
+    "bw_channel_mixer_r": 33,
+    "bw_channel_mixer_g": 50,
+    "bw_channel_mixer_b": 17,
+}
+
+RECIPES["monochrome"] = {
+    # Fuji Monochrome: standard neutral B&W, Rec.709 luminance weighting,
+    # no warm/cool bias. NOTE: bw_channel_mixer activation in engine.py
+    # is gated on the weights differing from the *engine defaults*
+    # (30/59/11, which happen to be BT.601), so this deliberately uses
+    # Rec.709 (21/72/7) rather than BT.601 to actually trip the gate.
+    "extends": "natural",
+    "frequency": {"smooth": 0.30, "mid_reduction": 0.30},
+    "skin": {"equalize": 0.15, "rosy": 0.00},
+    "eyes": {"whites": 0.10, "teeth_whiten": 0.10, "iris": 0.10, "catchlight": 0.15},
+    "lips": {"tint": None, "gloss": 0.00},
+    "hair": {"shine": 0.08},
+    "dodge_burn": {"amount": 0.10},
+    "color_harmony": {"preset": "natural", "amount": 0.00},
+    "bloom": {"opacity": 0.00},
+    "texture": {"opacity": 0.95},
+    "tonal_curve_strength": 0.40,
+    "skin_protect": 0.20,
+    "highlight_rolloff": 0.25,
+    "grain_strength": 0.00,
+    "saturation": 0.0,
+    "contrast": 10.0,
+    "highlights": 0.0,
+    "shadows": 0.0,
+    "sharpen": 25.0,
+    "sharpen_radius": 1.2,
+    "vignette": 0.0,
+    "bw_channel_mixer_r": 21,
+    "bw_channel_mixer_g": 72,
+    "bw_channel_mixer_b": 7,
+}
+
+RECIPES["sepia"] = {
+    # Fuji-style Sepia. NOTE: the engine's B&W channel mixer runs last in
+    # the color-grading stage (see engine.py _stage_color_grading), after
+    # split-tone hue/sat — so bw_channel_mixer + midtone_hue/shadow_hue
+    # cannot combine into true tinted-grayscale (the mixer wipes the tint).
+    # Approximated instead as a heavily desaturated warm cast (near-mono,
+    # amber-toned) rather than true gray+tint sepia.
+    "extends": "natural",
+    "frequency": {"smooth": 0.30, "mid_reduction": 0.30},
+    "skin": {"equalize": 0.15, "rosy": 0.00},
+    "eyes": {"whites": 0.08, "teeth_whiten": 0.08, "iris": 0.08, "catchlight": 0.10},
+    "lips": {"tint": None, "gloss": 0.00},
+    "hair": {"shine": 0.08},
+    "dodge_burn": {"amount": 0.10},
+    "color_harmony": {"preset": "natural", "amount": 0.00},
+    "bloom": {"opacity": 0.02},
+    "texture": {"opacity": 0.92},
+    "tonal_curve_strength": 0.35,
+    "skin_protect": 0.20,
+    "highlight_rolloff": 0.30,
+    "grain_strength": 0.10,
+    "saturation": -70.0,
+    "contrast": 5.0,
+    "highlights": -5.0,
+    "shadows": 5.0,
+    "sharpen": 18.0,
+    "sharpen_radius": 1.2,
+    "vignette": 8.0,
+    "midtone_hue": 40.0,
+    "midtone_sat": 30.0,
+    "shadow_hue": 35.0,
+    "shadow_sat": 32.0,
+    "highlight_hue": 45.0,
+    "highlight_sat": 25.0,
+}
+
+RECIPES["reala_ace"] = {
+    # Fuji Reala Ace: newest sim (2023+ bodies) — high fidelity, punchy
+    # but natural, deep blacks with clean color reproduction.
+    "extends": "natural",
+    "frequency": {"smooth": 0.30, "mid_reduction": 0.30},
+    "skin": {"equalize": 0.22, "rosy": 0.18},
+    "eyes": {"whites": 0.15, "teeth_whiten": 0.15, "iris": 0.18, "catchlight": 0.15},
+    "lips": {"tint": None, "gloss": 0.12},
+    "hair": {"shine": 0.12},
+    "dodge_burn": {"amount": 0.10},
+    "color_harmony": {"preset": "natural", "amount": 0.12},
+    "bloom": {"opacity": 0.03},
+    "texture": {"opacity": 0.95},
+    "tonal_curve_strength": 0.55,
+    "skin_protect": 0.55,
+    "highlight_rolloff": 0.30,
+    "grain_strength": 0.00,
+    "saturation": 12.0,
+    "contrast": 15.0,
+    "highlights": -4.0,
+    "shadows": -12.0,
+    "sharpen": 42.0,
+    "sharpen_radius": 1.1,
+    "vignette": 0.0,
+    "midtone_hue": 35.0,
+    "midtone_sat": 5.0,
+    "shadow_hue": 220.0,
+    "shadow_sat": 5.0,
+    "highlight_hue": 45.0,
+    "highlight_sat": 4.0,
+}
+
 RECIPES["studio_dream_v2"] = {
     # Flagship #11 (Phase 3-6 showcase): integrates film simulation, makeup v2,
     # background harmonizer, and advanced hair work — the complete Phase 3-6
@@ -2739,16 +3092,24 @@ RECIPES["matsuri_glow_v1"] = {
 }
 
 
-# Canonical name list for the three official Fuji film simulations.
+# Canonical name list for the full set of Fuji film simulations.
 # Used by the GUI dropdown, CLI helpers, and integration tests.
-FUJI_SIM_NAMES: List[str] = ["classic_chrome", "astia", "provia"]
+FUJI_SIM_NAMES: List[str] = [
+    "classic_chrome", "astia", "provia",
+    "velvia", "classic_neg", "nostalgic_neg",
+    "pro_neg_hi", "pro_neg_std",
+    "eterna", "eterna_bleach_bypass",
+    "acros", "monochrome", "sepia",
+    "reala_ace",
+]
 
 
 def list_fuji_sims() -> List[str]:
-    """Return the names of the three official Fuji film simulations.
+    """Return the names of all Fuji film simulations.
 
-    These are the recipes that exist in :data:`RECIPES` and match the
-    JSON files shipped in ``presets/``. Useful for populating a GUI
-    dropdown or a CLI helper.
+    These are the recipes that exist in :data:`RECIPES`. The original
+    three (``provia``/``astia``/``classic_chrome``) also ship JSON
+    descriptor files in ``presets/``; the rest are Python-only recipe
+    entries. Useful for populating a GUI dropdown or a CLI helper.
     """
     return sorted(name for name in FUJI_SIM_NAMES if name in RECIPES)

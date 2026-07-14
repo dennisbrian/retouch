@@ -72,7 +72,14 @@ class TestSimRegistration:
         assert "classic_chrome" in RECIPES
 
     def test_fuji_sim_names_constant_matches(self):
-        assert set(FUJI_SIM_NAMES) == {"classic_chrome", "astia", "provia"}
+        assert set(FUJI_SIM_NAMES) == {
+            "classic_chrome", "astia", "provia",
+            "velvia", "classic_neg", "nostalgic_neg",
+            "pro_neg_hi", "pro_neg_std",
+            "eterna", "eterna_bleach_bypass",
+            "acros", "monochrome", "sepia",
+            "reala_ace",
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +222,18 @@ class TestListFujiSims:
 
     def test_list_fuji_sims_contains_all_three(self):
         result = list_fuji_sims()
-        assert set(result) == {"classic_chrome", "astia", "provia"}
+        assert {"classic_chrome", "astia", "provia"}.issubset(set(result))
+
+    def test_list_fuji_sims_contains_all_fourteen(self):
+        result = list_fuji_sims()
+        assert set(result) == {
+            "classic_chrome", "astia", "provia",
+            "velvia", "classic_neg", "nostalgic_neg",
+            "pro_neg_hi", "pro_neg_std",
+            "eterna", "eterna_bleach_bypass",
+            "acros", "monochrome", "sepia",
+            "reala_ace",
+        }
 
     def test_list_fuji_sims_are_sorted_strings(self):
         result = list_fuji_sims()

@@ -13,7 +13,14 @@ from retouch.grading import load_preset
 PRESETS_DIR = Path(__file__).resolve().parent.parent / "presets"
 ASTIA_PATH = PRESETS_DIR / "astia.json"
 
-FUJI_SIM_NAMES = ("astia", "provia", "classic_chrome")
+FUJI_SIM_NAMES = (
+    "astia", "provia", "classic_chrome",
+    "velvia", "classic_neg", "nostalgic_neg",
+    "pro_neg_hi", "pro_neg_std",
+    "eterna", "eterna_bleach_bypass",
+    "acros", "monochrome", "sepia",
+    "reala_ace",
+)
 
 
 def _load_raw() -> Dict[str, Any]:

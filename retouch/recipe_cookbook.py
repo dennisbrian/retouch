@@ -57,7 +57,14 @@ _CATEGORY_RULES: List[tuple] = [
 ]
 
 # Fuji film sims are categorized as creative (film-look emulation).
-_FUJI_SIMS = {"provia", "astia", "classic_chrome"}
+_FUJI_SIMS = {
+    "provia", "astia", "classic_chrome",
+    "velvia", "classic_neg", "nostalgic_neg",
+    "pro_neg_hi", "pro_neg_std",
+    "eterna", "eterna_bleach_bypass",
+    "acros", "monochrome", "sepia",
+    "reala_ace",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +130,17 @@ _DESCRIPTIONS: Dict[str, str] = {
     "provia": "Fuji Provia: neutral standard film sim, clean color.",
     "astia": "Fuji Astia: soft portrait film sim, warm midtones.",
     "classic_chrome": "Fuji Classic Chrome: desaturated, high-contrast documentary.",
+    "velvia": "Fuji Velvia: punchy saturated landscape film, deep greens/blues.",
+    "classic_neg": "Fuji Classic Negative: Superia-style, saturated greens, warm yellows.",
+    "nostalgic_neg": "Fuji Nostalgic Negative: lifted amber shadows, muted highlights.",
+    "pro_neg_hi": "Fuji Pro Neg Hi: portrait negative, firmer contrast.",
+    "pro_neg_std": "Fuji Pro Neg Std: portrait negative, softer/flatter contrast.",
+    "eterna": "Fuji Eterna: cinema film stock, low contrast, flat log-style tones.",
+    "eterna_bleach_bypass": "Fuji Eterna Bleach Bypass: high-contrast, near-desaturated, gritty.",
+    "acros": "Fuji Acros: fine-grain B&W, smooth tonal transition.",
+    "monochrome": "Fuji Monochrome: standard neutral B&W.",
+    "sepia": "Fuji Sepia: B&W with warm amber split-tone.",
+    "reala_ace": "Fuji Reala Ace: high-fidelity punchy-but-natural, deep blacks.",
 }
 
 
