@@ -233,9 +233,22 @@ class TestSuggestParams:
         analyzer = ImageAnalyzer()
         analysis = analyzer.analyze(_dark_noisy())
         params = analyzer.suggest_params(analysis)
-        # Dark image → positive brightness
+        # Dark image → positive but restrained brightness (cap 12 for mean_l < 80)
         assert "brightness" in params
         assert params["brightness"] > 0
+        assert params["brightness"] <= 12
+
+    def test_dark_bg_lit_subject_not_low_light(self):
+        """Black-bg + bright subject (cosplay studio) must not class as low_light."""
+        analyzer = ImageAnalyzer()
+        # Dark field with a bright subject block (p99 high, mean low)
+        img = np.full((256, 256, 3), 20, dtype=np.uint8)
+        img[60:200, 80:180] = 220
+        analysis = analyzer.analyze(img)
+        assert analysis.lighting_type != "low_light"
+        recipe = analyzer.suggest_recipe(analysis)
+        # Must not pick heavy soft recipes that destroy texture
+        assert recipe not in {"xhs_ultrasoft", "milk_skin_v1"}
 
     def test_bright_image_suggests_negative_brightness(self):
         analyzer = ImageAnalyzer()

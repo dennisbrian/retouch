@@ -56,13 +56,13 @@ from retouch.frequency import FrequencySeparator  # noqa: E402
 from retouch.qa_detectors import detect_halo  # noqa: E402
 
 # --- configuration ----------------------------------------------------------
-REF_IMAGES = [
+DEFAULT_REF_IMAGES = [
     "test_output/DSCF4454.jpg",
     "test_output/DSCF4463.jpg",
     "test_output/DSCF4503.jpg",
     "test_output/DSCF4550.jpg",
 ]
-OUT_DIR = "test_output/qa_signoff_2026-07-10"
+DEFAULT_OUT_DIR = "test_output/qa_signoff_2026-07-10"
 BASELINE_RECIPE = "natural_polish_v1"
 PROC_MAX_DIM = 1500
 SKIN_PATCH = 200  # px square for texture gate + skin crop
@@ -70,10 +70,16 @@ EDGE_PATCH = 220  # px square for halo crop
 
 GATE_THRESHOLDS = {
     "texture_ssim": 0.92,
+    # Chroma-only (a*,b*) ΔE — L shifts from intentional brightness/exposure
+    # are NOT color drift. thr 2.0 matches VISUAL_QA.md No Color Drift gate.
     "color_drift_deltaE": 2.0,
     "highlight_clip_pct": 0.5,
     "shadow_clip_pct": 0.5,
 }
+
+# Mutated by main() from CLI; process_one / append_report read these.
+REF_IMAGES = list(DEFAULT_REF_IMAGES)
+OUT_DIR = DEFAULT_OUT_DIR
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +273,9 @@ def process_one(
         logger.warning("texture gate failed for %s: %s", stem, exc)
         gates["texture"] = ("PENDING", f"measurement error: {exc}")
 
-    # No Color Drift: ΔE in LAB on neutral-gray or stable background pixels.
+    # No Color Drift: chroma-only (a*,b*) ΔE on neutral-gray pixels.
+    # Full LAB ΔE was dominated by intentional L lifts (smart brightness),
+    # which is exposure — not hue/chroma drift (VISUAL_QA.md gate intent).
     try:
         orig_lab = cv2.cvtColor(orig_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
         after_lab = cv2.cvtColor(smart_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
@@ -284,10 +292,9 @@ def process_one(
             idx = (ys[sel], xs[sel])
             src = orig_lab[idx]
             dst = after_lab[idx]
-            de = float(np.mean(np.sqrt(np.sum((src - dst) ** 2, axis=1))))
-            used = "neutral gray"
+            de = float(np.mean(np.sqrt(np.sum((src[:, 1:] - dst[:, 1:]) ** 2, axis=1))))
+            used = "neutral gray ab"
         else:
-            # fall back to stable background corners
             samples = [
                 orig_lab[5, 5], orig_lab[5, -6],
                 orig_lab[-6, 5], orig_lab[-6, -6],
@@ -296,17 +303,17 @@ def process_one(
             samples_dst = [
                 after_lab[5, 5], after_lab[5, -6],
                 after_lab[-6, 5], after_lab[-6, -6],
-                after_lab[after_lab.shape[0] // 2, 5],
+                after_lab[orig_lab.shape[0] // 2, 5],
             ]
             de = float(np.mean([
-                np.sqrt(np.sum((s - d) ** 2))
+                np.sqrt(np.sum((s[1:] - d[1:]) ** 2))
                 for s, d in zip(samples, samples_dst)
             ]))
-            used = "stable background corners"
+            used = "bg corners ab"
         gates["color_drift"] = (
             "PASS" if de <= GATE_THRESHOLDS["color_drift_deltaE"]
             else "FAIL",
-            f"ΔE {de:.2f} ({used}, thr {GATE_THRESHOLDS['color_drift_deltaE']})",
+            f"ΔE_ab {de:.2f} ({used}, thr {GATE_THRESHOLDS['color_drift_deltaE']})",
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("color drift gate failed for %s: %s", stem, exc)
@@ -431,31 +438,107 @@ def append_report(rows: List[Dict[str, Any]]) -> None:
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
-def main() -> int:
+def _resolve_images(args: Any) -> List[str]:
+    """Build absolute image paths from --images / --dir / defaults."""
+    paths: List[str] = []
+    if args.images:
+        for p in args.images:
+            paths.append(p if os.path.isabs(p) else os.path.join(ROOT, p))
+    if args.dir:
+        d = args.dir if os.path.isabs(args.dir) else os.path.join(ROOT, args.dir)
+        for name in sorted(os.listdir(d)):
+            if name.lower().endswith((".jpg", ".jpeg", ".png", ".tif", ".tiff", ".raf")):
+                paths.append(os.path.join(d, name))
+    if args.limit and args.limit > 0:
+        paths = paths[: args.limit]
+    if not paths:
+        paths = [
+            p if os.path.isabs(p) else os.path.join(ROOT, p)
+            for p in DEFAULT_REF_IMAGES
+        ]
+    return paths
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Visual-QA sign-off harness")
+    parser.add_argument(
+        "--out",
+        default="test_output/qa_signoff_2026-07-14",
+        help="Output directory under repo (default: test_output/qa_signoff_2026-07-14)",
+    )
+    parser.add_argument(
+        "--images",
+        nargs="+",
+        default=None,
+        help="Explicit image paths (abs or repo-relative)",
+    )
+    parser.add_argument(
+        "--dir",
+        default=None,
+        help="Folder of images to process (jpg/png/tif/raf)",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="Max images from --dir/--images (0 = all)",
+    )
+    parser.add_argument(
+        "--no-append-doc",
+        action="store_true",
+        help="Skip appending report to docs/VISUAL_QA.md",
+    )
+    args = parser.parse_args(argv)
+
+    global REF_IMAGES, OUT_DIR
+    image_paths = _resolve_images(args)
+    OUT_DIR = args.out if os.path.isabs(args.out) else os.path.join(ROOT, args.out)
+    REF_IMAGES = image_paths  # absolute paths; loop uses as-is
+
     engine = RetouchEngine()
     smart = SmartProcessor(engine=engine)
     os.makedirs(OUT_DIR, exist_ok=True)
 
     rows: List[Dict[str, Any]] = []
     failures: List[str] = []
-    for rel in REF_IMAGES:
-        path = os.path.join(ROOT, rel)
+    for path in image_paths:
         if not os.path.exists(path):
             logger.warning("Missing reference image: %s — skipped", path)
-            failures.append(f"missing: {rel}")
+            failures.append(f"missing: {path}")
             continue
         try:
             rows.append(process_one(engine, smart, path, OUT_DIR))
         except Exception as exc:  # noqa: BLE001 — continue batch on per-image crash
-            logger.exception("Failed to process %s: %s", rel, exc)
-            failures.append(f"crash: {rel}: {exc}")
+            logger.exception("Failed to process %s: %s", path, exc)
+            failures.append(f"crash: {path}: {exc}")
 
     if not rows:
         logger.error("No images processed; aborting report.")
         return 1
 
     print_report(rows)
-    append_report(rows)
+    if not args.no_append_doc:
+        append_report(rows)
+
+    # Always write a standalone report next to the renders.
+    report_path = os.path.join(OUT_DIR, "REPORT.md")
+    with open(report_path, "w", encoding="utf-8") as fh:
+        # reuse append_report body via print_report capture is messy; dump rows simply
+        fh.write(f"# Visual QA Sign-off — {os.path.basename(OUT_DIR)}\n\n")
+        for row in rows:
+            fh.write(f"## {row['stem']}\n\n")
+            for key, (status, detail) in row["gates"].items():
+                fh.write(f"- **{key}**: {status} — {detail}\n")
+            flags = [
+                f"{w.detector}(flagged={w.flagged},score={w.score:.3f})"
+                for w in row.get("qa_smart", [])
+            ]
+            if flags:
+                fh.write(f"- engine_qa: {', '.join(flags)}\n")
+            fh.write("\n")
+    logger.info("Wrote %s", report_path)
 
     if failures:
         logger.warning("Non-fatal failures: %s", "; ".join(failures))

@@ -310,6 +310,7 @@ class ImageAnalyzer:
             has_face=bool(face_bboxes),
             skin_present=skin.present,
             skin_l=skin.l_mean,
+            p99=float(percentiles[6]),
         )
 
         return ImageAnalysis(
@@ -343,25 +344,39 @@ class ImageAnalyzer:
         """
         out: Dict[str, Any] = {}
 
-        # Exposure / brightness — target mean L of ~128 globally.
+        # Exposure / brightness — soft target mean L ~128, but never flatten
+        # intentional low-key / high-key portraits. Large |brightness| also
+        # inflates full-ΔE "color drift" gates that are mostly ΔL.
         target_global_l = 128.0
         delta_l = target_global_l - analysis.mean_luminance
-        # Clamp brightness to [-50, 50] (per ParamSpec bounds).
-        brightness = int(np.clip(delta_l * 0.5, -50, 50))
+        mean_l = analysis.mean_luminance
+        if mean_l < 80.0:
+            # Dark scene / dark-bg portrait: open a little, keep key.
+            brightness = int(np.clip(delta_l * 0.15, 0, 12))
+        elif mean_l > 180.0:
+            brightness = int(np.clip(delta_l * 0.3, -20, 0))
+        else:
+            brightness = int(np.clip(delta_l * 0.5, -30, 30))
         if abs(brightness) >= 1:
             out["brightness"] = brightness
 
         # Dynamic-range targets: pull blacks up / whites down when DR is
-        # clipped at either end. p1 < 10 → blacks crushed; p99 > 248 → whites blown.
+        # clipped at either end. p1 < 10 → blacks crushed; p99 > 240 → whites hot.
         p = analysis.l_percentiles
         if len(p) >= 7:
             p1, _, _, _, _, p95, p99 = p
             if p1 < 10.0:
                 # Lift blacks toward a target of ~12
                 out["blacks"] = int(np.clip((12.0 - p1) * 0.5, 0, 60))
-            if p99 > 248.0:
-                # Pull whites down
-                out["whites"] = int(np.clip(-(p99 - 248.0) * 0.5, -60, 0))
+            if p99 > 240.0:
+                # Pull whites down hard enough to engage (old thr 248 + gain 0.5
+                # collapsed to whites=0 on real outdoor p99≈249).
+                out["whites"] = int(np.clip(-(p99 - 240.0) * 1.5, -60, 0))
+            if p95 > 235.0:
+                out.setdefault(
+                    "highlights",
+                    int(np.clip(-(p95 - 235.0) * 1.0, -40, 0)),
+                )
             # Contrast: if DR is narrow, add contrast; if wide, reduce slightly.
             dr = p95 - p1
             if dr < 120.0:
@@ -443,7 +458,22 @@ class ImageAnalyzer:
         if analysis.noise_level > 0.5:
             return _pick(["milk_skin_v1", "xhs_ultrasoft", "porcelain_unified_v1"])
 
-        # Low-key scenes → cool porcelain look
+        # Dark-bg but subject-lit portraits (common cosplay/studio): high p99 +
+        # low noise means the face is fine — do NOT pick heavy soft recipes
+        # (xhs_ultrasoft smooth=0.85 kills pore SSIM).
+        p99 = (
+            float(analysis.l_percentiles[6])
+            if len(analysis.l_percentiles) >= 7
+            else 128.0
+        )
+        if (
+            (analysis.key == "low" or analysis.lighting_type == "low_light")
+            and p99 > 200.0
+            and analysis.noise_level < 0.25
+        ):
+            return _pick(["beauty", "portrait", "natural", "natural_polish_v1"])
+
+        # Genuine low-key / low-light scenes → cool porcelain / soft look
         if analysis.key == "low" or analysis.lighting_type == "low_light":
             if kelvin > 7000.0 or cast < 0.15:
                 return _pick(["fuji_porcelain", "porcelain_unified_v1", "xhs_ultrasoft"])
@@ -699,21 +729,28 @@ class ImageAnalyzer:
         has_face: bool,
         skin_present: bool,
         skin_l: float,
+        p99: float = 255.0,
     ) -> str:
         """Classify lighting into one of LIGHTING_TYPES.
 
         Heuristics:
-          - low_light: mean L < 90, or noise_level > 0.5 (high-ISO dark scene).
+          - low_light: high noise (high-ISO) OR both mean and highlights dark.
+            Dark mean alone is NOT enough — cosplay/studio shots often have
+            black backgrounds with a well-lit subject (high p99).
           - convention: strong WB cast (>0.12) + face present — typical of
             mixed-temperature convention-hall lighting.
-          - studio: low noise + low cast + well-lit — clean controlled light.
+          - studio: low noise + low cast + well-lit subject — clean controlled light.
           - outdoor: default when none of the above match.
         """
-        if mean_l < 90.0 or noise_level > 0.5:
+        if noise_level > 0.5:
+            return "low_light"
+        # Genuinely underexposed: dark mean AND crushed/dim highlights.
+        if mean_l < 90.0 and p99 < 180.0:
             return "low_light"
         if cast_strength > 0.12 and has_face:
             return "convention"
-        if noise_level < 0.15 and cast_strength < 0.06 and mean_l > 120.0:
+        # Dark-bg lit-subject portraits still count as studio when clean.
+        if noise_level < 0.15 and cast_strength < 0.06 and (mean_l > 120.0 or p99 > 200.0):
             return "studio"
         return "outdoor"
 
