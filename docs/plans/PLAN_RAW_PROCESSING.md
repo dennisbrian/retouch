@@ -1,7 +1,7 @@
 # PLAN — RAW Processing (full-data RAF ingestion)
 
 **Date:** 2026-07-10
-**Status:** Research complete; wiring not started. Companion to MASTER_PLAN.md "Post-plan enhancements (2026-07-10)" RAF row and the Phase 6 T5 row.
+**Status:** Step 1+2 largely done 2026-07-14 — `imread_engine` live for RAW (GUI/CLI); `load_raw` gamma=(1,1)+ReconstructDefault; CLI `--linear-raw` wires LinearGrader.develop. Step 3 develop UX still backlog.
 **Scope:** What "import raw files with full data" actually requires, what already exists in the codebase, what's broken, and the recommended wiring plan.
 
 ---

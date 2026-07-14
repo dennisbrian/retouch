@@ -21,6 +21,7 @@ from retouch.engine import _adjust_contrast
 from retouch.grading import PRESETS, ColorGrader
 from retouch.io import (
     IMAGE_EXTENSIONS,
+    RAW_EXTENSIONS,
     _resolve_safe_path,
     copy_exif,
     encode_write_params,
@@ -177,8 +178,25 @@ def _init_worker():
     _worker_engine = RetouchEngine()
 
 
+def _linear_raw_to_engine_bgr(path, exposure: float = 0.0, contrast: float = 1.0):
+    """T5 path: linear decode → develop → gamma-encode → float32 BGR [0,255]."""
+    from retouch.raw_develop import RAWDeveloper
+
+    dev = RAWDeveloper()
+    linear_rgb, _meta = dev.load_raw(path)
+    linear_rgb = dev.develop(
+        linear_rgb, exposure=exposure, contrast=contrast,
+    )
+    # sRGB-ish encode for engine (display-referred); keep float headroom
+    srgb = np.clip(linear_rgb, 0.0, 1.0) ** (1.0 / 2.2)
+    bgr = (srgb[..., ::-1] * 255.0).astype(np.float32)
+    return bgr
+
+
 def _process_single(args):
-    img_path, output_dir, params, format_arg, quality, force, copy_exif_flag, max_dim, compare_flag, global_only, bit_depth, fail_on_qa, save_session, smart = args
+    (img_path, output_dir, params, format_arg, quality, force, copy_exif_flag,
+     max_dim, compare_flag, global_only, bit_depth, fail_on_qa, save_session,
+     smart, linear_raw, raw_exposure, raw_contrast) = args
     try:
         fmt = output_format(img_path, format_arg)
         stem = img_path.stem
@@ -193,7 +211,12 @@ def _process_single(args):
         if out_path.exists() and not force:
             return (img_path.name, "skipped")
 
-        img_bgr = imread_engine(img_path)
+        if linear_raw and Path(img_path).suffix.lower() in RAW_EXTENSIONS:
+            img_bgr = _linear_raw_to_engine_bgr(
+                img_path, exposure=raw_exposure, contrast=raw_contrast,
+            )
+        else:
+            img_bgr = imread_engine(img_path)
         orig_shape = img_bgr.shape[:2]
         # 16-bit RAF ingest returns float32 [0,255]; comparison stitching is
         # uint8-only, so snapshot a uint8 original for the compare image.
@@ -581,6 +604,15 @@ def main() -> None:
                              '{"0": {"recipe": "cosplay", "smooth": 70}, '
                              '"1": {"recipe": "natural"}}. Engine units (0-100).')
 
+    # T5: optional true-linear RAW develop (gamma=1) before engine sRGB path.
+    parser.add_argument("--linear-raw", action="store_true",
+                        help="For RAW inputs: decode linear (gamma=1,1), optional "
+                             "exposure/contrast develop, then gamma-encode into engine.")
+    parser.add_argument("--raw-exposure", type=float, default=0.0,
+                        help="With --linear-raw: exposure stops (default 0)")
+    parser.add_argument("--raw-contrast", type=float, default=1.0,
+                        help="With --linear-raw: linear contrast factor (default 1)")
+
     args = parser.parse_args()
 
     # T4: recipe cookbook browse mode — exit before requiring an input image.
@@ -678,7 +710,10 @@ def main() -> None:
 
     if args.workers > 1 and len(files) > 1:
         pool_args = [
-            (f, output_dir, params, args.format, args.quality, args.force, not args.no_exif, args.max_dim, args.compare, args.global_only, args.bit_depth, args.fail_on_qa, args.save_session, args.smart)
+            (f, output_dir, params, args.format, args.quality, args.force,
+             not args.no_exif, args.max_dim, args.compare, args.global_only,
+             args.bit_depth, args.fail_on_qa, args.save_session, args.smart,
+             args.linear_raw, args.raw_exposure, args.raw_contrast)
             for f in files
         ]
         with ProcessPoolExecutor(
@@ -700,8 +735,17 @@ def main() -> None:
         engine = None if args.global_only else RetouchEngine()
         try:
             for f in tqdm(files, desc="Retouching", unit="img"):
-                # T5: RAW via 16-bit path (same as worker path imread_engine)
-                img_bgr = imread_engine(f)
+                if args.linear_raw and f.suffix.lower() in RAW_EXTENSIONS:
+                    try:
+                        img_bgr = _linear_raw_to_engine_bgr(
+                            f, exposure=args.raw_exposure, contrast=args.raw_contrast,
+                        )
+                    except Exception as e:
+                        failed += 1
+                        tqdm.write(f"  ✖ {f.name}: linear-raw {e}")
+                        continue
+                else:
+                    img_bgr = imread_engine(f)
                 if img_bgr is None:
                     failed += 1
                     tqdm.write(f"  ✖ {f.name}: failed to read")

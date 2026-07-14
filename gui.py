@@ -27,7 +27,7 @@ from retouch.style_library import list_styles, save_style_profile, learn_dataset
 from retouch.batch_processor import BatchProcessor
 from retouch.style import StyleProfile
 from retouch.look_extractor import LookExtractor
-from retouch.recipe_cookbook import search_recipes, list_recipes
+from retouch.recipe_cookbook import search_recipes, list_recipes, list_categories
 from retouch.lut import get_registry
 
 _logger = logging.getLogger(__name__)
@@ -805,20 +805,27 @@ def on_extract_look(look_ref_file, img_input):
     return clean, f"Look extracted ({mode}) — {len(clean)} params. Click Process to apply."
 
 
-def on_search_recipes(query):
-    """T4 — Search the recipe cookbook and populate a dropdown's choices.
-
-    Returns a ``gr.update`` for the cookbook dropdown plus a status string.
-    """
+def on_search_recipes(query, category=None):
+    """T4 — Search/browse cookbook; optional category filter."""
     try:
-        results = search_recipes(query or "")
+        cat = category if category and category != "All" else None
+        if query and str(query).strip():
+            results = search_recipes(query.strip())
+            if cat:
+                results = [r for r in results if r.category == cat]
+        else:
+            results = list_recipes(cat)
     except Exception as e:
         _logger.exception("Recipe search failed: %s", e)
         return gr.update(choices=[]), f"Recipe search failed: {e}"
 
     choices = [r.name for r in results]
-    msg = f"Found {len(results)} recipe(s) matching '{query}'." if query else f"{len(results)} recipes available."
-    return gr.update(choices=choices, value=None), msg
+    msg = f"{len(results)} recipe(s)"
+    if query:
+        msg += f" matching '{query}'"
+    if category and category != "All":
+        msg += f" in {category}"
+    return gr.update(choices=choices, value=None), msg + "."
 
 
 def on_select_cookbook(name):
@@ -826,6 +833,11 @@ def on_select_cookbook(name):
     if not name:
         return gr.update(), ""
     return gr.update(value=name), f"Selected recipe: {name}"
+
+
+def on_browse_category(category):
+    """T4 — List recipes in category (or all)."""
+    return on_search_recipes("", category)
 
 
 def on_reload_luts():
@@ -1650,12 +1662,36 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             info="Select an extracted style from your library"
                         )
 
-                        with gr.Accordion("📖 Recipe Cookbook (87 recipes)", open=False):
-                            cookbook_search = gr.Textbox(label="Search Recipes", placeholder="e.g. cosplay, portrait, fuji", scale=3)
+                        with gr.Accordion("📖 Recipe Cookbook", open=False):
                             with gr.Row():
-                                cookbook_search_btn = gr.Button("🔍 Search Recipes", variant="secondary", size="sm", elem_classes=["secondary-btn"])
-                            cookbook_dropdown = gr.Dropdown(label="Cookbook Recipe", choices=[], interactive=True, value=None, allow_custom_value=False, info="Pick a recipe from the cookbook to load it")
-                            cookbook_status = gr.Markdown("")
+                                cookbook_category = gr.Dropdown(
+                                    label="Category",
+                                    choices=["All"] + list_categories(),
+                                    value="All",
+                                    interactive=True,
+                                    scale=1,
+                                )
+                                cookbook_search = gr.Textbox(
+                                    label="Search",
+                                    placeholder="e.g. cosplay, portrait, fuji",
+                                    scale=2,
+                                )
+                            with gr.Row():
+                                cookbook_search_btn = gr.Button(
+                                    "Search / Browse", variant="secondary", size="sm",
+                                    elem_classes=["secondary-btn"],
+                                )
+                            cookbook_dropdown = gr.Dropdown(
+                                label="Cookbook Recipe",
+                                choices=[],
+                                interactive=True,
+                                value=None,
+                                allow_custom_value=False,
+                                info="Browse by category or search, then select to load into Base Recipe",
+                            )
+                            cookbook_status = gr.Markdown(
+                                "Open accordion → pick category or search → select recipe."
+                            )
 
                         show_compare = gr.Checkbox(label="Show side-by-side comparison screen", value=True, info="Split view: original | separator | retouched result")
 
@@ -2469,7 +2505,12 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     # T4: Recipe Cookbook wiring
     cookbook_search_btn.click(
         fn=on_search_recipes,
-        inputs=[cookbook_search],
+        inputs=[cookbook_search, cookbook_category],
+        outputs=[cookbook_dropdown, cookbook_status],
+    )
+    cookbook_category.change(
+        fn=on_browse_category,
+        inputs=[cookbook_category],
         outputs=[cookbook_dropdown, cookbook_status],
     )
     cookbook_dropdown.change(
