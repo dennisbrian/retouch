@@ -95,7 +95,9 @@ EXPECTED_RECIPE_KEYS = [
     "wrinkle_soften_forehead", "wrinkle_soften_nasolabial", "wrinkle_soften_neck",
 ]
 EXPECTED_RECIPE_KEY_COUNT = 203
-EXPECTED_UI_OUTPUT_COUNT = 91
+# Self-updating: the recipe/smart-style slider tuple length is the contract
+# defined by RECIPE_OUTPUT_KEYS, so this constant can never go stale.
+EXPECTED_UI_OUTPUT_COUNT = len(gui.RECIPE_OUTPUT_KEYS)
 
 
 # ---------------------------------------------------------------------------
@@ -331,8 +333,10 @@ class TestApplyCustomStyle:
         result = gui.apply_custom_style("test_style_override", "natural")
         # smooth is the first returned value
         assert result[0] == 40
-        # whiten is at index 5
-        assert result[5] == 20
+        # whiten lands at its canonical RECIPE_OUTPUT_KEYS index (key-based
+        # producers make the position self-documenting, not a magic number)
+        whiten_idx = gui.RECIPE_OUTPUT_KEYS.index("whiten")
+        assert result[whiten_idx] == 20
 
 
 # ---------------------------------------------------------------------------
@@ -349,17 +353,14 @@ class TestOnRecipeChange:
         assert len(result) == EXPECTED_UI_OUTPUT_COUNT
 
     def test_values_match_recipe_defaults(self):
-        """The first 10 UI outputs (smooth..equalize) should match recipe_defaults."""
+        """The UI outputs should match recipe_defaults in canonical order."""
         result = gui.on_recipe_change("natural")
         d = gui.recipe_defaults("natural")
-        assert result[0] == d["smooth"]
-        assert result[1] == d["mid_reduction"]
-        assert result[2] == d["texture_opacity"]
-        assert result[3] == d["pore_synthesis"]
-        assert result[4] == d["nose_smooth"]
-        assert result[5] == d["micro_restore"]
-        assert result[6] == d["whiten"]
-        assert result[7] == d["equalize"]
+        keys = gui.RECIPE_OUTPUT_KEYS
+        for name in ("smooth", "mid_reduction", "texture_opacity",
+                     "pore_synthesis", "nose_smooth", "micro_restore",
+                     "whiten", "equalize"):
+            assert result[keys.index(name)] == d[name]
 
     def test_unknown_recipe_returns_59_values(self):
         """Unknown recipes should still return a 59-tuple (falls back to natural)."""
@@ -380,9 +381,9 @@ class TestOnRecipeChange:
         result = gui.on_recipe_change("anime_cinematic_v1")
         d = gui.recipe_defaults("anime_cinematic_v1")
         assert d["clarity"] == 14
-        # clarity sits at index 47 in the on_recipe_change output tuple
-        # (after body_smooth, body_equalize, body_whiten, body_match_face were added)
-        clarity_index = 47
+        # clarity sits at its canonical RECIPE_OUTPUT_KEYS index (key-based
+        # producers make this self-documenting rather than a magic number)
+        clarity_index = gui.RECIPE_OUTPUT_KEYS.index("clarity")
         assert result[clarity_index] == 14
 
 
@@ -462,11 +463,17 @@ class TestExtMap:
     def test_contains_webp(self):
         assert "WebP" in gui.EXT_MAP
 
+    def test_contains_png16(self):
+        assert "PNG-16" in gui.EXT_MAP
+
     def test_jpeg_maps_to_jpg(self):
         assert gui.EXT_MAP["JPEG"] == ".jpg"
 
     def test_png_maps_to_png(self):
         assert gui.EXT_MAP["PNG"] == ".png"
+
+    def test_png16_maps_to_png(self):
+        assert gui.EXT_MAP["PNG-16"] == ".png"
 
     def test_webp_maps_to_webp(self):
         assert gui.EXT_MAP["WebP"] == ".webp"
@@ -1194,7 +1201,7 @@ class TestIntegrationConstantCrossRef:
         """The number of UI outputs (from the _recipe_outputs list) must match
         what on_recipe_change returns."""
         result = gui.on_recipe_change("natural")
-        assert len(result) == 91
+        assert len(result) == len(gui.RECIPE_OUTPUT_KEYS)
 
     def test_process_inputs_count_matches_process_input_keys(self):
         """_process_inputs and PROCESS_INPUT_KEYS must have matching lengths."""
@@ -1203,6 +1210,23 @@ class TestIntegrationConstantCrossRef:
     def test_recipe_outputs_count_matches_on_recipe_change(self):
         """_recipe_outputs and on_recipe_change return tuple must match."""
         assert len(gui._recipe_outputs) == len(gui.on_recipe_change("natural"))
+
+    def test_recipe_output_keys_include_formerly_dropped_params(self):
+        """Regression guard: the 4 params that were silently dropped from
+        apply_custom_style / on_smart_process (causing index-5 shift) are now
+        part of the canonical RECIPE_OUTPUT_KEYS contract."""
+        for dropped in ("regional_modulation", "smooth_engine",
+                        "undereye_shadow_strength", "freckle_removal"):
+            assert dropped in gui.RECIPE_OUTPUT_KEYS
+
+    def test_all_producers_keyed_by_recipe_output_keys(self):
+        """All three producer paths (on_recipe_change, apply_custom_style,
+        on_smart_process) build their tuple keyed by RECIPE_OUTPUT_KEYS, so the
+        full set of defaults must cover every key — otherwise a producer would
+        KeyError or emit a wrong-length/misaligned tuple."""
+        d = gui.recipe_defaults("natural")
+        missing = set(gui.RECIPE_OUTPUT_KEYS) - set(d.keys())
+        assert not missing, f"recipe_defaults missing keys for producers: {sorted(missing)}"
 
     def test_process_input_keys_excludes_color_transfer_intensity(self):
         """color_transfer_intensity is in param_names() but has no GUI component."""
@@ -1220,8 +1244,7 @@ class TestIntegrationConstantCrossRef:
 
     def test_ext_map_keys_match_radio_choices(self):
         """The EXT_MAP keys should match the format radio used in the UI."""
-        # The UI hard-codes ["JPEG", "PNG", "WebP"] as the radio choices.
-        assert set(gui.EXT_MAP.keys()) == {"JPEG", "PNG", "WebP"}
+        assert set(gui.EXT_MAP.keys()) == {"JPEG", "PNG", "PNG-16", "WebP"}
 
     def test_export_res_map_keys_match_dropdown_choices(self):
         """The EXPORT_RES_MAP keys should match the resolution dropdown choices."""

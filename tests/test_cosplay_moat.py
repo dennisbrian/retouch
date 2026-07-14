@@ -436,15 +436,14 @@ class TestShootConsistencyLock:
 
 
 class TestCosplayMoatIntegration:
-    """Integration tests with RetouchEngine."""
+    """Integration tests with RetouchEngine (module-scoped fixture = clean teardown)."""
 
     @pytest.mark.skipif(
         not Path("test_output/DSCF8007.jpg").exists(),
         reason="Test image not available",
     )
-    def test_engine_process_with_wig_lace_blend(self):
+    def test_engine_process_with_wig_lace_blend(self, engine):
         """Engine.process() should accept and apply cosplay_wig_lace_blend."""
-        engine = RetouchEngine()
         img = cv2.imread("test_output/DSCF8007.jpg")
         assert img is not None
 
@@ -463,9 +462,8 @@ class TestCosplayMoatIntegration:
         not Path("test_output/DSCF8007.jpg").exists(),
         reason="Test image not available",
     )
-    def test_engine_process_with_stockings_smooth(self):
+    def test_engine_process_with_stockings_smooth(self, engine):
         """Engine.process() should accept and apply cosplay_stockings_smooth."""
-        engine = RetouchEngine()
         img = cv2.imread("test_output/DSCF8007.jpg")
         assert img is not None
 
@@ -484,9 +482,8 @@ class TestCosplayMoatIntegration:
         not Path("test_output/DSCF8007.jpg").exists(),
         reason="Test image not available",
     )
-    def test_engine_process_with_consistency_lock(self):
+    def test_engine_process_with_consistency_lock(self, engine):
         """Engine.process() should accept and apply cosplay_consistency_strength."""
-        engine = RetouchEngine()
         img = cv2.imread("test_output/DSCF8007.jpg")
         assert img is not None
 
@@ -505,9 +502,8 @@ class TestCosplayMoatIntegration:
         not Path("test_output/DSCF8007.jpg").exists(),
         reason="Test image not available",
     )
-    def test_engine_process_with_all_cosplay_params(self):
+    def test_engine_process_with_all_cosplay_params(self, engine):
         """Engine.process() should handle all three cosplay params together."""
-        engine = RetouchEngine()
         img = cv2.imread("test_output/DSCF8007.jpg")
         assert img is not None
 
@@ -528,9 +524,8 @@ class TestCosplayMoatIntegration:
         not Path("test_output/DSCF8007.jpg").exists(),
         reason="Test image not available",
     )
-    def test_engine_process_cosplay_params_zero_minimal_diff(self):
+    def test_engine_process_cosplay_params_zero_minimal_diff(self, engine):
         """With zero cosplay params, output should be nearly identical to baseline."""
-        engine = RetouchEngine()
         img = cv2.imread("test_output/DSCF8007.jpg")
         assert img is not None
 

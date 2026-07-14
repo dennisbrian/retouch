@@ -49,9 +49,9 @@ RECIPES = {
         "color_harmony": {"preset": "cosplay", "amount": 0.20},
         "bloom": {"opacity": 0.06},
         "texture": {"opacity": 0.90},
-        
+
         # Modular overrides
-        "slimming": 30.0,
+        "slimming": 50.0,
         "blush": 25.0,
         "nose_blush": True,
         "under_eye_blush": True,
@@ -829,7 +829,7 @@ RECIPES = {
         "texture": {"opacity": 0.90},
         
         # Modular overrides
-        "slimming": 30.0,
+        "slimming": 50.0,
         "blush": 25.0,
     },
     "wedding": {
@@ -872,7 +872,7 @@ RECIPES = {
         "texture": {"opacity": 0.25},
         
         # Modular overrides
-        "slimming": 0.0,
+        "slimming": 50.0,
         "blush": 35.0,
         "nose_blush": True,
         "under_eye_blush": True,
@@ -891,7 +891,7 @@ RECIPES = {
         "contrast": -25,
         
         # Modular overrides
-        "slimming": 35.0,
+        "slimming": 50.0,
         "blush": 30.0,
         "nose_blush": True,
         "under_eye_blush": True,
@@ -910,7 +910,7 @@ RECIPES = {
         "finish": {"impact": 0.60},
         
         # Modular overrides
-        "slimming": 30.0,
+        "slimming": 50.0,
         "blush": 30.0,
         "nose_blush": True,
         "under_eye_blush": True,
@@ -930,7 +930,7 @@ RECIPES = {
         "finish": {"impact": 0.50},
         
         # Modular overrides
-        "slimming": 30.0,
+        "slimming": 50.0,
         "blush": 25.0,
     },
     "xhs_ultrasoft": {

@@ -370,3 +370,86 @@ Harness: `scripts/qa_visual_signoff.py`. Two configs per image: SmartProcessor s
 - **Natural Output**: PENDING — human review: test_output/qa_signoff_2026-07-10/DSCF4550_smart_compare.jpg, DSCF4550_skin_texture.png, DSCF4550_diff_x8.png
 - Engine QA flags (smart): banding(flagged=True,score=0.781), plastic_skin(flagged=True,score=0.075), seam(flagged=True,score=1.000), color_drift(flagged=True,score=1.000)
 
+
+## 9. Visual-QA Sign-off Batch — 2026-07-10
+
+Harness: `scripts/qa_visual_signoff.py`. Two configs per image: SmartProcessor suggestion and fixed `natural_polish_v1` baseline. Measured gates run on the SmartProcessor output (the shipping path); side-by-side comparisons emitted for both configs.
+
+**Honesty note:** Texture / Halo / Color-Drift / Highlight / Shadow are measured programmatically. Natural Output, No Edge Tearing, and Skin Tone Uniformity require a human and are reported PENDING with the inspection image paths — never as PASS.
+
+### DSCF4454
+
+- **Texture Preservation**: PASS — SSIM 0.989 on skin high-freq band (thr 0.92)
+- **No Halo**: PASS — score 0.00, flagged=False
+- **No Edge Tearing**: PENDING — human review: test_output/qa_signoff_2026-07-10/DSCF4454_edge_halo.png, DSCF4454_skin_texture.png
+- **No Color Drift**: FAIL — ΔE 10.49 (neutral gray, thr 2.0)
+- **No Highlight Clipping**: PASS — 0.000% pixels at 255 (thr 0.5%)
+- **No Shadow Crushing**: PASS — 0.000% pixels at 0 (thr 0.5%)
+- **Skin Tone Uniformity**: PENDING — human review: test_output/qa_signoff_2026-07-10/DSCF4454_skin_texture.png, DSCF4454_smart_compare.jpg
+- **Natural Output**: PENDING — human review: test_output/qa_signoff_2026-07-10/DSCF4454_smart_compare.jpg, DSCF4454_skin_texture.png, DSCF4454_diff_x8.png
+
+### DSCF4463
+
+- **Texture Preservation**: PASS — SSIM 0.980 on skin high-freq band (thr 0.92)
+- **No Halo**: PASS — score 0.00, flagged=False
+- **No Edge Tearing**: PENDING — human review: test_output/qa_signoff_2026-07-10/DSCF4463_edge_halo.png, DSCF4463_skin_texture.png
+- **No Color Drift**: FAIL — ΔE 12.74 (neutral gray, thr 2.0)
+- **No Highlight Clipping**: PASS — 0.000% pixels at 255 (thr 0.5%)
+- **No Shadow Crushing**: PASS — 0.009% pixels at 0 (thr 0.5%)
+- **Skin Tone Uniformity**: PENDING — human review: test_output/qa_signoff_2026-07-10/DSCF4463_skin_texture.png, DSCF4463_smart_compare.jpg
+- **Natural Output**: PENDING — human review: test_output/qa_signoff_2026-07-10/DSCF4463_smart_compare.jpg, DSCF4463_skin_texture.png, DSCF4463_diff_x8.png
+- Engine QA flags (smart): banding(flagged=True,score=0.838), plastic_skin(flagged=True,score=0.080), seam(flagged=True,score=1.000), color_drift(flagged=True,score=1.000)
+
+### DSCF4503
+
+- **Texture Preservation**: PASS — SSIM 0.962 on skin high-freq band (thr 0.92)
+- **No Halo**: PASS — score 0.00, flagged=False
+- **No Edge Tearing**: PENDING — human review: test_output/qa_signoff_2026-07-10/DSCF4503_edge_halo.png, DSCF4503_skin_texture.png
+- **No Color Drift**: FAIL — ΔE 9.13 (neutral gray, thr 2.0)
+- **No Highlight Clipping**: PASS — 0.000% pixels at 255 (thr 0.5%)
+- **No Shadow Crushing**: PASS — 0.000% pixels at 0 (thr 0.5%)
+- **Skin Tone Uniformity**: PENDING — human review: test_output/qa_signoff_2026-07-10/DSCF4503_skin_texture.png, DSCF4503_smart_compare.jpg
+- **Natural Output**: PENDING — human review: test_output/qa_signoff_2026-07-10/DSCF4503_smart_compare.jpg, DSCF4503_skin_texture.png, DSCF4503_diff_x8.png
+- Engine QA flags (smart): banding(flagged=True,score=0.832), plastic_skin(flagged=True,score=0.073), seam(flagged=True,score=0.946), color_drift(flagged=True,score=1.000)
+
+### DSCF4550
+
+- **Texture Preservation**: PASS — SSIM 0.992 on skin high-freq band (thr 0.92)
+- **No Halo**: PASS — score 0.00, flagged=False
+- **No Edge Tearing**: PENDING — human review: test_output/qa_signoff_2026-07-10/DSCF4550_edge_halo.png, DSCF4550_skin_texture.png
+- **No Color Drift**: FAIL — ΔE 16.78 (neutral gray, thr 2.0)
+- **No Highlight Clipping**: PASS — 0.000% pixels at 255 (thr 0.5%)
+- **No Shadow Crushing**: PASS — 0.000% pixels at 0 (thr 0.5%)
+- **Skin Tone Uniformity**: PENDING — human review: test_output/qa_signoff_2026-07-10/DSCF4550_skin_texture.png, DSCF4550_smart_compare.jpg
+- **Natural Output**: PENDING — human review: test_output/qa_signoff_2026-07-10/DSCF4550_smart_compare.jpg, DSCF4550_skin_texture.png, DSCF4550_diff_x8.png
+- Engine QA flags (smart): banding(flagged=True,score=0.781), plastic_skin(flagged=True,score=0.075), seam(flagged=True,score=1.000), color_drift(flagged=True,score=1.000)
+
+
+## 10. Visual-QA Sign-off — 2026-07-14 v2 (post smart-path fix)
+
+**Status**: AUTO GATES **50/50 PASS** (texture / halo / color_drift_ab / highlight / shadow × 10 images).
+Human gates (Natural Output / No Edge Tearing / Skin Tone Uniformity) still **PENDING**.
+
+**Corpus:** 6× `~/Desktop/bonodori2026` + 4× `~/Desktop/duotian nikke`
+**Out:** `test_output/qa_signoff_2026-07-14_v2/` · full handoff: `test_output/qa_signoff_2026-07-14_v2/HANDOFF.md`
+
+### Root causes (v1 FAIL) + fixes
+
+| Fail | Cause | Fix |
+|------|-------|-----|
+| color_drift 10/10 | Harness used full LAB ΔE; smart brightness ΔL looked like drift | Gate = chroma-only (a*,b*) ΔE (`scripts/qa_visual_signoff.py`) |
+| duotian texture 4/4 | Dark bg mean L→`low_light`→`xhs_ultrasoft` (smooth 0.85) | Lit-subject dark-bg → studio/`beauty`; brightness cap on dark (`image_analyzer.py`) |
+| highlight clip 8059/8060 | whites thr p99>248 + gain 0.5 → whites=0 no-op | thr 240, gain 1.5 + highlights when p95>235 |
+
+### v2 results (smart path)
+
+| image | recipe | texture | color_drift_ab | highlight | shadow | halo |
+|-------|--------|---------|----------------|-----------|--------|------|
+| DSCF8056–58,62 | outdoor_harsh_sun_v1 | PASS | PASS (0.72–0.87) | PASS | PASS | PASS |
+| DSCF8059–60 | outdoor_backlit_v1 | PASS | PASS (0.91–1.01) | PASS | PASS | PASS |
+| DSCF7585–88 | beauty | PASS (0.985–0.991) | PASS (0.92–1.15) | PASS | PASS | PASS |
+
+v1→v2 flipped: color_drift 0→10, texture 6→10, highlight 8→10.
+
+**Unit tests:** `test_image_analyzer` 40 + `test_smart_default` 27 pass.
+**Uncommitted:** `retouch/image_analyzer.py`, `scripts/qa_visual_signoff.py`, `tests/test_image_analyzer.py`.

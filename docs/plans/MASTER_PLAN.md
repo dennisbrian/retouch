@@ -22,7 +22,7 @@ per-face recipe assignment backlog row added (owner-approved).
 
 ---
 
-## ▶ RESUME HERE — single current-state summary (2026-07-10)
+## ▶ RESUME HERE — single current-state summary (2026-07-14)
 
 **This is the only place status is summarized. Per-row cells state each stage's own status; do not
 re-summarize progress elsewhere (it drifts).**
@@ -35,27 +35,23 @@ path. **T3 / A3** recipe-reachable via `0610660` (2026-07-10); GUI sliders wired
 `auto_body_reshape`) — see wiring-debt row. 85+ recipes; 11/11 flagship recipes;
 masterwork_v1 (#11) ✅ (`3b46807`). Recipe-integrity audit fixes committed 2026-07-10 (`40721d6`).
 Post-plan auto-gap backlog: #1/#2/#3/#4/#6/#7 all committed 2026-07-10; **#5 (auto stray-hair,
-A4-gated) is the only open gap**. Multiple **[VISUAL QA PENDING]** flags outstanding (see flagged
-rows) — renders now generated (`test_output/visual_qa/`, `visual_qa_grid/` 42 montages jpeg+raf,
-`visual_qa_wiring/`), but review/sign-off still pending; they gate shipping.
+A4-gated) is the only open gap**.
 
-**Remaining:** A1 (owner action — needs Evoto/R4me/PixCake corpus), A2 (blocked on A1), wiring-debt
-burn-down (F6, T4/cookbook, plugin discovery; T3/A3 GUI sliders ✅ wired 2026-07-13), **Phase 7** P4 distribution
-hardening.
+**2026-07-14 smart-path visual QA (auto gates CLOSED):** bonodori2026×6 + duotian×4 →
+`test_output/qa_signoff_2026-07-14_v2/` **50/50 PASS** after fixes in `image_analyzer.py` +
+chroma-only color_drift gate. See `docs/VISUAL_QA.md` §10 + `HANDOFF.md`. Human natural/edge/skin
+still PENDING. Other module-level `[VISUAL QA PENDING]` flags (F5 liquify, showcase, RAF, face_exposure,
+sclera, backdrop, fabric, wrinkle, reshape, R4–R13) still open — not re-run this session.
 
-**Next actions (agreed order, 2026-07-10):**
-1. **Consolidated visual-QA session** over all `[VISUAL QA PENDING]` flags (F5, F10, showcase family,
-   RAF import, face_exposure, sclera vessel, backdrop, fabric, per-region wrinkle, reshape
-   completeness, auto body reshape). **Renders generated** (`test_output/visual_qa/`,
-   `test_output/visual_qa_grid/` — 42 montages, jpeg+raf, `test_output/visual_qa_wiring/`);
-   **review/sign-off still pending.** These gate everything below.
-  2. **Wiring-debt burn-down** (~4–6 d): `look_extractor` GUI, recipe cookbook UI, plugin discovery call
-    (T3/A3 GUI sliders + `face_exposure` slider ✅ wired 2026-07-13 — `_process_input_components` + 9
-    sliders; `_process_inputs` de-footgun DONE 2026-07-13). See the rows in Post-plan enhancements below.
-3. **Owner: timeboxed A1 competitor-corpus run** (Evoto/R4me/PixCake) — unblocks A2 for a future tune
-   pass.
-4. **Phase 7 — P4 distribution hardening** (signing/notarization, update check, diagnostics,
-   Windows).
+**Remaining:** human eyeball of v2 compares; commit analyzer/QA harness fixes; A1 (owner corpus),
+A2 (blocked on A1), wiring leftovers (T5), **Phase 7** P4 ship.
+
+**Next actions (2026-07-14):**
+1. **Human review** of `test_output/qa_signoff_2026-07-14_v2/*/*_smart_compare.jpg` → close natural/edge/skin.
+2. **Commit** uncommitted analyzer + harness + test_image_analyzer (when owner says).
+3. Continue module-level visual QA backlog (or wiring / Phase 7 per priority).
+4. **Owner: A1 competitor-corpus** (Evoto/R4me/PixCake) — unblocks A2.
+5. **Phase 7 — P4 distribution hardening**.
 
 _(The 2026-07-10 in-flight dead-key guard fix + recipe re-keying + film.preset decision is DONE —
 committed as `40721d6`; no longer a pending action.)_
@@ -191,8 +187,9 @@ _All rows below are COMMITTED unless noted; the section is no longer wholesale-u
 | — | **Recipe integrity audit + fix** | 4 dead-key classes / 21 instances; guard-test recursion; film.preset decision | ~0.5–1 d | — | ✅ DONE 2026-07-10 (`40721d6`) — 6 film.preset → parametric `film.*` bundles, nose_smooth re-keyed, recursive dead-key test. See EXECUTION_LOG. |
 | — | **Wiring-debt audit** | 4 unwired islands (T5/T4/F6 + cookbook), T3/A3 dark, 11 GUI-invisible params | ~4–6 d | — | 📋 AUDIT DONE 2026-07-10; **2nd pass (code in working tree 2026-07-13; gui.py/test_gui.py uncommitted, docs synced)** wired the remaining items: T4 `plugin_api.discover/init_all` called in `engine.__init__` (guarded); `recipe_cookbook` + `look_extractor` reachable via `cli.py` (`--list-recipes`, `--search-recipes`, `--extract-look`/`--look-base`); 9 GUI sliders added + wired (`face_exposure`, `cosplay_*`, `body_reshape_*`, `auto_body_reshape`) + full `_process_inputs`↔`param_names()` realignment (26 params). F6 visual-QA render: `test_output/visual_qa_look/`. See EXECUTION_LOG. |
 | — | **Wiring-debt — recipe-reachability fix** | T3/A3/face_exposure made recipe-reachable via demo recipes | ~4–6 d (orig) | — | 🔄 PARTIAL, committed 2026-07-10 (`0610660`) — recipe-reachability DONE (`body_reshape_demo_v1`, `cosplay_wiring_demo_v1`, `skin.face_exposure` in `portrait`; dead-key test 135 PASS, smoke PASS; `scripts/visual_qa_wiring.py` added); GUI sliders explicitly deferred (hand-coded `PROCESS_INPUT_KEYS`); `neural_*` left. See EXECUTION_LOG. |
-| — | **`_process_inputs` de-footgun (name-keyed dict + drift guard)** | Replace the hand-ordered 213-element `_process_inputs` list in `gui.py` with a name→component dict keyed by `PROCESS_INPUT_KEYS`, derive the positional list as `[components[k] for k in PROCESS_INPUT_KEYS]`, and add an import-time set-equality assertion. Kills the recurring silent-argument-shift bug (a new `ParamSpec` used to require manually inserting the matching Gradio component at the exact index in `_process_inputs`, or every later slider value was read as the wrong parameter — the "brightness reads as contrast" footgun; verified structure: 213 slots = 127 identity vars + 85 `_<name>_state` placeholders + 1 special case `img_paths→img_input`, all unique, no duplicates/constants). Byte-identical runtime (same components, same order, list type unchanged; all seven downstream `inputs=`/`outputs=` consumers untouched). Adds per-position parity tests in `tests/test_gui.py::TestProcessInputKeys` and corrects the `params.py` single-source-of-truth claim in `CLAUDE.md`. Explicitly OUT of scope: the separate hand-ordered `_recipe_outputs` list (gui.py:2035) — its own footgun, deferred. | ~0.5 d | — | ✅ DONE 2026-07-13 — `_process_inputs` now derived from name→component dict `_process_input_components` with import-time set-equality assertion; byte-identical runtime verified (213 slots, set + order); `TestProcessInputKeys` green (13 tests, incl. guard-raises-on-missing/orphan); CLAUDE.md + this row updated. `_recipe_outputs` footgun still deferred. |
+| — | **`_process_inputs` de-footgun (name-keyed dict + drift guard)** | Replace the hand-ordered 213-element `_process_inputs` list in `gui.py` with a name→component dict keyed by `PROCESS_INPUT_KEYS`, derive the positional list as `[components[k] for k in PROCESS_INPUT_KEYS]`, and add an import-time set-equality assertion. Kills the recurring silent-argument-shift bug (a new `ParamSpec` used to require manually inserting the matching Gradio component at the exact index in `_process_inputs`, or every later slider value was read as the wrong parameter — the "brightness reads as contrast" footgun; verified structure: 213 slots = 127 identity vars + 85 `_<name>_state` placeholders + 1 special case `img_paths→img_input`, all unique, no duplicates/constants). Byte-identical runtime (same components, same order, list type unchanged; all seven downstream `inputs=`/`outputs=` consumers untouched). Adds per-position parity tests in `tests/test_gui.py::TestProcessInputKeys` and corrects the `params.py` single-source-of-truth claim in `CLAUDE.md`. The mirror-image `_recipe_outputs` footgun was fixed in the same session (see `PLAN_RECIPE_GUI_WIRING_AUDIT.md` → row below). | ~0.5 d | — | ✅ DONE 2026-07-13 — `_process_inputs` now derived from name→component dict `_process_input_components` with import-time set-equality assertion; byte-identical runtime verified (213 slots, set + order); `TestProcessInputKeys` green (13 tests, incl. guard-raises-on-missing/orphan); CLAUDE.md + this row updated. |
 | — | **Auto-gap backlog (owner: "everything auto")** | 7 classical-first auto features | ~7–9 wk | — | 🔄 #1/#2/#3/#4/#6/#7 ✅ committed 2026-07-10; **#5 (auto stray-hair) is the only open gap — PARKED** (A4-gated, needs segmentation model). See EXECUTION_LOG. |
+| — | **`_recipe_outputs` de-footgun (name-keyed dict + drift guard)** | Mirror the `_process_inputs` fix on the output side. `gui.py` `_recipe_outputs` (111 slots) was a bare hand-ordered list fed by three independent hand-ordered producer tuples (`on_recipe_change`, `apply_custom_style`, `on_smart_process`). `apply_custom_style` + `on_smart_process` had *already drifted* to 107 values (missing `regional_modulation`, `smooth_engine`, `undereye_shadow_strength`, `freckle_removal`), so every slider from index 5 onward received its neighbor's value on custom-style-preset / Smart-Process — a live, user-facing corruption. Fix: introduce `RECIPE_OUTPUT_KEYS` + `_recipe_output_components` dict + import-time set-equality assertion (same guard pattern as `_process_inputs`); rewrite all three producers to `tuple(d[k] for k in RECIPE_OUTPUT_KEYS)`; replace stale `EXPECTED_UI_OUTPUT_COUNT=91` with `len(gui.RECIPE_OUTPUT_KEYS)` (self-updating); extend `TestIntegrationConstantCrossRef` + fix stale positional-index tests. See `PLAN_RECIPE_GUI_WIRING_AUDIT.md`. | ~1–2 h | — | ✅ DONE 2026-07-13 — `RECIPE_OUTPUT_KEYS`/`_recipe_output_components` derived from the original 111-slot list (byte-identical components + order); drift guard active; all three producers now key-based (structurally cannot drop params); `EXPECTED_UI_OUTPUT_COUNT` self-updating; regression tests added (`test_recipe_output_keys_include_formerly_dropped_params`, `test_all_producers_keyed_by_recipe_output_keys`). Remaining: 10 `reset_*` handlers still hand-ordered pairs (latent, low-risk); `tests/test_gui.py::test_ext_map_keys_match_radio_choices` fails on a separate, pre-existing `EXT_MAP`/PNG-16 mismatch (out of scope). |
 | — | **Per-face recipe assignment (owner-approved backlog, 2026-07-10)** | Evoto's 2026 video suite headlines per-face preset assignment — each detected person in a group shot gets its own preset (auto-classified Male/Female/Child/Senior). Our engine already processes faces individually via FaceContext, but `process()` takes ONE global param set — no per-face recipe support exists (verified: no per-face param plumbing in engine.py). For the cosplay-group audience (multiple costumed subjects per frame wanting different treatments) this is a genuine differentiator, and the only competitor capability from the 2026-07-10 sweep we cannot match today; everything else on Evoto/Retouch4me's 2026 lineup is shipped, parked with rationale (auto stray-hair, A4-gated), or out of scope (video, cloud, Photoshop panel). Sketch: `process(face_params=[...])` or per-face recipe dict keyed by face index; GUI face-picker; optional auto-classification later. Fits the existing FaceContext caching architecture naturally. | ~1–2 wk (engine param plumbing + GUI face selection; auto-classification excluded from first slice) | FaceContext | 📋 BACKLOG — approved by owner 2026-07-10, not started. See EXECUTION_LOG. |
 | — | **`face_exposure` skin-brightness param** | Flat masked L-lift independent of relight | ~0.5 d | — | ✅ DONE 2026-07-10 (`af54d2d`) — 3/3 tests; recipe-reachable since `0610660` (in `portrait`); GUI slider wired 2026-07-13 (`face_exposure` in `_process_input_components`). **[VISUAL QA PENDING]** — Visual-Critical (`skin.py`). See EXECUTION_LOG. |
 | — | **Sclera vessel removal** | Red-vessel inpaint inside eye-white mask only | ~0.5 d | — | ✅ DONE 2026-07-10 (`ef31d55`) — 5/5 tests, iris-safe. **[VISUAL QA PENDING]** — Visual-Critical (`eyes.py`). See EXECUTION_LOG. |

@@ -446,7 +446,7 @@ python3 -m pytest tests/test_recipe_validation.py -v
 
 1. **Check docs/architecture/ARCHITECTURE.md** for pipeline design & module responsibilities
 2. **Check PERFORMANCE_TUNING.md** for speed/quality trade-offs
-3. **Check CLAUDE.md § Debugging** for crash logging & common issues
+3. **Re-read this guide's "Logs & Debugging" section above** for crash logging & common issues
 4. **Check docs/architecture/API.md** for Python API reference
 5. **Open an issue** with debug logs, environment, and reproduction steps
 
