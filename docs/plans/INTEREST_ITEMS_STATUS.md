@@ -33,10 +33,10 @@ python3 cli.py photo.RAF -o out/ --linear-raw --raw-exposure 0.5 --recipe natura
 - Not: full card grid / ratings / community — out of scope
 
 ## 5. Auto stray-hair #5
-| Status | 🅿️ PARKED |
+| Status | 🅿️ PARKED (low priority) |
 |--------|-----------|
-| Why | A4-gated; needs segmentation model; classical-first until A1 |
-| Action | Owner A1 corpus first; only then unpark A4 |
+| Why | A4-gated; needs model; A1 competitor track deferred (licensing fees) |
+| Action | Skip unless owner later funds A1/A4 or accepts classical-only gap |
 
 ## 6. Per-face auto Male/Female/Child
 | Status | 📋 Slice 3 backlog |

@@ -1,6 +1,6 @@
 # MASTER PLAN — Prioritized Execution Order (AUTHORITATIVE)
 
-**Date:** 2026-07-02 · **Last reconciled:** 2026-07-10
+**Date:** 2026-07-02 · **Last reconciled:** 2026-07-14
 
 **This document is the single source of truth for execution ORDER and STATUS.** Long verification
 narratives, bug-found receipts, agent-integrity notes, and measured numbers now live in
@@ -27,19 +27,19 @@ per-face recipe assignment backlog row added (owner-approved).
 **This is the only place status is summarized. Per-row cells state each stage's own status; do not
 re-summarize progress elsewhere (it drifts).**
 
-Phases 1–6 code-complete (all stages ✅ except A2, blocked on A1).
+Phases 1–6 code-complete. **A1/A2 competitive track = low priority** (owner: paid Evoto/R4me/PixCake trials not worth it now) — product ships without competitor corpus.
 
-**Wiring (2026-07-14):** **F6** look extract GUI+CLI (`--extract-look`); **T4** plugin discover/init in engine + cookbook search GUI + CLI list/search; **T5** 16-bit RAW ingest live (`imread_engine` GUI/CLI) + `load_raw` gamma=(1,1) fixed — LinearGrader still optional CLI path. **T3/A3** recipe+GUI sliders wired. Per-face recipe: engine+CLI+GUI picker shipped. P4 makeup unmix+cake product path. Auto-gap #5 stray-hair still **A4-parked**.
+**Wiring (2026-07-14):** **F6** look extract GUI+CLI (`--extract-look`); **T4** plugin discover/init in engine + cookbook search GUI + CLI list/search; **T5** 16-bit RAW ingest live (`imread_engine` GUI/CLI) + `load_raw` gamma=(1,1) fixed — LinearGrader still optional CLI path. **T3/A3** recipe+GUI sliders wired. Per-face recipe: engine+CLI+GUI picker shipped. P4 makeup unmix+cake product path. Auto-gap #5 stray-hair still **A4-parked** (same low-priority gate as A1).
 
 **Visual QA:** smart-path v2 auto **50/50** + human natural/edge/skin **CLOSED** (`0768c23`, `docs/VISUAL_QA.md` §10). Module harness MAE+montages (`scripts/visual_qa_modules.py`); human sample face_exposure/F5/backdrop **PASS** — `docs/plans/MODULE_VISUAL_QA_2026-07-14.md`. Remaining: OS review other montages; showcase/RAF stress corpus; R-series Visual-Critical.
 
-**Remaining:** A1 owner corpus → A2; Phase 7 distribution ship; optional T5 linear-develop UX; auto-class per-face (Slice 3); A4 if evidence.
+**Remaining:** **Phase 7** distribution ship; optional T5 linear-develop UX; per-face auto-class Slice 3; A1/A2/A4 only if owner later buys trials.
 
 **Next actions:**
-1. **Owner: A1** Evoto/R4me/PixCake corpus.
-2. **Phase 7** signing/Windows/update.
-3. OS-review remaining module montages; expand corpus if sclera/wrinkle MAE~0.
-4. Optional: per-face auto Male/Female/Child (heuristic Slice 3).
+1. **Phase 7** signing/Windows/update.
+2. OS-review remaining module montages; expand corpus if sclera/wrinkle MAE~0.
+3. Optional: per-face auto Male/Female/Child (heuristic Slice 3).
+4. ~~A1 competitor corpus~~ — **DEFERRED / low priority** (licensing fees).
 
 _(The 2026-07-10 in-flight dead-key guard fix + recipe re-keying + film.preset decision is DONE —
 committed as `40721d6`; no longer a pending action.)_
@@ -81,7 +81,7 @@ committed as `40721d6`; no longer a pending action.)_
 | # | Stage | What | Effort | Deps | Status |
 |---|---|---|---|---|---|
 | 1 | **P1** | Bilateral → guided filter | ✅ | — | ✅ DONE 2026-07-03 (`10bab48`) — shared `guided_filter`, frequency/skin migration. |
-| 2 | **A1** | Competitive benchmark harness (Evoto/R4me/PixCake corpus + metrics) | 4 d | — | ⏳ OWNER ACTION — needs Evoto/R4me/PixCake trials; standing unblocker for A2. |
+| 2 | **A1** | Competitive benchmark harness (Evoto/R4me/PixCake corpus + metrics) | 4 d | — | 🅿️ DEFERRED low-priority 2026-07-14 — paid trials/licensing; not required to ship. Revisit only if owner funds corpus. |
 
 ## Phase 1 — Quality Floor (~7 weeks)
 
@@ -103,7 +103,7 @@ committed as `40721d6`; no longer a pending action.)_
 | 9 | **S3** | Color-blotch / redness evening | — | S2 | ✅ DONE 2026-07-03 (Fable-verified) — caveat: ~1.02 mean-a drift, flagged for A2. |
 | 9b | **E3/E4 riders** | Fidelity riders: harmonize_neck gate, hue-line smoothstep, B&W `_DEFAULTS`, dead-Numba hygiene | — | gap filler | ✅ DONE 2026-07-03 (Fable-verified after fixes). See EXECUTION_LOG. |
 | 9c | **F8.0** | Proxy detail reinjection quick win | — | P1 | ✅ DONE 2026-07-03 (Fable-verified after shape-mismatch fix). See EXECUTION_LOG. |
-| 10 | **A2** | Tune S2/S3/C1/C2 vs Retouch4me (blind A/B) + freckle protection + E3 response-curve remaps | 1 wk | S2·S3·C1·C2·**A1** | ⛔ BLOCKED on A1 (competitor corpus). |
+| 10 | **A2** | Tune S2/S3/C1/C2 vs Retouch4me (blind A/B) + freckle protection + E3 response-curve remaps | 1 wk | S2·S3·C1·C2·**A1** | 🅿️ DEFERRED with A1 — no competitor corpus planned; freckle/protect can still land without A/B. |
 | 11 | **S1** | Body skin retouch + `body_match_face` (first-in-market) | 2 wk | P1·F11 | ✅ DONE 2026-07-03 (Fable-verified after fixes) — 3 real bugs incl. float32→`blend_masked` silent-corruption (owner-hit GUI bug). See EXECUTION_LOG. |
 | 12 | **S4** | Shine / oil removal | 1 wk | — | ✅ DONE 2026-07-03 (Fable-verified after fix) — critical LAB +128-offset chroma bug caught. See EXECUTION_LOG. |
 
@@ -158,7 +158,7 @@ committed as `40721d6`; no longer a pending action.)_
 | 33 | **A3** | Cosplay skin moat (makeup-aware smoothing, wig-lace blend, stockings, shoot-consistency lock) | 2 wk | S1·T2 | ✅ DONE — code ✅; recipe-reachable via `cosplay_wiring_demo_v1` (`0610660`, 2026-07-10) + GUI sliders wired 2026-07-13 (`cosplay_*` in `_process_input_components`). See wiring-debt audit. |
 | 34 | **T5** | Linear RAW develop | 2 wk | F1 | 🔄 PARTIAL — 16-bit sRGB ingest live (`imread_engine`); `load_raw` gamma=(1,1)+ReconstructDefault fixed. LinearGrader develop path optional CLI (`--linear-raw`). Full develop UX (exp_shift/WB) still backlog. |
 | 35 | **T3** | Body reshape (MediaPipe Pose) | 2–3 wk | P4.a·F5 | ✅ DONE — code ✅; recipe-reachable via `body_reshape_demo_v1` (`0610660`, 2026-07-10) + GUI sliders wired 2026-07-13 (`body_reshape_*`/`auto_body_reshape` in `_process_input_components`). See wiring-debt audit. |
-| 36 | **A4** | Neural boosters (stray hair, defect segmentation) — optional, evidence-gated by A1 | 2–3 wk | A1/A2 | 🅿️ PARKED — owner decision 2026-07-03: classical-only until A1 evidence. Competitor sweep mapped 2026-07-10. See EXECUTION_LOG. |
+| 36 | **A4** | Neural boosters (stray hair, defect segmentation) — optional, evidence-gated by A1 | 2–3 wk | A1/A2 | 🅿️ PARKED — classical-only; A1 deferred (licensing) so no evidence gate soon. Unpark only if owner revisits A1 or accepts classical gap. |
 
 ## Phase 7 — Ship (~1 week)
 
@@ -179,7 +179,7 @@ _All rows below are COMMITTED unless noted; the section is no longer wholesale-u
 | — | **Wiring-debt audit** | 4 unwired islands (T5/T4/F6 + cookbook), T3/A3 dark, 11 GUI-invisible params | ~4–6 d | — | 📋 AUDIT DONE 2026-07-10; **2nd pass (code in working tree 2026-07-13; gui.py/test_gui.py uncommitted, docs synced)** wired the remaining items: T4 `plugin_api.discover/init_all` called in `engine.__init__` (guarded); `recipe_cookbook` + `look_extractor` reachable via `cli.py` (`--list-recipes`, `--search-recipes`, `--extract-look`/`--look-base`); 9 GUI sliders added + wired (`face_exposure`, `cosplay_*`, `body_reshape_*`, `auto_body_reshape`) + full `_process_inputs`↔`param_names()` realignment (26 params). F6 visual-QA render: `test_output/visual_qa_look/`. See EXECUTION_LOG. |
 | — | **Wiring-debt — recipe-reachability fix** | T3/A3/face_exposure made recipe-reachable via demo recipes | ~4–6 d (orig) | — | 🔄 PARTIAL, committed 2026-07-10 (`0610660`) — recipe-reachability DONE (`body_reshape_demo_v1`, `cosplay_wiring_demo_v1`, `skin.face_exposure` in `portrait`; dead-key test 135 PASS, smoke PASS; `scripts/visual_qa_wiring.py` added); GUI sliders explicitly deferred (hand-coded `PROCESS_INPUT_KEYS`); `neural_*` left. See EXECUTION_LOG. |
 | — | **`_process_inputs` de-footgun (name-keyed dict + drift guard)** | Replace the hand-ordered 213-element `_process_inputs` list in `gui.py` with a name→component dict keyed by `PROCESS_INPUT_KEYS`, derive the positional list as `[components[k] for k in PROCESS_INPUT_KEYS]`, and add an import-time set-equality assertion. Kills the recurring silent-argument-shift bug (a new `ParamSpec` used to require manually inserting the matching Gradio component at the exact index in `_process_inputs`, or every later slider value was read as the wrong parameter — the "brightness reads as contrast" footgun; verified structure: 213 slots = 127 identity vars + 85 `_<name>_state` placeholders + 1 special case `img_paths→img_input`, all unique, no duplicates/constants). Byte-identical runtime (same components, same order, list type unchanged; all seven downstream `inputs=`/`outputs=` consumers untouched). Adds per-position parity tests in `tests/test_gui.py::TestProcessInputKeys` and corrects the `params.py` single-source-of-truth claim in `CLAUDE.md`. The mirror-image `_recipe_outputs` footgun was fixed in the same session (see `PLAN_RECIPE_GUI_WIRING_AUDIT.md` → row below). | ~0.5 d | — | ✅ DONE 2026-07-13 — `_process_inputs` now derived from name→component dict `_process_input_components` with import-time set-equality assertion; byte-identical runtime verified (213 slots, set + order); `TestProcessInputKeys` green (13 tests, incl. guard-raises-on-missing/orphan); CLAUDE.md + this row updated. |
-| — | **Auto-gap backlog (owner: "everything auto")** | 7 classical-first auto features | ~7–9 wk | — | 🔄 #1/#2/#3/#4/#6/#7 ✅ committed 2026-07-10; **#5 (auto stray-hair) is the only open gap — PARKED** (A4-gated, needs segmentation model). See EXECUTION_LOG. |
+| — | **Auto-gap backlog (owner: "everything auto")** | 7 classical-first auto features | ~7–9 wk | — | 🔄 #1/#2/#3/#4/#6/#7 ✅; **#5 auto stray-hair PARKED** (A4 / paid-model path; A1 deferred so stays low priority). |
 | — | **`_recipe_outputs` de-footgun (name-keyed dict + drift guard)** | Mirror the `_process_inputs` fix on the output side. `gui.py` `_recipe_outputs` (111 slots) was a bare hand-ordered list fed by three independent hand-ordered producer tuples (`on_recipe_change`, `apply_custom_style`, `on_smart_process`). `apply_custom_style` + `on_smart_process` had *already drifted* to 107 values (missing `regional_modulation`, `smooth_engine`, `undereye_shadow_strength`, `freckle_removal`), so every slider from index 5 onward received its neighbor's value on custom-style-preset / Smart-Process — a live, user-facing corruption. Fix: introduce `RECIPE_OUTPUT_KEYS` + `_recipe_output_components` dict + import-time set-equality assertion (same guard pattern as `_process_inputs`); rewrite all three producers to `tuple(d[k] for k in RECIPE_OUTPUT_KEYS)`; replace stale `EXPECTED_UI_OUTPUT_COUNT=91` with `len(gui.RECIPE_OUTPUT_KEYS)` (self-updating); extend `TestIntegrationConstantCrossRef` + fix stale positional-index tests. See `PLAN_RECIPE_GUI_WIRING_AUDIT.md`. | ~1–2 h | — | ✅ DONE 2026-07-13 — `RECIPE_OUTPUT_KEYS`/`_recipe_output_components` derived from the original 111-slot list (byte-identical components + order); drift guard active; all three producers now key-based (structurally cannot drop params); `EXPECTED_UI_OUTPUT_COUNT` self-updating; regression tests added (`test_recipe_output_keys_include_formerly_dropped_params`, `test_all_producers_keyed_by_recipe_output_keys`). Remaining: 10 `reset_*` handlers still hand-ordered pairs (latent, low-risk); `tests/test_gui.py::test_ext_map_keys_match_radio_choices` fails on a separate, pre-existing `EXT_MAP`/PNG-16 mismatch (out of scope). |
 | — | **Per-face recipe assignment (owner-approved backlog, 2026-07-10)** | Evoto-class per-face preset. Engine+CLI+geometry B-lite + GUI Detect→Gallery→recipe Apply (`face_params` State). Slice 3 auto Male/Female/Child **not started**. Plan: `PLAN_PER_FACE_RECIPE.md`. | ~1–2 wk | FaceContext | ✅ Slice 1+2 DONE 2026-07-14; Slice 3 auto-class backlog. |
 | — | **`face_exposure` skin-brightness param** | Flat masked L-lift independent of relight | ~0.5 d | — | ✅ DONE 2026-07-10 (`af54d2d`) — 3/3 tests; recipe-reachable since `0610660` (in `portrait`); GUI slider wired 2026-07-13 (`face_exposure` in `_process_input_components`). **[VISUAL QA PENDING]** — Visual-Critical (`skin.py`). See EXECUTION_LOG. |
