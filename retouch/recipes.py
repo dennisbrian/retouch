@@ -1412,6 +1412,10 @@ RECIPES["fantasy"] = RECIPES["anime_cinematic_fantasy"]
 # form (flat scalars consumed by build_context).
 
 RECIPES["provia"] = {
+    # Fuji Provia per docs/FUJI_COLOR_RESEARCH.md §4.4: "true to life" —
+    # saturated but not oversaturated, high default sharpness, linear
+    # midtone with gentle ends, accurate WB, and a subtle warm-shadow
+    # bias (§3.3.3) rather than a fully neutral cast.
     "extends": "natural",
     "frequency": {"smooth": 0.30, "mid_reduction": 0.35},
     "skin": {"equalize": 0.20, "rosy": 0.15},
@@ -1422,20 +1426,32 @@ RECIPES["provia"] = {
     "color_harmony": {"preset": "natural", "amount": 0.10},
     "bloom": {"opacity": 0.02},
     "texture": {"opacity": 0.95},
-    "tonal_curve_strength": 0.40,
-    "skin_protect": 0.20,
-    "highlight_rolloff": 0.20,
+    "tonal_curve_strength": 0.42,
+    "skin_protect": 0.25,
+    "highlight_rolloff": 0.22,
     "grain_strength": 0.00,
-    "saturation": 5.0,
+    "saturation": 6.0,
     "contrast": 0.0,
     "highlights": 0.0,
     "shadows": 0.0,
     "sharpen": 40.0,
     "sharpen_radius": 1.2,
     "vignette": 0.0,
+    "shadow_hue": 35.0,
+    "shadow_sat": 3.0,
+    "midtone_hue": 0.0,
+    "midtone_sat": 0.0,
+    "highlight_hue": 0.0,
+    "highlight_sat": 0.0,
 }
 
 RECIPES["astia"] = {
+    # Fuji Astia per docs/FUJI_COLOR_RESEARCH.md §4.3: smooth/gradual
+    # contrast (near-linear midtone), red saturation reduced ~10-20%
+    # (approximated here via the low-sat warm split-tone rather than a
+    # true per-hue reds-only desaturation, which the engine has no
+    # recipe-level lever for), slight warm bias (~+100-200K), highlights
+    # protected via soft shoulder, shadows NOT lifted.
     "extends": "natural",
     "frequency": {"smooth": 0.50, "mid_reduction": 0.45},
     "skin": {"equalize": 0.30, "rosy": 0.35},
@@ -1446,26 +1462,33 @@ RECIPES["astia"] = {
     "color_harmony": {"preset": "natural", "amount": 0.20},
     "bloom": {"opacity": 0.04},
     "texture": {"opacity": 0.90},
-    "tonal_curve_strength": 0.55,
+    "tonal_curve_strength": 0.50,
     "skin_protect": 0.85,
-    "highlight_rolloff": 0.50,
+    "highlight_rolloff": 0.55,
     "grain_strength": 0.00,
     "saturation": 2.0,
-    "contrast": 8.0,
-    "highlights": -3.0,
+    "contrast": 5.0,
+    "highlights": -4.0,
     "shadows": 0.0,
     "sharpen": 25.0,
     "sharpen_radius": 1.2,
     "vignette": 0.0,
     "midtone_hue": 35.0,
-    "midtone_sat": 4.0,
+    "midtone_sat": 5.0,
     "shadow_hue": 30.0,
-    "shadow_sat": 6.0,
+    "shadow_sat": 5.0,
     "highlight_hue": 40.0,
-    "highlight_sat": 4.0,
+    "highlight_sat": 5.0,
 }
 
 RECIPES["classic_chrome"] = {
+    # Fuji Classic Chrome per docs/FUJI_COLOR_RESEARCH.md §4.2: low
+    # saturation ("muted editorial"), high contrast, LIFTED shadows
+    # (not crushed — a lifted toe is what gives the flat-but-punchy
+    # look) with a rolled-off highlight shoulder, greens pushed toward
+    # teal/cyan (~10-15deg rotation, ~20% desat) and reds toward orange
+    # (~5-10deg, ~15% desat) via the shadow/highlight split-tone hues,
+    # low default sharpness, fine grain.
     "extends": "natural",
     "frequency": {"smooth": 0.45, "mid_reduction": 0.40},
     "skin": {"equalize": 0.25, "rosy": 0.20},
@@ -1483,14 +1506,14 @@ RECIPES["classic_chrome"] = {
     "saturation": -15.0,
     "contrast": 24.0,
     "highlights": -20.0,
-    "shadows": -20.0,
-    "sharpen": 20.0,
+    "shadows": 12.0,
+    "sharpen": 18.0,
     "sharpen_radius": 1.0,
     "vignette": 6.0,
     "midtone_hue": 40.0,
     "midtone_sat": 4.0,
-    "shadow_hue": 145.0,
-    "shadow_sat": 14.0,
+    "shadow_hue": 165.0,
+    "shadow_sat": 10.0,
     "highlight_hue": 200.0,
     "highlight_sat": 6.0,
 }
