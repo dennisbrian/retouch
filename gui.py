@@ -18,7 +18,7 @@ import gradio as gr
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from retouch import RetouchEngine
 from retouch.engine import resolve_recipe
-from retouch.io import imread_exif, EXPORT_RES_MAP, EXT_MAP
+from retouch.io import imread_exif, imread_engine, EXPORT_RES_MAP, EXT_MAP
 from retouch.lips import LIP_TINT_NAMES
 from retouch.recipes import RECIPES
 from retouch.params import recipe_to_params, PROCESSING_PARAMS, param_names, gui_values_to_engine_kwargs
@@ -237,6 +237,7 @@ PROCESS_INPUT_KEYS = (
         "quality_tier",
         "debug_mode",
         "look_params",
+        "face_params_json",
     ]
 )
 
@@ -473,14 +474,33 @@ def process_image(*args):
                 continue
             engine_kwargs[k] = v
 
+    # Per-face overrides (JSON textbox → face_params dict). Not in PROCESS
+    # ParamSpecs — transport key only (same pattern as look_params).
+    face_params_json = params.get("face_params_json") or ""
+    if isinstance(face_params_json, str) and face_params_json.strip():
+        try:
+            import json as _json
+            from retouch.face_params import coerce_face_params
+            raw_fp = _json.loads(face_params_json)
+            fp = coerce_face_params(raw_fp)
+            if fp:
+                engine_kwargs["face_params"] = fp
+        except Exception as e:
+            _logger.warning("face_params_json parse failed: %s", e)
+
     for idx, path_item in enumerate(img_paths):
         try:
             curr_path = path_item
             if isinstance(path_item, dict):
                 curr_path = path_item.get("name") or path_item.get("path")
             
-            img_bgr = imread_exif(curr_path)
-            original = img_bgr.copy()
+            # T5: RAW via 16-bit path; JPEG/PNG unchanged (imread_engine)
+            img_bgr = imread_engine(curr_path)
+            original = (
+                np.clip(img_bgr, 0, 255).astype(np.uint8)
+                if img_bgr.dtype != np.uint8
+                else img_bgr.copy()
+            )
 
             engine_kwargs["debug_dir"] = (
                 debug_dir if (first_result_rgb is None and first_combined is None) else None
@@ -1622,7 +1642,14 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         _specular_finish_strength_state = gr.State(value=0.5)
                         _specular_recolor_state = gr.State(value=0.0)
                         _albedo_even_state = gr.State(value=0.0)
+                        _makeup_coverage_even_state = gr.State(value=0.0)
                         _hemoglobin_smooth_state = gr.State(value=0.0)
+                        face_params_json = gr.Textbox(
+                            label="Per-face params (JSON)",
+                            placeholder='{"0": {"recipe": "cosplay", "smooth": 70}, "1": {"recipe": "natural"}}',
+                            lines=2,
+                            info="Optional. Face index = detection order. Engine units 0–100. Empty = global only.",
+                        )
                         _mole_protect_state = gr.State(value=0.0)
                         _vein_attenuate_state = gr.State(value=0.0)
                         _gamut_compress_state = gr.State(value=True)
@@ -2435,6 +2462,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "specular_finish_strength": _specular_finish_strength_state,
         "specular_recolor": _specular_recolor_state,
         "albedo_even": _albedo_even_state,
+        "makeup_coverage_even": _makeup_coverage_even_state,
         "hemoglobin_smooth": _hemoglobin_smooth_state,
         "mole_protect": _mole_protect_state,
         "vein_attenuate": _vein_attenuate_state,
@@ -2598,6 +2626,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "quality_tier": quality_tier,
         "debug_mode": debug_mode,
         "look_params": _look_params_state,
+        "face_params_json": face_params_json,
     }
     # Drift guard: every PROCESS_INPUT_KEYS name must map to exactly one
     # component, and every component key must be a PROCESS_INPUT_KEYS name.

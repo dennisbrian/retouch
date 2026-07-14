@@ -23,6 +23,7 @@ FACE_LOCAL_PARAM_NAMES: frozenset[str] = frozenset({
     "texture_opacity", "pore_synthesis", "regional_modulation", "smooth_engine",
     "specular_bloom", "specular_bloom_tone", "specular_finish",
     "specular_finish_strength", "specular_recolor", "albedo_even",
+    "makeup_coverage_even",
     "hemoglobin_smooth", "mole_protect", "vein_attenuate", "dodge_burn",
     "relight", "relight_azimuth", "relight_elevation", "face_exposure", "sculpt",
     "skin_flatten", "skin_quantize", "skin_unify", "skin_unify_hue",

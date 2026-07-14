@@ -203,7 +203,7 @@ def _e1_to_u8(canvas: np.ndarray) -> np.ndarray:
 
 
 _E1_U8_FROM = os.environ.get("E1_U8_FROM", "")
-_E1_CHAIN_ORDER = ['albedo_even', 'post_freq', 'flatten', 'restore_micro_texture', 'micro_dodge_burn',
+_E1_CHAIN_ORDER = ['makeup_coverage_even', 'albedo_even', 'post_freq', 'flatten', 'restore_micro_texture', 'micro_dodge_burn',
                    'redness_even', 'hemoglobin_smooth', 'vein_attenuate', 'equalize', 'unify_hue_line', 'unify_tone', 'whiten',
                    'shine_removal', 'relight', 'sculpt', 'quantize_tones',
                    'apply_specular_bloom', 'blemish.remove', 'undereye.repair',
@@ -302,6 +302,13 @@ def _process_face_core(
     # ctx may be a dict (pickled across process boundary) — convert to object
     if isinstance(ctx, dict):
         ctx = SimpleNamespace(**ctx)
+
+    # ---- P4: Makeup coverage evening (before albedo_even so paint ≠ blotch) ----
+    _mce = float(getattr(ctx, "makeup_coverage_even", 0.0) or 0.0)
+    if _mce > 0:
+        canvas = _tr('makeup_coverage_even', canvas)
+        from .makeup_unmix import apply_makeup_coverage_even
+        canvas = apply_makeup_coverage_even(canvas, regions.skin, _mce)
 
     # ---- R9: Even-albedo (condition input before frequency separation) ----
     if ctx.albedo_even > 0:

@@ -46,13 +46,13 @@ sclera, backdrop, fabric, wrinkle, reshape, R4–R13) still open — not re-run 
 **Remaining:** human eyeball of v2 compares; commit analyzer/QA harness fixes; A1 (owner corpus),
 A2 (blocked on A1), wiring leftovers (T5), **Phase 7** P4 ship.
 
-**Next actions (2026-07-14):**
-1. **Human review** of `test_output/qa_signoff_2026-07-14_v2/*/*_smart_compare.jpg` → close natural/edge/skin.
-2. **Commit** uncommitted analyzer + harness + test_image_analyzer (when owner says).
-3. Continue module-level visual QA backlog (or wiring / Phase 7 per priority).
+**Next actions (2026-07-14 evening update):**
+1. ~~Human review v2 compares~~ — provisional CLOSE (3/3 sampled PASS) — `docs/plans/HUMAN_QA_CHECKLIST_2026-07-14.md`.
+2. ~~Analyzer/QA harness commit~~ — `fc3a8ed`.
+3. Module-level visual QA backlog still open (F5/showcase/RAF/…).
 4. **Owner: A1 competitor-corpus** (Evoto/R4me/PixCake) — unblocks A2.
-5. **Phase 7 — P4 distribution hardening**.
-6. **Post-plan moat (design locked, not started):** per-face recipe Slice 1 → P4 makeup-unmix spike — see `PLAN_PER_FACE_RECIPE.md`, `PLAN_P4_MAKEUP_UNMIX.md`.
+5. **Phase 7 — distribution hardening** (signing/Windows).
+6. ~~Per-face Slice 1~~ `53d973e` + GUI JSON textbox; P4 `makeup_coverage_even` minimal wire; T5 ingest via `imread_engine` in GUI/CLI serial.
 
 _(The 2026-07-10 in-flight dead-key guard fix + recipe re-keying + film.preset decision is DONE —
 committed as `40721d6`; no longer a pending action.)_

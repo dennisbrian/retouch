@@ -700,7 +700,8 @@ def main() -> None:
         engine = None if args.global_only else RetouchEngine()
         try:
             for f in tqdm(files, desc="Retouching", unit="img"):
-                img_bgr = imread_exif(f)
+                # T5: RAW via 16-bit path (same as worker path imread_engine)
+                img_bgr = imread_engine(f)
                 if img_bgr is None:
                     failed += 1
                     tqdm.write(f"  ✖ {f.name}: failed to read")

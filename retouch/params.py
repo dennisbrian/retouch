@@ -694,6 +694,16 @@ _SKIN_PARAMS = [
         max_val=1.0,
     ),
     ParamSpec(
+        name="makeup_coverage_even",
+        cli_flag="makeup-coverage-even",
+        cli_type=float,
+        default=0.0,
+        recipe_key="skin.makeup_coverage_even",
+        conversion="recipe_direct",
+        min_val=0.0,
+        max_val=1.0,
+    ),
+    ParamSpec(
         name="hemoglobin_smooth",
         cli_flag="hemoglobin-smooth",
         cli_type=float,

@@ -606,9 +606,9 @@ class TestProcessInputKeys:
     def test_count_matches_process_image_arity(self):
         """PROCESS_INPUT_KEYS length must equal the arity of process_image."""
         from retouch.params import param_names
-        # 2 leading transport keys + registry params (minus the 2 excluded from
-        # PROCESS_INPUT_KEYS) + 10 trailing transport/session keys.
-        expected = 2 + (len(param_names()) - 2) + 10
+        # 2 leading + registry (minus 2 excluded) + 11 trailing transport keys
+        # (look_params + face_params_json).
+        expected = 2 + (len(param_names()) - 2) + 11
         assert len(gui.PROCESS_INPUT_KEYS) == expected
 
     def test_first_key_is_img_paths(self):
@@ -617,8 +617,9 @@ class TestProcessInputKeys:
     def test_second_key_is_recipe(self):
         assert gui.PROCESS_INPUT_KEYS[1] == "recipe"
 
-    def test_last_key_is_look_params(self):
-        assert gui.PROCESS_INPUT_KEYS[-1] == "look_params"
+    def test_last_key_is_face_params_json(self):
+        assert gui.PROCESS_INPUT_KEYS[-1] == "face_params_json"
+        assert gui.PROCESS_INPUT_KEYS[-2] == "look_params"
 
     def test_no_duplicate_keys(self):
         assert len(gui.PROCESS_INPUT_KEYS) == len(set(gui.PROCESS_INPUT_KEYS))
@@ -676,15 +677,15 @@ class TestProcessInputKeys:
         is identical to the old hand-ordered list)."""
         src = open(gui.__file__).read()
         dict_keys, dict_values = self._extract_components(src)
-        assert len(dict_keys) == len(gui.PROCESS_INPUT_KEYS) == 213
+        n = len(gui.PROCESS_INPUT_KEYS)
+        assert len(dict_keys) == n
         assert set(dict_keys) == set(gui.PROCESS_INPUT_KEYS)
         assert dict_keys == list(gui.PROCESS_INPUT_KEYS)
-        assert len(dict_values) == 213
+        assert len(dict_values) == n
 
     def test_derived_process_inputs_is_byte_identical(self):
         """The positional `_process_inputs` list is derived from the dict in
-        PROCESS_INPUT_KEYS order, and must reproduce the original 213-slot
-        ordering exactly (no silent argument shift)."""
+        PROCESS_INPUT_KEYS order (no silent argument shift)."""
         src = open(gui.__file__).read()
         dict_keys, dict_values = self._extract_components(src)
         derived = [dict_values[dict_keys.index(k)] for k in gui.PROCESS_INPUT_KEYS]
@@ -692,7 +693,8 @@ class TestProcessInputKeys:
         # The first two slots are the special img_paths->img_input and recipe.
         assert dict_keys[0] == "img_paths" and dict_values[0] == "img_input"
         assert dict_keys[1] == "recipe" and dict_values[1] == "recipe"
-        assert dict_keys[-1] == "look_params" and dict_values[-1] == "_look_params_state"
+        assert dict_keys[-1] == "face_params_json" and dict_values[-1] == "face_params_json"
+        assert dict_keys[-2] == "look_params" and dict_values[-2] == "_look_params_state"
 
     def _run_guard(self, dict_keys, process_keys):
         """Replicate the exact import-time drift guard from build_app()."""
