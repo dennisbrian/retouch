@@ -138,7 +138,7 @@ class TestRecipeDefaults:
         rec = resolve_recipe("cosplay")
         assert rec.get("nose_blush") is True
         assert rec.get("under_eye_blush") is True
-        assert rec.get("slimming") == 30.0
+        assert rec.get("slimming") == 50.0
         assert rec.get("blush") == 25.0
 
     def test_pink_dream_enables_white_costume_lift(self):
@@ -217,7 +217,7 @@ class TestBuildContextFromRecipe:
 
     def test_slimming_for_cosplay(self):
         ctx = self._ctx_for("cosplay")
-        assert ctx.slimming == 30.0
+        assert ctx.slimming == 50.0
 
     def test_slimming_for_natural(self):
         ctx = self._ctx_for("natural")

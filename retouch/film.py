@@ -106,7 +106,7 @@ def _hd_curve_logdensity(
         raw[in_shoulder] = 1.0
 
     raw = np.clip(raw, 0.0, 1.0)
-    return raw * D_MAX
+    return (1.0 - raw) * D_MAX
 
 
 def _build_crosstalk_matrix(

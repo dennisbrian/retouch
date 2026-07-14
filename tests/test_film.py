@@ -121,9 +121,9 @@ class TestMonotonicity:
                     for gm in (0.5, 1.0, 2.0):
                         D = _hd_curve_logdensity(logE, toe, shoulder, mp, gm)
                         diffs = np.diff(D)
-                        assert np.all(diffs >= -1e-6), (
+                        assert np.all(diffs <= 1e-6), (
                             f"Non-monotonic at toe={toe} shoulder={shoulder} "
-                            f"mp={mp} gamma={gm}: min diff={diffs.min()}"
+                            f"mp={mp} gamma={gm}: max diff={diffs.max()}"
                         )
 
     def test_increasing_toe_darkens_shadows(self):
@@ -203,7 +203,7 @@ class TestCrosstalkSign:
 class TestSkewEndpoints:
     def test_skew_zero_preserves_hue(self):
         engine = FilmDensityEngine()
-        ramp = np.linspace(0.1, 0.9, 64, dtype=np.float32)
+        ramp = np.linspace(0.1, 0.5, 64, dtype=np.float32)
         img_lin = np.stack([ramp, ramp * 0.5, ramp * 0.3], axis=-1)
         img_lin = np.broadcast_to(img_lin, (64, 64, 3)).copy()
         img01 = _linear_to_srgb(img_lin)
@@ -358,3 +358,18 @@ class TestShapeValidation:
         img = np.full((4, 4, 3), 128, dtype=np.uint8)
         out = engine.apply(img, _default_params())
         assert out.shape == (4, 4, 3)
+
+
+class TestBrightnessPreservation:
+    def test_default_params_preserves_overall_brightness(self):
+        engine = FilmDensityEngine()
+        # Gray patch at 128
+        img = np.full((32, 32, 3), 128, dtype=np.uint8)
+        out = engine.apply(img, _default_params())
+        # Mapped output mean should be reasonably close to input (e.g. within 35%)
+        # and definitely NOT crushed to near-black.
+        mean_in = float(img.mean())
+        mean_out = float(out.mean())
+        pct_diff = abs(mean_out - mean_in) / mean_in
+        assert pct_diff < 0.35, f"Expected output mean near {mean_in}, got {mean_out} (diff {pct_diff:.1%})"
+

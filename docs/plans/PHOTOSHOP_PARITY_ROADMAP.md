@@ -115,3 +115,18 @@ Rationale: 1.1 is invisible but raises the ceiling for everything (and de-risks 
 - Zero visible banding at 100% in dark-gradient looks (`moonlight_porcelain` class) on 16-bit export.
 - Any edit reproducible from a session JSON; any slider undoable.
 - Painted-mask local adjustment round-trips in < 2s preview at 800px.
+
+## 7. Competitor research — Adobe Lightroom Web (2026-07-14)
+
+Source: user walkthrough of lightroom.adobe.com (web app), doc: [Adobe Lightroom Web — Retouch System Reference](https://docs.google.com/document/d/1Jb0S-QssfRVJlIvarqOK24vLl8iFQHDpjI6-a9Jy1eE/edit?usp=sharing).
+
+**Gaps this surfaces that PS-parity doesn't already cover:**
+- **People-mask granularity** (LR's Masking → People): separate masks per attribute — Entire Person, Facial Skin, Body Skin, Eyebrows, **Eye Sclera**, **Iris and Pupil**, Lips, Hair, Clothes, with a "create separate masks" option. Our BiSeNet classes should be checked against this list — sclera/iris as distinct semantic masks may not exist yet and would sharpen eye-enhancement precision beyond a single "eyes" class.
+- **Generative Remove/Heal** — maps directly to Tier 2.1 (spot heal/object removal) above; LR ships both a "Detect objects" auto mode and a People/Blemishes one-click distraction-removal category. Confirms 2.1 v0 (OpenCV inpaint) + v1 (LaMa) prioritization is the right shape.
+- **Lens Blur (simulated depth of field)**: Blur Amount, bokeh shape presets, Cat Eye, Bokeh Boost, Focus Range (by subject or point) with a "Visualize Depth" toggle. Worth comparing against our relight/lens-effects stage for bokeh-shape and focus-by-point controls specifically.
+- **Content Credentials / AI edit provenance** (C2PA-style tagging of AI-edit steps, "AI edit status" badge on auto-versions) — not in our roadmap anywhere; flagged as a possible future compliance/trust feature, not prioritized yet.
+- **Versions (non-destructive branching)** — LR's "Create new version" is a lighter-weight variant of our Tier 1.2 session/undo model; no new gap, just corroborates 1.2's direction.
+
+**Where we still clearly exceed LR (no action needed):** LR's "Skin" quick action is a single Refine + Soften slider pair — far coarser than our frequency-separation + component-enhancement pipeline. Their preset system (Community/Recommended/Yours) has no parameter inheritance (`extends`) like ours.
+
+**Suggested follow-up (not yet scheduled):** audit `retouch/segmentation.py` (or wherever BiSeNet class labels are enumerated) for whether iris/pupil and sclera are separable from the general "eyes" mask — smallest, most concrete gap from this research.
