@@ -1785,6 +1785,72 @@ _HARMONIZE_PARAMS = [
 ]
 
 
+# Add HSL adjustments and Calibration parameters dynamically to _GRADING_PARAMS
+for color in ["red", "orange", "yellow", "green", "cyan", "blue", "purple", "magenta"]:
+    _GRADING_PARAMS.append(ParamSpec(
+        name=f"hsl_hue_{color}",
+        cli_flag=None,
+        cli_type=None,
+        default=0.0,
+        recipe_key=f"hsl_adjustments.hue.{color}",
+        conversion="gui_direct",
+        min_val=-180,
+        max_val=180,
+    ))
+    _GRADING_PARAMS.append(ParamSpec(
+        name=f"hsl_sat_{color}",
+        cli_flag=None,
+        cli_type=None,
+        default=0.0,
+        recipe_key=f"hsl_adjustments.saturation.{color}",
+        conversion="gui_direct",
+        min_val=-100,
+        max_val=100,
+    ))
+    _GRADING_PARAMS.append(ParamSpec(
+        name=f"hsl_lum_{color}",
+        cli_flag=None,
+        cli_type=None,
+        default=0.0,
+        recipe_key=f"hsl_adjustments.luminance.{color}",
+        conversion="gui_direct",
+        min_val=-100,
+        max_val=100,
+    ))
+
+for color in ["red", "green", "blue"]:
+    _GRADING_PARAMS.append(ParamSpec(
+        name=f"calibration_{color}_hue",
+        cli_flag=None,
+        cli_type=None,
+        default=0.0,
+        recipe_key=f"calibration.{color}.hue",
+        conversion="gui_direct",
+        min_val=-180,
+        max_val=180,
+    ))
+    _GRADING_PARAMS.append(ParamSpec(
+        name=f"calibration_{color}_sat",
+        cli_flag=None,
+        cli_type=None,
+        default=0.0,
+        recipe_key=f"calibration.{color}.sat",
+        conversion="gui_direct",
+        min_val=-100,
+        max_val=100,
+    ))
+    _GRADING_PARAMS.append(ParamSpec(
+        name=f"calibration_{color}_lum",
+        cli_flag=None,
+        cli_type=None,
+        default=0.0,
+        recipe_key=f"calibration.{color}.lum",
+        conversion="gui_direct",
+        min_val=-100,
+        max_val=100,
+    ))
+
+
 # T1 — Background replace & scene relight.
 # These 7 keys are the historically-dead ``anime_crystal_void`` params,
 # finally wired (T1). Each maps to a BackgroundReplacer operation gated
@@ -1798,6 +1864,16 @@ _BACKGROUND_PARAMS = [
         cli_type=None,
         default=0.0,
         recipe_key="background.background_blur",
+        conversion="gui_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="lens_blur",
+        cli_flag=None,
+        cli_type=None,
+        default=0.0,
+        recipe_key="background.lens_blur",
         conversion="gui_direct",
         min_val=0,
         max_val=100,

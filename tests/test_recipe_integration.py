@@ -246,6 +246,31 @@ class TestBuildContextFromRecipe:
         # beauty: eyes.teeth_whiten = 0.20 → 20.0
         assert ctx.teeth_whiten == pytest.approx(20.0)
 
+    def test_fuji_film_density_params(self):
+        # Provia
+        ctx_provia = self._ctx_for("provia")
+        assert ctx_provia.film_enable is True
+        assert ctx_provia.film_strength == pytest.approx(1.0)
+        assert ctx_provia.film_toe_r == pytest.approx(0.10)
+        assert ctx_provia.film_crosstalk_cy_mg == pytest.approx(0.04)
+        assert ctx_provia.film_tonemap_strength == pytest.approx(0.42)
+        
+        # Astia
+        ctx_astia = self._ctx_for("astia")
+        assert ctx_astia.film_enable is True
+        assert ctx_astia.film_strength == pytest.approx(1.0)
+        assert ctx_astia.film_toe_r == pytest.approx(0.05)
+        assert ctx_astia.film_crosstalk_cy_mg == pytest.approx(0.03)
+        assert ctx_astia.film_tonemap_strength == pytest.approx(0.50)
+        
+        # Classic Chrome
+        ctx_chrome = self._ctx_for("classic_chrome")
+        assert ctx_chrome.film_enable is True
+        assert ctx_chrome.film_strength == pytest.approx(1.0)
+        assert ctx_chrome.film_toe_r == pytest.approx(0.15)
+        assert ctx_chrome.film_crosstalk_cy_mg == pytest.approx(0.08)
+        assert ctx_chrome.film_tonemap_strength == pytest.approx(0.85)
+
 
 # ---------------------------------------------------------------------------
 # Recipe parameter coverage
@@ -393,6 +418,9 @@ class TestRecipeParameterCoverage:
         assert ctx.highlight_hue == 30.0
         assert ctx.highlight_sat == 5.0
         assert ctx.active_recipe == "custom"
+        assert ctx.lens_blur == 0.0
+        assert ctx.hsl_hue_green == 0.0
+        assert ctx.calibration_red_hue == 0.0
 
     def test_processing_context_fields_covered(self):
         """All ProcessingContext fields (except internal face_contexts) should

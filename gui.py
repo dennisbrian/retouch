@@ -725,11 +725,19 @@ def on_detect_faces(img_paths):
         rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
         thumbs.append((rgb, f"Face {i}"))
         choices.append(str(i))
+    
+    suggested = get_engine().suggest_face_params(img, faces_data=faces)
+    
+    status = f"{len(choices)} face(s) detected.\n\nSuggested default recipes:\n"
+    for k, v in suggested.items():
+        status += f"- Face {k}: {v['recipe']}\n"
+    status += "\nAssign a recipe per face (optional), then Process."
+
     return (
         thumbs,
-        {},
+        suggested,
         gr.update(choices=choices, value=choices[0] if choices else None),
-        f"{len(choices)} face(s). Assign a recipe per face, then Process.",
+        status,
     )
 
 
@@ -1850,6 +1858,40 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         _reshape_neck_length_state = gr.State(value=0.0)
                         _neural_stray_hair_boost_state = gr.State(value=0)
                         _neural_defect_boost_state = gr.State(value=0)
+                        _lens_blur_state = gr.State(value=0.0)
+                        _hsl_hue_red_state = gr.State(value=0.0)
+                        _hsl_sat_red_state = gr.State(value=0.0)
+                        _hsl_lum_red_state = gr.State(value=0.0)
+                        _hsl_hue_orange_state = gr.State(value=0.0)
+                        _hsl_sat_orange_state = gr.State(value=0.0)
+                        _hsl_lum_orange_state = gr.State(value=0.0)
+                        _hsl_hue_yellow_state = gr.State(value=0.0)
+                        _hsl_sat_yellow_state = gr.State(value=0.0)
+                        _hsl_lum_yellow_state = gr.State(value=0.0)
+                        _hsl_hue_green_state = gr.State(value=0.0)
+                        _hsl_sat_green_state = gr.State(value=0.0)
+                        _hsl_lum_green_state = gr.State(value=0.0)
+                        _hsl_hue_cyan_state = gr.State(value=0.0)
+                        _hsl_sat_cyan_state = gr.State(value=0.0)
+                        _hsl_lum_cyan_state = gr.State(value=0.0)
+                        _hsl_hue_blue_state = gr.State(value=0.0)
+                        _hsl_sat_blue_state = gr.State(value=0.0)
+                        _hsl_lum_blue_state = gr.State(value=0.0)
+                        _hsl_hue_purple_state = gr.State(value=0.0)
+                        _hsl_sat_purple_state = gr.State(value=0.0)
+                        _hsl_lum_purple_state = gr.State(value=0.0)
+                        _hsl_hue_magenta_state = gr.State(value=0.0)
+                        _hsl_sat_magenta_state = gr.State(value=0.0)
+                        _hsl_lum_magenta_state = gr.State(value=0.0)
+                        _calibration_red_hue_state = gr.State(value=0.0)
+                        _calibration_red_sat_state = gr.State(value=0.0)
+                        _calibration_red_lum_state = gr.State(value=0.0)
+                        _calibration_green_hue_state = gr.State(value=0.0)
+                        _calibration_green_sat_state = gr.State(value=0.0)
+                        _calibration_green_lum_state = gr.State(value=0.0)
+                        _calibration_blue_hue_state = gr.State(value=0.0)
+                        _calibration_blue_sat_state = gr.State(value=0.0)
+                        _calibration_blue_lum_state = gr.State(value=0.0)
                         _look_params_state = gr.State(value={})
                         status = gr.Textbox(label="Status", interactive=False, placeholder="Upload an image and click Process to start...")
                         smart_analysis_html = gr.HTML(visible=True)
@@ -2706,6 +2748,39 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "highlight_rolloff_strength": highlight_rolloff_strength,
         "gamut_compress": _gamut_compress_state,
         "saturation_mode": _saturation_mode_state,
+        "hsl_hue_red": _hsl_hue_red_state,
+        "hsl_sat_red": _hsl_sat_red_state,
+        "hsl_lum_red": _hsl_lum_red_state,
+        "hsl_hue_orange": _hsl_hue_orange_state,
+        "hsl_sat_orange": _hsl_sat_orange_state,
+        "hsl_lum_orange": _hsl_lum_orange_state,
+        "hsl_hue_yellow": _hsl_hue_yellow_state,
+        "hsl_sat_yellow": _hsl_sat_yellow_state,
+        "hsl_lum_yellow": _hsl_lum_yellow_state,
+        "hsl_hue_green": _hsl_hue_green_state,
+        "hsl_sat_green": _hsl_sat_green_state,
+        "hsl_lum_green": _hsl_lum_green_state,
+        "hsl_hue_cyan": _hsl_hue_cyan_state,
+        "hsl_sat_cyan": _hsl_sat_cyan_state,
+        "hsl_lum_cyan": _hsl_lum_cyan_state,
+        "hsl_hue_blue": _hsl_hue_blue_state,
+        "hsl_sat_blue": _hsl_sat_blue_state,
+        "hsl_lum_blue": _hsl_lum_blue_state,
+        "hsl_hue_purple": _hsl_hue_purple_state,
+        "hsl_sat_purple": _hsl_sat_purple_state,
+        "hsl_lum_purple": _hsl_lum_purple_state,
+        "hsl_hue_magenta": _hsl_hue_magenta_state,
+        "hsl_sat_magenta": _hsl_sat_magenta_state,
+        "hsl_lum_magenta": _hsl_lum_magenta_state,
+        "calibration_red_hue": _calibration_red_hue_state,
+        "calibration_red_sat": _calibration_red_sat_state,
+        "calibration_red_lum": _calibration_red_lum_state,
+        "calibration_green_hue": _calibration_green_hue_state,
+        "calibration_green_sat": _calibration_green_sat_state,
+        "calibration_green_lum": _calibration_green_lum_state,
+        "calibration_blue_hue": _calibration_blue_hue_state,
+        "calibration_blue_sat": _calibration_blue_sat_state,
+        "calibration_blue_lum": _calibration_blue_lum_state,
         "film_enable": _film_enable_state,
         "film_strength": _film_strength_state,
         "film_toe_r": _film_toe_r_state,
@@ -2726,6 +2801,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "background_harmonize": _background_harmonize_state,
         "background_harmonize_mode": _background_harmonize_mode_state,
         "background_blur": _background_blur_state,
+        "lens_blur": _lens_blur_state,
         "background_desaturation": _background_desaturation_state,
         "light_wrap": _light_wrap_state,
         "blue_shadow_grade": _blue_shadow_grade_state,

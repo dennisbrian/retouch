@@ -80,8 +80,12 @@ class EyeEnhancer:
         result = img_bgr.copy()
 
         # Eye whites — combine both eyes
-        whites_mask_l = np.clip(regions.left_eye - regions.left_iris, 0, 1)
-        whites_mask_r = np.clip(regions.right_eye - regions.right_iris, 0, 1)
+        whites_mask_l = getattr(regions, "left_sclera", None)
+        if whites_mask_l is None:
+            whites_mask_l = np.clip(regions.left_eye - regions.left_iris, 0, 1)
+        whites_mask_r = getattr(regions, "right_sclera", None)
+        if whites_mask_r is None:
+            whites_mask_r = np.clip(regions.right_eye - regions.right_iris, 0, 1)
         whites_mask = np.clip(whites_mask_l + whites_mask_r, 0, 1)
         result = self._enhance_whites(result, whites_mask, s)
 

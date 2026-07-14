@@ -1140,7 +1140,27 @@ class ColorGrader:
         color_centers = {"red": 0.0, "orange": 14.0, "yellow": 27.0, "green": 57.0, 
                           "cyan": 92.0, "blue": 122.0, "purple": 148.0, "magenta": 156.0}
         sigma = 10.0
-        hue_adj = adjustments.get("hue", {}); sat_adj = adjustments.get("saturation", {}); lum_adj = adjustments.get("luminance", {})
+        
+        hue_adj = adjustments.get("hue", {})
+        sat_adj = adjustments.get("saturation", {})
+        lum_adj = adjustments.get("luminance", {})
+        
+        # Check for nested schema format: adjustments[color][shift_type]
+        has_color_keys = any(color in adjustments for color in color_centers)
+        if has_color_keys:
+            hue_adj = {}
+            sat_adj = {}
+            lum_adj = {}
+            for color in color_centers:
+                color_data = adjustments.get(color, {})
+                if isinstance(color_data, dict):
+                    if "hue_shift" in color_data:
+                        hue_adj[color] = color_data["hue_shift"]
+                    if "sat_shift" in color_data:
+                        sat_adj[color] = color_data["sat_shift"]
+                    if "lum_shift" in color_data:
+                        lum_adj[color] = color_data["lum_shift"]
+
         for color in color_centers:
             h_shift = hue_adj.get(color, 0); s_shift = sat_adj.get(color, 0); l_shift = lum_adj.get(color, 0)
             if h_shift == 0 and s_shift == 0 and l_shift == 0: continue
@@ -1168,7 +1188,27 @@ class ColorGrader:
         color_centers = {"red": 0.0, "orange": 14.0, "yellow": 27.0, "green": 57.0,
                           "cyan": 92.0, "blue": 122.0, "purple": 148.0, "magenta": 156.0}
         sigma = 10.0
-        hue_adj = adjustments.get("hue", {}); sat_adj = adjustments.get("saturation", {}); lum_adj = adjustments.get("luminance", {})
+        
+        hue_adj = adjustments.get("hue", {})
+        sat_adj = adjustments.get("saturation", {})
+        lum_adj = adjustments.get("luminance", {})
+        
+        # Check for nested schema format: adjustments[color][shift_type]
+        has_color_keys = any(color in adjustments for color in color_centers)
+        if has_color_keys:
+            hue_adj = {}
+            sat_adj = {}
+            lum_adj = {}
+            for color in color_centers:
+                color_data = adjustments.get(color, {})
+                if isinstance(color_data, dict):
+                    if "hue_shift" in color_data:
+                        hue_adj[color] = color_data["hue_shift"]
+                    if "sat_shift" in color_data:
+                        sat_adj[color] = color_data["sat_shift"]
+                    if "lum_shift" in color_data:
+                        lum_adj[color] = color_data["lum_shift"]
+
         for color in color_centers:
             h_shift = hue_adj.get(color, 0); s_shift = sat_adj.get(color, 0); l_shift = lum_adj.get(color, 0)
             if h_shift == 0 and s_shift == 0 and l_shift == 0: continue

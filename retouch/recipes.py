@@ -7,6 +7,42 @@ from typing import List
 
 
 RECIPES = {
+    "male": {
+        "extends": "natural",
+        "frequency": {"smooth": 0.25},
+        "skin": {"equalize": 0.15, "rosy": 0.05},
+        "eyes": {"whites": 0.05, "teeth_whiten": 0.05, "iris": 0.05, "catchlight": 0.05},
+        "lips": {"tint": None, "gloss": 0.0},
+        "blush": 0.0,
+        "nose_blush": False,
+        "under_eye_blush": False,
+        "slimming": 0.0,
+    },
+    "female": {
+        "extends": "portrait",
+        "frequency": {"smooth": 0.50},
+        "skin": {"equalize": 0.35, "rosy": 0.20},
+        "eyes": {"whites": 0.20, "teeth_whiten": 0.20, "iris": 0.20, "catchlight": 0.20},
+        "lips": {"tint": "rose", "gloss": 0.15},
+        "blush": 15.0,
+    },
+    "child": {
+        "extends": "natural",
+        "frequency": {"smooth": 0.15},
+        "skin": {"equalize": 0.10, "rosy": 0.15},
+        "eyes": {"whites": 0.10, "teeth_whiten": 0.0, "iris": 0.15, "catchlight": 0.15},
+        "lips": {"tint": None, "gloss": 0.05},
+        "blush": 5.0,
+        "nose_blush": False,
+        "under_eye_blush": False,
+        "slimming": 0.0,
+    },
+    "senior": {
+        "extends": "portrait",
+        "frequency": {"smooth": 0.35},
+        "skin": {"equalize": 0.25, "rosy": 0.10},
+        "wrinkle_soften": 35.0,
+    },
     "natural": {
         "frequency": {"smooth": 0.30},
         "skin": {"equalize": 0.20, "rosy": 0.10},
@@ -1443,6 +1479,25 @@ RECIPES["provia"] = {
     "midtone_sat": 0.0,
     "highlight_hue": 0.0,
     "highlight_sat": 0.0,
+    "film": {
+        "enable": True,
+        "strength": 1.0,
+        "toe": {"r": 0.10, "g": 0.10, "b": 0.10},
+        "shoulder": {"r": 0.10, "g": 0.10, "b": 0.10},
+        "midpoint": 0.50,
+        "gamma": 1.0,
+        "crosstalk": {
+            "cy_mg": 0.04,
+            "cy_ye": 0.02,
+            "mg_ye": 0.01,
+        },
+        "tonemap": {
+            "strength": 0.42,
+            "toe": 0.10,
+            "shoulder": 0.15,
+            "skew": 0.2,
+        }
+    },
 }
 
 RECIPES["astia"] = {
@@ -1479,6 +1534,25 @@ RECIPES["astia"] = {
     "shadow_sat": 5.0,
     "highlight_hue": 40.0,
     "highlight_sat": 5.0,
+    "film": {
+        "enable": True,
+        "strength": 1.0,
+        "toe": {"r": 0.05, "g": 0.05, "b": 0.05},
+        "shoulder": {"r": 0.05, "g": 0.05, "b": 0.05},
+        "midpoint": 0.50,
+        "gamma": 0.95,
+        "crosstalk": {
+            "cy_mg": 0.03,
+            "cy_ye": 0.02,
+            "mg_ye": 0.02,
+        },
+        "tonemap": {
+            "strength": 0.50,
+            "toe": 0.05,
+            "shoulder": 0.05,
+            "skew": 0.1,
+        }
+    },
 }
 
 RECIPES["classic_chrome"] = {
@@ -1516,6 +1590,25 @@ RECIPES["classic_chrome"] = {
     "shadow_sat": 10.0,
     "highlight_hue": 200.0,
     "highlight_sat": 6.0,
+    "film": {
+        "enable": True,
+        "strength": 1.0,
+        "toe": {"r": 0.15, "g": 0.15, "b": 0.15},
+        "shoulder": {"r": 0.12, "g": 0.12, "b": 0.12},
+        "midpoint": 0.50,
+        "gamma": 1.15,
+        "crosstalk": {
+            "cy_mg": 0.08,
+            "cy_ye": 0.04,
+            "mg_ye": 0.03,
+        },
+        "tonemap": {
+            "strength": 0.85,
+            "toe": 0.15,
+            "shoulder": 0.15,
+            "skew": 0.4,
+        }
+    },
 }
 
 RECIPES["velvia"] = {

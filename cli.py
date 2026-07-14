@@ -417,8 +417,11 @@ def build_params(args: argparse.Namespace) -> dict:
         params["recipe"] = args.preset
 
     if getattr(args, "face_params", None):
-        from retouch.face_params import load_face_params_json
-        params["face_params"] = load_face_params_json(args.face_params)
+        if args.face_params.lower() == "auto":
+            params["face_params"] = "auto"
+        else:
+            from retouch.face_params import load_face_params_json
+            params["face_params"] = load_face_params_json(args.face_params)
 
     # Process the simple scalar/int/float parameters from the spec list.
     # Each spec maps a CLI flag (e.g. "--smooth") to the engine kwarg name

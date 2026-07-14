@@ -293,6 +293,87 @@ class BackgroundReplacer:
         out = blend_masked(src_f, blurred, bg_mask)
         return self._restore_dtype(out, was_float)
 
+    def lens_blur(
+        self,
+        img: np.ndarray,
+        person_mask: np.ndarray,
+        strength: float,
+        focus_x: Optional[float] = None,
+        focus_y: Optional[float] = None,
+    ) -> np.ndarray:
+        """Simulate depth-of-field lens blur (bokeh).
+
+        Blur is 0 at the focus point (or inside the person mask), and increases
+        radially and/or vertically in the background.
+
+        Args:
+            img: (H, W, 3) BGR image.
+            person_mask: (H, W) float32 mask of the subject.
+            strength: 0-100 overall blur amount.
+            focus_x: Focus point X coordinate (0-1 relative, or None for face/center).
+            focus_y: Focus point Y coordinate (0-1 relative, or None for face/center).
+        """
+        if strength <= 0.0:
+            return img
+
+        src_f, was_float = self._to_f32_255(img)
+        h, w = src_f.shape[:2]
+        min_dim = float(min(h, w))
+
+        # 1. Determine focus point (defaults to center of person mask or center of image)
+        if focus_x is None or focus_y is None:
+            y_indices, x_indices = np.where(person_mask > 0.5)
+            if len(x_indices) > 0:
+                cx = float(x_indices.mean())
+                cy = float(y_indices.mean())
+            else:
+                cx, cy = w / 2.0, h / 2.0
+        else:
+            cx, cy = focus_x * w, focus_y * h
+
+        # 2. Build depth map
+        # Distance from focus point
+        yy, xx = np.mgrid[0:h, 0:w]
+        dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+        max_dist = max(np.sqrt(cx**2 + cy**2), np.sqrt((w-cx)**2 + (h-cy)**2), 1.0)
+        
+        # Radial depth component
+        depth_radial = np.clip(dist / max_dist, 0.0, 1.0)
+        
+        # Combine radial distance with person mask (person stays in focus)
+        # We also add a vertical gradient simulating a ground plane getting farther away
+        depth_vert = np.clip(yy / h, 0.0, 1.0)
+        depth = depth_radial * 0.4 + depth_vert * 0.6
+        
+        # Person mask forces depth to 0 (fully in focus)
+        depth = np.clip(depth * (1.0 - person_mask), 0.0, 1.0)
+
+        # 3. Create blurred levels
+        max_sigma = (strength / 100.0) * (min_dim * 0.05)
+        
+        level1_sigma = max(max_sigma * 0.33, 0.1)
+        level2_sigma = max(max_sigma * 0.66, 0.1)
+        level3_sigma = max(max_sigma, 0.1)
+        
+        k1 = max(3, int(level1_sigma * 3.0)) | 1
+        k2 = max(3, int(level2_sigma * 3.0)) | 1
+        k3 = max(3, int(level3_sigma * 3.0)) | 1
+        
+        blur1 = cv2.GaussianBlur(src_f, (k1, k1), level1_sigma)
+        blur2 = cv2.GaussianBlur(src_f, (k2, k2), level2_sigma)
+        blur3 = cv2.GaussianBlur(src_f, (k3, k3), level3_sigma)
+
+        # 4. Blend based on depth map ranges
+        mask1 = np.clip(depth / 0.33, 0.0, 1.0)[:, :, np.newaxis]
+        mask2 = np.clip((depth - 0.33) / 0.33, 0.0, 1.0)[:, :, np.newaxis]
+        mask3 = np.clip((depth - 0.66) / 0.34, 0.0, 1.0)[:, :, np.newaxis]
+        
+        out = src_f * (1.0 - mask1) + blur1 * mask1
+        out = out * (1.0 - mask2) + blur2 * mask2
+        out = out * (1.0 - mask3) + blur3 * mask3
+
+        return self._restore_dtype(out, was_float)
+
     def grade_background(
         self,
         img: np.ndarray,

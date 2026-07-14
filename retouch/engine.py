@@ -377,6 +377,7 @@ class ProcessingContext:
 
     # --- T1: Background replace & scene relight (wires anime_crystal_void) ---
     background_blur: float = 0.0
+    lens_blur: float = 0.0
     background_desaturation: float = 0.0
     light_wrap: float = 0.0
     blue_shadow_grade: float = 0.0
@@ -424,7 +425,7 @@ class ProcessingContext:
 
     # Per-face recipe/param overrides keyed by face index (detection order).
     # None ⇒ every face uses this global context (golden path).
-    face_params: Optional[Dict[int, Dict[str, Any]]] = None
+    face_params: Optional[Union[Dict[int, Dict[str, Any]], str]] = None
 
     # 16-bit RAF ingest: full-precision float32 [0,255] BGR source at the
     # native processing resolution. Set by process() when the input is
@@ -468,6 +469,43 @@ class ProcessingContext:
     body_reshape_shoulder_width: float = 50.0
     body_reshape_hip_width: float = 50.0
     auto_body_reshape: float = 0.0
+
+    # --- Selective HSL Adjustments ---
+    hsl_hue_red: float = 0.0
+    hsl_sat_red: float = 0.0
+    hsl_lum_red: float = 0.0
+    hsl_hue_orange: float = 0.0
+    hsl_sat_orange: float = 0.0
+    hsl_lum_orange: float = 0.0
+    hsl_hue_yellow: float = 0.0
+    hsl_sat_yellow: float = 0.0
+    hsl_lum_yellow: float = 0.0
+    hsl_hue_green: float = 0.0
+    hsl_sat_green: float = 0.0
+    hsl_lum_green: float = 0.0
+    hsl_hue_cyan: float = 0.0
+    hsl_sat_cyan: float = 0.0
+    hsl_lum_cyan: float = 0.0
+    hsl_hue_blue: float = 0.0
+    hsl_sat_blue: float = 0.0
+    hsl_lum_blue: float = 0.0
+    hsl_hue_purple: float = 0.0
+    hsl_sat_purple: float = 0.0
+    hsl_lum_purple: float = 0.0
+    hsl_hue_magenta: float = 0.0
+    hsl_sat_magenta: float = 0.0
+    hsl_lum_magenta: float = 0.0
+
+    # --- Calibration ---
+    calibration_red_hue: float = 0.0
+    calibration_red_sat: float = 0.0
+    calibration_red_lum: float = 0.0
+    calibration_green_hue: float = 0.0
+    calibration_green_sat: float = 0.0
+    calibration_green_lum: float = 0.0
+    calibration_blue_hue: float = 0.0
+    calibration_blue_sat: float = 0.0
+    calibration_blue_lum: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -1047,6 +1085,7 @@ class RetouchEngine:
         background_harmonize_mode: Optional[str] = None,
         # --- T1: Background replace & scene relight ---
         background_blur: Optional[float] = None,
+        lens_blur: Optional[float] = None,
         background_desaturation: Optional[float] = None,
         light_wrap: Optional[float] = None,
         blue_shadow_grade: Optional[float] = None,
@@ -1306,6 +1345,7 @@ class RetouchEngine:
             "background_harmonize": background_harmonize,
             "background_harmonize_mode": background_harmonize_mode,
             "background_blur": background_blur,
+            "lens_blur": lens_blur,
             "background_desaturation": background_desaturation,
             "light_wrap": light_wrap,
             "blue_shadow_grade": blue_shadow_grade,
@@ -1800,6 +1840,9 @@ class RetouchEngine:
         # ------------------------------------------------------------------
         # Stages 1–2 — Reshape + per-face + composite at NATIVE resolution
         # ------------------------------------------------------------------
+        if ctx.face_params == "auto":
+            ctx.face_params = self.suggest_face_params(native_img_bgr, faces_data=faces_native)
+
         t1 = time.perf_counter()
         result_native = self._stage_reshape(native_img_bgr, faces_native, ctx)
         timings["reshape"] = (time.perf_counter() - t1) * 1000
@@ -1968,6 +2011,9 @@ class RetouchEngine:
         # ------------------------------------------------------------------
         # Stage 1 — Face reshaping (global, applied once before per-face work)
         # ------------------------------------------------------------------
+        if ctx.face_params == "auto":
+            ctx.face_params = self.suggest_face_params(img_bgr, faces_data=faces)
+
         t1 = time.perf_counter()
         result = self._stage_reshape(img_bgr, faces, ctx)
         timings["reshape"] = (time.perf_counter() - t1) * 1000
@@ -2481,16 +2527,62 @@ class RetouchEngine:
         # grade_intensity == 0 means "no grade" — skip entirely so a preset set
         # with amount 0 (e.g. color_harmony.amount: 0.0) doesn't still leak the
         # preset's post-effects (grain/halation/CA/lut) onto the image.
-        if ctx.color_grade and ctx.grade_intensity > 0:
-            settings = PRESETS.get(ctx.color_grade, PRESETS["natural"]).copy()
+        has_custom_hsl = any(getattr(ctx, f"hsl_hue_{c}", 0.0) != 0.0 or getattr(ctx, f"hsl_sat_{c}", 0.0) != 0.0 or getattr(ctx, f"hsl_lum_{c}", 0.0) != 0.0 for c in ["red", "orange", "yellow", "green", "cyan", "blue", "purple", "magenta"])
+        has_custom_calib = any(getattr(ctx, f"calibration_{c}_hue", 0.0) != 0.0 or getattr(ctx, f"calibration_{c}_sat", 0.0) != 0.0 or getattr(ctx, f"calibration_{c}_lum", 0.0) != 0.0 for c in ["red", "green", "blue"])
+
+        if (ctx.color_grade and ctx.grade_intensity > 0) or has_custom_hsl or has_custom_calib:
+            active_grade = ctx.color_grade if (ctx.color_grade and ctx.color_grade != "none") else "natural"
+            intensity = ctx.grade_intensity if (ctx.color_grade and ctx.color_grade != "none") else 1.0
+            settings = PRESETS.get(active_grade, PRESETS["natural"]).copy()
             for k in ["halation", "grain", "chromatic_aberration", "lut"]:
                 if k in settings and k not in post_effects:
                     post_effects[k] = settings[k]
             settings["gamut_compress"] = ctx.gamut_compress
             settings["saturation_mode"] = ctx.saturation_mode
 
+            h_adj = {}
+            s_adj = {}
+            l_adj = {}
+            for color in ["red", "orange", "yellow", "green", "cyan", "blue", "purple", "magenta"]:
+                h_val = getattr(ctx, f"hsl_hue_{color}", 0.0)
+                s_val = getattr(ctx, f"hsl_sat_{color}", 0.0)
+                l_val = getattr(ctx, f"hsl_lum_{color}", 0.0)
+                if h_val != 0.0: h_adj[color] = h_val
+                if s_val != 0.0: s_adj[color] = s_val
+                if l_val != 0.0: l_adj[color] = l_val
+            
+            if h_adj or s_adj or l_adj:
+                if "hsl_adjustments" not in settings:
+                    settings["hsl_adjustments"] = {}
+                if "hue" not in settings["hsl_adjustments"]:
+                    settings["hsl_adjustments"]["hue"] = {}
+                if "saturation" not in settings["hsl_adjustments"]:
+                    settings["hsl_adjustments"]["saturation"] = {}
+                if "luminance" not in settings["hsl_adjustments"]:
+                    settings["hsl_adjustments"]["luminance"] = {}
+                
+                settings["hsl_adjustments"]["hue"].update(h_adj)
+                settings["hsl_adjustments"]["saturation"].update(s_adj)
+                settings["hsl_adjustments"]["luminance"].update(l_adj)
+
+            calib = {}
+            for color in ["red", "green", "blue"]:
+                h_val = getattr(ctx, f"calibration_{color}_hue", 0.0)
+                s_val = getattr(ctx, f"calibration_{color}_sat", 0.0)
+                l_val = getattr(ctx, f"calibration_{color}_lum", 0.0)
+                if h_val != 0.0 or s_val != 0.0 or l_val != 0.0:
+                    calib[color] = {"hue": h_val, "sat": s_val, "lum": l_val}
+            
+            if calib:
+                if "calibration" not in settings:
+                    settings["calibration"] = {}
+                for color, vals in calib.items():
+                    if color not in settings["calibration"]:
+                        settings["calibration"][color] = {}
+                    settings["calibration"][color].update(vals)
+
             result = self._grader.grade(
-                result, settings, ctx.grade_intensity,
+                result, settings, intensity,
                 skip_glows=skip_glows, skip_post_effects=True,
                 skin_protect_strength=ctx.skin_protect_strength,
                 return_float=True,
@@ -2553,13 +2645,33 @@ class RetouchEngine:
 
     def _ctx_for_face(self, ctx: ProcessingContext, face_index: int) -> ProcessingContext:
         """Resolve per-face overrides; identity when face_params empty/missing."""
-        if not ctx.face_params:
+        if not ctx.face_params or ctx.face_params == "auto":
             return ctx
         ov = ctx.face_params.get(face_index)
         if not ov:
             return ctx
         from .face_params import resolve_face_context
         return resolve_face_context(ctx, ov)
+
+    def suggest_face_params(
+        self,
+        img_bgr: np.ndarray,
+        face_contexts: Optional[List["FaceContext"]] = None,
+        faces_data: Optional[List["FaceData"]] = None,
+    ) -> Dict[int, Dict[str, Any]]:
+        """Suggest per-face recipe overrides based on classical demographics detection."""
+        if faces_data is None:
+            if not face_contexts:
+                faces_data = self._detector.detect(img_bgr)
+            else:
+                faces_data = [f.face_data for f in face_contexts]
+
+        from .face_params import suggest_face_recipe
+        out = {}
+        for i, face_data in enumerate(faces_data):
+            recipe = suggest_face_recipe(img_bgr, face_data.landmarks, face_data.bbox, face_data.ied)
+            out[i] = {"recipe": recipe}
+        return out
 
     def _face_ctxs_for_reshape(self, ctx: ProcessingContext, n_faces: int):
         """Per-face contexts for reshape B-lite, or None when no face_params."""
@@ -3066,6 +3178,8 @@ class RetouchEngine:
         # 2. Background blur (bokeh) — subject stays sharp.
         if ctx.background_blur > 0:
             out = replacer.blur_background(out, person_mask, float(ctx.background_blur))
+        if ctx.lens_blur > 0:
+            out = replacer.lens_blur(out, person_mask, float(ctx.lens_blur))
 
         # 3. Light-wrap rim — composite integration glow around the subject.
         if ctx.light_wrap > 0:

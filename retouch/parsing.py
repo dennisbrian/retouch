@@ -115,6 +115,7 @@ class FaceRegions:
         "left_eye", "right_eye",
         "left_eyebrow", "right_eyebrow",
         "left_iris", "right_iris",
+        "left_sclera", "right_sclera",
         "lips", "mouth_interior",
         "left_under_eye", "right_under_eye",
         "nose_bridge", "forehead_center",
@@ -608,6 +609,17 @@ class FaceParser:
                 setattr(regions, attr, val)
             else:
                 setattr(regions, attr, val * regions.skin)
+
+        # Compute sclera masks (eye regions minus iris)
+        if regions.left_eye is not None and regions.left_iris is not None:
+            regions.left_sclera = np.clip(regions.left_eye - regions.left_iris, 0.0, 1.0)
+        else:
+            regions.left_sclera = np.zeros((h_img, w_img), dtype=np.float32)
+
+        if regions.right_eye is not None and regions.right_iris is not None:
+            regions.right_sclera = np.clip(regions.right_eye - regions.right_iris, 0.0, 1.0)
+        else:
+            regions.right_sclera = np.zeros((h_img, w_img), dtype=np.float32)
 
     # ------------------------------------------------------------------
     # Internal helpers
