@@ -14,12 +14,48 @@ exposes those attributes is a valid caller.
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Tuple
+import weakref
+from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
 
 from .utils import blend_masked, bgr_f32_to_lab_f32, lab_f32_to_bgr_f32, normalize_mask
+
+# Per-process memo of reference-image analysis. Keyed by id(ref_img) with a
+# weakref guard so the entry is only reused while the caller's array is alive.
+# Caps at 8 to bound memory when many distinct references are processed.
+_STYLE_REF_CACHE: Dict[int, Tuple["weakref.ReferenceType[Any]", Dict[str, Any]]] = {}
+
+
+def _cached_ref_analysis(engine: Any, ref_img: np.ndarray) -> Dict[str, Any]:
+    """Detect/segment/parse a reference image once per distinct array.
+
+    In a batch with a shared ``style_ref``, the reference's detect + segment +
+    parse would otherwise re-run on every target image. This memoizes it by
+    object identity (guarded by a weakref so GC'd arrays don't poison the key).
+    """
+    key = id(ref_img)
+    entry = _STYLE_REF_CACHE.get(key)
+    if entry is not None and entry[0]() is ref_img:
+        return entry[1]
+
+    ref_faces = engine._detector.detect(ref_img)
+    ref_person = engine._detector.segment_person(ref_img)
+    ref_person_f = normalize_mask(ref_person)
+    if ref_person_f.ndim == 3:
+        ref_person_f = ref_person_f[:, :, 0]
+
+    data: Dict[str, Any] = {"ref_faces": ref_faces, "ref_person_f": ref_person_f}
+    if ref_faces:
+        r_face = sorted(ref_faces, key=lambda f: f.bbox[2] * f.bbox[3], reverse=True)[0]
+        data["r_regions"] = engine._parser.parse(
+            r_face.landmarks, ref_img, r_face.bbox, ref_person_f, r_face.ied
+        )
+    _STYLE_REF_CACHE[key] = (weakref.ref(ref_img), data)
+    if len(_STYLE_REF_CACHE) > 8:
+        _STYLE_REF_CACHE.pop(next(iter(_STYLE_REF_CACHE)))
+    return data
 
 
 def weighted_mean_std(data: np.ndarray, weights: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -107,14 +143,10 @@ def subject_aware_transfer(
 
     target_bg_mask = 1.0 - target_person_f
 
-    # 2. Reference masks
-    ref_faces = engine._detector.detect(ref_img)
-    ref_person = engine._detector.segment_person(ref_img)
-
-    ref_person_f = normalize_mask(ref_person)
-    if ref_person_f.ndim == 3:
-        ref_person_f = ref_person_f[:, :, 0]
-
+    # 2. Reference masks (memoized per distinct reference array)
+    ref = _cached_ref_analysis(engine, ref_img)
+    ref_faces = ref["ref_faces"]
+    ref_person_f = ref["ref_person_f"]
     ref_bg_mask = 1.0 - ref_person_f
 
     # Base transfer for background
@@ -122,21 +154,17 @@ def subject_aware_transfer(
 
     # --- Skin & Hair Transfer (if faces detected in both) ---
     if target_faces and ref_faces:
-        # Sort both by area descending for deterministic largest-face matching
+        # Sort target by area descending for deterministic largest-face matching
         target_faces = sorted(target_faces, key=lambda f: f.bbox[2] * f.bbox[3], reverse=True)
-        ref_faces = sorted(ref_faces, key=lambda f: f.bbox[2] * f.bbox[3], reverse=True)
         t_face = target_faces[0]
-        r_face = ref_faces[0]
+        r_regions = ref.get("r_regions")
 
         t_regions = engine._parser.parse(
             t_face.landmarks, target_img, t_face.bbox, target_person_f, t_face.ied
         )
-        r_regions = engine._parser.parse(
-            r_face.landmarks, ref_img, r_face.bbox, ref_person_f, r_face.ied
-        )
 
         # Skin transfer (matched from original target_img and blended back)
-        if t_regions.skin is not None and r_regions.skin is not None:
+        if t_regions.skin is not None and r_regions is not None and r_regions.skin is not None:
             t_skin = normalize_mask(t_regions.skin)
             r_skin = normalize_mask(r_regions.skin)
 
@@ -144,7 +172,7 @@ def subject_aware_transfer(
             result = blend_masked(result, skin_trans, t_skin)
 
         # Hair transfer (matched from original target_img and blended back)
-        if t_regions.hair is not None and r_regions.hair is not None:
+        if t_regions.hair is not None and r_regions is not None and r_regions.hair is not None:
             t_hair = normalize_mask(t_regions.hair)
             r_hair = normalize_mask(r_regions.hair)
 

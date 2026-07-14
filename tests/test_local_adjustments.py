@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+import cv2
 import numpy as np
 import pytest
 
@@ -272,6 +273,72 @@ class TestSemanticMaskIntersection:
             img_u8, full_mask, "dodge", 1.0, semantic_mask=sem
         )
         assert np.array_equal(out, img_u8)
+
+
+class TestSoftMaskLinearCoverage:
+    """Pin HARD-1: soft-mask coverage must be linear (m), not squared (m^2).
+
+    Each op already applies the mask internally; compositing again in
+    ``apply_local_adjustment`` would scale the effective coverage by m^2,
+    steepening falloff for every soft brush. These tests assert the linear
+    relationship, which fails on the pre-fix (m^2) behavior.
+    """
+
+    @staticmethod
+    def _colorful_img() -> np.ndarray:
+        # Random colorful image: every op (exposure, warmth, saturation,
+        # clarity, smooth, dodge, burn) has a real, mask-proportional effect.
+        rng = np.random.default_rng(7)
+        return rng.integers(0, 255, (64, 64, 3)).astype(np.uint8)
+
+    @staticmethod
+    def _const_mask(level: float) -> np.ndarray:
+        return np.full((64, 64), level, dtype=np.float32)
+
+    def test_exposure_coverage_is_linear(self) -> None:
+        img = self._colorful_img()
+        full = apply_local_adjustment(img, self._const_mask(1.0), "exposure", 0.5)
+        half = apply_local_adjustment(img, self._const_mask(0.5), "exposure", 0.5)
+        delta_full = float(full.astype(np.float32).mean() - img.astype(np.float32).mean())
+        delta_half = float(half.astype(np.float32).mean() - img.astype(np.float32).mean())
+        assert abs(delta_full) > 1.0  # exposure actually changed the image
+        ratio = delta_half / delta_full
+        # Linear coverage => half mask gives ~half the shift (not a quarter).
+        assert 0.4 < ratio < 0.6
+
+    @pytest.mark.parametrize("op_name", sorted(EXPECTED_OPS))
+    def test_each_op_soft_mask_is_linear(self, op_name: str) -> None:
+        if op_name == "saturation":
+            # Chroma scaling is linear in LCH, not in BGR mean; measured in
+            # test_saturation_soft_mask_is_linear below.
+            pytest.skip("saturation linearity measured in LCH space")
+        img = self._colorful_img()
+        full = apply_local_adjustment(img, self._const_mask(1.0), op_name, 0.5)
+        half = apply_local_adjustment(img, self._const_mask(0.5), op_name, 0.5)
+        delta_full = float(full.astype(np.float32).mean() - img.astype(np.float32).mean())
+        delta_half = float(half.astype(np.float32).mean() - img.astype(np.float32).mean())
+        if abs(delta_full) < 1.0:
+            pytest.skip("op produced no measurable change at full mask")
+        ratio = delta_half / delta_full
+        assert 0.35 < ratio < 0.65
+
+    @staticmethod
+    def _lab_chroma_mean(img: np.ndarray) -> float:
+        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
+        a = lab[:, :, 1] - 128.0
+        b = lab[:, :, 2] - 128.0
+        return float(np.sqrt(a * a + b * b).mean())
+
+    def test_saturation_soft_mask_is_linear(self) -> None:
+        img = self._colorful_img()
+        full = apply_local_adjustment(img, self._const_mask(1.0), "saturation", 0.5)
+        half = apply_local_adjustment(img, self._const_mask(0.5), "saturation", 0.5)
+        c0 = self._lab_chroma_mean(img)
+        d_full = self._lab_chroma_mean(full) - c0
+        d_half = self._lab_chroma_mean(half) - c0
+        assert abs(d_full) > 1.0
+        ratio = d_half / d_full
+        assert 0.35 < ratio < 0.65
 
 
 # ---------------------------------------------------------------------------

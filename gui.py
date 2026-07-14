@@ -1750,6 +1750,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         _makeup_coverage_even_state = gr.State(value=0.0)
                         _makeup_cake_reduce_state = gr.State(value=0.0)
                         _hemoglobin_smooth_state = gr.State(value=0.0)
+                        # mole_protect is a visible slider (below freckle_removal); no State
                         with gr.Accordion("👥 Per-face recipes", open=False):
                             detect_faces_btn = gr.Button("Detect Faces", size="sm", variant="secondary")
                             face_gallery = gr.Gallery(
@@ -1774,7 +1775,6 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 lines=2,
                                 info="Optional. State from picker wins if set. Engine units 0–100.",
                             )
-                        _mole_protect_state = gr.State(value=0.0)
                         _vein_attenuate_state = gr.State(value=0.0)
                         _gamut_compress_state = gr.State(value=True)
                         _saturation_mode_state = gr.State(value="additive")
@@ -1880,6 +1880,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             pore_synthesis = gr.Slider(0, 100, 0, step=1, label="Pore Synthesis", info="Add micro-texture/synthesized pores to prevent artificial plastic skin")
                             blemish = gr.Slider(0, 100, 30, step=1, label="Blemish Removal", info="AI blemish detection and inpainting for acne/spots")
                             freckle_removal = gr.Slider(0, 100, 0, step=1, label="Freckle Removal", info="Remove freckles while preserving beauty marks (0=off)")
+                            mole_protect = gr.Slider(
+                                0.0, 1.0, 0.0, step=0.05,
+                                label="Mole / Beauty-Mark Protect",
+                                info="R10: protect compact melanin spots from blemish+freckle heals (0=off, 1=full). Classical, no paid corpus.",
+                            )
                             skin_flatten = gr.Slider(0, 100, 0, step=1, label="Skin Flatten (Anime)", info="Edge-preserving cel flatten for anime-style shading · 0=off, 80=aggressive")
                             skin_quantize = gr.Slider(0, 100, 0, step=1, label="Tone Quantize (Anime)", info="Cel shading colour bands on skin · 0=off, 60=dramatic bands")
 
@@ -2616,7 +2621,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "makeup_coverage_even": _makeup_coverage_even_state,
         "makeup_cake_reduce": _makeup_cake_reduce_state,
         "hemoglobin_smooth": _hemoglobin_smooth_state,
-        "mole_protect": _mole_protect_state,
+        "mole_protect": mole_protect,
         "vein_attenuate": _vein_attenuate_state,
         "skin_flatten": skin_flatten,
         "skin_quantize": skin_quantize,

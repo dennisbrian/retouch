@@ -303,6 +303,13 @@ class FaceDetector:
 
     @staticmethod
     def _resolve_delegate(base: Any) -> Any:
+        # Default to CPU. GPU delegation is opt-in via RETUCH_GPU=1: on some
+        # platforms MediaPipe's GPU delegate constructor HANGS (does not raise),
+        # so we must not attempt it by default — the __init__ try/except only
+        # catches exceptions, not hangs. When RETUCH_GPU is set and GPU works,
+        # task creation succeeds; if it raises, __init__ falls back to CPU.
+        if os.environ.get("RETUCH_GPU"):
+            return base.Delegate.GPU
         return base.Delegate.CPU
 
     @staticmethod

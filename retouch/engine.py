@@ -4101,6 +4101,8 @@ class RetouchEngine:
                 # When real implementation added: apply masked healing/removal
                 # For now: placeholder returns empty mask, no-op
                 pass
+            else:
+                self._warn_neural_booster_disabled("stray_hair_boost")
 
         # Apply defect boosting if enabled
         if defect_strength > 0:
@@ -4111,8 +4113,29 @@ class RetouchEngine:
                 # blemish/pore refinement, texture transplant targeting, etc.
                 # For now: placeholder returns empty mask, no-op
                 pass
+            else:
+                self._warn_neural_booster_disabled("defect_boost")
 
         return img
+
+    @staticmethod
+    def _warn_neural_booster_disabled(name: str) -> None:
+        # The neural booster segmenters are PARKED (neural_boosters.py, enabled=False).
+        # A non-zero strength would silently do nothing; warn once per process so the
+        # caller is not misled (e.g. recipes.py ships neural.*=30 by default).
+        warned = getattr(RetouchEngine, "_neural_booster_warned", None)
+        if warned is None:
+            warned = set()
+            RetouchEngine._neural_booster_warned = warned
+        if name in warned:
+            return
+        warned.add(name)
+        logger.warning(
+            "neural booster '%s' requested (strength>0) but its segmenter is PARKED "
+            "(enabled=False) — no effect. See retouch/neural_boosters.py. Set the "
+            "strength to 0 or implement the segmenter to remove this warning.",
+            name,
+        )
 
     # ------------------------------------------------------------------
     # Lifecycle

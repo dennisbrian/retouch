@@ -273,6 +273,7 @@ class FreckleRemover:
         freckle_removal: float = 0.0,
         freckle_preserve_mask: Optional[np.ndarray] = None,
         confidence_threshold: float = 0.7,
+        mole_mask: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Remove freckles while preserving beauty marks via inpainting.
 
@@ -282,6 +283,7 @@ class FreckleRemover:
             freckle_removal: 0-100 strength. <=0 is a byte-identical no-op.
             freckle_preserve_mask: Optional (H, W) mask of pixels to never heal.
             confidence_threshold: Min classification confidence to act on.
+            mole_mask: Optional R10 mole mask (uint8/float) — never heal these.
 
         Returns:
             Image matching input dtype with freckles inpainted.
@@ -297,6 +299,7 @@ class FreckleRemover:
                 freckle_removal,
                 freckle_preserve_mask,
                 confidence_threshold,
+                mole_mask,
             )
 
         classifications = self.classify_anomalies(
@@ -310,6 +313,11 @@ class FreckleRemover:
         if freckle_preserve_mask is not None:
             user = normalize_mask(freckle_preserve_mask)
             preserve_mask = (user > 0.1).astype(np.uint8) * 255
+        if mole_mask is not None:
+            mm = normalize_mask(mole_mask)
+            preserve_mask = np.maximum(
+                preserve_mask, (mm > 0.1).astype(np.uint8) * 255
+            )
 
         for c in classifications:
             if c.classification == "beauty_mark":

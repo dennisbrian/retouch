@@ -628,11 +628,12 @@ def apply_local_adjustment(
         return img.copy()
 
     op = LOCAL_ADJUSTMENT_OPS[op_name]
+    # Each op applies the mask internally and returns a full-frame result:
+    # masked pixels are adjusted, unmasked pixels are unchanged (see the
+    # *_local_* ops). Compositing again here would square soft-mask coverage
+    # (m -> m^2), steepening falloff for every soft brush. So return the op
+    # result directly.
     result = op(img_f32, m, float(strength))
-    result = np.clip(result, 0.0, 255.0)
-
-    m3 = m[:, :, np.newaxis]
-    result = img_f32 * (1.0 - m3) + result * m3
     result = np.clip(result, 0.0, 255.0)
 
     if is_float:

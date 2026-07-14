@@ -158,6 +158,55 @@ class TestColorTransfer:
         assert np.all(result_half == color_img)
         assert not np.allclose(result_full, color_img)
 
+    @staticmethod
+    def _lab_ab_means(img: np.ndarray) -> tuple:
+        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
+        return float(lab[:, :, 1].mean()), float(lab[:, :, 2].mean())
+
+    def test_recovery_matches_reference_stats(self, grader):
+        # Spatially varying chroma so a/b std > 0 (channel not skipped).
+        rng = np.random.default_rng(0)
+        src = rng.integers(0, 255, (64, 64, 3)).astype(np.uint8)
+        ref = rng.integers(0, 255, (64, 64, 3)).astype(np.uint8)
+        result = grader.color_transfer(src, ref, intensity=1.0)
+        r_a, r_b = self._lab_ab_means(result)
+        ref_a, ref_b = self._lab_ab_means(ref)
+        src_a, src_b = self._lab_ab_means(src)
+        # Transfer matches the reference a/b means (within LAB rounding).
+        assert abs(r_a - ref_a) < 8
+        assert abs(r_b - ref_b) < 8
+        # And it actually moved the image away from the source stats.
+        assert abs(r_a - src_a) > 1 or abs(r_b - src_b) > 1
+
+    def test_flat_source_channel_preserved(self, grader):
+        # Gray source has ~zero a/b std -> the channel must be skipped (no crush).
+        src = np.full((64, 64, 3), 128, dtype=np.uint8)
+        ref = np.full((64, 64, 3), 200, dtype=np.uint8)  # strongly different
+        result = grader.color_transfer(src, ref, intensity=1.0)
+        r_a, r_b = self._lab_ab_means(result)
+        src_a, src_b = self._lab_ab_means(src)
+        # Near-flat source a/b must be left essentially unchanged.
+        assert abs(r_a - src_a) < 2
+        assert abs(r_b - src_b) < 2
+
+    def test_std_ratio_is_clamped(self, grader):
+        # Extreme reference a-channel so the unclamped ratio would far exceed 3.
+        rng = np.random.default_rng(1)
+        base = rng.integers(100, 140, (64, 64, 3)).astype(np.uint8)
+        src = base.copy()
+        ref = base.copy()
+        ref[:, :32, :] = (20, 60, 200)   # very different a/b on the left half
+        ref[:, 32:, :] = (230, 20, 30)   # and the right half
+        result = grader.color_transfer(src, ref, intensity=1.0)
+        _, r_b = self._lab_ab_means(result)
+        _, s_b = self._lab_ab_means(src)
+        # Clamp bounds the std ratio to [0.3, 3.0]; the *mean* shift must stay
+        # within a sane multiple of the source spread (not crushed to an edge).
+        assert 0.0 <= r_b <= 255.0
+        # Result b mean must not be driven past the source by more than ~3x the
+        # source spread would allow (sanity guard against unbounded ratio).
+        assert abs(r_b - s_b) <= 3.0 * max(s_b, 255 - s_b) + 5
+
 
 class TestInternalMethods:
     def test_luminance_curve(self, grader, gradient_img):

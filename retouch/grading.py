@@ -1489,6 +1489,25 @@ class ColorGrader:
     # Color transfer
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _reinhard_chroma(
+        src: np.ndarray,
+        mean_src: float,
+        std_src: float,
+        mean_ref: float,
+        std_ref: float,
+    ) -> np.ndarray:
+        """Single-channel Reinhard chroma match (A/B only), ratio-clamped.
+
+        Mirrors ``style_transfer.reinhard_transfer_masked``'s safety policy:
+        skip near-flat source channels (std < 1e-3) to leave them unchanged,
+        otherwise scale by std ratio clamped to [0.3, 3.0] to avoid crush.
+        """
+        if std_src < 1e-3:
+            return src
+        ratio = np.clip(std_ref / (std_src + 1e-6), 0.3, 3.0)
+        return (src - mean_src) * ratio + mean_ref
+
     def color_transfer(
         self,
         img_bgr: np.ndarray,
@@ -1511,8 +1530,12 @@ class ColorGrader:
         mean_b_src = src_b.mean(); std_b_src = src_b.std()
         mean_a_ref = ref_a.mean(); std_a_ref = ref_a.std()
         mean_b_ref = ref_b.mean(); std_b_ref = ref_b.std()
-        a_result = (src_a - mean_a_src) * (std_a_ref / (std_a_src + 1e-6)) + mean_a_ref
-        b_result = (src_b - mean_b_src) * (std_b_ref / (std_b_src + 1e-6)) + mean_b_ref
+        # Match A/B (chroma) channels only; L (lightness) is copied verbatim.
+        # Symmetric with style_transfer.reinhard_transfer_masked: clamp the
+        # std ratio to [0.3, 3.0] and skip a near-flat source channel to avoid
+        # channel crush (previously unbounded -> hard clip at [0,255]).
+        a_result = self._reinhard_chroma(src_a, mean_a_src, std_a_src, mean_a_ref, std_a_ref)
+        b_result = self._reinhard_chroma(src_b, mean_b_src, std_b_src, mean_b_ref, std_b_ref)
         lab_result = np.stack([src_l, a_result, b_result], axis=2)
         if is_float:
             result = lab_f32_to_bgr_f32(np.clip(lab_result, 0, 255))

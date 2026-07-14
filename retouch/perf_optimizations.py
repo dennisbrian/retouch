@@ -459,15 +459,25 @@ def _process_face_core(
             feather_radius=3,
         )
 
-    # ---- Selective freckle removal (preserve beauty marks) ----
+    # ---- Selective freckle removal (preserve beauty marks + R10 moles) ----
     # Runs after smoothing so the heal stays crisp; no-op when freckle_removal <= 0.
+    # Classical freckle protect (no A1): beauty_mark classifier + optional mole_protect mask.
     _freckle_removal = getattr(ctx, 'freckle_removal', 0.0) or 0.0
+    _mole_for_freckle = None
+    if _freckle_removal > 0 and float(getattr(ctx, 'mole_protect', 0.0) or 0.0) > 0:
+        try:
+            _, _mole_for_freckle = skin.apply_mole_protect(
+                canvas, regions.skin, float(ctx.mole_protect),
+            )
+        except Exception:
+            _mole_for_freckle = None
     if _freckle_removal > 0:
         canvas = FreckleRemover().remove(
             img_bgr=canvas,
             face_mask=skin_n,
             freckle_removal=_freckle_removal,
             freckle_preserve_mask=getattr(ctx, 'freckle_preserve_mask', None),
+            mole_mask=_mole_for_freckle,
         )
 
     # ---- Exposure-locked smoothing (recipe-only) ----
