@@ -26,7 +26,7 @@ BGR is the input convention (image is converted to RGB [0, 1] internally).
 
 from __future__ import annotations
 
-from typing import Tuple
+from typing import Optional, Tuple
 
 import cv2
 import numpy as np
@@ -104,6 +104,55 @@ def decompose_chromophores(img_bgr: np.ndarray) -> Tuple[np.ndarray, np.ndarray]
     melanin = np.clip(melanin, 0.0, None).astype(np.float32)
     hemoglobin = np.clip(hemoglobin, 0.0, None).astype(np.float32)
     return melanin, hemoglobin
+
+
+def reconstruct_from_chromophores(
+    melanin: np.ndarray,
+    hemoglobin: np.ndarray,
+    c: Optional[np.ndarray] = None,
+    *,
+    img_bgr: Optional[np.ndarray] = None,
+    skin_mask: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Forward map mel/hb → BGR float32 [0,255].
+
+    If ``c`` is None and ``img_bgr`` is given, fit shared ambient optical density
+    as median residual on skin (or whole image). Else ``c=0``.
+    """
+    mel = melanin.astype(np.float32)
+    hb = hemoglobin.astype(np.float32)
+    conc = np.stack([mel, hb], axis=-1)  # H,W,2
+    log_hat = conc @ _M.T  # H,W,3 RGB optical density (c=0)
+
+    if c is None:
+        if img_bgr is not None:
+            log_rgb = _bgr_to_log_rgb(img_bgr)
+            resid = log_rgb - log_hat  # H,W,3
+            # Shared scalar ambient: mean across channels, median over skin
+            per_px = resid.mean(axis=-1)
+            if skin_mask is not None:
+                m = skin_mask.astype(np.float32)
+                if m.max() > 1.0:
+                    m = m / 255.0
+                sel = per_px[m > 0.5]
+                c_val = float(np.median(sel)) if sel.size else 0.0
+            else:
+                c_val = float(np.median(per_px))
+            c = np.full(mel.shape, c_val, dtype=np.float32)
+        else:
+            c = 0.0
+
+    if np.isscalar(c):
+        log_rgb_hat = log_hat + float(c)
+    else:
+        c_arr = np.asarray(c, dtype=np.float32)
+        if c_arr.ndim == 2:
+            c_arr = c_arr[..., None]
+        log_rgb_hat = log_hat + c_arr
+    rgb = np.exp(-np.clip(log_rgb_hat, -20.0, 20.0))
+    rgb = np.clip(rgb, 0.0, 1.0)
+    bgr = (rgb[..., ::-1] * 255.0).astype(np.float32)
+    return bgr
 
 
 def hemoglobin_breakdown_phase(

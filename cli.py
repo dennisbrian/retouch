@@ -393,6 +393,10 @@ def build_params(args: argparse.Namespace) -> dict:
     elif getattr(args, "preset", None):
         params["recipe"] = args.preset
 
+    if getattr(args, "face_params", None):
+        from retouch.face_params import load_face_params_json
+        params["face_params"] = load_face_params_json(args.face_params)
+
     # Process the simple scalar/int/float parameters from the spec list.
     # Each spec maps a CLI flag (e.g. "--smooth") to the engine kwarg name
     # ("smooth").  When a flag is not provided on the command line we leave
@@ -569,6 +573,13 @@ def main() -> None:
     parser.add_argument("--look-base", type=str, default=None,
                         metavar="BASE_IMG",
                         help="Optional original image for paired look extraction (delta vs REF_IMG)")
+
+    # Per-face recipe / param overrides (JSON keyed by detection-order index).
+    parser.add_argument("--face-params", type=str, default=None,
+                        metavar="PATH",
+                        help="JSON file of per-face overrides, e.g. "
+                             '{"0": {"recipe": "cosplay", "smooth": 70}, '
+                             '"1": {"recipe": "natural"}}. Engine units (0-100).')
 
     args = parser.parse_args()
 

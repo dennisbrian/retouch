@@ -90,6 +90,10 @@ the person.
 **Why not a recombination:** A3/R11 *mask around* makeup; this *decomposes* it as a distinct optical
 layer with its own parameters. Masking ≠ unmixing.
 
+**Implementation plan (locked 2026-07-14):** `PLAN_P4_MAKEUP_UNMIX.md` — alpha composite (default) +
+R7 residual prior (do not wait P1), optional R9 albedo path, spike GO/NO-GO, `retouch/makeup_unmix.py`,
+engine order unmix→skin-on-S→recompose→makeup_v2. Product after per-face recipe Slice 1.
+
 ---
 
 ## P5 — Temporal / burst coherence ⭐ novel (the un-opened axis, region-agnostic but skin-critical)

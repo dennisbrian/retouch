@@ -65,35 +65,12 @@ class FaceReshaper:
     # Public entry point
     # ------------------------------------------------------------------
 
-    def reshape(
-        self,
-        img_bgr: np.ndarray,
-        faces: List[Any],
+    @staticmethod
+    def _read_reshape_vals(
         ctx: Any = None,
         strength: Optional[int] = None,
-    ) -> np.ndarray:
-        """Perform face reshaping (slimming + 9 F5 liquify sliders) for all faces.
-
-        Backward-compatible: when called with the legacy ``strength`` int and
-        ``ctx=None``, applies only the slimming warp set at that strength.
-
-        Args:
-            img_bgr: (H, W, 3) uint8 BGR input image.
-            faces: List of FaceData objects.
-            ctx: ProcessingContext (or any object exposing the reshape_*
-                attributes). If None, ``strength`` is used for slimming only.
-            strength: Legacy slimming strength override (0–100). Ignored when
-                ``ctx`` is provided.
-
-        Returns:
-            (H, W, 3) reshaped image, same dtype as input.
-        """
-        if not faces:
-            return img_bgr
-
-        slimming_val: float
-        reshape_vals: dict[str, float]
-        side_vals: dict[str, float]
+    ) -> Tuple[float, dict, dict]:
+        """Read slimming + reshape + side slider values from one context."""
         if ctx is not None:
             slimming_val = float(getattr(ctx, "slimming", 0.0) or 0.0)
             reshape_vals = {
@@ -127,12 +104,40 @@ class FaceReshaper:
                 "jaw_width_l", "jaw_width_r", "nose_width_l", "nose_width_r",
                 "eye_size_l", "eye_size_r", "neck_width", "neck_length",
             )}
+        return slimming_val, reshape_vals, side_vals
 
-        if (
-            slimming_val <= 0
-            and not any(v != 0 for v in reshape_vals.values())
-            and not any(v != 0 for v in side_vals.values())
-        ):
+    def reshape(
+        self,
+        img_bgr: np.ndarray,
+        faces: List[Any],
+        ctx: Any = None,
+        strength: Optional[int] = None,
+        face_ctxs: Optional[Sequence[Any]] = None,
+    ) -> np.ndarray:
+        """Perform face reshaping (slimming + F5 liquify) for all faces.
+
+        B-lite: when ``face_ctxs`` is provided (same length as faces), each face
+        reads its own reshape/slimming values; warps still accumulate into one
+        global remap (safe when face supports are disjoint).
+
+        Backward-compatible: ``strength`` int + ``ctx=None`` = slimming only.
+        """
+        if not faces:
+            return img_bgr
+
+        # Early exit: any face (or global ctx) non-zero
+        check_ctxs: List[Any] = list(face_ctxs) if face_ctxs else [ctx]
+        any_active = False
+        for c in check_ctxs:
+            sv, rv, sdv = self._read_reshape_vals(c, strength if c is None else None)
+            if sv > 0 or any(v != 0 for v in rv.values()) or any(v != 0 for v in sdv.values()):
+                any_active = True
+                break
+        if not any_active and ctx is not None and face_ctxs:
+            sv, rv, sdv = self._read_reshape_vals(ctx, None)
+            if sv > 0 or any(v != 0 for v in rv.values()) or any(v != 0 for v in sdv.values()):
+                any_active = True
+        if not any_active:
             return img_bgr
 
         h, w = img_bgr.shape[:2]
@@ -140,7 +145,12 @@ class FaceReshaper:
         face_oval_pts_per_face: List[np.ndarray] = []
         max_face_width = 0.0
 
-        for face in faces:
+        for i, face in enumerate(faces):
+            c = face_ctxs[i] if face_ctxs is not None and i < len(face_ctxs) else ctx
+            slimming_val, reshape_vals, side_vals = self._read_reshape_vals(
+                c, strength if c is None else None,
+            )
+
             lm_obj = face.landmarks
             landmarks = lm_obj.landmark
             fw = self._face_width(landmarks, w)
@@ -152,8 +162,6 @@ class FaceReshaper:
 
             warps.extend(self._slimming_warps(landmarks, fw, slimming_val, h, w))
 
-            # Eye size: per-side L/R override when either side variant is set,
-            # else global symmetric path (byte-identical to legacy).
             if side_vals["eye_size_l"] != 0 or side_vals["eye_size_r"] != 0:
                 warps.extend(self._eye_size_warps(
                     lm_obj, landmarks, fw, 0.0, h, w,
@@ -164,7 +172,6 @@ class FaceReshaper:
 
             warps.extend(self._eye_distance_warps(landmarks, fw, reshape_vals["eye_distance"], h, w))
 
-            # Nose width: per-side L/R override or global symmetric path.
             if side_vals["nose_width_l"] != 0 or side_vals["nose_width_r"] != 0:
                 warps.extend(self._nose_width_warps(
                     landmarks, fw, 0.0, h, w,
@@ -175,7 +182,6 @@ class FaceReshaper:
 
             warps.extend(self._nose_length_warps(landmarks, fw, reshape_vals["nose_length"], h, w))
 
-            # Jaw width: per-side L/R override or global symmetric path.
             if side_vals["jaw_width_l"] != 0 or side_vals["jaw_width_r"] != 0:
                 warps.extend(self._jaw_width_warps(
                     landmarks, fw, 0.0, h, w,

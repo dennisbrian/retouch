@@ -79,7 +79,7 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
 import cv2
 import numpy as np
@@ -420,6 +420,10 @@ class ProcessingContext:
     # Cached per-face detection + parsing; None ⇒ engine detects/parses.
     face_contexts: Optional[List["FaceContext"]] = None
 
+    # Per-face recipe/param overrides keyed by face index (detection order).
+    # None ⇒ every face uses this global context (golden path).
+    face_params: Optional[Dict[int, Dict[str, Any]]] = None
+
     # 16-bit RAF ingest: full-precision float32 [0,255] BGR source at the
     # native processing resolution. Set by process() when the input is
     # float32; threaded into global grading so the extra tonal headroom
@@ -487,6 +491,7 @@ class ProcessingResult(np.ndarray):
         timings: Optional[Dict[str, float]] = None,
         face_contexts: Optional[List["FaceContext"]] = None,
         qa: Optional[List[QAWarning]] = None,
+        face_recipes: Optional[Dict[int, Dict[str, Any]]] = None,
     ):
         obj = np.asarray(image).view(cls)
         obj.image = image
@@ -499,6 +504,7 @@ class ProcessingResult(np.ndarray):
         obj.timings = timings or {}
         obj.face_contexts = face_contexts
         obj.qa = qa or []
+        obj.face_recipes = face_recipes
         return obj
 
     def __array_finalize__(self, obj):
@@ -514,6 +520,7 @@ class ProcessingResult(np.ndarray):
         self.timings = getattr(obj, "timings", {})
         self.face_contexts = getattr(obj, "face_contexts", None)
         self.qa = getattr(obj, "qa", None) or []
+        self.face_recipes = getattr(obj, "face_recipes", None)
 
 
 # ---------------------------------------------------------------------------
@@ -1070,6 +1077,8 @@ class RetouchEngine:
         body_reshape_hip_width: Optional[float] = None,
         # --- T3: Auto body reshape (one-click) ---
         auto_body_reshape: Optional[float] = None,
+        # --- Per-face recipe / param overrides (detection-order index) ---
+        face_params: Optional[Mapping[int, Mapping[str, Any]]] = None,
     ) -> ProcessingResult:
         """Process a single image through the full Retouch pipeline.
 
@@ -1337,6 +1346,9 @@ class RetouchEngine:
             ctx.quality = quality
         if local_adjustments is not None:
             ctx._local_adjustments = local_adjustments
+        if face_params is not None:
+            from .face_params import coerce_face_params
+            ctx.face_params = coerce_face_params(face_params)
 
         if style_profile is not None:
             if overrides["contrast"] is None:
@@ -1483,6 +1495,13 @@ class RetouchEngine:
         # ------------------------------------------------------------------
         result = self._apply_sr_export(result, ctx, timings)
 
+        face_recipes = None
+        if ctx.face_params:
+            face_recipes = {
+                i: dict(ctx.face_params[i])
+                for i in range(len(faces))
+                if i in ctx.face_params
+            }
         return ProcessingResult(
             image=result,
             skin_mask=acc_skin,
@@ -1494,6 +1513,7 @@ class RetouchEngine:
             timings=timings,
             face_contexts=built_contexts,
             qa=core.qa,
+            face_recipes=face_recipes or None,
         )
 
     # ------------------------------------------------------------------
@@ -2525,37 +2545,62 @@ class RetouchEngine:
 
         return result_u8
 
+    def _ctx_for_face(self, ctx: ProcessingContext, face_index: int) -> ProcessingContext:
+        """Resolve per-face overrides; identity when face_params empty/missing."""
+        if not ctx.face_params:
+            return ctx
+        ov = ctx.face_params.get(face_index)
+        if not ov:
+            return ctx
+        from .face_params import resolve_face_context
+        return resolve_face_context(ctx, ov)
+
+    def _face_ctxs_for_reshape(self, ctx: ProcessingContext, n_faces: int):
+        """Per-face contexts for reshape B-lite, or None when no face_params."""
+        if not ctx.face_params or n_faces <= 0:
+            return None
+        return [self._ctx_for_face(ctx, i) for i in range(n_faces)]
+
     def _stage_reshape(self, img: np.ndarray, faces, ctx: ProcessingContext) -> np.ndarray:
-        if self._any_reshape_active(ctx):
-            return self._reshaper.reshape(img, faces, ctx)
+        face_ctxs = self._face_ctxs_for_reshape(ctx, len(faces) if faces else 0)
+        if self._any_reshape_active(ctx, face_ctxs):
+            return self._reshaper.reshape(img, faces, ctx, face_ctxs=face_ctxs)
         return img.copy()
 
     @staticmethod
-    def _any_reshape_active(ctx: ProcessingContext) -> bool:
-        if ctx.slimming > 0:
-            return True
-        return any(
-            getattr(ctx, attr, 0.0) != 0
-            for attr in (
-                "reshape_eye_size",
-                "reshape_eye_distance",
-                "reshape_nose_width",
-                "reshape_nose_length",
-                "reshape_jaw_width",
-                "reshape_chin_length",
-                "reshape_mouth_size",
-                "reshape_smile",
-                "reshape_forehead",
-                "reshape_jaw_width_l",
-                "reshape_jaw_width_r",
-                "reshape_nose_width_l",
-                "reshape_nose_width_r",
-                "reshape_eye_size_l",
-                "reshape_eye_size_r",
-                "reshape_neck_width",
-                "reshape_neck_length",
+    def _any_reshape_active(
+        ctx: ProcessingContext,
+        face_ctxs: Optional[List[ProcessingContext]] = None,
+    ) -> bool:
+        def _active(c: ProcessingContext) -> bool:
+            if c.slimming > 0:
+                return True
+            return any(
+                getattr(c, attr, 0.0) != 0
+                for attr in (
+                    "reshape_eye_size",
+                    "reshape_eye_distance",
+                    "reshape_nose_width",
+                    "reshape_nose_length",
+                    "reshape_jaw_width",
+                    "reshape_chin_length",
+                    "reshape_mouth_size",
+                    "reshape_smile",
+                    "reshape_forehead",
+                    "reshape_jaw_width_l",
+                    "reshape_jaw_width_r",
+                    "reshape_nose_width_l",
+                    "reshape_nose_width_r",
+                    "reshape_eye_size_l",
+                    "reshape_eye_size_r",
+                    "reshape_neck_width",
+                    "reshape_neck_length",
+                )
             )
-        )
+
+        if face_ctxs:
+            return any(_active(c) for c in face_ctxs) or _active(ctx)
+        return _active(ctx)
 
     @staticmethod
     def _compute_face_roi_padding(
@@ -2653,7 +2698,7 @@ class RetouchEngine:
         results: List[Optional[_FaceResult]] = [None] * len(faces)
         if len(faces) == 1:
             results[0] = self._process_one_face(
-                img, faces[0], person_mask, ctx, h_img, w_img,
+                img, faces[0], person_mask, self._ctx_for_face(ctx, 0), h_img, w_img,
                 regions=all_regions[0], preprepared=prepared_faces[0]
             )
             return results, built_contexts  # type: ignore[return-value]
@@ -2662,9 +2707,9 @@ class RetouchEngine:
         # falling back to ThreadPoolExecutor (shares memory + GIL-released ops).
         proc_results: Optional[List[Optional[dict]]] = None
         try:
-            def _slim_ctx(ctx):
+            def _slim_ctx(c):
                 return {
-                    k: v for k, v in ctx.__dict__.items()
+                    k: v for k, v in c.__dict__.items()
                     if not isinstance(v, np.ndarray)
                 }
             payloads = [
@@ -2674,7 +2719,7 @@ class RetouchEngine:
                     prepared_faces[i]['shifted_bbox'],
                     prepared_faces[i]['shifted_landmarks'],
                     ieds[i],
-                    _slim_ctx(ctx),
+                    _slim_ctx(self._ctx_for_face(ctx, i)),
                     prepared_faces[i]['roi_box'],
                     prepared_faces[i]['roi_person_mask'],
                     prepared_faces[i]['roi_box'][3] - prepared_faces[i]['roi_box'][1],
@@ -2691,7 +2736,8 @@ class RetouchEngine:
             for i, pr in enumerate(proc_results):
                 if pr is None:
                     results[i] = self._process_one_face(
-                        img, faces[i], person_mask, ctx, h_img, w_img,
+                        img, faces[i], person_mask, self._ctx_for_face(ctx, i),
+                        h_img, w_img,
                         regions=all_regions[i], preprepared=prepared_faces[i]
                     )
                 else:
@@ -2710,7 +2756,8 @@ class RetouchEngine:
             future_to_idx = {
                 pool.submit(
                     self._process_one_face,
-                    img, face, person_mask, ctx, h_img, w_img,
+                    img, face, person_mask, self._ctx_for_face(ctx, i),
+                    h_img, w_img,
                     regions=all_regions[i], preprepared=prepared_faces[i]
                 ): i
                 for i, face in enumerate(faces)
