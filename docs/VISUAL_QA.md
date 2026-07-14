@@ -454,4 +454,4 @@ halos, no color drift artifacts, detail preserved (e.g. braces/teeth in DSCF8062
 v1→v2 flipped: color_drift 0→10, texture 6→10, highlight 8→10.
 
 **Unit tests:** `test_image_analyzer` 40 + `test_smart_default` 27 pass.
-**Uncommitted:** `retouch/image_analyzer.py`, `scripts/qa_visual_signoff.py`, `tests/test_image_analyzer.py`.
+**Committed:** `retouch/image_analyzer.py`, `scripts/qa_visual_signoff.py`, `tests/test_image_analyzer.py` (`fc3a8ed`).
