@@ -48,20 +48,20 @@ These are the items on this list with real judgment load: some are mathematicall
    - T3 body reshape (`_stage_body_reshape`)
    Fix: either migrate these 4 stages into the registry, or gate `_use_global_registry = False` when these features are requested. Mechanical: the fix shape is already known, just needs careful wiring + test coverage — Haiku-appropriate.
 
-2. **[HAIKU] Related — spot heal is also split-brain (HON-4):** `retouch/spot_heal.py` (`SpotHealer`/`LamaHealer` — the more capable Tier 2.1 v1 LaMa path) is never imported/called by `engine.py`. Only the older, simpler `heal.heal_region` (Telea-only, v0) is wired at `engine.py:1439`. Pairs naturally with item 1's fix (same "code exists, unreachable" bug class — audit calls this **B3**). Wiring-only, not judgment-heavy.
+2. **[HAIKU] Related — spot heal is also split-brain (HON-4) — VERIFIED 2026-07-15.** `retouch/spot_heal.py`'s `LamaHealer` is never imported/called by `engine.py` (0 matches). `engine.py:1439` wires only the older `heal.heal_region` (Telea-only). Correction to the earlier finding: `SpotHealer` (not `LamaHealer`) *is* called, but only narrowly inside `hairwork.py:862-866` for flyaway-hair removal — not the general-purpose brush-heal path. Also confirmed: the real LaMa ONNX model was **never downloaded** (`model_fetch.py` has no `"lama_inpaint"` entry), so even if wired, `LamaHealer` would transparently fall back to multi-pass Telea today — meaning the practical quality gap is smaller than the wiring gap suggests, though `LamaHealer`'s multi-pass Telea fallback is still better than `heal_region`'s single-pass. Fix: in `engine.py`'s heals loop (~line 1438-1451), swap to `LamaHealer.heal_large()` for large masks. Pairs naturally with item 1 (same "code exists, unreachable" bug class — audit calls this **B3**).
 
-3. **[HAIKU] Stale research doc — hygiene, not code:** `RESEARCH_FUJI_SIM_QUALITY_CEILING.md` (written 2026-07-14) is already resolved as of the *same day* — `FilmDensityEngine` brightness-crush fixed in `9699157`, selective-color/HSL calibration blocks added in `f3290c3`. Archive or add a status note so it doesn't cause redundant re-work. Only its item 4 (reference corpus acquisition) is still genuinely open.
+3. **[HAIKU] Stale research doc — hygiene, not code — DONE 2026-07-15.** `RESEARCH_FUJI_SIM_QUALITY_CEILING.md` status note added, citing exact commits (`9699157` FilmDensityEngine fix, `f3290c3` HSL calibration). Archived as historical context, not an active task list.
 
 ---
 
 ## P1 — Next up (face-path items first, per standing priority) — [HAIKU unless noted]
 
-4. **[HAIKU] B6: ROI-crop `FaceRegions` before IPC pickling** — currently ~335MB/face pickled; face-pipeline perf/memory issue, not a general one. Mechanical scoping fix.
+4. **[HAIKU] B6: ROI-crop `FaceRegions` before IPC pickling — VERIFIED 2026-07-15.** Confirmed: `FaceRegions` has 30 mask fields, all full-image-sized float32. Independently measured at ~448MB/face for a 2048×2048 image (28 populated masks × 16MB each) — same order of magnitude as the original ~335MB estimate, worst case ~480MB if all 30 slots populated. Pickled raw via `engine.py:2833-2848` into `ProcessPoolExecutor.submit()`. Fix: crop each mask to face bbox + padding before pickling, restore to full-image coords on the worker side — estimated ~7-15× IPC size reduction (448MB → ~30-60MB for a typical 400×400 face ROI). Mechanical scoping fix.
 5. **[HAIKU] Phase 7 ship/distribution hardening** — signing, notarization, Windows build, update-check. Confirmed **not started**, no code found. Not face-specific; kept here since it's still P1-severity for shippability. Mostly config/tooling, not judgment-heavy.
 6. **[HAIKU] Remaining audit Tier B items** (from `PLAN_CODEBASE_AUDIT_2026_07_14.md`), pair naturally with the P0 fix but are body/background-scoped, not face:
-   - B3: wire local-adjustments + spot-heal brush UI end-to-end (see item 1-2 above)
-   - B4: LaMa tile-seam fix (`spot_heal.py:311` — dead `weight` blend variable, hard seams at 1024px)
-   - B5: per-model ONNX provider denylist (CoreML known-broken for NAFNet, not currently blocked)
+   - B4: LaMa tile-seam fix — **VERIFIED 2026-07-15.** `spot_heal.py:311` computes a `weight` feathering array but it's dead: never referenced again, and the actual tile blend at line 328 is a hard overwrite (`out[y0:y1, x0:x1] = inpainted`), not a weighted blend. Docstring explicitly promises feathered blending; overlap mechanism exists (`tile_overlap`, line ~441) but isn't used. High confidence (85%+) this causes visible seams at 1024px. Fix: apply `weight` via accumulation + normalization instead of hard overwrite — moot in practice until B3 (LaMa wiring) also lands, since the model isn't currently reachable anyway.
+   - B5: per-model ONNX provider denylist — **VERIFIED 2026-07-15, narrower than originally stated.** NAFNet (denoise) is *already correctly* CoreML-blocked (`enhance.py:197`, hardcoded `cpu_only=True` — CoreML was measured to silently miscompute NAFNet, max abs error 1.7-2.4). LaMa spot-heal is also hardcoded CPU-only (`spot_heal.py:268`). The real gap: **BiSeNet face parser** (`parsing.py:147`) uses `build_ort_providers()` with no denylist, so it *will* use CoreML if available — no evidence this is broken, just unaudited. `RETUCH_GPU=1` only gates MediaPipe, not ONNX providers — the CoreML path for BiSeNet is always-on by default today. Correct this item's framing: it's "audit BiSeNet on CoreML," not "NAFNet is unblocked" (NAFNet was already fixed).
+   - New, surfaced 2026-07-15: **`lens_blur` is another "shipped but unreachable" case.** `retouch/background.py::BackgroundReplacer.lens_blur()` is engine-callable (`engine.py:3182`) and has real depth-aware multi-level Gaussian blur with subject protection — but the GUI slider is a hidden `gr.State()` placeholder (`gui.py:2804`, no visible control) and there's no CLI flag at all (`cli_flag=None` in `params.py`). Focus-by-point exists in the method signature but isn't wired from the engine call (always defaults to subject-only focus). See item 11 below for the full LR-comparison — this is the reachability half of that finding.
 
 *(Note: F1 float32 completion and B7 style_ref multi-face were originally P1 items here — both moved to the FABLE hardest-tier section above; they're judgment-heavy, not mechanical.)*
 
@@ -73,9 +73,21 @@ These are the items on this list with real judgment load: some are mathematicall
 8. **[HAIKU] Body Skin / Clothes as separately maskable GUI targets** — from LR competitor research (§7 of `PHOTOSHOP_PARITY_ROADMAP.md`); "Body Skin" touches face-adjacent retouching, "Clothes" doesn't — split if scoped. GUI/param wiring, mechanical.
 9. **[HAIKU] 2.3 Interactive curve editor** — confirmed NOT STARTED, deliberately deferred (needs custom JS component/canvas, not a Gradio built-in). F6 (look-extraction into editable preset JSON) already shipped as a partial substitute. General-purpose, not face-specific. Frontend widget work — mechanical once scoped, but flag to Fable first if the canvas/JS component design needs real UX judgment.
 10. **[HAIKU] 2.4 Super-resolution model** — denoise (F7/NAFNet) is done; SR model deliberately not yet acquired. Benefits faces same as everything else, not face-specific work. Model acquisition + wiring, mechanical.
-11. **[HAIKU] Lens Blur comparison** — LR has bokeh-shape presets, Cat Eye, Bokeh Boost, focus-by-point + "Visualize Depth" toggle. Compare against our relight/lens-effects stage; note `f3290c3` already added *some* lens blur — check current coverage before scoping. Background/DoF-scoped, not face.
+11. **[HAIKU] Lens Blur comparison — VERIFIED 2026-07-15, full coverage table:**
+
+    | Feature | Lightroom | Ours | Status |
+    |---|---|---|---|
+    | Blur Amount | Yes (0-100) | Yes (0-100 `strength`) | ✓ Match |
+    | Bokeh Shape Presets | Yes | No (Gaussian only) | ✗ Missing |
+    | Cat Eye | Yes | No | ✗ Missing |
+    | Bokeh Boost | Yes | No | ✗ Missing |
+    | Focus Range: by subject | Yes | Yes (person mask always in-focus) | ✓ Match |
+    | Focus Range: by point | Yes | Method params exist, not engine-wired | ✗ Dead code |
+    | Visualize Depth toggle | Yes | No | ✗ Missing |
+
+    Reachability: engine-callable (`engine.py:3182`) but **GUI-hidden** (`gr.State()` placeholder, no visible slider, `gui.py:2804`) and **no CLI flag**. Two separable tasks: (a) cheap — expose the existing slider in GUI + add a CLI flag (mechanical, do first), (b) larger — bokeh-shape/Cat-Eye/Bokeh-Boost/depth-visualization are genuinely new engine features, not just wiring. Background/DoF-scoped, not face — correctly ranked below face-path items.
 12. **[HAIKU] Linear RAW develop full UX** — 16-bit ingest + `LinearGrader` exist, reachable only via CLI `--linear-raw`; GUI exposure/WB sliders for the develop step are genuine backlog (T5 Step 3). Whole-image scope, not face-specific. GUI wiring, mechanical.
-13. **[HAIKU] 10 `reset_*` handlers in gui.py** — still hand-ordered positional pairs (latent, low-risk, unchanged status). Purely mechanical.
+13. **[HAIKU] `reset_*` handlers in gui.py — VERIFIED 2026-07-15, count corrected: 13, not 10** (3 added since the original count): `reset_skin_smoothing`, `reset_skin_tone`, `reset_basic_tone`, `reset_tone_curve`, `reset_relighting`, `reset_eyes_lips`, `reset_face_reshaping`, `reset_structure_effects`, `reset_color_grading`, `reset_film_effects`, `reset_split_toning`, `reset_color_transfer`, `reset_debug` (`gui.py:633-680`). Each returns a hand-ordered tuple matched positionally against a button's `outputs=` list, no name-keyed safety net, no import-time drift guard. Fix is **identical to the existing `_process_input_components`/`_recipe_output_components` pattern already in gui.py** (lines 2304-2424) — no new infrastructure needed: define a `RESET_*_KEYS` tuple per handler, rewrite each to `return tuple(d[k] for k in KEYS)`, add the same `AssertionError` drift guard. Estimated **45-60 minutes total**, low risk, mechanical, copy-paste from proven code.
 
 ---
 
@@ -83,7 +95,8 @@ These are the items on this list with real judgment load: some are mathematicall
 
 - A1/A2/A4 competitor benchmarking track (Retouch4me tuning, neural stray-hair) — owner-declined paid trial licensing.
 - Per-face auto Male/Female/Child classification Slice 3 — heuristic, low priority.
-- LUT hot-reload daemon — **not actually a bug**; a manual "Reload LUTs" button already works. Only the filesystem-watcher automation is deferred as a nice-to-have.
+- LUT hot-reload daemon — **not actually a bug, RE-VERIFIED 2026-07-15**: manual "Reload LUTs" button confirmed working end-to-end (`gui.py:2102` → `on_reload_luts()` → `lut.py:495-499` `reload()`, tested in `test_lut_registry.py`). Daemon watcher (`lut.py:554-584` `watch_luts_dir()`) confirmed to exist but genuinely never started from `gui.py`/`cli.py` (0 matches) — correctly deferred nice-to-have, no blocking bug found.
+- Confidence-based stage skipping / hardware-aware scheduling — **RE-VERIFIED 2026-07-15 with a deeper check** (read all `enabled()` methods, `qa_backoff.py`, thread-pool sizing): genuinely absent, no partial/hidden implementation. Closest adjacent facts: face detection confidence is captured (`detection.py`, `FaceData.confidence`) but never consulted to skip a stage; `ThreadPoolExecutor(max_workers=min(len(faces), 4))` caps at a hardcoded 4, not real CPU-count detection. Confirmed low priority, not correctness-critical.
 - P6 preference learning / P5 temporal-burst coherence / P8 aging — explicitly blocked on dependencies per `RESEARCH_PER_FACE_AND_P4.md`.
 
 ---
