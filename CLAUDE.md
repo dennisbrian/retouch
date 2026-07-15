@@ -156,6 +156,10 @@ Cuts memory from 7.5 GB → 1.84 GB, runtime from 15.3s → 3.09s.
 - Use `cv2.LUT` for fast 1D LUT application
 - ThreadPoolExecutor (max 4 workers) for multi-face, ProcessPoolExecutor for heavy CPU workloads
 
+### Tone-Invariance & Fairness
+- **No Absolute Intensity Thresholds:** Do not use hardcoded absolute intensity, luminance, or reflectance threshold checks (e.g., `I > 170.0`, `L > 0.85`) on signals that scale with the subject's skin tone. These absolute gates systematically degrade or fail on darker skin tones (Fitzpatrick V-VI).
+- **Tone-Adaptive Alternatives:** Use margin-above-baseline measures relative to each face's own diffuse baseline (e.g., computed via median over the skin mask or crop). See `retouch/specular.py::extract_specular` for a reference implementation.
+
 ---
 
 ## Git Workflow
