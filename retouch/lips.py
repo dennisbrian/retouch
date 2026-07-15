@@ -147,9 +147,19 @@ class LipEnhancer:
         lip_median = np.median(lip_pixels)
         lip_std = max(lip_pixels.std(), 1.0)
 
-        # Specular mask: bright pixels inside lips
+        # Specular mask: bright pixels inside lips. The absolute floor here
+        # used to be a fixed L > 130.0 -- since specular gloss is additive on
+        # top of the lip's own diffuse reflectance (dichromatic model), that
+        # fixed floor is reachable by a modest highlight on light lips but
+        # silently vetoes genuine gloss detections on darker-toned lips (the
+        # adaptive `specular_thresh` above already does the real detection
+        # work; the floor only needs to reject flat noise, not gate on skin
+        # tone). Anchor the floor to the lip's own median instead so it
+        # scales with the subject's own lip color rather than a 0-255
+        # constant (see docs/plans/PLAN_P4_MAKEUP_UNMIX.md Sec 16).
         specular_thresh = lip_median + lip_std * 1.5
-        specular_mask = ((l_chan > specular_thresh) & (l_chan > 130.0) & (lip_mask > 0.4)).astype(np.float32)
+        rel_floor = lip_median + 12.0
+        specular_mask = ((l_chan > specular_thresh) & (l_chan > rel_floor) & (lip_mask > 0.4)).astype(np.float32)
 
         if specular_mask.sum() == 0:
             return img_bgr

@@ -1,6 +1,6 @@
 # P4 — Skin ↔ Makeup Unmixing (Research + Implementation Plan)
 
-**Status:** 📋 RESEARCH LOCKED (design 2026-07-14) · **⚠️ 2026-07-15 dark-skin audit: shipped solver fails on Fitzpatrick V–VI — see §14 before enabling in recipes** · **✅ 2026-07-15 sibling bug found + FIXED in `specular.py` (same absolute-threshold pattern) — see §15** · **Parent:** `PLAN_SKIN_PROMAX.md` §P4 · MASTER_PLAN research backlog  
+**Status:** 📋 RESEARCH LOCKED (design 2026-07-14) · **⚠️ 2026-07-15 dark-skin audit: shipped solver fails on Fitzpatrick V–VI — see §14 before enabling in recipes** · **✅ 2026-07-15 sibling bug found + FIXED in `specular.py` (same absolute-threshold pattern) — see §15** · **✅ 2026-07-15 third instance found + FIXED in `lips.py`, fourth found + documented (not fixed, higher blast radius) in `skin.py::whiten()` — see §16** · **Parent:** `PLAN_SKIN_PROMAX.md` §P4 · MASTER_PLAN research backlog  
 **Effort:** spike 4–5 d · full feature ~3–4 wk if GO  
 **Standout:** highest-moat cosplay axis — separate **paint layer** from **person**, not merely mask around paint (A3/R11).
 
@@ -645,3 +645,179 @@ checked: other R9-R13 modules (`intrinsic.py`, `skin_chromophore.py`) had a
 quick threshold grep during this pass with no clear hits, but were not put
 through the same empirical tone-sweep as the two confirmed instances — treat
 as unverified, not clean.
+
+---
+
+## 16. Targeted sweep for the same anti-pattern (2026-07-15) — third instance found + fixed, fourth found + documented (not fixed)
+
+Following §14/§15, a targeted grep + empirical-check sweep was run across
+other skin/face-adjacent modules for the same anti-pattern: an absolute
+luminance/chroma/intensity threshold gating a signal whose baseline scales
+with skin tone. Grep targets: `retouch/skin.py`, `retouch/eyes.py`,
+`retouch/eye_enhancement.py`, `retouch/hair.py`, `retouch/hairwork.py`,
+`retouch/lips.py`, `retouch/undereye.py`, `retouch/skin_chromophore.py`,
+`retouch/intrinsic.py`. Method: grep for `smoothstep(<abs>, <abs>, ...)`,
+`clip((X - <abs>) / <abs>, ...)`, and bare `> <abs>` / `< <abs>` comparisons
+against luminance/chroma channels, then a quick reasoned check per hit, with
+a full empirical tone-sweep only where the reasoned check flagged a plausible
+real effect.
+
+### 16.1 Third instance, FIXED: `retouch/lips.py` `_add_lip_gloss` specular floor
+
+**Finding:** `specular_mask = ((l_chan > specular_thresh) & (l_chan > 130.0) & ...)`
+— `specular_thresh` (`lip_median + 1.5*lip_std`) is already a correct,
+per-face adaptive threshold, but it was ANDed with a redundant **absolute**
+floor of `130.0`. For light lips (median L ~146+) the floor never binds. For
+darker-toned lips the floor becomes the *sole* binding constraint, silently
+vetoing detections the adaptive math already correctly identified.
+
+**Measured (same +25 L-channel gloss highlight, real API, 4-tone swatch set):**
+
+| tone | max delta in highlight spot (0 = gloss not applied) |
+|---|---|
+| I   | 45.0 |
+| III | 15.0 |
+| V   | **0.0** |
+| VI  | **0.0** |
+
+Lip gloss finish was silently inert on Fitzpatrick V–VI lips for a
+realistic highlight strength.
+
+**Fix landed** (`retouch/lips.py`): replaced the absolute `130.0` floor with
+`rel_floor = lip_median + 12.0` — a margin above the lip's own median,
+matching the specular.py fix pattern. The `+12.0` margin (not `+8.0`, tried
+first) was chosen empirically: at `+8.0` a Fitzpatrick-VI-specific false-
+positive noise sensitivity appeared (RGB→LAB's cube-root nonlinearity
+stretches ±3 sensor-noise-σ excursions slightly more at low absolute
+luminance — measured max noise excursion 10.0 vs 9.0 for lighter tones on a
+flat patch); `+12.0` clears that false-positive rate to 0/20 seeds at every
+tone while still detecting the full +25 highlight (197/197 spot pixels) at
+every tone.
+
+**Verified:**
+- Detection: same +25 highlight now reads > 20 max delta at every tone
+  (I=45, III=68, V=84, VI=93 post-fix) — was 0.0 at V/VI pre-fix.
+- No-op: flat lips (natural noise only, no real highlight) trigger 0/20
+  seeds at every tone, post-fix (pre-fix: I was 10/10, since I's median
+  already exceeded the old absolute 130 floor and the floor did nothing to
+  suppress noise there — the old code was *simultaneously* under-detecting
+  real highlights on dark lips and over-triggering on noise for light lips).
+- All pre-existing `tests/test_lips.py` (`TestAddLipGloss`, 4 tests) pass
+  unmodified. 9 new tests added (`TestLipGlossToneInvariance`): per-tone
+  detection check, per-tone no-op check (20 seeds each), direct VI
+  regression. Full file: 35/35 pass.
+
+### 16.2 Fourth instance, FOUND, documented, NOT fixed: `retouch/skin.py` `SkinProcessor.whiten()` shadow-protection gate
+
+**Finding:** `whiten()` (the "Adaptive Rosy Foundation" skin whitening /
+rosy-tone op) gates its lift with `shadow_protection = clip((l_val - 80.0) /
+40.0, 0, 1)` (positive-strength branch) and `shadow_decay = clip((l_val -
+10.0) / 20.0, 0, 1)` (negative-strength/shadow-deepen branch) — both absolute
+L thresholds on the skin's own luminance channel, same bug shape as §14/§15/
+16.1.
+
+**Measured** (flat noisy skin swatches, `strength=30/60/90`, `tone="rosy"`,
+`hue_stable=False`, mean abs delta over the whole image):
+
+| tone | strength=30 | strength=60 | strength=90 |
+|---|---|---|---|
+| I   | 2.33 | 5.07 | 7.90 |
+| III | 5.28 | 10.30 | 15.50 |
+| V   | 3.34 | 7.05 | 10.65 |
+| **VI**  | **1.06** | **1.06** | **1.06** |
+
+VI's effect is flat regardless of slider strength — the `shadow_protection`
+mask sits near 0 across nearly the whole face for L in the 30-60 range
+typical of Fitzpatrick VI skin, capping the whitening effect near-zero no
+matter how far the user pushes the strength slider. (Caveat, flagged
+honestly: this was measured on a flat synthetic patch, which — per the same
+lesson learned from the Fitzpatrick-I clipping artifact in §14 — likely
+*overstates* "fully inert": a real face has shading, so some regions of a
+real Fitzpatrick-VI face will sit above L=80 and get partial effect. The
+*direction* of the bug — weaker/inconsistent effect on darker skin at the
+same slider setting — is not in doubt; the exact magnitude on real photos is
+unmeasured.)
+
+**Why this was NOT fixed in this pass, unlike the other three:**
+
+1. **Reachability/severity is categorically different.** `whiten` is
+   `params.py`'s `skin.rosy` recipe key with **default=10** (not 0) and is
+   called unconditionally in the main per-face pipeline
+   (`perf_optimizations.py:550`) and the body-skin path (`engine.py:3465`).
+   Unlike the P4 (§14) and specular (§15) findings — both reachable but not
+   activated by any shipped recipe — `whiten` runs, at some nonzero
+   strength, on every processed image today. That makes it higher-impact to
+   fix *and* higher-risk to change: a relative-baseline rewrite would alter
+   output for the existing, already-tuned light-skin userbase, not just
+   extend correctness to dark skin.
+2. **Wide, uncharacterized blast radius.** `grep -rln "whiten" tests/`
+   returns 18+ test files (`test_skin.py`, `test_whiten_hue_stable.py`,
+   `test_recipe_integration.py`, `test_c4_finish_pack.py`,
+   `test_qa_backoff.py`, golden/integration suites, etc.) — none of which
+   were individually triaged for what they assert about current absolute
+   behavior. A same-day fix here would be a design task (re-anchor to a
+   face-median baseline while reproducing today's light-skin behavior
+   within tolerance), not a 5-line threshold swap.
+3. **Prior history of exactly this function being delicate.** `git log`
+   shows a previous regression fix on this same area (`1640eeb` "Fix
+   skin.py: equalize blend strength scaling") and the project's own memory
+   notes flag an "equalize pale-face regression" as a known landmine
+   requiring careful bisection, not a drive-by change.
+
+**Recommended next step, if/when this is picked up:** (a) triage the ~18
+test files to establish which ones assert exact absolute-behavior numbers
+vs. qualitative direction-only checks; (b) design the relative baseline to
+reproduce current light-skin output within tolerance (e.g. anchor
+`shadow_protection`'s ramp to something like `face_median_L - k` rather than
+a fixed `80.0`, so a "typically lit light face" reproduces today's near-1.0
+protection while a "typically lit dark face" gets equivalent relative
+protection instead of a near-zero absolute one); (c) re-run the tone-sweep
+methodology from this section plus the full existing whiten-adjacent test
+suite before landing.
+
+### 16.3 Checked, no bug: other candidates
+
+- **`retouch/eyes.py:206`, `bright_sclera = (L > 100.0)`** (sclera
+  whitening gate). Not flagged as a skin-tone bug: sclera (eye white) color
+  does not vary by Fitzpatrick tone the way skin/lip reflectance does — this
+  gate operates on the sclera's own luminance, not a signal that scales with
+  the subject's skin melanin. Checked, no bug.
+- **`retouch/eyes.py:117` / iris catchlight specular boost, `clip((l_chan -
+  220.0) / 20.0, ...)`** — operates on the iris/catchlight region, not skin;
+  iris/catchlight brightness is dominated by the physical light source
+  reflection (near-white, ~220+), not skin melanin. Lower-priority than the
+  skin/lip instances; not empirically tone-swept in this pass, but reasoned
+  as low-risk since it's gated to `iris_m`, not a skin-reflectance-scaled
+  region.
+- **`retouch/hair.py:134`, `thresh = max(mean_val + std_val*0.8, 120.0)`**
+  — same *shape* as the lips.py bug (adaptive threshold ANDed/maxed with an
+  absolute floor), but the tone axis here is **hair color**, not
+  Fitzpatrick skin tone — hair color varies independently of skin melanin
+  (e.g. dark hair on light skin, light hair on dark skin are both common),
+  so this is not the same fairness-relevant bug class. Flagged as a
+  legitimate but lower-priority candidate for a general "absolute floor
+  defeats adaptive threshold" cleanup pass, not a skin-tone audit item.
+- **`retouch/skin.py:318`, shadow-band gate `(L < local_median - 15.0) & (L
+  > 40.0) & (L < 200.0)`** — the `local_median - 15.0` term is already
+  relative; the `40.0`/`200.0` bounds are a sanity clamp (reject near-black
+  and near-white outliers) rather than the primary detector. Reasoned as
+  low-risk, not empirically tone-swept.
+- **`retouch/intrinsic.py`, `retouch/skin_chromophore.py`** — grepped for
+  the same shapes; no absolute luminance/chroma gate comparable to the
+  above found. Not exhaustively tone-swept (no candidate strong enough to
+  justify it), but no clear hit either — treat as checked, not confirmed
+  clean at the same confidence level as 16.3's sclera/iris items above.
+
+### 16.4 Sweep verdict
+
+Three confirmed instances of the pattern now exist across the codebase
+(`makeup_unmix.py` §14, `specular.py` §15, `lips.py` §16.1), two fixed
+(specular.py, lips.py) and one parked pending a fuller solver rework
+(makeup_unmix.py). A fourth, higher-severity instance was found in
+`skin.py::whiten()` (§16.2) but deliberately left unfixed pending a properly
+scoped design pass, given it is an always-on-by-default, wide-blast-radius
+path rather than a latent/parked feature. This is now a confirmed *pattern*,
+not a one-off — worth a standing check ("does this absolute threshold's
+trigger point shift with skin tone, and if so is that intentional") whenever
+touching luminance/chroma/reflectance-gated code in any skin/lip/lash-
+adjacent module.

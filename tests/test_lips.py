@@ -96,6 +96,93 @@ class TestAddLipGloss:
         assert result.dtype == np.uint8
 
 
+class TestLipGlossToneInvariance:
+    """_add_lip_gloss's specular floor must be relative to the lip's own
+    diffuse baseline, not an absolute 0-255 constant -- an absolute floor
+    systematically under-detects (or misses) real specular gloss highlights
+    on darker-toned lips, since a specular reflection is additive on top of
+    a lower diffuse base (dichromatic model). Regression coverage for the
+    2026-07-15 fix (see docs/plans/PLAN_P4_MAKEUP_UNMIX.md Sec 16 -- same
+    bug class as the specular.py and makeup_unmix.py findings there).
+    """
+
+    # Fitzpatrick-representative lip BGR swatches with headroom below 255.
+    TONES = {
+        "I": (150, 120, 180),
+        "III": (90, 70, 140),
+        "V": (55, 40, 95),
+        "VI": (30, 20, 55),
+    }
+
+    @staticmethod
+    def _spot_mask(h: int = 60, w: int = 60, radius: int = 8):
+        yy, xx = np.ogrid[:h, :w]
+        return ((yy - h // 2) ** 2 + (xx - w // 2) ** 2) <= radius ** 2
+
+    @pytest.mark.parametrize("tone", list(TONES.keys()))
+    def test_gloss_highlight_detected_even_on_dark_lips(self, tone):
+        """A +25 L-channel gloss highlight must be detected at every tone.
+        Pre-fix, the absolute L > 130.0 floor read exactly 0 pixels changed
+        for Fitzpatrick V-VI at this boost -- i.e. lip gloss finish was
+        silently inert on darker-toned lips."""
+        import cv2
+
+        bgr = self.TONES[tone]
+        h = w = 60
+        spot = self._spot_mask(h, w)
+        mask = np.ones((h, w), dtype=np.float32)
+        lip = np.zeros((h, w, 3), np.float32) + np.array(bgr, np.float32)
+        rng = np.random.RandomState(1)
+        lip += rng.normal(0, 3, (h, w, 3))
+        lip_lab = cv2.cvtColor(np.clip(lip, 0, 255).astype(np.uint8), cv2.COLOR_BGR2LAB).astype(np.float32)
+        lip_lab[spot, 0] = np.clip(lip_lab[spot, 0] + 25.0, 0, 255)
+        lip_bgr = cv2.cvtColor(lip_lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
+
+        enhancer = LipEnhancer()
+        out = enhancer._add_lip_gloss(lip_bgr, mask, 1.0)
+        delta = np.abs(out.astype(np.float32) - lip_bgr.astype(np.float32))
+        assert float(delta[spot].max()) > 20.0, (tone, float(delta[spot].max()))
+
+    @pytest.mark.parametrize("tone", list(TONES.keys()))
+    def test_flat_lips_no_false_positive_all_tones(self, tone):
+        """No-op invariant: flat lips with only natural sensor noise (no real
+        highlight) must not trigger the gloss boost at any tone, across
+        multiple noise seeds."""
+        bgr = self.TONES[tone]
+        h = w = 60
+        mask = np.ones((h, w), dtype=np.float32)
+        enhancer = LipEnhancer()
+        for seed in range(20):
+            lip = np.zeros((h, w, 3), np.float32) + np.array(bgr, np.float32)
+            rng = np.random.RandomState(seed)
+            lip = np.clip(lip + rng.normal(0, 3, (h, w, 3)), 0, 255).astype(np.uint8)
+            out = enhancer._add_lip_gloss(lip, mask, 1.0)
+            delta = float(np.abs(out.astype(np.float32) - lip.astype(np.float32)).max())
+            assert delta < 1.0, (tone, seed, delta)
+
+    def test_detection_no_longer_collapses_on_darkest_tone(self):
+        """Direct regression for the worst pre-fix case: Fitzpatrick VI used
+        to read exactly 0 delta for a +25 gloss highlight (total
+        non-detection). Confirms the relative floor closes that gap."""
+        import cv2
+
+        bgr = self.TONES["VI"]
+        h = w = 60
+        spot = self._spot_mask(h, w)
+        mask = np.ones((h, w), dtype=np.float32)
+        lip = np.zeros((h, w, 3), np.float32) + np.array(bgr, np.float32)
+        rng = np.random.RandomState(1)
+        lip += rng.normal(0, 3, (h, w, 3))
+        lip_lab = cv2.cvtColor(np.clip(lip, 0, 255).astype(np.uint8), cv2.COLOR_BGR2LAB).astype(np.float32)
+        lip_lab[spot, 0] = np.clip(lip_lab[spot, 0] + 25.0, 0, 255)
+        lip_bgr = cv2.cvtColor(lip_lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
+
+        enhancer = LipEnhancer()
+        out = enhancer._add_lip_gloss(lip_bgr, mask, 1.0)
+        delta = np.abs(out.astype(np.float32) - lip_bgr.astype(np.float32))
+        assert float(delta[spot].max()) > 20.0
+
+
 class TestExtractTexture:
     def test_output_shape(self, enhancer, lip_img, lip_mask):
         result = enhancer._extract_texture(lip_img, lip_mask, face_width=500)
