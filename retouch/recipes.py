@@ -1559,10 +1559,12 @@ RECIPES["classic_chrome"] = {
     # Fuji Classic Chrome per docs/FUJI_COLOR_RESEARCH.md §4.2: low
     # saturation ("muted editorial"), high contrast, LIFTED shadows
     # (not crushed — a lifted toe is what gives the flat-but-punchy
-    # look) with a rolled-off highlight shoulder, greens pushed toward
-    # teal/cyan (~10-15deg rotation, ~20% desat) and reds toward orange
-    # (~5-10deg, ~15% desat) via the shadow/highlight split-tone hues,
-    # low default sharpness, fine grain.
+    # look) with a rolled-off highlight shoulder, low default sharpness,
+    # fine grain. Greens pushed toward teal/cyan and reds toward orange
+    # via the real per-hue-band selective-color primitive (hsl_hue_*/
+    # hsl_sat_*, see engine.py's _apply_hsl_adjustments) rather than the
+    # shadow/highlight split-tone-hue approximation used before this was
+    # wired — see docs/plans/RESEARCH_FUJI_SIM_QUALITY_CEILING.md §3/§5.
     "extends": "natural",
     "frequency": {"smooth": 0.45, "mid_reduction": 0.40},
     "skin": {"equalize": 0.25, "rosy": 0.20},
@@ -1590,6 +1592,17 @@ RECIPES["classic_chrome"] = {
     "shadow_sat": 10.0,
     "highlight_hue": 200.0,
     "highlight_sat": 6.0,
+    # Per-hue-band selective color (real primitive, not the split-tone
+    # workaround above): rotate greens ~25deg toward cyan/teal and desat
+    # ~20%; rotate reds ~15deg toward orange and desat ~15%. Units are the
+    # engine's exposed hsl_hue_* degrees (-180..180), which the engine
+    # halves internally to match OpenCV's 0-179 hue scale. Nested dict
+    # shape required: ParamSpec.recipe_key is "hsl_adjustments.hue.<color>"
+    # etc, resolved via _lookup_recipe's dot-path walk (see params.py).
+    "hsl_adjustments": {
+        "hue": {"green": 25.0, "red": 15.0},
+        "saturation": {"green": -20.0, "red": -15.0},
+    },
     "film": {
         "enable": True,
         "strength": 1.0,
