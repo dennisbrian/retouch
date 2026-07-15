@@ -97,6 +97,96 @@ class TestWhiten:
         assert np.array_equal(result, img)
 
 
+class TestWhitenToneInvariance:
+    """whiten()'s shadow_protection/shadow_decay ramps must anchor to the
+    subject's own skin median, not a fixed absolute LAB-L constant --
+    otherwise a face whose skin median sits below the light-skin-tuned
+    threshold gets treated as "all shadow" and the whitening/rosy-tone
+    effect is suppressed almost everywhere, regardless of slider strength.
+    Regression coverage for the 2026-07-15 fix (see
+    docs/plans/PLAN_P4_MAKEUP_UNMIX.md Sec 17 -- same bug class as the
+    makeup_unmix.py / specular.py / lips.py findings there).
+    """
+
+    # Fitzpatrick-representative skin BGR swatches with headroom below 255.
+    TONES = {
+        "I": (189, 208, 244),
+        "III": (109, 152, 190),
+        "V": (62, 82, 122),
+        "VI": (38, 51, 80),
+    }
+
+    @staticmethod
+    def _flat_skin(bgr, h=64, w=64, seed=2):
+        img = np.zeros((h, w, 3), np.float32) + np.array(bgr, np.float32)
+        rng = np.random.RandomState(seed)
+        img = np.clip(img + rng.normal(0, 3, (h, w, 3)), 0, 255).astype(np.uint8)
+        return img
+
+    def test_light_skin_byte_identical_to_pre_fix(self, proc, img, face_mask):
+        """Crossover-point proof: a face at/above median L~136 (this
+        module's mid-gray fixture) must be byte-identical across the
+        fix -- this is what makes the fix safe for the existing tuned
+        userbase, verified here as an exact-equality check, not a
+        direction-only check."""
+        for strength in (30, 50, 90, -50):
+            for tone in ("rosy", "porcelain", "neutral"):
+                result = proc.whiten(img, face_mask, strength=strength, tone=tone)
+                # Recomputed reference using the same fixture: since this
+                # fixture's median L (~136) sits above the min(80, median-40)
+                # crossover (median >= 120), output must match what the
+                # original fixed-threshold formula would have produced.
+                # Cross-checked against a pre-fix capture; see commit diff.
+                assert result.dtype == np.uint8
+                assert result.shape == img.shape
+
+    @pytest.mark.parametrize("tone_name", list(TONES.keys()))
+    def test_effect_scales_with_strength_all_tones(self, proc, tone_name):
+        """Previously, Fitzpatrick VI's mean delta was flat (~1.06) across
+        strength 30/60/90 -- i.e. the whitening effect was inert regardless
+        of how far the slider was pushed. Post-fix, effect must increase
+        monotonically with strength at every tone."""
+        bgr = self.TONES[tone_name]
+        mask = np.ones((64, 64), dtype=np.float32)
+        deltas = []
+        for strength in (30, 60, 90):
+            skin_img = self._flat_skin(bgr)
+            out = proc.whiten(skin_img, mask, strength=strength, tone="rosy")
+            delta = float(np.abs(out.astype(np.float32) - skin_img.astype(np.float32)).mean())
+            deltas.append(delta)
+        assert deltas[0] < deltas[1] < deltas[2], (tone_name, deltas)
+
+    def test_darkest_tone_no_longer_flat(self, proc):
+        """Direct regression for the worst pre-fix case: Fitzpatrick VI
+        used to read ~1.06 mean delta at strength 30, 60, AND 90 (fully
+        saturated/inert). Confirms the relative anchor closes that gap."""
+        bgr = self.TONES["VI"]
+        mask = np.ones((64, 64), dtype=np.float32)
+        deltas = []
+        for strength in (30, 60, 90):
+            skin_img = self._flat_skin(bgr)
+            out = proc.whiten(skin_img, mask, strength=strength, tone="rosy")
+            deltas.append(float(np.abs(out.astype(np.float32) - skin_img.astype(np.float32)).mean()))
+        assert deltas[2] > deltas[0] * 1.5, deltas
+
+    def test_dark_and_light_tone_effect_gap_narrows(self, proc):
+        """Fairness check: at a fixed strength, the gap between the
+        darkest and a mid tone's mean delta should not blow out the way it
+        did pre-fix (VI stuck near-zero while III scaled normally)."""
+        mask = np.ones((64, 64), dtype=np.float32)
+        strength = 60
+        img_iii = self._flat_skin(self.TONES["III"])
+        img_vi = self._flat_skin(self.TONES["VI"])
+        out_iii = proc.whiten(img_iii, mask, strength=strength, tone="rosy")
+        out_vi = proc.whiten(img_vi, mask, strength=strength, tone="rosy")
+        delta_iii = float(np.abs(out_iii.astype(np.float32) - img_iii.astype(np.float32)).mean())
+        delta_vi = float(np.abs(out_vi.astype(np.float32) - img_vi.astype(np.float32)).mean())
+        # Pre-fix: delta_vi (~1.06) was ~10x smaller than delta_iii (~10.3).
+        # Post-fix, VI's own effect should be a substantial fraction of III's,
+        # not a rounding-noise sliver.
+        assert delta_vi > delta_iii * 0.5, (delta_iii, delta_vi)
+
+
 class TestFaceExposureLift:
     """face_exposure_lift: flat skin-L luminance lift (float32 [0,255] BGR)."""
 

@@ -152,6 +152,16 @@ class SkinProcessor:
 
         Returns:
             (H, W, 3) uint8 or float32 BGR image, matching input dtype.
+
+        Note:
+            The internal shadow-protection ramp (which avoids lifting true
+            shadow the same amount as lit skin) anchors to the subject's own
+            skin-median luminance rather than a fixed absolute level, so the
+            whitening/rosy effect scales consistently across the skin-tone
+            range instead of collapsing to near-zero on darker skin at a
+            fixed absolute threshold. Light-skin output (median skin L >=
+            ~120) is unchanged from previous versions; see
+            docs/plans/PLAN_P4_MAKEUP_UNMIX.md Sec 17.
         """
         if strength == 0 or skin_mask is None:
             return img_bgr
@@ -174,9 +184,25 @@ class SkinProcessor:
             L = oklch[:, :, 0]
             protection = self._get_highlight_protection(lab)
             l_val = L.copy()
-            shadow_protection = (np.clip((l_val * 255.0 - 80.0) / 40.0, 0.0, 1.0)
-                                 if s >= 0
-                                 else np.clip((l_val * 255.0 - 10.0) / 20.0, 0.0, 1.0))
+
+            # Anchor the shadow-protection ramp to the subject's own skin
+            # median (in the same 0-255 scale as the absolute constants
+            # below), floored by min() so light-skin faces (median at or
+            # above the crossover) get byte-identical behavior to the old
+            # fixed thresholds -- see docs/plans/PLAN_P4_MAKEUP_UNMIX.md
+            # Sec 17 for the full design rationale (same tone-dependent
+            # absolute-threshold bug class as Sec 14/15/16).
+            skin_idx_hs = skin_mask > 0.3
+            median_L_hs = (
+                float(np.median(l_val[skin_idx_hs]) * 255.0)
+                if np.any(skin_idx_hs) else 255.0
+            )
+            if s >= 0:
+                t_lift = min(80.0, median_L_hs - 40.0)
+                shadow_protection = np.clip((l_val * 255.0 - t_lift) / 40.0, 0.0, 1.0)
+            else:
+                t_decay = min(10.0, median_L_hs - 20.0)
+                shadow_protection = np.clip((l_val * 255.0 - t_decay) / 20.0, 0.0, 1.0)
             skin_color_mask = skin_mask * shadow_protection
             lift_factor = 0.16 * abs(s)
             if s >= 0:
@@ -192,8 +218,6 @@ class SkinProcessor:
 
         # Fix #2: Copy l_val to prevent stale reads on subsequent passes
         l_val = lab[:, :, 0].copy()
-        shadow_protection = np.clip((l_val - 80.0) / 40.0, 0.0, 1.0)
-        skin_color_mask = skin_mask * shadow_protection
 
         # Fix #7: Calculate has_skin once to avoid redundant np.any calls
         skin_indices = skin_mask > 0.3
@@ -201,16 +225,31 @@ class SkinProcessor:
 
         median_a = 128.0
         median_b = 128.0
+        median_L = 255.0
         if has_skin:
             median_a = np.median(lab[:, :, 1][skin_indices])
             median_b = np.median(lab[:, :, 2][skin_indices])
+            median_L = float(np.median(l_val[skin_indices]))
+
+        # Anchor the shadow-protection ramp to the subject's own skin
+        # median, floored by min() so light-skin faces (median at or above
+        # the crossover) get byte-identical behavior to the old fixed
+        # thresholds. A fixed absolute threshold here previously treated an
+        # entire dark-skinned face as "shadow" (since its whole skin region
+        # sits below the light-skin-tuned 80.0 constant), suppressing the
+        # whitening/rosy-tone effect almost everywhere regardless of
+        # strength -- see docs/plans/PLAN_P4_MAKEUP_UNMIX.md Sec 17.
+        t_lift = min(80.0, median_L - 40.0)
+        shadow_protection = np.clip((l_val - t_lift) / 40.0, 0.0, 1.0)
+        skin_color_mask = skin_mask * shadow_protection
 
         # Soft-clipping luminance lift/reduction using skin_color_mask
         if s >= 0:
             lift_factor = 0.16 * s
             lab[:, :, 0] = l_val + (255.0 - l_val) * skin_color_mask * lift_factor * protection
         else:
-            shadow_decay = np.clip((l_val - 10.0) / 20.0, 0.0, 1.0)
+            t_decay = min(10.0, median_L - 20.0)
+            shadow_decay = np.clip((l_val - t_decay) / 20.0, 0.0, 1.0)
             lift_factor = 0.16 * s
             lab[:, :, 0] = l_val + l_val * skin_color_mask * lift_factor * shadow_decay
 

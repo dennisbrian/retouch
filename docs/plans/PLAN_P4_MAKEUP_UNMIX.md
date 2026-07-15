@@ -821,3 +821,207 @@ not a one-off — worth a standing check ("does this absolute threshold's
 trigger point shift with skin tone, and if so is that intentional") whenever
 touching luminance/chroma/reflectance-gated code in any skin/lip/lash-
 adjacent module.
+
+---
+
+## 17. `skin.py::whiten()` fix — design plan + implementation (2026-07-15)
+
+Picking up the §16.2 finding: `SkinProcessor.whiten()`'s `shadow_protection`
+(positive-strength branch) and `shadow_decay` (negative-strength branch) use
+absolute LAB-L thresholds (80/40 and 10/20). This section documents the
+design plan **before** implementation, per project discipline for an
+always-on-default, wide-blast-radius fix, then records what was actually
+done and verified.
+
+### 17.1 History check (`1640eeb`)
+
+`1640eeb` ("Fix skin.py: equalize blend strength scaling and dodge_burn mask
+dtype") is the only prior dedicated regression fix in this area of
+`skin.py`. It touched `equalize()` (blend not scaled by strength — unrelated
+bug shape, a missing `* s` multiplier) and `dodge_burn()` (uint8 mask
+truncation on accumulation — a dtype bug, not a threshold bug). Neither
+touches `whiten()` or its `shadow_protection`/`shadow_decay` constants.
+`git log --follow` on `whiten()` specifically shows no dedicated fix commit
+for these constants since introduction — they are original, untouched
+values. Lesson carried forward: this file has a history of a "smaller code
+review reveals additional independent bugs" pattern (the same commit fixed
+two unrelated things once someone actually looked closely), which is a
+reason for care but not evidence this specific constant was already
+vetted.
+
+### 17.2 Why `whiten()` is different from the specular.py / lips.py fixes
+
+`shadow_protection` is not a binary detection gate (unlike the specular
+highlight gate or the lip gloss floor) — it is a **shading-preserving ramp**
+that intentionally applies less whitening lift to pixels that are dark
+*relative to the rest of the face* (true shadow: under the chin, nostril
+shadow, etc.), so the whitening effect reads as an even foundation rather
+than a flat brightness slam. The bug is that "dark relative to this face"
+and "dark in absolute LAB terms" are conflated: on a face whose skin
+median sits below the fixed 80 threshold, this ramp is no longer
+distinguishing real shadow from ordinary lit skin — it treats the *entire
+face* as shadow and suppresses the whitening effect almost everywhere,
+regardless of strength. The fix must **preserve the ramp's shape and
+relocate its anchor to the subject's own skin median**, not flatten or
+remove the ramp (removing it would turn foundation-style whitening into a
+flat lift, losing the shading-aware quality the ramp exists for).
+
+### 17.3 Formulation: anchor via `min(absolute, relative)`, not pure re-anchor
+
+Rejected: pure re-anchor `t = median_skin_L - 40`. This changes light-skin
+output too — a medium-light face (median L 100-120) would get *less*
+protection than today, breaking "preserve the existing tuned userbase."
+
+**Chosen formulation:**
+
+```
+span = 40.0  # unchanged from current
+t = min(80.0, median_skin_L - span)
+shadow_protection = clip((l_val - t) / span, 0.0, 1.0)
+```
+
+Properties (verified numerically, see §17.5):
+- **Byte-identical for light faces:** when `median_skin_L >= 120`,
+  `median_skin_L - span >= 80`, so `min` picks `80.0` — the exact original
+  formula, for any face at or above that median.
+- **Monotonic:** `new_protection >= old_protection` everywhere, for every
+  face median. Effect only ever *increases* relative to today, never
+  decreases — this is what makes existing lower-bound/direction test
+  assertions (`> orig_mean`, `differs by > threshold`) safe by
+  construction.
+- **Fairness invariant restored:** a pixel at the face's own median gets
+  `shadow_protection = 1.0` regardless of what that median's absolute value
+  is — i.e. a Fitzpatrick VI face at its own median luminance is treated the
+  same as a Fitzpatrick I face at its own median, not judged against a
+  constant tuned for light skin.
+- Same treatment applied to `shadow_decay` (negative-strength branch,
+  `10.0`/`20.0` → `t = min(10.0, median_skin_L - 20.0)`) for consistency,
+  even though the negative (shadow-deepen) direction is the less common
+  use case.
+- Both code paths (the `hue_stable=True` OKLCh branch, `l_val` in [0,1]
+  scaled by 255, and the `hue_stable=False` LAB branch, `l_val` in [0,255])
+  get the fix — each computes its own median in its own scale so the two
+  branches don't diverge.
+- Bonus: `shadow_protection` also gates the rosy/porcelain color-channel
+  shift (`skin_color_mask` feeds the `a`/`b` shift block too), so this fix
+  restores the cosmetic tone shift on dark skin as well, not just the L
+  lift — noted as a side benefit, not a separate change.
+
+### 17.4 Test-blast-radius triage (18+ files referencing "whiten")
+
+Sorted by what they actually assert, to predict pass/fail under a
+monotonic (effect-only-increases) fix:
+
+- **Lower-bound / direction assertions — safe by construction** (more
+  effect cannot newly fail a "some/more effect happened" check):
+  `tests/test_skin.py::TestWhiten` (mid-gray `np.full(..., 128)` fixture,
+  median L≈136 — above the 120 crossover, so in fact byte-identical, not
+  just direction-safe), `tests/test_whiten_hue_stable.py`
+  (`randint(100,220)` fixture, median well above crossover — byte-identical
+  too), `tests/test_body_skin.py::test_body_whiten_gate_independent`
+  (`max_diff > 0.5` — cannot newly fail when effect only grows).
+- **Param-plumbing / gate tests, not exercising pixel math** — unaffected:
+  `tests/test_recipe_integration.py`, `tests/test_qa_backoff.py` (these
+  test that `ctx.whiten`/`body_whiten` values are correctly parsed/gated,
+  not `SkinProcessor.whiten()`'s pixel output).
+  `tests/test_c4_finish_pack.py::test_recipe_has_whiten_hue_stable` has an
+  `... or True` clause — always passes regardless.
+  `tests/test_gui.py`, `tests/test_params.py`,
+  `tests/test_params_gui_wiring.py`, `tests/test_cli_integration.py` —
+  wiring/registry tests, don't call `whiten()`'s pixel math.
+- **Real-photo / golden-pipeline risk** — the one category that needed a
+  human check rather than a monotonicity argument:
+  `tests/test_body_skin.py` uses a real photo (`DSCF8007.jpg`, whole-image
+  median L=31, though the skin region itself needs separate checking) via
+  `RetouchEngine.process()`. Its only whiten-specific assertion
+  (`max_diff > 0.5`, "some visible difference occurred") is a lower-bound
+  check, safe under a monotonic fix regardless of the subject's actual
+  skin tone. `tests/benchmark_modules.py`,
+  `tests/test_integration.py`/`test_integration_pipeline.py`,
+  `tests/test_face_float32.py`, `tests/test_skin_float32.py`,
+  `tests/test_recipe_generator.py`, `tests/test_recipe_validation.py`,
+  `tests/test_recipe_fidelity_updates.py`, `tests/test_style_extraction.py`,
+  `tests/test_unify_smoothstep.py`, `tests/test_teeth.py` — grepped for
+  exact-magnitude/snapshot assertions on `whiten` output specifically; none
+  found (teeth_whiten in `test_teeth.py`/`test_recipe_integration.py` is
+  the unrelated `teeth.whiten()` function, different module).
+- **No golden/snapshot test found that pins an exact whiten() pixel value
+  on a medium/dark-skin subject** — the risk category the advisor flagged
+  as the real danger turns out to be empty in this codebase today. If one
+  is added later, it would need re-baselining under this fix, same as any
+  monotonic-improvement change.
+
+### 17.5 Verification plan (executed, see §17.6 for results)
+
+1. Numeric check of the `min` formulation's byte-identical / monotonic
+   properties across a spread of face medians (not tied to pytest) —
+   confirms the crossover point and that `new >= old` everywhere.
+2. Empirical delta on a **light** synthetic face fixture (median L above
+   crossover): assert exact-zero difference before/after the code change
+   (not just "looks similar") — proves preservation, not just an eyeball
+   check.
+3. Fitzpatrick I–VI tone-sweep (same methodology as §14/§15/§16.1) at fixed
+   strengths 30/60/90: confirm the previously-flat VI response now scales
+   with strength and the I-VI gap closes, without claiming light-skin
+   output changed.
+4. Full existing test suite for every file in §17.4's inventory, not just
+   a new test file.
+
+### 17.6 Implementation + results
+
+Implemented in `retouch/skin.py::whiten()`, both branches (`hue_stable=True`
+OKLCh and `hue_stable=False` LAB), both directions (`shadow_protection` and
+`shadow_decay`).
+
+**Light-skin exact-preservation check** (median L 136, mid-gray fixture, and
+median L ~170, `randint(100,220)` fixture): output byte-identical
+before/after the code change at every strength tested (0, 30, 50, 90) —
+confirms the crossover-point argument holds in the real function, not just
+the isolated formula.
+
+**Tone-sweep, mean abs delta over flat noisy skin swatches, `tone="rosy"`,
+`hue_stable=False`, real API (measured, not projected):**
+
+| tone | median L | strength=30 before→after | strength=60 before→after | strength=90 before→after |
+|---|---|---|---|---|
+| I   | ~220 | 2.329 → 2.329 (identical) | 5.066 → 5.066 (identical) | 7.903 → 7.903 (identical) |
+| III | ~150 | 5.281 → 5.281 (identical) | 10.295 → 10.295 (identical) | 15.497 → 15.497 (identical) |
+| V   | ~75  | 3.335 → 7.593 | 7.051 → 15.227 | 10.646 → 23.291 |
+| VI  | ~45  | **1.059 → 8.566** | **1.059 → 17.362** | **1.06 → 26.175** |
+
+I and III (median L above the 120 crossover) are exactly byte-identical
+before/after at every strength — confirms the `min()` formulation's
+preservation guarantee empirically, not just algebraically. V and VI now
+scale with strength as expected (previously flat/inert); VI in particular
+went from a rounding-noise-level constant (~1.06 regardless of slider
+position) to a normal monotonic strength response.
+
+**Exact-preservation check (separate from the tone sweep):** ran the two
+existing light-skin test fixtures (`test_skin.py`'s mid-gray `np.full(...,
+128)`, median L≈136; `test_whiten_hue_stable.py`'s `randint(100,220)`,
+well above crossover) through `whiten()` at strengths {30, 50, 90, -50} and
+tones {rosy, porcelain, neutral}, comparing an integer-sum checksum of the
+output before and after the code change (via `git stash`): **identical in
+every combination tested**, both `hue_stable=True` and `hue_stable=False`
+branches.
+
+**Full test suite result:**
+- `tests/test_skin.py` (152 pass, including 8 new
+  `TestWhitenToneInvariance` tests: light-skin exact-preservation,
+  per-tone strength-monotonicity across all 4 Fitzpatrick swatches, a
+  direct VI regression, and a dark/mid-tone fairness-gap check).
+- `tests/test_whiten_hue_stable.py`, `tests/test_qa_backoff.py`,
+  `tests/test_c4_finish_pack.py` — all pass (bundled in the same 152-test
+  run above).
+- `tests/test_body_skin.py`, `tests/test_recipe_integration.py`,
+  `tests/test_gui.py`, `tests/test_params.py`,
+  `tests/test_params_gui_wiring.py`, `tests/test_cli_integration.py` — run
+  separately (body_skin exercises the full `RetouchEngine` on a real
+  6240x4160 photo, slower); see commit for confirmation these all pass
+  unmodified.
+- Final grep sweep of the full test tree for any exact-equality
+  (`==`/`np.array_equal`/`np.allclose`/`pytest.approx`) assertion on
+  `whiten` found only parameter-value checks (recipe defaults, GUI wiring,
+  `ctx.whiten == 40.0`-style plumbing) — none pin an exact pixel value from
+  `SkinProcessor.whiten()`'s actual image output, confirming the §17.4
+  triage was complete.
