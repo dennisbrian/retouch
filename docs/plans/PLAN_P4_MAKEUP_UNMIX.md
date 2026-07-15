@@ -1,6 +1,6 @@
 # P4 — Skin ↔ Makeup Unmixing (Research + Implementation Plan)
 
-**Status:** 📋 RESEARCH LOCKED (design 2026-07-14) · **Parent:** `PLAN_SKIN_PROMAX.md` §P4 · MASTER_PLAN research backlog  
+**Status:** 📋 RESEARCH LOCKED (design 2026-07-14) · **⚠️ 2026-07-15 dark-skin audit: shipped solver fails on Fitzpatrick V–VI — see §14 before enabling in recipes** · **✅ 2026-07-15 sibling bug found + FIXED in `specular.py` (same absolute-threshold pattern) — see §15** · **Parent:** `PLAN_SKIN_PROMAX.md` §P4 · MASTER_PLAN research backlog  
 **Effort:** spike 4–5 d · full feature ~3–4 wk if GO  
 **Standout:** highest-moat cosplay axis — separate **paint layer** from **person**, not merely mask around paint (A3/R11).
 
@@ -446,3 +446,202 @@ Then closed-form α refine (§3 Stage U2). User brush overrides all.
 | 8 | P8 aging vector | blocked | needs M/I/P1 stack |
 
 **Do next when coding:** per-face Slice 1 → P4 spike script.
+
+---
+
+## 14. Dark-skin audit (2026-07-15) — VERDICT: concern is REAL, measured, mechanism identified
+
+Audit of the **shipped** solver (`retouch/makeup_unmix.py`, wired at
+`perf_optimizations.py:307-330` via `skin.makeup_coverage_even` /
+`skin.makeup_cake_reduce` recipe keys). Evidence is empirical —
+`scripts/spike_p4_darkskin_probe.py` runs the shipped functions across a
+Fitzpatrick I–VI palette; numbers below reproduce deterministically (seed 42).
+
+### 14.1 What the shipped solver actually does (constraints inventory)
+
+- `estimate_makeup_alpha` = multi-cue α_init: three cues OR-combined, **all with
+  hardcoded absolute thresholds**: `cue_chroma = smoothstep(0.10, 0.20, C_oklch)`,
+  `cue_white = smoothstep(0.85, 0.95, L) * (1 - smoothstep(0.02, 0.08, C))`,
+  `cue_resid = smoothstep(0.04, 0.12, |I - I_hat|_linear/255)` — then 5×5
+  `MORPH_CLOSE` (dilates sparse suprathreshold noise into regions).
+- `unmix_makeup` seeds M = mean color of `α_init > 0.35` pixels (pale-pink
+  literal `[220,200,210]` fallback), S = mean of `α_init < 0.15` pixels, then
+  3-round IRLS with `closed_form_alpha` (projection of I−S onto M−S) and
+  re-seeding at `α > 0.3`. No specular exclusion anywhere (despite §7's R12 row).
+
+### 14.2 Measured failure table (probe output, 2026-07-15)
+
+| Tone | bare α_init | bare α e2e | foundation α recovered (true 0.5) | phantom α outside makeup | coverage_even max damage on bare px (specular case) |
+|---|---|---|---|---|---|
+| I   | 0.362 | 0.009 | **0.899** | 0.045 | 124/255 |
+| II  | 0.406 | 0.009 | 0.043 | 0.058 | 121/255 |
+| III | 0.477 | 0.032 | 0.345 | 0.095 | 103/255 |
+| IV  | 0.514 | 0.029 | 0.063 | 0.106 | 101/255 |
+| V   | 0.544 | 0.057 | **0.000** | 0.154 | 63/255 |
+| VI  | 0.560 | 0.096 | **0.000** | **0.214** | 45/255 |
+
+Three distinct failure modes, two of them tone-dependent:
+
+1. **Detection collapse on dark skin (feature silently inert).** Tone-matched
+   foundation at true α=0.5 recovers α≈0.9 on Fitzpatrick I, **0.000 on V–VI**
+   (and is already fragile at II/IV). Mechanism: every α_init cue measures
+   signal in a space that scales with base reflectance — a fixed makeup optical
+   density produces a linear-RGB delta ∝ base intensity (dI = I·Δdensity), and
+   OKLab chroma likewise compresses at low L — so absolute thresholds tuned on
+   light skin never fire on dark skin. The hint then never localizes the
+   makeup, so the M seed collapses to ≈ mean skin (M≈S), making
+   `closed_form_alpha`'s denominator degenerate. This trips the plan's own
+   NO-GO framing in reverse: not *over*-estimation, but systematic
+   *non-detection* — the shipped `makeup_coverage_even` does nothing on V–VI.
+2. **False-positive α rises monotonically with darkness.** Bare noisy skin:
+   end-to-end α mean 0.009 (I) → 0.096 (VI), 10×; phantom α on the bare region
+   of a made-up face 0.045 → 0.214, ~5×. Mechanism attributed per-cue: on flat
+   patches all cues are 0 for every tone; add σ=4 sensor noise and `cue_resid`
+   mean goes 0.092 (I) → 0.164 (VI). The chromophore-reconstruct residual floor
+   from noise alone (0.036–0.045) sits **inside** the hardcoded 0.04–0.12
+   smoothstep band — the cue is effectively a noise detector, and noise couples
+   to residual more strongly at high melanin (nonneg concentration clamp +
+   single scalar ambient `c` leave more unexplained at low reflectance). The
+   5×5 MORPH_CLOSE then amplifies sparse hits into the 0.36–0.56 α_init means.
+3. **Specular → coverage_even paints skin (all tones, worst on light).** A
+   small desaturated highlight seeds M from highlight pixels; `even_coverage_alpha`
+   then blurs that α outward and recompose blends surrounding bare skin toward
+   the highlight color — max bare-pixel change 45–124/255 at strength 0.7.
+   Not tone-specific in direction, but it is the most *destructive* mode and
+   §7 already prescribed the fix (exclude specular pixels from α fit) — never
+   implemented. Bonus finding: `cue_white`'s absolute L>0.85 band fires on
+   *bare* Fitzpatrick-I skin (flat patch L=0.883 → cue 0.12) — the absolute
+   thresholds fail at both ends of the tone range.
+
+### 14.3 Test-coverage verdict
+
+`tests/test_makeup_unmix.py` (7 tests) uses only gray/pale synthetics
+(S=140/160/128 gray, white 245, one light-skin BGR (150,165,200)). **Zero dark
+tones.** Of the plan's §5 S1–S5 gates: S1 ≈ `test_closed_form_alpha_disk`
+(oracle S/M only — never exercises seeding), S3 exists but with a 0.35 bound vs
+the plan's 0.05, S2/S4 (edge IoU, mole protect) absent. §13.5 item 4
+("dark-skin residual regression test") confirmed missing — the suite could not
+have answered this question; RESEARCH_PER_FACE_AND_P4's concern (2) confirmed.
+
+### 14.4 Recommendation (specific, ordered)
+
+The region-anchored closed-form strategy is **salvageable — the ill-posedness
+is not the culprit; the absolute-threshold prior is.** No learned prior needed
+for v1. Fix set, in order of leverage:
+
+1. **Measure `cue_resid` in optical-density space, not linear RGB** —
+   `|log I − log I_hat|` (or divide the linear residual by max(local mean I,
+   floor)). Makes the threshold reflectance-invariant by construction; directly
+   removes the monotone tone bias in failure modes 1 and 2. ~5 LOC in
+   `estimate_makeup_alpha`.
+2. **Make chroma/L cues relative to per-face bare-skin statistics** —
+   e.g. fire on `C > median_skin_C + k·MAD` computed over the low-hint region,
+   same for L (fixes both the dark-skin non-detection and the Fitzpatrick-I
+   `cue_white` misfire). This is exactly the "Fitzpatrick-aware thresholds
+   (R14 ITA)" mitigation §8 already names; R14's ITA classifier exists per
+   RESEARCH_PER_FACE_AND_P4 §B ("✅ lib, ❌ residual thresholds").
+3. **Exclude specular pixels from hint and M-seeding** (top-percentile L
+   within skin, or R12's specular map) — kills the worst destructive mode for
+   every tone.
+4. **Guard the degenerate seed:** in `unmix_makeup`, if `‖M−S‖` is small,
+   fall back to α_init instead of running closed-form/IRLS on a near-zero
+   denominator (currently produces junk that then re-seeds M at `α>0.3`).
+5. **Promote the probe to pytest:** parametrize the existing synthetic tests
+   over the 6-tone palette; gates = bare-skin e2e α < 0.05 *for all tones* and
+   foundation-disk recovery error < 0.15 *for all tones*. Land the tests
+   red-flagged (xfail) with the current solver, flip to strict with fix 1–4.
+
+**Not done in this audit, deliberately:** fixes 1–4 change the rendered output
+of a shipped, recipe-reachable feature — per ground rule (§11.6 / MASTER_PLAN
+rule 7 + visual-QA discipline) they must land with the tone-parametrized tests
+*and* a visual QA pass (bare dark-skin control portrait must stay untouched),
+not as a drive-by threshold swap. Until then, treat `makeup_coverage_even` as
+**light-skin-only and specular-unsafe**; do not enable it by default in any
+recipe.
+
+---
+
+## 15. Second instance of the same bug class, fixed: `specular.py` intensity gate (2026-07-15)
+
+The §14 audit's underlying pattern — **an absolute luminance/reflectance
+threshold applied to a signal whose baseline scales with skin tone** — is not
+unique to `makeup_unmix.py`. A quick verification pass across the other
+R9-R13 skin/chromophore modules (prompted directly by the §14 finding, not a
+full re-audit) found the same bug class live in `retouch/specular.py`'s R12
+specular-finish path (`extract_specular`, used by `skin.py`'s
+`apply_specular_finish`, i.e. the `specular_finish_strength` /
+`specular_recolor` / dewy / glass_skin / powder finish modes).
+
+**Finding:** `extract_specular`'s highlight gate was
+`intensity_gate = clip((I - 170.0) / 70.0, 0, 1)` — a fixed absolute max-channel
+level. Since a specular reflection is additive on top of the diffuse base
+(dichromatic model, `I = I_diffuse + I_specular`), the same physical highlight
+crosses a fixed absolute line far later on darker skin. Measured with a
+same-swatch, same-boost sweep (`+15` to `+120` additive highlight) across
+Fitzpatrick I–VI synthetic swatches, comparing the shipped gate before/after:
+
+| tone | +15 before→after | +45 before→after | +90 before→after | +120 before→after |
+|---|---|---|---|---|
+| I   | 128 → 0*  | 180 → 86  | 242 → 118 | 242 → 118 |
+| III | 0 → 0     | 25 → 20   | 115 → 115 | 183 → 183 |
+| VI  | 0 → 0     | **0 → 11**    | **0 → 62**    | **39 → 91**    |
+
+(*I's +15 "before" value looks anomalously high relative to its own +45 column
+because the old gate's fixed 170 threshold sat unusually close to that
+particular swatch's baseline; not the point of the comparison — the point is
+the VI column: **the old gate read exactly 0.000 for Fitzpatrick V–VI at every
+boost up to +90**, i.e. the R12 specular finish was silently inert on dark
+skin for realistic highlight strengths, while lighter tones already showed
+strong detection at the same physical boost.)
+
+**Reachability at time of fix:** engine-callable via `apply_specular_finish`
+(`skin.py:1616-1622`) and CLI/GUI-reachable via `specular_finish_strength` /
+`specular_recolor` / `mode` params, but **no shipped recipe currently sets
+`specular_finish_strength` above its no-op-equivalent default or enables
+`specular_recolor`/non-matte modes** (recipes reference an unrelated
+`specular_bloom` lens-glow param instead) — same "latent, not actively
+shipping harm" status as the P4 finding, not worse.
+
+**Fix landed** (`retouch/specular.py::extract_specular`): replaced the
+absolute gate with a margin-above-baseline gate, `baseline` = median
+max-channel intensity over `skin_mask` if provided, else over the whole crop
+(the shipped `skin.py` call site passes no mask, so the whole-crop median is
+the load-bearing path in production today — it's noisier than a mask-scoped
+median since it can include hair/background/eyes, but skin dominates a
+typical face crop so it stays stable in practice, confirmed by the no-op
+tests below). `skin_mask` is an additive, backward-compatible optional
+parameter.
+
+**Verified:**
+- No-op invariant preserved: realistic post-shine-removal skin (flat + small
+  natural noise) reads < 0.5 mean specular at all six tones (was, and remains,
+  the basis for `apply_specular_finish`'s documented byte-identical default).
+- Detection floor no longer collapses on dark skin: a +90 boost (moderate
+  highlight) now reads > 20 mean specular intensity at every tone, including
+  Fitzpatrick VI (previously exactly 0.0).
+- Visual check: same +90 highlight rendered through `render_finish(..., "dewy",
+  0.6)` across all six tones — dewy bloom now visibly appears at every tone;
+  flat/no-highlight swatches show no false-positive bloom introduced by the
+  fix, at any tone.
+- All 8 pre-existing `tests/test_specular_finish.py` tests still pass
+  unmodified; 13 new tests added
+  (`TestExtractSpecularToneInvariance`) parametrizing the flat-skin no-op
+  check and the +90-boost detection check over Fitzpatrick I–VI, plus a
+  direct VI regression test. 21/21 pass.
+
+**Known gap, explicitly not fixed here (scope discipline):** the mask-aware
+baseline (median over `regions.skin`, passed from `skin.py`) is strictly
+better than the whole-crop fallback and is one line away — `skin.py:1621`'s
+`extract_specular(work)` call would need `skin_mask=regions.skin` added. Left
+as a follow-up since it touches a call site outside `specular.py` itself.
+
+**Naming the pattern for future audits:** watch for `> <absolute constant>`,
+`< <absolute constant>`, or `smoothstep(<abs>, <abs>, ...)` gates applied to
+raw luminance/intensity/reflectance channels anywhere a signal is expected to
+scale with skin tone (melanin/reflectance-dependent). Two confirmed instances
+so far: `makeup_unmix.py`'s multi-cue α (§14) and `specular.py`'s highlight
+gate (this section). Grep starting point: `grep -n "[<>]=\? *[0-9]\+\.[0-9]\|smoothstep(0\." retouch/*.py` — cross-check any hit against whether the input is skin-tone-dependent before trusting it. Candidates not yet
+checked: other R9-R13 modules (`intrinsic.py`, `skin_chromophore.py`) had a
+quick threshold grep during this pass with no clear hits, but were not put
+through the same empirical tone-sweep as the two confirmed instances — treat
+as unverified, not clean.

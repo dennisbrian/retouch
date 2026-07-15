@@ -31,6 +31,73 @@ def _blob_image(base: float = 100.0, peak: float = 150.0, sigma: float = 8.0) ->
 # ---------------------------------------------------------------------------
 
 
+class TestExtractSpecularToneInvariance:
+    """extract_specular's intensity_gate must be relative to the subject's own
+    diffuse-skin baseline, not an absolute 0-255 constant -- an absolute gate
+    systematically under-detects (or misses) real specular highlights on
+    darker skin, since a specular reflection is additive on top of a lower
+    diffuse base (dichromatic model). Regression coverage for the 2026-07-15
+    fix (see docs/plans/PLAN_P4_MAKEUP_UNMIX.md Sec 15 and
+    scripts/spike_p4_darkskin_probe.py's sibling audit).
+    """
+
+    # Fitzpatrick I-VI representative BGR swatches with real headroom below
+    # 255 on the max channel (so an additive highlight isn't immediately
+    # clipped -- clipping artifacts would mask the tone-invariance property
+    # being tested here).
+    TONES = {
+        "I": (180, 195, 220),
+        "II": (143, 180, 210),
+        "III": (109, 152, 190),
+        "IV": (87, 114, 165),
+        "V": (62, 82, 122),
+        "VI": (38, 51, 80),
+    }
+
+    @staticmethod
+    def _spot_mask(h: int = 64, w: int = 64, radius: int = 10):
+        yy, xx = np.ogrid[:h, :w]
+        return ((yy - h // 2) ** 2 + (xx - w // 2) ** 2) <= radius ** 2
+
+    @pytest.mark.parametrize("tone", list(TONES.keys()))
+    def test_flat_skin_reads_near_zero_all_tones(self, tone):
+        """No-op invariant: realistic post-shine-removal skin (flat + small
+        natural noise) must read ~0 specular at every tone -- this is what
+        makes the default apply_specular_finish("matte", 0.5) a no-op."""
+        bgr = self.TONES[tone]
+        rng = np.random.RandomState(7)
+        img = np.zeros((100, 100, 3), np.float32) + np.array(bgr, np.float32)
+        img += rng.normal(0, 5, (100, 100, 3))
+        img = np.clip(img, 0, 255).astype(np.uint8)
+        spec = extract_specular(img)
+        assert float(spec.mean()) < 0.5, (tone, float(spec.mean()))
+
+    @pytest.mark.parametrize("tone", list(TONES.keys()))
+    def test_moderate_highlight_detected_even_on_dark_skin(self, tone):
+        """A +90 additive highlight (moderate specular reflection) must be
+        detected at every tone. Pre-fix, the absolute 170-gate read exactly
+        0.0 for Fitzpatrick V-VI at this boost (see PLAN_P4_MAKEUP_UNMIX.md
+        Sec 15 before/after table) -- i.e. the specular finish was silently
+        inert on dark skin for realistic highlight strengths."""
+        bgr = self.TONES[tone]
+        spot = self._spot_mask()
+        img = np.zeros((64, 64, 3), np.float32) + np.array(bgr, np.float32)
+        img[spot] = np.clip(img[spot] + 90.0, 0, 255)
+        spec = extract_specular(img.astype(np.uint8))
+        assert float(spec[spot].mean()) > 20.0, (tone, float(spec[spot].mean()))
+
+    def test_detection_floor_no_longer_collapses_on_darkest_tone(self):
+        """Direct regression for the worst pre-fix case: Fitzpatrick VI at a
+        +90 boost used to read exactly 0.0 (total non-detection). Confirms
+        the relative gate closes that gap without needing skin_mask."""
+        bgr = self.TONES["VI"]
+        spot = self._spot_mask()
+        img = np.zeros((64, 64, 3), np.float32) + np.array(bgr, np.float32)
+        img[spot] = np.clip(img[spot] + 90.0, 0, 255)
+        spec = extract_specular(img.astype(np.uint8))
+        assert float(spec[spot].mean()) > 20.0
+
+
 def test_extract_specular_ordering():
     img = np.zeros((80, 80, 3), dtype=np.float32)
     # Bright near-white highlight region (top band), well separated from red.

@@ -45,16 +45,40 @@ def _as_spec_layer(specular_layer: np.ndarray) -> np.ndarray:
     return s
 
 
-def extract_specular(img_bgr: np.ndarray, rho: float = 0.95) -> np.ndarray:
+def extract_specular(
+    img_bgr: np.ndarray,
+    rho: float = 0.95,
+    skin_mask: np.ndarray | None = None,
+) -> np.ndarray:
     """Per-pixel specular (highlight) intensity map, float32 [0, 255].
 
     In normalized RGB a specular pixel has near-equal channels (low chroma)
-    AND high intensity. We isolate it with the dichromatic specular-free
-    residual gated by high intensity and low chroma:
+    AND high intensity *relative to the face's own diffuse skin baseline*.
+    We isolate it with the dichromatic specular-free residual gated by
+    intensity margin and low chroma:
 
         spec = I * intensity_gate * chroma_gate
         chroma_gate = 1 - clip(chroma / chroma_thresh, 0, 1)
         chroma_thresh = max(0.06, 0.15 * (2 - rho))   # rho = max diffuse chroma
+        intensity_gate = clip((I - baseline - margin_lo) / (margin_hi - margin_lo), 0, 1)
+
+    ``baseline`` is the median max-channel intensity over ``skin_mask`` (or,
+    if no mask is given, over the whole crop — a coarser proxy since it can
+    include hair/background/eyes, but still tone-adaptive since skin
+    dominates a typical face crop). This gate is a *margin above the
+    subject's own diffuse skin reflectance*, not a fixed absolute level.
+
+    Rationale for margin over absolute level: a specular reflection is
+    additive on top of the diffuse base (dichromatic model,
+    ``I_observed = I_diffuse + I_specular``). A fixed absolute intensity
+    threshold (e.g. "brighter than 170/255") is reachable by a modest
+    highlight on light skin but requires a much stronger physical highlight
+    on dark skin to cross the same line -- systematically under-detecting
+    (or missing entirely) genuine specular highlights on darker skin tones.
+    Measuring the margin above each face's own baseline removes that bias
+    by construction (verified empirically across a synthetic Fitzpatrick
+    I-VI sweep, see ``tests/test_specular_finish.py``
+    ``TestExtractSpecularToneInvariance``).
 
     ``rho`` (max diffuse chromaticity, 0.9-1.0) widens the accepted chroma band:
     a higher ``rho`` treats more-saturated pixels as diffuse (less specular).
@@ -63,6 +87,9 @@ def extract_specular(img_bgr: np.ndarray, rho: float = 0.95) -> np.ndarray:
     Args:
         img_bgr: BGR image, uint8 or float32 [0, 255].
         rho: Max diffuse chromaticity in [0.9, 1.0].
+        skin_mask: Optional (H, W) mask (0-1 or 0-255) marking bare/diffuse
+            skin pixels to compute the baseline over. When omitted, the
+            baseline falls back to the median over the whole crop.
 
     Returns:
         (H, W) float32 specular intensity in [0, 255].
@@ -88,8 +115,25 @@ def extract_specular(img_bgr: np.ndarray, rho: float = 0.95) -> np.ndarray:
     chroma_thresh = max(0.06, 0.15 * (2.0 - rho))
     chroma_gate = 1.0 - np.clip(chroma / chroma_thresh, 0.0, 1.0)
 
-    # Only genuine highlights carry specular (not mid-gray skin).
-    intensity_gate = np.clip((I - 170.0) / 70.0, 0.0, 1.0)
+    # Tone-adaptive baseline: median max-channel intensity over skin (or,
+    # lacking a mask, over the whole crop). Using the median (not mean/max)
+    # keeps small bright-highlight regions from pulling their own baseline
+    # up, since they occupy a minority of face-crop pixels.
+    if skin_mask is not None:
+        m = np.ascontiguousarray(skin_mask, dtype=np.float32)
+        if m.ndim == 3:
+            m = m[..., 0]
+        if m.max() > 1.0:
+            m = m / 255.0
+        sel = I[m > 0.5]
+        baseline = float(np.median(sel)) if sel.size else float(np.median(I))
+    else:
+        baseline = float(np.median(I))
+
+    # Only a genuine margin above the subject's own skin baseline carries
+    # specular (not mid-gray skin, at any tone).
+    margin_lo, margin_hi = 15.0, 55.0
+    intensity_gate = np.clip((I - baseline - margin_lo) / (margin_hi - margin_lo), 0.0, 1.0)
 
     spec = I * intensity_gate * chroma_gate
 
