@@ -79,13 +79,13 @@ scripts/
 ├── meta/             # Metadata & config
 ├── prompts/          # AI generation prompts
 ├── styles/           # Style definitions
-├── tests/            # Test suite (3,630 tests collected 2026-07-13)
+├── tests/            # Test suite (3,736 tests collected 2026-07-15)
 └── test_output/      # Test artifacts
 ```
 
 ## Quality Assurance
 - **Test Coverage:** 89% on core modules (last measured 2026-07-01)
-- **Test Count:** 3,630 collected (`pytest --collect-only`, 2026-07-13)
+- **Test Count:** 3,736 collected (`pytest --collect-only`, 2026-07-15)
 - **Performance:** 702ms per-face (400×400)
 - **CI/CD:** Weekly syntax checks, monthly audits
 
