@@ -422,7 +422,7 @@ def process_image(*args):
         # Defensive check: only process if color_ref_img is a valid file path (not bool/invalid type)
         if isinstance(color_ref_img, dict):
             color_ref_img = color_ref_img.get("name") or color_ref_img.get("path")
-        if color_ref_img and isinstance(color_ref_img, (str, bytes)) or hasattr(color_ref_img, '__fspath__'):
+        if color_ref_img and (isinstance(color_ref_img, (str, bytes)) or hasattr(color_ref_img, '__fspath__')):
             try:
                 color_ref_bgr = imread_exif(color_ref_img)
             except (TypeError, FileNotFoundError) as e:
@@ -636,7 +636,7 @@ def reset_skin_smoothing(recipe_name):
 
 def reset_skin_tone(recipe_name):
     d = recipe_defaults(recipe_name)
-    return d["whiten"], d["whiten_tone"], d["equalize"], d["skin_unify"], d["skin_unify_hue"], d["auto_exposure"], d["white_costume_lift"]
+    return d["whiten"], d["whiten_tone"], d["equalize"], d["shadow_lift"], d["nose_restore"], d["skin_unify"], d["skin_unify_hue"], d["auto_exposure"], d["white_costume_lift"], d["face_exposure"]
 
 def reset_basic_tone(recipe_name):
     d = recipe_defaults(recipe_name)
@@ -679,6 +679,16 @@ def reset_color_transfer():
 
 def reset_debug(recipe_name):
     return False
+
+
+def reset_body_skin(recipe_name):
+    d = recipe_defaults(recipe_name)
+    return d["body_smooth"], d["body_equalize"], d["body_whiten"], d["body_match_face"], d["body_relight"], d["body_dodge_burn"], d["body_shadow_lift"]
+
+
+def reset_lch(recipe_name):
+    d = recipe_defaults(recipe_name)
+    return d["white_balance_kelvin"], d["white_balance_tint"], d["bw_channel_mixer_r"], d["bw_channel_mixer_g"], d["bw_channel_mixer_b"], d["negative_split_tone_shadow"], d["negative_split_tone_highlight"], d["hsl_hue_global"], d["hsl_sat_global"], d["hsl_lum_global"]
 
 
 def _resolve_image_path(value):
@@ -2451,7 +2461,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     reset_skin_tone_btn.click(
         fn=reset_skin_tone,
         inputs=[recipe],
-        outputs=[whiten, whiten_tone, equalize, skin_unify, skin_unify_hue, auto_exposure, white_costume_lift]
+        outputs=[whiten, whiten_tone, equalize, shadow_lift, nose_restore, skin_unify, skin_unify_hue, auto_exposure, white_costume_lift, face_exposure]
     )
 
     reset_basic_tone_btn.click(
@@ -2518,6 +2528,18 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         fn=reset_debug,
         inputs=[recipe],
         outputs=[debug_mode]
+    )
+
+    reset_body_skin_btn.click(
+        fn=reset_body_skin,
+        inputs=[recipe],
+        outputs=[body_smooth, body_equalize, body_whiten, body_match_face, body_relight, body_dodge_burn, body_shadow_lift]
+    )
+
+    reset_lch_btn.click(
+        fn=reset_lch,
+        inputs=[recipe],
+        outputs=[white_balance_kelvin, white_balance_tint, bw_channel_mixer_r, bw_channel_mixer_g, bw_channel_mixer_b, negative_split_tone_shadow, negative_split_tone_highlight, hsl_hue_global, hsl_sat_global, hsl_lum_global]
     )
 
     # F6: Look Extractor wiring
@@ -2875,6 +2897,21 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         )
     _process_inputs = [_process_input_components[k] for k in PROCESS_INPUT_KEYS]
     _process_outputs = [img_output, compare_viewer, _original_state, export_file, status, debug_gallery, debug_panel, qa_status]
+
+    # F2: Undo/Redo history.  Push the current slider state onto the stack
+    # after every mutation so undo_handler/redo_handler (wired below) can step
+    # through history.  Registered after _process_inputs exists; each source's
+    # mutation listener was registered earlier, so push fires post-mutation.
+    recipe.change(push_undo_handler, inputs=_process_inputs, outputs=[_undo_stack_state, undo_btn, redo_btn])
+    custom_style_preset.change(push_undo_handler, inputs=_process_inputs, outputs=[_undo_stack_state, undo_btn, redo_btn])
+    for _reset_src in (
+        reset_btn, reset_skin_smooth_btn, reset_skin_tone_btn, reset_basic_tone_btn,
+        reset_tone_curve_btn, reset_relighting_btn, reset_eyes_lips_btn,
+        reset_face_reshaping_btn, reset_structure_effects_btn, reset_color_grading_btn,
+        reset_film_effects_btn, reset_split_toning_btn, reset_color_transfer_btn,
+        reset_debug_btn, reset_body_skin_btn, reset_lch_btn, smart_process_btn,
+    ):
+        _reset_src.click(push_undo_handler, inputs=_process_inputs, outputs=[_undo_stack_state, undo_btn, redo_btn])
 
     process_btn.click(
         fn=process_image,

@@ -804,14 +804,15 @@ class TestResetFunctions:
     def test_reset_skin_tone_returns_seven_values(self):
         result = gui.reset_skin_tone("natural")
         assert isinstance(result, tuple)
-        assert len(result) == 7
+        assert len(result) == 10
 
     def test_reset_skin_tone_values_match_natural_recipe(self):
         d = gui.recipe_defaults("natural")
         result = gui.reset_skin_tone("natural")
         assert result == (d["whiten"], d["whiten_tone"], d["equalize"],
-                          d["skin_unify"], d["skin_unify_hue"],
-                          d["auto_exposure"], d["white_costume_lift"])
+                          d["shadow_lift"], d["nose_restore"], d["skin_unify"],
+                          d["skin_unify_hue"], d["auto_exposure"],
+                          d["white_costume_lift"], d["face_exposure"])
 
     def test_reset_basic_tone_returns_five_values(self):
         result = gui.reset_basic_tone("natural")
