@@ -1,6 +1,6 @@
 # Task list — Haiku/Fable split (2026-07-15, ~6pm handoff)
 
-**Status:** DRAFT — not yet assigned. Prepared for review before handoff. See top "FABLE — hardest tier" section for what goes to Fable specifically; everything else is tagged `[HAIKU]`.
+**Status:** Ready for Fable. P0 item 1 (registry fix) is DONE — see note below. Everything in the "FABLE — hardest tier" section is what Fable should pick up next; everything tagged `[HAIKU]` is either already done (marked so) or intentionally left for Haiku, not Fable.
 **P0 #1 verified independently (2026-07-15), not just subagent-reported:** direct greps confirm `_stage_background`/`_stage_cosplay_moat`/`_stage_local_adjustments`/`_stage_body_reshape` are called only at `engine.py:2145/2159/2186/2200`, all inside the `else` branch of `if use_registry:` (line 2105). `_use_global_registry` has exactly one reference in the whole codebase (the `getattr(..., True)` default at line 2104) — no code anywhere ever sets it `False`. `stage_wrappers.py`'s registry defines exactly 6 stage classes (`SubjectSeparation`, `BackgroundHarmonize`, `BodySkin`, `Global`, `Grade`, `Finish`) and none reference the 4 dead methods. The block's own comment (`engine.py:2099-2102`) confirms intent: it was meant to be a golden-harness-verified A/B toggle, flipped to registry-default before the 4 features were ported in, and never fixed back.
 **Source:** Reconciled from `PHOTOSHOP_PARITY_ROADMAP.md`, `MASTER_PLAN.md`, `PLAN_CODEBASE_AUDIT_2026_07_14.md`,
 Tier 1/2/3 plans, `PLAN_TIERP_PERF_ARCH_SHIP.md`, `PLAN_FEATURE_FRONTIER.md`, `RESEARCH_FUJI_SIM_QUALITY_CEILING.md`,
@@ -40,13 +40,7 @@ These are the items on this list with real judgment load: some are mathematicall
 
 ## P0 — Architecture bug (highest leverage, fix first) — [HAIKU]
 
-1. **[HAIKU] Dead stage-registry `else` branch** (`retouch/engine.py:2104`, `_use_global_registry` defaults `True`, never set `False` anywhere).
-   The registry (`stage_wrappers.py:build_global_registry()`) only wires 6 stages. Four features that MASTER_PLAN marks "✅ DONE" are actually **unreachable in production**, only exercised in tests that call the private stage method directly, bypassing `engine.process()`:
-   - T1 background replace/relight (`_stage_background`) — includes the `anime_crystal_void` 7-key wiring, which is **still effectively dead**, not just "7 dead keys" as previously assumed.
-   - A3 cosplay skin moat (`_stage_cosplay_moat`)
-   - **F3 brush-painted local masks** (`_stage_local_adjustments`) — this is Tier 1.3 from the roadmap.
-   - T3 body reshape (`_stage_body_reshape`)
-   Fix: either migrate these 4 stages into the registry, or gate `_use_global_registry = False` when these features are requested. Mechanical: the fix shape is already known, just needs careful wiring + test coverage — Haiku-appropriate.
+1. **[HAIKU] Dead stage-registry `else` branch — FIXED 2026-07-15 (commit `b8bec2d`).** The registry (`stage_wrappers.py:build_global_registry()`) previously only wired 6 stages; 4 features MASTER_PLAN marked "✅ DONE" (T1 background replace/relight incl. `anime_crystal_void`, A3 cosplay skin moat, F3 brush-painted local masks, T3 body reshape) were unreachable in production. Fixed by adding `BackgroundReplaceStage`, `CosplayMoatStage`, `LocalAdjustmentsStage`, `BodyReshapeStage` wrapper classes and registering them in the correct order. Verified: golden pipeline test (5/5) + 99/100 on directly-affected test files (1 pre-existing unrelated failure). **Still open, not yet done:** no test exercises these 4 features through `engine.process()` end-to-end with a real visual check — needs a visual-QA render pass (see P2 item 7) before fully trusting output quality; only reachability is fixed so far. MASTER_PLAN's rows for these 4 features should also be corrected to reflect "reachable as of `b8bec2d`," not just "code exists."
 
 2. **[HAIKU] Related — spot heal is also split-brain (HON-4) — VERIFIED 2026-07-15.** `retouch/spot_heal.py`'s `LamaHealer` is never imported/called by `engine.py` (0 matches). `engine.py:1439` wires only the older `heal.heal_region` (Telea-only). Correction to the earlier finding: `SpotHealer` (not `LamaHealer`) *is* called, but only narrowly inside `hairwork.py:862-866` for flyaway-hair removal — not the general-purpose brush-heal path. Also confirmed: the real LaMa ONNX model was **never downloaded** (`model_fetch.py` has no `"lama_inpaint"` entry), so even if wired, `LamaHealer` would transparently fall back to multi-pass Telea today — meaning the practical quality gap is smaller than the wiring gap suggests, though `LamaHealer`'s multi-pass Telea fallback is still better than `heal_region`'s single-pass. Fix: in `engine.py`'s heals loop (~line 1438-1451), swap to `LamaHealer.heal_large()` for large masks. Pairs naturally with item 1 (same "code exists, unreachable" bug class — audit calls this **B3**).
 
@@ -101,7 +95,10 @@ These are the items on this list with real judgment load: some are mathematicall
 
 ---
 
-## Notes for whoever reviews this before Fable gets it
+## Notes for Fable
 
-- MASTER_PLAN is the declared authoritative doc, but items 1-2 above are proof its "✅ DONE" status can mean "code exists" rather than "reachable by a user." Worth deciding whether to correct MASTER_PLAN's rows directly as part of the P0 fix, so this discrepancy doesn't recur.
+- **Start with the "FABLE — hardest tier" section above** (P4 makeup-unmix robustness, F1 float32 completion, eye/teeth/lip optical models, Tier C research, B7 style_ref multi-face) — that's the actual assignment. Ranked hardest-first; P4 is #1.
+- Everything under P0/P1/P2 tagged `[HAIKU]` is either already done (marked so with a commit hash) or intentionally scoped for Haiku, not Fable — no action needed there unless a `[HAIKU]` item's fix turns out to be harder than expected once started, in which case escalate back to this list rather than silently absorbing it.
+- MASTER_PLAN was the declared authoritative doc, but P0 item 1 (now fixed) proved its "✅ DONE" status could mean "code exists" rather than "reachable by a user" for at least 4 features. Worth a pass correcting MASTER_PLAN's rows to cite `b8bec2d` once picked up.
 - Priority chain of supersession confirmed: `PHOTOSHOP_PARITY_ROADMAP.md` → Tier 1/2/3 plans → `PLAN_TIERP_PERF_ARCH_SHIP.md` (P1 guided-filter + F8 full-res before F1 float32) → `MASTER_PLAN.md` (current authority, dated 2026-07-14).
+- All findings on this list as of 2026-07-15 were independently verified via direct grep/read (not taken on faith from the source audit docs) — see the "VERIFIED 2026-07-15" tags throughout for what's been double-checked and what corrections were made along the way.
