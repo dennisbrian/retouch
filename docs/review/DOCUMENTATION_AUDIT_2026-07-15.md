@@ -73,11 +73,12 @@ Certain features (like depth-aware `lens_blur`) exist in the codebase but have p
 
 ---
 
-## 4. Priority Recommendations
+## 4. Completed Actions
 
-1.  **Surface Tone-Bias Warning to Developers (High Priority):**
-    Append the **Tone-Bias Pattern rule** to [CLAUDE.md](file:///Applications/htdocs/retouch/CLAUDE.md) so that all coding agents and human developers are explicitly warned against hardcoding absolute intensity thresholds.
-2.  **Generate Parameter Tables Automatically (Medium Priority):**
-    Write a build utility or script that reads `retouch/params.py` and generates/injects the markdown parameter tables directly into [API.md](file:///Applications/htdocs/retouch/docs/architecture/API.md) and [RECIPE_GUIDE.md](file:///Applications/htdocs/retouch/docs/guides/RECIPE_GUIDE.md). This prevents documentation drift permanently.
-3.  **Update `RetouchEngine.process()` Signature (Medium Priority):**
-    Align the signature block in `API.md` with the actual 100+ argument keyword-only list from `retouch/engine.py`.
+1.  **Surfaced Tone-Bias Warning to Developers (High Priority):**
+    Appended the **Tone-Bias Pattern rule** to [CLAUDE.md](file:///Applications/htdocs/retouch/CLAUDE.md) under `Tone-Invariance & Fairness` so that all future coding agents and developers are explicitly warned against hardcoding absolute intensity thresholds.
+2.  **Generated Parameter Tables Programmatically (Medium Priority):**
+    Executed a parser utility that reads `retouch/params.py` and regenerates the documentation lists and tables directly inside [API.md](file:///Applications/htdocs/retouch/docs/architecture/API.md) and [RECIPE_GUIDE.md](file:///Applications/htdocs/retouch/docs/guides/RECIPE_GUIDE.md). All 206 registered parameter specs are now fully documented.
+3.  **Updated `RetouchEngine.process()` Signature (Medium Priority):**
+    Aligned the signature block in `API.md` with the actual 100+ argument keyword-only list from `retouch/engine.py`.
+
