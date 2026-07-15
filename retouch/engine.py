@@ -2463,9 +2463,16 @@ class RetouchEngine:
         ctx: ProcessingContext,
         person_mask: Optional[np.ndarray] = None,
     ) -> np.ndarray:
-        """F1/E2: uint8 no-face path fixed — now converts to float32 [0,1]
-        at the top (matching _run_global_phases) so --global-only batch runs
-        get the same float-pipeline benefit as face-detected runs."""
+        """F1/E2: converts to float32 [0,1] at the top (matching
+        _run_global_phases) so --global-only batch runs get float precision
+        through tonal curve, white balance, master HSL, film density, and
+        the main grade() call. NOTE: from the post-grade() post-effects
+        boundary onward (highlight rolloff, bloom, glow, vignette, impact,
+        grain, negative split tone, B&W mixer) this still converts to uint8
+        and always returns uint8 -- that back half has not yet been
+        migrated to match `_stage_grade`'s float-native versions of the
+        same ops. See docs/plans/PLAN_P4_MAKEUP_UNMIX.md Sec 18 for the
+        residual inventory."""
         from .precision import to_float, to_uint8
         # 16-bit ingest: no faces ⇒ nothing is edited, so start global grading
         # from the full-precision source when available (no banding on skies/
@@ -2490,25 +2497,31 @@ class RetouchEngine:
 
         # --- White balance (LCH-based, Phase 1.d) ---
         if ctx.white_balance_kelvin != _DEFAULTS["white_balance_kelvin"] or ctx.white_balance_tint != _DEFAULTS["white_balance_tint"]:
-            # white_balance_lch expects uint8 — boundary conversion
-            result_u8 = to_uint8(result)
-            result_u8 = self._grader.white_balance_lch(
-                result_u8,
+            # F1/E2: white_balance_lch is dtype-aware (bgr_f32_to_lch_f32 for
+            # float input) -- stay in float32 [0,255] instead of the old
+            # to_uint8/to_float boundary round-trip, matching the face path
+            # in _stage_grade. white_balance_lch expects float BGR in
+            # [0,255]; `result` is [0,1] here, so scale around the call.
+            wb_in = np.clip(result * 255.0, 0.0, 255.0).astype(np.float32)
+            wb_out = self._grader.white_balance_lch(
+                wb_in,
                 temperature=ctx.white_balance_kelvin,
                 tint=ctx.white_balance_tint,
             )
-            result = to_float(result_u8)
+            result = np.clip(wb_out / 255.0, 0.0, 1.0).astype(np.float32)
 
         # --- Master HSL (Phase 1.d) — global LCH adjustments ---
         if ctx.hsl_hue_global != 0 or ctx.hsl_sat_global != 0 or ctx.hsl_lum_global != 0:
-            result_u8 = to_uint8(result)
-            result_u8 = self._grader.adjust_hsl_lch(
-                result_u8,
+            # F1/E2: adjust_hsl_lch is dtype-aware -- same float-native
+            # scale-around-the-call pattern as white balance above.
+            hsl_in = np.clip(result * 255.0, 0.0, 255.0).astype(np.float32)
+            hsl_out = self._grader.adjust_hsl_lch(
+                hsl_in,
                 hue_shift=ctx.hsl_hue_global * 0.6,
                 sat_scale=1.0 + ctx.hsl_sat_global / 100.0,
                 lum_shift=ctx.hsl_lum_global * 0.5,
             )
-            result = to_float(result_u8)
+            result = np.clip(hsl_out / 255.0, 0.0, 1.0).astype(np.float32)
 
         # --- C3: Parametric film-density engine (no-face path) ---
         if ctx.film_enable:

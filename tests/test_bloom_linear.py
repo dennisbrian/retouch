@@ -358,3 +358,71 @@ class TestBloomEdgeCases:
         img = np.full((50, 50, 3), 128, dtype=np.uint8)
         result = apply_global_bloom(img, strength=-10.0, threshold=200.0, softness=30.0)
         assert np.all(result == img), "Negative strength should return original image"
+
+
+class TestBloomFloatNativeNoBanding:
+    """F1/E2: apply_global_bloom's float32 path used to quantize to uint8
+    internally (highlight isolation + linearization + cascaded blur all ran
+    on 8-bit data) even though the function accepted and returned float32 --
+    a "fake float" round-trip, same bug class as the other F1 findings
+    documented in docs/plans/PLAN_P4_MAKEUP_UNMIX.md Sec 18. These tests
+    pin the fix: the float32 path must stay in float precision throughout
+    and must not introduce new banding on a smooth gradient.
+    """
+
+    @staticmethod
+    def _smooth_gradient(h=256, w=512, lo=120.0, hi=250.0):
+        """A smooth linear luminance ramp spanning into the highlight
+        range (threshold=210 by default) so bloom actually triggers --
+        a flat/no-highlight gradient would false-pass any banding check."""
+        grad = np.tile(np.linspace(lo, hi, w, dtype=np.float32), (h, 1))
+        return np.stack([grad, grad, grad], axis=-1)
+
+    def test_uint8_path_byte_identical_after_fix(self):
+        """The fix only changes the float32 branch; uint8 input must
+        produce byte-identical output to before the change."""
+        rng = np.random.RandomState(0)
+        img_u8 = rng.randint(0, 255, (128, 128, 3), dtype=np.uint8)
+        out = apply_global_bloom(img_u8.copy(), strength=60, threshold=180, softness=30)
+        assert int(out.astype(np.int64).sum()) == 7044139
+
+        rng2 = np.random.RandomState(1)
+        img_u8_2 = rng2.randint(50, 255, (200, 150, 3), dtype=np.uint8)
+        out2 = apply_global_bloom(img_u8_2.copy(), strength=30, threshold=210, softness=15)
+        assert int(out2.astype(np.int64).sum()) == 14030336
+
+    def test_float_path_no_banding_on_smooth_gradient(self):
+        """A smooth gradient through the float32 path must stay smooth --
+        every column should differ from its neighbor by construction, so
+        the count of distinct output levels should be close to the image
+        width (full resolution), not collapsed to a handful of 8-bit steps."""
+        h, w = 256, 512
+        img_255 = self._smooth_gradient(h, w)
+        img_01 = img_255 / 255.0
+        out_float = apply_global_bloom(img_01.copy(), strength=60, threshold=210, softness=30)
+        assert out_float.dtype == np.float32
+
+        row = (out_float[h // 2, :, 0] * 255.0)
+        distinct_levels = len(np.unique(np.round(row, 2)))
+        # Pre-fix this collapsed to ~258 (still constrained by an internal
+        # uint8 quantization); post-fix it should reach full column
+        # resolution (512) since every input column is distinct.
+        assert distinct_levels >= w - 4, distinct_levels
+
+    def test_float_path_matches_uint8_path_within_tolerance(self):
+        """The float32 and uint8 paths should agree closely in aggregate
+        (same algorithm, different precision) -- large disagreement would
+        indicate a scale-convention bug (e.g. LAB range mismatch), not
+        just a precision difference."""
+        h, w = 256, 512
+        img_255 = self._smooth_gradient(h, w)
+        img_01 = img_255 / 255.0
+        img_u8 = np.clip(img_255, 0, 255).astype(np.uint8)
+
+        out_float = apply_global_bloom(img_01.copy(), strength=60, threshold=210, softness=30)
+        out_uint8 = apply_global_bloom(img_u8.copy(), strength=60, threshold=210, softness=30)
+
+        out_float_255 = out_float * 255.0
+        out_uint8_255 = out_uint8.astype(np.float32)
+        mean_delta = float(np.abs(out_float_255 - out_uint8_255).mean())
+        assert mean_delta < 2.0, mean_delta

@@ -661,12 +661,24 @@ def apply_global_bloom(
     is_float = img_bgr.dtype == np.float32
 
     # Convert to LAB to isolate highlights based on L (luminance) channel
-    # Threshold and softness logic operates in gamma-space L domain (photographer-intuitive)
+    # Threshold and softness logic operates in gamma-space L domain (photographer-intuitive).
+    #
+    # F1/E2: previously this always quantized to uint8 here (even when given
+    # float32 input) before computing the LAB highlight mask and the linear
+    # base image used for blending -- a "fake float" round-trip: the
+    # function accepted and returned float32, but did all of its actual math
+    # (highlight isolation, linearization, cascaded blur) on 8-bit data. Now
+    # the float path stays in float32 [0,255] throughout via
+    # ``bgr_f32_to_lab_f32`` (uint8-scale-convention LAB, no quantization),
+    # matching the pattern already used by ``apply_skin_diffusion`` and the
+    # other float-native grading ops. See docs/plans/PLAN_P4_MAKEUP_UNMIX.md
+    # Sec 18 for the before/after banding measurement.
     if is_float:
-        img_u8 = np.clip(img_bgr * 255.0, 0, 255).astype(np.uint8)
+        img_f255 = np.clip(img_bgr * 255.0, 0.0, 255.0).astype(np.float32)
+        lab = bgr_f32_to_lab_f32(img_f255)
     else:
-        img_u8 = img_bgr
-    lab = cv2.cvtColor(img_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
+        img_f255 = img_bgr.astype(np.float32)
+        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
     l_chan = lab[:, :, 0]
 
     # Soft threshold ramp from threshold to threshold + softness
@@ -676,15 +688,15 @@ def apply_global_bloom(
     if highlight_mask.max() < 0.01:
         return img_bgr
 
-    h, w = img_u8.shape[:2]
+    h, w = img_f255.shape[:2]
     min_dim = min(h, w)
 
     # Isolate highlights in float32 (color-preserving, avoid early quantization to uint8)
-    highlights_gamma = img_u8.astype(np.float32) * highlight_mask[:, :, np.newaxis]
+    highlights_gamma = img_f255 * highlight_mask[:, :, np.newaxis]
 
     # Linearize highlights and base image for bloom computation (gamma 2.2)
     highlights_lin = (highlights_gamma / 255.0) ** 2.2
-    img_lin = (img_u8.astype(np.float32) / 255.0) ** 2.2
+    img_lin = (img_f255 / 255.0) ** 2.2
 
     # Downsampled bloom optimization for large images (operates in linear space)
     target_min = 2000

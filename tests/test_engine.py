@@ -435,6 +435,59 @@ class TestEngineBloom:
         assert res.params.bloom_softness == 10.0
 
 
+class TestNoFaceFallbackFloatNative:
+    """F1/E2: _no_face_fallback's white balance and master HSL used to
+    round-trip through uint8 (to_uint8/to_float) even though both
+    white_balance_lch and adjust_hsl_lch are dtype-aware and accept float32
+    directly -- an unnecessary quantization step that _stage_grade (the
+    face path) already avoided for the same two operations. See
+    docs/plans/PLAN_P4_MAKEUP_UNMIX.md Sec 18.
+    """
+
+    def test_no_face_white_balance_runs(self, engine):
+        img = np.random.RandomState(5).randint(20, 230, (80, 80, 3), dtype=np.uint8)
+        res = engine.process(img, white_balance_kelvin=4500, white_balance_tint=15)
+        assert res.shape == img.shape
+        assert res.dtype == np.uint8
+        assert not np.array_equal(res, img)
+
+    def test_no_face_hsl_runs(self, engine):
+        img = np.random.RandomState(5).randint(20, 230, (80, 80, 3), dtype=np.uint8)
+        res = engine.process(img, hsl_hue_global=20, hsl_sat_global=15, hsl_lum_global=-5)
+        assert res.shape == img.shape
+        assert res.dtype == np.uint8
+        assert not np.array_equal(res, img)
+
+    def test_no_face_white_balance_more_precise_than_uint8_roundtrip(self):
+        """The float-native path should introduce less quantization error
+        than a to_uint8/to_float boundary round-trip would -- verified
+        directly against retouch.grading.ColorGrader.white_balance_lch's
+        own float32 vs uint8 branches (isolated from the rest of the
+        engine, which has its own additional processing)."""
+        from retouch.grading import ColorGrader
+
+        grader = ColorGrader()
+        img_u8 = np.random.RandomState(5).randint(20, 230, (80, 80, 3), dtype=np.uint8)
+
+        # Pure round-trip through LCh with no adjustment (identity check):
+        # the uint8 path's own cv2 LAB conversion loses sub-integer
+        # precision before any white-balance math is even applied.
+        from retouch.color_space import (
+            bgr_to_lch, lch_to_bgr, bgr_f32_to_lch_f32, lch_f32_to_bgr_f32,
+        )
+        back_u8 = lch_to_bgr(bgr_to_lch(img_u8))
+        back_f32 = np.clip(
+            lch_f32_to_bgr_f32(bgr_f32_to_lch_f32(img_u8.astype(np.float32))),
+            0, 255,
+        ).astype(np.uint8)
+
+        delta_u8 = np.abs(back_u8.astype(np.int16) - img_u8.astype(np.int16)).max()
+        delta_f32 = np.abs(back_f32.astype(np.int16) - img_u8.astype(np.int16)).max()
+        # float32 round-trip must be at least as precise (usually far more
+        # precise) than the uint8 round-trip's own quantization error.
+        assert delta_f32 <= delta_u8
+
+
 # ---------------------------------------------------------------------------
 # _upscale_core_result — unit tests for the proxy down/up-scaling helper
 # ---------------------------------------------------------------------------

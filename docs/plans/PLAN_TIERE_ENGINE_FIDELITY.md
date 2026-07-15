@@ -1,5 +1,14 @@
 # Tier E Plan — Engine & Skin Fidelity Audit (Stages E1–E4)
 
+**⚠️ 2026-07-16 re-verification: most of Part 1's headline findings are now
+STALE (fixed since this doc was written) — see §18 below before treating
+any citation in this file as current. `_stage_grade` is at `engine.py:3683`
+today, not `:1655`; the file has grown from whatever HEAD `ea6f835` was to
+4486 lines. Two genuine residual gaps were found and fixed in §18
+(`apply_global_bloom`'s internal uint8 quantization; `_no_face_fallback`'s
+white-balance/HSL round-trip). Treat this doc as a historical snapshot for
+Parts 1.2–1.6 and Part 2 below; §18 is the current-truth appendix.**
+
 **Date:** 2026-07-03
 **Type:** Code-audit research + stage definitions (no code). Companion to `PLAN_TIERH_HAIR.md` (same session's planning frontier).
 **Question:** Tier H covered the hair gap; what does a deep read of the *existing* core (`engine.py`, `skin.py`, `perf_optimizations.py`, `frequency.py`) reveal that no current plan covers?
@@ -74,3 +83,143 @@ Nothing here blocks the Phase 2 queue; §1.4 items are the only ones with a *dea
 - E1/E2: synthetic 16-bit-origin gradient corpus — banding step count and high-band energy before/after; golden-image byte-identity for migrated-but-unchanged ops; benchmark.py per-face time (expect improvement).
 - E3: slider monotonicity tests (output delta strictly increasing in slider value — extends the existing monotonicity test pattern); recipe re-tune signed off on owner's corpus.
 - E4: engine init time before/after; multi-face IPC payload size logged; full pytest throughout.
+
+---
+
+## 18. F1 re-verification against current HEAD (2026-07-16)
+
+Task: verify this doc's §1.1 "16 `_to_uint8_if_float` sites + 3 fake-float
+helpers + 100% uint8 no-face path" inventory against current code before
+doing any migration work, per F1's own acceptance criterion ("the 16-site
+list above *is* the F1 work inventory"). HEAD at time of this audit:
+`d6b7d8d` (engine.py: 4486 lines, vs whatever `ea6f835` was on 2026-07-03).
+
+### 18.1 Verdict: the doc's headline inventory is mostly STALE — most of it has already shipped
+
+| §1.1 claim (2026-07-03) | Current status (2026-07-16) |
+|---|---|
+| 16 `_to_uint8_if_float` sites in `_stage_grade` | **3 remain**, at `engine.py:3712/3801/3808`, each with an inline comment justifying it as inherently-uint8: `subject_aware_transfer` (internal `cvtColor`), `tonal.apply_hd_curve` (`cv2.LUT` requires uint8), `grade_stack` (no `return_float` param). The other 13 (color_transfer, white balance, master HSL, split-tone, highlight rolloff, skin_glow, bloom, glow, fade_toe/highlight_drift/airy_haze/clarity_split finish pack, white-costume lift, vignette, grain, negative split tone, B&W mixer) are now float-native or explicitly scale-wrapped float calls — each carries an `F1/E2: ... now dtype-aware` comment. |
+| `_F_adjust_vibrance` / `_F_apply_uniform_saturation` fake-float | **Fixed.** Both docstrings now explicitly say "genuinely float-native" and document the prior bug ("the old version round-tripped through uint8 twice (fake float)"). `_F_apply_uniform_saturation` correctly handles cv2's float-HSV `S` range being `[0,1]` (not `[0,255]` as in the uint8 path) — the exact pitfall this kind of migration is prone to. |
+| `_stage_subject_separation` uint8-LAB even on float input | **Fixed.** Genuinely float-native via `bgr_f32_to_lab_f32`/`lab_f32_to_bgr_f32`, dtype-branched throughout. |
+| No-face path 100% uint8 (`_no_face_fallback` before `to_float`) | **Partially fixed, partially still true** — see §18.2/§18.3. The docstring claimed "fixed" but was itself misleading (see below). |
+| §1.2 B&W mixer literals vs `_DEFAULTS` | **Fixed** at both sites (`engine.py:2634-2636`, `:3956-3958`). |
+| §1.3 sharpen inert 1-60 | **Fixed** — monotone map at `engine.py:4033-4036` (`0→0, 50→1.0, 100→3.0`, no dead zone). |
+| §1.3 equalize s² non-linearity | Not independently re-checked this pass (out of scope for F1; flagged in CLAUDE.md's "Outstanding Fixes" as previously addressed — `1640eeb`/later commits). |
+
+**Why this matters for anyone picking up F1 next:** don't treat this doc's
+Part 1 as a live work-order. Grep current `engine.py` for
+`_to_uint8_if_float(` and cross-check against §18.1's table above before
+assuming any specific site is still broken — most of the doc's own
+citations no longer resolve to the described state.
+
+### 18.2 Genuine residual gap #1, FOUND + FIXED: `apply_global_bloom`'s internal uint8 quantization (`retouch/utils.py`)
+
+Despite `_stage_grade`'s call site carrying the comment "Apply Global
+Cinematic Bloom (float-native: handles float32 [0,1] I/O)" — **that comment
+was misleading.** `apply_global_bloom` accepted and returned float32, but
+internally converted to `img_u8 = np.clip(img_bgr*255,0,255).astype(np.uint8)`
+at the very top and did all of its actual work (LAB highlight isolation,
+linearization, three-scale cascaded Gaussian blur, screen blend) on that
+quantized 8-bit data — a "fake float" round-trip, same bug class as the 3
+helpers §1.1 already named, just not caught by the original audit (or
+introduced/left uncorrected after).
+
+**Measured** (smooth linear gradient, 120→250 across 512px, spanning into
+the `threshold=210` highlight range so bloom actually triggers — a flat/
+sub-threshold gradient would false-pass any banding check):
+
+| metric | before fix | after fix |
+|---|---|---|
+| distinct output levels (of 512 columns) | 258 | **512** (full resolution) |
+| vs true uint8-path distinct levels | 127 | 127 (unchanged, as expected) |
+
+**Fix** (`retouch/utils.py::apply_global_bloom`): float32 input now stays in
+float32 throughout via `bgr_f32_to_lab_f32` (same helper `apply_skin_diffusion`
+already used correctly) instead of quantizing to uint8 for the LAB
+conversion and the linearized base image. uint8 input path is untouched.
+
+**Verified:**
+- uint8-path output byte-identical before/after (checksummed, not just
+  eyeballed): two different random uint8 images at different
+  strength/threshold/softness combinations, exact integer-sum match.
+- Float path: 512/512 distinct levels on the gradient test (no banding),
+  vs 258 pre-fix.
+- Float vs uint8-path mean absolute delta < 2.0/255 (same algorithm,
+  different precision — small disagreement expected, not a scale bug).
+- `tests/test_bloom_linear.py`: 22/22 pass (18 pre-existing + 4 new,
+  `TestBloomFloatNativeNoBanding`). `tests/test_utils.py`: bundled, all pass.
+
+### 18.3 Genuine residual gap #2, FOUND + FIXED: `_no_face_fallback`'s white-balance/HSL round-trip (`retouch/engine.py`)
+
+`_no_face_fallback`'s own docstring claimed "F1/E2: uint8 no-face path
+fixed — now converts to float32 [0,1] at the top... get the same
+float-pipeline benefit as face-detected runs." **This was only true for the
+front half of the function.** The conversion to float does happen at the
+top, and tonal curve / white balance / master HSL / film density / the main
+`grade()` call all ran on float32 — but white balance and master HSL still
+round-tripped through `to_uint8()`/`to_float()` at each call
+(`engine.py:2494/2500` and `:2504/2511` pre-fix), even though
+`white_balance_lch` and `adjust_hsl_lch` are dtype-aware and the *face*
+path (`_stage_grade`) already calls them directly on float32 (scaled to
+`[0,255]`) without any uint8 boundary. Additionally, **the function always
+returns uint8** (`result_u8` at the final `return`) — from the post-`grade()`
+post-effects boundary onward (highlight rolloff, bloom, glow, vignette,
+impact, grain, negative split tone, B&W mixer) it converts to uint8 and
+never converts back, so the docstring's "same float-pipeline benefit as
+face-detected runs" claim was not fully accurate even before this fix, and
+still isn't for that back half.
+
+**Fix** (`retouch/engine.py::_no_face_fallback`): white balance and master
+HSL now use the same scale-around-the-call float32 pattern as
+`_stage_grade` (scale `[0,1]` → `[0,255]` float, call directly, scale back)
+instead of `to_uint8`/`to_float`. Docstring corrected to accurately state
+what is and isn't float-native in this function today (the back-half gap
+is now documented, not silently missed).
+
+**Verified (and a real trap caught along the way):** the naive check
+"does the no-face WB/HSL output change vs before the fix" showed deltas up
+to ~33/255 — larger than a single quantization step, which is exactly the
+kind of scale-mismatch red flag this class of fix can hide. Isolated the
+cause with a pure identity round-trip (`bgr_to_lch`→`lch_to_bgr` vs
+`bgr_f32_to_lch_f32`→`lch_f32_to_bgr_f32`, zero adjustment applied): the
+**uint8 path's own round-trip has a max delta of 35 vs the original image**
+(cv2's uint8 LAB conversion quantizes before any adjustment math even
+runs), while the float32 path's round-trip max delta is 1 (correct,
+near-identity). The ~33-level disagreement is the uint8 path's own
+pre-existing imprecision, not a bug introduced by the fix — confirmed via
+high correlation (0.87) between the two paths' delta-from-original maps,
+i.e. both apply the same white-balance direction/magnitude, just with
+different quantization noise. This is the intended F1 outcome (removing
+quantization error), not a regression.
+
+- `tests/test_engine.py`: 65/65 pass (60 pre-existing + 5 new,
+  `TestNoFaceFallbackFloatNative`, including a direct precision-comparison
+  test against the uint8 round-trip).
+- `tests/test_float_pipeline.py`, `tests/test_grading_lch.py`,
+  `tests/test_grading_internal.py`, `tests/test_grading.py`: 273/273 pass
+  (bundled run, unaffected files included for safety).
+
+### 18.4 What remains (explicitly not done in this pass)
+
+- **The 3 remaining `_to_uint8_if_float` sites in `_stage_grade`** — legitimately
+  boundary-bound today (cv2.LUT, subject_aware_transfer's internal cvtColor,
+  grade_stack's uint8-only return). Converting them needs upstream work
+  (a float-native curve-interpolation path, a `return_float` param on
+  `grade_stack`) that is separately scopeable, not a same-pattern fix like
+  the two above. Annotate-not-fix, per the original plan's own E2
+  acceptance criterion ("each site migrates to a float-native
+  implementation OR gets an explicit inherently-uint8 annotation") — the
+  annotations already exist in the code comments; this section is that
+  annotation's audit trail.
+- **`_no_face_fallback`'s back half** (highlight rolloff through B&W mixer,
+  §18.3) — lower priority per the standing rule (this path only affects
+  images with zero detected faces), and it's a larger mechanical lift
+  (mirroring ~8 more of `_stage_grade`'s float-native call patterns) than
+  the two fixes landed here. Docstring now accurately flags this as open
+  rather than silently claiming it's done.
+- **`apply_skin_diffusion`'s absolute L gate** (`l_chan - 110.0) / 90.0`,
+  `retouch/utils.py`) — noticed while confirming this function was
+  *already* float-native (it is). Not a float-precision issue, but the
+  same skin-tone-relative-vs-absolute-threshold pattern documented at
+  length in `PLAN_P4_MAKEUP_UNMIX.md` §§14-17. Out of scope for F1;
+  flagged here as a pointer for whoever next works that thread.
