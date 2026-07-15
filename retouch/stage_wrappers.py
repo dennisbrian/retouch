@@ -75,6 +75,27 @@ class BackgroundHarmonizeStage(_EngineStage):
         )
 
 
+class BackgroundReplaceStage(_EngineStage):
+    """Stage 3.2: T1 — background replace & scene relight.
+
+    Wires the 7 historically-dead ``anime_crystal_void`` keys. Always
+    ``enabled`` (matches the unconditional call in the pre-registry
+    hardcoded path); the method itself early-returns when all 7 params
+    are zero or there is no person mask, so this is cheap when unused.
+    """
+
+    name = "background"
+    phase = "global"
+
+    def enabled(self, state: PipelineState) -> bool:
+        return True
+
+    def _call(self, state: PipelineState) -> np.ndarray:
+        return self._engine._stage_background(
+            state.img, state.ctx, state.person_mask
+        )
+
+
 class BodySkinStage(_EngineStage):
     """Stage 3.5: Body skin retouch."""
 
@@ -89,6 +110,26 @@ class BodySkinStage(_EngineStage):
             state.img, state.ctx, state.person_mask,
             state.acc_skin, state.acc_skin_hair, state.acc_lips,
             state.faces, state.h_img, state.w_img,
+        )
+
+
+class CosplayMoatStage(_EngineStage):
+    """Stage 3.6: A3 — cosplay skin moat (wig-lace, stockings, consistency).
+
+    Always ``enabled`` (matches the unconditional call in the pre-registry
+    hardcoded path); the method itself early-returns when all 3 cosplay
+    params are zero, so this is cheap when unused.
+    """
+
+    name = "cosplay_moat"
+    phase = "global"
+
+    def enabled(self, state: PipelineState) -> bool:
+        return True
+
+    def _call(self, state: PipelineState) -> np.ndarray:
+        return self._engine._stage_cosplay_moat(
+            state.img, state.ctx, state.acc_skin_hair, state.person_mask
         )
 
 
@@ -121,6 +162,31 @@ class GradeStage(_EngineStage):
         )
 
 
+class LocalAdjustmentsStage(_EngineStage):
+    """Stage 5.5: F3 — brush/radial/linear local adjustments.
+
+    Runs after grade, before finish (matches Lightroom-style local-edits-
+    on-top-of-global-look ordering in the pre-registry hardcoded path).
+    """
+
+    name = "local_adjustments"
+    phase = "grade"
+
+    def enabled(self, state: PipelineState) -> bool:
+        return bool(getattr(state.ctx, "_local_adjustments", None))
+
+    def _call(self, state: PipelineState) -> np.ndarray:
+        local_adjs = getattr(state.ctx, "_local_adjustments", None)
+        sem_masks = (
+            {"skin": state.acc_skin, "person": state.person_mask}
+            if state.acc_skin is not None else None
+        )
+        return self._engine._stage_local_adjustments(
+            state.img, state.ctx,
+            local_adjustments=local_adjs, semantic_masks=sem_masks,
+        )
+
+
 class FinishStage(_EngineStage):
     """Stage 6: Selective sharpening + impact finish."""
 
@@ -134,6 +200,27 @@ class FinishStage(_EngineStage):
         return self._engine._stage_finish(
             state.img, state.ctx, state.acc_sharpen,
             faces=state.faces, person_mask=state.person_mask,
+        )
+
+
+class BodyReshapeStage(_EngineStage):
+    """Stage 7: T3 — body reshape (MediaPipe Pose, native resolution).
+
+    Always ``enabled`` (matches the unconditional call in the pre-registry
+    hardcoded path); the method itself early-returns before invoking
+    MediaPipe Pose when auto_body_reshape is off and all sliders are
+    neutral, so this is cheap when unused.
+    """
+
+    name = "body_reshape"
+    phase = "finish"
+
+    def enabled(self, state: PipelineState) -> bool:
+        return True
+
+    def _call(self, state: PipelineState) -> np.ndarray:
+        return self._engine._stage_body_reshape(
+            state.img, state.ctx, person_mask=state.person_mask
         )
 
 
@@ -152,8 +239,12 @@ def build_global_registry(engine: "RetouchEngine") -> "StageRegistry":
     registry = StageRegistry()
     registry.add(SubjectSeparationStage(engine))
     registry.add(BackgroundHarmonizeStage(engine))
+    registry.add(BackgroundReplaceStage(engine))
     registry.add(BodySkinStage(engine))
+    registry.add(CosplayMoatStage(engine))
     registry.add(GlobalStage(engine))
     registry.add(GradeStage(engine))
+    registry.add(LocalAdjustmentsStage(engine))
     registry.add(FinishStage(engine))
+    registry.add(BodyReshapeStage(engine))
     return registry
