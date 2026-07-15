@@ -91,3 +91,32 @@ This vision document does **not** describe a big missing system — it describes
 - **S16 — Universal portrait foundation model.** *No build analog exists — this is the unifying frame all of S1-S15 point toward.* Instead of dozens of handcrafted modules (segmentation, geometry, skin, makeup, lighting, grade), build one latent portrait representation from which lighting, geometry, skin, makeup, optics, camera response, facial materials, and artistic intent can all be recovered and edited as movements within a single latent space — "one model, not forty modules." This is the most speculative item on the list: it presupposes that S1 (optical properties), S3 (identity manifold), S8 (lighting), and S13 (makeup layers) are all expressible as coordinates in one shared space, which is itself an unproven hypothesis, not an engineering plan. Treat as the eventual unifying question *if and only if* several of S1/S3/S8/S13 individually yield real partial results — attempting S16 directly, with none of its prerequisites solved, would be building a unification of things that don't yet exist.
 
 **Relationship to P4/F1/registry-bug (Fable's current top items):** none of S1-S16 should displace those from the near-term queue. They're a different time horizon (research, months-to-years) vs. near-term engineering (weeks). If a dedicated research track opens up separately from the Fable/Haiku engineering queue, S13 (generalizes P4) and S1 (generalizes the existing chromophore decomposition) are the most natural starting points since they build directly on code that already exists, rather than starting from zero like S3/S6/S9/S14/S15/S16.
+
+---
+
+## What Fable can actually plan for right now (grounded, not invented)
+
+The user asked to find "all proven solutions Fable can plan for." Important honesty check before answering: **"proven" here can only mean "has a concrete foothold in this repo or an already-scoped plan doc"** — not "a published paper exists that I recall solving this," because I can't verify a remembered paper/method claim against this codebase, and asserting one would be dressing a guess as a finding (the same discipline that caught the P0 registry bug earlier — verify before asserting). So this list is deliberately narrower than "all of S1-S16 with a technique bolted on."
+
+**Two honest categories result:**
+
+### A. Fully plannable now — build-tier, already scoped, in `FABLE_TASK_LIST_2026_07_15.md`
+No new research needed; Fable can take these directly:
+- P4 makeup-unmix robustness (dark-skin validation, failure-mode audit) — hardest-tier #1
+- F1 float32 pipeline completion — hardest-tier #2
+- Eyes/teeth/lips optical models (`PLAN_FEATURE_FRONTIER.md`) — hardest-tier #3
+- Tier C items (C3 soft BiSeNet logits, C1 Planckian WB, C7 real benchmark harness, C6 diffeomorphic constraint) — hardest-tier #4
+- B7 `style_ref` multi-face coverage — hardest-tier #5
+- Registry bug fix, spot-heal wiring, stale-doc cleanup — P0, Haiku-tier
+- Per-blemish preserve/attenuate/enhance policy layer, facial harmony/cross-region consistency objective — reconciliation items 2-3 above, P3
+
+### B. Plannable *as a scoped spike*, not as "solve the research problem" — only where a repo foothold exists
+These S-tier items have existing code that gives a concrete starting point — Fable can plan "extend/stress-test X," which is a real, boundable task, even though the *full* S-tier version (invent a general solution) remains open-ended:
+- **S1's build-side extension:** audit `decompose_chromophores`'s current 2-channel (melanin/hemoglobin) calibration for failure modes — a scoped, checkable task, distinct from "solve 10-channel reconstruction with no ground truth" (which is not plannable).
+- **S7's build-side extension:** the existing `qa_detectors.py` list is fixed; Fable could plan "collect a corpus of real failure renders and check whether any cluster outside the 7 known detector categories" — a bounded data-collection task, distinct from "invent a self-expanding detector-generation system" (not plannable).
+- **S8's build-side extension:** audit `body_relight.py`'s current lighting estimate against a small set of known-lighting test shots to quantify where it breaks — bounded, distinct from "full HDRI inverse rendering" (not plannable).
+- **S13's build-side extension:** this *is* P4 (already in category A) — no separate spike needed beyond what P4 already covers.
+
+**What's explicitly NOT plannable, and shouldn't be dressed up as a spike:** S3 (universal face manifold), S5 (explainability engine), S6 (RLHF taste model), S9 (personalized beauty), S14 (human vision simulator), S15 (self-optimizing engine), S16 (foundation model) — none of these have a repo foothold or an existing partial implementation to extend. Any "plan" for these would be inventing a research methodology from scratch, which is a different ask than "find proven solutions" — flag these as explore-only if the user wants to pursue them, not schedule them as Fable deliverables.
+
+**Verification note:** confirmed via direct grep (2026-07-15) that "confidence-based stage skipping" and "hardware-aware scheduling" (reconciliation item 8/4 above) genuinely do not exist anywhere in `retouch/*.py` — zero matches for `confidence.based|stage.skip|hardware.aware|scheduling`. Not a research problem, just an unscoped perf item; low priority, Haiku-appropriate if ever picked up.
