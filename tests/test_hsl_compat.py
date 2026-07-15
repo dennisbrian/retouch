@@ -31,3 +31,19 @@ def test_hsl_dual_schema_compatibility():
     
     # Verify outputs are identical
     np.testing.assert_array_equal(out_flat, out_nested)
+
+
+def test_engine_process_accepts_dynamic_hsl_kwargs():
+    from retouch import RetouchEngine
+    np.random.seed(42)
+    img = np.random.randint(0, 256, (128, 128, 3), dtype=np.uint8)
+    
+    engine = RetouchEngine()
+    try:
+        # This would raise TypeError before our fix:
+        result = engine.process(img, hsl_hue_red=15.0, calibration_red_hue=5.0)
+        assert result is not None
+        assert result.shape == img.shape
+    finally:
+        engine.close()
+

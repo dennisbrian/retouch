@@ -1122,6 +1122,7 @@ class RetouchEngine:
         auto_body_reshape: Optional[float] = None,
         # --- Per-face recipe / param overrides (detection-order index) ---
         face_params: Optional[Mapping[int, Mapping[str, Any]]] = None,
+        **kwargs: Any,
     ) -> ProcessingResult:
         """Process a single image through the full Retouch pipeline.
 
@@ -1381,6 +1382,7 @@ class RetouchEngine:
             "freckle_removal": freckle_removal,
             "freckle_preserve_mask": freckle_preserve_mask,
         }
+        overrides.update(kwargs)
 
         ctx = build_context(active_recipe, rec, overrides)
         ctx.hi_ref = hi_ref
