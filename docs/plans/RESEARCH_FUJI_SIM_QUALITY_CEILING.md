@@ -4,6 +4,8 @@
 ask to make the 14 Fuji film simulations (see `retouch/recipes.py`
 `FUJI_SIM_NAMES`) "among the best" / "exhaust all the ability."
 
+**STATUS UPDATE (2026-07-15):** The two headline blockers listed below—FilmDensityEngine brightness-crush bug (§2) and absent selective-color/HSL calibration (§3)—were fixed the same day this doc was written. See commits `9699157` (fix: FilmDensityEngine characteristic curve) and `f3290c3` (feat: selective HSL/calibration with hue/sat/luminance per-band adjustments now wired in `engine.py`). Only the reference-corpus-acquisition item (§4) remains open. Treat the rest of this doc as historical context, not an active task list.
+
 **Context:** `docs/FUJI_COLOR_RESEARCH.md` is the existing research doc.
 This file picks up where that one's theory meets the actual engine code —
 i.e. which of its four "key technical ingredients" (§3) are real, wired,
