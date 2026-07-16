@@ -212,6 +212,7 @@ class ProcessingContext:
     skin_chroma_even: float = 0.0
     redness_even: float = 0.0
     skin_glow: float = 0.0
+    mask_feather_mode: str = "gaussian"
     whiten_hue_stable: bool = False
     skin_locus: Optional[Dict[str, float]] = None
     smooth_exposure_lock: float = 0.0
@@ -2822,7 +2823,8 @@ class RetouchEngine:
             built_contexts: Optional[List["FaceContext"]] = None
         else:
             all_regions = self._parser.parse_batch(
-                crop_list, landmarks_compat_list, face_bbox_list, person_masks, ieds
+                crop_list, landmarks_compat_list, face_bbox_list, person_masks, ieds,
+                mask_feather_mode=ctx.mask_feather_mode
             )
             built_contexts = [
                 FaceContext(
@@ -2971,7 +2973,8 @@ class RetouchEngine:
         # ---- Parse regions (only when not already provided by the batch path) ----
         if regions is None:
             regions = self._parser.parse(
-                shifted_face.landmarks, canvas, shifted_face.bbox, roi_person_mask, shifted_face.ied
+                shifted_face.landmarks, canvas, shifted_face.bbox, roi_person_mask, shifted_face.ied,
+                mask_feather_mode=ctx.mask_feather_mode
             )
 
         processors = {

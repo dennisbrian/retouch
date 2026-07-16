@@ -2028,6 +2028,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             sharpen_radius = gr.Slider(0.1, 5.0, 1.0, step=0.1, label="Sharpen Radius", info="Blur radius for unsharp mask kernel")
                             glow = gr.Slider(0, 100, 0, step=1, label="Atmospheric Glow", info="Multi-scale atmospheric glow/bloom effect")
                             skin_glow = gr.Slider(0, 100, 0, step=1, label="Skin Light-Wrap (Anime)", info="Skin-scoped diffusion glow / light-wrap for anime cel blending · 0=off, 30=visible halo")
+                            mask_feather_mode = gr.State("gaussian")
                             vignette = gr.Slider(0, 100, 0, step=1, label="Vignette", info="Darken image corners for a focused portrait look")
                             fade_toe = gr.Slider(0, 100, 0, step=1, label="Fade Toe", info="Lift shadows while preserving hue (L-only LAB fade for 透明感)")
                             highlight_drift = gr.Slider(0, 100, 0, step=1, label="Highlight Drift", info="Bounded cyan hue rotation in highlights with skin protection")
@@ -2718,6 +2719,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "skin_hue_unify": _skin_hue_unify_state,
         "skin_chroma_even": _skin_chroma_even_state,
         "skin_glow": skin_glow,
+        "mask_feather_mode": mask_feather_mode,
         "eye_enhance": eye_enhance,
         "catchlight": catchlight,
         "dark_circles": dark_circles,

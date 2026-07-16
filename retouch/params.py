@@ -823,6 +823,16 @@ _SKIN_PARAMS = [
         min_val=0,
         max_val=100,
     ),
+    ParamSpec(
+        name="mask_feather_mode",
+        cli_flag="mask-feather-mode",
+        cli_type=str,
+        default="gaussian",
+        recipe_key=None,
+        conversion="dropdown",
+        min_val=None,
+        max_val=None,
+    ),
 ]
 
 

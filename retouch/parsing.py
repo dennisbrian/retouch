@@ -24,6 +24,102 @@ from .utils import create_polygon_mask, feather_mask, get_points, normalize_mask
 
 logger = logging.getLogger(__name__)
 
+# One-shot flag so the guided-filter fallback notice doesn't repeat per mask/face.
+_GUIDED_FALLBACK_WARNED = False
+
+
+def _masks_from_label_map(
+    full_label_map: np.ndarray,
+    img_bgr: np.ndarray,
+    feather: int,
+    mode: str = "gaussian",
+    include_cloth: bool = True,
+) -> dict:
+    """Convert BiSeNet label map to feathered soft masks.
+
+    Generates binary masks for each class, applies feathering, and performs
+    skin-exclusion subtraction. The output is a dict of float32 masks in [0, 1].
+
+    Args:
+        full_label_map: (H, W) uint8 BiSeNet class label map.
+        img_bgr: (H, W, 3) uint8 BGR image (used as guide for guided filter).
+        feather: Base feather radius in pixels.
+        mode: "gaussian" (default, Gaussian blur) or "guided" (guided filter).
+        include_cloth: If True, initialize cloth mask; if False, skip it.
+                      Used to preserve byte-identical behavior between parse()
+                      and parse_batch() which differ in cloth initialization.
+
+    Returns:
+        Dict mapping class names to (H, W) float32 masks in [0, 1].
+    """
+    bisenet_masks = {}
+
+    # Generate binary masks for required classes
+    bisenet_masks['skin'] = (full_label_map == 1).astype(np.float32)
+    bisenet_masks['left_eyebrow'] = (full_label_map == 2).astype(np.float32)
+    bisenet_masks['right_eyebrow'] = (full_label_map == 3).astype(np.float32)
+    bisenet_masks['left_eye'] = (full_label_map == 4).astype(np.float32)
+    bisenet_masks['right_eye'] = (full_label_map == 5).astype(np.float32)
+    bisenet_masks['mouth_interior'] = (full_label_map == 11).astype(np.float32)
+    bisenet_masks['lips'] = ((full_label_map == 12) | (full_label_map == 13)).astype(np.float32)
+    bisenet_masks['neck'] = (full_label_map == 14).astype(np.float32)
+    bisenet_masks['hair'] = (full_label_map == 17).astype(np.float32)
+    if include_cloth:
+        bisenet_masks['cloth'] = (full_label_map == 16).astype(np.float32)
+
+    bisenet_masks['face_oval'] = (
+        (full_label_map == 1) | (full_label_map == 2) | (full_label_map == 3) |
+        (full_label_map == 4) | (full_label_map == 5) | (full_label_map == 10) |
+        (full_label_map == 11) | (full_label_map == 12) | (full_label_map == 13)
+    ).astype(np.float32)
+
+    # Apply feathering (or guided filtering)
+    feather_keys = ['skin', 'left_eyebrow', 'right_eyebrow', 'left_eye', 'right_eye', 'lips', 'face_oval', 'neck', 'hair', 'cloth']
+    for k in feather_keys:
+        if k not in bisenet_masks:
+            continue
+        r = feather // 2 if k in ['left_eye', 'right_eye', 'lips', 'left_eyebrow', 'right_eyebrow', 'cloth'] else feather
+
+        if mode == "gaussian":
+            bisenet_masks[k] = feather_mask(bisenet_masks[k], radius=r)
+        elif mode == "guided":
+            # Guided filter: binary mask refined by image edges
+            # Ensure guide is float32 [0, 1]
+            guide = img_bgr.astype(np.float32) / 255.0
+            if guide.ndim == 3:
+                # Convert BGR to grayscale for guided filtering
+                guide = cv2.cvtColor(guide, cv2.COLOR_BGR2GRAY)
+            try:
+                # Try cv2.ximgproc.guidedFilter
+                import cv2.ximgproc as xp
+                filtered = xp.guidedFilter(guide, bisenet_masks[k], radius=r, eps=1e-3)
+            except (ImportError, AttributeError, cv2.error) as e:
+                # Fallback to utils.guided_filter (logged once per process,
+                # never a silent degrade to Gaussian)
+                global _GUIDED_FALLBACK_WARNED
+                if not _GUIDED_FALLBACK_WARNED:
+                    logger.warning(
+                        "cv2.ximgproc.guidedFilter unavailable or failed, using "
+                        "utils.guided_filter for mask feathering: %s", e
+                    )
+                    _GUIDED_FALLBACK_WARNED = True
+                from .utils import guided_filter
+                filtered = guided_filter(bisenet_masks[k], radius=r, eps=1e-3, guide=guide)
+            filtered = np.clip(filtered, 0.0, 1.0)
+            # Residual Gaussian so edges aren't over-crisp on skin-to-skin
+            # boundaries — keep/tune per Stage 2 visual QA (PLAN_C3 risks).
+            residual_r = max(r // 3, 1)
+            bisenet_masks[k] = feather_mask(filtered, radius=residual_r)
+        else:
+            raise ValueError(f"Unknown feather mode: {mode!r}")
+
+    # Clean skin mask after feathering: subtract excluded regions
+    for excl_k in ['left_eyebrow', 'right_eyebrow', 'left_eye', 'right_eye', 'lips', 'mouth_interior']:
+        if excl_k in bisenet_masks and bisenet_masks[excl_k] is not None:
+            bisenet_masks['skin'] = np.clip(bisenet_masks['skin'] - bisenet_masks[excl_k], 0.0, 1.0)
+
+    return bisenet_masks
+
 # =====================================================================
 # MediaPipe Face Mesh landmark indices (stable across versions)
 # =====================================================================
@@ -163,6 +259,7 @@ class FaceParser:
         face_bbox: Tuple[int, int, int, int],
         person_mask: Optional[np.ndarray] = None,
         ied: float = 100.0,
+        mask_feather_mode: str = "gaussian",
     ) -> "FaceRegions":
         """Parse a single face into region masks.
 
@@ -219,34 +316,10 @@ class FaceParser:
                     full_label_map = np.zeros((h_img, w_img), dtype=np.uint8)
                     full_label_map[cy1:cy2, cx1:cx2] = pred_crop_resized
 
-                    # Generate binary masks for required classes
-                    bisenet_masks['skin'] = (full_label_map == 1).astype(np.float32)
-                    bisenet_masks['left_eyebrow'] = (full_label_map == 2).astype(np.float32)
-                    bisenet_masks['right_eyebrow'] = (full_label_map == 3).astype(np.float32)
-                    bisenet_masks['left_eye'] = (full_label_map == 4).astype(np.float32)
-                    bisenet_masks['right_eye'] = (full_label_map == 5).astype(np.float32)
-                    bisenet_masks['mouth_interior'] = (full_label_map == 11).astype(np.float32)
-                    bisenet_masks['lips'] = ((full_label_map == 12) | (full_label_map == 13)).astype(np.float32)
-                    bisenet_masks['neck'] = (full_label_map == 14).astype(np.float32)
-                    bisenet_masks['hair'] = (full_label_map == 17).astype(np.float32)
-                    bisenet_masks['cloth'] = (full_label_map == 16).astype(np.float32)
-
-                    bisenet_masks['face_oval'] = (
-                        (full_label_map == 1) | (full_label_map == 2) | (full_label_map == 3) |
-                        (full_label_map == 4) | (full_label_map == 5) | (full_label_map == 10) |
-                        (full_label_map == 11) | (full_label_map == 12) | (full_label_map == 13)
-                    ).astype(np.float32)
-
-                    # Apply feathering
-                    for k in ['skin', 'left_eyebrow', 'right_eyebrow', 'left_eye', 'right_eye', 'lips', 'face_oval', 'neck', 'hair', 'cloth']:
-                        if k in bisenet_masks:
-                            r = feather // 2 if k in ['left_eye', 'right_eye', 'lips', 'left_eyebrow', 'right_eyebrow', 'cloth'] else feather
-                            bisenet_masks[k] = feather_mask(bisenet_masks[k], radius=r)
-
-                    # Clean skin mask after feathering
-                    for excl_k in ['left_eyebrow', 'right_eyebrow', 'left_eye', 'right_eye', 'lips', 'mouth_interior']:
-                        if excl_k in bisenet_masks and bisenet_masks[excl_k] is not None:
-                            bisenet_masks['skin'] = np.clip(bisenet_masks['skin'] - bisenet_masks[excl_k], 0.0, 1.0)
+                    # Generate feathered masks from label map
+                    bisenet_masks = _masks_from_label_map(
+                        full_label_map, img_bgr, feather, mode=mask_feather_mode, include_cloth=True
+                    )
             except Exception as e:
                 input_shape = crop_input.shape if 'crop_input' in locals() else None
                 logger.warning(
@@ -322,6 +395,7 @@ class FaceParser:
         face_bbox_list: List[Tuple[int, int, int, int]],
         person_masks: List[Optional[np.ndarray]],
         ieds: List[float],
+        mask_feather_mode: str = "gaussian",
     ) -> List["FaceRegions"]:
         """Parse multiple face crops in a single batch ONNX call.
 
@@ -436,35 +510,11 @@ class FaceParser:
                 full_label_map = np.zeros((h_img, w_img), dtype=np.uint8)
                 full_label_map[cy1:cy2, cx1:cx2] = pred_crop_resized
 
-                # Generate masks
-                bisenet_masks = {}
-                bisenet_masks['skin'] = (full_label_map == 1).astype(np.float32)
-                bisenet_masks['left_eyebrow'] = (full_label_map == 2).astype(np.float32)
-                bisenet_masks['right_eyebrow'] = (full_label_map == 3).astype(np.float32)
-                bisenet_masks['left_eye'] = (full_label_map == 4).astype(np.float32)
-                bisenet_masks['right_eye'] = (full_label_map == 5).astype(np.float32)
-                bisenet_masks['mouth_interior'] = (full_label_map == 11).astype(np.float32)
-                bisenet_masks['lips'] = ((full_label_map == 12) | (full_label_map == 13)).astype(np.float32)
-                bisenet_masks['neck'] = (full_label_map == 14).astype(np.float32)
-                bisenet_masks['hair'] = (full_label_map == 17).astype(np.float32)
-
-                bisenet_masks['face_oval'] = (
-                    (full_label_map == 1) | (full_label_map == 2) | (full_label_map == 3) |
-                    (full_label_map == 4) | (full_label_map == 5) | (full_label_map == 10) |
-                    (full_label_map == 11) | (full_label_map == 12) | (full_label_map == 13)
-                ).astype(np.float32)
-
-                # Feathering
+                # Compute feather for this face and generate masks
                 feather = max(int(ieds[idx_face] * 0.08), 3)
-                for k in ['skin', 'left_eyebrow', 'right_eyebrow', 'left_eye', 'right_eye', 'lips', 'face_oval', 'neck', 'hair', 'cloth']:
-                    if k in bisenet_masks:
-                        r = feather // 2 if k in ['left_eye', 'right_eye', 'lips', 'left_eyebrow', 'right_eyebrow', 'cloth'] else feather
-                        bisenet_masks[k] = feather_mask(bisenet_masks[k], radius=r)
-
-                # Clean skin
-                for excl_k in ['left_eyebrow', 'right_eyebrow', 'left_eye', 'right_eye', 'lips', 'mouth_interior']:
-                    if excl_k in bisenet_masks and bisenet_masks[excl_k] is not None:
-                        bisenet_masks['skin'] = np.clip(bisenet_masks['skin'] - bisenet_masks[excl_k], 0.0, 1.0)
+                bisenet_masks = _masks_from_label_map(
+                    full_label_map, crop_list[idx_face], feather, mode=mask_feather_mode, include_cloth=False
+                )
 
                 # Build FaceRegions
                 regions = FaceRegions()
