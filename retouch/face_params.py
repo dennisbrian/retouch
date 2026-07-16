@@ -34,7 +34,7 @@ FACE_LOCAL_PARAM_NAMES: frozenset[str] = frozenset({
     "whiten_hue_stable", "skin_locus", "smooth_exposure_lock", "shine_removal",
     "wrinkle_soften", "wrinkle_soften_forehead", "wrinkle_soften_nasolabial",
     "wrinkle_soften_neck", "texture_transplant", "shadow_lift", "nose_restore",
-    "freckle_removal",
+    "skin_sss", "freckle_removal",
     "eye_enhance", "eye_sclera_vessel_remove", "dark_circles",
     "undereye_darken_removal", "undereye_puffiness_reduction",
     "undereye_shadow_strength", "catchlight", "eye_sclera_brighten",

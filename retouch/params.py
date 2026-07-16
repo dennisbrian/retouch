@@ -636,6 +636,16 @@ _SKIN_PARAMS = [
         max_val=100,
     ),
     ParamSpec(
+        name="skin_sss",
+        cli_flag="skin-sss",
+        cli_type=float,
+        default=0,
+        recipe_key="skin.sss",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
         name="specular_bloom",
         cli_flag="specular-bloom",
         cli_type=int,

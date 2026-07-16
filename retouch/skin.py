@@ -1718,6 +1718,102 @@ class SkinProcessor:
             return result.astype(np.float32)
         return result.astype(np.uint8)
 
+    def apply_sss(
+        self,
+        img_bgr: np.ndarray,
+        skin_mask: Optional[np.ndarray],
+        strength: float = 0.0,
+        face_width: Optional[float] = None,
+    ) -> np.ndarray:
+        """Screen-space subsurface-scattering approximation (game-render skin).
+
+        Splits skin into a low-frequency shading band and a detail band, then
+        diffuses the shading band with per-channel Gaussian widths — red
+        widest, matching red light's deeper mean free path in tissue. Red
+        from lit zones bleeds across lit→shadow transitions, so terminators
+        warm up and soften the way translucent skin renders under a game
+        engine's separable SSS, while the untouched detail band keeps pores
+        and edges crisp. A small LAB a/b warm push, gated to the transition
+        zone of this face's own shading range, reinforces the effect without
+        moving luminance.
+
+        Tone-invariance: the diffusion is a linear filter (scales with the
+        subject's own contrast), and the terminator zone is located from the
+        face's own skin median / 5th-percentile shading span — no absolute
+        intensity references anywhere.
+
+        Args:
+            img_bgr: (H, W, 3) uint8 or float32 [0,255] BGR image.
+            skin_mask: (H, W) float mask 0-1. May be None to skip.
+            strength: 0-1 scatter strength. 0 returns input unchanged.
+            face_width: Face width in pixels for physical kernel scaling.
+
+        Returns:
+            (H, W, 3) BGR image, same dtype as input.
+        """
+        if skin_mask is None or strength <= 0.0:
+            return img_bgr
+
+        is_float = img_bgr.dtype == np.float32
+        work = img_bgr.astype(np.float32) if not is_float else img_bgr
+
+        m = normalize_mask(skin_mask.astype(np.float32, copy=False))
+        if float(m.max()) <= 0.01:
+            return img_bgr
+
+        h, w = work.shape[:2]
+        fw = float(face_width) if face_width else min(h, w) * 0.6
+        # Soft interior falloff: blur then re-multiply by the hard mask so the
+        # effect fades to zero *inside* the skin boundary — it must never leak
+        # onto lips/eyes/hair that sit right outside regions.skin.
+        m_soft = cv2.GaussianBlur(m, (0, 0), max(1.0, fw * 0.01)) * m
+
+        # Shading (low) vs detail split at a pore-safe scale.
+        sigma_base = max(1.5, fw * 0.012)
+        low = cv2.GaussianBlur(work, (0, 0), sigma_base)
+        detail = work - low
+
+        # Per-channel diffusion widths / blend weights (B, G, R): red
+        # scatters widest and strongest, blue barely at all. Masked
+        # normalized blur so background/hair never bleeds into skin.
+        sigma_r = max(2.0, fw * 0.03)
+        chan_sigma = (0.35 * sigma_r, 0.55 * sigma_r, sigma_r)
+        chan_weight = (0.15, 0.35, 0.85)
+        diffused = np.empty_like(low)
+        for c in range(3):
+            num = cv2.GaussianBlur(low[..., c] * m, (0, 0), chan_sigma[c])
+            den = cv2.GaussianBlur(m, (0, 0), chan_sigma[c])
+            scattered = num / np.maximum(den, 1e-3)
+            wgt = chan_weight[c] * float(strength)
+            diffused[..., c] = low[..., c] + wgt * (scattered - low[..., c])
+
+        out = diffused + detail
+
+        # Terminator warmth: hemoglobin backscatter reads warm where shading
+        # transitions from lit to shadow. Depth is normalized against this
+        # face's own lit (median) to deep-shadow (5th percentile) span; the
+        # band-pass 4·d·(1−d) peaks mid-transition and vanishes in both full
+        # light and full shadow.
+        L_low = 0.114 * low[..., 0] + 0.587 * low[..., 1] + 0.299 * low[..., 2]
+        sample = L_low[m > 0.5]
+        if sample.size >= 64:
+            lit = float(np.median(sample))
+            deep = float(np.percentile(sample, 5.0))
+            span = max(lit - deep, 1e-3)
+            depth = np.clip((lit - L_low) / span, 0.0, 1.0)
+            terminator = 4.0 * depth * (1.0 - depth)
+            warm = (float(strength) * terminator * m_soft).astype(np.float32)
+            lab = bgr_f32_to_lab_f32(np.clip(out, 0.0, 255.0))
+            lab[..., 1] += 4.0 * warm
+            lab[..., 2] += 2.0 * warm
+            out = lab_f32_to_bgr_f32(lab)
+
+        result = work + m_soft[..., None] * (np.clip(out, 0.0, 255.0) - work)
+        result = np.clip(result, 0.0, 255.0)
+        if is_float:
+            return result.astype(np.float32)
+        return result.astype(np.uint8)
+
     def apply_hemoglobin_guided_smooth(
         self,
         img_bgr: np.ndarray,

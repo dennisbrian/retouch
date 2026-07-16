@@ -205,7 +205,7 @@ def _e1_to_u8(canvas: np.ndarray) -> np.ndarray:
 _E1_U8_FROM = os.environ.get("E1_U8_FROM", "")
 _E1_CHAIN_ORDER = ['makeup_coverage_even', 'albedo_even', 'post_freq', 'flatten', 'restore_micro_texture', 'micro_dodge_burn',
                    'redness_even', 'hemoglobin_smooth', 'vein_attenuate', 'equalize', 'unify_hue_line', 'unify_tone', 'whiten',
-                   'shine_removal', 'relight', 'sculpt', 'quantize_tones',
+                   'shine_removal', 'relight', 'sculpt', 'apply_sss', 'quantize_tones',
                    'apply_specular_bloom', 'blemish.remove', 'undereye.repair',
                    'harmonize_neck', 'eyes.enhance', 'teeth.whiten', 'lips.enhance',
                    'makeup.apply_blush', 'hair.enhance', 'dodge_burn', 'wrinkle_soften',
@@ -603,6 +603,16 @@ def _process_face_core(
             regions.skin,
             face_width=face_width,
             strength=ctx.sculpt,
+        )
+
+    # ---- Subsurface-scatter finish (screen-space SSS approximation) ----
+    # Runs after relight/sculpt so it diffuses the final shading, and before
+    # quantize/specular so cel bands and highlights stay crisp on top.
+    skin_sss_v = getattr(ctx, 'skin_sss', 0) or 0
+    if skin_sss_v > 0:
+        canvas = _tr('apply_sss', canvas)
+        canvas = skin.apply_sss(
+            canvas, regions.skin, skin_sss_v / 100.0, face_width=face_width
         )
 
     # ---- Tone quantization (cel shading bands) ----

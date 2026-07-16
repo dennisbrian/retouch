@@ -1248,6 +1248,16 @@ RECIPES = {
         "slimming": 0.0,
         "blush": 10.0,
     },
+    "game_character_v2": {
+        # game_character_v1 + subsurface-scatter skin (skin.sss): red-weighted
+        # diffusion of the shading band + warm shadow terminators, the
+        # translucency signature of a game engine's separable SSS. This is
+        # the anti-plastic ingredient v1 lacked — smoothing + relight alone
+        # reads matte/opaque. Detail band is untouched, so the pore realism
+        # v1 keeps via texture opacity is unchanged.
+        "extends": "game_character_v1",
+        "skin": {"sss": 0.40},
+    },
     "aaa_photoreal_v1": {
         # Targets the "AAA Gold Quality" photoreal brief: over-smooth then
         # reclone real pore texture (texture_transplant, borrowed from
