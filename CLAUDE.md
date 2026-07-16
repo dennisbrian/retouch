@@ -96,7 +96,7 @@ Cuts memory from 7.5 GB → 1.84 GB, runtime from 15.3s → 3.09s.
 ## Testing & Quality
 
 ### Test Coverage
-- **3,736 tests collected** (`pytest --collect-only`, 2026-07-15) — full-suite pass/fail baseline not re-run at this count
+- **3,880 tests collected** (`pytest --collect-only`, 2026-07-17) — full-suite pass/fail baseline not re-run at this count
 - **89% coverage** on core modules (per `pytest --cov`; last measured 2026-07-01)
 - **Unit + integration tests** for every public API
 - **Deep algorithmic verification** (monotonicity checks, round-trip stability, etc.)
@@ -104,7 +104,7 @@ Cuts memory from 7.5 GB → 1.84 GB, runtime from 15.3s → 3.09s.
 ### Audit Status
 - **Security:** No hardcoded secrets, API keys, or absolute paths
 - **Performance:** Benchmarked at 702ms per-face (400×400), 6.9ms for no-face global-only
-- **Process:** Weekly syntax checks, monthly algorithmic re-audit (`docs/review/AUDIT_REPORT.md`)
+- **Process:** Weekly syntax checks, monthly algorithmic re-audit (`docs/review/AUDIT_REPORT.md` — last cycle 2026-07-06; report's own §0 flags its Cycle 3 verdict as superseded by `docs/review/TEST_REPORT_2026-07-04.md`, so read past the executive summary before citing it as current status)
 
 ### Known Limitations
 - Remaining ~4% undetected faces: extreme profiles, heavy occlusion, tiny faces in distance shots
