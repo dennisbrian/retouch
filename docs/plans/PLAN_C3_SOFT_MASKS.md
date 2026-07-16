@@ -198,3 +198,30 @@ Judgments from the rendered panels (all three images agree):
    blocks; `mask_feather_mode` ParamSpec defaulting to `"gaussian"` (byte-identical
    off state); GUI component registered per the drift-guard pattern; staged rollout
    with a mandatory visual QA gate.
+
+---
+
+## 6. Stage 0–2 execution log (2026-07-17)
+
+- **Stages 0–1 implemented** in commit `caea111`: `_masks_from_label_map()` helper
+  (byte-identity locked by `TestGoldenByteIdentity`, 8 parametrized cases),
+  `mask_feather_mode` ParamSpec + GUI drift-guard entry, guided path with
+  once-per-process logged fallback. Note: this machine's OpenCV build lacks
+  `cv2.ximgproc.guidedFilter`, so `utils.guided_filter` **is** the production
+  path here — verified on a structured hair/skin boundary (interiors saturate
+  to 1.000, 3px transition vs Gaussian's 6px).
+- **Stage 2 visual QA: PASS.** Full-pipeline renders (`recipe=cosplay`,
+  1600px) gaussian-vs-guided on DSCF8007 (white wig), DSCF7204, and a
+  dark-hair bonodori asset (`~/Desktop/bonodori/DSCF8083.jpg`); crops at the
+  max-diff regions inspected visually (`test_output/qa_c3_*_crop.png`):
+  guided preserves fine strands the Gaussian mattes down, face interiors
+  identical, **no halos / gray fringe / transition lines on any asset**, and
+  the dark-hair case degrades gracefully as §Risks predicted. Deltas are
+  subtle in final renders (mean abs diff 0.02–0.07, 1.6–6% px changed) —
+  the win is real but modest at default op strengths.
+- **Residual Gaussian (r//3) kept** — no over-crisp seams observed with it in
+  place; not re-tested without it.
+- **Stage 3 (open):** enable in 1–2 flagship recipes. Note `mask_feather_mode`
+  currently has `recipe_key=None` — Stage 3 needs a recipe_key added (plus the
+  nested-dict recipe shape, cf. the classic_chrome flat-key lesson) before any
+  recipe can turn it on. Consider default flip only after batch visual QA.
