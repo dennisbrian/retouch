@@ -124,6 +124,7 @@ _DESCRIPTIONS: Dict[str, str] = {
     "jp_transparent_v1": "Japanese transparent skin: airy haze, fade toe.",
     "game_character_v1": "AAA game character: directional relight, micro-contrast.",
     "game_character_v2": "Game character v2: subsurface-scatter skin, warm translucent shadows.",
+    "cosplay_character_showcase_v1": "Character showreel: dewy skin, vivid eyes, wig-lace blend, no geometry edits.",
     "aaa_photoreal_v1": "AAA photoreal: pore transplant, soft relight, no geometry.",
     "aaa_photoreal_v2": "AAA photoreal v2: bigger eyes, cleaner hair, split tone.",
     "zzz_anime_v1": "ZZZ-style anime: expressive eyes, rim-light bloom, glossy lips.",

@@ -308,7 +308,8 @@ class FaceDetector:
         # so we must not attempt it by default — the __init__ try/except only
         # catches exceptions, not hangs. When RETUCH_GPU is set and GPU works,
         # task creation succeeds; if it raises, __init__ falls back to CPU.
-        if os.environ.get("RETUCH_GPU"):
+        gpu_requested = os.environ.get("RETUCH_GPU", "").strip().lower()
+        if gpu_requested in {"1", "true", "yes", "on"}:
             return base.Delegate.GPU
         return base.Delegate.CPU
 

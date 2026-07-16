@@ -42,6 +42,27 @@ By default, this will:
 
 ## 3. Practical Examples
 
+### Recipe Comparison and Folder Visual QA
+
+Use the dedicated QA runners when selecting a look, validating a new recipe, or
+checking a folder before a production batch. Unlike `cli.py`, they retain one
+output directory per recipe, per-recipe contact sheets, and a `manifest.json`.
+
+```bash
+# One image through selected recipes
+./executable/recipe_sweep portrait.jpg --recipes natural,portrait,cosplay --compare
+
+# One or more recipes across a folder. Omit --max-dim for a full-resolution run.
+./executable/recipe_batch /path/to/input_folder \
+  -o test_output/recipe_validation \
+  --recipes cosplay_character_showcase_v1,cosplay_pastel_dream_showcase_v1 \
+  --compare
+```
+
+Use `--global-only --max-dim 1600` only for a fast global-grade smoke check; it
+does not exercise face detection, masks, or local retouching. See
+[Recipe Sweep](../RECIPE_SWEEP.md) for output layout and all options.
+
 ### Example A: Fast Preview Batch
 If you have a large folder of images (e.g. 500+ photos) and want a fast preview of the stronger reference-style look, downscale them to `2048px` and use maximum CPU threads:
 

@@ -22,6 +22,7 @@ Tests verify:
 
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -70,6 +71,18 @@ class TestWigLaceBlender:
         assert result.dtype == np.float32
         # Values should be in [0, 1]
         assert result.min() >= -0.01 and result.max() <= 1.01
+
+    def test_wig_lace_blend_preserves_float_255_range(self):
+        """The cosplay moat passes float canvases in the engine's 0-255 range."""
+        blender = WigLaceBlender()
+        img = np.full((96, 96, 3), 128.0, dtype=np.float32)
+        hair_mask = np.ones((96, 96), dtype=np.float32)
+        skin_mask = np.ones((96, 96), dtype=np.float32)
+
+        result = blender.blend(img, hair_mask, skin_mask, strength=0.5)
+
+        assert result.dtype == np.float32
+        assert 100.0 <= float(result.mean()) <= 155.0
 
     def test_wig_lace_blend_none_hair_mask_no_op(self):
         """None hair_mask should be treated as no-op."""
@@ -152,6 +165,27 @@ class TestWigLaceBlender:
         # (The blend might be subtle depending on the random hair pattern)
         assert diff >= 0
 
+    def test_cosplay_moat_wig_lace_keeps_unit_range_brightness(self):
+        """The engine's 0-1 global path must not double-divide wig-lace output."""
+        # Import lazily: this test calls the stage directly and never creates
+        # an engine, so MediaPipe detection is not initialized.
+        from retouch.engine import RetouchEngine
+
+        image = np.full((96, 96, 3), 128.0 / 255.0, dtype=np.float32)
+        hair_mask = np.ones((96, 96), dtype=np.float32)
+        ctx = SimpleNamespace(
+            cosplay_wig_lace_blend=42.0,
+            cosplay_stockings_smooth=0.0,
+            cosplay_consistency_strength=0.0,
+        )
+
+        result = RetouchEngine._stage_cosplay_moat(
+            object(), image, ctx, hair_mask, person_mask=None
+        )
+
+        assert result.dtype == np.float32
+        assert 0.40 <= float(result.mean()) <= 0.60
+
 
 class TestHosierySmoother:
     """Tests for HosierySmoother chroma detection and smoothing."""
@@ -186,6 +220,17 @@ class TestHosierySmoother:
         result = smoother.smooth(img, person_mask, strength=0.5)
         assert result.dtype == np.float32
         assert result.min() >= -0.01 and result.max() <= 1.01
+
+    def test_hosiery_smooth_preserves_float_255_range(self):
+        """Full-range float input must not be divided by 255 a second time."""
+        smoother = HosierySmoother()
+        img = np.full((96, 96, 3), 128.0, dtype=np.float32)
+        person_mask = np.ones((96, 96), dtype=np.float32)
+
+        result = smoother.smooth(img, person_mask, strength=0.5)
+
+        assert result.dtype == np.float32
+        assert 100.0 <= float(result.mean()) <= 155.0
 
     def test_hosiery_smooth_none_person_mask_no_op(self):
         """None person_mask should be treated as no-op."""

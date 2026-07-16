@@ -63,3 +63,21 @@ test_output/recipe_sweeps/<stem>_<timestamp>/
 ```
 
 Each per-recipe output has metadata (timings, QA warnings) printed to stdout during processing. The `manifest.json` records everything for programmatic review.
+
+## Folder Batch QA
+
+Use the batch runner to apply one or more recipes across a whole folder. It writes
+one folder and contact sheet per recipe, plus a batch-level `manifest.json`.
+
+```bash
+# Reliable visual-QA pass when local MediaPipe is unavailable
+./executable/recipe_batch ~/Desktop/duotiannikke \
+  -o test_output/visual_qa_duotiannikke/character_batch \
+  --recipes cosplay_character_showcase_v1,cosplay_heroic_amber_showcase_v1 \
+  --global-only --compare --max-dim 1600
+
+# Full face pipeline when MediaPipe is available
+./executable/recipe_batch ~/Desktop/duotiannikke \
+  -o test_output/visual_qa_duotiannikke/character_batch_full \
+  --recipes cosplay_character_showcase_v1 --compare
+```

@@ -660,7 +660,7 @@ def reset_face_reshaping(recipe_name):
 
 def reset_structure_effects(recipe_name):
     d = recipe_defaults(recipe_name)
-    return d["hair_enhance"], d["dodge_burn"], d["impact"], d["specular_bloom"], d["specular_bloom_tone"], d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["sharpen"], d["sharpen_radius"], d["glow"], d["skin_glow"], d["vignette"], d["subject_separation"]
+    return d["hair_enhance"], d["dodge_burn"], d["impact"], d["specular_bloom"], d["specular_bloom_tone"], d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["sharpen"], d["sharpen_radius"], d["glow"], d["skin_glow"], d["mask_feather_mode"], d["vignette"], d["subject_separation"]
 
 def reset_color_grading(recipe_name):
     d = recipe_defaults(recipe_name)
@@ -2028,7 +2028,12 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             sharpen_radius = gr.Slider(0.1, 5.0, 1.0, step=0.1, label="Sharpen Radius", info="Blur radius for unsharp mask kernel")
                             glow = gr.Slider(0, 100, 0, step=1, label="Atmospheric Glow", info="Multi-scale atmospheric glow/bloom effect")
                             skin_glow = gr.Slider(0, 100, 0, step=1, label="Skin Light-Wrap (Anime)", info="Skin-scoped diffusion glow / light-wrap for anime cel blending · 0=off, 30=visible halo")
-                            mask_feather_mode = gr.State("gaussian")
+                            mask_feather_mode = gr.Dropdown(
+                                choices=["gaussian", "guided"],
+                                value="gaussian",
+                                label="Mask Edge Refinement",
+                                info="Gaussian is conservative; guided preserves fine wig, hairline, and lash edges.",
+                            )
                             vignette = gr.Slider(0, 100, 0, step=1, label="Vignette", info="Darken image corners for a focused portrait look")
                             fade_toe = gr.Slider(0, 100, 0, step=1, label="Fade Toe", info="Lift shadows while preserving hue (L-only LAB fade for 透明感)")
                             highlight_drift = gr.Slider(0, 100, 0, step=1, label="Highlight Drift", info="Bounded cyan hue rotation in highlights with skin protection")
@@ -2231,6 +2236,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
  "skin_unify",
  "skin_unify_hue",
  "skin_glow",
+ "mask_feather_mode",
  "skin_sss",
         "eye_enhance",
  "catchlight",
@@ -2360,8 +2366,9 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "skin_flatten": skin_flatten,
  "skin_quantize": skin_quantize,
  "skin_unify": skin_unify,
-        "skin_unify_hue": skin_unify_hue,
+ "skin_unify_hue": skin_unify_hue,
  "skin_glow": skin_glow,
+ "mask_feather_mode": mask_feather_mode,
  "skin_sss": skin_sss,
  "eye_enhance": eye_enhance,
         "catchlight": catchlight,
@@ -2521,7 +2528,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     reset_structure_effects_btn.click(
         fn=reset_structure_effects,
         inputs=[recipe],
-        outputs=[hair_enhance, dodge_burn, impact, specular_bloom, specular_bloom_tone, bloom, bloom_threshold, bloom_softness, sharpen, sharpen_radius, glow, skin_glow, vignette, subject_separation]
+        outputs=[hair_enhance, dodge_burn, impact, specular_bloom, specular_bloom_tone, bloom, bloom_threshold, bloom_softness, sharpen, sharpen_radius, glow, skin_glow, mask_feather_mode, vignette, subject_separation]
     )
 
     reset_color_grading_btn.click(

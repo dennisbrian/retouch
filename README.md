@@ -69,6 +69,23 @@ python3 cli.py /path/to/photos -o /path/to/output --recipe cosplay --workers 4
 
 See [BATCH_GUIDE.md](docs/guides/BATCH_GUIDE.md) for full CLI options.
 
+### Recipe QA
+
+Compare recipes on one photo or sweep selected recipes across a folder before
+committing to a batch. The runners write contact sheets, comparison images, and
+machine-readable manifests:
+
+```bash
+# One photo across selected recipes
+./executable/recipe_sweep portrait.jpg --recipes natural,portrait,cosplay --compare
+
+# Folder validation at full resolution: omit --max-dim
+./executable/recipe_batch /path/to/photos -o test_output/recipe_check \
+  --recipes cosplay_character_showcase_v1,cosplay_pastel_dream_showcase_v1 --compare
+```
+
+See [RECIPE_SWEEP.md](docs/RECIPE_SWEEP.md) for the full visual-QA workflow.
+
 ### Web GUI
 
 ```bash
@@ -113,6 +130,7 @@ The dev server watches `.` and `retouch/` for `.py` changes and restarts the Gra
 - [API.md](docs/architecture/API.md) — Python API reference and parameter list
 - [ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) — pipeline design and module breakdown
 - [BATCH_GUIDE.md](docs/guides/BATCH_GUIDE.md) — batch processing examples
+- [RECIPE_SWEEP.md](docs/RECIPE_SWEEP.md) — recipe comparisons and folder visual QA
 - [GUI.md](docs/guides/GUI.md) — Gradio web UI layout, components, and styling
 - [RECIPE_GUIDE.md](docs/guides/RECIPE_GUIDE.md) — recipe authoring reference
 - [docs/INDEX.md](docs/INDEX.md) — full documentation map

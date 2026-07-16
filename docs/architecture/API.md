@@ -351,6 +351,8 @@ Passing an explicit value override to these parameters takes precedence over the
 *   **`skin_hue_unify`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.hue_unify`): Adjusts the skin hue unify parameter.
 *   **`skin_chroma_even`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.chroma_even`): Adjusts the skin chroma even parameter.
 *   **`skin_glow`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.glow`): Adjusts the skin glow parameter.
+*   **`skin_sss`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.sss`): Adds screen-space subsurface scattering for a translucent game-character skin finish.
+*   **`mask_feather_mode`** (Type: `str`, Default: `gaussian`, Recipe key: `mask.feather_mode`): Selects `gaussian` mask feathering or `guided` edge-aware refinement for fine hair, wig, and lash boundaries.
 *   **`fabric_wrinkle_smooth`** (Type: `float`, Default: `0.0`, Range: `0` to `100`, Recipe key: `fabric.wrinkle_smooth`): Adjusts the fabric wrinkle smooth parameter.
 *   **`blush`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `blush`): Adjusts the blush parameter.
 *   **`hair_enhance`** (Type: `int`, Default: `5`, Range: `0` to `100`, Recipe key: `hair.shine`): Adjusts the hair enhance parameter.

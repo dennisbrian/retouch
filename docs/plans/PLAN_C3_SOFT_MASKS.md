@@ -221,7 +221,7 @@ Judgments from the rendered panels (all three images agree):
   the win is real but modest at default op strengths.
 - **Residual Gaussian (r//3) kept** — no over-crisp seams observed with it in
   place; not re-tested without it.
-- **Stage 3 (open):** enable in 1–2 flagship recipes. Note `mask_feather_mode`
-  currently has `recipe_key=None` — Stage 3 needs a recipe_key added (plus the
-  nested-dict recipe shape, cf. the classic_chrome flat-key lesson) before any
-  recipe can turn it on. Consider default flip only after batch visual QA.
+- **Stage 3 completed (2026-07-16):** `mask.feather_mode` is recipe-reachable,
+  and `cosplay_character_showcase_v1` plus `cosplay_heroic_amber_showcase_v1`
+  opt into `"guided"`. Gaussian remains the default for every other recipe;
+  a default flip still requires broader batch visual QA.

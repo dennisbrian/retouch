@@ -20,10 +20,11 @@ graph TD
 
 ### 1.1 Column 1: Library & Presets (Left Column, `scale=1.5`)
 * **Inputs**: Image file upload zone (`img_input`) with multi-file and RAW support.
-* **Style Presets**: Vertical scrollable presets sidebar listing all built-in recipes (custom `gr.Radio` chips), including the three Xiaohongshu presets — `xiaohongshu`, `xhs_ultrasoft`, and `xhs_soft_glow` (the strongest of the three).
+* **Style Presets**: Vertical scrollable presets sidebar listing all built-in recipes (custom `gr.Radio` chips), plus the **Recipe Cookbook** search/category browser.
 * **Library Styles**: Dropdown to load learned custom style profiles (`custom_style_preset`).
-* **Preferences**: Checkboxes for side-by-side split comparison (`show_compare`) and fast preview downsampling (`fast`).
+* **Preferences**: Side-by-side comparison (`show_compare`), **Fast Preview**, Smart Process, recipe-default reset, sessions, snapshots, undo, and redo.
 * **Export Menu**: Compact options for format (JPEG, PNG, WebP), compression quality, and resolution limits.
+* **Processing Quality**: **Full (native face crops)** is the default. Use **Draft (proxy, fast)** for contact sheets and quick iteration.
 * **Control Triggers**: Primary action button (`process_btn`) and defaults reset (`reset_btn`).
 
 ### 1.2 Column 2: Preview Canvas (Center Column, `scale=4.0`)
@@ -32,6 +33,7 @@ graph TD
 * **Status Console**: Text input box displaying pipeline logs and execution results.
 * **Asset Downloader**: File download interface (`export_file`) to fetch finished images.
 * **Debug Console**: Hidden panel (`debug_panel` / `debug_gallery`) showing mask segmentations (Skin, Lips, Sharpen, Frequency Layers) when debug mode is checked.
+* **Live stages**: The GUI currently shows the completed preview only. A per-stage processing timeline is planned and must not be presented as an available control.
 
 ### 1.3 Column 3: Develop Adjustments (Right Column, `scale=2.5`)
 Styled with class `.develop-panel` to **scroll independently** while the center image preview remains fixed on screen.
@@ -40,7 +42,7 @@ Styled with class `.develop-panel` to **scroll independently** while the center 
 * **Virtual Studio Relighting**: 3D Blinn-Phong lighting strengths, light azimuth, and light elevation angles.
 * **Eyes & Lips**: Eye clarity, dark circles repair, teeth whitening, lip gloss/matte finishes, cosmetic lip tints, and cheek blush values.
 * **Face Reshaping**: Warp-driven cheek, chin, and jaw slimming.
-* **Structure & Effects**: Hair shine, Dodge & Burn brush weights, specular highlights bloom, and atmospheric glow.
+* **Structure & Effects**: Hair shine, Dodge & Burn brush weights, specular highlights bloom, atmospheric glow, and **Mask Edge Refinement**. Use `gaussian` as the conservative default; use `guided` when fine wig, hairline, or lash edges need more exact masks.
 * **Color Grading & Emulation**: Cine presets, film grain, analog lens chromatic aberrations, halations, and Kodak/Fuji film stock LUTs.
 * **Split Toning**: Color balance shifting for Shadows, Midtones, and Highlights (Hue / Saturation sliders).
 * **Color Transfer**: Reference image CDF histogram matcher.
@@ -182,32 +184,31 @@ The **Export Resolution** dropdown (`export_res`) defaults to `"Original"`. This
 
 ### 5.2 Internal Resolution Layers
 
-Even with `export_res = "Original"`, the processing pipeline has two internal resolution stages that affect **detail preservation**, not output dimensions:
+`export_res = "Original"` keeps the source dimensions. Processing quality
+controls where detail is evaluated, not the requested export dimensions:
 
-| Layer | When | What | Output dimensions |
-|---|---|---|---|
-| **Fast Preview** (`fast=True` checkbox) | When enabled (default ON) | Image is downscaled to **800px** before processing, then **upsampled back to full resolution** before export | **Full** |
-| **Proxy Resolution** | Always, when input > 2048px | Image is downscaled to **2048px** (`PROXY_MAX_DIM`) for the core per-face pipeline, then upsampled back. All masks (skin, lips, sharpen, etc.) are also upscaled. | **Full** |
-
-Both layers preserve the output pixel dimensions — the output file is always at the input's full resolution. However, the actual per-face work (BiSeNet parsing, frequency separation, smoothing) runs at the reduced resolution.
+| Mode | What runs at reduced resolution | Recommended use |
+|---|---|---|
+| **Fast Preview** (`fast=True`) | The input is reduced to 800px before detection and processing, then the result is restored to the source dimensions. | Slider and recipe tuning. |
+| **Full (native face crops)** | Detection may use a proxy on very large inputs, but face crops and global phases run at native resolution. | Final export. |
+| **Draft (proxy, fast)** | Per-face processing uses the proxy path before the result is restored. | Batch contact sheets and quick visual comparison. |
 
 ### 5.3 Quality vs Speed Tradeoffs
 
 | Setting | Detail preservation | Speed | Memory | Recommended for |
 |---|---|---|---|---|
-| `fast=True` (default) | 800px effective detail | ~3-5× faster | ~600 MB | Interactive slider tuning, preview |
-| `fast=False` + input ≤ 2048px | Full native detail | Baseline | ~1.2 GB | Final production output |
-| `fast=False` + input > 2048px | 2048px effective detail | 2× faster than no-proxy | ~1.8 GB | High-res production with memory savings |
-| `fast=False` + proxy disabled (theoretical) | True native detail | 5× slower | ~7.5 GB | Not recommended — memory-prohibitive |
+| Fast Preview | 800px effective detail | Fastest | Lowest | Interactive slider tuning |
+| Full + Fast Preview off | Native face crops and global phases | Baseline | Higher | Final production output |
+| Draft + Fast Preview off | Proxy face processing | Faster | Lower | Batch contact sheets |
 
 ### 5.4 Recommendations for High-Res Workflows
 
 For **batch processing high-res photos** (e.g., 24MP+):
 
-1. **Keep `fast=True`** for interactive tuning — detail is sufficient at 800px for preview
-2. **Turn off `fast`** for final export — gets you native detail up to 2048px
-3. **Inputs > 2048px** automatically use the 2048px proxy — this is a memory optimization, not a quality compromise
-4. **Export at "Original"** unless you have a specific target size (e.g., for web delivery)
+1. Keep **Fast Preview** on while tuning sliders and recipes.
+2. Turn **Fast Preview** off and select **Full (native face crops)** for final export.
+3. Use **Draft** only when lower-detail proxy processing is acceptable.
+4. Export at **Original** unless a delivery size is required.
 
 The **bottleneck** is the bilateral filter in `FrequencySeparator.combine` (~600-800ms per face at 200×200). If processing 100+ high-res photos, consider using the CLI with `--workers 8` for parallel processing.
 
@@ -218,7 +219,7 @@ The **bottleneck** is the bilateral filter in `FrequencySeparator.combine` (~600
 | Question | Answer |
 |---|---|
 | Will my output be at full resolution? | **Yes**, if `export_res = "Original"` (default) |
-| Is the per-face work done at full resolution? | **No** — at 800px (fast) or 2048px (proxy) |
-| Should I turn off `fast` for final exports? | **Yes** — gets you 800px→2048px effective detail |
-| Can I disable the 2048px proxy? | **Not from GUI** — it's automatic for memory. Use CLI with `--max-dim 0` to disable |
-| What's the output file format? | JPEG (95% quality default), PNG, or WebP — see Export Format dropdown |
+| Is the per-face work done at full resolution? | **Yes** with Full quality and Fast Preview off; Draft uses proxy processing. |
+| Should I turn off `fast` for final exports? | **Yes.** |
+| Can I inspect processing stages live? | Not yet. Debug mode exposes masks after processing; a stage timeline is planned. |
+| What's the output file format? | JPEG, PNG, PNG-16, or WebP — see Export Format dropdown. |

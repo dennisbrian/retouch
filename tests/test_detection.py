@@ -850,3 +850,24 @@ class TestFaceDetectorSegmentPerson:
         assert mask.shape == (h, w)
         assert np.all(mask == 1.0)
 
+
+class TestDelegateSelection:
+    class _Base:
+        class Delegate:
+            CPU = object()
+            GPU = object()
+
+    @pytest.mark.parametrize("value", [None, "", "0", "false", "False", "no", "off"])
+    def test_cpu_is_default_and_zero_is_not_gpu_opt_in(self, monkeypatch, value):
+        if value is None:
+            monkeypatch.delenv("RETUCH_GPU", raising=False)
+        else:
+            monkeypatch.setenv("RETUCH_GPU", value)
+
+        assert FaceDetector._resolve_delegate(self._Base) is self._Base.Delegate.CPU
+
+    @pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on"])
+    def test_explicit_gpu_values_opt_in(self, monkeypatch, value):
+        monkeypatch.setenv("RETUCH_GPU", value)
+
+        assert FaceDetector._resolve_delegate(self._Base) is self._Base.Delegate.GPU

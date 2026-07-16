@@ -3231,6 +3231,216 @@ RECIPES["matsuri_glow_v1"] = {
 }
 
 
+# Material-finish presets reuse R12's specular layer rather than raising skin
+# smoothing. They remain opt-in until visual QA covers the intended looks.
+RECIPES["cosplay_powder_v1"] = {
+    "extends": "cosplay_clear_v1",
+    "skin": {
+        "specular_finish": "powder",
+        "specular_finish_strength": 0.22,
+        "specular_recolor": 0.0,
+    },
+}
+
+RECIPES["kbeauty_glass_finish_v1"] = {
+    "extends": "korean_glass_clear_v1",
+    "skin": {
+        "specular_finish": "glass_skin",
+        "specular_finish_strength": 0.18,
+        "specular_recolor": 0.0,
+    },
+}
+
+RECIPES["game_character_v3"] = {
+    "extends": "game_character_v2",
+    "skin": {
+        "specular_finish": "dewy",
+        "specular_finish_strength": 0.18,
+        "specular_recolor": 0.0,
+    },
+    # The R12 sheen replaces part of v1's broad bloom to avoid double gloss.
+    "specular_bloom": 20,
+}
+
+RECIPES["editorial_matte_v1"] = {
+    # Flash/editorial polish: reduce only the editable specular layer rather
+    # than broadening the skin blur or changing facial texture.
+    "extends": "portrait",
+    "skin": {
+        "specular_finish": "matte",
+        "specular_finish_strength": 0.20,
+        "specular_recolor": 0.0,
+    },
+}
+
+RECIPES["vascular_refine_v1"] = {
+    # Conservative correction for visible facial vascular colour. The
+    # hemoglobin guide protects hard pigment edges, while vein attenuation is
+    # deliberately below a corrective-strength treatment.
+    "extends": "natural_polish_v1",
+    "skin": {
+        "hemoglobin_smooth": 0.18,
+        "vein_attenuate": 0.12,
+    },
+    "texture": {"opacity": 1.0},
+}
+
+RECIPES["mole_safe_portrait_v1"] = {
+    # Preserve natural beauty marks when the inherited blemish pass is active.
+    # This is a protection-only recipe: it does not add smoothing or colour.
+    "extends": "portrait",
+    "skin": {"mole_protect": 0.80},
+}
+
+RECIPES["cosplay_heroic_amber_v1"] = {
+    # Reference: warm key light, rich red/gold costume accents, and preserved
+    # costume speculars rather than an over-smoothed "beauty" treatment.
+    "extends": "game_character_v3",
+    "skin": {"specular_finish_strength": 0.20},
+    "eyes": {"whites": 0.20, "iris": 0.32, "catchlight": 0.30},
+    "bloom": {"opacity": 0.08, "threshold": 205.0},
+    "highlight_rolloff": 0.40,
+    "contrast": 14.0,
+    "vibrance": 14.0,
+    "specular_bloom": 24,
+    "slimming": 0.0,
+}
+
+RECIPES["cosplay_pastel_dream_v1"] = {
+    # Reference: soft pastel beauty light. The glass finish is deliberately
+    # low so makeup and hair retain texture rather than becoming waxy.
+    "extends": "kbeauty_glass_finish_v1",
+    "frequency": {"smooth": 0.38, "mid_reduction": 0.28},
+    "skin": {"specular_finish_strength": 0.16},
+    "color_harmony": {"preset": "pink_dream", "amount": 0.32},
+    "eyes": {"whites": 0.18, "iris": 0.28, "catchlight": 0.22},
+    "lips": {"tint": "rose", "gloss": 0.16},
+    "bloom": {"opacity": 0.09, "threshold": 205.0},
+    "contrast": 2.0,
+    "vibrance": 8.0,
+    "texture": {"opacity": 0.92},
+    "slimming": 0.0,
+}
+
+RECIPES["cosplay_ice_cathedral_v1"] = {
+    # Reference: cool cyan architecture, luminous white costume/hair, and a
+    # precise glass-skin highlight that does not turn the subject blue.
+    "extends": "kbeauty_glass_finish_v1",
+    "frequency": {"smooth": 0.35, "mid_reduction": 0.25},
+    "skin": {
+        "specular_finish_strength": 0.18,
+        "specular_recolor": 0.18,
+    },
+    "color_harmony": {"preset": "blue_dream", "amount": 0.35},
+    "eyes": {"whites": 0.20, "iris": 0.26, "catchlight": 0.24},
+    "hair": {"shine": 0.18},
+    "bloom": {"opacity": 0.10, "threshold": 210.0},
+    "highlight_rolloff": 0.35,
+    "shadow_hue": 210.0,
+    "shadow_sat": 8.0,
+    "texture": {"opacity": 0.95},
+    "slimming": 0.0,
+}
+
+# Demonstration tier: stronger, presentation-first variants for before/after
+# reels. Keep the base recipes for client delivery and batch work.
+RECIPES["cosplay_heroic_amber_showcase_v1"] = {
+    "extends": "cosplay_heroic_amber_v1",
+    "frequency": {"smooth": 0.45, "mid_reduction": 0.35},
+    "skin": {"specular_finish_strength": 0.32, "sss": 0.48},
+    "eyes": {"whites": 0.28, "iris": 0.45, "catchlight": 0.45},
+    "bloom": {"opacity": 0.16, "threshold": 195.0},
+    "highlight_rolloff": 0.55,
+    "contrast": 24.0,
+    "clarity": 22.0,
+    "vibrance": 24.0,
+    "saturation": 8.0,
+    "specular_bloom": 40,
+    "texture": {"opacity": 0.82},
+    # C3 guided feathering protects fine wig and lash edges from the stronger
+    # showcase smoothing pass. Gaussian remains the global default.
+    "mask": {"feather_mode": "guided"},
+}
+
+RECIPES["cosplay_pastel_dream_showcase_v1"] = {
+    "extends": "cosplay_pastel_dream_v1",
+    "frequency": {"smooth": 0.46, "mid_reduction": 0.34},
+    "skin": {"specular_finish_strength": 0.30},
+    "color_harmony": {"preset": "pink_dream", "amount": 0.55},
+    "eyes": {"whites": 0.25, "iris": 0.38, "catchlight": 0.35},
+    "lips": {"tint": "rose", "gloss": 0.28},
+    "bloom": {"opacity": 0.18, "threshold": 195.0},
+    "brightness": 4.0,
+    "contrast": 8.0,
+    "vibrance": 16.0,
+    "glow": 9.0,
+    "texture": {"opacity": 0.84},
+}
+
+RECIPES["cosplay_ice_cathedral_showcase_v1"] = {
+    "extends": "cosplay_ice_cathedral_v1",
+    "frequency": {"smooth": 0.42, "mid_reduction": 0.30},
+    "skin": {
+        "specular_finish_strength": 0.30,
+        "specular_recolor": 0.32,
+    },
+    "color_harmony": {"preset": "blue_dream", "amount": 0.55},
+    "eyes": {"whites": 0.28, "iris": 0.38, "catchlight": 0.38},
+    "hair": {"shine": 0.30},
+    "bloom": {"opacity": 0.17, "threshold": 200.0},
+    "highlight_rolloff": 0.55,
+    "contrast": 16.0,
+    "clarity": 16.0,
+    "vibrance": 14.0,
+    "shadow_sat": 16.0,
+    "texture": {"opacity": 0.86},
+}
+
+RECIPES["cosplay_character_showcase_v1"] = {
+    # Strong hero-frame treatment for game-character and convention cosplay:
+    # work the face, wig transition and reflective costume accents, but never
+    # alter geometry. This stays character-neutral across wig colourways.
+    "extends": "cosplay_clear_v1",
+    "frequency": {
+        "smooth": 0.62,
+        "mid_reduction": 0.43,
+        "regional_modulation": 0.70,
+        "smooth_engine": "anisotropic",
+        "freckle_removal": 35,
+    },
+    "skin": {
+        "equalize": 0.12,
+        "hue_unify": 0.30,
+        "chroma_even": 0.25,
+        "whiten_hue_stable": 1,
+        "specular_finish": "dewy",
+        "specular_finish_strength": 0.26,
+        "sss": 0.42,
+    },
+    "eyes": {"whites": 0.32, "iris": 0.46, "catchlight": 0.42},
+    "eye": {
+        "sclera_brighten": 0.42,
+        "iris_saturate": 0.58,
+        "iris_brightness": 0.38,
+        "iris_hue_shift": 0,
+    },
+    "lips": {"tint": "cosplay", "gloss": 0.30},
+    "hair": {"shine": 0.30},
+    "cosplay": {"wig_lace_blend": 0.42},
+    "dodge_burn": {"amount": 0.28},
+    "color_harmony": {"preset": "cosplay", "amount": 0.32},
+    "bloom": {"opacity": 0.12, "threshold": 198.0},
+    "highlight_rolloff": 0.45,
+    "contrast": 20.0,
+    "clarity": 14.0,
+    "vibrance": 18.0,
+    "specular_bloom": 34,
+    "texture": {"opacity": 0.82},
+    "mask": {"feather_mode": "guided"},
+    "slimming": 0.0,
+}
+
+
 # Canonical name list for the full set of Fuji film simulations.
 # Used by the GUI dropdown, CLI helpers, and integration tests.
 FUJI_SIM_NAMES: List[str] = [

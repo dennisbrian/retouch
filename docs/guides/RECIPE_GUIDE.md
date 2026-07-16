@@ -198,6 +198,7 @@ These keys are defined inside nested dictionary blocks inside a recipe.
 | `skin` | `relight` | 0 to 100 | `0` | `relight` |
 | `skin` | `rosy` | 0 to 100 | `10` | `whiten` |
 | `skin` | `sculpt` | 0 to 100 | `0` | `sculpt` |
+| `skin` | `sss` | 0 to 100 | `0` | `skin_sss` |
 | `skin` | `shadow_lift` | 0 to 100 | `0` | `shadow_lift` |
 | `skin` | `shine_removal` | 0 to 100 | `0` | `shine_removal` |
 | `skin` | `specular_finish_strength` | 0.0 to 1.0 | `0.5` | `specular_finish_strength` |
@@ -216,6 +217,7 @@ These keys are defined inside nested dictionary blocks inside a recipe.
 | `texture` | `pore_synthesis` | 0 to 100 | `0` | `pore_synthesis` |
 | `undereye` | `darken_removal` | 0 to 100 | `0` | `undereye_darken_removal` |
 | `undereye` | `puffiness_reduction` | 0 to 100 | `0` | `undereye_puffiness_reduction` |
+| `mask` | `feather_mode` | `gaussian` or `guided` | `gaussian` | `mask_feather_mode` |
 
 ### Flat Fields (top-level, direct values)
 
@@ -242,6 +244,7 @@ These keys are defined directly at the top level of a recipe dictionary.
 | `halation` | 0.0 to 1.0 | `0.0` | None |
 | `highlight_hue` | 0.0 to 1.0 | `0.0` | None |
 | `highlight_rolloff` | 0.0 to 1.0 | `0.0` | `--highlight-rolloff` if applicable |
+| `highlight_rolloff_strength` | 0.0 to 1.0 | `0.0` | `--highlight-rolloff` if applicable |
 | `highlight_sat` | 0.0 to 1.0 | `0.0` | None |
 | `highlights` | -100 to 100 | `None` | `--highlights` if applicable |
 | `hsl_hue_global` | -100 to 100 | `0` | `--hsl-hue` if applicable |
@@ -263,6 +266,7 @@ These keys are defined directly at the top level of a recipe dictionary.
 | `sharpen_radius` | 0.0 to 1.0 | `1.0` | None |
 | `sharpen` | 0 to 100 | `0.0` | None |
 | `skin_protect` | 0.0 to 1.0 | `0.0` | `--skin-protect` if applicable |
+| `skin_protect_strength` | 0.0 to 1.0 | `0.0` | `--skin-protect` if applicable |
 | `slimming` | 0 to 100 | `0` | `--slimming` if applicable |
 | `specular_bloom_tone` | 0.0 to 1.0 | `rosy` | `--specular-bloom-tone` if applicable |
 | `specular_bloom` | 0 to 100 | `0` | `--specular-bloom` if applicable |
@@ -275,6 +279,15 @@ These keys are defined directly at the top level of a recipe dictionary.
 | `white_balance_tint` | -100.0 to 100.0 | `0.0` | `--wb-tint` if applicable |
 | `white_costume_lift` | 0.0 to 1.0 | `False` | `--white-costume-lift` if applicable |
 | `whites` | -100 to 100 | `None` | `--whites` if applicable |
+
+### Runtime-only controls
+
+These registered controls are accepted by the Python API or GUI state but do
+not serialize as ordinary recipe values:
+
+- `ai_sr_scale` — output upscale factor (`1`, `2`, or `4`).
+- `blemish` — legacy API control; use the recipe's smoothing and blemish fields for new presets.
+- `freckle_preserve_mask` — an in-memory mask supplied by API callers to protect selected marks.
 
 #### `color_harmony.preset` valid values
 
@@ -445,6 +458,7 @@ and 0–360 for split-toning hue).
 | Lut | `lut` | direct |
 | Makeup Cake Reduce | `skin.makeup_cake_reduce` | direct |
 | Makeup Coverage Even | `skin.makeup_coverage_even` | direct |
+| Mask Feather Mode | `mask.feather_mode` | direct |
 | Matte Black | `background.matte_black` | direct |
 | Micro Dodge Burn | `skin.micro_db` | ÷ 100 |
 | Micro Restore | `micro_restore` | direct |
@@ -507,6 +521,7 @@ and 0–360 for split-toning hue).
 | Skin Chroma Even | `skin.chroma_even` | ÷ 100 |
 | Skin Flatten | `skin.flatten` | ÷ 100 |
 | Skin Glow | `skin.glow` | ÷ 100 |
+| Skin SSS | `skin.sss` | ÷ 100 |
 | Skin Hue Unify | `skin.hue_unify` | ÷ 100 |
 | Skin Protect Strength | `skin_protect` | direct |
 | Skin Quantize | `skin.quantize` | ÷ 100 |

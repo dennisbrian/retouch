@@ -72,7 +72,7 @@ EXPECTED_RECIPE_KEYS = [
     "hair_remove_flyaways", "hair_ring_position", "hair_ring_tint", "halation", "hemoglobin_smooth",
     "highlight_drift", "highlight_hue", "highlight_rolloff_strength", "highlight_sat", "highlights",
     "hsl_hue_global", "hsl_lum_global", "hsl_sat_global", "impact", "light_wrap",
-    "lip_enhance", "lip_finish", "lip_tint", "lut", "makeup_cake_reduce", "makeup_coverage_even", "matte_black",
+    "lip_enhance", "lip_finish", "lip_tint", "lut", "makeup_cake_reduce", "makeup_coverage_even", "mask_feather_mode", "matte_black",
     "micro_dodge_burn", "micro_restore", "mid_reduction", "midtone_hue", "midtone_sat",
     "mole_protect", "mv2_brows", "mv2_brows_color", "mv2_contour", "mv2_eyeliner",
     "mv2_eyeliner_color", "mv2_eyeliner_style", "mv2_eyeshadow", "mv2_eyeshadow_color", "mv2_eyeshadow_style",
@@ -102,7 +102,7 @@ for color in ["red", "green", "blue"]:
     EXPECTED_RECIPE_KEYS.extend([f"calibration_{color}_hue", f"calibration_{color}_sat", f"calibration_{color}_lum"])
 EXPECTED_RECIPE_KEYS.append("lens_blur")
 
-EXPECTED_RECIPE_KEY_COUNT = 240
+EXPECTED_RECIPE_KEY_COUNT = 241
 # Self-updating: the recipe/smart-style slider tuple length is the contract
 # defined by RECIPE_OUTPUT_KEYS, so this constant can never go stale.
 EXPECTED_UI_OUTPUT_COUNT = len(gui.RECIPE_OUTPUT_KEYS)
@@ -163,7 +163,7 @@ class TestRecipeDefaults:
         """Slider/box fields should be int or float, not None or strings."""
         # String fields in recipe_defaults
         string_fields = {
-            "lip_tint", "whiten_tone", "lip_finish", "specular_bloom_tone", "color_grade", "lut",
+            "lip_tint", "whiten_tone", "lip_finish", "specular_bloom_tone", "color_grade", "lut", "mask_feather_mode",
             "background_harmonize_mode", "saturation_mode", "smooth_engine", "specular_finish",
             "mv2_brows_color", "mv2_eyeliner_color", "mv2_eyeliner_style",
             "mv2_eyeshadow_color", "mv2_eyeshadow_style", "mv2_ombre_color1", "mv2_ombre_color2"
@@ -369,6 +369,13 @@ class TestOnRecipeChange:
                      "pore_synthesis", "nose_smooth", "micro_restore",
                      "whiten", "equalize"):
             assert result[keys.index(name)] == d[name]
+
+    def test_showcase_recipe_loads_guided_mask_refinement(self):
+        key_index = gui.RECIPE_OUTPUT_KEYS.index("mask_feather_mode")
+        defaults = gui.recipe_defaults("cosplay_character_showcase_v1")
+
+        assert defaults["mask_feather_mode"] == "guided"
+        assert gui.on_recipe_change("cosplay_character_showcase_v1")[key_index] == "guided"
 
     def test_unknown_recipe_returns_59_values(self):
         """Unknown recipes should still return a 59-tuple (falls back to natural)."""
@@ -839,10 +846,10 @@ class TestResetFunctions:
         d = gui.recipe_defaults("natural")
         assert result == d["slimming"]
 
-    def test_reset_structure_effects_returns_fourteen_values(self):
+    def test_reset_structure_effects_returns_fifteen_values(self):
         result = gui.reset_structure_effects("natural")
         assert isinstance(result, tuple)
-        assert len(result) == 14
+        assert len(result) == 15
 
     def test_reset_color_grading_returns_two_values(self):
         result = gui.reset_color_grading("natural")

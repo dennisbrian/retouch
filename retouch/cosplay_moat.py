@@ -75,9 +75,14 @@ class WigLaceBlender:
         if strength <= 0 or hair_mask is None or skin_mask is None:
             return img_bgr
 
-        is_float = img_bgr.dtype == np.float32
+        is_float = np.issubdtype(img_bgr.dtype, np.floating)
+        # Public helpers accept both float conventions used by the engine:
+        # global stages use [0, 1], while the cosplay moat works internally
+        # in [0, 255]. Preserve the caller's convention on return.
+        float_unit_range = is_float and float(np.nanmax(img_bgr)) <= 1.0
         if is_float:
-            img_u8 = np.clip(img_bgr, 0, 255).astype(np.uint8)
+            scale = 255.0 if float_unit_range else 1.0
+            img_u8 = np.clip(img_bgr * scale, 0, 255).astype(np.uint8)
         else:
             img_u8 = img_bgr
 
@@ -144,7 +149,9 @@ class WigLaceBlender:
 
         # Return in original dtype
         if is_float:
-            return result.astype(np.float32) / 255.0
+            if float_unit_range:
+                return result.astype(np.float32) / 255.0
+            return result.astype(np.float32)
 
         return result
 
@@ -234,9 +241,13 @@ class HosierySmoother:
         if strength <= 0 or person_mask is None:
             return img_bgr
 
-        is_float = img_bgr.dtype == np.float32
+        is_float = np.issubdtype(img_bgr.dtype, np.floating)
+        # See WigLaceBlender.blend(): keep float [0, 1] and [0, 255]
+        # callers in their original range.
+        float_unit_range = is_float and float(np.nanmax(img_bgr)) <= 1.0
         if is_float:
-            img_u8 = np.clip(img_bgr, 0, 255).astype(np.uint8)
+            scale = 255.0 if float_unit_range else 1.0
+            img_u8 = np.clip(img_bgr * scale, 0, 255).astype(np.uint8)
         else:
             img_u8 = img_bgr
 
@@ -263,7 +274,9 @@ class HosierySmoother:
         result = np.clip(result, 0, 255).astype(np.uint8)
 
         if is_float:
-            return result.astype(np.float32) / 255.0
+            if float_unit_range:
+                return result.astype(np.float32) / 255.0
+            return result.astype(np.float32)
 
         return result
 

@@ -8,6 +8,7 @@
 - `RECIPE_GUIDE.md` — Creating custom presets
 - `GUI.md` — Gradio UI layout & components
 - `BATCH_GUIDE.md` — Batch processing via CLI
+- `RECIPE_SWEEP.md` — Single-photo recipe sweeps and folder visual QA
 - `PERFORMANCE_TUNING.md` — Optimization tips
 - `TROUBLESHOOTING.md` — Common issues & fixes
 - `RECIPE_GENERATOR.md` — Recipe generation
@@ -43,4 +44,3 @@
 
 ## Contributing
 See `docs/CONTRIBUTING.md` for dev workflow
-

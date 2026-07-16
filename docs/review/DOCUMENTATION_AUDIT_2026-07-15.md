@@ -2,6 +2,11 @@
 
 This audit analyzes the alignment between the active codebase parameters (in `retouch/params.py` and `retouch/engine.py`) and the system documentation. It identifies missing API parameters, outdated signature references, and provides recommendations for alignment.
 
+> **Status: superseded on 2026-07-17.** The active registry now has 241
+> `ParamSpec` entries. API and recipe-guide coverage is enforced by
+> `tests/test_documentation_coverage.py`; refer to current guides rather than
+> the historical counts and completion claims below.
+
 ---
 
 ## 1. Parameter Coverage Deficit
@@ -81,4 +86,3 @@ Certain features (like depth-aware `lens_blur`) exist in the codebase but have p
     Executed a parser utility that reads `retouch/params.py` and regenerates the documentation lists and tables directly inside [API.md](file:///Applications/htdocs/retouch/docs/architecture/API.md) and [RECIPE_GUIDE.md](file:///Applications/htdocs/retouch/docs/guides/RECIPE_GUIDE.md). All 206 registered parameter specs are now fully documented.
 3.  **Updated `RetouchEngine.process()` Signature (Medium Priority):**
     Aligned the signature block in `API.md` with the actual 100+ argument keyword-only list from `retouch/engine.py`.
-
