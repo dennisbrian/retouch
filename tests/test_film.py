@@ -373,3 +373,30 @@ class TestBrightnessPreservation:
         pct_diff = abs(mean_out - mean_in) / mean_in
         assert pct_diff < 0.35, f"Expected output mean near {mean_in}, got {mean_out} (diff {pct_diff:.1%})"
 
+
+
+class TestEndToEndPipeline:
+    """Regression guard for 449f3fc: FilmDensityEngine was fed the F1 float
+    pipeline's [0,1] data (it expects [0,255]), blowing every film.enable
+    recipe to pure white through engine.process() while all unit tests here
+    stayed green. Render a sim end-to-end and check output statistics."""
+
+    def test_fuji_sim_render_not_collapsed(self, engine):
+        rng = np.random.default_rng(42)
+        # Structured photo-like input: smooth gradient + texture, no face
+        # (exercises the _no_face_fallback film call site — fast, no models
+        # beyond detection returning zero faces).
+        yy, xx = np.mgrid[0:160, 0:160].astype(np.float32)
+        base = 60.0 + (yy + xx) * 0.4
+        img = np.clip(
+            base[..., None] + rng.normal(0, 18, (160, 160, 3)), 0, 255
+        ).astype(np.uint8)
+
+        out = np.asarray(engine.process(img, recipe="provia"), dtype=np.uint8)
+
+        assert out.std() > img.std() * 0.3, (
+            f"provia render collapsed: in std {img.std():.1f} -> out std {out.std():.1f}"
+        )
+        assert 30.0 < out.mean() < 235.0, (
+            f"provia render mean {out.mean():.1f} is blown/crushed"
+        )

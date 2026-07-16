@@ -6,6 +6,11 @@ ask to make the 14 Fuji film simulations (see `retouch/recipes.py`
 
 **STATUS UPDATE (2026-07-15):** The two headline blockers listed below—FilmDensityEngine brightness-crush bug (§2) and absent selective-color/HSL calibration (§3)—were fixed the same day this doc was written. See commits `9699157` (fix: FilmDensityEngine characteristic curve) and `f3290c3` (feat: selective HSL/calibration with hue/sat/luminance per-band adjustments now wired in `engine.py`). Only the reference-corpus-acquisition item (§4) remains open. Treat the rest of this doc as historical context, not an active task list.
 
+**STATUS UPDATE 2 (2026-07-16):** Both "fixed" claims above were only true in isolation, not in the shipped pipeline (see commit `449f3fc`):
+- The `9699157` film fix left both engine call sites feeding the F1 float pipeline's [0,1] data into `FilmDensityEngine.apply`, which expects [0,255] — so **all 14 Fuji sims rendered blown white end-to-end** (provia: mean 255.0, std 0.0). Fixed by scaling around the call. The existing tests never caught it because none render a sim through `engine.process()` and check output statistics.
+- The `f3290c3` HSL/calibration wiring existed only in `_no_face_fallback`; the face path (`_stage_grade`) never injected the ctx values, and classic_chrome sets no `color_grade` so `grade()` wasn't entered at all. Now applied as a standalone full-strength step in `_stage_grade`.
+- Still open (minor): `FilmDensityEngine` at classic_chrome/provia params *brightens* a real photo by ~19% standalone (157→187 mean) — the `9699157` fix may have overshot in the other direction; the rendered look is plausible but untuned against any reference (§4 corpus still missing).
+
 **Context:** `docs/FUJI_COLOR_RESEARCH.md` is the existing research doc.
 This file picks up where that one's theory meets the actual engine code —
 i.e. which of its four "key technical ingredients" (§3) are real, wired,
