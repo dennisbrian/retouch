@@ -9,6 +9,7 @@ from retouch.undereye import (
     UndereyeAnalyzer,
     UndereyeRemover,
 )
+from retouch.chromophore import decompose_chromophores
 from retouch.utils import bgr_f32_to_lab_f32, lab_f32_to_bgr_f32
 
 
@@ -281,6 +282,40 @@ class TestUndereyeProcessor:
             (lab_result[30:40, 20:44, 1] - 128.0) ** 2 + (lab_result[30:40, 20:44, 2] - 128.0) ** 2
         ).mean()
         assert result_chroma < orig_chroma
+
+    def test_hemoglobin_spike_zero_strength_is_identity(self, processor, cheek_reference_img, undereye_mask):
+        result = processor.attenuate_hemoglobin(
+            cheek_reference_img, undereye_mask, strength=0.0
+        )
+        assert np.array_equal(result, cheek_reference_img)
+
+    def test_hemoglobin_spike_reduces_vascular_excess_without_lifting_luminance(self, processor):
+        """E-EYE-4 should remove excess vascular color, not brighten a shadow."""
+        img = np.full((80, 80, 3), (110, 130, 160), dtype=np.uint8)
+        mask = np.zeros((80, 80), dtype=np.float32)
+        mask[30:50, 24:56] = 1.0
+        # Strong red-purple vascular signal inside a bounded under-eye area.
+        img[30:50, 24:56] = (80, 85, 180)
+
+        hb_before = decompose_chromophores(img)[1]
+        out = processor.attenuate_hemoglobin(img, mask, strength=0.8)
+        hb_after = decompose_chromophores(out)[1]
+        source_lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
+        output_lab = cv2.cvtColor(out, cv2.COLOR_BGR2LAB).astype(np.float32)
+        inside = mask > 0.5
+
+        assert float(hb_after[inside].mean()) < float(hb_before[inside].mean())
+        assert abs(float(output_lab[inside, 0].mean() - source_lab[inside, 0].mean())) <= 2.0
+        assert np.array_equal(out[~inside], img[~inside])
+
+    def test_hemoglobin_spike_preserves_float32_contract(self, processor):
+        img = np.full((64, 64, 3), (110.0, 130.0, 160.0), dtype=np.float32)
+        mask = np.zeros((64, 64), dtype=np.float32)
+        mask[24:40, 20:44] = 1.0
+        img[24:40, 20:44] = (80.0, 85.0, 180.0)
+        out = processor.attenuate_hemoglobin(img, mask, strength=0.7)
+        assert out.dtype == np.float32
+        assert out.shape == img.shape
 
 
 # ---- Test UnderEyeRepairer (legacy interface) ----

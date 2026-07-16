@@ -12,6 +12,7 @@ import cv2
 import numpy as np
 
 from .parsing import FaceRegions
+from .chromophore import decompose_chromophores, reconstruct_from_chromophores
 from .utils import blend_masked, normalize_mask, feather_mask as _feather_mask, bgr_f32_to_lab_f32, lab_f32_to_bgr_f32
 
 
@@ -246,6 +247,77 @@ class UndereyeProcessor:
 
         # Blend within the mask to avoid hard edges
         return blend_masked(img_bgr, result, mask)
+
+    def attenuate_hemoglobin(
+        self,
+        img_bgr: np.ndarray,
+        mask: np.ndarray,
+        strength: float = 0.0,
+    ) -> np.ndarray:
+        """Experimental E-EYE-4 spike: reduce vascular color, not luminance.
+
+        The existing under-eye path can brighten and desaturate a dark region,
+        but neither operation distinguishes vascular color from a true shadow.
+        This leaf operator attenuates only hemoglobin that exceeds the nearby
+        cheek baseline, then restores the source L channel before compositing.
+        It is intentionally not wired to engine parameters or recipes until
+        real-image visual QA establishes a safe product control.
+        """
+        if strength <= 0.0 or mask is None or mask.max() < 0.01:
+            return img_bgr
+
+        s = float(np.clip(strength, 0.0, 1.0))
+        is_float = img_bgr.dtype == np.float32
+        region = normalize_mask(mask)
+        assert region is not None
+        if region.max() < 0.01:
+            return img_bgr
+
+        # Estimate a robust cheek baseline from a ring surrounding the
+        # landmark-defined under-eye region. A minimum scale rejects normal
+        # sensor variation on otherwise uniform skin.
+        ring_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25))
+        ring = np.clip(
+            cv2.dilate((region > 0.3).astype(np.uint8), ring_kernel).astype(np.float32)
+            - region,
+            0.0,
+            1.0,
+        )
+        work = img_bgr.astype(np.float32)
+        melanin, hemoglobin = decompose_chromophores(work)
+        samples = hemoglobin[ring > 0.3]
+        if samples.size < 20:
+            samples = hemoglobin[region > 0.3]
+        if samples.size < 20:
+            return img_bgr
+
+        baseline = float(np.median(samples))
+        mad = float(np.median(np.abs(samples - baseline)))
+        sigma = max(1.4826 * mad, 0.03)
+        excess = np.clip(hemoglobin - baseline, 0.0, None)
+        confidence = np.clip((excess - 2.0 * sigma) / (3.0 * sigma), 0.0, 1.0)
+        effective_mask = region * confidence
+        if effective_mask.max() < 1e-4:
+            return img_bgr
+
+        corrected_hb = hemoglobin - s * excess
+        reconstructed = reconstruct_from_chromophores(
+            melanin,
+            corrected_hb,
+            img_bgr=work,
+        )
+
+        # Chromophore reconstruction changes both color and brightness. Keep
+        # source lightness so this spike cannot flatten an anatomical shadow.
+        # Use the float-native LAB convention for both images. Mixing OpenCV's
+        # uint8 LAB scale with float LAB would reintroduce a luminance shift.
+        source_lab = _to_lab(work, True)
+        corrected_lab = _to_lab(reconstructed, True)
+        corrected_lab[:, :, 0] = source_lab[:, :, 0]
+        corrected = _from_lab(corrected_lab, True)
+        if not is_float:
+            corrected = np.clip(corrected, 0.0, 255.0).astype(np.uint8)
+        return blend_masked(img_bgr, corrected, effective_mask)
 
 
 class UnderEyeRepairer:

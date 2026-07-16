@@ -68,6 +68,14 @@ patch, attenuate the hemoglobin (blue-purple venous) component specifically, and
 the "brightened but still corpse-toned" failure of the current remover. Directly reuses R7 maps if/when
 R7 lands; can be prototyped standalone on the periorbital ROI (small, bounded) before R7.
 
+**2026-07-16 spike:** `UndereyeProcessor.attenuate_hemoglobin()` now exists as an
+experimental leaf operator. It measures excess hemoglobin against the local cheek ring,
+attenuates only the excess, restores source luminance after reconstruction, and composites
+only inside the landmark under-eye mask. Synthetic vascular tests cover hue reduction,
+luminance preservation, float32 output, and zero-strength identity. It is deliberately not
+engine-, recipe-, CLI-, or GUI-wired until real-image visual QA proves it improves dark
+circles without erasing anatomical shadows.
+
 ### E-EYE-5 — Gaze / eye-symmetry micro-correction (geometry, gated, conservative)
 Strabismus-lite and minor gaze asymmetry (one iris slightly off-center vs the palpebral opening) read as
 "something's off" without the viewer knowing why. A *tiny*, capped iris-recenter warp (reuse F5 liquify
