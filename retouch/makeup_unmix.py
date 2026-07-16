@@ -13,6 +13,7 @@ import numpy as np
 
 from .chromophore import decompose_chromophores, reconstruct_from_chromophores
 from .color_science import bgr_to_oklab, oklab_to_oklch
+from .specular import extract_specular
 
 
 def _smoothstep(e0: float, e1: float, x: np.ndarray) -> np.ndarray:
@@ -40,13 +41,78 @@ def _to_u8(img: np.ndarray) -> np.ndarray:
     return np.clip(img, 0, 255).astype(np.uint8)
 
 
+def _skin_median_mad(values: np.ndarray, mask: np.ndarray) -> Tuple[float, float]:
+    """Return robust per-face statistics, with a noise floor for flat patches."""
+    sample = values[mask > 0.5]
+    if not sample.size:
+        sample = values.reshape(-1)
+    median = float(np.median(sample))
+    mad = float(np.median(np.abs(sample - median)))
+    return median, max(1.4826 * mad, 1e-4)
+
+
+def _high_outlier_cue(
+    values: np.ndarray, mask: np.ndarray, *, start_sigma: float = 3.0,
+) -> np.ndarray:
+    """Softly detect values that exceed this subject's normal skin variation."""
+    median, sigma = _skin_median_mad(values, mask)
+    return _smoothstep(
+        median + start_sigma * sigma,
+        median + (start_sigma + 3.0) * sigma,
+        values,
+    )
+
+
+def _low_outlier_cue(
+    values: np.ndarray, mask: np.ndarray, *, start_sigma: float = 2.0,
+) -> np.ndarray:
+    """Softly detect values below this subject's normal skin variation."""
+    median, sigma = _skin_median_mad(values, mask)
+    return 1.0 - _smoothstep(
+        median - (start_sigma + 3.0) * sigma,
+        median - start_sigma * sigma,
+        values,
+    )
+
+
+def _merge_masks(*masks: Optional[np.ndarray]) -> Optional[np.ndarray]:
+    """Combine optional exclusion masks in normalized float form."""
+    present = [m for m in masks if m is not None]
+    if not present:
+        return None
+    return np.maximum.reduce(present).astype(np.float32)
+
+
+def _compact_specular_exclusion(
+    img_bgr: np.ndarray, skin_mask: np.ndarray,
+) -> np.ndarray:
+    """Exclude compact highlights without classifying broad white paint as shine."""
+    spec = extract_specular(img_bgr, skin_mask=skin_mask)
+    binary = (spec >= 20.0).astype(np.uint8)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(binary)
+    max_area = max(1, int(np.count_nonzero(skin_mask > 0.5) * 0.10))
+    compact = np.zeros_like(binary)
+    for label in range(1, count):
+        if stats[label, cv2.CC_STAT_AREA] <= max_area:
+            compact[labels == label] = 1
+    # Include the feathered edge surrounding a compact highlight so alpha
+    # smoothing cannot pull its near-white color into adjacent bare skin.
+    return cv2.dilate(compact, np.ones((21, 21), dtype=np.uint8)).astype(np.float32)
+
+
 def estimate_makeup_alpha(
     img_bgr: np.ndarray,
     skin_mask: np.ndarray,
     mole_mask: Optional[np.ndarray] = None,
     exclude_mask: Optional[np.ndarray] = None,
+    specular_mask: Optional[np.ndarray] = None,
 ) -> np.ndarray:
-    """Multi-cue soft α prior (chroma ∨ white-paint ∨ reconstruct residual)."""
+    """Estimate a tone-relative soft alpha prior for makeup coverage.
+
+    Every cue is measured against robust statistics from the current face's
+    skin pixels. This avoids treating a fixed reflectance or chroma value as
+    makeup merely because the subject has darker or lighter skin.
+    """
     h, w = img_bgr.shape[:2]
     m = _prep_mask(skin_mask, h, w)
     if m is None:
@@ -59,23 +125,46 @@ def estimate_makeup_alpha(
 
     mel, hb = decompose_chromophores(work)
     recon = reconstruct_from_chromophores(mel, hb, img_bgr=work, skin_mask=m)
-    resid = np.abs(work.astype(np.float32) - recon).mean(axis=-1) / 255.0
+    # Makeup density is multiplicative in reflectance. Measuring its residual
+    # in optical-density space keeps an equal physical change comparable on
+    # light and dark skin instead of shrinking with the base RGB intensity.
+    density = -np.log(np.clip(work.astype(np.float32) / 255.0, 1e-3, 1.0))
+    recon_density = -np.log(np.clip(recon.astype(np.float32) / 255.0, 1e-3, 1.0))
+    resid = np.abs(density - recon_density).mean(axis=-1)
+    # Foundation coverage is broad while sensor noise is not. Smooth only the
+    # detection signal so a low-reflectance face does not need an unrealistically
+    # large density jump to clear a per-pixel noise threshold.
+    density_l = cv2.GaussianBlur(density.mean(axis=-1), (0, 0), sigmaX=2.0)
 
-    cue_chroma = _smoothstep(0.10, 0.20, C)
-    cue_white = _smoothstep(0.85, 0.95, L) * (1.0 - _smoothstep(0.02, 0.08, C))
-    cue_resid = _smoothstep(0.04, 0.12, resid)
+    cue_chroma = _high_outlier_cue(C, m)
+    cue_light = _high_outlier_cue(L, m)
+    cue_low_chroma = _low_outlier_cue(C, m)
+    cue_white = cue_light * cue_low_chroma
+    cue_resid = _high_outlier_cue(resid, m)
+    # A sheer foundation changes optical density by a similar amount on every
+    # skin tone, even though its additive RGB difference is smaller on dark
+    # skin. Lighter makeup is therefore a *low* density outlier.
+    cue_density = _low_outlier_cue(density_l, m)
 
-    hint = np.maximum(np.maximum(cue_chroma, cue_white), cue_resid) * m
+    hint = np.maximum.reduce(
+        (cue_chroma, cue_light, cue_white, cue_resid, cue_density)
+    ) * m
     mm = _prep_mask(mole_mask, h, w)
     if mm is not None:
         hint = hint * (1.0 - mm)
-    ex = _prep_mask(exclude_mask, h, w)
+    ex = _merge_masks(
+        _prep_mask(exclude_mask, h, w),
+        _prep_mask(specular_mask, h, w),
+    )
     if ex is not None:
         hint = hint * (1.0 - ex)
 
+    # Opening removes isolated noise hits. The former closing operation grew
+    # those hits into paint regions, which made compact shine bleed outward
+    # when coverage-even blurred the resulting alpha map.
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
     u8 = np.clip(hint * 255, 0, 255).astype(np.uint8)
-    u8 = cv2.morphologyEx(u8, cv2.MORPH_CLOSE, k)
+    u8 = cv2.morphologyEx(u8, cv2.MORPH_OPEN, k)
     return (u8.astype(np.float32) / 255.0)
 
 
@@ -108,6 +197,7 @@ def unmix_makeup(
     mole_mask: Optional[np.ndarray] = None,
     user_alpha: Optional[np.ndarray] = None,
     exclude_mask: Optional[np.ndarray] = None,
+    specular_mask: Optional[np.ndarray] = None,
     iterations: int = 3,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return (skin_bgr, makeup_bgr, alpha) float32 [0,255] / α HxW.
@@ -121,12 +211,26 @@ def unmix_makeup(
         z = np.zeros((h, w), dtype=np.float32)
         return I.copy(), I.copy(), z
 
+    if specular_mask is None and user_alpha is None:
+        # A highlight can seed a near-white makeup color and then bleed that
+        # color across bare skin during coverage evening. The specular module
+        # already uses a face-relative brightness gate, so reuse it here.
+        specular_mask = _compact_specular_exclusion(I, base)
+
+    combined_exclude = _merge_masks(
+        _prep_mask(exclude_mask, h, w),
+        _prep_mask(specular_mask, h, w),
+    )
+
     if user_alpha is not None:
         alpha = _prep_mask(user_alpha, h, w)
         assert alpha is not None
     else:
         alpha = estimate_makeup_alpha(
-            img_bgr, skin_mask, mole_mask=mole_mask, exclude_mask=exclude_mask,
+            img_bgr,
+            skin_mask,
+            mole_mask=mole_mask,
+            exclude_mask=combined_exclude,
         )
 
     # Seed makeup color M from high-α pixels; skin S from low-α
@@ -140,6 +244,19 @@ def unmix_makeup(
         S_fill = I[lo].mean(axis=0)
     else:
         S_fill = I.reshape(-1, 3).mean(axis=0)
+
+    # With no separation between estimated skin and makeup colors, projection
+    # is underdetermined. Returning the masked prior avoids IRLS inventing a
+    # direction that later coverage smoothing can spread across bare skin.
+    if float(np.linalg.norm(Mcol - S_fill)) < 6.0:
+        alpha = alpha * base
+        if mole_mask is not None:
+            mm = _prep_mask(mole_mask, h, w)
+            if mm is not None:
+                alpha *= 1.0 - mm
+        if combined_exclude is not None:
+            alpha *= 1.0 - combined_exclude
+        return I.copy(), I.copy(), alpha.astype(np.float32)
 
     M = np.broadcast_to(Mcol, I.shape).copy()
     # S: observed under low α, guided fill under high α
@@ -157,10 +274,8 @@ def unmix_makeup(
             mm = _prep_mask(mole_mask, h, w)
             if mm is not None:
                 alpha = alpha * (1.0 - mm)
-        if exclude_mask is not None:
-            ex = _prep_mask(exclude_mask, h, w)
-            if ex is not None:
-                alpha = alpha * (1.0 - ex)
+        if combined_exclude is not None:
+            alpha = alpha * (1.0 - combined_exclude)
         hi = alpha > 0.3
         if hi.any():
             Mcol = I[hi].mean(axis=0)
@@ -226,6 +341,7 @@ def apply_makeup_unmix(
     cake_reduce_strength: float = 0.0,
     mole_mask: Optional[np.ndarray] = None,
     exclude_mask: Optional[np.ndarray] = None,
+    specular_mask: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Full product entry: unmix → edit α → recompose. All strengths 0 = identity."""
     ce = float(coverage_even or 0.0)
@@ -234,7 +350,11 @@ def apply_makeup_unmix(
         return img_bgr
 
     S, M, alpha = unmix_makeup(
-        img_bgr, skin_mask, mole_mask=mole_mask, exclude_mask=exclude_mask,
+        img_bgr,
+        skin_mask,
+        mole_mask=mole_mask,
+        exclude_mask=exclude_mask,
+        specular_mask=specular_mask,
     )
     if ce > 0:
         alpha = even_coverage_alpha(alpha, ce, img_bgr)
@@ -253,6 +373,7 @@ def apply_makeup_coverage_even(
     mole_mask: Optional[np.ndarray] = None,
     cake_reduce_strength: float = 0.0,
     exclude_mask: Optional[np.ndarray] = None,
+    specular_mask: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Engine-facing: full unmix path when strength>0."""
     return apply_makeup_unmix(
@@ -262,4 +383,5 @@ def apply_makeup_coverage_even(
         cake_reduce_strength=float(cake_reduce_strength or 0.0),
         mole_mask=mole_mask,
         exclude_mask=exclude_mask,
+        specular_mask=specular_mask,
     )

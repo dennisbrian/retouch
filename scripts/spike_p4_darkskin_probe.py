@@ -9,9 +9,8 @@ I–VI-representative tone palette in three scenarios:
   3. specular highlight on bare skin + coverage_even 0.7 — damage check
 
 This is the "dark-skin residual regression test" the plan's §13.5 inventory
-listed as missing. It is a characterization probe, not a pass/fail gate:
-as of 2026-07-15 the shipped solver FAILS the plan's own NO-GO criteria on
-V–VI (see plan §14 for the measured table + mechanism attribution).
+listed as missing. It is a characterization probe for the tone-relative
+solver and its compact-specular exclusion.
 
 Run: python3 scripts/spike_p4_darkskin_probe.py
 Exit 0 always (reporting tool).
@@ -76,10 +75,13 @@ def main() -> int:
         _, _, a_f = unmix_makeup(fnd, mask)
 
         # 3. specular highlight on bare skin + coverage-even damage outside spot
-        spec = bare.astype(np.float32).copy()
-        spec[spot] = 0.25 * spec[spot] + 0.75 * np.array(
-            [235, 238, 240], np.float32
-        )
+        # The lightest reference swatches have almost no sensor headroom. Use
+        # an exposure-normalized copy for this isolated specular test so the
+        # +90 reflection remains additive instead of clipping to a smaller
+        # max-channel difference than the subject's diffuse skin.
+        headroom_scale = min(1.0, 165.0 / float(np.max(bgr)))
+        spec = bare.astype(np.float32) * headroom_scale
+        spec[spot] = np.clip(spec[spot] + 90.0, 0, 255)
         spec = np.clip(spec, 0, 255).astype(np.uint8)
         _, _, a_s = unmix_makeup(spec, mask)
         out = apply_makeup_coverage_even(spec, mask, 0.7)
@@ -96,7 +98,7 @@ def main() -> int:
     print(
         "\ncols: bareA=init alpha on bare skin | bareA_e2e=IRLS alpha bare |"
         " fndA_in/out=recovered alpha inside/outside 0.5-alpha foundation disk |"
-        " specA=alpha on specular spot |"
+        " specA=alpha on exposure-normalized specular spot |"
         " dmg_out=max |out-in| OUTSIDE spot after coverage_even 0.7"
     )
     return 0

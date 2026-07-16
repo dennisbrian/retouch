@@ -1,6 +1,7 @@
 """P4 makeup unmix — full product slice tests."""
 
 import numpy as np
+import pytest
 
 from retouch.makeup_unmix import (
     apply_makeup_coverage_even,
@@ -12,6 +13,43 @@ from retouch.makeup_unmix import (
     recompose,
     unmix_makeup,
 )
+
+
+FITZPATRICK_BGR = {
+    "I": (189, 208, 244),
+    "II": (143, 180, 231),
+    "III": (109, 152, 208),
+    "IV": (87, 114, 165),
+    "V": (62, 82, 122),
+    "VI": (38, 51, 80),
+}
+
+# Match the headroom-qualified palette in test_specular_finish.py. A clipped
+# highlight cannot be identified from its lost additive intensity alone.
+SPECULAR_BGR = {
+    "I": (180, 195, 220),
+    "II": (143, 180, 210),
+    "III": (109, 152, 190),
+    "IV": (87, 114, 165),
+    "V": (62, 82, 122),
+    "VI": (38, 51, 80),
+}
+
+
+def _foundation_disk(bgr, seed=42):
+    """Return a noisy bare swatch and a known broad foundation coverage area."""
+    h = w = 96
+    rng = np.random.RandomState(seed)
+    base = np.zeros((h, w, 3), np.float32) + np.asarray(bgr, np.float32)
+    bare = np.clip(base + rng.normal(0, 4, (h, w, 3)), 0, 255).astype(np.uint8)
+    yy, xx = np.ogrid[:h, :w]
+    disk = ((yy - h // 2) ** 2 + (xx - w // 2) ** 2) <= 24 ** 2
+    makeup = np.clip(
+        np.asarray(bgr, np.float32) * 1.18 + np.array([0, 8, 12]), 0, 255,
+    )
+    foundation = bare.astype(np.float32)
+    foundation[disk] = 0.5 * foundation[disk] + 0.5 * makeup
+    return bare, np.clip(foundation, 0, 255).astype(np.uint8), disk
 
 
 def test_strength_zero_identity():
@@ -84,3 +122,50 @@ def test_unmix_bare_skin_low_alpha():
     img[:, :, 2] = 200
     _, _, alpha = unmix_makeup(img, np.ones((40, 40), dtype=np.float32))
     assert float(alpha.mean()) < 0.35
+
+
+def test_user_alpha_overrides_automatic_specular_exclusion():
+    """An explicit user paint mask remains authoritative over auto detection."""
+    img = np.full((48, 48, 3), (180, 190, 210), dtype=np.uint8)
+    user_alpha = np.zeros((48, 48), dtype=np.float32)
+    user_alpha[16:32, 16:32] = 1.0
+    _, _, alpha = unmix_makeup(
+        img,
+        np.ones((48, 48), dtype=np.float32),
+        user_alpha=user_alpha,
+    )
+    assert float(alpha[20:28, 20:28].mean()) > 0.9
+
+
+@pytest.mark.parametrize("tone", FITZPATRICK_BGR.values(), ids=list(FITZPATRICK_BGR))
+def test_tone_relative_alpha_detects_foundation_across_skin_tones(tone):
+    """A comparable density change must not disappear on darker skin."""
+    _, foundation, disk = _foundation_disk(tone)
+    alpha = estimate_makeup_alpha(foundation, np.ones(foundation.shape[:2], np.float32))
+    assert float(alpha[disk].mean()) > 0.5
+    assert float(alpha[~disk].mean()) < 0.05
+
+
+@pytest.mark.parametrize("tone", FITZPATRICK_BGR.values(), ids=list(FITZPATRICK_BGR))
+def test_tone_relative_alpha_keeps_bare_skin_below_false_positive_gate(tone):
+    """Noisy bare skin remains a no-op for every Fitzpatrick reference tone."""
+    bare, _, _ = _foundation_disk(tone)
+    _, _, alpha = unmix_makeup(bare, np.ones(bare.shape[:2], np.float32))
+    assert float(alpha.mean()) < 0.05
+
+
+@pytest.mark.parametrize("tone", SPECULAR_BGR.values(), ids=list(SPECULAR_BGR))
+def test_compact_specular_highlight_cannot_bleed_coverage_even(tone):
+    """A real additive highlight is excluded before alpha smoothing can spread it."""
+    bare, _, _ = _foundation_disk(tone)
+    h, w = bare.shape[:2]
+    yy, xx = np.ogrid[:h, :w]
+    spot = ((yy - h // 2) ** 2 + (xx - w // 2) ** 2) <= 8 ** 2
+    highlighted = bare.astype(np.float32)
+    highlighted[spot] = np.clip(highlighted[spot] + 90.0, 0, 255)
+    highlighted = highlighted.astype(np.uint8)
+
+    _, _, alpha = unmix_makeup(highlighted, np.ones((h, w), np.float32))
+    out = apply_makeup_coverage_even(highlighted, np.ones((h, w), np.float32), 0.7)
+    assert float(alpha[spot].mean()) < 0.05
+    assert float(np.abs(out.astype(np.float32) - highlighted)[~spot].max()) <= 1.0

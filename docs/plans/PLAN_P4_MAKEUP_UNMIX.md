@@ -1,6 +1,6 @@
 # P4 — Skin ↔ Makeup Unmixing (Research + Implementation Plan)
 
-**Status:** 📋 RESEARCH LOCKED (design 2026-07-14) · **⚠️ 2026-07-15 dark-skin audit: shipped solver fails on Fitzpatrick V–VI — see §14 before enabling in recipes** · **✅ 2026-07-15 sibling bug found + FIXED in `specular.py` (same absolute-threshold pattern) — see §15** · **✅ 2026-07-15 third instance found + FIXED in `lips.py`, fourth found + documented (not fixed, higher blast radius) in `skin.py::whiten()` — see §16** · **Parent:** `PLAN_SKIN_PROMAX.md` §P4 · MASTER_PLAN research backlog  
+**Status:** 🔄 SAFETY REMEDIATION IMPLEMENTED (2026-07-16) · tone-relative alpha cues, compact specular exclusion, and Fitzpatrick I–VI synthetic gates landed; real-image visual QA remains required before recipe enablement · **✅ 2026-07-15 sibling bug found + FIXED in `specular.py` (same absolute-threshold pattern) — see §15** · **✅ 2026-07-15 third instance found + FIXED in `lips.py`, fourth found + documented (not fixed, higher blast radius) in `skin.py::whiten()` — see §16** · **Parent:** `PLAN_SKIN_PROMAX.md` §P4 · MASTER_PLAN research backlog
 **Effort:** spike 4–5 d · full feature ~3–4 wk if GO  
 **Standout:** highest-moat cosplay axis — separate **paint layer** from **person**, not merely mask around paint (A3/R11).
 
@@ -558,6 +558,37 @@ rule 7 + visual-QA discipline) they must land with the tone-parametrized tests
 not as a drive-by threshold swap. Until then, treat `makeup_coverage_even` as
 **light-skin-only and specular-unsafe**; do not enable it by default in any
 recipe.
+
+### 14.5 Safety remediation implemented (2026-07-16)
+
+The solver now uses robust per-face median/MAD statistics for chroma,
+lightness, and chromophore reconstruction residual cues. Its foundation cue
+uses a lightly smoothed optical-density signal, so the same multiplicative
+reflectance change remains detectable on dark skin instead of collapsing with
+absolute RGB magnitude. The cleanup operation changed from morphological close
+to open: isolated cue noise is removed rather than enlarged into a paint
+region.
+
+Compact, tone-adaptively detected specular highlights are excluded before
+alpha seeding and IRLS. Broad regions are deliberately not classified as shine,
+so white face paint remains available to the makeup solver. If the inferred
+skin and makeup colors are too similar for a stable projection, the solver
+returns the protected alpha prior rather than inventing a direction.
+
+`tests/test_makeup_unmix.py` now parameterizes the deterministic Fitzpatrick
+I–VI palette. The current gates require broad, tone-matched foundation to be
+detected inside its synthetic disk while outside alpha stays below 0.05; noisy
+bare skin remains below the same gate; and an additive compact highlight cannot
+change surrounding pixels at coverage-even strength 0.7. The alpha magnitude
+is not treated as a physical coverage estimate: recovering absolute alpha from
+one RGB observation remains underdetermined, so the regression contract is
+safe detection and isolation rather than equality to the synthetic 0.5 value.
+
+The 2026-07-16 probe result is: bare end-to-end alpha 0.000 for all six
+swatches; foundation-disk alpha 0.926-0.949; outside-disk alpha at most 0.003;
+specular-spot alpha 0.000; maximum surrounding-pixel change at coverage-even
+0.7 is 1/255. Defaults remain zero and no recipe enables the feature. Real
+portrait/cosplay visual QA remains the release gate before that changes.
 
 ---
 
