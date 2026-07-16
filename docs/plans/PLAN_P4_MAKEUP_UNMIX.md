@@ -1056,3 +1056,227 @@ branches.
   `ctx.whiten == 40.0`-style plumbing) — none pin an exact pixel value from
   `SkinProcessor.whiten()`'s actual image output, confirming the §17.4
   triage was complete.
+
+---
+
+## 19. Ill-posed alpha-solve failure-mode audit across skin tones (2026-07-17)
+
+(Numbering note: the file has no §18; this section is numbered per the task
+assignment. Audits the CURRENT post-§14.5 solver — the tone-relative
+median/MAD remediation — not the pre-remediation absolute-threshold solver
+§14 measured.)
+
+**Probes (seeded, re-runnable):**
+- `scripts/spike_p4_alpha_matrix.py` — 6 Fitzpatrick tones × 6 makeup types
+  (foundation +18% lighter / −20% darker, blush, concealer, white cosplay
+  paint, blue cosplay paint) × 3 true-α fields (uniform 0.6, gradient 0→0.9,
+  patchy ~0.7), composited with the solver's own forward model
+  I=(1−α)S+αM plus ±1% low-freq mottling and σ=3 noise; plus a shading
+  variant and a ‖M−S‖→0 ambiguity sweep. Panels:
+  `test_output/spike_p4_alpha_matrix_*.png`.
+- `scripts/spike_p4_alpha_coverage_sweep.py` — foundation-disk coverage
+  fraction 5%→79% (flat patch, exact §14.5-probe construction).
+- `scripts/spike_p4_alpha_real.py` — real cosplay photos via
+  FaceDetector+FaceParser skin masks; internal-consistency checks (no GT).
+  Panels: `test_output/spike_p4_alpha_real_*.png`.
+
+### 19.1 Headline: the §14.5 gates measure a flat-patch idealization
+
+The §14.5 remediation numbers (foundation-disk α 0.926–0.949 at all tones)
+reproduce **only** on a perfectly flat noise patch with minority-coverage
+makeup. Two structural fragilities make the shipped detector inert in the
+regimes the product actually targets:
+
+**F1 — minority-outlier assumption (coverage cliff).** All cues are
+per-face median/MAD outlier detectors over the whole skin mask, so makeup
+pixels contaminate their own baseline. Flat-patch foundation disk, recovered
+mean α inside (true 0.5), by coverage fraction:
+
+| tone | 5% | 11% | 20% | 31% | 44% | 60% | 79% |
+|---|---|---|---|---|---|---|---|
+| I   | 0.925 | 0.925 | 0.927 | 0.926 | 0.914 | **0.000** | 0.000 |
+| III | 0.942 | 0.942 | 0.943 | 0.942 | 0.931 | **0.000** | 0.000 |
+| V   | 0.949 | 0.949 | 0.947 | 0.941 | 0.873 | **0.000** | 0.000 |
+| VI  | 0.944 | 0.940 | 0.935 | 0.925 | **0.333** | **0.000** | 0.000 |
+
+Hard cliff between 44% and 60%; onset is tone-ordered — **VI degrades first**
+(0.333 at 44% where I–V still read 0.87–0.93). Real foundation covers most
+of the face → the primary §1 use case sits on the far side of the cliff by
+construction.
+
+**F2 — MAD inflation under realistic low-frequency variation.** Adding a mere
+±0.5% multiplicative low-freq mottle (≈3 gray levels std — far below real
+facial shading) collapses foundation detection at EVERY tone. Traced
+mechanism (tone III, disk 37%): the foundation's optical-density delta is
+0.10; whole-mask MAD-σ of the smoothed density signal is 0.008 flat (11.7σ →
+fires) but 0.049 at 0.5% mottle (1.7σ → below the 2σ cue threshold →
+silent). At ±1% mottle: 0.9σ. Real faces have density-space shading σ of
+0.1–0.3, i.e. 10–30× the level that already kills the cue.
+
+### 19.2 Measured matrix (tone × makeup × α-pattern)
+
+Full table: run `spike_p4_alpha_matrix.py` (seed 42, deterministic).
+Condensed detect-in-support means (α_rec over α_true>0.3), with ±1% mottling:
+
+| type | pattern | I | II | III | IV | V | VI |
+|---|---|---|---|---|---|---|---|
+| fnd_light (all 3 patterns) | | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000–0.001 |
+| fnd_dark / concealer (all) | | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| blush | uniform/gradient | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000–0.104 |
+| blush | patchy | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | **0.592** |
+| paint_white | uniform | **0.000** | **0.000** | **0.005** | 0.932 | 0.942 | 0.946 |
+| paint_white | patchy | 0.000 | 0.284 | 0.001 | 0.551 | 0.674 | 0.675 |
+| paint_blue | uniform | 0.852 | 0.404 | **0.000** | **0.000** | 0.634 | 0.932 |
+| paint_blue | patchy | 0.685 | 0.774 | 0.795 | 0.580 | 0.638 | 0.763 |
+
+Other measured columns (same runs):
+- **α is a detection mask, not coverage.** Where detection fires it saturates
+  to ~0.93–0.95 regardless of true α (aMAE 0.21–0.43; gradient fields recover
+  a near-binary map — see `spike_p4_alpha_matrix_paint_blue.png` col 3 vs 2).
+- **Recovered S retains the paint.** S_MAE inside makeup: 50–130/255 for
+  paints (visible: blue/white blotches burned into the "skin" layer in the
+  panels). §1 goal 2 ("fix skin *through* makeup") would run skin ops on
+  paint.
+- **False-positive damage (F6).** Blush III/IV: zero real detection, but
+  sparse noise speckles pass the cues, seed a junk M, and
+  `coverage_even(0.5)` then blends bare pixels toward it — localized spots up
+  to 46–50/255 (`spike_p4_alpha_damage_blush.png`). Small area, but a real
+  render defect on an op the user believes is inert when nothing is detected.
+- **Shading variant:** a 0.82–1.12 luminance ramp alone (uniform fnd_light)
+  → detection 0.000 at all tones (same F2 mechanism).
+
+### 19.3 Real-photo internal-consistency check
+
+`DSCF4550.jpg`, `DSCF4463.jpg` (light-skinned cosplay subjects with obvious
+full-coverage foundation + strong eye makeup; ≤1600px, parsed skin masks):
+- Foundation: **completely undetected** (skin-mask α mean 0.02–0.05,
+  frac(α>0.3) = 3–8%) — consistent with F1+F2.
+- What fires instead: eyeliner/lash-rim pixels inside the skin mask. The
+  shipped `coverage_even(0.5)` therefore concentrates its output changes at
+  the lash line (per-pixel delta up to 61–69/255) — adjacent to the §3-U4
+  "never edit eyes by default" zone, while leaving the actual foundation
+  untouched. Panels: `spike_p4_alpha_real_DSCF4550.png` / `_DSCF4463.png`.
+- recompose(S,M,α)==I holds (err 0.00) but vacuously (α≈0, S≈I).
+- Gap, stated honestly: no dark-skin real portrait exists in `test_output/`;
+  the real-photo leg of this audit covers Fitzpatrick I–II only. Synthetic
+  results are the only V–VI evidence.
+
+### 19.4 Fairness verdict (tone-correlation, with numbers)
+
+1. In the realistic-texture regime (any mottling/shading): **uniformly inert
+   at all six tones** for foundation/concealer/blush — no output-level
+   disparity, because there is no output. "Equal by being useless" — the §14
+   monotone dark-skin bias is gone, which the §14.5 remediation genuinely
+   achieved, but not replaced by working detection.
+2. In the regimes where the solver does act, errors ARE tone-correlated, with
+   direction depending on makeup type (each tone's own chroma/L baseline
+   geometry decides what counts as an "outlier"):
+   - coverage cliff onset: VI fails at 44% coverage (0.333) vs I–V 0.87–0.93;
+   - white paint: inert on I–III (0.000–0.005) vs 0.93+ on IV–VI — bias
+     *against light skin* here (low paint-vs-skin contrast);
+   - blush: detected only on VI (0.592 patchy; 0 elsewhere) — blush chroma is
+     an outlier only vs VI's low-chroma baseline;
+   - blue paint: erratic non-monotone (III/IV uniform = 0.000 vs I 0.852,
+     VI 0.932).
+3. Verdict: the remediation removed the *systematic* anti-dark-skin bias of
+   §14 but the detector's behavior is now an unpredictable function of
+   (tone, makeup color, coverage fraction) — per-regime disparities up to
+   0.93-vs-0.00 in both directions. Not shippable as a default-on feature on
+   fairness grounds alone, independent of the utility problem.
+
+### 19.5 Irreducible ambiguity (characterized, not tunable away)
+
+- **α-scale unidentifiability:** I=(1−α)S+αM is exactly reproduced by
+  (α'=1, M'=I) — with M seeded from mixed pixels (mean of I over high-α),
+  the recovered α must saturate. No constraint tuning fixes this; only an
+  independent anchor for S (or M) does. §14.5 already scoped the contract to
+  "detection and isolation, not coverage" — correct, but then
+  `even_coverage_alpha` (which edits α as if it were physical coverage) is
+  operating on a signal that does not mean coverage.
+- **Shade-matched foundation:** ambiguity sweep — at ‖M−S‖ ≤ 30/255 (uniform
+  0.6 disk at 37% coverage) detection is 0.000 at every tone even before the
+  ‖M−S‖<6 degenerate guard triggers. A well-matched foundation (the ideal
+  application) is unrecoverable in principle from 3 RGB equations: "skin"
+  vs "perfectly skin-colored layer" is not distinguishable pointwise. Any
+  product story for matched foundation must be texture/blotch evening
+  (existing frequency tools), not layer unmix.
+
+---
+
+## 20. Recommendation: (a) vs (b) — decision
+
+**Verdict: (b) a stronger prior is required for the §1 product goals; (a)
+constraint tuning is worthwhile only to convert the current solver into a
+safe compact-artifact detector.** The two are complementary and staged.
+
+### 20.1 Why tuning alone cannot get there
+
+Broad foundation detection with per-face outlier statistics is structurally
+impossible: when makeup covers the majority of the skin mask, makeup *is*
+the median (F1); and any bandpass/local-baseline fix for F2 removes broad
+signals by definition. You cannot detect "most of the face is covered" by
+asking "which pixels deviate from most of the face."
+
+### 20.2 Track A (tuning — small, do first): compact-artifact mode
+
+Scope the classical solver to what outlier statistics can do: compact paint
+edges, caking speckles, localized artifacts.
+1. **High-pass the cue signals:** subtract a large-σ (≥0.15·face-width)
+   Gaussian baseline from density/chroma/L before median/MAD. Predicted
+   effect: restores compact-makeup detection under mottling/shading (fixes
+   F2 for the compact case; measured 11.7σ→1.7σ collapse reverses because
+   the low-freq variance is removed from MAD). Explicitly does NOT restore
+   broad-foundation detection (see 20.1) — document that.
+2. **Component-area guard before M seeding:** require the α_init>0.35 region
+   to contain a connected component ≥ ~0.2% of skin area before seeding M;
+   otherwise take the degenerate (prior-only) return. Predicted effect:
+   eliminates F6 speckle damage (blush III/IV dmg 46–50 → <5).
+3. **Eye-rim exclusion:** dilate eye/brow region masks out of the α fit
+   (real-photo probes show lash-line α is the dominant real-world firing
+   mode; `coverage_even` currently edits there at up to 69/255).
+4. **Test strategy:** promote `spike_p4_alpha_matrix.py` fixtures to pytest —
+   the §14.5 tone gates must gain a mottled (±1%) variant; the current
+   flat-patch gates gave a false "detection works at all tones" signal.
+   Gates: compact paint detected under mottle at all tones; blush-speckle
+   dmg <5; bare mottled skin e2e α <0.05 all tones.
+
+### 20.3 Track B (stronger prior — the actual fix): face-anchored bare-skin
+locus from chromophores, physics-based, no learned model
+
+- **Cue:** bare skin of *this subject* occupies a compact locus on the
+  melanin/hemoglobin manifold (`chromophore.py`). Foundation (TiO₂-based
+  scattering) displaces color off that locus in a characteristic direction.
+  The current `cue_resid` fails because `decompose_chromophores` is fit on
+  the same makeup-contaminated pixels — foundation is absorbed as "less
+  melanin," so it reconstructs well and the residual stays low.
+- **Anchor:** fit the mel/hb locus from reference regions unlikely to carry
+  foundation — `parsing.py` already produces `neck` (and ear-adjacent
+  face-oval) masks. Per-pixel makeup evidence = distance from that
+  face-specific bare locus, in density space (tone-adaptive by construction;
+  margin-above-own-baseline, satisfying the CLAUDE.md tone-invariance rule).
+  This also resolves the α-scale ambiguity (§19.5): S under makeup is
+  predicted from the anchored locus (mel/hb propagated from bare regions),
+  so closed-form α gets a real S instead of a circular one.
+- **Integration point:** `estimate_makeup_alpha(..., bare_reference_mask=)`
+  + `unmix_makeup` seeding S from the anchored locus instead of "mean of
+  low-α pixels." No new module; no engine-order change.
+- **Data needs:** none for the algorithm (physics prior). For validation: a
+  small corpus of bare + made-up portraits including Fitzpatrick V–VI (the
+  §19.3 gap — currently zero dark-skin real assets in test_output/).
+- **Fallback behavior:** if the reference region is occluded/too small
+  (<~500 px) or its locus variance is too high (hair/shadow contamination),
+  fall back to Track-A compact-artifact mode and keep `coverage_even`
+  restricted to compact regions. Never let a bad anchor invent broad α.
+- **Honest limit:** shade-matched foundation stays undetectable (§19.5) even
+  with the anchor when the match is exact in RGB; the anchor only helps when
+  foundation shifts color off the wearer's own locus (the common case —
+  foundation rarely matches neck exactly, which is precisely the visible
+  "line of demarcation" makeup artists correct).
+
+### 20.4 Interim product guidance (immediate)
+
+Keep `makeup_coverage_even` / `makeup_cake_reduce` out of all recipes
+(already true). Do not present the current op as foundation evening: on real
+photos it is a no-op on foundation and an unreviewed edit at the lash line.
+§14.5's "real visual QA remains the release gate" stands, with this audit as
+the reason the gate would currently fail.
