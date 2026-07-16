@@ -2471,7 +2471,7 @@ class RetouchEngine:
         grain, negative split tone, B&W mixer) this still converts to uint8
         and always returns uint8 -- that back half has not yet been
         migrated to match `_stage_grade`'s float-native versions of the
-        same ops. See docs/plans/PLAN_P4_MAKEUP_UNMIX.md Sec 18 for the
+        same ops. See docs/plans/PLAN_TIERE_ENGINE_FIDELITY.md Sec 18 for the
         residual inventory."""
         from .precision import to_float, to_uint8
         # 16-bit ingest: no faces ⇒ nothing is edited, so start global grading
@@ -2527,7 +2527,10 @@ class RetouchEngine:
         if ctx.film_enable:
             from .film import FilmDensityEngine
             _film_engine = FilmDensityEngine()
-            result = _film_engine.apply_from_context(result, ctx)
+            # film expects float32 [0,255] (or uint8); result here is [0,1]
+            film_in = np.clip(result * 255.0, 0.0, 255.0).astype(np.float32)
+            film_out = _film_engine.apply_from_context(film_in, ctx)
+            result = np.clip(film_out / 255.0, 0.0, 1.0).astype(np.float32)
 
         post_effects = self._assemble_post_effects(ctx)
         skip_glows = ctx.bloom > 0.0
@@ -3807,7 +3810,13 @@ class RetouchEngine:
             if ctx.film_tonemap_strength > 0:
                 film_tonemap_active = True
             _film_engine = FilmDensityEngine()
-            result = _film_engine.apply_from_context(result, ctx)
+            if is_float:
+                # film expects float32 [0,255] (or uint8); result here is [0,1]
+                film_in = np.clip(result * 255.0, 0.0, 255.0).astype(np.float32)
+                film_out = _film_engine.apply_from_context(film_in, ctx)
+                result = np.clip(film_out / 255.0, 0.0, 1.0).astype(np.float32)
+            else:
+                result = _film_engine.apply_from_context(result, ctx)
 
         if ctx.tonal_curve_strength > 0 and not film_tonemap_active:
             # inherently-uint8: tonal.apply_hd_curve uses cv2.LUT which requires uint8 input
@@ -3839,6 +3848,40 @@ class RetouchEngine:
                 skin_protect_strength=ctx.skin_protect_strength,
                 return_float=is_float,
             )
+
+        # Apply recipe-level per-hue-band HSL + calibration at full strength.
+        # These are ctx params (e.g. classic_chrome's green/red rotation), not
+        # preset settings — injecting them into grade()'s settings would dilute
+        # them by grade_intensity (or skip them entirely when no color_grade is
+        # set, as for classic_chrome). Same full-strength-after-grade pattern
+        # as the recipe-level split toning below.
+        calib = {}
+        for color in ["red", "green", "blue"]:
+            c_hue = getattr(ctx, f"calibration_{color}_hue", 0.0)
+            c_sat = getattr(ctx, f"calibration_{color}_sat", 0.0)
+            c_lum = getattr(ctx, f"calibration_{color}_lum", 0.0)
+            if c_hue != 0.0 or c_sat != 0.0 or c_lum != 0.0:
+                calib[color] = {"hue": c_hue, "sat": c_sat, "lum": c_lum}
+        if calib:
+            if is_float:
+                result = self._grader._F_apply_calibration(result, calib)
+            else:
+                result = self._grader._apply_calibration(result, calib)
+
+        h_adj, s_adj, l_adj = {}, {}, {}
+        for color in ["red", "orange", "yellow", "green", "cyan", "blue", "purple", "magenta"]:
+            h_val = getattr(ctx, f"hsl_hue_{color}", 0.0)
+            s_val = getattr(ctx, f"hsl_sat_{color}", 0.0)
+            l_val = getattr(ctx, f"hsl_lum_{color}", 0.0)
+            if h_val != 0.0: h_adj[color] = h_val
+            if s_val != 0.0: s_adj[color] = s_val
+            if l_val != 0.0: l_adj[color] = l_val
+        if h_adj or s_adj or l_adj:
+            hsl = {"hue": h_adj, "saturation": s_adj, "luminance": l_adj}
+            if is_float:
+                result = self._grader._F_apply_hsl_adjustments(result, hsl)
+            else:
+                result = self._grader._apply_hsl_adjustments(result, hsl)
 
         # Apply recipe-level split toning
         if any((ctx.shadow_hue, ctx.shadow_sat, ctx.midtone_hue, ctx.midtone_sat, ctx.highlight_hue, ctx.highlight_sat)):

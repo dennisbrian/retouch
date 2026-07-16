@@ -671,7 +671,7 @@ def apply_global_bloom(
     # the float path stays in float32 [0,255] throughout via
     # ``bgr_f32_to_lab_f32`` (uint8-scale-convention LAB, no quantization),
     # matching the pattern already used by ``apply_skin_diffusion`` and the
-    # other float-native grading ops. See docs/plans/PLAN_P4_MAKEUP_UNMIX.md
+    # other float-native grading ops. See docs/plans/PLAN_TIERE_ENGINE_FIDELITY.md
     # Sec 18 for the before/after banding measurement.
     if is_float:
         img_f255 = np.clip(img_bgr * 255.0, 0.0, 255.0).astype(np.float32)
