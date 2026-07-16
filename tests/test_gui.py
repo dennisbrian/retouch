@@ -85,7 +85,7 @@ EXPECTED_RECIPE_KEYS = [
     "reshape_nose_width_l", "reshape_nose_width_r", "reshape_smile", "saturation", "saturation_mode",
     "sculpt", "shadow_hue", "shadow_lift", "shadow_sat", "shadows",
     "sharpen", "sharpen_radius", "shine_removal", "skin_chroma_even", "skin_flatten",
-    "skin_glow", "skin_hue_unify", "skin_protect_strength", "skin_quantize", "skin_unify",
+    "skin_glow", "skin_hue_unify", "skin_protect_strength", "skin_quantize", "skin_sss", "skin_unify",
     "skin_unify_hue", "slimming", "smooth", "smooth_engine", "specular_bloom",
     "specular_bloom_tone", "specular_finish", "specular_finish_strength", "specular_recolor", "subject_separation",
     "subject_sharpen", "teeth_whiten", "texture_opacity", "texture_transplant", "tonal_curve_strength",
@@ -102,7 +102,7 @@ for color in ["red", "green", "blue"]:
     EXPECTED_RECIPE_KEYS.extend([f"calibration_{color}_hue", f"calibration_{color}_sat", f"calibration_{color}_lum"])
 EXPECTED_RECIPE_KEYS.append("lens_blur")
 
-EXPECTED_RECIPE_KEY_COUNT = 239
+EXPECTED_RECIPE_KEY_COUNT = 240
 # Self-updating: the recipe/smart-style slider tuple length is the contract
 # defined by RECIPE_OUTPUT_KEYS, so this constant can never go stale.
 EXPECTED_UI_OUTPUT_COUNT = len(gui.RECIPE_OUTPUT_KEYS)
@@ -804,14 +804,14 @@ class TestResetFunctions:
     def test_reset_skin_tone_returns_seven_values(self):
         result = gui.reset_skin_tone("natural")
         assert isinstance(result, tuple)
-        assert len(result) == 10
+        assert len(result) == 11
 
     def test_reset_skin_tone_values_match_natural_recipe(self):
         d = gui.recipe_defaults("natural")
         result = gui.reset_skin_tone("natural")
         assert result == (d["whiten"], d["whiten_tone"], d["equalize"],
-                          d["shadow_lift"], d["nose_restore"], d["skin_unify"],
-                          d["skin_unify_hue"], d["auto_exposure"],
+                          d["shadow_lift"], d["nose_restore"], d["skin_sss"],
+                          d["skin_unify"], d["skin_unify_hue"], d["auto_exposure"],
                           d["white_costume_lift"], d["face_exposure"])
 
     def test_reset_basic_tone_returns_five_values(self):
@@ -1078,13 +1078,21 @@ class TestProcessImageValidation:
     """Tests for gui.process_image() input-validation early returns."""
 
     def _build_args(self, **overrides):
-        """Build a 95-arg tuple for process_image, with all entries as defaults.
+        """Build a full arg tuple (one value per PROCESS_INPUT_KEYS entry).
 
-        Default values reflect a 'natural' recipe with all-zero adjustments,
-        so the function should reach its validation gates and short-circuit
-        before any real image work is attempted.
+        Every ParamSpec contributes its registry default, then the hand-pinned
+        'natural'-recipe values below overlay them, so the function reaches its
+        validation gates and short-circuits before any real image work is
+        attempted — and a newly registered param can never KeyError this
+        helper again (it starts from its own spec default).
         """
-        defaults = {
+        from retouch.params import PROCESSING_PARAMS
+        defaults = {s.name: s.default for s in PROCESSING_PARAMS}
+        # Transport keys that are not ParamSpecs.
+        defaults.update({
+            "look_params": None, "face_params": None, "face_params_json": None,
+        })
+        defaults.update({
             "img_paths": None,
             "recipe": "natural",
             "smooth": 0, "mid_reduction": 0.0, "texture_opacity": 1.0,
@@ -1150,7 +1158,7 @@ class TestProcessImageValidation:
             "highlight_hue": 0, "highlight_sat": 0,
             "quality_tier": "Full (native face crops)",
             "debug_mode": False,
-        }
+        })
         defaults.update(overrides)
         return tuple(defaults[k] for k in gui.PROCESS_INPUT_KEYS)
 

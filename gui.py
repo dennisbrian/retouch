@@ -2306,7 +2306,19 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
  "body_reshape_torso_width",
  "body_reshape_shoulder_width",
  "body_reshape_hip_width",
-        "auto_body_reshape"
+        "auto_body_reshape",
+        # Recipe-driven face/body skin sliders that are VISIBLE gr.Slider
+        # components (not gr.State placeholders): they must be synced on recipe
+        # change or the stale slider value stomps the recipe value in GUI
+        # renders (CLI was already correct via build_context).  Appended so
+        # every existing RECIPE_OUTPUT_KEYS index stays stable.
+        "shadow_lift",
+ "nose_restore",
+ "mole_protect",
+ "texture_transplant",
+ "body_relight",
+        "body_dodge_burn",
+ "body_shadow_lift"
     )
 
     # Name -> Gradio component map for the recipe-output tuple.  Mirrors the
@@ -2425,7 +2437,15 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
  "body_reshape_torso_width": body_reshape_torso_width,
         "body_reshape_shoulder_width": body_reshape_shoulder_width,
  "body_reshape_hip_width": body_reshape_hip_width,
- "auto_body_reshape": auto_body_reshape
+ "auto_body_reshape": auto_body_reshape,
+        # Visible recipe-driven skin sliders (see RECIPE_OUTPUT_KEYS note above).
+        "shadow_lift": shadow_lift,
+ "nose_restore": nose_restore,
+ "mole_protect": mole_protect,
+ "texture_transplant": texture_transplant,
+ "body_relight": body_relight,
+        "body_dodge_burn": body_dodge_burn,
+ "body_shadow_lift": body_shadow_lift
     }
     _missing_outputs = set(RECIPE_OUTPUT_KEYS) - set(_recipe_output_components)
     _extra_outputs = set(_recipe_output_components) - set(RECIPE_OUTPUT_KEYS)

@@ -1191,7 +1191,11 @@ _FACE_FEATURE_PARAMS = [
         cli_type=int,
         default=0,
         recipe_key="hair.deglare",
-        conversion="recipe_pct",
+        # 0-100 raw pass-through: the engine consumer (hairwork.deglare_wig)
+        # expects strength in 0-100, and the recipe stores 0-100 (e.g.
+        # auto_clean_v1 -> 30).  recipe_pct here would ×100 the recipe value
+        # (30 -> 3000), feeding 30x-over-range garbage to the engine.
+        conversion="recipe_direct",
         min_val=0,
         max_val=100,
     ),
@@ -1201,7 +1205,8 @@ _FACE_FEATURE_PARAMS = [
         cli_type=int,
         default=30,
         recipe_key="hair.ring_position",
-        conversion="recipe_pct",
+        # 0-100 raw pass-through (hairwork.add_angel_ring position is 0-100).
+        conversion="recipe_direct",
         min_val=0,
         max_val=100,
     ),
@@ -1211,7 +1216,8 @@ _FACE_FEATURE_PARAMS = [
         cli_type=int,
         default=40,
         recipe_key="hair.ring_tint",
-        conversion="recipe_pct",
+        # 0-100 raw pass-through (hairwork.add_angel_ring tint is 0-100).
+        conversion="recipe_direct",
         min_val=0,
         max_val=100,
     ),
@@ -1221,7 +1227,8 @@ _FACE_FEATURE_PARAMS = [
         cli_type=int,
         default=0,
         recipe_key="hair.remove_flyaways",
-        conversion="recipe_pct",
+        # 0-100 raw pass-through (hairwork.remove_flyaways strength is 0-100).
+        conversion="recipe_direct",
         min_val=0,
         max_val=100,
     ),
