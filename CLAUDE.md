@@ -3,7 +3,7 @@
 **Project:** Professional automated face retouching pipeline  
 **Repository:** https://github.com/dennisbrian/retouch  
 **Status:** Mature (v2.0.0 — Fuji-quality color recipe system)  
-**Last Updated:** 2026-07-13
+**Last Updated:** 2026-07-17
 
 ---
 
@@ -16,7 +16,7 @@ This is a **production-grade image processing engine** that applies professional
 - Color grading + Fuji film simulation presets
 - Virtual studio relighting + advanced lens effects
 
-**~42.5k LOC (retouch/*.py + gui.py + cli.py), 70 modules in retouch/, 3,736 tests collected (pytest --collect-only, 2026-07-15).**
+**~46k LOC (retouch/*.py + gui.py + cli.py), 73 modules in retouch/, 3,880 tests collected (pytest --collect-only, 2026-07-17).**
 
 ---
 
@@ -28,8 +28,10 @@ This is a **production-grade image processing engine** that applies professional
 - **Why:** Budget-conscious — each agent spawn costs tokens. Stay cheap.
 
 ### Model Strategy
-- **Default:** Haiku (cheapest, capable for most tasks)
-- **Fallback:** Fable → Sonnet 5 → Opus (only if Haiku can't handle it)
+Task difficulty decides the model, not a flat cheapest-first cascade:
+- **Mechanical/routine** (wiring a param, doc hygiene, test-file writing to a tight spec): Haiku.
+- **Bug fixes**: Opus.
+- **Hard/judgment-heavy** (multi-site refactors, calibration/research work, new feature design with open judgment calls): Fable, inline — not delegated to a subagent.
 - **Thinking mode:** OFF by default, prompted only when needed for complex reasoning
 
 ### Key Commands

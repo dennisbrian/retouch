@@ -479,9 +479,16 @@ class ImageAnalyzer:
                 return _pick(["fuji_porcelain", "porcelain_unified_v1", "xhs_ultrasoft"])
             return _pick(["xhs_ultrasoft", "milk_skin_v1"])
 
-        # Studio lighting → recipes tuned for controlled light
+        # Studio lighting → recipes tuned for controlled light.
+        # Margin above the subject's own TARGET_SKIN_L (not an absolute L
+        # level): skin already at/near the porcelain target benefits from
+        # porcelain_unified_v1, regardless of the subject's own skin tone.
+        # An absolute cutoff (e.g. "L > 160") is reachable near-for-free on
+        # light skin but requires a much stronger relit adjustment on dark
+        # skin to cross the same line, so it would systematically steer
+        # darker-skinned subjects away from the porcelain recipes.
         if analysis.lighting_type == "studio":
-            if skin.present and skin.l_mean > 160.0:
+            if skin.present and (self.TARGET_SKIN_L - skin.l_mean) < 15.0:
                 return _pick(["porcelain_unified_v1", "beauty"])
             return _pick(["beauty", "portrait"])
 
