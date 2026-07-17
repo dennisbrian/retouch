@@ -9,6 +9,7 @@ from retouch.marks import (
     adapt_detector_mask,
     compile_mark_policy,
     detect_marks,
+    resolve_mark_policy,
     resolve_mark_action,
 )
 
@@ -78,3 +79,12 @@ def test_detect_marks_emits_relative_feature_schema_for_existing_freckle_detecto
     assert records[0].mark_class == "mole"
     for key in ("l_margin", "a_margin", "mel_rel", "hb_rel", "eccentricity", "cluster_density"):
         assert key in records[0].features
+
+
+def test_named_policy_is_copied_and_legacy_is_a_true_noop():
+    assert resolve_mark_policy("legacy") is None
+    policy = resolve_mark_policy("protect_identity")
+    assert policy is not None
+    assert policy["mole"]["action"] == "preserve"
+    policy["mole"]["action"] = "remove"
+    assert resolve_mark_policy("protect_identity")["mole"]["action"] == "preserve"

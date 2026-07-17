@@ -472,11 +472,38 @@ def _process_face_core(
         except Exception:
             _mole_for_freckle = None
     if _freckle_removal > 0:
+        preserve_mask = getattr(ctx, 'freckle_preserve_mask', None)
+        mark_policy = getattr(ctx, 'mark_policy', None)
+        if mark_policy is not None:
+            # Policy masks are opt-in. Only the preserve action is consumed
+            # here because this existing stage is a healer; remove/attenuate
+            # actions remain inert until their dedicated consumers are built.
+            from .marks import compile_mark_policy, detect_marks
+
+            records = detect_marks(
+                np.clip(canvas, 0, 255).astype(np.uint8),
+                face_mask=skin_n,
+            )
+            policy_preserve = compile_mark_policy(
+                records, canvas.shape, mark_policy,
+            ).preserve.astype(np.float32) / 255.0
+            if preserve_mask is None:
+                preserve_mask = policy_preserve
+            else:
+                existing = preserve_mask.astype(np.float32)
+                if existing.shape != policy_preserve.shape:
+                    existing = cv2.resize(
+                        existing, (policy_preserve.shape[1], policy_preserve.shape[0]),
+                        interpolation=cv2.INTER_LINEAR,
+                    )
+                if existing.max() > 1.0:
+                    existing /= 255.0
+                preserve_mask = np.maximum(existing, policy_preserve)
         canvas = FreckleRemover().remove(
             img_bgr=canvas,
             face_mask=skin_n,
             freckle_removal=_freckle_removal,
-            freckle_preserve_mask=getattr(ctx, 'freckle_preserve_mask', None),
+            freckle_preserve_mask=preserve_mask,
             mole_mask=_mole_for_freckle,
         )
 
@@ -1177,6 +1204,5 @@ def build_ort_providers() -> list[str | tuple[str, dict]]:
 
     providers.append("CPUExecutionProvider")
     return providers
-
 
 

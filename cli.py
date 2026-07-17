@@ -404,6 +404,7 @@ def _add_processing_arg(parser, spec):
     parser.add_argument(
         f"--{spec.cli_flag}",
         type=spec.cli_type,
+        choices=spec.choices,
         default=None,
         help=f"{spec.name} parameter",
     )

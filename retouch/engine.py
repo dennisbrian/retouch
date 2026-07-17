@@ -236,6 +236,7 @@ class ProcessingContext:
     skin_sss: float = 0.0
     freckle_removal: float = 0.0
     freckle_preserve_mask: Optional[np.ndarray] = None
+    mark_policy: Optional[Mapping[str, Any]] = None
 
     # --- Eyes ---
     eye_enhance: float = 0.0
@@ -754,6 +755,12 @@ def build_context(
     if final_exposure_lock is None:
         final_exposure_lock = 0.0
 
+    from .marks import resolve_mark_policy
+
+    # UI/CLI send a preset name; API callers may supply an explicit mapping.
+    # Resolve once so worker paths and H4 receive the same immutable policy.
+    mark_policy = resolve_mark_policy(spec_kwargs.pop("mark_policy", None))
+
     return ProcessingContext(
         # Recipe-derived fields (data-driven) — the bulk of the context.
         **spec_kwargs,
@@ -769,6 +776,7 @@ def build_context(
         lut=_recipe_or_caller("lut", None),
         skin_locus=final_skin_locus,
         smooth_exposure_lock=final_exposure_lock,
+        mark_policy=mark_policy,
         # ``nose_smooth`` reads the caller override first, then the recipe's
         # ``frequency.nose_smooth`` (0-1 fraction, converted to 0-100 like
         # ``frequency.smooth``); absent → None (nose smoothed with the face).
@@ -2246,7 +2254,9 @@ class RetouchEngine:
         # QA detectors
         # ------------------------------------------------------------------
         qa_warnings: List[QAWarning] = self._run_qa(
-            result, person_mask, img_bgr, face_skin_mask=acc_skin,
+            result, person_mask, img_bgr,
+            face_skin_mask=acc_skin,
+            mark_policy=ctx.mark_policy,
         )
         ctx._qa_results = {w.detector: w.details for w in qa_warnings}
 
@@ -2276,6 +2286,7 @@ class RetouchEngine:
         person_mask: Optional[np.ndarray],
         reference_img_bgr: Optional[np.ndarray] = None,
         face_skin_mask: Optional[np.ndarray] = None,
+        mark_policy: Optional[Mapping[str, Any]] = None,
     ) -> List[QAWarning]:
         """Run QA detectors on a processed uint8 BGR image.
 
@@ -2300,6 +2311,7 @@ class RetouchEngine:
                 person_mask=person_mask,
                 face_skin_mask=face_skin_mask,
                 body_skin_mask=body_skin_mask,
+                mark_policy=mark_policy,
             )
         except Exception as e:
             logger.warning("QA detectors raised, skipping QA: %s", e)

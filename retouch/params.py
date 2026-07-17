@@ -52,7 +52,7 @@ the engine ``ProcessingContext``.  CLI arguments are mapped by
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 import copy
 
@@ -128,6 +128,7 @@ class ParamSpec:
     max_val: Optional[float] = None
     alias_of: Optional[str] = None
     fallback_default: Any = None
+    choices: Optional[Sequence[str]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +328,15 @@ _SKIN_PARAMS = [
         conversion="gui_direct",
         min_val=None,
         max_val=None,
+    ),
+    ParamSpec(
+        name="mark_policy",
+        cli_flag="mark-policy",
+        cli_type=str,
+        default="legacy",
+        recipe_key=None,
+        conversion="dropdown",
+        choices=("legacy", "protect_identity", "preserve_all"),
     ),
     ParamSpec(
         name="micro_restore",

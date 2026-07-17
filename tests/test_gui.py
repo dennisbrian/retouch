@@ -73,6 +73,7 @@ EXPECTED_RECIPE_KEYS = [
     "highlight_drift", "highlight_hue", "highlight_rolloff_strength", "highlight_sat", "highlights",
     "hsl_hue_global", "hsl_lum_global", "hsl_sat_global", "impact", "light_wrap",
     "lip_enhance", "lip_finish", "lip_tint", "lut", "makeup_cake_reduce", "makeup_coverage_even", "mask_feather_mode", "matte_black",
+    "mark_policy",
     "micro_dodge_burn", "micro_restore", "mid_reduction", "midtone_hue", "midtone_sat",
     "mole_protect", "mv2_brows", "mv2_brows_color", "mv2_contour", "mv2_eyeliner",
     "mv2_eyeliner_color", "mv2_eyeliner_style", "mv2_eyeshadow", "mv2_eyeshadow_color", "mv2_eyeshadow_style",
@@ -102,7 +103,7 @@ for color in ["red", "green", "blue"]:
     EXPECTED_RECIPE_KEYS.extend([f"calibration_{color}_hue", f"calibration_{color}_sat", f"calibration_{color}_lum"])
 EXPECTED_RECIPE_KEYS.append("lens_blur")
 
-EXPECTED_RECIPE_KEY_COUNT = 241
+EXPECTED_RECIPE_KEY_COUNT = 242
 # Self-updating: the recipe/smart-style slider tuple length is the contract
 # defined by RECIPE_OUTPUT_KEYS, so this constant can never go stale.
 EXPECTED_UI_OUTPUT_COUNT = len(gui.RECIPE_OUTPUT_KEYS)
@@ -164,7 +165,7 @@ class TestRecipeDefaults:
         # String fields in recipe_defaults
         string_fields = {
             "lip_tint", "whiten_tone", "lip_finish", "specular_bloom_tone", "color_grade", "lut", "mask_feather_mode",
-            "background_harmonize_mode", "saturation_mode", "smooth_engine", "specular_finish",
+            "background_harmonize_mode", "saturation_mode", "smooth_engine", "specular_finish", "mark_policy",
             "mv2_brows_color", "mv2_eyeliner_color", "mv2_eyeliner_style",
             "mv2_eyeshadow_color", "mv2_eyeshadow_style", "mv2_ombre_color1", "mv2_ombre_color2"
         }
@@ -1244,7 +1245,7 @@ class TestIntegrationConstantCrossRef:
         apply_custom_style / on_smart_process (causing index-5 shift) are now
         part of the canonical RECIPE_OUTPUT_KEYS contract."""
         for dropped in ("regional_modulation", "smooth_engine",
-                        "undereye_shadow_strength", "freckle_removal"):
+                        "undereye_shadow_strength", "freckle_removal", "mark_policy"):
             assert dropped in gui.RECIPE_OUTPUT_KEYS
 
     def test_all_producers_keyed_by_recipe_output_keys(self):

@@ -29,6 +29,7 @@ from retouch.style import StyleProfile
 from retouch.look_extractor import LookExtractor
 from retouch.recipe_cookbook import search_recipes, list_recipes, list_categories
 from retouch.lut import get_registry
+from retouch.marks import MARK_POLICY_PRESET_NAMES
 
 _logger = logging.getLogger(__name__)
 
@@ -1932,6 +1933,12 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             pore_synthesis = gr.Slider(0, 100, 0, step=1, label="Pore Synthesis", info="Add micro-texture/synthesized pores to prevent artificial plastic skin")
                             blemish = gr.Slider(0, 100, 30, step=1, label="Blemish Removal", info="AI blemish detection and inpainting for acne/spots")
                             freckle_removal = gr.Slider(0, 100, 0, step=1, label="Freckle Removal", info="Remove freckles while preserving beauty marks (0=off)")
+                            mark_policy = gr.Dropdown(
+                                choices=list(MARK_POLICY_PRESET_NAMES),
+                                value="legacy",
+                                label="Identity Mark Policy",
+                                info="Optional preserve mask for freckles/moles and H4 QA. Legacy keeps existing behavior.",
+                            )
                             mole_protect = gr.Slider(
                                 0.0, 1.0, 0.0, step=0.05,
                                 label="Mole / Beauty-Mark Protect",
@@ -2325,7 +2332,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
  "texture_transplant",
  "body_relight",
         "body_dodge_burn",
- "body_shadow_lift"
+ "body_shadow_lift",
+        "mark_policy"
     )
 
     # Name -> Gradio component map for the recipe-output tuple.  Mirrors the
@@ -2341,7 +2349,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
  "regional_modulation": regional_modulation,
         "smooth_engine": smooth_engine,
  "undereye_shadow_strength": undereye_shadow_strength,
- "freckle_removal": freckle_removal,
+        "freckle_removal": freckle_removal,
         "micro_restore": micro_restore,
  "whiten": whiten,
  "equalize": equalize,
@@ -2453,7 +2461,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
  "texture_transplant": texture_transplant,
  "body_relight": body_relight,
         "body_dodge_burn": body_dodge_burn,
- "body_shadow_lift": body_shadow_lift
+ "body_shadow_lift": body_shadow_lift,
+        "mark_policy": mark_policy
     }
     _missing_outputs = set(RECIPE_OUTPUT_KEYS) - set(_recipe_output_components)
     _extra_outputs = set(_recipe_output_components) - set(RECIPE_OUTPUT_KEYS)
@@ -2675,6 +2684,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "smooth_engine": smooth_engine,
         "undereye_shadow_strength": undereye_shadow_strength,
         "freckle_removal": freckle_removal,
+        "mark_policy": mark_policy,
         "micro_restore": micro_restore,
         "micro_dodge_burn": _micro_dodge_burn_state,
         "redness_even": _redness_even_state,

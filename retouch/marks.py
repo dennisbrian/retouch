@@ -9,6 +9,7 @@ freckle and mole controls continue to own their current pixels unchanged.
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, replace
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
@@ -30,6 +31,53 @@ _FRECKLE_CLASS_MAP = {
     "blemish": "acne_blemish",
     "noise": "unknown",
 }
+
+# Named policies are deliberately conservative. They make the class-aware
+# preserve mask available to the existing freckle stage; removal/attenuation
+# masks are compiled for later consumers but do not add a new destructive path.
+MARK_POLICY_PRESETS: dict[str, Optional[dict[str, Any]]] = {
+    "legacy": None,
+    "protect_identity": {
+        "min_confidence": 0.6,
+        "mole": {"action": "preserve"},
+        "drawn_makeup_mark": {"action": "preserve"},
+        "scar": {"action": "preserve"},
+        "unknown": {"action": "preserve"},
+        "freckle": {"action": "attenuate", "strength": 40},
+        "acne_blemish": {"action": "remove"},
+    },
+    "preserve_all": {
+        "min_confidence": 0.0,
+        "mole": {"action": "preserve"},
+        "freckle": {"action": "preserve"},
+        "acne_blemish": {"action": "preserve"},
+        "scar": {"action": "preserve"},
+        "drawn_makeup_mark": {"action": "preserve"},
+        "stray_hair": {"action": "preserve"},
+        "sensor_dust": {"action": "preserve"},
+        "vellus_sheen": {"action": "preserve"},
+        "unknown": {"action": "preserve"},
+    },
+}
+MARK_POLICY_PRESET_NAMES = tuple(MARK_POLICY_PRESETS)
+
+
+def resolve_mark_policy(policy: Optional[Mapping[str, Any] | str]) -> Optional[dict[str, Any]]:
+    """Resolve a named UI/CLI policy or copy an explicit policy mapping.
+
+    ``legacy`` and ``None`` retain the pre-policy execution path exactly.
+    """
+    if policy is None or policy == "legacy":
+        return None
+    if isinstance(policy, str):
+        if policy not in MARK_POLICY_PRESETS:
+            raise ValueError(
+                f"Unknown mark policy {policy!r}; choose from {list(MARK_POLICY_PRESET_NAMES)}"
+            )
+        return copy.deepcopy(MARK_POLICY_PRESETS[policy])
+    if isinstance(policy, Mapping):
+        return copy.deepcopy(dict(policy))
+    raise TypeError("mark policy must be a preset name, mapping, or None")
 
 
 @dataclass(frozen=True)
