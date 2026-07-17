@@ -2671,6 +2671,54 @@ RECIPES["studio_porcelain_clear_v1"] = {
     "sharpen": 12.0,
 }
 
+RECIPES["cosplay_portrait_polish_v1"] = {
+    # Editorial cosplay portrait finish: keep real form and costume detail,
+    # then bring exposed body skin toward the face treatment. This is an
+    # intentionally conservative v1; P4 full-face makeup unmix stays off.
+    "extends": "body_match_v1",
+    "frequency": {
+        "smooth": 0.48,
+        "mid_reduction": 0.34,
+        "regional_modulation": 0.60,
+        "smooth_engine": "anisotropic",
+        "nose_smooth": 0.32,
+    },
+    "skin": {
+        "equalize": 0.05,
+        "rosy": 0.12,
+        "hue_unify": 0.55,
+        "chroma_even": 0.42,
+        "whiten_hue_stable": 1,
+        "shine_removal": 0.24,
+        "texture_transplant": 0.20,
+        "wrinkle_soften": 0.16,
+    },
+    "eyes": {
+        "whites": 0.12,
+        "iris": 0.18,
+        "catchlight": 0.12,
+        "dark_circles": 0.16,
+    },
+    "lips": {"tint": None, "gloss": 0.16},
+    "hair": {"shine": 0.14},
+    "body_skin": {
+        "smooth": 0.32,
+        "equalize": 0.20,
+        "whiten": 0.08,
+        "match_face": 0.55,
+        "relight": 0.14,
+        "dodge_burn": 0.10,
+    },
+    "dodge_burn": 0.10,
+    "color_harmony": {"preset": "cosplay", "amount": 0.18},
+    "bloom": {"opacity": 0.04, "threshold": 212.0},
+    "highlight_rolloff": 0.30,
+    "vignette": 3.0,
+    "sharpen": 10.0,
+    "slimming": 0.0,
+    "blush": 8.0,
+}
+
 RECIPES["xhs_clear_glow_v1"] = {
     # Xiaohongshu dreamy-glow base + new primitives. The glow/airy look loves
     # smooth gradients; anisotropic smoothing keeps the glow from washing out
