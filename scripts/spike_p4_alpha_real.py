@@ -74,12 +74,27 @@ def main() -> int:
         x1, y1 = min(img.shape[1], x + w + m), min(img.shape[0], y + h + m)
         crop = img[y0:y1, x0:x1]
         skin_c = skin[y0:y1, x0:x1]
+        protected = [
+            getattr(regions, name, None)
+            for name in (
+                "left_eye", "right_eye", "left_eyebrow", "right_eyebrow",
+                "lips", "mouth_interior", "hair",
+            )
+        ]
+        protected = [part for part in protected if part is not None]
+        exclude_c = None
+        if protected:
+            exclude = np.maximum.reduce([
+                part.astype(np.float32) / 255.0 if part.max() > 1 else part.astype(np.float32)
+                for part in protected
+            ])
+            exclude_c = exclude[y0:y1, x0:x1]
 
         I = crop.astype(np.float32)
-        S, M, a = unmix_makeup(crop, skin_c)
+        S, M, a = unmix_makeup(crop, skin_c, exclude_mask=exclude_c)
         recon = recompose(S, M, a)
         recon_err = float(np.abs(recon - I).mean())
-        out = apply_makeup_coverage_even(crop, skin_c, 0.5)
+        out = apply_makeup_coverage_even(crop, skin_c, 0.5, exclude_mask=exclude_c)
         delta = np.abs(out.astype(np.float32) - I)
         sk = skin_c > 0.5
         print(f"{path.name}: skin px={int(sk.sum())} "

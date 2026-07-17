@@ -1,5 +1,6 @@
 """P4 makeup unmix — full product slice tests."""
 
+import cv2
 import numpy as np
 import pytest
 
@@ -50,6 +51,21 @@ def _foundation_disk(bgr, seed=42):
     foundation = bare.astype(np.float32)
     foundation[disk] = 0.5 * foundation[disk] + 0.5 * makeup
     return bare, np.clip(foundation, 0, 255).astype(np.uint8), disk
+
+
+def _compact_paint_patch(bgr, seed=42):
+    """A local artifact over realistic low-frequency skin variation."""
+    h = w = 128
+    rng = np.random.RandomState(seed)
+    base = np.zeros((h, w, 3), np.float32) + np.asarray(bgr, np.float32)
+    low = cv2.resize(rng.normal(0, 1, (16, 16)).astype(np.float32), (w, h))
+    low = cv2.GaussianBlur(low, (0, 0), 5.0)
+    bare = np.clip(base * (1.0 + low[..., None] * 0.01) + rng.normal(0, 2, base.shape), 0, 255)
+    patch = np.zeros((h, w), dtype=bool)
+    patch[56:72, 56:72] = True
+    artifact = bare.copy()
+    artifact[patch] = np.clip(0.35 * artifact[patch] + 0.65 * np.array([220, 110, 45]), 0, 255)
+    return bare.astype(np.uint8), artifact.astype(np.uint8), patch
 
 
 def test_strength_zero_identity():
@@ -138,12 +154,41 @@ def test_user_alpha_overrides_automatic_specular_exclusion():
 
 
 @pytest.mark.parametrize("tone", FITZPATRICK_BGR.values(), ids=list(FITZPATRICK_BGR))
-def test_tone_relative_alpha_detects_foundation_across_skin_tones(tone):
-    """A comparable density change must not disappear on darker skin."""
-    _, foundation, disk = _foundation_disk(tone)
+def test_compact_paint_is_detected_under_mottle_across_skin_tones(tone):
+    """Track A must keep local paint artifacts detectable under realistic mottle."""
+    _, artifact, patch = _compact_paint_patch(tone)
+    alpha = estimate_makeup_alpha(artifact, np.ones(artifact.shape[:2], np.float32))
+    assert float(alpha[patch].mean()) > 0.35
+    assert float(alpha[~patch].mean()) < 0.05
+
+
+@pytest.mark.parametrize("tone", FITZPATRICK_BGR.values(), ids=list(FITZPATRICK_BGR))
+def test_broad_foundation_is_refused_across_skin_tones(tone):
+    """Full-face-like coverage is outside Track A's safe operating contract."""
+    _, foundation, _ = _foundation_disk(tone)
     alpha = estimate_makeup_alpha(foundation, np.ones(foundation.shape[:2], np.float32))
-    assert float(alpha[disk].mean()) > 0.5
-    assert float(alpha[~disk].mean()) < 0.05
+    assert float(alpha.mean()) < 0.05
+
+
+@pytest.mark.parametrize("tone", FITZPATRICK_BGR.values(), ids=list(FITZPATRICK_BGR))
+def test_protected_eye_region_is_excluded_before_alpha_seeding(tone):
+    """A compact eye-rim-like hit must not become automatic makeup evidence."""
+    _, artifact, patch = _compact_paint_patch(tone)
+    alpha = estimate_makeup_alpha(
+        artifact,
+        np.ones(artifact.shape[:2], np.float32),
+        exclude_mask=patch.astype(np.float32),
+    )
+    assert float(alpha[patch].max()) == 0.0
+
+
+def test_automatic_coverage_even_has_a_hard_safety_delta_cap():
+    """An uncertain automatic component cannot create a destructive edit."""
+    _, artifact, _ = _compact_paint_patch(FITZPATRICK_BGR["III"])
+    out = apply_makeup_coverage_even(
+        artifact, np.ones(artifact.shape[:2], np.float32), 1.0,
+    )
+    assert float(np.abs(out.astype(np.float32) - artifact.astype(np.float32)).max()) <= 5.0
 
 
 @pytest.mark.parametrize("tone", FITZPATRICK_BGR.values(), ids=list(FITZPATRICK_BGR))

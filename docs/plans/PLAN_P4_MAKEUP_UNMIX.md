@@ -1,6 +1,6 @@
 # P4 — Skin ↔ Makeup Unmixing (Research + Implementation Plan)
 
-**Status:** 🔄 SAFETY REMEDIATION IMPLEMENTED (2026-07-16) · tone-relative alpha cues, compact specular exclusion, and Fitzpatrick I–VI synthetic gates landed; real-image visual QA remains required before recipe enablement · **✅ 2026-07-15 sibling bug found + FIXED in `specular.py` (same absolute-threshold pattern) — see §15** · **✅ 2026-07-15 third instance found + FIXED in `lips.py`, fourth found + documented (not fixed, higher blast radius) in `skin.py::whiten()` — see §16** · **Parent:** `PLAN_SKIN_PROMAX.md` §P4 · MASTER_PLAN research backlog
+**Status:** ✅ **TRACK A COMPACT-ARTIFACT SAFETY MODE IMPLEMENTED (2026-07-17)** · high-pass local cues, protected-region exclusion, component gates, Fitzpatrick I–VI tests, and native real-photo QA; **Track B remains required for full-face foundation** · **✅ 2026-07-15 sibling bug found + FIXED in `specular.py` (same absolute-threshold pattern) — see §15** · **✅ 2026-07-15 third instance found + FIXED in `lips.py`, fourth found + documented (not fixed, higher blast radius) in `skin.py::whiten()`, fifth found + FIXED in `freckle.py` (2026-07-17) — see §16** · **Parent:** `PLAN_SKIN_PROMAX.md` §P4 · MASTER_PLAN research backlog
 **Effort:** spike 4–5 d · full feature ~3–4 wk if GO  
 **Standout:** highest-moat cosplay axis — separate **paint layer** from **person**, not merely mask around paint (A3/R11).
 
@@ -839,19 +839,41 @@ suite before landing.
   justify it), but no clear hit either — treat as checked, not confirmed
   clean at the same confidence level as 16.3's sclera/iris items above.
 
-### 16.4 Sweep verdict
+### 16.4 Fifth instance, FIXED: `retouch/freckle.py` relative anomaly gates (2026-07-17)
 
-Three confirmed instances of the pattern now exist across the codebase
-(`makeup_unmix.py` §14, `specular.py` §15, `lips.py` §16.1), two fixed
-(specular.py, lips.py) and one parked pending a fuller solver rework
-(makeup_unmix.py). A fourth, higher-severity instance was found in
-`skin.py::whiten()` (§16.2) but deliberately left unfixed pending a properly
-scoped design pass, given it is an always-on-by-default, wide-blast-radius
-path rather than a latent/parked feature. This is now a confirmed *pattern*,
-not a one-off — worth a standing check ("does this absolute threshold's
-trigger point shift with skin tone, and if so is that intentional") whenever
-touching luminance/chroma/reflectance-gated code in any skin/lip/lash-
-adjacent module.
+`FreckleRemover` had two skin-tone-scaled absolute decisions: its dark-spot
+candidate gate required a fixed gray deviation above `7.0`, and the anomaly
+classifier assigned its freckle/beauty-mark L cue from a fixed LAB-L value of
+`70`. The same relative freckle was detected through Fitzpatrick V but
+disappeared entirely on the VI synthetic fixture; a real dark-skin freckle
+could therefore be silently preserved because the removal slider never saw a
+candidate.
+
+**Fix landed:** `_detect_components` now compares dark contrast as
+`(local_mean - gray) / local_mean > 0.05`. `_classify_anomaly` now evaluates
+L as a margin from the current face's skin-L median, normalized by the
+larger of its observed standard deviation and 10% of the median. The latter
+floor prevents an otherwise uniform crop from turning a compact mark into an
+arbitrary many-sigma outlier. Freckles receive the small L cue at
+`L_norm >= -2`; truly dark beauty marks receive their preserve cue below that
+boundary.
+
+**Verified:** `tests/test_freckle.py` has Fitzpatrick I-VI relative-freckle
+detection/classification and relative-beauty-mark preservation sweeps; the
+deepest freckle, previously absent, is now classified as `freckle`. A
+light-skin removal fixture is pinned by SHA-256 and remains byte-identical.
+
+### 16.5 Sweep verdict
+
+Five confirmed instances of the pattern now exist across the codebase:
+`makeup_unmix.py` (§14), `specular.py` (§15), `lips.py` (§16.1),
+`skin.py::whiten()` (§16.2), and `freckle.py` (§16.4). `specular.py`,
+`lips.py`, and `freckle.py` are fixed; makeup unmix remains parked pending a
+fuller solver rework. `skin.py::whiten()` was deliberately deferred at the
+time of this audit because it was an always-on-by-default, wide-blast-radius
+path. This is a confirmed *pattern*, not a one-off: whenever touching a
+luminance/chroma/reflectance-gated skin, lip, or lash operation, ask whether
+its trigger point shifts with skin tone and whether that is intentional.
 
 ---
 
@@ -1239,6 +1261,42 @@ edges, caking speckles, localized artifacts.
    flat-patch gates gave a false "detection works at all tones" signal.
    Gates: compact paint detected under mottle at all tones; blush-speckle
    dmg <5; bare mottled skin e2e α <0.05 all tones.
+
+### 20.2.1 Track A implementation record (2026-07-17)
+
+**Implemented, conservative automatic mode only.** `retouch/makeup_unmix.py`
+now removes a face-scale Gaussian baseline (sigma = 0.15 x face width) before
+measuring density/chroma/lightness/residual cues. It then retains only
+connected components with a compact area and bounding box, erodes the
+high-pass edge halo, and dilates all caller-provided protected regions before
+either alpha fitting or makeup-colour seeding. The engine-provided eye, brow,
+lip, mouth, and hair masks therefore remain outside the automatic fit.
+
+The first real-photo pass still found one 41/255 false-positive output on
+`DSCF7011`, despite its alpha support being only 0.61% of skin. The product
+path now has a hard automatic output cap of **5/255 per channel**. This is a
+deliberate safety contract: automatic P4 alpha is evidence for a compact
+artifact, not a physical makeup coverage estimate. Smaller manual corrections
+remain a user-mask/brush responsibility.
+
+**Deterministic gates:** `39 passed` in `tests/test_makeup_unmix.py`.
+Fixtures cover compact coloured paint under +/-1% low-frequency mottle across
+Fitzpatrick I-VI, broad foundation refusal, bare-skin no-op, protected
+eye-like regions, and the 5/255 safety cap. The regenerated seeded matrix is
+at `test_output/p4_track_a_matrix.txt`; all broad-foundation and
+shade-matched ambiguity cases correctly return alpha 0.000 rather than claim
+full-face recovery.
+
+**Native real-photo QA:** `scripts/spike_p4_alpha_real.py` now passes the
+same protected-region masks used by the engine. On `DSCF7204` and `DSCF7011`,
+the final run measured alpha means 0.0000 and 0.0043 respectively; maximum
+coverage-even output deltas were 1/255 and 5/255. Panels:
+`test_output/spike_p4_alpha_real_DSCF7204.png` and
+`test_output/spike_p4_alpha_real_DSCF7011.png`.
+
+**Shipping verdict:** safe only as a conservative compact-artifact helper.
+It is intentionally not a full-face foundation correction, and Track B is
+still required for that product claim.
 
 ### 20.3 Track B (stronger prior — the actual fix): face-anchored bare-skin
 locus from chromophores, physics-based, no learned model

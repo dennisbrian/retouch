@@ -16,6 +16,17 @@ from .color_science import bgr_to_oklab, oklab_to_oklch
 from .specular import extract_specular
 
 
+# The classical cues can only identify local deviations from this face's skin
+# baseline.  They are deliberately not a full-face foundation detector.
+# At 0.2% a handful of false-positive pixels still seeded a visibly wrong M
+# colour on real cosplay photos.  Track A is intentionally conservative: a
+# user can supply a brush mask for smaller corrections.
+_MIN_COMPONENT_FRACTION = 0.008
+_MAX_COMPONENT_FRACTION = 0.12
+_MAX_COMPONENT_BBOX_FRACTION = 0.20
+_MAX_AUTOMATIC_EDIT_DELTA = 5.0
+
+
 def _smoothstep(e0: float, e1: float, x: np.ndarray) -> np.ndarray:
     t = np.clip((x - e0) / max(e1 - e0, 1e-6), 0.0, 1.0)
     return t * t * (3.0 - 2.0 * t)
@@ -83,6 +94,50 @@ def _merge_masks(*masks: Optional[np.ndarray]) -> Optional[np.ndarray]:
     return np.maximum.reduce(present).astype(np.float32)
 
 
+def _local_residual(values: np.ndarray, face_width: int) -> np.ndarray:
+    """Remove face-scale lighting before measuring compact paint deviations."""
+    sigma = max(2.0, 0.15 * face_width)
+    baseline = cv2.GaussianBlur(values.astype(np.float32), (0, 0), sigmaX=sigma)
+    return values.astype(np.float32) - baseline
+
+
+def _dilated_exclusion(mask: Optional[np.ndarray], face_width: int) -> Optional[np.ndarray]:
+    """Keep eye rims and other protected regions out of automatic alpha fitting."""
+    if mask is None:
+        return None
+    size = max(5, int(round(face_width * 0.06)))
+    if size % 2 == 0:
+        size += 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
+    return cv2.dilate((mask > 0.01).astype(np.uint8), kernel).astype(np.float32)
+
+
+def _compact_components(hint: np.ndarray, skin_mask: np.ndarray) -> np.ndarray:
+    """Retain only local regions that are safe to seed as makeup colour.
+
+    A broad face-sized region is fundamentally ambiguous for this model: it
+    cannot distinguish foundation from the face's baseline.  Bounding-box and
+    area gates reject it even when its high-pass edge is locally conspicuous.
+    """
+    skin_area = max(1, int(np.count_nonzero(skin_mask > 0.5)))
+    min_area = max(1, int(np.ceil(skin_area * _MIN_COMPONENT_FRACTION)))
+    max_area = max(min_area, int(np.floor(skin_area * _MAX_COMPONENT_FRACTION)))
+    max_bbox_area = max(min_area, int(np.floor(skin_area * _MAX_COMPONENT_BBOX_FRACTION)))
+    binary = (hint > 0.35).astype(np.uint8)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(binary)
+    keep = np.zeros_like(binary, dtype=np.float32)
+    for label in range(1, count):
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        bbox_area = int(stats[label, cv2.CC_STAT_WIDTH] * stats[label, cv2.CC_STAT_HEIGHT])
+        if min_area <= area <= max_area and bbox_area <= max_bbox_area:
+            keep[labels == label] = 1.0
+    # The high-pass response has a one-pixel halo around sharp edges.  Retain
+    # the component interior so coverage smoothing cannot edit bare skin next
+    # to the local artifact.
+    keep = cv2.erode(keep, np.ones((3, 3), dtype=np.uint8)).astype(np.float32)
+    return hint * keep
+
+
 def _compact_specular_exclusion(
     img_bgr: np.ndarray, skin_mask: np.ndarray,
 ) -> np.ndarray:
@@ -136,36 +191,37 @@ def estimate_makeup_alpha(
     # large density jump to clear a per-pixel noise threshold.
     density_l = cv2.GaussianBlur(density.mean(axis=-1), (0, 0), sigmaX=2.0)
 
-    cue_chroma = _high_outlier_cue(C, m)
-    cue_light = _high_outlier_cue(L, m)
-    cue_low_chroma = _low_outlier_cue(C, m)
-    cue_white = cue_light * cue_low_chroma
-    cue_resid = _high_outlier_cue(resid, m)
-    # A sheer foundation changes optical density by a similar amount on every
-    # skin tone, even though its additive RGB difference is smaller on dark
-    # skin. Lighter makeup is therefore a *low* density outlier.
-    cue_density = _low_outlier_cue(density_l, m)
+    # Use local deviations instead of face-wide values.  This intentionally
+    # discards full-face foundation signals while restoring compact artifacts
+    # under normal facial shading and low-frequency skin variation.
+    face_width = max(1, int(np.sqrt(np.count_nonzero(m > 0.5))))
+    cue_chroma = _high_outlier_cue(np.abs(_local_residual(C, face_width)), m)
+    cue_light = _high_outlier_cue(np.abs(_local_residual(L, face_width)), m)
+    cue_resid = _high_outlier_cue(np.abs(_local_residual(resid, face_width)), m)
+    cue_density = _high_outlier_cue(
+        np.abs(_local_residual(density_l, face_width)), m,
+    )
 
     hint = np.maximum.reduce(
-        (cue_chroma, cue_light, cue_white, cue_resid, cue_density)
+        (cue_chroma, cue_light, cue_resid, cue_density)
     ) * m
     mm = _prep_mask(mole_mask, h, w)
     if mm is not None:
         hint = hint * (1.0 - mm)
-    ex = _merge_masks(
+    ex = _dilated_exclusion(_merge_masks(
         _prep_mask(exclude_mask, h, w),
         _prep_mask(specular_mask, h, w),
-    )
+    ), face_width)
     if ex is not None:
         hint = hint * (1.0 - ex)
 
     # Opening removes isolated noise hits. The former closing operation grew
     # those hits into paint regions, which made compact shine bleed outward
     # when coverage-even blurred the resulting alpha map.
-    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     u8 = np.clip(hint * 255, 0, 255).astype(np.uint8)
     u8 = cv2.morphologyEx(u8, cv2.MORPH_OPEN, k)
-    return (u8.astype(np.float32) / 255.0)
+    return _compact_components(u8.astype(np.float32) / 255.0, m).astype(np.float32)
 
 
 def closed_form_alpha(
@@ -233,6 +289,10 @@ def unmix_makeup(
             exclude_mask=combined_exclude,
         )
 
+    # Automatic alpha may only affect the compact component that cleared the
+    # safety gate.  User-supplied alpha remains authoritative.
+    auto_support = None if user_alpha is not None else (alpha > 0.0).astype(np.float32)
+
     # Seed makeup color M from high-α pixels; skin S from low-α
     hi = alpha > 0.35
     lo = (alpha < 0.15) & (base > 0.5)
@@ -270,6 +330,8 @@ def unmix_makeup(
     for _ in range(max(1, iterations)):
         alpha = closed_form_alpha(I, S, M)
         alpha = alpha * base
+        if auto_support is not None:
+            alpha = alpha * auto_support
         if mole_mask is not None:
             mm = _prep_mask(mole_mask, h, w)
             if mm is not None:
@@ -296,7 +358,10 @@ def even_coverage_alpha(alpha: np.ndarray, strength: float, guide: np.ndarray) -
     a = alpha.astype(np.float32)
     sigma = max(3.0, min(a.shape[:2]) * 0.04)
     blur = cv2.GaussianBlur(a, (0, 0), sigmaX=sigma)
-    return np.clip(a * (1.0 - s) + blur * s, 0.0, 1.0)
+    # Never let smoothing spread an automatic local edit into adjacent bare
+    # skin.  The non-zero support has already cleared the compactness gate.
+    support = a > 1e-6
+    return np.where(support, np.clip(a * (1.0 - s) + blur * s, 0.0, 1.0), 0.0)
 
 
 def cake_reduce(alpha: np.ndarray, strength: float) -> np.ndarray:
@@ -361,6 +426,13 @@ def apply_makeup_unmix(
     if cr > 0:
         alpha = cake_reduce(alpha, cr)
     out = recompose(S, M, alpha)
+    # P4's automatic alpha is evidence, not a physical coverage measurement.
+    # A mistaken compact component must not create a destructive visible edit.
+    out = img_bgr.astype(np.float32) + np.clip(
+        out - img_bgr.astype(np.float32),
+        -_MAX_AUTOMATIC_EDIT_DELTA,
+        _MAX_AUTOMATIC_EDIT_DELTA,
+    )
     if img_bgr.dtype == np.uint8:
         return np.clip(out, 0, 255).astype(np.uint8)
     return np.clip(out, 0, 255).astype(np.float32)
