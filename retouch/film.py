@@ -31,6 +31,7 @@ from .tonal import _sigmoid, _safe_midpoint
 
 
 _EPS = 1e-6
+_HIGHLIGHT_PURITY_KNEE = 0.65
 
 
 def _srgb_to_linear(rgb01: np.ndarray) -> np.ndarray:
@@ -50,6 +51,43 @@ def _linear_to_srgb(lin: np.ndarray) -> np.ndarray:
         lin * 12.92,
         1.055 * np.power(lin, 1.0 / 2.4) - 0.055,
     )
+
+
+def _smoothstep(edge0: float, edge1: float, value: np.ndarray) -> np.ndarray:
+    """Cubic transition with zero slope at both edges."""
+    t = np.clip((value - edge0) / max(edge1 - edge0, _EPS), 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
+def _apply_highlight_purity(
+    rgb_lin: np.ndarray,
+    amount: float,
+    skew: float,
+) -> np.ndarray:
+    """Compress highlight chroma toward the scene-linear adapted white.
+
+    The target is neutral at the pixel's current luminance, so the blend
+    preserves luminance exactly and only scales the chroma vector.  ``skew``
+    modestly reinforces the control for filmic, per-channel tone maps, where
+    high-luminance hue drift is intentionally more pronounced.
+    """
+    amount = float(np.clip(amount, 0.0, 1.0))
+    if amount <= _EPS:
+        return rgb_lin
+
+    Y = (
+        0.2126 * rgb_lin[..., 0]
+        + 0.7152 * rgb_lin[..., 1]
+        + 0.0722 * rgb_lin[..., 2]
+    )
+    base_weight = _smoothstep(_HIGHLIGHT_PURITY_KNEE, 1.0, Y)
+    # A drifting film map reaches the same neutral endpoint but starts the
+    # purity rolloff up to 25% faster, containing its added hue drift.
+    skew_boost = 1.0 + 0.25 * float(np.clip(skew, 0.0, 1.0)) * (1.0 - base_weight)
+    weight = np.clip(base_weight * skew_boost * amount, 0.0, 1.0)
+    neutral = Y[..., np.newaxis]
+    result = rgb_lin * (1.0 - weight[..., np.newaxis]) + neutral * weight[..., np.newaxis]
+    return np.clip(result, 0.0, 1.0).astype(np.float32)
 
 
 def _hd_curve_logdensity(
@@ -152,19 +190,23 @@ def _master_tonemap(
     gamma: float,
     strength: float,
     skew: float,
+    highlight_purity: float = 0.0,
 ) -> np.ndarray:
     """Hue-preserving master tone-map with skew control.
 
     At skew=0: luma is compressed by the H&D sigmoid, chroma is re-attached
     by the luma ratio (hue-locked, ACES/AgX-class).
     At skew=1: each channel is independently curve-mapped (classic drift).
+    ``highlight_purity`` is a post-map, scene-linear chroma compression above
+    a luminance knee.  Zero is an exact no-op.
 
     ``rgb_lin`` is scene-linear [0,1]. Returns scene-linear [0,1].
     """
     rgb_lin = np.clip(rgb_lin, 0.0, 1.0).astype(np.float32)
     strength = float(np.clip(strength, 0.0, 1.0))
     skew = float(np.clip(skew, 0.0, 1.0))
-    if strength <= 0.0:
+    highlight_purity = float(np.clip(highlight_purity, 0.0, 1.0))
+    if strength <= 0.0 and highlight_purity <= _EPS:
         return rgb_lin
 
     Y = 0.2126 * rgb_lin[..., 0] + 0.7152 * rgb_lin[..., 1] + 0.0722 * rgb_lin[..., 2]
@@ -195,6 +237,7 @@ def _master_tonemap(
         result = hue_locked * (1.0 - skew) + per_channel * skew
 
     result = rgb_lin * (1.0 - strength) + result * strength
+    result = _apply_highlight_purity(result, highlight_purity, skew)
     return np.clip(result, 0.0, 1.0).astype(np.float32)
 
 
@@ -290,8 +333,9 @@ class FilmDensityEngine:
         tm_toe = params.get("tonemap_toe", 0.10)
         tm_shoulder = params.get("tonemap_shoulder", 0.15)
         tm_skew = params.get("skew", 0.3)
+        tm_highlight_purity = params.get("highlight_purity", 0.0)
 
-        if tm_strength > 0.0:
+        if tm_strength > 0.0 or tm_highlight_purity > 0.0:
             rgb_post = _master_tonemap(
                 rgb_post,
                 toe=tm_toe,
@@ -300,6 +344,7 @@ class FilmDensityEngine:
                 gamma=p_gamma,
                 strength=tm_strength,
                 skew=tm_skew,
+                highlight_purity=tm_highlight_purity,
             )
 
         rgb_out_lin = np.clip(rgb_post, 0.0, 1.0)
@@ -351,4 +396,5 @@ def _context_to_params(ctx: Any) -> Dict[str, Any]:
         "tonemap_toe": getattr(ctx, "film_tonemap_toe", 0.10),
         "tonemap_shoulder": getattr(ctx, "film_tonemap_shoulder", 0.15),
         "skew": getattr(ctx, "film_skew", 0.3),
+        "highlight_purity": getattr(ctx, "film_highlight_purity", 0.0),
     }

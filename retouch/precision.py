@@ -11,6 +11,7 @@ tools (DaVinci Resolve, Photoshop 32-bit mode, etc.).
 Public API:
     to_float(img)             uint8 -> float32 [0, 1]
     to_uint8(img)             float32 [0, 1] -> uint8
+    to_uint8_dithered(img)    float32 [0, 1] -> uint8, final-delivery only
     ensure_float(img)         pass-through if float, else convert
     PrecisionContext(...)     context manager exposing ``process(op, img)``
 """
@@ -26,6 +27,118 @@ import numpy as np
 _FLOAT_MAX: float = 1.0
 _FLOAT_MIN: float = 0.0
 _UINT8_MAX: float = 255.0
+_DITHER_TILE_SIZE: int = 64
+
+
+_BLUE_NOISE_RANK_TILE: Optional[np.ndarray] = None
+
+
+def _void_and_cluster_rank_tile() -> np.ndarray:
+    """Build a deterministic 64x64 void-and-cluster threshold matrix.
+
+    The construction follows Ulichney's void-and-cluster method: relax a
+    half-density binary pattern by replacing its densest cluster with its
+    largest void, then rank removal and addition order from that stable
+    pattern.  Every threshold level therefore inherits a well-dispersed dot
+    distribution, unlike an ordered (Bayer) dither matrix.
+
+    The tile is generated lazily because only final 8-bit delivery uses it.
+    It has no external asset or random runtime dependency: the seed and the
+    bounded relaxation count are fixed.
+    """
+    size = _DITHER_TILE_SIZE
+    count = size * size
+    sigma = np.float32(1.9)
+    rng = np.random.default_rng(20_260_717)
+
+    y, x = np.indices((size, size))
+    dy = np.minimum(y, size - y)
+    dx = np.minimum(x, size - x)
+    kernel = np.exp(-(dx * dx + dy * dy) / (2.0 * sigma * sigma)).astype(
+        np.float32
+    )
+
+    # A deterministic half-density seed, then a periodic void-and-cluster
+    # relaxation.  Updating the density field avoids thousands of FFTs.
+    state = np.zeros((size, size), dtype=np.uint8)
+    state.flat[rng.permutation(count)[: count // 2]] = 1
+    density = np.fft.ifft2(
+        np.fft.fft2(state) * np.fft.fft2(kernel)
+    ).real.astype(np.float32)
+    for _ in range(3_000):
+        cluster = np.where(state, density, -np.inf)
+        void = np.where(state, np.inf, density)
+        cy, cx = np.unravel_index(np.argmax(cluster), state.shape)
+        vy, vx = np.unravel_index(np.argmin(void), state.shape)
+        if density[cy, cx] <= density[vy, vx]:
+            break
+        state[cy, cx] = 0
+        density -= np.roll(kernel, (cy, cx), axis=(0, 1))
+        state[vy, vx] = 1
+        density += np.roll(kernel, (vy, vx), axis=(0, 1))
+
+    mid_state = state.copy()
+    ranks = np.empty((size, size), dtype=np.uint16)
+
+    # Removing densest dots first ranks the lower half of the threshold tile.
+    for rank in range(count // 2 - 1, -1, -1):
+        cluster = np.where(state, density, -np.inf)
+        cy, cx = np.unravel_index(np.argmax(cluster), state.shape)
+        ranks[cy, cx] = rank
+        state[cy, cx] = 0
+        density -= np.roll(kernel, (cy, cx), axis=(0, 1))
+
+    # Filling largest voids ranks the upper half from the same midpoint.
+    state = mid_state
+    density = np.fft.ifft2(
+        np.fft.fft2(state) * np.fft.fft2(kernel)
+    ).real.astype(np.float32)
+    for rank in range(count // 2, count):
+        void = np.where(state, np.inf, density)
+        vy, vx = np.unravel_index(np.argmin(void), state.shape)
+        ranks[vy, vx] = rank
+        state[vy, vx] = 1
+        density += np.roll(kernel, (vy, vx), axis=(0, 1))
+
+    return ranks
+
+
+def _blue_noise_rank_tile() -> np.ndarray:
+    """Return the process-local deterministic void-and-cluster tile."""
+    global _BLUE_NOISE_RANK_TILE
+    if _BLUE_NOISE_RANK_TILE is None:
+        _BLUE_NOISE_RANK_TILE = _void_and_cluster_rank_tile()
+    return _BLUE_NOISE_RANK_TILE
+
+
+def blue_noise_lsb_noise(
+    shape: tuple[int, int],
+    *,
+    origin: tuple[int, int] = (0, 0),
+) -> np.ndarray:
+    """Return deterministic, zero-mean, sub-LSB dither in uint8 code units.
+
+    The returned 2D float32 array is tiled in absolute pixel coordinates,
+    which lets future final-export callers retain a consistent pattern when
+    processing crops or tiles.  Its values are strictly inside ``[-0.5, 0.5]``
+    and have an exact zero mean over each 64x64 tile.
+
+    Args:
+        shape: Requested ``(height, width)``.
+        origin: Absolute ``(y, x)`` offset for tiled export/crop alignment.
+    """
+    height, width = shape
+    if height < 0 or width < 0:
+        raise ValueError(f"dither shape must be non-negative, got {shape!r}")
+
+    y0, x0 = origin
+    y = (np.arange(height, dtype=np.int64) + y0) % _DITHER_TILE_SIZE
+    x = (np.arange(width, dtype=np.int64) + x0) % _DITHER_TILE_SIZE
+    ranks = _blue_noise_rank_tile()[np.ix_(y, x)].astype(np.float32)
+    return (
+        (ranks + np.float32(0.5)) / np.float32(_DITHER_TILE_SIZE**2)
+        - np.float32(0.5)
+    )
 
 
 def to_float(img: np.ndarray) -> np.ndarray:
@@ -63,6 +176,47 @@ def to_uint8(img: np.ndarray) -> np.ndarray:
     """
     f = np.clip(img, _FLOAT_MIN, _FLOAT_MAX).astype(np.float32, copy=False)
     return np.clip(np.round(f * _UINT8_MAX), 0, 255).astype(np.uint8)
+
+
+def to_uint8_dithered(
+    img: np.ndarray,
+    *,
+    origin: tuple[int, int] = (0, 0),
+) -> np.ndarray:
+    """Quantize a final float image with deterministic sub-LSB display dither.
+
+    This is deliberately separate from :func:`to_uint8`: most current calls
+    are intermediate compatibility boundaries, where injecting noise would
+    accumulate across stages.  Use this helper exactly once at the selected
+    float-to-8-bit delivery boundary.  All color channels share one threshold
+    value per pixel so the dither does not introduce chromatic speckle.
+
+    Existing uint8 input is returned unchanged.  This makes the helper safe
+    for delivery code that accepts either a completed uint8 image or a float
+    image, while preserving an already-quantized asset exactly.
+
+    Args:
+        img: A 2D or 3D float image nominally in [0, 1], or uint8 delivery
+            image.
+        origin: Absolute ``(y, x)`` offset for tiled export/crop alignment.
+
+    Returns:
+        uint8 image in [0, 255].
+    """
+    if img.dtype == np.uint8:
+        return img.copy()
+    if img.ndim not in (2, 3):
+        raise ValueError(
+            "to_uint8_dithered expects a 2D grayscale or 3D color image, "
+            f"got shape {img.shape!r}"
+        )
+
+    f = np.clip(img, _FLOAT_MIN, _FLOAT_MAX).astype(np.float32, copy=False)
+    noise = blue_noise_lsb_noise(f.shape[:2], origin=origin)
+    if f.ndim == 3:
+        noise = noise[..., np.newaxis]
+    codes = f * _UINT8_MAX + noise
+    return np.clip(np.round(codes), 0, 255).astype(np.uint8)
 
 
 def ensure_float(img: np.ndarray) -> np.ndarray:

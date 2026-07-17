@@ -24,6 +24,7 @@ from .utils import apply_curve, blend_masked, normalize_mask, screen_blend, sque
 from . import skin_protect
 from .color_science import apply_subtractive_saturation
 from .precision import ensure_float, to_uint8
+from .white_balance import white_balance_cat16
 
 logger = logging.getLogger(__name__)
 
@@ -1434,56 +1435,23 @@ class ColorGrader:
         temperature: float = 6500.0,
         tint: float = 0.0,
     ) -> np.ndarray:
-        """White balance via LCH hue-shift on near‑neutral pixels.
+        """White balance via linear-light CAT16 chromatic adaptation.
 
-        Maps Kelvin temperature to a warm/cool hue shift and applies
-        ``tint`` as a green‑magenta axis shift. Operates primarily on
-        low‑chroma pixels so saturated areas are not over‑corrected.
+        The method name is retained for public API compatibility.  Its former
+        LCh hue rotation has been replaced by a source-white-to-D65 CAT16
+        adaptation, so neutral pixels and real casts now move correctly.
 
         Args:
-            img_bgr: (H, W, 3) uint8 BGR.
-            temperature: Kelvin colour temperature (2000–50000).
-                         6500 = neutral daylight. Lower = warmer.
-            tint: Green‑magenta shift in [-100, 100]. Negative = green,
+            img_bgr: (H, W, 3) uint8 or float32 BGR in [0, 255].
+            temperature: Estimated source colour temperature (2000–50000).
+                         6500K / zero tint is an exact identity.
+            tint: Correction direction in [-100, 100]. Negative = green,
                   positive = magenta.
 
         Returns:
-            (H, W, 3) uint8 BGR.
+            Same dtype and range as ``img_bgr``.
         """
-        if abs(temperature - 6500.0) < 1e-3 and abs(tint) < 1e-4:
-            return img_bgr
-        is_float = img_bgr.dtype == np.float32
-        if is_float:
-            from .color_space import bgr_f32_to_lch_f32, lch_f32_to_bgr_f32
-            lch = bgr_f32_to_lch_f32(img_bgr)
-        else:
-            from .color_space import bgr_to_lch, lch_to_bgr
-            lch = bgr_to_lch(img_bgr)
-        t = float(np.clip(temperature, 2000.0, 50000.0))
-        tint_val = float(np.clip(tint, -100.0, 100.0))
-        # Mired-based white balance correction
-        # Mired = 1e6 / temperature (reciprocal Kelvin)
-        # Neutral at 6500K ≈ 153.85 mired
-        # Negative mired_delta → cool (high K), positive → warm (low K)
-        MIRED_NEUTRAL = 1e6 / 6500.0  # ≈ 153.85
-        mired_delta = (1e6 / max(t, 100.0)) - MIRED_NEUTRAL
-        # Scale mired_delta to hue shift: ~30 mireds per ±50° hue
-        # This gives smooth, monotonic correction with correct sign flip at 6500K
-        hue_delta = mired_delta / MIRED_NEUTRAL * 100.0 * 0.3
-        chroma = lch[:, :, 1]
-        chroma_weight = np.clip(1.0 - chroma / 60.0, 0.0, 1.0)
-        hue_delta = hue_delta * chroma_weight
-        lch[:, :, 2] = np.mod(lch[:, :, 2] + hue_delta, 360.0)
-        if abs(tint_val) > 1e-4:
-            tint_hue = 150.0 if tint_val < 0 else 330.0
-            tint_strength = abs(tint_val) / 100.0 * chroma_weight * 0.2
-            delta = (tint_hue - lch[:, :, 2] + 180.0) % 360.0 - 180.0
-            lch[:, :, 2] = np.mod(
-                lch[:, :, 2] + delta * tint_strength, 360.0
-            )
-        if is_float:
-            return lch_f32_to_bgr_f32(lch)
-        return lch_to_bgr(lch)
+        return white_balance_cat16(img_bgr, temperature=temperature, tint=tint)
 
     def channel_mixer_bw(
         self,

@@ -2523,13 +2523,10 @@ class RetouchEngine:
             result_u8 = tonal.apply_hd_curve(result_u8, strength=ctx.tonal_curve_strength)
             result = to_float(result_u8)
 
-        # --- White balance (LCH-based, Phase 1.d) ---
+        # --- White balance (linear CAT16, source white -> D65) ---
         if ctx.white_balance_kelvin != _DEFAULTS["white_balance_kelvin"] or ctx.white_balance_tint != _DEFAULTS["white_balance_tint"]:
-            # F1/E2: white_balance_lch is dtype-aware (bgr_f32_to_lch_f32 for
-            # float input) -- stay in float32 [0,255] instead of the old
-            # to_uint8/to_float boundary round-trip, matching the face path
-            # in _stage_grade. white_balance_lch expects float BGR in
-            # [0,255]; `result` is [0,1] here, so scale around the call.
+            # CAT16 is dtype-aware and stays float-native.  The grade API's
+            # historic float contract is BGR [0,255], while this path is [0,1].
             wb_in = np.clip(result * 255.0, 0.0, 255.0).astype(np.float32)
             wb_out = self._grader.white_balance_lch(
                 wb_in,
@@ -3784,11 +3781,10 @@ class RetouchEngine:
                     result, ctx.color_ref, intensity=ctx.color_transfer_intensity
                 )
 
-        # --- White balance (LCH-based, Phase 1.d) ---
+        # --- White balance (linear CAT16, source white -> D65) ---
         if ctx.white_balance_kelvin != _DEFAULTS["white_balance_kelvin"] or ctx.white_balance_tint != _DEFAULTS["white_balance_tint"]:
-            # white_balance_lch runs through bgr_f32_to_lch_f32, which expects
-            # float BGR in [0,255]; `result` is [0,1] here, so scale around the
-            # call or the LCh L collapses and the image crushes to black.
+            # CAT16 accepts float BGR [0,255]; keep this [0,1] float path free
+            # of uint8 compatibility conversions.
             if is_float:
                 wb_in = np.clip(result * 255.0, 0.0, 255.0).astype(np.float32)
                 wb_out = self._grader.white_balance_lch(

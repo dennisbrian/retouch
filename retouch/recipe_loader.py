@@ -95,12 +95,17 @@ def _flat_to_engine_recipe(flat: Dict[str, Any]) -> Dict[str, Any]:
     if "skin_locus" in flat:
         engine.setdefault("skin", {})["locus"] = flat["skin_locus"]
 
-    for key in ("eye_enhance", "catchlight", "dark_circles", "teeth_whiten"):
+    # Nested engine recipes express face-feature strengths on the normalized
+    # 0..1 recipe scale. JSON recipes use the same scale, so converting these
+    # to GUI's 0..100 values here would make imported recipes over-strength.
+    for key in ("catchlight", "dark_circles", "teeth_whiten"):
         if key in flat:
-            engine.setdefault("eyes", {})[key] = _convert_param_to_engine(key, flat[key])
+            engine.setdefault("eyes", {})[key] = float(flat[key])
+    if "eye_enhance" in flat:
+        engine.setdefault("eyes", {})["whites"] = float(flat["eye_enhance"])
 
     if "lip_enhance" in flat:
-        engine.setdefault("lips", {})["lip_enhance"] = _convert_param_to_engine("lip_enhance", flat["lip_enhance"])
+        engine.setdefault("lips", {})["gloss"] = float(flat["lip_enhance"])
     if "lip_tint" in flat:
         tint = flat["lip_tint"]
         engine.setdefault("lips", {})["tint"] = None if tint == "none" else tint
@@ -110,6 +115,13 @@ def _flat_to_engine_recipe(flat: Dict[str, Any]) -> Dict[str, Any]:
 
     if "blush" in flat:
         engine["blush"] = _convert_param_to_engine("blush", flat["blush"])
+
+    if "blotch_reduction" in flat:
+        engine.setdefault("frequency", {})["blotch_reduction"] = float(flat["blotch_reduction"])
+    if "skin_hue_unify" in flat:
+        engine.setdefault("skin", {})["hue_unify"] = float(flat["skin_hue_unify"])
+    if "skin_chroma_even" in flat:
+        engine.setdefault("skin", {})["chroma_even"] = float(flat["skin_chroma_even"])
 
     if "hair_enhance" in flat:
         engine.setdefault("hair", {})["shine"] = _convert_param_to_engine("hair_enhance", flat["hair_enhance"])
@@ -168,6 +180,8 @@ def _engine_to_flat_recipe(engine: Dict[str, Any]) -> Dict[str, Any]:
     freq = engine.get("frequency", {})
     if "smooth" in freq:
         flat["smooth"] = _convert_param_from_engine("smooth", freq["smooth"])
+    if "blotch_reduction" in freq:
+        flat["blotch_reduction"] = freq["blotch_reduction"]
 
     texture = engine.get("texture", {})
     if "pore_synthesis" in texture:
@@ -180,15 +194,21 @@ def _engine_to_flat_recipe(engine: Dict[str, Any]) -> Dict[str, Any]:
 
     if "locus" in skin:
         flat["skin_locus"] = skin["locus"]
+    if "hue_unify" in skin:
+        flat["skin_hue_unify"] = skin["hue_unify"]
+    if "chroma_even" in skin:
+        flat["skin_chroma_even"] = skin["chroma_even"]
 
     eyes = engine.get("eyes", {})
-    for key in ("eye_enhance", "catchlight", "dark_circles", "teeth_whiten"):
+    if "whites" in eyes:
+        flat["eye_enhance"] = eyes["whites"]
+    for key in ("catchlight", "dark_circles", "teeth_whiten"):
         if key in eyes:
-            flat[key] = _convert_param_from_engine(key, eyes[key])
+            flat[key] = eyes[key]
 
     lips = engine.get("lips", {})
-    if "lip_enhance" in lips:
-        flat["lip_enhance"] = _convert_param_from_engine("lip_enhance", lips["lip_enhance"])
+    if "gloss" in lips:
+        flat["lip_enhance"] = lips["gloss"]
     if "tint" in lips:
         flat["lip_tint"] = "none" if lips["tint"] is None else lips["tint"]
     if "gloss" in lips:

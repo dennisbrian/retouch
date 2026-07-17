@@ -12,6 +12,7 @@ import cv2
 import numpy as np
 
 from .blemish import inpaint_and_blend
+from .patchmatch import patchmatch_fill, seamless_blend_roi
 
 
 def heal_region(
@@ -19,14 +20,25 @@ def heal_region(
     mask: np.ndarray,
     method: str = "telea",
     radius: Optional[int] = None,
+    *,
+    source_mask: Optional[np.ndarray] = None,
+    patch_size: int = 7,
+    iterations: int = 5,
+    seed: int = 0,
+    seamless: bool = True,
 ) -> np.ndarray:
     """Heal a masked region using inpainting.
 
     Args:
         img_bgr: (H, W, 3) uint8 BGR image or float32 [0, 255] BGR image.
         mask: (H, W) uint8 binary mask (255 = region to heal) or float32 [0,1].
-        method: "telea" or "ns" (Navier-Stokes).
+        method: "telea", "ns" (Navier-Stokes), or ``"patchmatch"``.
         radius: Inpaint radius. If None, auto-scales from mask bounding box.
+        source_mask: Optional allowed-source mask for ``"patchmatch"``.
+        patch_size: Odd exemplar patch width for ``"patchmatch"``.
+        iterations: Deterministic PatchMatch proposal passes.
+        seed: Fixed PatchMatch random proposal seed.
+        seamless: Blend the PatchMatch result in its local repair ROI.
 
     Returns:
         (H, W, 3) image matching input dtype. The uint8 path is byte-identical
@@ -40,10 +52,25 @@ def heal_region(
     else:
         mask_uint8 = mask.astype(np.uint8)
 
+    method_key = method.lower()
+    if method_key == "patchmatch":
+        filled = patchmatch_fill(
+            img_bgr,
+            mask_uint8,
+            source_mask=source_mask,
+            patch_size=patch_size,
+            iterations=iterations,
+            seed=seed,
+        )
+        return seamless_blend_roi(img_bgr, filled, mask_uint8) if seamless else filled
+    if method_key not in ("telea", "ns"):
+        raise ValueError("method must be 'telea', 'ns', or 'patchmatch'")
+
     if radius is None:
         radius = _auto_radius(mask_uint8)
 
-    flags = cv2.INPAINT_TELEA if method.lower() == "telea" else cv2.INPAINT_NS
+    # Preserve existing Telea/NS behavior byte-for-byte.
+    flags = cv2.INPAINT_TELEA if method_key == "telea" else cv2.INPAINT_NS
 
     blend_ksize = max(radius * 2 + 1, 3) | 1
 

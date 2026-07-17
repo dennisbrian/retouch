@@ -630,7 +630,9 @@ RECIPES = {
         "relight_azimuth": 160.0,
         "relight_elevation": 20.0,
         "bloom": {"opacity": 0.18, "threshold": 0.75},
-        "white_balance_kelvin": 4800,
+        # CAT16 WB corrects an estimated source illuminant to D65; it is not
+        # a creative warmth control.  Leave the golden-hour source colour in
+        # place so the intended warm rim survives this look.
         "grain_strength": 0.12,
     },
     "outdoor_overcast_v1": {
@@ -653,7 +655,9 @@ RECIPES = {
         "contrast": 12.0,
         "clarity": 15.0,
         "vibrance": 10.0,
-        "white_balance_kelvin": 5800,
+        # Preserve the scene's cool daylight.  A measured source CCT may be
+        # supplied per image, but this fixed creative value was invalid once
+        # WB became a source-to-D65 correction.
     },
     "outdoor_backlit_v1": {
         # Subject silhouetted/underexposed against a bright background —
@@ -758,7 +762,8 @@ RECIPES = {
             "chroma_even": 0.50,
             "whiten_hue_stable": 1,
         },
-        "white_balance_tint": 8.0,
+        # Preserve the gel lighting globally; C1's skin-local operations
+        # handle complexion consistency without globally counter-casting it.
     },
 
     # ------------------------------------------------------------------
@@ -780,8 +785,10 @@ RECIPES = {
             "whiten_hue_stable": 1,
             "shine_removal": 0.30,
         },
+        # CAT16 expects the estimated source illuminant.  Positive tint
+        # compensates a green cast with a magenta correction.
         "white_balance_kelvin": 5200,
-        "white_balance_tint": -12.0,
+        "white_balance_tint": 12.0,
         "highlights": -15.0,
         "shadows": 20.0,
     },
@@ -3260,10 +3267,9 @@ RECIPES["matsuri_glow_v1"] = {
     # Eyes: evening low light dulls them — a subtle catchlight + white lift
     # (not a glam opening) keeps the subject present.
     "eyes": {"catchlight": 0.10, "whites": 0.05},
-    # Warm, lantern-true WB. grading.white_balance_lch: 6500 = neutral,
-    # LOWER = warmer. 6900 (prior) actually cooled the frame — wrong for a
-    # lantern festival. 6200 keeps a gentle warm bias without orange skin.
-    "white_balance_kelvin": 6200,
+    # Preserve the lantern's warmth.  CAT16 WB now corrects a measured source
+    # illuminant to D65, so it is deliberately not used as a creative warm
+    # filter in this event look.
     # Global grade: alive but real. Slight vibrance/contrast, no crushing.
     "vibrance": 8,
     "contrast": 4,
