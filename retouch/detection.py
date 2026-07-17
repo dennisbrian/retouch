@@ -19,6 +19,7 @@ import mediapipe as mp
 import numpy as np
 
 from .parsing import FaceRegions
+from .lighting import LightDirection
 from .utils import inter_eye_distance
 
 # Resolve model paths relative to this package
@@ -54,6 +55,8 @@ class FaceContext:
     regions: FaceRegions
     index: int = 0
     face_image: Optional[np.ndarray] = None
+    # Cached once after parsing. Consumers must honor confidence before use.
+    light_direction: Optional[LightDirection] = None
 
 
 class _LandmarkCompat:

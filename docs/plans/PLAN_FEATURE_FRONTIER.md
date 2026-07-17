@@ -161,6 +161,12 @@ it. This is the connective tissue that makes the added highlights and shadings *
 the difference between "each feature retouched" and "one coherently-lit face." Build this and half the
 Part 1–3 items get their gating input for free. Strong candidate to do *first*.
 
+**Foundation implemented 2026-07-17:** `retouch.lighting.estimate_light_direction()` now caches a
+confidence-rated `LightDirection` on each `FaceContext`. It prefers agreeing paired iris catchlights,
+falls back to a low-frequency skin-shading plane, and reports `unknown` rather than guessing when the
+evidence is weak. It has no image-editing consumer yet, so existing output remains unchanged until a
+later eye or lip feature explicitly honors its confidence gate.
+
 ---
 
 ## Ranking & recommendation

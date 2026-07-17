@@ -13,6 +13,7 @@ from retouch.detection import (
     FaceContext,
     FaceDetector,
 )
+from retouch.lighting import LightDirection
 from retouch.parsing import FaceRegions
 
 
@@ -67,6 +68,7 @@ class TestFaceContext:
         assert ctx.regions is regions
         assert ctx.index == 0
         assert ctx.face_image is None
+        assert ctx.light_direction is None
 
     def test_creates_with_all_args(self):
         fd = FaceData(landmarks=None, bbox=(0, 0, 10, 10), ied=5.0)
@@ -75,6 +77,12 @@ class TestFaceContext:
         ctx = FaceContext(face_data=fd, regions=regions, index=2, face_image=img)
         assert ctx.index == 2
         assert ctx.face_image is img
+
+    def test_carries_cached_light_direction(self):
+        fd = FaceData(landmarks=None, bbox=(0, 0, 10, 10), ied=5.0)
+        estimate = LightDirection((1.0, 0.0), 0.8, "catchlights")
+        ctx = FaceContext(face_data=fd, regions=FaceRegions(), light_direction=estimate)
+        assert ctx.light_direction is estimate
 
     def test_regions_is_face_regions_instance(self):
         fd = FaceData(landmarks=None, bbox=(0, 0, 10, 10), ied=5.0)
