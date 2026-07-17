@@ -56,6 +56,10 @@ class FreckleRemover:
     _BEAUTY_SIZE = (10, 70)
     _BLEMISH_SIZE = (6, 80)
     _MAX_COMPONENTS = 2000
+    # Local dark-spot contrast is multiplicative with skin reflectance. A
+    # ratio avoids the former fixed seven-code-value gate disappearing on
+    # darker skin while retaining a comparable light-skin sensitivity.
+    _DARK_SPOT_RELATIVE_DEVIATION = 0.05
 
     def _to_lab(self, img_bgr: np.ndarray) -> np.ndarray:
         """BGR -> LAB in the uint8-scale convention (L 0-255, a/b centered 128).
@@ -88,8 +92,10 @@ class FreckleRemover:
         ksize = 11
         local_mean = cv2.GaussianBlur(gray, (ksize, ksize), 0)
         deviation = local_mean - gray  # positive = darker than surroundings
-        threshold = 7.0
-        candidates = (deviation > threshold).astype(np.uint8) * 255
+        relative_deviation = deviation / np.maximum(local_mean, 1.0)
+        candidates = (
+            relative_deviation > self._DARK_SPOT_RELATIVE_DEVIATION
+        ).astype(np.uint8) * 255
 
         if skin_mask is not None:
             skin_binary = (skin_mask > 0.3).astype(np.uint8) * 255
@@ -123,6 +129,8 @@ class FreckleRemover:
         comp_mask: np.ndarray,
         a_median: float,
         a_std: float,
+        l_median: float,
+        l_std: float,
     ) -> Tuple[str, float, str, float, Tuple[float, float], Tuple[int, int, int, int]]:
         """Score one component into freckle/beauty_mark/blemish/noise.
 
@@ -136,8 +144,13 @@ class FreckleRemover:
         l_mean = float(np.mean(pixels[:, 0]))
         a_mean = float(np.mean(pixels[:, 1]))
         b_mean = float(np.mean(pixels[:, 2]))
-        l_std = float(np.std(pixels[:, 0]))
+        l_component_std = float(np.std(pixels[:, 0]))
         a_norm = (a_mean - a_median) / (a_std + 1e-6)
+        # A nearly uniform face crop has a vanishing L standard deviation;
+        # retain a scale tied to the face's own luminance in that case so a
+        # small component cannot inflate itself into a many-sigma outlier.
+        l_scale = max(l_std, l_median * 0.10, 1.0)
+        l_norm = (l_mean - l_median) / l_scale
         chroma = float(np.sqrt((a_mean - 128.0) ** 2 + (b_mean - 128.0) ** 2))
 
         scores = {"freckle": 0.0, "beauty_mark": 0.0, "blemish": 0.0, "noise": 0.0}
@@ -154,9 +167,12 @@ class FreckleRemover:
         if a_norm > 0.3:
             scores["freckle"] += 0.45
             reasons["freckle"].append(f"a_norm={a_norm:.2f}")
-        if l_mean >= 70:
+        # This was ``l_mean >= 70``. Absolute LAB-L changes with the subject's
+        # skin tone, so freckles on dark skin were preserved as beauty marks.
+        # Only use the component's margin from this face's skin distribution.
+        if l_norm >= -2.0:
             scores["freckle"] += 0.05
-            reasons["freckle"].append(f"L={l_mean:.0f}")
+            reasons["freckle"].append(f"L_norm={l_norm:.2f}")
 
         # Beauty mark: dark, larger, cool relative to skin, flat.
         if bl <= area <= bh:
@@ -165,9 +181,9 @@ class FreckleRemover:
         if a_norm < -0.3:
             scores["beauty_mark"] += 0.4
             reasons["beauty_mark"].append(f"a_norm={a_norm:.2f}")
-        if l_mean < 70:
+        if l_norm < -2.0:
             scores["beauty_mark"] += 0.5
-            reasons["beauty_mark"].append(f"L={l_mean:.0f}")
+            reasons["beauty_mark"].append(f"L_norm={l_norm:.2f}")
 
         # Blemish: inflamed -> high chroma AND high internal variance (uneven).
         if cl <= area <= ch:
@@ -176,9 +192,9 @@ class FreckleRemover:
         if chroma > 25.0:
             scores["blemish"] += 0.3
             reasons["blemish"].append(f"chroma={chroma:.1f}")
-        if l_std > 8.0:
+        if l_component_std > 8.0:
             scores["blemish"] += 0.5
-            reasons["blemish"].append(f"L_std={l_std:.1f}")
+            reasons["blemish"].append(f"L_std={l_component_std:.1f}")
 
         # Noise: tiny.
         if area < self._NOISE_MAX_AREA:
@@ -214,13 +230,17 @@ class FreckleRemover:
 
         lab = self._to_lab(img_bgr)
 
-        skin_pixels_a = lab[skin_mask > 0.3, 1] if skin_mask.max() > 0 else lab[:, :, 1].reshape(-1)
-        if skin_pixels_a.size == 0:
+        skin_pixels = lab[skin_mask > 0.3] if skin_mask.max() > 0 else lab.reshape(-1, 3)
+        if skin_pixels.size == 0:
             a_median = 128.0
             a_std = 1.0
+            l_median = 128.0
+            l_std = 1.0
         else:
-            a_median = float(np.median(skin_pixels_a))
-            a_std = float(np.std(skin_pixels_a))
+            a_median = float(np.median(skin_pixels[:, 1]))
+            a_std = float(np.std(skin_pixels[:, 1]))
+            l_median = float(np.median(skin_pixels[:, 0]))
+            l_std = float(np.std(skin_pixels[:, 0]))
 
         labels, stats, centroids, n_labels = self._detect_components(img_bgr, skin_mask)
         if labels is None or n_labels <= 1:
@@ -242,7 +262,7 @@ class FreckleRemover:
                 break
             comp_mask = labels == i
             cls, conf, reason, _area, _, _ = self._classify_anomaly(
-                lab, comp_mask, a_median, a_std
+                lab, comp_mask, a_median, a_std, l_median, l_std
             )
             cx, cy = float(centroids[i, 0]), float(centroids[i, 1])
             x = int(stats[i, cv2.CC_STAT_LEFT])

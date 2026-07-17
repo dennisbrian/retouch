@@ -1,5 +1,6 @@
 """Tests for retouch/freckle.py — FreckleRemover / FreckleClassification."""
 
+import hashlib
 import numpy as np
 import pytest
 import cv2
@@ -83,14 +84,51 @@ def test_classify_sorted_by_confidence():
     assert confs == sorted(confs, reverse=True)
 
 
-def test_multitone_freckle_robustness():
+def test_fitzpatrick_i_to_vi_freckle_detection_and_classification_is_invariant():
+    """The same relative freckle must not disappear on deep skin tones."""
     r = FreckleRemover()
-    for rgb in [(210, 180, 150), (160, 125, 95), (95, 70, 55)]:
+    # Controlled sRGB fixtures spanning Fitzpatrick I-VI-like skin values.
+    # The mark is generated from each base using the same relative recipe.
+    for rgb in [
+        (235, 205, 185), (210, 180, 150), (185, 150, 120),
+        (150, 115, 90), (115, 85, 65), (85, 60, 45),
+    ]:
         img = _skin(rgb=rgb)
         _stamp(img, 120, 120, 2, _freckle_spot(rgb))
         cls = r.classify_anomalies(img, _mask(), confidence_threshold=0.0)
         assert cls, f"no detection on skin {rgb}"
         assert cls[0].classification == "freckle", f"skin {rgb} -> {cls[0].classification}"
+
+
+def test_fitzpatrick_i_to_vi_relative_beauty_marks_remain_preserved():
+    """A dark identity mark must stay a beauty mark at every tested tone."""
+    r = FreckleRemover()
+    for rgb in [
+        (235, 205, 185), (210, 180, 150), (185, 150, 120),
+        (150, 115, 90), (115, 85, 65), (85, 60, 45),
+    ]:
+        img = _skin(rgb=rgb)
+        # Same relative neutral-density mark, expressed in each base tone.
+        bgr = tuple(max(1, int(value * 0.20)) for value in reversed(rgb))
+        _stamp(img, 120, 120, 4, bgr)
+        cls = r.classify_anomalies(img, _mask(), confidence_threshold=0.0)
+        assert cls, f"no detection on skin {rgb}"
+        assert cls[0].classification == "beauty_mark", (
+            f"skin {rgb} -> {cls[0].classification}"
+        )
+
+
+@pytest.mark.parametrize(
+    "rgb",
+    [
+        (235, 205, 185), (210, 180, 150), (185, 150, 120),
+        (150, 115, 90), (115, 85, 65), (85, 60, 45),
+    ],
+)
+def test_fitzpatrick_i_to_vi_flat_skin_has_no_false_candidates(rgb):
+    assert FreckleRemover().classify_anomalies(
+        _skin(rgb=rgb), _mask(), confidence_threshold=0.0
+    ) == []
 
 
 def test_classification_invalid_type_raises():
@@ -147,6 +185,17 @@ def test_remove_freckles_removed_beauty_preserved():
     )
     assert freckle_change > 0, "freckle should be healed"
     assert mark_change == 0, "beauty mark should be preserved"
+
+
+def test_light_skin_removal_output_is_byte_identical():
+    """S1 tone adaptation must not change the established light-skin fixture."""
+    img, m = _scene_freckle_and_mark()
+    out = FreckleRemover().remove(
+        img, m, freckle_removal=100, confidence_threshold=0.7
+    )
+    assert hashlib.sha256(out.tobytes()).hexdigest() == (
+        "681455108f8be4caf0644ff23544b44316adb409cbc9fa62d6f53cabf6fb0e45"
+    )
 
 
 def test_remove_user_preserve_mask_override():
