@@ -89,6 +89,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from .detection import FaceDetector, FaceData, FaceContext
+from .lighting import estimate_light_direction
 from .parsing import FaceParser, FaceRegions
 from .geometry import FaceReshaper
 from .makeup import MakeupEngine
@@ -118,6 +119,7 @@ from .relight import Relighter
 from .enhance import AIEnhancer
 from .recipes import RECIPES
 from .recipe_loader import load_user_recipes
+from .harmony import build_face_anchored_body_mask
 from .style import StyleProfile
 from .style_transfer import subject_aware_transfer
 from .utils import correct_exposure, apply_global_bloom, apply_skin_diffusion, vibrance as _vibrance_fn, squeeze_mask, feather_mask, guided_filter, normalize_mask, blend_masked, bgr_f32_to_lab_f32, lab_f32_to_bgr_f32
@@ -2243,7 +2245,9 @@ class RetouchEngine:
         # ------------------------------------------------------------------
         # QA detectors
         # ------------------------------------------------------------------
-        qa_warnings: List[QAWarning] = self._run_qa(result, person_mask, img_bgr)
+        qa_warnings: List[QAWarning] = self._run_qa(
+            result, person_mask, img_bgr, face_skin_mask=acc_skin,
+        )
         ctx._qa_results = {w.detector: w.details for w in qa_warnings}
 
         # ------------------------------------------------------------------
@@ -2271,6 +2275,7 @@ class RetouchEngine:
         result: np.ndarray,
         person_mask: Optional[np.ndarray],
         reference_img_bgr: Optional[np.ndarray] = None,
+        face_skin_mask: Optional[np.ndarray] = None,
     ) -> List[QAWarning]:
         """Run QA detectors on a processed uint8 BGR image.
 
@@ -2283,11 +2288,18 @@ class RetouchEngine:
             return []
         qa_warnings: List[QAWarning] = []
         try:
+            body_skin_mask = None
+            if face_skin_mask is not None and reference_img_bgr is not None:
+                body_skin_mask = build_face_anchored_body_mask(
+                    reference_img_bgr, face_skin_mask, person_mask,
+                )
             qa_raw = qa_detectors.run_all(
                 result,
                 skin_mask=person_mask,
                 reference_img_bgr=reference_img_bgr,
                 person_mask=person_mask,
+                face_skin_mask=face_skin_mask,
+                body_skin_mask=body_skin_mask,
             )
         except Exception as e:
             logger.warning("QA detectors raised, skipping QA: %s", e)
@@ -2832,6 +2844,9 @@ class RetouchEngine:
                     regions=all_regions[i],
                     index=i,
                     face_image=crop_list[i],
+                    light_direction=estimate_light_direction(
+                        crop_list[i], all_regions[i], face_width=faces[i].bbox[2]
+                    ),
                 )
                 for i in range(len(faces))
             ]
@@ -4053,7 +4068,16 @@ class RetouchEngine:
 
         from .regions import apply_local_adjustment
 
-        result = img
+        # The global grade path carries float canvases in [0,1], whereas the
+        # reusable local operators intentionally use the project's [0,255]
+        # float convention. Bridge that boundary once rather than making each
+        # operator guess its input scale.
+        unit_float = (
+            img.dtype == np.float32
+            and img.size > 0
+            and float(np.max(img)) <= 1.0 + 1e-3
+        )
+        result = img * 255.0 if unit_float else img
         for adj in local_adjustments:
             mask = adj.get("mask")
             op = adj.get("op", "exposure")
@@ -4069,6 +4093,8 @@ class RetouchEngine:
 
             result = apply_local_adjustment(result, mask, op, strength, semantic_mask=sem_mask)
 
+        if unit_float:
+            return np.clip(result / 255.0, 0.0, 1.0).astype(np.float32)
         return result
 
     def _stage_finish(

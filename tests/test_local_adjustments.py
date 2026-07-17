@@ -389,6 +389,33 @@ class TestStageLocalAdjustments:
         assert left_out > left_in + 1.0
         assert right_out == pytest.approx(right_in, abs=1.0)
 
+    def test_unit_float_canvas_preserves_scale_and_unmasked_pixels(
+        self,
+        engine: RetouchEngine,
+        ctx: ProcessingContext,
+        img_u8: np.ndarray,
+        half_mask: np.ndarray,
+    ) -> None:
+        """The global pipeline passes float32 canvases in [0,1], not [0,255]."""
+        img_unit = img_u8.astype(np.float32) / 255.0
+        out = engine._stage_local_adjustments(
+            img_unit,
+            ctx,
+            local_adjustments=[{
+                "mask": half_mask,
+                "op": "dodge",
+                "strength": 0.5,
+            }],
+        )
+
+        assert out.dtype == np.float32
+        assert out.min() >= 0.0
+        assert out.max() <= 1.0
+        assert out[:, :32].mean() > img_unit[:, :32].mean() + 0.01
+        # The unmasked side crosses float LAB and can differ by less than one
+        # 8-bit code value from conversion precision, but must not be edited.
+        assert np.max(np.abs(out[:, 32:] - img_unit[:, 32:])) < 1.0 / 255.0
+
     def test_multiple_adjustments_compose(
         self,
         engine: RetouchEngine,

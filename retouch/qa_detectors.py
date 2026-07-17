@@ -21,6 +21,8 @@ from typing import Any, Dict, Optional, List
 import cv2
 import numpy as np
 
+from .harmony import evaluate_harmony
+
 
 def _to_u8_for_analysis(img: np.ndarray) -> np.ndarray:
     """Return a uint8 BGR snapshot of ``img`` for QA analysis.
@@ -993,6 +995,8 @@ def run_all(
     skin_mask: Optional[np.ndarray] = None,
     reference_img_bgr: Optional[np.ndarray] = None,
     person_mask: Optional[np.ndarray] = None,
+    face_skin_mask: Optional[np.ndarray] = None,
+    body_skin_mask: Optional[np.ndarray] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Run all QA detectors and aggregate their results.
 
@@ -1004,6 +1008,8 @@ def run_all(
             float32 [0, 255]), forwarded to ``detect_plastic_skin`` for
             before/after texture-loss comparison.
         person_mask: Optional (H, W) float mask [0, 1] for seam detection.
+        face_skin_mask: Optional confident face-skin mask for harmony metrics.
+        body_skin_mask: Optional face-anchored body-skin mask for harmony metrics.
 
     Returns:
         dict with keys "banding", "clipping", "plastic_skin", "halo", "seam",
@@ -1059,4 +1065,13 @@ def run_all(
             "texture_metric": 1.0,
             "flagged": False,
         }
+    try:
+        result["harmony"] = evaluate_harmony(
+            img_bgr,
+            face_skin_mask=face_skin_mask,
+            body_skin_mask=body_skin_mask,
+            reference_img_bgr=reference_img_bgr,
+        )
+    except Exception:
+        result["harmony"] = {"score": 0.0, "flagged": False, "available": False}
     return result
