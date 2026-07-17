@@ -347,6 +347,28 @@ class TestFaceParserParseOnnx:
         assert result.neck.max() > 0.0
         assert result.hair.max() > 0.0
 
+    def test_full_frame_hair_mask_preserves_ambiguous_confidence(self):
+        """Full-frame body masking must not turn an ambiguous wig label into 1.0.
+
+        A hard argmax classified these pixels as non-hair (or, just across a
+        tiny logit boundary, as full-strength hair), which made colourful wigs
+        erase body candidates discontinuously.  The helper returns the hair
+        posterior so the body stage can exclude only proportionally.
+        """
+        logits = np.full((1, 19, 512, 512), -20.0, dtype=np.float32)
+        logits[:, 1, :, :] = 5.0
+        logits[:, 17, :, :] = 4.8
+        mock_sess = MagicMock()
+        mock_sess.run.return_value = [logits]
+
+        parser = FaceParser()
+        parser._sess = mock_sess
+        hair = parser.parse_hair_full_image(np.full((80, 120, 3), 128, dtype=np.uint8))
+
+        assert hair is not None
+        assert hair.dtype == np.float32
+        assert 0.35 < float(hair.mean()) < 0.55
+
     def test_skin_excludes_eyes_and_lips(self):
         # When ONNX populates both skin and eyes/lips classes, the
         # cleaning step must subtract the eye/lip masks from skin.

@@ -3356,24 +3356,30 @@ class RetouchEngine:
         body_skin_candidate = cv2.morphologyEx(body_skin_candidate, cv2.MORPH_OPEN, kernel)
         body_skin_candidate = cv2.morphologyEx(body_skin_candidate, cv2.MORPH_CLOSE, kernel)
 
-        # Contiguity check: drop disconnected components that don't touch the face region
+        # Contiguity check: drop disconnected components that do not belong to
+        # the same person silhouette as the face.  This must walk to
+        # convergence *through the person mask*, rather than for a fixed
+        # number of steps through the post-exclusion candidate.  Face/hair
+        # exclusions often remove the narrow neck corridor; with the old
+        # 12-step cap, otherwise-valid chest/arm components became orphans and
+        # made the entire body stage silently no-op.
         if acc_skin is not None and acc_skin.max() > 0.01:
-            # Geodesic dilation of the face-skin region, constrained to stay
-            # within person_mask at every step. A single large isotropic
-            # dilation (even scaled to person_bbox_size) can fail on close-up
-            # crops where the face bbox and a distant chest/décolletage skin
-            # patch don't overlap on either axis within a sane radius — but
-            # bridging them with a huge kernel risks bleeding sideways into
-            # background/other-person skin. Instead, "walk" the dilation
-            # along the body silhouette in small steps re-masked by pm each
-            # iteration, so it follows the person's contour (neck -> chest)
-            # rather than growing as a raw circle. Cheap: ~10 iterations of a
-            # small kernel.
-            step_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
-            face_skin_dilated = acc_skin_norm.copy()
-            for _ in range(12):
-                face_skin_dilated = cv2.dilate(face_skin_dilated, step_kernel, iterations=1)
-                face_skin_dilated = face_skin_dilated * pm
+            # Connected components give the converged geodesic reachability
+            # directly: every pixel in the same person-mask component as the
+            # face is reachable without crossing another person/background.
+            # This is equivalent to walking until convergence, but avoids
+            # hundreds of dilations on a high-resolution full-body frame.
+            _, person_labels = cv2.connectedComponents((pm > 0.5).astype(np.uint8))
+            face_seed = (acc_skin_norm > 0.1) & (pm > 0.5)
+            face_component_ids = np.unique(person_labels[face_seed])
+            face_component_ids = face_component_ids[face_component_ids != 0]
+            if face_component_ids.size == 0:
+                # A segmentation mask that does not include the detected face
+                # cannot support a reliable subject-connectivity decision.
+                # Preserve the existing conservative behavior in that case.
+                reachable = np.zeros_like(pm, dtype=np.uint8)
+            else:
+                reachable = np.isin(person_labels, face_component_ids).astype(np.uint8)
 
             # Find connected components in body_skin_candidate
             n_labels, labels = cv2.connectedComponents((body_skin_candidate > 0.3).astype(np.uint8))
@@ -3382,7 +3388,7 @@ class RetouchEngine:
             body_skin_filtered = np.zeros_like(body_skin_candidate)
             for label_id in range(1, n_labels):  # 0 is background
                 comp_mask = (labels == label_id).astype(np.float32)
-                overlap = np.sum(comp_mask * face_skin_dilated)
+                overlap = np.sum(comp_mask * reachable)
                 if overlap > 10:  # At least 10 pixels of overlap with face region
                     body_skin_filtered += comp_mask * body_skin_candidate
             body_skin_candidate = np.clip(body_skin_filtered, 0, 1)

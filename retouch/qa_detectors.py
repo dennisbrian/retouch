@@ -16,7 +16,7 @@ Each detector returns a dict with:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, List, Mapping, Optional
 
 import cv2
 import numpy as np
@@ -997,6 +997,7 @@ def run_all(
     person_mask: Optional[np.ndarray] = None,
     face_skin_mask: Optional[np.ndarray] = None,
     body_skin_mask: Optional[np.ndarray] = None,
+    mark_policy: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Run all QA detectors and aggregate their results.
 
@@ -1010,6 +1011,7 @@ def run_all(
         person_mask: Optional (H, W) float mask [0, 1] for seam detection.
         face_skin_mask: Optional confident face-skin mask for harmony metrics.
         body_skin_mask: Optional face-anchored body-skin mask for harmony metrics.
+        mark_policy: Optional explicit mark-class policy for H4 retention.
 
     Returns:
         dict with keys "banding", "clipping", "plastic_skin", "halo", "seam",
@@ -1071,6 +1073,7 @@ def run_all(
             face_skin_mask=face_skin_mask,
             body_skin_mask=body_skin_mask,
             reference_img_bgr=reference_img_bgr,
+            mark_policy=mark_policy,
         )
     except Exception:
         result["harmony"] = {"score": 0.0, "flagged": False, "available": False}

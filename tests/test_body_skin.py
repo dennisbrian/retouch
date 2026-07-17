@@ -17,7 +17,9 @@ import numpy as np
 import pytest
 
 from retouch import RetouchEngine
+from retouch import engine as engine_module
 from retouch.color_space import bgr_to_lch, skin_mask_lch
+from retouch.engine import ProcessingContext
 from retouch.utils import normalize_mask, squeeze_mask
 
 
@@ -150,6 +152,72 @@ class TestBodySkinMaskConstruction:
         # The tattoo region should have lower gate value than normal skin
         # (both pass LCH detection, but tattoo is suppressed by chroma gate)
         assert tattoo_mean <= normal_skin_mean, "Tattoo should be attenuated more than or equal to normal skin due to higher chroma"
+
+    def test_body_stage_reaches_remote_skin_through_person_silhouette(self, monkeypatch):
+        """A face-to-chest gap must not make valid body parameters inert.
+
+        The old fixed 12-step geodesic cap reached only a small ring around
+        the face.  This fixture places a valid chest candidate farther than
+        that ring while keeping it inside the same continuous person mask.
+        The body-match operation must therefore alter the chest pixels.
+        """
+        h, w = 240, 160
+        img = np.full((h, w, 3), (75, 100, 145), dtype=np.uint8)
+        img[15:45, 55:105] = (165, 185, 225)  # retouched face reference
+        img_f = img.astype(np.float32) / 255.0
+
+        person = np.zeros((h, w), dtype=np.float32)
+        person[5:235, 25:135] = 1.0
+        # A separate subject-like island proves the converged reachability
+        # still rejects components that are not connected to the face.
+        person[150:220, 142:158] = 1.0
+        face = np.zeros((h, w), dtype=np.float32)
+        face[15:45, 55:105] = 1.0
+
+        # A chest-only candidate starts more than 12 x 4px dilation steps
+        # from the face.  Keep the mask construction deterministic so this
+        # regression tests reachability rather than colour thresholds.
+        candidate = np.zeros((h, w), dtype=np.float32)
+        candidate[150:220, 40:120] = 1.0
+        candidate[150:220, 142:158] = 1.0
+        monkeypatch.setattr(engine_module, "skin_mask_lch", lambda *args, **kwargs: candidate)
+        monkeypatch.setattr(
+            engine_module,
+            "oklab_to_oklch",
+            lambda oklab: np.zeros((*oklab.shape[:2], 3), dtype=np.float32),
+        )
+
+        class _NoFullFrameHair:
+            @staticmethod
+            def parse_hair_full_image(_img):
+                return None
+
+        engine = object.__new__(RetouchEngine)
+        engine._parser = _NoFullFrameHair()
+        result = engine._stage_body_skin(
+            img_f,
+            ProcessingContext(body_match_face=100.0),
+            person,
+            face,
+            np.zeros_like(face),
+            np.zeros_like(face),
+            [],
+            h,
+            w,
+        )
+
+        chest = np.s_[170:200, 60:100]
+        assert not np.array_equal(result[chest], img_f[chest]), (
+            "A connected, valid chest candidate was dropped before any body "
+            "operation ran. Reachability must converge through person_mask."
+        )
+        other_subject = np.s_[170:200, 145:155]
+        # LAB conversion round-trips can move an untouched uint8 channel by
+        # one code value.  Anything beyond that is body-mask leakage.
+        assert np.max(np.abs(result[other_subject] - img_f[other_subject])) <= (1.0 / 255.0 + 1e-6), (
+            "A candidate on a disconnected person-mask component must not be "
+            "treated as the detected face's body skin."
+        )
 
 
 class TestBodySkinProcessing:

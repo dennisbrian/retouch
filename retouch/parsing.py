@@ -354,9 +354,11 @@ class FaceParser:
         onto shoulders/chest that ``parse()`` never sees.
 
         This is coarser than the face-crop path (512x512 covers the entire
-        frame instead of just a padded face region), so treat the result as
-        a soft exclusion signal for body_skin masking, not a precise
-        per-strand mask. Returns None if the model isn't available.
+        frame instead of just a padded face region), so it returns the
+        model's *hair confidence*, not a hard argmax label.  Callers use it
+        as a soft exclusion signal for body-skin masking; a hard full-frame
+        label can otherwise erase large skin candidates when a colourful wig
+        is classified ambiguously. Returns None if the model isn't available.
 
         Args:
             img_bgr: (H, W, 3) uint8 BGR image, full frame.
@@ -382,11 +384,17 @@ class FaceParser:
         except Exception:
             return None
 
-        logits = outs[0][0]
-        pred = np.argmax(logits, axis=0).astype(np.uint8)
-        hair_512 = (pred == 17).astype(np.float32)
+        logits = outs[0][0].astype(np.float32)
+        # Stable softmax.  The full-frame model is deliberately a weak,
+        # coarse cue; retaining probability lets downstream masking reduce
+        # its influence where the hair class is uncertain.
+        logits -= np.max(logits, axis=0, keepdims=True)
+        exp_logits = np.exp(logits)
+        hair_512 = exp_logits[17] / np.maximum(
+            np.sum(exp_logits, axis=0), np.finfo(np.float32).tiny
+        )
         hair_full = cv2.resize(hair_512, (w_img, h_img), interpolation=cv2.INTER_LINEAR)
-        return hair_full
+        return np.clip(hair_full, 0.0, 1.0).astype(np.float32)
 
     def parse_batch(
         self,

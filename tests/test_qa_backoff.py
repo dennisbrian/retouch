@@ -157,6 +157,11 @@ class TestCheckAndBackoff:
         warns = [_warn("halo", flagged=True, score=20.0)]
         assert QABackoff().check_and_backoff(_img(), ctx, warns) is None
 
+    def test_harmony_flag_is_review_only(self):
+        ctx = _ctx()
+        warns = [_warn("harmony", flagged=True, score=0.4)]
+        assert QABackoff().check_and_backoff(_img(), ctx, warns) is None
+
     def test_multiple_flags_keep_most_conservative(self):
         # If two flagged warnings touch the same param, the smaller value
         # wins (most conservative).

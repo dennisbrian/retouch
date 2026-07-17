@@ -6,7 +6,7 @@ They diagnose a mismatch; they do not tune retouch parameters automatically.
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 import cv2
 import numpy as np
@@ -20,6 +20,9 @@ _MIN_REGION_PIXELS = 512
 # A preserved mark must re-detect within this many pixels of its original
 # centroid (spike-calibrated at a 1600px long edge).
 _MARK_MATCH_RADIUS = 6.0
+# H4 is intentionally a review gate. It warns when a preserve-class identity
+# mark disappears, but never guesses which retouch control caused the loss.
+MARK_RETENTION_FLAG_FLOOR = 0.85
 
 
 def _mask(mask: Optional[np.ndarray], shape: tuple[int, int]) -> Optional[np.ndarray]:
@@ -128,6 +131,7 @@ def _mark_retention(
     reference_img_bgr: np.ndarray,
     processed_img_bgr: np.ndarray,
     face_mask: np.ndarray,
+    mark_policy: Optional[Mapping[str, Any]] = None,
 ) -> tuple[int, int]:
     """H4: preserve-class (beauty-mark) survival, reference vs processed.
 
@@ -143,29 +147,52 @@ def _mark_retention(
     x0, x1 = max(int(xs.min()) - pad, 0), min(int(xs.max()) + pad, face_mask.shape[1])
     crop_mask = face_mask[y0:y1, x0:x1]
 
-    remover = FreckleRemover()
-    before = [
-        c for c in remover.classify_anomalies(
-            _to_u8(reference_img_bgr[y0:y1, x0:x1]),
+    if mark_policy is None:
+        # Compatibility boundary: existing H4 treats beauty marks as the
+        # preserve class until an explicit policy is supplied.
+        remover = FreckleRemover()
+        before = [
+            c for c in remover.classify_anomalies(
+                _to_u8(reference_img_bgr[y0:y1, x0:x1]),
+                face_mask=crop_mask,
+                confidence_threshold=0.6,
+            )
+            if c.classification == "beauty_mark"
+        ]
+        after = remover.classify_anomalies(
+            _to_u8(processed_img_bgr[y0:y1, x0:x1]),
             face_mask=crop_mask,
-            confidence_threshold=0.6,
+            confidence_threshold=0.4,
         )
-        if c.classification == "beauty_mark"
-    ]
+        same_class = lambda _before, _after: True
+    else:
+        # An explicit policy changes the denominator to preserve-class marks
+        # only. Acne configured for removal must never count as an H4 loss.
+        from .marks import detect_marks, resolve_mark_action
+
+        before = [
+            record for record in detect_marks(
+                _to_u8(reference_img_bgr[y0:y1, x0:x1]),
+                face_mask=crop_mask,
+                confidence_threshold=0.6,
+            )
+            if (action := resolve_mark_action(record, mark_policy)) is not None
+            and action[0] == "preserve"
+        ]
+        after = detect_marks(
+            _to_u8(processed_img_bgr[y0:y1, x0:x1]),
+            face_mask=crop_mask,
+            confidence_threshold=0.4,
+        )
+        same_class = lambda before_record, after_record: before_record.mark_class == after_record.mark_class
     if not before:
         return 0, 0
-    # Re-detect at a lower confidence bar: an attenuated-but-present mark
-    # still counts as retained; only a destroyed one should score as lost.
-    after = remover.classify_anomalies(
-        _to_u8(processed_img_bgr[y0:y1, x0:x1]),
-        face_mask=crop_mask,
-        confidence_threshold=0.4,
-    )
     kept = 0
     for b in before:
         for a in after:
-            if np.hypot(a.centroid[0] - b.centroid[0],
-                        a.centroid[1] - b.centroid[1]) <= _MARK_MATCH_RADIUS:
+            if (same_class(b, a)
+                    and np.hypot(a.centroid[0] - b.centroid[0],
+                                 a.centroid[1] - b.centroid[1]) <= _MARK_MATCH_RADIUS):
                 kept += 1
                 break
     return len(before), kept
@@ -177,12 +204,12 @@ def evaluate_harmony(
     face_skin_mask: Optional[np.ndarray],
     body_skin_mask: Optional[np.ndarray],
     reference_img_bgr: Optional[np.ndarray] = None,
+    mark_policy: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, float | bool]:
-    """Measure face/body parity without creating a production backoff signal.
+    """Measure face/body parity with a review-only H4 retention flag.
 
-    ``flagged`` intentionally remains false until thresholds are calibrated on
-    a diverse real-portrait corpus. Consumers can render and log the metrics
-    now without silently altering a user's retouch settings.
+    Other harmony metrics remain observational because their real-engine
+    thresholds are not calibrated. A harmony flag never triggers auto-backoff.
     """
     h, w = img_bgr.shape[:2]
     face = _mask(face_skin_mask, (h, w))
@@ -251,14 +278,19 @@ def evaluate_harmony(
             detect_banding(reference_img_bgr, face).get("score", 0.0))
         body_banding_delta = body_banding - float(
             detect_banding(reference_img_bgr, body).get("score", 0.0))
-        marks_before, marks_kept = _mark_retention(reference_img_bgr, img_bgr, face)
+        marks_before, marks_kept = _mark_retention(
+            reference_img_bgr, img_bgr, face, mark_policy=mark_policy)
         if marks_before:
             mark_retention = marks_kept / marks_before
 
+    h4_flagged = bool(
+        np.isfinite(mark_retention) and mark_retention < MARK_RETENTION_FLAG_FLOOR
+    )
+
     return {
         "available": True,
-        "flagged": False,
-        "score": 0.0,
+        "flagged": h4_flagged,
+        "score": float(1.0 - mark_retention) if np.isfinite(mark_retention) else 0.0,
         "texture_parity_ratio": float(texture_ratio),
         "texture_parity_drift": texture_drift,
         "specular_parity_ratio": float(specular_ratio),
@@ -272,4 +304,5 @@ def evaluate_harmony(
         "marks_before": marks_before,
         "marks_kept": marks_kept,
         "mark_retention": mark_retention,
+        "mark_retention_floor": MARK_RETENTION_FLAG_FLOOR,
     }

@@ -176,6 +176,10 @@ class QABackoff:
         """
         if warning_type == "plastic_skin":
             return self._plastic_skin_strategy(current_params)
+        if warning_type == "harmony":
+            # H4 finds lost identity marks but cannot safely attribute the
+            # loss to one control. Preserve the warning for human review.
+            return {}
         # Future warning types (halo, banding, ...) can be added here. A5
         # scope is plastic-skin only; others return no adjustments so the
         # engine ships the original result rather than guessing.

@@ -120,6 +120,27 @@ def test_mark_retention_detects_erased_identity_mark():
     )
     assert erased["marks_before"] >= 1
     assert erased["mark_retention"] == 0.0
+    assert erased["flagged"] is True
+
+
+def test_harmony_policy_counts_only_preserve_class_marks():
+    img = np.full((240, 240, 3), (140, 170, 200), dtype=np.uint8)
+    face = np.zeros(img.shape[:2], dtype=np.float32)
+    body = np.zeros_like(face)
+    face[20:140, 40:200] = 1.0
+    body[160:232, 20:220] = 1.0
+    reference = img.copy()
+    cv2.circle(reference, (120, 80), 4, (20, 15, 12), -1)
+
+    result = evaluate_harmony(
+        img, face_skin_mask=face, body_skin_mask=body,
+        reference_img_bgr=reference,
+        mark_policy={"mole": {"action": "remove"}, "unknown": {"action": "remove"}},
+    )
+
+    assert result["marks_before"] == 0
+    assert np.isnan(result["mark_retention"])
+    assert result["flagged"] is False
 
 
 def test_banding_delta_is_differential_not_absolute():
