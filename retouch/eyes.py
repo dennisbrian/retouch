@@ -201,9 +201,26 @@ class EyeEnhancer:
         is_float = img_bgr.dtype == np.float32
         lab = _to_lab(img_bgr, is_float)
         
-        # Only apply whitening to pixels that are relatively bright (L > 100)
-        # to prevent eyelashes/eyeliner and dark shadow areas from turning gray/dusty.
-        bright_sclera = (lab[:, :, 0] > 100.0).astype(np.float32)
+        # Only apply whitening to pixels bright relative to THIS sclera's own
+        # median, so eyelashes/eyeliner and dark shadow areas don't turn
+        # gray/dusty. Tone-adaptive rather than an absolute L* gate (a fixed
+        # cutoff would drop correction on darker-complexioned or dimly-lit
+        # subjects whose sclera legitimately sits lower). See CLAUDE.md
+        # Tone-Invariance & Fairness.
+        l_chan = lab[:, :, 0]
+        sclera_vals = l_chan[whites_mask > 0.1]
+        if sclera_vals.size == 0:
+            return img_bgr
+        l_ref = float(np.median(sclera_vals))
+        # Ramp in over a band below the sclera's own median (soft, not a hard
+        # step) so the darkest lash/liner pixels are excluded but true sclera is
+        # kept whatever its absolute level.
+        lo = 0.55 * l_ref
+        hi = 0.85 * l_ref
+        if hi > lo:
+            bright_sclera = np.clip((l_chan - lo) / (hi - lo), 0.0, 1.0).astype(np.float32)
+        else:
+            bright_sclera = (l_chan >= lo).astype(np.float32)
         m = whites_mask * strength * bright_sclera
 
         # Reduce redness (a channel > 128 means more red)

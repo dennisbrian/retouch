@@ -70,6 +70,42 @@ class TestEnhanceWhites:
         result = enhancer._enhance_whites(img, mask, 1.0)
         assert result.dtype == np.uint8
 
+    def test_dark_and_bright_sclera_receive_equal_chroma_correction(self, enhancer):
+        """Whitening must not depend on an absolute image-lightness gate."""
+        def make_sclera(l_value):
+            lab = np.full((48, 48, 3), (l_value, 148, 152), dtype=np.uint8)
+            return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+        mask = np.ones((48, 48), dtype=np.float32)
+        dark = make_sclera(70)
+        bright = make_sclera(180)
+        dark_out = enhancer._enhance_whites(dark, mask, 0.5)
+        bright_out = enhancer._enhance_whites(bright, mask, 0.5)
+
+        def chroma_delta(before, after):
+            lab_before = cv2.cvtColor(before, cv2.COLOR_BGR2LAB).astype(np.float32)
+            lab_after = cv2.cvtColor(after, cv2.COLOR_BGR2LAB).astype(np.float32)
+            return float(np.mean(np.abs(lab_before[:, :, 1:] - lab_after[:, :, 1:])))
+
+        dark_delta = chroma_delta(dark, dark_out)
+        bright_delta = chroma_delta(bright, bright_out)
+        assert dark_delta > 0.0
+        assert dark_delta == pytest.approx(bright_delta, abs=0.5)
+
+    def test_small_dark_sclera_ignores_bright_background(self, enhancer):
+        """A tiny valid eye mask must not inherit its reference from the frame."""
+        lab = np.full((48, 48, 3), (230, 128, 128), dtype=np.uint8)
+        lab[20:23, 20:23] = (70, 148, 152)
+        image = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+        mask = np.zeros((48, 48), dtype=np.float32)
+        mask[20:23, 20:23] = 1.0
+
+        out = enhancer._enhance_whites(image, mask, 0.5)
+        before_lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
+        after_lab = cv2.cvtColor(out, cv2.COLOR_BGR2LAB).astype(np.float32)
+        assert np.mean(np.abs(before_lab[20:23, 20:23, 1:] - after_lab[20:23, 20:23, 1:])) > 0.0
+        assert np.all(out[0, 0] == image[0, 0])
+
 
 class TestSculptIris:
     def test_none_mask(self, enhancer, img):
