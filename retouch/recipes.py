@@ -1513,6 +1513,7 @@ RECIPES["provia"] = {
             "toe": 0.10,
             "shoulder": 0.15,
             "skew": 0.2,
+            "highlight_purity": 0.22,
         }
     },
 }
@@ -1568,6 +1569,7 @@ RECIPES["astia"] = {
             "toe": 0.05,
             "shoulder": 0.05,
             "skew": 0.1,
+            "highlight_purity": 0.28,
         }
     },
 }
@@ -1637,6 +1639,7 @@ RECIPES["classic_chrome"] = {
             "toe": 0.15,
             "shoulder": 0.15,
             "skew": 0.4,
+            "highlight_purity": 0.34,
         }
     },
 }

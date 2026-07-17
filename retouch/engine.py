@@ -235,8 +235,11 @@ class ProcessingContext:
     nose_restore: float = 0.0
     skin_sss: float = 0.0
     freckle_removal: float = 0.0
+    heal_engine: str = "telea"
     freckle_preserve_mask: Optional[np.ndarray] = None
     mark_policy: Optional[Mapping[str, Any]] = None
+    hb_even: float = 0.0
+    hb_shift: float = 0.0
 
     # --- Eyes ---
     eye_enhance: float = 0.0
@@ -341,6 +344,7 @@ class ProcessingContext:
     film_tonemap_toe: float = _DEFAULTS["film_tonemap_toe"]
     film_tonemap_shoulder: float = _DEFAULTS["film_tonemap_shoulder"]
     film_skew: float = _DEFAULTS["film_skew"]
+    film_highlight_purity: float = _DEFAULTS["film_highlight_purity"]
 
     # --- Split toning ---
     shadow_hue: float = _DEFAULTS["shadow_hue"]
@@ -1040,7 +1044,10 @@ class RetouchEngine:
         smooth_engine: Optional[str] = None,
         undereye_shadow_strength: Optional[float] = None,
         freckle_removal: Optional[float] = None,
+        heal_engine: Optional[str] = None,
         freckle_preserve_mask: Optional[np.ndarray] = None,
+        hb_even: Optional[float] = None,
+        hb_shift: Optional[float] = None,
         lut: Optional[str] = None,
         skin_locus: Optional[Dict[str, float]] = None,
         tonal_curve_strength: Optional[float] = None,
@@ -1080,6 +1087,7 @@ class RetouchEngine:
         film_tonemap_toe: Optional[float] = None,
         film_tonemap_shoulder: Optional[float] = None,
         film_skew: Optional[float] = None,
+        film_highlight_purity: Optional[float] = None,
         color_grade_stack=None,
         color_ref: Optional[np.ndarray] = None,
         color_transfer_intensity: Optional[float] = None,
@@ -1344,6 +1352,7 @@ class RetouchEngine:
             "film_tonemap_toe": film_tonemap_toe,
             "film_tonemap_shoulder": film_tonemap_shoulder,
             "film_skew": film_skew,
+            "film_highlight_purity": film_highlight_purity,
             "color_grade_stack": color_grade_stack,
             "color_ref": color_ref,
             "color_transfer_intensity": color_transfer_intensity,
@@ -1394,7 +1403,10 @@ class RetouchEngine:
             "smooth_engine": smooth_engine,
             "undereye_shadow_strength": undereye_shadow_strength,
             "freckle_removal": freckle_removal,
+            "heal_engine": heal_engine,
             "freckle_preserve_mask": freckle_preserve_mask,
+            "hb_even": hb_even,
+            "hb_shift": hb_shift,
         }
         overrides.update(kwargs)
 
@@ -3572,7 +3584,12 @@ class RetouchEngine:
             blemish_strength = max(20.0, active_strength * 0.5)  # conservative floor of 20
             blemish_remover = BlemishRemover()
             result_u8 = np.clip(result * 255.0, 0, 255).astype(np.uint8)
-            result_unblemished = blemish_remover.remove(result_u8, body_skin_mask, strength=blemish_strength)
+            result_unblemished = blemish_remover.remove(
+                result_u8,
+                body_skin_mask,
+                strength=blemish_strength,
+                heal_engine=ctx.heal_engine,
+            )
             # blend_masked expects uint8 [0,255] images, not float32 [0,1]
             result = blend_masked(
                 result_u8,

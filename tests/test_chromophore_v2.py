@@ -8,6 +8,7 @@ from retouch.chromophore_v2 import (
     decompose_chromophores_v2,
     recompose_chromophores_v2,
     reduce_hemoglobin_variance,
+    shift_hemoglobin,
 )
 
 
@@ -83,6 +84,15 @@ def test_hemoglobin_edit_preserves_melanin_in_fixed_coordinate_system():
     assert after.hemoglobin.std() < before.hemoglobin.std() * 0.35
 
 
+def test_hemoglobin_shift_preserves_melanin_and_moves_relative_flush():
+    img = _synthetic_skin()
+    before = decompose_chromophores_v2(img)
+    out = shift_hemoglobin(img, -0.6, decomposition=before)
+    after = decompose_chromophores_v2(out, axes_rgb=before.axes_rgb)
+    assert np.max(np.abs(after.melanin - before.melanin)) < 2e-4
+    assert float(after.hemoglobin.mean()) < float(before.hemoglobin.mean())
+
+
 def test_global_colour_cast_does_not_change_relative_hb_variance_or_axis_choice():
     img = _synthetic_skin()
     # A per-channel gain is a global OD offset. It should not perturb the
@@ -102,8 +112,10 @@ def test_mask_and_zero_strength_are_exact_noops():
     img = _synthetic_skin()
     mask = np.zeros(img.shape[:2], dtype=np.uint8)
     zero = reduce_hemoglobin_variance(img, 0.0)
+    shift_zero = shift_hemoglobin(img, 0.0)
     empty = reduce_hemoglobin_variance(img, 0.7, skin_mask=mask)
     assert zero is img
+    assert shift_zero is img
     assert empty is img
 
 

@@ -669,7 +669,7 @@ def reset_color_grading(recipe_name):
 
 def reset_film_effects(recipe_name):
     d = recipe_defaults(recipe_name)
-    return d["chromatic_aberration"], d["grain"], d["halation"], d["lut"], d["tonal_curve_strength"], d["skin_protect_strength"], d["grain_strength"], d["highlight_rolloff_strength"]
+    return d["chromatic_aberration"], d["grain"], d["halation"], d["lut"], d["tonal_curve_strength"], d["skin_protect_strength"], d["grain_strength"], d["highlight_rolloff_strength"], d["film_enable"], d["film_highlight_purity"]
 
 def reset_split_toning(recipe_name):
     d = recipe_defaults(recipe_name)
@@ -1810,7 +1810,6 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         _hair_ring_position_state = gr.State(value=0.5)
                         _hair_ring_tint_state = gr.State(value=0.0)
                         _hair_remove_flyaways_state = gr.State(value=0.0)
-                        _film_enable_state = gr.State(value=False)
                         _film_strength_state = gr.State(value=0.0)
                         _film_toe_r_state = gr.State(value=0.0)
                         _film_toe_g_state = gr.State(value=0.0)
@@ -1929,10 +1928,13 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             micro_restore = gr.Slider(0, 50, 20, step=1, label="Micro-Texture Restore", info="Re-inject dimensional micro-contrast in cheek/nose/under-eye zones after smoothing (0 = off, 25 = subtle, 50 = strong)")
                             _micro_dodge_burn_state = gr.State(value=0)
                             _redness_even_state = gr.State(value=0)
+                            hb_even = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Hemoglobin Even", info="Even redness variation in linear pigment space while preserving melanin marks")
+                            hb_shift = gr.Slider(-1.0, 1.0, 0.0, step=0.05, label="Hemoglobin Shift", info="Negative reduces facial flush; positive adds it. Uses the face's own pigment range")
                             _whiten_hue_stable_state = gr.State(value=0)
                             pore_synthesis = gr.Slider(0, 100, 0, step=1, label="Pore Synthesis", info="Add micro-texture/synthesized pores to prevent artificial plastic skin")
                             blemish = gr.Slider(0, 100, 30, step=1, label="Blemish Removal", info="AI blemish detection and inpainting for acne/spots")
                             freckle_removal = gr.Slider(0, 100, 0, step=1, label="Freckle Removal", info="Remove freckles while preserving beauty marks (0=off)")
+                            heal_engine = gr.Dropdown(choices=["telea", "patchmatch"], value="telea", label="Auto Heal Engine", info="PatchMatch synthesizes from nearby skin texture; Telea remains the fast default")
                             mark_policy = gr.Dropdown(
                                 choices=list(MARK_POLICY_PRESET_NAMES),
                                 value="legacy",
@@ -2071,6 +2073,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
 
                         with gr.Accordion("🎞️ Film & Analog Effects", open=False):
                             reset_film_effects_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
+                            film_enable = gr.Checkbox(label="Enable Film Density Engine", value=False, info="Required for film highlight controls")
+                            film_highlight_purity = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Highlight Purity", info="Roll saturated highlights naturally toward white instead of neon yellow or orange")
                             chromatic_aberration = gr.Slider(0, 20, 0, step=0.5, label="Chromatic Aberration", info="Lens fringing effect (RGB channel shift in pixels)")
                             grain = gr.Slider(0, 100, 0, step=1, label="Film Grain", info="Analog film grain noise overlay (0-100 maps to engine 0.0-0.2)")
                             halation = gr.Slider(0, 100, 0, step=1, label="Halation", info="Red light bloom around bright highlights (0-100 maps to engine 0.0-1.0)")
@@ -2333,7 +2337,15 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
  "body_relight",
         "body_dodge_burn",
  "body_shadow_lift",
-        "mark_policy"
+        "mark_policy",
+        # These controls are visible and recipe-driven. Keep them appended so
+        # existing callback positions remain stable while a film/heal recipe
+        # can actually activate the capability it declares.
+        "heal_engine",
+        "hb_even",
+        "hb_shift",
+        "film_enable",
+        "film_highlight_purity",
     )
 
     # Name -> Gradio component map for the recipe-output tuple.  Mirrors the
@@ -2462,7 +2474,12 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
  "body_relight": body_relight,
         "body_dodge_burn": body_dodge_burn,
  "body_shadow_lift": body_shadow_lift,
-        "mark_policy": mark_policy
+        "mark_policy": mark_policy,
+        "heal_engine": heal_engine,
+        "hb_even": hb_even,
+        "hb_shift": hb_shift,
+        "film_enable": film_enable,
+        "film_highlight_purity": film_highlight_purity,
     }
     _missing_outputs = set(RECIPE_OUTPUT_KEYS) - set(_recipe_output_components)
     _extra_outputs = set(_recipe_output_components) - set(RECIPE_OUTPUT_KEYS)
@@ -2549,7 +2566,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     reset_film_effects_btn.click(
         fn=reset_film_effects,
         inputs=[recipe],
-        outputs=[chromatic_aberration, grain, halation, lut, tonal_curve_strength, skin_protect_strength, grain_strength, highlight_rolloff_strength]
+        outputs=[chromatic_aberration, grain, halation, lut, tonal_curve_strength, skin_protect_strength, grain_strength, highlight_rolloff_strength, film_enable, film_highlight_purity]
     )
 
     reset_split_toning_btn.click(
@@ -2684,10 +2701,13 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "smooth_engine": smooth_engine,
         "undereye_shadow_strength": undereye_shadow_strength,
         "freckle_removal": freckle_removal,
+        "heal_engine": heal_engine,
         "mark_policy": mark_policy,
         "micro_restore": micro_restore,
         "micro_dodge_burn": _micro_dodge_burn_state,
         "redness_even": _redness_even_state,
+        "hb_even": hb_even,
+        "hb_shift": hb_shift,
         "whiten_hue_stable": _whiten_hue_stable_state,
         "whiten": whiten,
         "equalize": equalize,
@@ -2846,7 +2866,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "calibration_blue_hue": _calibration_blue_hue_state,
         "calibration_blue_sat": _calibration_blue_sat_state,
         "calibration_blue_lum": _calibration_blue_lum_state,
-        "film_enable": _film_enable_state,
+        "film_enable": film_enable,
         "film_strength": _film_strength_state,
         "film_toe_r": _film_toe_r_state,
         "film_toe_g": _film_toe_g_state,
@@ -2863,6 +2883,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "film_tonemap_toe": _film_tonemap_toe_state,
         "film_tonemap_shoulder": _film_tonemap_shoulder_state,
         "film_skew": _film_skew_state,
+        "film_highlight_purity": film_highlight_purity,
         "background_harmonize": _background_harmonize_state,
         "background_harmonize_mode": _background_harmonize_mode_state,
         "background_blur": _background_blur_state,

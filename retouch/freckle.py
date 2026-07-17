@@ -294,6 +294,7 @@ class FreckleRemover:
         freckle_preserve_mask: Optional[np.ndarray] = None,
         confidence_threshold: float = 0.7,
         mole_mask: Optional[np.ndarray] = None,
+        heal_engine: str = "telea",
     ) -> np.ndarray:
         """Remove freckles while preserving beauty marks via inpainting.
 
@@ -320,6 +321,7 @@ class FreckleRemover:
                 freckle_preserve_mask,
                 confidence_threshold,
                 mole_mask,
+                heal_engine,
             )
 
         classifications = self.classify_anomalies(
@@ -372,6 +374,20 @@ class FreckleRemover:
         scale = face_width / 500.0
         inpaint_r = max(int(3 * scale), 2)
         blend_k = max(int(7 * scale), 3) | 1
-        return inpaint_and_blend(
-            img_bgr, removal_mask, inpaint_r, cv2.INPAINT_TELEA, blend_k
-        )
+        if heal_engine == "telea":
+            return inpaint_and_blend(
+                img_bgr, removal_mask, inpaint_r, cv2.INPAINT_TELEA, blend_k
+            )
+        if heal_engine == "patchmatch":
+            from .heal import heal_region
+
+            return heal_region(
+                img_bgr,
+                removal_mask,
+                method="patchmatch",
+                source_mask=face_mask,
+                patch_size=7,
+                iterations=5,
+                seamless=False,
+            )
+        raise ValueError("heal_engine must be 'telea' or 'patchmatch'")

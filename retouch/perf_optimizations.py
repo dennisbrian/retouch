@@ -204,7 +204,7 @@ def _e1_to_u8(canvas: np.ndarray) -> np.ndarray:
 
 _E1_U8_FROM = os.environ.get("E1_U8_FROM", "")
 _E1_CHAIN_ORDER = ['makeup_coverage_even', 'albedo_even', 'post_freq', 'flatten', 'restore_micro_texture', 'micro_dodge_burn',
-                   'redness_even', 'hemoglobin_smooth', 'vein_attenuate', 'equalize', 'unify_hue_line', 'unify_tone', 'whiten',
+                   'redness_even', 'hb_even', 'hb_shift', 'hemoglobin_smooth', 'vein_attenuate', 'equalize', 'unify_hue_line', 'unify_tone', 'whiten',
                    'shine_removal', 'relight', 'sculpt', 'apply_sss', 'quantize_tones',
                    'apply_specular_bloom', 'blemish.remove', 'undereye.repair',
                    'harmonize_neck', 'eyes.enhance', 'teeth.whiten', 'lips.enhance',
@@ -505,6 +505,7 @@ def _process_face_core(
             freckle_removal=_freckle_removal,
             freckle_preserve_mask=preserve_mask,
             mole_mask=_mole_for_freckle,
+            heal_engine=getattr(ctx, 'heal_engine', 'telea'),
         )
 
     # ---- Exposure-locked smoothing (recipe-only) ----
@@ -545,6 +546,36 @@ def _process_face_core(
     if ctx.redness_even > 0:
         canvas = _tr('redness_even', canvas)
         canvas = skin.redness_even(canvas, _norm_mask(regions.skin), ctx.redness_even, face_width, lips_mask=_norm_mask(regions.lips))
+
+    # ---- X2: Relative hemoglobin edits in linear optical density ----
+    # These are explicitly opt-in.  They use the face's own pigment span and
+    # leave melanin untouched, unlike generic LAB chroma smoothing.
+    _hb_even = float(getattr(ctx, 'hb_even', 0.0) or 0.0)
+    _hb_shift = float(getattr(ctx, 'hb_shift', 0.0) or 0.0)
+    if _hb_even > 0.0 or _hb_shift != 0.0:
+        from .chromophore_v2 import (
+            decompose_chromophores_v2,
+            reduce_hemoglobin_variance,
+            shift_hemoglobin,
+        )
+
+        _skin_mask = _norm_mask(regions.skin)
+        if _skin_mask is not None:
+            _dec = decompose_chromophores_v2(canvas, skin_mask=_skin_mask)
+            if _hb_even > 0.0:
+                canvas = _tr('hb_even', canvas)
+                canvas = reduce_hemoglobin_variance(
+                    canvas, min(_hb_even, 1.0), skin_mask=_skin_mask, decomposition=_dec,
+                )
+                _dec = decompose_chromophores_v2(
+                    canvas, skin_mask=_skin_mask, axes_rgb=_dec.axes_rgb,
+                )
+            if _hb_shift != 0.0:
+                canvas = _tr('hb_shift', canvas)
+                canvas = shift_hemoglobin(
+                    canvas, float(np.clip(_hb_shift, -1.0, 1.0)),
+                    skin_mask=_skin_mask, decomposition=_dec,
+                )
 
     # ---- R10: Hemoglobin-guided smoothing (edge-preserving freckle-aware smoothing) ----
     if ctx.hemoglobin_smooth > 0:
@@ -667,7 +698,10 @@ def _process_face_core(
     # ---- Blemish removal ----
     if ctx.blemish > 0:
         canvas = _tr('blemish.remove', canvas)
-        canvas = blemish.remove(canvas, blemish_skin_mask, ctx.blemish)
+        canvas = blemish.remove(
+            canvas, blemish_skin_mask, ctx.blemish,
+            heal_engine=getattr(ctx, 'heal_engine', 'telea'),
+        )
 
     # ---- Under-eye repair ----
     if ctx.dark_circles > 0 or ctx.undereye_darken_removal > 0 or ctx.undereye_puffiness_reduction > 0:
@@ -1204,5 +1238,4 @@ def build_ort_providers() -> list[str | tuple[str, dict]]:
 
     providers.append("CPUExecutionProvider")
     return providers
-
 

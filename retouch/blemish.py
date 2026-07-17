@@ -73,6 +73,7 @@ class BlemishRemover:
         img_bgr: np.ndarray,
         skin_mask: Optional[np.ndarray],
         strength: int = 50,
+        heal_engine: str = "telea",
     ) -> np.ndarray:
         """Detect blemishes and inpaint them.
 
@@ -91,7 +92,7 @@ class BlemishRemover:
             # E1 delta adapter: inpainting is inherently uint8. Run on a uint8
             # snapshot and apply the delta to the float canvas so quantization
             # is confined to the healed pixels.
-            return apply_u8_op_float(img_bgr, self.remove, skin_mask, strength)
+            return apply_u8_op_float(img_bgr, self.remove, skin_mask, strength, heal_engine)
 
         # Estimate face width from skin mask
         face_width = estimate_face_width(skin_mask=skin_mask, img_shape=img_bgr.shape[:2])
@@ -105,7 +106,27 @@ class BlemishRemover:
         scale = face_width / 500.0
         inpaint_r = max(int(3 * scale), 2)
         blend_k = max(int(7 * scale), 3) | 1
-        return inpaint_and_blend(img_bgr, blemish_mask, inpaint_r, cv2.INPAINT_TELEA, blend_k)
+        if heal_engine == "telea":
+            return inpaint_and_blend(img_bgr, blemish_mask, inpaint_r, cv2.INPAINT_TELEA, blend_k)
+        if heal_engine == "patchmatch":
+            # Restrict exemplars to the detected skin region so a blemish is
+            # repaired from skin texture, never a nearby eye, lip, or hair.
+            from .heal import heal_region
+
+            return heal_region(
+                img_bgr,
+                blemish_mask,
+                method="patchmatch",
+                source_mask=skin_mask,
+                patch_size=7,
+                iterations=5,
+                # OpenCV seamlessClone can reintroduce a dark compact defect
+                # on a nearly uniform patch. The detected mask is already
+                # dilated, so direct exemplar replacement is the safer auto
+                # path; manual heals retain the optional seamless blend.
+                seamless=False,
+            )
+        raise ValueError("heal_engine must be 'telea' or 'patchmatch'")
 
     def _detect(
         self,

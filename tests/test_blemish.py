@@ -43,6 +43,14 @@ class TestRemove:
         result = remover.remove(img, mask, strength=80)
         assert not np.allclose(result[128, 128], [30, 30, 30], atol=10)
 
+    def test_patchmatch_is_available_for_auto_blemish_repair(self, remover):
+        img = np.full((256, 256, 3), 128, dtype=np.uint8)
+        img[124:132, 124:132] = [30, 30, 30]
+        mask = np.ones((256, 256), dtype=np.float32)
+        result = remover.remove(img, mask, strength=80, heal_engine="patchmatch")
+        assert result.dtype == np.uint8
+        assert not np.array_equal(result[128, 128], img[128, 128])
+
     def test_very_small_skin_region(self, remover, img):
         mask = np.zeros((64, 64), dtype=np.float32)
         mask[32, 32] = 1.0

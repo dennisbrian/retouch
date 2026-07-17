@@ -254,6 +254,7 @@ class TestBuildContextFromRecipe:
         assert ctx_provia.film_toe_r == pytest.approx(0.10)
         assert ctx_provia.film_crosstalk_cy_mg == pytest.approx(0.04)
         assert ctx_provia.film_tonemap_strength == pytest.approx(0.42)
+        assert ctx_provia.film_highlight_purity == pytest.approx(0.22)
         
         # Astia
         ctx_astia = self._ctx_for("astia")
@@ -262,6 +263,7 @@ class TestBuildContextFromRecipe:
         assert ctx_astia.film_toe_r == pytest.approx(0.05)
         assert ctx_astia.film_crosstalk_cy_mg == pytest.approx(0.03)
         assert ctx_astia.film_tonemap_strength == pytest.approx(0.50)
+        assert ctx_astia.film_highlight_purity == pytest.approx(0.28)
         
         # Classic Chrome
         ctx_chrome = self._ctx_for("classic_chrome")
@@ -270,6 +272,7 @@ class TestBuildContextFromRecipe:
         assert ctx_chrome.film_toe_r == pytest.approx(0.15)
         assert ctx_chrome.film_crosstalk_cy_mg == pytest.approx(0.08)
         assert ctx_chrome.film_tonemap_strength == pytest.approx(0.85)
+        assert ctx_chrome.film_highlight_purity == pytest.approx(0.34)
 
 
 # ---------------------------------------------------------------------------

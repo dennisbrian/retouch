@@ -65,11 +65,11 @@ EXPECTED_RECIPE_KEYS = [
     "eye_enhance", "eye_iris_brightness", "eye_iris_hue_shift", "eye_iris_saturate", "eye_sclera_brighten",
     "eye_sclera_vessel_remove", "fabric_wrinkle_smooth", "face_exposure", "fade_toe", "film_crosstalk_cy_mg",
     "film_crosstalk_cy_ye", "film_crosstalk_mg_ye", "film_enable", "film_gamma", "film_midpoint",
-    "film_shoulder_b", "film_shoulder_g", "film_shoulder_r", "film_skew", "film_strength",
+    "film_highlight_purity", "film_shoulder_b", "film_shoulder_g", "film_shoulder_r", "film_skew", "film_strength",
     "film_toe_b", "film_toe_g", "film_toe_r", "film_tonemap_shoulder", "film_tonemap_strength",
-    "film_tonemap_toe", "freckle_preserve_mask", "freckle_removal", "gamut_compress", "glow",
+    "film_tonemap_toe", "freckle_preserve_mask", "freckle_removal", "gamut_compress", "glow", "hb_even", "hb_shift",
     "grade_intensity", "grain", "grain_strength", "hair_deglare", "hair_enhance",
-    "hair_remove_flyaways", "hair_ring_position", "hair_ring_tint", "halation", "hemoglobin_smooth",
+    "hair_remove_flyaways", "hair_ring_position", "hair_ring_tint", "halation", "heal_engine", "hemoglobin_smooth",
     "highlight_drift", "highlight_hue", "highlight_rolloff_strength", "highlight_sat", "highlights",
     "hsl_hue_global", "hsl_lum_global", "hsl_sat_global", "impact", "light_wrap",
     "lip_enhance", "lip_finish", "lip_tint", "lut", "makeup_cake_reduce", "makeup_coverage_even", "mask_feather_mode", "matte_black",
@@ -103,7 +103,7 @@ for color in ["red", "green", "blue"]:
     EXPECTED_RECIPE_KEYS.extend([f"calibration_{color}_hue", f"calibration_{color}_sat", f"calibration_{color}_lum"])
 EXPECTED_RECIPE_KEYS.append("lens_blur")
 
-EXPECTED_RECIPE_KEY_COUNT = 242
+EXPECTED_RECIPE_KEY_COUNT = 246
 # Self-updating: the recipe/smart-style slider tuple length is the contract
 # defined by RECIPE_OUTPUT_KEYS, so this constant can never go stale.
 EXPECTED_UI_OUTPUT_COUNT = len(gui.RECIPE_OUTPUT_KEYS)
@@ -165,7 +165,7 @@ class TestRecipeDefaults:
         # String fields in recipe_defaults
         string_fields = {
             "lip_tint", "whiten_tone", "lip_finish", "specular_bloom_tone", "color_grade", "lut", "mask_feather_mode",
-            "background_harmonize_mode", "saturation_mode", "smooth_engine", "specular_finish", "mark_policy",
+            "background_harmonize_mode", "saturation_mode", "smooth_engine", "specular_finish", "mark_policy", "heal_engine",
             "mv2_brows_color", "mv2_eyeliner_color", "mv2_eyeliner_style",
             "mv2_eyeshadow_color", "mv2_eyeshadow_style", "mv2_ombre_color1", "mv2_ombre_color2"
         }
@@ -1151,7 +1151,8 @@ class TestProcessImageValidation:
             "film_midpoint": 0.5, "film_gamma": 1.0,
             "film_crosstalk_cy_mg": 0.0, "film_crosstalk_cy_ye": 0.0, "film_crosstalk_mg_ye": 0.0,
             "film_tonemap_strength": 0.0, "film_tonemap_toe": 0.1,
-            "film_tonemap_shoulder": 0.1, "film_skew": 0.0,
+            "film_tonemap_shoulder": 0.1, "film_skew": 0.0, "film_highlight_purity": 0.0,
+            "heal_engine": "telea", "hb_even": 0.0, "hb_shift": 0.0,
             "background_harmonize": 0.0, "background_harmonize_mode": "split",
             "background_blur": 0.0, "background_desaturation": 0.0,
             "light_wrap": 0.0, "blue_shadow_grade": 0.0,

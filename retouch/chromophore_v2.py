@@ -310,6 +310,45 @@ def reduce_hemoglobin_variance(
     return (bgr255 * (1.0 - alpha[..., None]) + edited * alpha[..., None]).astype(np.float32)
 
 
+def shift_hemoglobin(
+    img_bgr: np.ndarray,
+    shift: float,
+    *,
+    skin_mask: Optional[np.ndarray] = None,
+    decomposition: Optional[ChromophoreV2Decomposition] = None,
+) -> np.ndarray:
+    """Shift the masked hemoglobin coordinate by a face-relative amount.
+
+    ``shift`` is in ``[-1, 1]``.  Positive values add flush and negative
+    values reduce it.  The magnitude is derived from the subject's own
+    interquartile hemoglobin span, rather than an absolute RGB or skin-tone
+    threshold.  Melanin is deliberately left untouched.
+    """
+    if not np.isfinite(shift) or not -1.0 <= float(shift) <= 1.0:
+        raise ValueError("shift must be finite and in [-1, 1]")
+    if float(shift) == 0.0:
+        return img_bgr
+
+    bgr255 = _bgr_to_255(img_bgr)
+    alpha = _normalise_mask(skin_mask, bgr255.shape[:2])
+    if not np.any(alpha > 0.0):
+        return img_bgr
+    dec = decomposition or decompose_chromophores_v2(img_bgr, skin_mask=skin_mask)
+    if dec.hemoglobin.shape != alpha.shape:
+        raise ValueError("decomposition shape must match img_bgr")
+
+    selected = dec.hemoglobin[alpha > 0.5]
+    if selected.size == 0:
+        return img_bgr
+    q25, q75 = np.percentile(selected, (25.0, 75.0))
+    # A full-scale slider move is intentionally conservative: half the
+    # subject's robust spread, then feathered at the skin boundary.
+    delta = np.float32(float(shift) * 0.5 * float(q75 - q25))
+    hb_new = dec.hemoglobin + alpha * delta
+    edited = recompose_chromophores_v2(dec, hemoglobin=hb_new)
+    return (bgr255 * (1.0 - alpha[..., None]) + edited * alpha[..., None]).astype(np.float32)
+
+
 __all__ = [
     "ChromophoreV2Decomposition",
     "HEMOGLOBIN_PRIOR_RGB",
@@ -317,4 +356,5 @@ __all__ = [
     "decompose_chromophores_v2",
     "recompose_chromophores_v2",
     "reduce_hemoglobin_variance",
+    "shift_hemoglobin",
 ]
