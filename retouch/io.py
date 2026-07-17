@@ -378,7 +378,17 @@ def encode_write_params(fmt: str, quality: int) -> List[int]:
         OpenCV imwrite flag list, possibly empty for lossless formats.
     """
     if fmt in ("jpg", "jpeg"):
-        return [cv2.IMWRITE_JPEG_QUALITY, quality]
+        params = [cv2.IMWRITE_JPEG_QUALITY, quality]
+        # Delivery JPEGs preserve chroma resolution. This prevents the export
+        # boundary from reintroducing 4:2:0 bleed at lip and costume edges.
+        if hasattr(cv2, "IMWRITE_JPEG_SAMPLING_FACTOR") and hasattr(
+            cv2, "IMWRITE_JPEG_SAMPLING_FACTOR_444"
+        ):
+            params.extend([
+                cv2.IMWRITE_JPEG_SAMPLING_FACTOR,
+                cv2.IMWRITE_JPEG_SAMPLING_FACTOR_444,
+            ])
+        return params
     if fmt == "webp":
         return [cv2.IMWRITE_WEBP_QUALITY, quality]
     return []
@@ -491,6 +501,30 @@ def _bgr_to_pil(img: np.ndarray) -> Image.Image:
     return Image.fromarray(rgba, mode="RGBA")
 
 
+def _resolve_float_range(img: np.ndarray, float_range: str) -> str:
+    """Resolve an explicit float export range without changing uint8 callers."""
+    if float_range not in ("auto", "unit", "byte"):
+        raise ValueError("float_range must be 'auto', 'unit', or 'byte'")
+    if float_range != "auto" or img.dtype not in (np.float32, np.float64):
+        return float_range
+    finite = img[np.isfinite(img)]
+    return "unit" if finite.size == 0 or float(finite.max()) <= 1.0 else "byte"
+
+
+def _to_uint8_delivery(img: np.ndarray, float_range: str) -> np.ndarray:
+    """Convert a final image to uint8, applying dither only at delivery."""
+    if img.dtype == np.uint8:
+        return img
+    if img.dtype in (np.float32, np.float64):
+        from .precision import to_uint8_dithered
+
+        unit = img if float_range == "unit" else img * (1.0 / 255.0)
+        return to_uint8_dithered(unit.astype(np.float32, copy=False))
+    if img.dtype == np.uint16:
+        return np.clip(np.round(img.astype(np.float32) / 257.0), 0, 255).astype(np.uint8)
+    return np.clip(img, 0, 255).astype(np.uint8)
+
+
 def _icc_to_profile(icc_profile: bytes) -> "ImageCms.core.CmsProfile":  # type: ignore[name-defined]
     return ImageCms.getOpenProfile(io.BytesIO(icc_profile))
 
@@ -508,13 +542,16 @@ def write_image_with_icc(
         path: Destination filesystem path. Format is inferred from extension
             (``.jpg``/``.jpeg``/``.png``/``.tif``/``.tiff``/``.webp``).
         img: Source image. Accepts ``HxW`` grayscale, ``HxWx3`` BGR, or
-            ``HxWx4`` BGRA uint8 (or float in [0, 1]). Channel order is
-            converted to RGB/RGBA for PIL.
+            ``HxWx4`` BGRA uint8. Float input must declare ``float_range``
+            when the range is ambiguous; the engine's future float contract is
+            ``[0, 255]`` (``float_range="byte"``).
         icc_profile: Raw ICC profile bytes to embed. If ``None`` or empty,
             the image is saved without an embedded profile.
         bit_depth: Output bit depth. ``8`` (default) for uint8, ``16`` for
-            uint16 (PNG/TIFF only). JPEG/WebP always output 8-bit.
-        **kwargs: ``quality`` (int, default ``95``) and ``format`` (str) are
+            uint16 (PNG/TIFF only). The 16-bit OpenCV path cannot embed an
+            ICC profile; JPEG/WebP always output 8-bit.
+        **kwargs: ``quality`` (int, default ``95``), ``format`` (str), and
+            ``float_range`` (``"auto"``, ``"unit"``, or ``"byte"``) are
             consumed; all remaining kwargs are forwarded to ``PIL.Image.save``.
 
     Falls back to ``cv2.imwrite`` (which never embeds ICC) when PIL or the
@@ -524,6 +561,7 @@ def write_image_with_icc(
     ext = path.suffix.lower()
     pil_format = kwargs.pop("format", _ICC_WRITE_FORMAT_MAP.get(ext))
     quality = int(kwargs.pop("quality", 95))
+    float_range = _resolve_float_range(img, str(kwargs.pop("float_range", "auto")))
 
     # 16-bit export: only PNG and TIFF support it
     if bit_depth == 16:
@@ -536,42 +574,42 @@ def write_image_with_icc(
         else:
             # Convert to uint16 for 16-bit export
             if img.dtype == np.float32 or img.dtype == np.float64:
-                img_16 = np.clip(img * 65535.0 + 0.5, 0, 65535).astype(np.uint16)
+                scale = 65535.0 if float_range == "unit" else 257.0
+                img_16 = np.clip(img * scale + 0.5, 0, 65535).astype(np.uint16)
             elif img.dtype == np.uint8:
                 # Upscale uint8 to uint16: multiply by 257 to fill the range
                 img_16 = (img.astype(np.uint16) * 257).astype(np.uint16)
             else:
                 img_16 = img.astype(np.uint16)
             
-            # For 16-bit, use PIL with proper mode
-            if img_16.ndim == 2:
-                pil_img = Image.fromarray(img_16, mode="I;16")
-            elif img_16.ndim == 3 and img_16.shape[2] == 3:
-                # Convert BGR to RGB for PIL
-                rgb_16 = cv2.cvtColor(img_16, cv2.COLOR_BGR2RGB)
-                pil_img = Image.fromarray(rgb_16, mode="RGB;16")
-            elif img_16.ndim == 3 and img_16.shape[2] == 4:
-                rgba_16 = cv2.cvtColor(img_16, cv2.COLOR_BGRA2RGBA)
-                pil_img = Image.fromarray(rgba_16, mode="RGBA;16")
-            else:
+            if img_16.ndim not in (2, 3) or (
+                img_16.ndim == 3 and img_16.shape[2] not in (3, 4)
+            ):
                 raise ValueError(f"16-bit export: unsupported image shape {img_16.shape}")
-            
-            save_kwargs: Dict[str, Any] = {"format": pil_format or ("PNG" if ext == ".png" else "TIFF")}
+
+            # Pillow cannot reliably construct 16-bit RGB/RGBA images across
+            # supported versions. OpenCV preserves the actual channel depth;
+            # unlike the old path, it cannot attach an ICC profile, so report
+            # that limitation instead of writing an invalid or 8-bit file.
             if icc_profile:
-                save_kwargs["icc_profile"] = icc_profile
-            save_kwargs.update(kwargs)
-            pil_img.save(str(path), **save_kwargs)
+                logger.warning("16-bit export does not embed ICC profiles; OpenCV writer is used")
+            if not cv2.imwrite(str(path), img_16):
+                raise cv2.error(f"cv2.imwrite returned False for 16-bit write to {path}")
             return
 
-    # 8-bit path (original logic)
+    # 8-bit delivery is the only place where blue-noise dither is allowed.
+    # Intermediate pipeline conversions must stay deterministic and noiseless.
+    img_u8 = _to_uint8_delivery(img, float_range)
     if pil_format is None:
-        cv2.imwrite(str(path), img, encode_write_params(ext.lstrip("."), quality))
+        cv2.imwrite(str(path), img_u8, encode_write_params(ext.lstrip("."), quality))
         return
 
-    pil_img = _bgr_to_pil(img)
+    pil_img = _bgr_to_pil(img_u8)
     save_kwargs_8: Dict[str, Any] = {"format": pil_format}
     if pil_format in ("JPEG", "WEBP"):
         save_kwargs_8["quality"] = quality
+    if pil_format == "JPEG":
+        save_kwargs_8["subsampling"] = 0  # 4:4:4
     if icc_profile:
         save_kwargs_8["icc_profile"] = icc_profile
     save_kwargs_8.update(kwargs)

@@ -9,6 +9,11 @@ method sources (§Sources; verify exact citations when implementing).
 **Rules inherited:** classical/deterministic, unit-testable, no learned models,
 tone-fair, no absolute intensity thresholds, no identity-changing defaults.
 
+**Delivery update (working tree):** AB1 JPEG 4:4:4 delivery is implemented at
+the shared encoder and GUI paths. Pillow exposes an explicit JPEG subsampling
+control, but not an equivalent control for lossy WebP; WebP therefore remains
+unchanged rather than advertising an unsupported 4:4:4 setting.
+
 ---
 
 ## 1. Working-tree status (delta since the AA doc)
@@ -109,7 +114,9 @@ the chroma loop (restore on ingest, preserve on delivery).
 `IMWRITE_JPEG_SAMPLING_FACTOR = IMWRITE_JPEG_SAMPLING_FACTOR_444` (available
 since OpenCV 4.6). Also apply to the GUI compare strip (`gui.py:973-974`) —
 that strip is the visual-QA surface, and today it softens exactly the edges
-the slider work is judged on.
+the slider work is judged on. Lossy WebP has no equivalent Pillow sampling
+control, so preserve its current behavior or use lossless WebP where chroma
+fidelity matters more than file size.
 
 **Tests:** encode→decode round trip on saturated synthetic edges — chroma MSE
 drops vs 4:2:0 at equal quality; file-size delta measured and documented

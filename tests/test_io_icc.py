@@ -11,10 +11,12 @@ import cv2
 import numpy as np
 import pytest
 from PIL import Image, ImageCms, UnidentifiedImageError
+from PIL.JpegImagePlugin import get_sampling
 
 from retouch.io import (
     _HAS_IMAGECMS,
     convert_image_colorspace,
+    encode_write_params,
     image_has_icc,
     read_icc_profile,
     write_image_with_icc,
@@ -205,8 +207,47 @@ class TestWriteImageWithIcc:
     def test_writes_float_image_in_unit_range(self, tmp_path: Path) -> None:
         path = tmp_path / "float.jpg"
         arr = np.full((20, 20, 3), 0.5, dtype=np.float32)
-        write_image_with_icc(str(path), arr, _srgb_icc_bytes(), quality=90)
+        write_image_with_icc(
+            str(path), arr, _srgb_icc_bytes(), quality=90, float_range="unit"
+        )
         assert path.exists()
+
+    def test_writes_float_image_in_engine_byte_range(self, tmp_path: Path) -> None:
+        path = tmp_path / "float-byte.jpg"
+        arr = np.full((20, 20, 3), 127.5, dtype=np.float32)
+        write_image_with_icc(
+            str(path), arr, _srgb_icc_bytes(), quality=95, float_range="byte"
+        )
+        decoded = np.asarray(Image.open(str(path)).convert("RGB"))
+        assert decoded.mean() == pytest.approx(128.0, abs=3.0)
+
+    def test_writes_16bit_float_image_in_engine_byte_range(self, tmp_path: Path) -> None:
+        path = tmp_path / "float-byte-16.png"
+        arr = np.full((20, 20, 3), 127.5, dtype=np.float32)
+        write_image_with_icc(str(path), arr, bit_depth=16, float_range="byte")
+
+        decoded = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+        assert decoded is not None
+        assert decoded.dtype == np.uint16
+        assert decoded.mean() == pytest.approx(127.5 * 257.0, abs=1.0)
+
+    def test_jpeg_uses_444_subsampling(self, tmp_path: Path) -> None:
+        path = tmp_path / "444.jpg"
+        arr = np.zeros((32, 32, 3), dtype=np.uint8)
+        arr[:, ::2] = (255, 0, 255)
+        arr[:, 1::2] = (0, 255, 0)
+        write_image_with_icc(str(path), arr, quality=90)
+        with Image.open(str(path)) as decoded:
+            assert get_sampling(decoded) == 0
+
+    def test_opencv_jpeg_params_use_444_subsampling(self) -> None:
+        arr = np.zeros((32, 32, 3), dtype=np.uint8)
+        arr[:, ::2] = (255, 0, 255)
+        arr[:, 1::2] = (0, 255, 0)
+        ok, encoded = cv2.imencode(".jpg", arr, encode_write_params("jpg", 90))
+        assert ok
+        with Image.open(io.BytesIO(encoded.tobytes())) as decoded:
+            assert get_sampling(decoded) == 0
 
     def test_writes_grayscale_image(self, tmp_path: Path) -> None:
         path = tmp_path / "gray.jpg"

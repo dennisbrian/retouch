@@ -18,7 +18,15 @@ import gradio as gr
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from retouch import RetouchEngine
 from retouch.engine import resolve_recipe
-from retouch.io import imread_exif, imread_engine, EXPORT_RES_MAP, EXT_MAP
+from retouch.io import (
+    EXT_MAP,
+    EXPORT_RES_MAP,
+    encode_write_params,
+    imread_engine,
+    imread_exif,
+    read_icc_profile,
+    write_image_with_icc,
+)
 from retouch.lips import LIP_TINT_NAMES
 from retouch.recipes import RECIPES
 from retouch.params import recipe_to_params, PROCESSING_PARAMS, param_names, gui_values_to_engine_kwargs
@@ -572,12 +580,16 @@ def process_image(*args):
                 from retouch.io import write_image_16bit
                 write_image_16bit(out_path, export_img, format="png")
             else:
-                write_params = []
-                if export_fmt == "JPEG":
-                    write_params = [cv2.IMWRITE_JPEG_QUALITY, export_quality]
-                elif export_fmt == "WebP":
-                    write_params = [cv2.IMWRITE_WEBP_QUALITY, export_quality]
-                cv2.imwrite(out_path, export_img, write_params)
+                # Keep source ICC metadata on GUI output and route JPEG through
+                # the 4:4:4 delivery encoder. PNG-16 stays on its explicit
+                # writer until engine float output is available end-to-end.
+                write_image_with_icc(
+                    out_path,
+                    export_img,
+                    icc_profile=read_icc_profile(curr_path),
+                    bit_depth=8,
+                    quality=export_quality,
+                )
             exported_paths.append(out_path)
 
         except Exception as e:
@@ -970,8 +982,9 @@ def _make_comparison_html(orig_bgr, result_bgr, max_height=600):
         new_h = int(orig_bgr.shape[0] * scale)
         orig_bgr = cv2.resize(orig_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
         result_bgr = cv2.resize(result_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
-    _, ob = cv2.imencode('.jpg', orig_bgr, [cv2.IMWRITE_JPEG_QUALITY, 92])
-    _, rb = cv2.imencode('.jpg', result_bgr, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    jpeg_params = encode_write_params("jpg", 92)
+    _, ob = cv2.imencode('.jpg', orig_bgr, jpeg_params)
+    _, rb = cv2.imencode('.jpg', result_bgr, jpeg_params)
     uid = hex(int(time.time() * 1e6))[2:]
     return COMPARE_TPL % {
         "uid": uid,
