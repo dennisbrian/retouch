@@ -531,3 +531,109 @@ class TestFaceParserParseFallback:
         # should fall back to landmarks.
         result = parser.parse(landmarks, img, bbox, None, 50.0)
         assert isinstance(result, FaceRegions)
+
+
+# ---------------------------------------------------------------------------
+# BiSeNet skin mask must not bleed onto a nearby skin-toned region that is
+# outside the landmark face oval (e.g. an occluding hand) — regression for
+# docs/plans/RESEARCH_FRONTIER_AD_2026_07_19.md.
+# ---------------------------------------------------------------------------
+
+
+def _make_face_oval_landmarks(
+    num=478, center=(0.5, 0.5), radius=0.20,
+):
+    """478 landmarks with FACE_OVAL indices on a known circle; all other
+    indices collapsed to the same center point (irrelevant to this test —
+    only the FACE_OVAL polygon shape is exercised)."""
+    from retouch.parsing import FACE_OVAL
+
+    cx, cy = center
+    lm_list = [_Landmark(cx, cy, 0.0) for _ in range(num)]
+    n = len(FACE_OVAL)
+    for k, idx in enumerate(FACE_OVAL):
+        angle = 2.0 * np.pi * k / n
+        lm_list[idx] = _Landmark(
+            cx + radius * np.cos(angle),
+            cy + radius * np.sin(angle),
+            0.0,
+        )
+    return _LandmarkCompat(lm_list)
+
+
+class TestBiSenetSkinClippedToLandmarkOval:
+    """FaceParser.parse() must clip BiSeNet's unconstrained per-pixel skin
+    mask to the landmark face-oval boundary, so a nearby skin-toned region
+    (a hand resting near the jaw) does not receive face-retouch treatment."""
+
+    def test_skin_bleed_outside_face_oval_is_clipped(self):
+        h = w = 200
+        # FACE_OVAL circle: center (100, 100)px, radius 40px (0.20 * 200).
+        landmarks = _make_face_oval_landmarks(center=(0.5, 0.5), radius=0.20)
+
+        # BiSeNet says "skin" (class 1) uniformly across its ENTIRE crop —
+        # exactly the real bug: BiSeNet correctly finds the actual face,
+        # but (having no hand/limb class) also calls any other skin-toned
+        # region "skin" with equal confidence, e.g. a hand resting near
+        # the jaw. No class override needed; the point being sampled below
+        # ((30, 30) in image space) is deliberately outside the landmark
+        # circle (distance ~99px from center vs. 40px radius) but still
+        # inside BiSeNet's crop, so pre-fix it reads as skin regardless.
+        logits = np.full((1, 19, 512, 512), -10.0, dtype=np.float32)
+        logits[:, 1, :, :] = 10.0
+
+        mock_sess = MagicMock()
+        mock_sess.run.return_value = [logits]
+
+        parser = FaceParser()
+        parser._sess = mock_sess
+
+        img = np.full((h, w, 3), 128, dtype=np.uint8)
+        bbox = (50, 50, 100, 100)
+
+        result = parser.parse(landmarks, img, bbox, None, 50.0)
+
+        # Inside the face-oval circle: skin must still be present (the fix
+        # is a clip, not a wholesale mask replacement).
+        assert result.skin[100, 100] > 0.5, (
+            "Skin mask should still cover the actual face region after clipping"
+        )
+        # (30, 30) is inside BiSeNet's padded crop (BiSeNet says skin
+        # there — it has no hand class to say otherwise) but well outside
+        # the landmark face-oval circle. Verified this assertion actually
+        # discriminates: pre-fix it reads 1.0 here, post-fix 0.0 (checked
+        # by temporarily reverting the parsing.py fix and re-running).
+        assert result.skin[30, 30] < 0.1, (
+            "Skin mask bled onto a region outside the landmark face oval "
+            "(regression: BiSeNet has no hand/limb class, so an occluding "
+            "hand gets face-retouch treatment unless clipped to the "
+            "landmark-derived face silhouette)"
+        )
+
+    def test_unoccluded_face_oval_mostly_unaffected(self):
+        """When BiSeNet's skin mask is already spatially inside the
+        landmark face oval (the normal, unoccluded case), clipping must be
+        near-lossless."""
+        h = w = 200
+        landmarks = _make_face_oval_landmarks(center=(0.5, 0.5), radius=0.35)
+
+        # BiSeNet says skin everywhere (matches _make_fake_logits default):
+        # a face oval this large relative to the crop approximates BiSeNet
+        # correctly finding skin across most of the frame, as it would for
+        # an unoccluded close-up face crop.
+        mock_sess = MagicMock()
+        mock_sess.run.return_value = [_make_fake_logits()]
+
+        parser = FaceParser()
+        parser._sess = mock_sess
+
+        img = np.full((h, w, 3), 128, dtype=np.uint8)
+        bbox = (50, 50, 100, 100)
+
+        result = parser.parse(landmarks, img, bbox, None, 50.0)
+
+        # Center of the face must remain fully covered.
+        assert result.skin[100, 100] > 0.9
+        # Overall coverage should stay substantial — clipping only removes
+        # the true boundary/background, not the bulk of a real face.
+        assert result.skin.mean() > 0.15

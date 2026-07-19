@@ -340,6 +340,12 @@ class FaceParser:
         regions.hair = bisenet_masks.get('hair')
         regions.cloth = bisenet_masks.get('cloth')
 
+        # BiSeNet has no hand/limb class; clip its unconstrained per-pixel
+        # skin/face_oval to the landmark face-oval boundary before anything
+        # downstream derives sub-regions from them (see
+        # _clip_bisenet_skin_to_landmark_oval docstring).
+        self._clip_bisenet_skin_to_landmark_oval(regions, landmarks, w_img, h_img, feather)
+
         # Fallback to landmarks if BiSeNet failed or has empty skin
         if regions.skin is None or regions.skin.max() < 0.01:
             regions = self._landmark_fallback_only(landmarks, img_bgr, person_mask, ied)
@@ -538,6 +544,14 @@ class FaceParser:
                 regions.hair = bisenet_masks.get('hair')
                 regions.cloth = bisenet_masks.get('cloth')
 
+                # BiSeNet has no hand/limb class; clip its unconstrained
+                # per-pixel skin/face_oval to the landmark face-oval
+                # boundary before anything downstream derives sub-regions
+                # from them (see _clip_bisenet_skin_to_landmark_oval).
+                self._clip_bisenet_skin_to_landmark_oval(
+                    regions, landmarks_compat_list[idx_face], w_img, h_img, feather
+                )
+
                 # Handle fallback if skin is empty
                 if regions.skin is None or regions.skin.max() < 0.01:
                     regions = self._landmark_fallback_only(
@@ -572,6 +586,36 @@ class FaceParser:
                     )
 
         return results
+
+    def _clip_bisenet_skin_to_landmark_oval(
+        self,
+        regions: "FaceRegions",
+        landmarks: Any,
+        w_img: int,
+        h_img: int,
+        feather: int,
+    ) -> None:
+        """Clip BiSeNet's ``skin``/``face_oval`` to the landmark face-oval.
+
+        BiSeNet's per-pixel classifier has no hand/limb class, so any
+        skin-toned pixel it associates with "face skin" by local
+        texture/context — including a hand resting near the jaw — is
+        labeled skin. Left unconstrained, this bleeds face-retouch
+        treatment onto an occluding hand (see
+        docs/plans/RESEARCH_FRONTIER_AD_2026_07_19.md). The landmark face
+        oval is pure polygon geometry over the actual jawline/hairline
+        contour, independent of pixel color, so intersecting against it
+        excludes anything spatially outside the face regardless of skin
+        tone. For an unoccluded face this is a near-no-op (BiSeNet's mask
+        is already inside the landmark boundary), so this must run before
+        ``_add_landmark_subregions`` derives every sub-region from
+        ``regions.skin``.
+        """
+        landmark_oval = self._mask(landmarks, FACE_OVAL, w_img, h_img, feather)
+        if regions.skin is not None:
+            regions.skin = regions.skin * landmark_oval
+        if regions.face_oval is not None:
+            regions.face_oval = regions.face_oval * landmark_oval
 
     def _landmark_fallback_only(
         self,
