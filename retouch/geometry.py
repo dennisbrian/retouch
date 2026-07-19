@@ -329,25 +329,31 @@ class FaceReshaper:
             return []
         s = strength / 100.0
         warps: List[Warp] = []
+        horiz, vert = FaceReshaper._face_local_axes(landmarks, w, h)
 
         c_rjaw = (int(landmarks[234].x * w), int(landmarks[234].y * h))
-        t_rjaw = (int(c_rjaw[0] + fw * 0.04 * s), c_rjaw[1])
+        d_rjaw = horiz * (fw * 0.04 * s)
+        t_rjaw = (int(c_rjaw[0] + d_rjaw[0]), int(c_rjaw[1] + d_rjaw[1]))
         warps.append((c_rjaw, t_rjaw, int(fw * 0.5)))
 
         c_ljaw = (int(landmarks[454].x * w), int(landmarks[454].y * h))
-        t_ljaw = (int(c_ljaw[0] - fw * 0.04 * s), c_ljaw[1])
+        d_ljaw = horiz * (fw * 0.04 * s)
+        t_ljaw = (int(c_ljaw[0] - d_ljaw[0]), int(c_ljaw[1] - d_ljaw[1]))
         warps.append((c_ljaw, t_ljaw, int(fw * 0.5)))
 
         c_rchk = (int(landmarks[117].x * w), int(landmarks[117].y * h))
-        t_rchk = (int(c_rchk[0] + fw * 0.02 * s), c_rchk[1])
+        d_rchk = horiz * (fw * 0.02 * s)
+        t_rchk = (int(c_rchk[0] + d_rchk[0]), int(c_rchk[1] + d_rchk[1]))
         warps.append((c_rchk, t_rchk, int(fw * 0.4)))
 
         c_lchk = (int(landmarks[346].x * w), int(landmarks[346].y * h))
-        t_lchk = (int(c_lchk[0] - fw * 0.02 * s), c_lchk[1])
+        d_lchk = horiz * (fw * 0.02 * s)
+        t_lchk = (int(c_lchk[0] - d_lchk[0]), int(c_lchk[1] - d_lchk[1]))
         warps.append((c_lchk, t_lchk, int(fw * 0.4)))
 
         c_chin = (int(landmarks[152].x * w), int(landmarks[152].y * h))
-        t_chin = (c_chin[0], int(c_chin[1] - fw * 0.015 * s))
+        d_chin = vert * (fw * 0.015 * s)
+        t_chin = (int(c_chin[0] - d_chin[0]), int(c_chin[1] - d_chin[1]))
         warps.append((c_chin, t_chin, int(fw * 0.35)))
 
         return warps
@@ -523,17 +529,18 @@ class FaceReshaper:
             return []
         R = int(fw * 0.5)
         warps: List[Warp] = []
+        horiz, _vert = FaceReshaper._face_local_axes(landmarks, w, h)
         if s_right != 0:
             k_r = np.clip(s_right / 100.0, -1.0, 1.0) * _JAW_WIDTH_K
-            disp_r = fw * k_r
+            d_rjaw = horiz * (fw * k_r)
             c_rjaw = (int(landmarks[234].x * w), int(landmarks[234].y * h))
-            t_rjaw = (int(c_rjaw[0] + disp_r), c_rjaw[1])
+            t_rjaw = (int(c_rjaw[0] + d_rjaw[0]), int(c_rjaw[1] + d_rjaw[1]))
             warps.append((c_rjaw, t_rjaw, R))
         if s_left != 0:
             k_l = np.clip(s_left / 100.0, -1.0, 1.0) * _JAW_WIDTH_K
-            disp_l = fw * k_l
+            d_ljaw = horiz * (fw * k_l)
             c_ljaw = (int(landmarks[454].x * w), int(landmarks[454].y * h))
-            t_ljaw = (int(c_ljaw[0] - disp_l), c_ljaw[1])
+            t_ljaw = (int(c_ljaw[0] - d_ljaw[0]), int(c_ljaw[1] - d_ljaw[1]))
             warps.append((c_ljaw, t_ljaw, R))
         return warps
 
@@ -593,14 +600,15 @@ class FaceReshaper:
         if slider == 0:
             return []
         k = np.clip(slider / 100.0, -1.0, 1.0) * _SMILE_K
-        disp_y = -fw * k  # up
-        disp_x = fw * k * 0.5  # outward
+        horiz, vert = FaceReshaper._face_local_axes(landmarks, w, h)
+        up = vert * (-fw * k)  # up along the face's own vertical
+        out = horiz * (fw * k * 0.5)  # outward along the face's own horizontal
         warps: List[Warp] = []
         c_l = (int(landmarks[61].x * w), int(landmarks[61].y * h))
-        t_l = (int(c_l[0] - disp_x), int(c_l[1] + disp_y))
+        t_l = (int(c_l[0] - out[0] + up[0]), int(c_l[1] - out[1] + up[1]))
         warps.append((c_l, t_l, int(fw * 0.3)))
         c_r = (int(landmarks[291].x * w), int(landmarks[291].y * h))
-        t_r = (int(c_r[0] + disp_x), int(c_r[1] + disp_y))
+        t_r = (int(c_r[0] + out[0] + up[0]), int(c_r[1] + out[1] + up[1]))
         warps.append((c_r, t_r, int(fw * 0.3)))
         return warps
 
@@ -693,6 +701,46 @@ class FaceReshaper:
         x_234 = landmarks[234].x * w
         x_454 = landmarks[454].x * w
         return abs(x_454 - x_234)
+
+    @staticmethod
+    def _face_local_axes(
+        landmarks: Any,
+        w: int,
+        h: int,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Unit vectors for this face's own horizontal/vertical, independent
+        of head roll in the frame.
+
+        Warps like jaw compression or a mouth-corner lift are defined
+        relative to the face's own anatomy ("pull the jaw toward the face
+        center", "lift the mouth corner up"), not the camera's screen axes.
+        For an upright face the two coincide, so a hardcoded screen ±x/±y
+        offset looks right — but on a rolled/tilted portrait (e.g. a
+        close-up with the head canted ~50° off vertical) screen-horizontal
+        is no longer close to the true jaw-to-jaw axis, and a warp aimed
+        along it pushes tissue sideways across the face instead of toward
+        its intended target, producing a lopsided swollen-cheek look.
+
+        Horizontal: anatomical right jaw (234) -> left jaw (454), matching
+        the same landmark pair every jaw/cheek warp already keys off of.
+        Vertical: forehead top (10) -> chin (152), perpendicular-ish to the
+        horizontal by construction of the face shape, not enforced exactly
+        orthogonal (real anatomy isn't a perfect rectangle) — each caller
+        picks whichever axis matches the warp's intent.
+        """
+        p_r = np.array([landmarks[234].x * w, landmarks[234].y * h], dtype=np.float32)
+        p_l = np.array([landmarks[454].x * w, landmarks[454].y * h], dtype=np.float32)
+        horiz = p_l - p_r
+        horiz_norm = float(np.linalg.norm(horiz))
+        horiz = horiz / horiz_norm if horiz_norm > 1e-3 else np.array([1.0, 0.0], dtype=np.float32)
+
+        p_top = np.array([landmarks[10].x * w, landmarks[10].y * h], dtype=np.float32)
+        p_chin = np.array([landmarks[152].x * w, landmarks[152].y * h], dtype=np.float32)
+        vert = p_chin - p_top
+        vert_norm = float(np.linalg.norm(vert))
+        vert = vert / vert_norm if vert_norm > 1e-3 else np.array([0.0, 1.0], dtype=np.float32)
+
+        return horiz, vert
 
     @staticmethod
     def _centroid(
