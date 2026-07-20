@@ -30,6 +30,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+import cv2
 import numpy as np
 
 
@@ -51,6 +52,11 @@ HEMOGLOBIN_PRIOR_RGB = np.array([0.08, 0.90, 0.60], dtype=np.float32)
 _MAX_AXIS_ROTATION_RAD = np.deg2rad(12.0)
 _MIN_AXIS_SEPARATION_RAD = np.deg2rad(20.0)
 _MIN_SAMPLES = 128
+
+# AA5: a full physiological oxygenation swing is ΔE 2.4.  Keep each
+# hemoglobin edit inside that perceptual budget rather than limiting it with
+# an RGB or luminance threshold.
+MAX_HEMOGLOBIN_DELTA_E = 2.4
 
 
 @dataclass(frozen=True)
@@ -123,6 +129,102 @@ def _normalise_mask(mask: Optional[np.ndarray], shape: tuple[int, int]) -> np.nd
     if m.size and float(m.max()) > 1.0:
         m = m / 255.0
     return np.clip(m, 0.0, 1.0)
+
+
+def _bgr255_to_lab(img_bgr: np.ndarray) -> np.ndarray:
+    """Convert float BGR [0, 255] to CIELab float32 (L* 0..100)."""
+    rgb = np.clip(img_bgr[..., ::-1] / 255.0, 0.0, 1.0).astype(np.float32)
+    return cv2.cvtColor(rgb, cv2.COLOR_RGB2Lab)
+
+
+def _lab_to_bgr255(lab: np.ndarray) -> np.ndarray:
+    """Convert CIELab float32 (L* 0..100) to float BGR [0, 255]."""
+    rgb = cv2.cvtColor(lab.astype(np.float32), cv2.COLOR_Lab2RGB)
+    return np.clip(rgb[..., ::-1] * 255.0, 0.0, 255.0).astype(np.float32)
+
+
+def delta_e_76(
+    reference_bgr: np.ndarray,
+    edited_bgr: np.ndarray,
+    *,
+    skin_mask: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Return per-pixel CIE76 ΔE, optionally zeroed outside the skin mask."""
+    reference = _bgr_to_255(reference_bgr)
+    edited = _bgr_to_255(edited_bgr)
+    if reference.shape != edited.shape:
+        raise ValueError("reference_bgr and edited_bgr must have the same shape")
+    delta = _bgr255_to_lab(edited) - _bgr255_to_lab(reference)
+    out = np.sqrt(np.sum(delta * delta, axis=2)).astype(np.float32)
+    if skin_mask is not None:
+        out *= _normalise_mask(skin_mask, out.shape)
+    return out
+
+
+def cap_delta_e_76(
+    reference_bgr: np.ndarray,
+    edited_bgr: np.ndarray,
+    *,
+    skin_mask: Optional[np.ndarray] = None,
+    max_delta_e: float = MAX_HEMOGLOBIN_DELTA_E,
+) -> np.ndarray:
+    """Clamp an edit to a per-pixel CIE76 ΔE budget in Lab space.
+
+    Interpolation happens in Lab, so the cap is exact in the metric being
+    promised. Pixels outside ``skin_mask`` remain byte-identical to the
+    reference float255 representation.
+    """
+    if not np.isfinite(max_delta_e) or max_delta_e <= 0.0:
+        raise ValueError("max_delta_e must be finite and positive")
+    reference = _bgr_to_255(reference_bgr)
+    edited = _bgr_to_255(edited_bgr)
+    if reference.shape != edited.shape:
+        raise ValueError("reference_bgr and edited_bgr must have the same shape")
+    alpha = _normalise_mask(skin_mask, reference.shape[:2])
+    ref_lab = _bgr255_to_lab(reference)
+    edited_lab = _bgr255_to_lab(edited)
+    delta = edited_lab - ref_lab
+    distance = np.sqrt(np.sum(delta * delta, axis=2))
+    scale = np.minimum(1.0, float(max_delta_e) / np.maximum(distance, _EPS)) * alpha
+    capped = ref_lab + delta * scale[:, :, None]
+    result = _lab_to_bgr255(capped)
+    return (reference * (1.0 - alpha[:, :, None]) + result * alpha[:, :, None]).astype(np.float32)
+
+
+def _bounded_hemoglobin_edit(
+    bgr255: np.ndarray,
+    decomposition: ChromophoreV2Decomposition,
+    proposed_hemoglobin: np.ndarray,
+    alpha: np.ndarray,
+) -> np.ndarray:
+    """Apply a hemoglobin-only edit while enforcing AA5's ΔE cap.
+
+    The search scales the hemoglobin-coordinate delta before recomposition,
+    rather than blending in Lab. This preserves the decomposition's melanin
+    coordinate exactly (up to the existing float reconstruction tolerance).
+    """
+    change = proposed_hemoglobin.astype(np.float32) - decomposition.hemoglobin
+
+    def compose(scale: float) -> np.ndarray:
+        edited = recompose_chromophores_v2(
+            decomposition,
+            hemoglobin=decomposition.hemoglobin + np.float32(scale) * change,
+        )
+        return (bgr255 * (1.0 - alpha[..., None]) + edited * alpha[..., None]).astype(np.float32)
+
+    full = compose(1.0)
+    if float(delta_e_76(bgr255, full, skin_mask=alpha).max()) <= MAX_HEMOGLOBIN_DELTA_E:
+        return full
+
+    lo, hi = 0.0, 1.0
+    for _ in range(16):
+        mid = (lo + hi) * 0.5
+        candidate = compose(mid)
+        if float(delta_e_76(bgr255, candidate, skin_mask=alpha).max()) <= MAX_HEMOGLOBIN_DELTA_E:
+            lo = mid
+        else:
+            hi = mid
+    return compose(lo)
 
 
 def _project_chromatic(od_rgb: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -307,7 +409,7 @@ def reduce_hemoglobin_variance(
     hb_new = dec.hemoglobin + np.float32(strength) * alpha * (target - dec.hemoglobin)
     edited = recompose_chromophores_v2(dec, hemoglobin=hb_new)
     # Preserve unselected pixels exactly in the documented float255 contract.
-    return (bgr255 * (1.0 - alpha[..., None]) + edited * alpha[..., None]).astype(np.float32)
+    return _bounded_hemoglobin_edit(bgr255, dec, hb_new, alpha)
 
 
 def shift_hemoglobin(
@@ -346,14 +448,17 @@ def shift_hemoglobin(
     delta = np.float32(float(shift) * 0.5 * float(q75 - q25))
     hb_new = dec.hemoglobin + alpha * delta
     edited = recompose_chromophores_v2(dec, hemoglobin=hb_new)
-    return (bgr255 * (1.0 - alpha[..., None]) + edited * alpha[..., None]).astype(np.float32)
+    return _bounded_hemoglobin_edit(bgr255, dec, hb_new, alpha)
 
 
 __all__ = [
     "ChromophoreV2Decomposition",
     "HEMOGLOBIN_PRIOR_RGB",
     "MELANIN_PRIOR_RGB",
+    "MAX_HEMOGLOBIN_DELTA_E",
+    "cap_delta_e_76",
     "decompose_chromophores_v2",
+    "delta_e_76",
     "recompose_chromophores_v2",
     "reduce_hemoglobin_variance",
     "shift_hemoglobin",

@@ -69,6 +69,14 @@ PORE_SPECTRUM_THRESHOLD = 0.50  # Flag if pore-energy loss ratio > 50%
 ASYMMETRY_THRESHOLD = 0.40      # Flag if a zone < 60% of face texture energy
 SKIN_SCORE_FLOOR = 25.0         # Below this 0-100 skin score = clearly plastic
 
+# AA6 — Kee–Farid's deterministic 8-statistic retouching vector.  This is a
+# read-only diagnostic; its corpus-calibrated 1–5 mapping is deliberately not
+# a runtime model.
+_AA6_C2 = 0.03 ** 2
+_AA6_C3 = _AA6_C2 / 2.0
+_AA6_FILTER_9 = np.full((9, 9), -1.0 / 81.0, dtype=np.float32)
+_AA6_FILTER_9[4, 4] += 1.0
+
 
 def _bgr_to_lab(img_bgr: np.ndarray) -> np.ndarray:
     """Convert BGR uint8 image to CIELab float32.
@@ -82,6 +90,112 @@ def _bgr_to_lab(img_bgr: np.ndarray) -> np.ndarray:
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
     img_lab = cv2.cvtColor(img_rgb.astype(np.float32) / 255.0, cv2.COLOR_RGB2Lab)
     return img_lab
+
+
+def _aa6_mask(mask: Optional[np.ndarray], shape: tuple[int, int]) -> np.ndarray:
+    """Normalize an optional AA6 region mask to a boolean image mask."""
+    if mask is None:
+        return np.zeros(shape, dtype=bool)
+    if mask.shape != shape:
+        raise ValueError("AA6 masks must match the image dimensions")
+    mask_f = mask.astype(np.float32, copy=False)
+    if mask_f.max() > 1.0:
+        mask_f = mask_f / 255.0
+    return mask_f > 0.5
+
+
+def _aa6_weighted_mean_std(values: np.ndarray, weights: np.ndarray) -> tuple[float, float]:
+    """Return deterministic weighted summary statistics, safe for empty ROIs."""
+    total_weight = float(weights.sum())
+    if total_weight <= 0.0:
+        return 0.0, 0.0
+    mean = float(np.sum(values * weights) / total_weight)
+    variance = float(np.sum(weights * (values - mean) ** 2) / total_weight)
+    return mean, float(np.sqrt(max(variance, 0.0)))
+
+
+def perceived_retouching_vector(
+    img_bgr: np.ndarray,
+    reference_img_bgr: np.ndarray,
+    face_mask: Optional[np.ndarray],
+    warp_field: Optional[np.ndarray] = None,
+    body_mask: Optional[np.ndarray] = None,
+    body_region_weights: Optional[np.ndarray] = None,
+) -> Dict[str, float]:
+    """Compute AA6's eight deterministic Kee–Farid QA statistics.
+
+    The four geometry statistics summarize the signed warp displacement's
+    magnitude along the local reference-luminance gradient, separately for
+    face and body.  ``body_region_weights`` is optional but, when supplied,
+    lets the pose/parsing caller apply the prescribed bust/waist/thigh ×2 and
+    head/hair ×0.5 weighting without embedding class-specific assumptions in
+    this generic QA module.
+
+    The four face photometry statistics are local contrast-structure SSIM
+    (the brightness term is omitted) and the signed 9×9 high-pass response
+    change D.  Positive D means a net loss of high-frequency energy (blur);
+    negative D means a net gain (sharpening).
+    """
+    if img_bgr.shape != reference_img_bgr.shape or img_bgr.ndim != 3:
+        raise ValueError("AA6 images must be same-shape BGR images")
+    h, w = img_bgr.shape[:2]
+    face = _aa6_mask(face_mask, (h, w))
+    body = _aa6_mask(body_mask, (h, w))
+
+    if warp_field is None:
+        warp = np.zeros((h, w, 2), dtype=np.float32)
+    else:
+        if warp_field.shape != (h, w, 2):
+            raise ValueError("AA6 warp_field must have shape (H, W, 2)")
+        warp = warp_field.astype(np.float32, copy=False)
+
+    ref_luma = _gray_f32(reference_img_bgr) / 255.0
+    grad_x = cv2.Sobel(ref_luma, cv2.CV_32F, 1, 0, ksize=3)
+    grad_y = cv2.Sobel(ref_luma, cv2.CV_32F, 0, 1, ksize=3)
+    grad_norm = np.sqrt(grad_x * grad_x + grad_y * grad_y)
+    unit_x = np.divide(grad_x, grad_norm, out=np.zeros_like(grad_x), where=grad_norm > 1e-6)
+    unit_y = np.divide(grad_y, grad_norm, out=np.zeros_like(grad_y), where=grad_norm > 1e-6)
+    # Normalize by image diagonal so the same geometric edit scores the same
+    # at a proxy and at native resolution.
+    projected_warp = np.abs(warp[:, :, 0] * unit_x + warp[:, :, 1] * unit_y)
+    projected_warp /= float(np.hypot(h, w))
+
+    face_weights = face.astype(np.float32)
+    body_weights = body.astype(np.float32)
+    if body_region_weights is not None:
+        if body_region_weights.shape != (h, w):
+            raise ValueError("AA6 body_region_weights must match image dimensions")
+        body_weights *= np.maximum(body_region_weights.astype(np.float32), 0.0)
+    face_warp_mean, face_warp_std = _aa6_weighted_mean_std(projected_warp, face_weights)
+    body_warp_mean, body_warp_std = _aa6_weighted_mean_std(projected_warp, body_weights)
+
+    proc_luma = _gray_f32(img_bgr) / 255.0
+    mu_ref = cv2.GaussianBlur(ref_luma, (11, 11), 1.5)
+    mu_proc = cv2.GaussianBlur(proc_luma, (11, 11), 1.5)
+    var_ref = np.maximum(cv2.GaussianBlur(ref_luma * ref_luma, (11, 11), 1.5) - mu_ref * mu_ref, 0.0)
+    var_proc = np.maximum(cv2.GaussianBlur(proc_luma * proc_luma, (11, 11), 1.5) - mu_proc * mu_proc, 0.0)
+    covariance = cv2.GaussianBlur(ref_luma * proc_luma, (11, 11), 1.5) - mu_ref * mu_proc
+    sigma_ref = np.sqrt(var_ref)
+    sigma_proc = np.sqrt(var_proc)
+    ssim_cs = ((2.0 * sigma_ref * sigma_proc + _AA6_C2) / (var_ref + var_proc + _AA6_C2)) * (
+        (covariance + _AA6_C3) / (sigma_ref * sigma_proc + _AA6_C3)
+    )
+    ssim_mean, ssim_std = _aa6_weighted_mean_std(ssim_cs, face_weights)
+
+    ref_response = np.abs(cv2.filter2D(ref_luma, cv2.CV_32F, _AA6_FILTER_9))
+    proc_response = np.abs(cv2.filter2D(proc_luma, cv2.CV_32F, _AA6_FILTER_9))
+    frequency_d = np.log((ref_response + 1e-6) / (proc_response + 1e-6))
+    frequency_mean, frequency_std = _aa6_weighted_mean_std(frequency_d, face_weights)
+    return {
+        "face_warp_gradient_mean": face_warp_mean,
+        "face_warp_gradient_std": face_warp_std,
+        "body_warp_gradient_mean": body_warp_mean,
+        "body_warp_gradient_std": body_warp_std,
+        "face_ssim_cs_mean": ssim_mean,
+        "face_ssim_cs_std": ssim_std,
+        "face_frequency_d_mean": frequency_mean,
+        "face_frequency_d_std": frequency_std,
+    }
 
 
 def detect_banding(
@@ -998,6 +1112,8 @@ def run_all(
     face_skin_mask: Optional[np.ndarray] = None,
     body_skin_mask: Optional[np.ndarray] = None,
     mark_policy: Optional[Mapping[str, Any]] = None,
+    warp_field: Optional[np.ndarray] = None,
+    body_region_weights: Optional[np.ndarray] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Run all QA detectors and aggregate their results.
 
@@ -1012,6 +1128,8 @@ def run_all(
         face_skin_mask: Optional confident face-skin mask for harmony metrics.
         body_skin_mask: Optional face-anchored body-skin mask for harmony metrics.
         mark_policy: Optional explicit mark-class policy for H4 retention.
+        warp_field: Optional (H, W, 2) raw geometry displacement field.
+        body_region_weights: Optional positive AA6 per-pixel body weights.
 
     Returns:
         dict with keys "banding", "clipping", "plastic_skin", "halo", "seam",
@@ -1077,4 +1195,18 @@ def run_all(
         )
     except Exception:
         result["harmony"] = {"score": 0.0, "flagged": False, "available": False}
+    if reference_img_bgr is not None:
+        try:
+            result["perceived_retouching"] = perceived_retouching_vector(
+                img_bgr,
+                reference_img_bgr,
+                face_mask=face_skin_mask if face_skin_mask is not None else skin_mask,
+                warp_field=warp_field,
+                body_mask=body_skin_mask,
+                body_region_weights=body_region_weights,
+            )
+            result["perceived_retouching"]["score"] = 0.0
+            result["perceived_retouching"]["flagged"] = False
+        except Exception:
+            result["perceived_retouching"] = {"score": 0.0, "flagged": False}
     return result

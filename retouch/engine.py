@@ -2269,6 +2269,7 @@ class RetouchEngine:
             result, person_mask, img_bgr,
             face_skin_mask=acc_skin,
             mark_policy=ctx.mark_policy,
+            warp_field=getattr(ctx, "_aa6_warp_field", None),
         )
         ctx._qa_results = {w.detector: w.details for w in qa_warnings}
 
@@ -2299,6 +2300,7 @@ class RetouchEngine:
         reference_img_bgr: Optional[np.ndarray] = None,
         face_skin_mask: Optional[np.ndarray] = None,
         mark_policy: Optional[Mapping[str, Any]] = None,
+        warp_field: Optional[np.ndarray] = None,
     ) -> List[QAWarning]:
         """Run QA detectors on a processed uint8 BGR image.
 
@@ -2324,6 +2326,7 @@ class RetouchEngine:
                 face_skin_mask=face_skin_mask,
                 body_skin_mask=body_skin_mask,
                 mark_policy=mark_policy,
+                warp_field=warp_field,
             )
         except Exception as e:
             logger.warning("QA detectors raised, skipping QA: %s", e)
@@ -2737,7 +2740,10 @@ class RetouchEngine:
     def _stage_reshape(self, img: np.ndarray, faces, ctx: ProcessingContext) -> np.ndarray:
         face_ctxs = self._face_ctxs_for_reshape(ctx, len(faces) if faces else 0)
         if self._any_reshape_active(ctx, face_ctxs):
-            return self._reshaper.reshape(img, faces, ctx, face_ctxs=face_ctxs)
+            result = self._reshaper.reshape(img, faces, ctx, face_ctxs=face_ctxs)
+            ctx._aa6_warp_field = self._reshaper.last_displacement_field
+            return result
+        ctx._aa6_warp_field = np.zeros((*img.shape[:2], 2), dtype=np.float32)
         return img.copy()
 
     @staticmethod

@@ -6,6 +6,7 @@ from retouch.chromophore_v2 import (
     HEMOGLOBIN_PRIOR_RGB,
     MELANIN_PRIOR_RGB,
     decompose_chromophores_v2,
+    delta_e_76,
     recompose_chromophores_v2,
     reduce_hemoglobin_variance,
     shift_hemoglobin,
@@ -81,7 +82,9 @@ def test_hemoglobin_edit_preserves_melanin_in_fixed_coordinate_system():
     out = reduce_hemoglobin_variance(img, 0.75, decomposition=before)
     after = decompose_chromophores_v2(out, axes_rgb=before.axes_rgb)
     assert np.max(np.abs(after.melanin - before.melanin)) < 2e-4
-    assert after.hemoglobin.std() < before.hemoglobin.std() * 0.35
+    # AA5's perceptual ΔE cap may limit a full-strength slider move; the
+    # invariant is a monotone variance reduction, not an uncapped percentage.
+    assert after.hemoglobin.std() < before.hemoglobin.std()
 
 
 def test_hemoglobin_shift_preserves_melanin_and_moves_relative_flush():
@@ -91,6 +94,16 @@ def test_hemoglobin_shift_preserves_melanin_and_moves_relative_flush():
     after = decompose_chromophores_v2(out, axes_rgb=before.axes_rgb)
     assert np.max(np.abs(after.melanin - before.melanin)) < 2e-4
     assert float(after.hemoglobin.mean()) < float(before.hemoglobin.mean())
+
+
+def test_hemoglobin_edits_stay_inside_the_aa5_delta_e_budget():
+    img = _synthetic_skin()
+    mask = np.ones(img.shape[:2], dtype=np.float32)
+    shifted = shift_hemoglobin(img, 1.0, skin_mask=mask)
+    evened = reduce_hemoglobin_variance(img, 1.0, skin_mask=mask)
+
+    assert float(delta_e_76(img, shifted, skin_mask=mask).max()) <= 2.401
+    assert float(delta_e_76(img, evened, skin_mask=mask).max()) <= 2.401
 
 
 def test_global_colour_cast_does_not_change_relative_hb_variance_or_axis_choice():

@@ -61,6 +61,11 @@ Warp = Tuple[Tuple[int, int], Tuple[int, int], int]
 class FaceReshaper:
     """Photographer-grade face slimming and reshaping using local translation warping."""
 
+    def __init__(self) -> None:
+        # AA6 reads this exact remap field after ``reshape``. It is diagnostic
+        # state only and is reset for every invocation, including no-op calls.
+        self.last_displacement_field: Optional[np.ndarray] = None
+
     # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------
@@ -122,6 +127,8 @@ class FaceReshaper:
 
         Backward-compatible: ``strength`` int + ``ctx=None`` = slimming only.
         """
+        h, w = img_bgr.shape[:2]
+        self.last_displacement_field = np.zeros((h, w, 2), dtype=np.float32)
         if not faces:
             return img_bgr
 
@@ -140,7 +147,6 @@ class FaceReshaper:
         if not any_active:
             return img_bgr
 
-        h, w = img_bgr.shape[:2]
         warps: List[Warp] = []
         face_oval_pts_per_face: List[np.ndarray] = []
         max_face_width = 0.0
@@ -301,12 +307,21 @@ class FaceReshaper:
             borderMode=cv2.BORDER_REFLECT_101,
         )
 
+        # ``map_*`` are source coordinates for each output pixel. Their
+        # inverse delta is the exact visual displacement used by AA6.
+        grid_x = np.arange(w, dtype=np.float32)[None, :]
+        grid_y = np.arange(h, dtype=np.float32)[:, None]
+        displacement = np.dstack((grid_x - map_x, grid_y - map_y))
+
         if face_oval_mask is not None and face_oval_mask.max() > 0.01:
             m3 = face_oval_mask[:, :, None]
             reshaped_f = reshaped.astype(np.float32)
             orig_f = img_bgr.astype(np.float32)
             blended = orig_f * (1.0 - m3) + reshaped_f * m3
             reshaped = np.clip(blended, 0, 255).astype(orig_dtype)
+            displacement *= face_oval_mask[:, :, None].astype(np.float32)
+
+        self.last_displacement_field = displacement.astype(np.float32, copy=False)
 
         if reshaped.dtype != orig_dtype:
             reshaped = reshaped.astype(orig_dtype)
