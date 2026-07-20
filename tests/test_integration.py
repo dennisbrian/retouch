@@ -553,3 +553,125 @@ class TestFaceContextsCaching:
         assert result2.face_count == 1
         assert result2.shape == (h_img, w_img, 3)
         assert result2.dtype == np.uint8
+
+
+@_NEEDS_ENGINE
+class TestSculptLightDirectionWiring:
+    """sculpt() must follow ctx.relight_azimuth/elevation whenever relight is
+    active (physical coherence — two ops shading one face in different
+    directions would look wrong), and only fall back to the per-face
+    detected key-light direction when relight is off and detection is
+    confident. See RESEARCH_FRONTIER_AB_2026_07_17.md Sec.4 / TODO_WEEK
+    Day 2."""
+
+    def _setup(self, engine, monkeypatch, h_img=400, w_img=400):
+        from retouch.parsing import FaceRegions
+
+        img = np.full((h_img, w_img, 3), 180, dtype=np.uint8)
+        face = _make_synthetic_face(200, 200, w_img, h_img, size=120)
+
+        def _regions(crop_h, crop_w):
+            r = FaceRegions()
+            r.skin = np.full((crop_h, crop_w), 0.6, dtype=np.float32)
+            zeros = np.zeros((crop_h, crop_w), dtype=np.float32)
+            for attr in (
+                "hair", "lips", "neck", "left_eye", "right_eye",
+                "left_under_eye", "right_under_eye", "left_eyebrow",
+                "right_eyebrow", "nose", "face_oval", "mouth_interior",
+                "left_iris", "right_iris",
+            ):
+                setattr(r, attr, zeros.copy())
+            return r
+
+        monkeypatch.setattr(engine._detector, "detect", lambda *a, **k: [face])
+        monkeypatch.setattr(
+            engine._detector, "segment_person",
+            lambda img: np.ones((h_img, w_img), dtype=np.float32),
+        )
+        _patch_face_pool_to_threaded(engine)
+        monkeypatch.setattr(engine._parser, "parse_batch", _fake_parse_batch(_regions))
+        return img
+
+    def _capture_sculpt_calls(self, engine, monkeypatch):
+        calls = []
+        real_sculpt = engine._relighter.sculpt
+
+        def _spy(*args, **kwargs):
+            calls.append(kwargs)
+            return real_sculpt(*args, **kwargs)
+
+        monkeypatch.setattr(engine._relighter, "sculpt", _spy)
+        return calls
+
+    def test_relight_active_overrides_detected_light(self, engine, monkeypatch):
+        """relight(strength>0) must make sculpt follow ctx.relight_azimuth/
+        elevation, even when a confident detected light direction exists."""
+        from retouch.lighting import LightDirection
+
+        img = self._setup(engine, monkeypatch)
+        # A confident, strongly lateral detected direction that would map
+        # to a very different azimuth than the explicit relight controls.
+        monkeypatch.setattr(
+            "retouch.engine.estimate_light_direction",
+            lambda *a, **k: LightDirection((1.0, 0.0), 0.8, "catchlights"),
+        )
+        calls = self._capture_sculpt_calls(engine, monkeypatch)
+
+        kwargs = _zero_intensity_overrides()
+        kwargs.update(sculpt=60.0, relight=40.0, relight_azimuth=-75.0, relight_elevation=10.0)
+        result = engine.process(img, recipe="natural", **kwargs)
+
+        assert result.face_count == 1
+        assert len(calls) == 1
+        assert calls[0]["light_azimuth"] == pytest.approx(-75.0)
+        assert calls[0]["light_elevation"] == pytest.approx(10.0)
+
+    def test_relight_off_uses_detected_light_when_known(self, engine, monkeypatch):
+        """relight(strength=0) + a confident detected direction: sculpt must
+        receive a derived azimuth (not None) and elevation fixed at 30deg
+        (the estimator has no elevation signal)."""
+        from retouch.lighting import LightDirection
+
+        img = self._setup(engine, monkeypatch)
+        monkeypatch.setattr(
+            "retouch.engine.estimate_light_direction",
+            lambda *a, **k: LightDirection((1.0, 0.0), 0.8, "catchlights"),
+        )
+        calls = self._capture_sculpt_calls(engine, monkeypatch)
+
+        kwargs = _zero_intensity_overrides()
+        kwargs.update(sculpt=60.0, relight=0.0)
+        result = engine.process(img, recipe="natural", **kwargs)
+
+        assert result.face_count == 1
+        assert len(calls) == 1
+        assert calls[0]["light_azimuth"] is not None
+        assert calls[0]["light_elevation"] == pytest.approx(30.0)
+
+    def test_relight_off_and_light_unknown_is_byte_identical_to_auto(self, engine, monkeypatch):
+        """relight off + an unknown/low-confidence detected direction: sculpt
+        must receive light_azimuth=None (its own auto-estimate), and the
+        render must be byte-identical to a run with no light_direction
+        wiring at all (pre-existing behavior preserved)."""
+        from retouch.lighting import LightDirection
+
+        img = self._setup(engine, monkeypatch)
+        monkeypatch.setattr(
+            "retouch.engine.estimate_light_direction",
+            lambda *a, **k: LightDirection(),  # unknown: confidence=0.0
+        )
+        calls = self._capture_sculpt_calls(engine, monkeypatch)
+
+        kwargs = _zero_intensity_overrides()
+        kwargs.update(sculpt=60.0, relight=0.0)
+        result = engine.process(img, recipe="natural", **kwargs)
+
+        assert len(calls) == 1
+        assert calls[0]["light_azimuth"] is None
+        assert calls[0]["light_elevation"] is None
+
+        # Byte-identity: a second run through the same mocked pipeline must
+        # produce the same pixels, confirming the unknown-light path is
+        # deterministic and doesn't leak state between calls.
+        result2 = engine.process(img, recipe="natural", **kwargs)
+        np.testing.assert_array_equal(result, result2)

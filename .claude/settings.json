@@ -9,5 +9,18 @@
       "Skill(verify)",
       "Skill(run)"
     ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_response.filePath // .tool_input.file_path' | { read -r f; case \"$f\" in *.py) python3 -m py_compile \"$f\"; (command -v ruff >/dev/null 2>&1 && ruff check --fix \"$f\") || true;; esac; } || true"
+          }
+        ]
+      }
+    ]
   }
 }

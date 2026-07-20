@@ -1,6 +1,6 @@
 # MASTER PLAN — Prioritized Execution Order (AUTHORITATIVE)
 
-**Date:** 2026-07-02 · **Last reconciled:** 2026-07-14
+**Date:** 2026-07-02 · **Last reconciled:** 2026-07-20
 
 **This document is the single source of truth for execution ORDER and STATUS.** Long verification
 narratives, bug-found receipts, agent-integrity notes, and measured numbers now live in
@@ -18,28 +18,75 @@ the cosplay audience judges.
 **Changelog:** 2026-07-02: Tier C (East✕West color) adopted per `PLAN_EASTWEST_COLOR_SUPREMACY.md`.
 2026-07-03: Tier E (engine/skin fidelity) + Tier H (hair & wig) adopted. 2026-07-10: doc refactored —
 narratives moved to `EXECUTION_LOG.md`; status reconciled against git; ground rule #7 added;
-per-face recipe assignment backlog row added (owner-approved).
+per-face recipe assignment backlog row added (owner-approved). 2026-07-20: reconciled against ~65
+commits since 2026-07-14 (last reconcile) — this doc had stopped being the live driver; day-to-day
+work moved to `TODO_WEEK_2026_07_20.md` + the K→X/Y/Z→AA→AB→BB→AC→AD→AE research lineage, none of
+which had a tier-doc row here. Added those rows, added the video-retouch track (Phase 8, previously
+three untracked docs with no phase placement), and refreshed RESUME HERE.
 
 ---
 
-## ▶ RESUME HERE — single current-state summary (2026-07-14)
+## ▶ RESUME HERE — single current-state summary (2026-07-20)
 
 **This is the only place status is summarized. Per-row cells state each stage's own status; do not
 re-summarize progress elsewhere (it drifts).**
 
-Phases 1–6 code-complete. **A1/A2 competitive track = low priority** (owner: paid Evoto/R4me/PixCake trials not worth it now) — product ships without competitor corpus.
+Phases 1–6 code-complete (unchanged since 2026-07-14). **A1/A2 competitive track = low priority**
+(owner: paid Evoto/R4me/PixCake trials not worth it now) — product ships without competitor corpus.
 
-**Wiring (2026-07-14):** **F6** look extract GUI+CLI (`--extract-look`); **T4** plugin discover/init in engine + cookbook search GUI + CLI list/search; **T5** 16-bit RAW ingest live (`imread_engine` GUI/CLI) + `load_raw` gamma=(1,1) fixed — LinearGrader still optional CLI path. **T3/A3** recipe+GUI sliders wired. Per-face recipe: engine+CLI+GUI picker shipped. P4 makeup unmix+cake product path. Auto-gap #5 stray-hair still **A4-parked** (same low-priority gate as A1).
+**Since 2026-07-14, the live driver moved to `TODO_WEEK_2026_07_20.md` + a continuous research
+lineage this doc had no row for** (K→X/Y/Z→AA→AB→BB→AC→AD→AE, see updated tier-doc map below — all
+Fable, all direct-code/real-render verified, not simulated). That work, not this table, is what
+actually happened in the ~65 commits since last reconcile. Highlights:
 
-**Visual QA:** smart-path v2 auto **50/50** + human natural/edge/skin **CLOSED** (`0768c23`, `docs/VISUAL_QA.md` §10). Module harness MAE+montages (`scripts/visual_qa_modules.py`); human sample face_exposure/F5/backdrop **PASS** — `docs/plans/MODULE_VISUAL_QA_2026-07-14.md`. Remaining: OS review other montages; showcase/RAF stress corpus; R-series Visual-Critical.
+- **AC1 (EXIF/ICC delivery-boundary regression):** `copy_exif`'s two-step re-save was silently
+  undoing AB1's 4:4:4/ICC delivery fix. Rewired to single-save embed (`write_image_with_icc` + new
+  `exif` param) at all 3 call sites; batch_processor gained ICC it never had as a same-session
+  follow-up. **⚠️ Marked ✅ DONE in `TODO_WEEK_2026_07_20.md` but still uncommitted in the working
+  tree as of this reconcile** — independently re-confirmed via `/verify` this session (Orientation
+  reset 6→1, ICC preserved, EXIF survived) before committing to that status here.
+- **AD/AE (owner-reported visual defects, verified + fixed same-day):** BiSeNet skin mask bleeding
+  onto occluding hands → `78cff5a`; jaw/cheek/chin/smile warps ignoring face roll on tilted portraits
+  → `f58d2f6`. Both are the two most recent commits on this branch.
+- **Day 2 lighting-coherence wiring** (`5097560`, `f8e1880`, sclera tone-adaptivity `fd095ad`):
+  sculpt now follows relight's explicit direction when relight is active, falls back to detected
+  key-light otherwise; caught and fixed a pre-existing NaN-production bug in `relight.py` (empty
+  valid-mask division) as an unplanned same-session finding.
+- **Uncommitted in the working tree right now** (separate thread from the above, not yet reconciled
+  into a shipped row): `retouch/fuji_match.py` (new module) + `io.py`/`cli.py` RAW-decoder options
+  (`--raf-decoder raf2jpeg|rawpy-fuji-match`), and a large `recipes.py` "correction-first" rewrite.
+  Verified this session via `/verify`: CLI flag validation clean; EXIF/ICC embed clean; RAF-decoder
+  paths and the recipe-rewrite render **BLOCKED** — no vetted `.raf`/portrait test asset was
+  available to drive them end-to-end. `TODO_WEEK_2026_07_20.md` confirms these don't conflict with
+  its own scope (different files/hunks) but are unscheduled by it.
+- **New, previously homeless workstream:** video face retouch (V0 corpus harness in progress, V1–V4
+  designed, not authorized past V0) — see new Phase 8 below.
 
-**Remaining:** **Phase 7** distribution ship; optional T5 linear-develop UX; per-face auto-class Slice 3; A1/A2/A4 only if owner later buys trials.
+**Wiring (as of 2026-07-14, unchanged):** **F6** look extract GUI+CLI (`--extract-look`); **T4**
+plugin discover/init in engine + cookbook search GUI + CLI list/search; **T5** 16-bit RAW ingest live
+(`imread_engine` GUI/CLI) + `load_raw` gamma=(1,1) fixed — LinearGrader still optional CLI path.
+**T3/A3** recipe+GUI sliders wired. Per-face recipe: engine+CLI+GUI picker shipped. P4 makeup
+unmix+cake product path. Auto-gap #5 stray-hair still **A4-parked** (same low-priority gate as A1).
+
+**Visual QA:** smart-path v2 auto **50/50** + human natural/edge/skin **CLOSED** (`0768c23`,
+`docs/VISUAL_QA.md` §10). Module harness MAE+montages (`scripts/visual_qa_modules.py`); human sample
+face_exposure/F5/backdrop **PASS** — `docs/plans/MODULE_VISUAL_QA_2026-07-14.md`. Remaining: OS
+review other montages; showcase/RAF stress corpus; R-series Visual-Critical.
+
+**Remaining:** **Phase 7** distribution ship (still 📋 NOT STARTED, no evidence of change); land the
+two uncommitted threads (AC1 fix, RAF-decoder+recipe-rewrite); optional T5 linear-develop UX;
+per-face auto-class Slice 3; **Phase 8** video V0→V1; A1/A2/A4 only if owner later buys trials.
 
 **Next actions:**
-1. **Phase 7** signing/Windows/update.
-2. OS-review remaining module montages; expand corpus if sclera/wrinkle MAE~0.
-3. Optional: per-face auto Male/Female/Child (heuristic Slice 3).
-4. ~~A1 competitor corpus~~ — **DEFERRED / low priority** (licensing fees).
+1. Commit the AC1 EXIF/ICC fix — it's verified working but sitting uncommitted; don't let more work
+   stack on top of an unshipped delivery-boundary fix.
+2. Decide RAF-decoder/recipe-rewrite disposition — needs a vetted test asset to finish verification
+   before it ships (see AC-series + this session's `/verify` transcript).
+3. **Phase 7** signing/Windows/update.
+4. OS-review remaining module montages; expand corpus if sclera/wrinkle MAE~0.
+5. Optional: per-face auto Male/Female/Child (heuristic Slice 3).
+6. Video track: V0 corpus/thresholds still need real clips + human review before V1 is authorized.
+7. ~~A1 competitor corpus~~ — **DEFERRED / low priority** (licensing fees).
 
 _(The 2026-07-10 in-flight dead-key guard fix + recipe re-keying + film.preset decision is DONE —
 committed as `40721d6`; no longer a pending action.)_
@@ -64,6 +111,10 @@ committed as `40721d6`; no longer a pending action.)_
 | `PLAN_F8_EXECUTION.md` | F8.0–F8.2 (staged F8 slices) |
 | `PLAN_MOONLIGHT_PORCELAIN.md` | ✅ shipped (`2b46f96`) |
 | `PLAN_RAW_PROCESSING.md` | T5 wiring + full-data RAF ingestion (research 2026-07-10) |
+| `PLAN_VIDEO_FACE_RETOUCH.md` | Phase 8 (V0–V4) — full video face retouch product definition, architecture, quality gates |
+| `PLAN_V0_VIDEO_QA_EXECUTION.md` | V0 execution detail — corpus spec, track-extraction gap, threshold-setting protocol |
+| `PLAN_V1_VIDEO_EXPORT_EXECUTION.md` | V1 execution detail — proposed slices (benchmarks → media I/O → tracker → stabilization → adapter → CLI); not yet authorized |
+| `RESEARCH_VIDEO_RETOUCH_ALGORITHMS.md` | Companion algorithm research — TikTok-parity tiers, smoothing/texture/reshape candidates |
 | `PLAN_R9_INTRINSIC_SPIKE.md` | R9 spike design — albedo×shading decomposition (research 2026-07-10) |
 | `PLAN_SKIN_FRONTIER.md` | Skin measurement science (M1–M6) + "inverse" retouching (I1–I5) (research 2026-07-11) |
 | `PLAN_FEATURE_FRONTIER.md` | Eyes/teeth/lips optical & anatomical models — E-EYE/E-TEETH/E-LIP + shared light-direction (research 2026-07-11) |
@@ -72,6 +123,11 @@ committed as `40721d6`; no longer a pending action.)_
 | `PLAN_PER_FACE_RECIPE.md` | Per-face recipe assignment — engine/CLI/GUI design (locked 2026-07-14) |
 | `PLAN_P4_MAKEUP_UNMIX.md` | P4 skin↔makeup unmixing — spike + product slices (locked 2026-07-14) |
 | `RESEARCH_PER_FACE_AND_P4.md` | Agent research synthesis (2×3 waves) — merge points, B-lite reshape, multi-cue α GO |
+| `TODO_WEEK_2026_07_20.md` | **Current live weekly driver** (supersedes this doc's day-to-day granularity) — AC1 EXIF/ICC fix, Day 2 lighting-coherence wiring, AA5/AA6/BB1 calibration pack |
+| `RESEARCH_SKIN_COLOR_FRONTIER_X_2026_07_17.md` | K-series lineage, X-tier — spectral film, chromophore v2, dichromatic specular research |
+| `RESEARCH_STRUCTURE_HEAL_WORKFLOW_Y_2026_07_17.md` | Y-tier — structure, healing, workflow intelligence research |
+| `RESEARCH_PERCEPTUAL_CALIBRATION_Z_2026_07_17.md` | Z-tier — perceptual calibration, boundaries, reference intelligence research |
+| `RESEARCH_FRONTIER_AA_2026_07_17.md` → `RESEARCH_FRONTIER_BB_2026_07_17.md` → `RESEARCH_FRONTIER_AC_2026_07_18.md` → `RESEARCH_FRONTIER_AD_2026_07_19.md` → `RESEARCH_FRONTIER_AE_2026_07_20.md` | **AA→BB→AC→AD→AE lineage** (each reconciles against the previous + HEAD at time of writing) — post-`f8e1880` axes, delivery-boundary deep dive, `copy_exif` regression, BiSeNet hand-bleed bug (→`78cff5a`), roll-unaware warp bug (→`f58d2f6`). AD/AE are owner-reported-defect writeups verified by direct reproduction on real photos, not backlog research. |
 | `docs/EXECUTION_LOG.md` | Verification receipts for every ✅ row below |
 
 ---
@@ -166,6 +222,23 @@ committed as `40721d6`; no longer a pending action.)_
 |---|---|---|---|---|---|
 | 37 | **P4** | Distribution hardening (signing/notarization, update check, diagnostics, Windows) | 1 wk | P4.a | 📋 NOT STARTED — final ship step (after visual-QA + wiring burn-down). |
 
+## Phase 8 — Video Face Retouch (new track, added 2026-07-20; not sequenced against Phases 0–7)
+
+_Separate product surface from the image engine (`retouch-lite` stays a small guarded demo for short
+clips; this is the full track). Design-only per `PLAN_VIDEO_FACE_RETOUCH.md` — no pipeline code is
+authorized past V0 by that doc. Added here because it was untracked by this doc despite being
+in-progress; placement as its own phase (not folded into Phase 6) because it has its own V0–V4
+delivery-phase numbering and explicit non-negotiable quality gates independent of the image pipeline
+phases above._
+
+| # | Stage | What | Effort | Deps | Status |
+|---|---|---|---|---|---|
+| 38 | **V0** | Research harness + consented corpus (track loss, mask-edge error, flicker, texture-energy, displacement metrics) | — | — | 🔄 IN PROGRESS — `scripts/review/video_qa_report.py` harness + `docs/review/VIDEO_CORPUS_MANIFEST_TEMPLATE.md` exist; no corpus clips or acceptance thresholds landed yet. See `PLAN_V0_VIDEO_QA_EXECUTION.md`. |
+| 39 | **V1** | Stable offline single-face export (one-person, 720p, short-clip) | — | V0 | 📋 PROPOSED, not authorized — slice plan exists (`PLAN_V1_VIDEO_EXPORT_EXECUTION.md`), grounded in V0 measurements not yet collected. |
+| 40 | **V2** | Feature-accurate beauty controls (region-safe skin/tone/eye/teeth, attribute-aware strength, temporal QA gate) | — | V1 | 📋 NOT STARTED |
+| 41 | **V3** | Multi-face + professional export (job queue, resumable, codec profiles) | — | V2 | 📋 NOT STARTED |
+| 42 | **V4** | Live camera effects (GPU compositor, latency/frame-rate tiers) | — | V3 | 📋 NOT STARTED |
+
 ---
 
 ## Post-plan enhancements (2026-07-10)
@@ -189,6 +262,11 @@ _All rows below are COMMITTED unless noted; the section is no longer wholesale-u
 | — | **Per-region wrinkle sliders** | forehead/nasolabial/neck scoped wrinkle_soften | ~0.5 d | — | ✅ DONE 2026-07-10 (`25c445c`; forehead-mask follow-up `ea7697e`). **[VISUAL QA PENDING]** — Visual-Critical (`skin.py`). See EXECUTION_LOG. |
 | — | **Reshape completeness (auto-gap #6)** | L/R-independent jaw/nose/eye + neck width/length | ~0.5 d | F5 | ✅ DONE 2026-07-10 (`1b89d1e`) — +16 tests, global path byte-identical. **[VISUAL QA PENDING]** — Visual-Critical (`geometry.py`). See EXECUTION_LOG. |
 | — | **One-click auto body reshape (auto-gap #7)** | F9/F10-style pose analyzer → T3 params | ~0.5 d | T3 | ✅ DONE 2026-07-10 (`3c3f78d`) — heuristic tests green. **[VISUAL QA PENDING]** — real-photo pass once pose model available. See EXECUTION_LOG. |
+| — | **AD: BiSeNet skin mask bleeds onto occluding hands** | Owner-reported defect on real cosplay portraits; skin/face_oval mask wasn't clipped to the landmark face-oval, so smoothing/color ops leaked onto hands crossing the face | — | — | ✅ DONE 2026-07-19 (`78cff5a`) — verified by direct reproduction on real photos + mask-overlay visualization per `RESEARCH_FRONTIER_AD_2026_07_19.md`, not simulated. |
+| — | **AE: reshape warps ignore face roll** | Owner-reported "getting punch" defect on a tilted/rolled portrait; jaw/cheek/chin/smile liquify warps applied in image-axis-aligned space instead of face-roll-relative space, producing a lopsided bulge on rolled heads | — | F5 | ✅ DONE 2026-07-20 (`f58d2f6`) — verified by direct reproduction (`DSCF8777.jpg`, same photo as the AD repro) + component isolation per `RESEARCH_FRONTIER_AE_2026_07_20.md`. |
+| — | **AC1: `copy_exif` re-save was undoing AB1's delivery-boundary fix** | Two-step write-then-re-save silently dropped 4:4:4 chroma subsampling/quality that AB1 had fixed; rewired to single-save EXIF embed (new `exif` param on `write_image_with_icc` + `read_exif_bytes`) at all 3 call sites (`cli.py` ×2, `batch_processor.py`); `batch_processor.py` gained ICC embedding it never had, as a same-session follow-up gap closure | ~0.5 d | AB1 | 🔄 **Marked DONE in `TODO_WEEK_2026_07_20.md` (test added, real-render verified) but still uncommitted in the working tree** as of this reconcile (2026-07-20) — independently re-confirmed via `/verify` this session before trusting that status. Commit before building on top of it. See `RESEARCH_FRONTIER_AC_2026_07_18.md`. |
+| — | **Day 2: sculpt/relight light-direction coherence** | `sculpt()` now resolves an azimuth/elevation and follows relight's explicit direction when relight is active, falls back to detected key-light otherwise; unplanned same-session fix for a pre-existing NaN-production bug (empty valid-mask division in both `sculpt()` and `relight()`'s v2 engine) | — | — | ✅ DONE 2026-07-19 (`5097560`, `f8e1880`; sclera tone-adaptivity companion fix `fd095ad`) — `TestSculptLightDirectionWiring` (3 tests) + 2 new NaN-guard regression tests; real-render verified on both coherence-rule branches (`DSCF7204.jpg`, not simulated). See `TODO_WEEK_2026_07_20.md` Day 2. |
+| — | **Uncommitted: RAF-decoder options + `recipes.py` correction-first rewrite** | New opt-in `--raf-decoder raf2jpeg\|rawpy-fuji-match` CLI flags + `retouch/fuji_match.py` calibration module; large `recipes.py` rewrite shifting many recipes from additive/romantic grading toward restrained correction-first philosophy; `--recipe` narrowed to a curated allowlist (`CURATED_RECIPE_NAMES`), dropping ~78 previously-valid bare names (e.g. `cosplay`) — **breaking change, confirm intentional before shipping** | — | — | 🔄 IN PROGRESS, uncommitted — `/verify` this session (2026-07-20): CLI flag validation clean, EXIF/ICC embed clean; RAF-decoder paths and recipe-rewrite visual render **BLOCKED**, no vetted `.raf`/portrait test asset available. Not yet scheduled in `TODO_WEEK_2026_07_20.md` (explicitly noted there as a separate, non-conflicting thread). |
 
 ## Color/retouch research backlog (owner-approved 2026-07-10)
 
@@ -229,6 +307,9 @@ _From the 2026-07-10 "better than Fuji filter" research sweep (Fable). All 📋 
 - **After Phase 6:** "The cosplay retouching platform: backgrounds, makeup, body, plugins, community
   recipes."
 - **After Phase 7:** shippable to strangers.
+- **After Phase 8 (V1):** "Retouch a short one-person clip with no visible flicker or sliding" —
+  video is a supported output, not just stills. (V2–V4 extend toward full parity with Phase 1–6's
+  still-image claims; not implied by V1 alone.)
 
 ## Ground rules (from all prior rounds)
 

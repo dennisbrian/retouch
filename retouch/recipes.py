@@ -793,23 +793,20 @@ RECIPES = {
         "shadows": 20.0,
     },
     "con_mixed_temp_v1": {
-        # Multiple light sources at different color temperatures in one
-        # frame (LED panel + venue tungsten + daylight from a window) — the
-        # exact scenario C1's hue-line unification was purpose-built for
-        # per PLAN_EASTWEST_COLOR_SUPREMACY §1a: "记忆色... corrected toward
-        # the preferred reproduction locus" regardless of the ambient color
-        # chaos. subject_separation isolates the subject from a background
-        # that may have entirely different color temperature.
-        "extends": "porcelain_unified_v1",
+        # A single global WB cannot solve mixed illuminants.  Keep the
+        # correction local and restrained until spatially varying WB lands;
+        # the prior porcelain-strength unification made neutral scenes gray.
+        "extends": "natural",
+        "frequency": {"smooth": 0.32},
         "skin": {
-            "equalize": 0.0,
-            "rosy": 0.15,
-            "hue_unify": 0.75,
-            "chroma_even": 0.60,
-            "whiten_hue_stable": 1,
-            "shine_removal": 0.35,
+            "equalize": 0.10,
+            "hue_unify": 0.24,
+            "chroma_even": 0.18,
+            "shine_removal": 0.24,
         },
-        "subject_separation": 35.0,
+        "subject_separation": 12.0,
+        "highlight_rolloff": 0.22,
+        "texture": {"opacity": 0.98},
     },
     "con_crowd_bg_v1": {
         # Crowded convention-hall background — need strong subject/background
@@ -2235,84 +2232,41 @@ RECIPES["editorial_elegance_v1"] = {
 }
 
 RECIPES["wedding_timeless_v1"] = {
-    # Flagship #14 (Phase 3-6): Wedding/formal portraiture.
-    # Soft, romantic aesthetic with balanced makeup depth, luminous skin,
-    # moderate hair shine, and gentle background blur. Romantic film tone
-    # (warm shadows, soft highlights). Respects natural beauty while adding
-    # a touch of magic and elegance.
+    # Wedding/formal portraiture.  This is deliberately correction-first:
+    # the source already contains the wedding palette, so a recipe must not
+    # add rose makeup, haze, or a second warm grade to every client.
     "extends": "natural_polish_v1",
-    "frequency": {"smooth": 0.33},
+    "frequency": {"smooth": 0.28},
     "skin": {
-        "equalize": 0.10,
-        "hue_unify": 0.28,
-        "chroma_even": 0.22,
-        "whiten_hue_stable": 1,
-        "shine_removal": 0.30,
-        "relight": 0.30,
+        "equalize": 0.06,
+        "hue_unify": 0.12,
+        "chroma_even": 0.10,
+        "shine_removal": 0.18,
+        "relight": 0.10,
     },
     "eyes": {
-        "dark_circles": 0.20,
-        "catchlight": 0.16,
-        "iris": 0.16,
-        "whites": 0.14,
+        "dark_circles": 0.10,
+        "catchlight": 0.08,
+        "iris": 0.08,
+        "whites": 0.06,
     },
-    "lips": {"gloss": 0.16, "tint": "rose"},
-    "hair": {"shine": 0.32},
-    # --- Makeup v2 (soft, romantic makeup) ---
-    "makeup_v2": {
-        "eyeshadow": 30,  # Soft eyeshadow
-        "eyeshadow_color": "rose",  # Romantic rose/mauve
-        "eyeshadow_style": "soft",  # Soft blended (not dramatic)
-        "eyeliner": 20,  # Subtle eyeliner
-        "eyeliner_color": "brown",  # Soft brown (not harsh)
-        "eyeliner_style": "subtle",
-        "contour": 18,  # Gentle contouring
-        "brows": 16,  # Soft brow enhancement
-        "brows_color": "brown",
-    },
-    # --- Film (Kodak Portra romance) ---
+    "lips": {"gloss": 0.06, "tint": None},
+    "hair": {"shine": 0.12},
     "film": {
-        # approximated portra_romance film look
-        "enable": 1,
-        "strength": 0.5,  # soft warm, low contrast
-        "toe": {"r": 0.05, "g": 0.04, "b": 0.03},  # Warm toe
-        "shoulder": {"r": 0.04, "g": 0.03, "b": 0.02},  # Soft shoulder
-        "midpoint": 0.48,
-        "gamma": 0.94,
-        "crosstalk": {"cy_mg": 0.06, "cy_ye": 0.04, "mg_ye": 0.05},
+        "enable": True,
+        "strength": 0.14,
         "tonemap": {
-            "strength": 0.12,
-            "toe": 0.10,
-            "shoulder": 0.06,
-            "skew": 0.01,
+            "strength": 0.10,
+            "toe": 0.04,
+            "shoulder": 0.08,
+            "skew": 0.0,
         },
     },
-    # --- Gentle background separation ---
-    "harmony": {
-        "background_harmonize": True,
-        "background_harmonize_mode": "split",
-    },
-    "background": {
-        "background_blur": 10,  # Soft bokeh
-        "background_desaturation": 12,
-        "light_wrap": 5,  # Delicate rim
-        "subject_sharpen": 9.0,
-        "matte_black": 0.02,  # Minimal black crush
-    },
-    # Warm, soft split-tone
-    "shadow_hue": 210, "shadow_sat": 15,
-    "midtone_hue": 35, "midtone_sat": 10,
-    "highlight_hue": 45, "highlight_sat": 12,
-    "tonal_curve_strength": 0.22,
-    "highlight_rolloff": 0.35,
-    "finish": {
-        "clarity_split_neg": 0.10,
-        "clarity_split_pos": 0.08,
-        "airy_haze": 0.15,  # Romantic atmospheric glow
-    },
-    "bloom": {"opacity": 0.08},  # Soft bloom for romance
-    "vignette": 10.0,
-    "grain_strength": 0.10,
+    "highlight_rolloff": 0.24,
+    "finish": {"clarity_split_neg": 0.04, "clarity_split_pos": 0.04},
+    "bloom": {"opacity": 0.015, "threshold": 220.0},
+    "texture": {"opacity": 0.98},
+    "sharpen": 8.0,
 }
 
 RECIPES["high_energy_glow_v1"] = {
@@ -3494,6 +3448,424 @@ RECIPES["cosplay_character_showcase_v1"] = {
     "specular_bloom": 34,
     "texture": {"opacity": 0.82},
     "mask": {"feather_mode": "guided"},
+    "slimming": 0.0,
+}
+
+RECIPES["cosplay_porcelain_protected_v1"] = {
+    # Clean, luminous cosplay skin without treating freckles or beauty marks
+    # as defects. The film highlight knee keeps pale wigs and white costumes
+    # from turning unnaturally saturated at their brightest edges.
+    "extends": "cosplay_clear_v1",
+    "frequency": {
+        "smooth": 0.50,
+        "mid_reduction": 0.36,
+        "regional_modulation": 0.62,
+        "smooth_engine": "anisotropic",
+        "freckle_removal": 0,
+    },
+    "skin": {
+        "porcelain": 0.30,
+        "hue_unify": 0.42,
+        "chroma_even": 0.30,
+        "hb_even": 0.20,
+        "hb_shift": -0.07,
+        "mole_protect": 0.80,
+        "specular_finish": "dewy",
+        "specular_finish_strength": 0.20,
+    },
+    "eyes": {"whites": 0.20, "iris": 0.32, "catchlight": 0.28},
+    "film": {
+        "enable": True,
+        "strength": 0.28,
+        "tonemap": {
+            "strength": 0.24,
+            "toe": 0.08,
+            "shoulder": 0.12,
+            "skew": 0.15,
+            "highlight_purity": 0.28,
+        },
+    },
+    "bloom": {"opacity": 0.06, "threshold": 205.0},
+    "highlight_rolloff": 0.38,
+    "texture": {"opacity": 0.90},
+    "slimming": 0.0,
+}
+
+RECIPES["cosplay_flash_rescue_v1"] = {
+    # For hard on-camera flash and flat convention lighting. It evens only
+    # hemoglobin variation, then uses a small cool shift and highlight purity
+    # to restore skin and white-costume separation without flattening makeup.
+    "extends": "cosplay_portrait_polish_v1",
+    "frequency": {
+        "smooth": 0.44,
+        "mid_reduction": 0.30,
+        "regional_modulation": 0.58,
+        "smooth_engine": "anisotropic",
+        "freckle_removal": 0,
+    },
+    "skin": {
+        "hb_even": 0.30,
+        "hb_shift": -0.10,
+        "mole_protect": 0.80,
+        "shine_removal": 0.30,
+        "specular_finish": "matte",
+        "specular_finish_strength": 0.16,
+    },
+    "eyes": {"whites": 0.16, "iris": 0.22, "catchlight": 0.16},
+    "film": {
+        "enable": True,
+        "strength": 0.22,
+        "tonemap": {
+            "strength": 0.28,
+            "toe": 0.08,
+            "shoulder": 0.16,
+            "skew": 0.12,
+            "highlight_purity": 0.32,
+        },
+    },
+    "bloom": {"opacity": 0.03, "threshold": 215.0},
+    "highlight_rolloff": 0.48,
+    "texture": {"opacity": 0.94},
+    "slimming": 0.0,
+}
+
+RECIPES["cosplay_porcelain_color_demo_v1"] = {
+    # Presentation variant of cosplay_porcelain_protected_v1. The smoothing
+    # is intentionally more legible than the parent, but color remains close
+    # to the source: warm venue light should not become a pink beauty grade.
+    "extends": "cosplay_porcelain_protected_v1",
+    "frequency": {
+        "smooth": 0.55,
+        "mid_reduction": 0.36,
+        "regional_modulation": 0.62,
+        "smooth_engine": "anisotropic",
+        "freckle_removal": 0,
+    },
+    "skin": {
+        # Override cosplay's strong rosy/equalize defaults. DSCF7969 already
+        # has a warm key and needs cleanup, not a second pink color grade.
+        "equalize": 0.10,
+        "rosy": 0.08,
+        "porcelain": 0.0,
+        "hue_unify": 0.15,
+        "chroma_even": 0.12,
+        "hb_even": 0.0,
+        "hb_shift": 0.0,
+        "mole_protect": 0.80,
+        "specular_finish": "dewy",
+        "specular_finish_strength": 0.16,
+    },
+    "color_harmony": {"preset": "natural", "amount": 0.05},
+    "film": {
+        "enable": True,
+        "strength": 0.10,
+        "tonemap": {
+            "strength": 0.10,
+            "toe": 0.04,
+            "shoulder": 0.08,
+            "skew": 0.05,
+            "highlight_purity": 0.10,
+        },
+    },
+    "bloom": {"opacity": 0.02, "threshold": 215.0},
+    "highlight_rolloff": 0.30,
+    "contrast": 0.0,
+    "vibrance": 0.0,
+    "texture": {"opacity": 0.95},
+    "slimming": 0.0,
+}
+
+# The consumer-facing catalog is deliberately curated. ``RECIPES`` retains
+# older experiments and specialist looks for backwards-compatible projects.
+# A curated name only means it has a maintained QA path; it does *not* mean a
+# light-specific or creative look is safe for every source photo.
+CURATED_RECIPE_NAMES: List[str] = [
+    # Safe portrait and beauty correction
+    "natural",
+    "portrait",
+    "male",
+    "female",
+    "senior",
+    "natural_polish_v1",
+    "clear_skin_v1",
+    "freckle_free_v1",
+    "tired_eye_rescue_v1",
+    "aniso_pore_real_v1",
+    "studio_porcelain_clear_v1",
+    "beauty_editorial_clear_v1",
+    "korean_glass_clear_v1",
+    "editorial_matte_v1",
+    "mole_safe_portrait_v1",
+    "vascular_refine_v1",
+    "wedding_timeless_v1",
+    "aaa_photoreal_v1",
+    "aaa_photoreal_v2",
+    "body_match_v1",
+    "jp_transparent_v1",
+    # Cosplay and convention
+    "cosplay_clear_v1",
+    "cosplay_portrait_polish_v1",
+    "cosplay_flash_rescue_v1",
+    "cosplay_powder_v1",
+    "cosplay_heroic_amber_v1",
+    "cosplay_ice_cathedral_v1",
+    "game_character_v1",
+    "game_character_v2",
+    "game_character_v3",
+    "convention_repair_v1",
+    "convention_clear_v1",
+    "con_fluorescent_v1",
+    "con_mixed_temp_v1",
+    "con_crowd_bg_v1",
+    # Location and lighting
+    "outdoor_golden_clear_v1",
+    "outdoor_backlit_v1",
+    "outdoor_overcast_v1",
+    "outdoor_harsh_sun_v1",
+    "studio_hard_flash_clear_v1",
+    "studio_softbox_v1",
+    "studio_ringlight_v1",
+    # Apex flagships
+    "apex_cosplay_v1",
+    "apex_editorial_v1",
+    "apex_cinema_v1",
+    "cosplay_character_showcase_v1",
+    # Proven restrained finish looks
+    "reala_ace",
+    "auto_clean_v1",
+    "full_showcase_v1",
+    "matsuri_glow_v1",
+]
+
+# These are the correction-first choices suitable as the initial GUI/CLI
+# recommendation.  The remaining curated recipes require a matching scene or
+# creative intent, and are labelled accordingly in the GUI rather than being
+# presented as universal "beautify" buttons.
+RECOMMENDED_RECIPE_NAMES: List[str] = [
+    "natural",
+    "natural_polish_v1",
+    "portrait",
+    "male",
+    "female",
+    "senior",
+    "clear_skin_v1",
+    "mole_safe_portrait_v1",
+    "vascular_refine_v1",
+    "aniso_pore_real_v1",
+    "tired_eye_rescue_v1",
+    "wedding_timeless_v1",
+    "cosplay_clear_v1",
+    "cosplay_portrait_polish_v1",
+    "cosplay_character_showcase_v1",
+    "apex_editorial_v1",
+    "reala_ace",
+    "matsuri_glow_v1",
+]
+
+CONDITIONAL_RECIPE_NAMES: List[str] = [
+    name for name in CURATED_RECIPE_NAMES if name not in RECOMMENDED_RECIPE_NAMES
+]
+
+# Gradio accepts ``(label, value)`` choices.  Keep the recipe key stable for
+# sessions and CLI while showing the user when a recipe needs matching input.
+RECIPE_UI_CHOICES: List[tuple] = [
+    (f"{name}  [Recommended]", name) for name in RECOMMENDED_RECIPE_NAMES
+] + [
+    (f"{name}  [Scene / creative]", name) for name in CONDITIONAL_RECIPE_NAMES
+]
+
+
+# Apex tier: three flagship recipes that deliberately compose the full modern
+# stack — calibrated anisotropic smoothing, PatchMatch healing, chromophore
+# controls (hb_even/hb_shift), mole protection, subsurface-scatter finish,
+# structural sculpt/relight, the film engine with highlight purity,
+# subtractive saturation, and the C4 finish pack. One per delivery archetype:
+# convention hero frame, natural editorial, cinematic night portrait.
+# heal_engine stays "telea": the pure-Python PatchMatch path is minutes-slow
+# on 20MP+ auto-heal runs; opt in per shoot via --heal-engine patchmatch.
+
+RECIPES["apex_cosplay_v1"] = {
+    # The maximal convention hero frame: full face/body coherence from the
+    # polish parent, character marks protected, wig edges guarded by guided
+    # feathering, film highlight purity keeping pale wigs and white costumes
+    # clean at their brightest edges.
+    "extends": "cosplay_portrait_polish_v1",
+    "frequency": {
+        "smooth": 0.45,
+        "mid_reduction": 0.32,
+        "regional_modulation": 0.70,
+        "smooth_engine": "anisotropic",
+        "heal_engine": "telea",
+        "freckle_removal": 0,
+        "nose_smooth": 0.30,
+    },
+    "mask": {"feather_mode": "guided"},
+    "skin": {
+        "hue_unify": 0.45,
+        "chroma_even": 0.35,
+        "hb_even": 0.25,
+        "hb_shift": -0.06,
+        "mole_protect": 0.85,
+        "sss": 0.25,
+        "specular_finish": "dewy",
+        "specular_finish_strength": 0.24,
+        "shine_removal": 0.26,
+        "sculpt": 0.12,
+        "relight": 0.08,
+        "wrinkle_soften": 0.08,
+    },
+    "eyes": {"whites": 0.22, "iris": 0.32, "catchlight": 0.30, "dark_circles": 0.10},
+    "eye": {
+        "sclera_brighten": 0.25,
+        "iris_saturate": 0.40,
+        "iris_brightness": 0.24,
+        "iris_hue_shift": 0,
+    },
+    "undereye": {"darken_removal": 0.15, "puffiness_reduction": 0.15},
+    "lips": {"tint": None, "gloss": 0.22},
+    "hair": {"shine": 0.20, "remove_flyaways": 30},
+    "film": {
+        "enable": True,
+        "strength": 0.30,
+        "tonemap": {
+            "strength": 0.30,
+            "toe": 0.08,
+            "shoulder": 0.14,
+            "skew": 0.15,
+            "highlight_purity": 0.30,
+        },
+    },
+    "saturation_mode": "subtractive",
+    "finish": {"airy_haze": 0.06},
+    "bloom": {"opacity": 0.08, "threshold": 205.0},
+    "highlight_rolloff": 0.45,
+    "texture": {"opacity": 0.93},
+    "sharpen": 12.0,
+    "slimming": 0.0,
+}
+
+RECIPES["apex_editorial_v1"] = {
+    # Natural editorial: "expensive but untouched". Structure and light do
+    # the work (sculpt, micro dodge&burn, undereye repair); smoothing stays
+    # low with near-full texture; hemoglobin evening cleans blotch without
+    # repainting tone; a restrained film curve finishes the frame.
+    "frequency": {
+        "smooth": 0.34,
+        "mid_reduction": 0.24,
+        "regional_modulation": 0.65,
+        "smooth_engine": "anisotropic",
+        "heal_engine": "telea",
+        "freckle_removal": 0,
+    },
+    "skin": {
+        "equalize": 0.08,
+        "rosy": 0.06,
+        "whiten_hue_stable": 1,
+        "hue_unify": 0.20,
+        "chroma_even": 0.16,
+        "hb_even": 0.20,
+        "hb_shift": -0.04,
+        "mole_protect": 0.90,
+        "sculpt": 0.28,
+        "relight": 0.10,
+        "micro_db": 0.15,
+        "shine_removal": 0.20,
+        "specular_finish": "dewy",
+        "specular_finish_strength": 0.14,
+        "texture_transplant": 0.15,
+        "wrinkle_soften": 0.12,
+    },
+    "eyes": {
+        "whites": 0.12,
+        "iris": 0.16,
+        "catchlight": 0.14,
+        "dark_circles": 0.14,
+        "sclera_vessel_remove": 0.20,
+    },
+    "eye": {"sclera_brighten": 0.12},
+    "undereye": {"darken_removal": 0.30, "puffiness_reduction": 0.25},
+    "lips": {"tint": None, "gloss": 0.10},
+    "hair": {"shine": 0.10, "remove_flyaways": 25},
+    "film": {
+        "enable": True,
+        "strength": 0.24,
+        "tonemap": {
+            "strength": 0.24,
+            "toe": 0.07,
+            "shoulder": 0.12,
+            "skew": 0.12,
+            "highlight_purity": 0.22,
+        },
+    },
+    "saturation_mode": "subtractive",
+    "color_harmony": {"preset": "natural", "amount": 0.06},
+    "finish": {"fade_toe": 0.06, "airy_haze": 0.06},
+    "dodge_burn": 0.12,
+    "grain_strength": 0.06,
+    "bloom": {"opacity": 0.03, "threshold": 215.0},
+    "highlight_rolloff": 0.35,
+    "texture": {"opacity": 0.96},
+    "sharpen": 8.0,
+    "slimming": 0.0,
+}
+
+RECIPES["apex_cinema_v1"] = {
+    # Cinematic night portrait on the Eterna motion-picture base, corrected
+    # for warm scenes: Eterna's log-flat desaturation and cyan midtones gray
+    # the skin, so this pulls saturation/contrast most of the way back, drops
+    # the cyan midtone leg, protects skin from the grade, and keeps the
+    # cinema signature as teal shadows / warm highlights + purity tonemap,
+    # halation, grain and lens-blur separation.
+    "extends": "eterna",
+    "frequency": {
+        "smooth": 0.38,
+        "mid_reduction": 0.26,
+        "regional_modulation": 0.60,
+        "smooth_engine": "anisotropic",
+        "heal_engine": "telea",
+    },
+    "skin": {
+        "rosy": 0.10,
+        "hb_even": 0.22,
+        "mole_protect": 0.85,
+        "sss": 0.20,
+        "sculpt": 0.15,
+        "relight": 0.10,
+        "shine_removal": 0.18,
+        "specular_finish": "matte",
+        "specular_finish_strength": 0.18,
+    },
+    "eyes": {"whites": 0.14, "iris": 0.26, "catchlight": 0.34},
+    "film": {
+        "enable": True,
+        "strength": 0.35,
+        "tonemap": {
+            "strength": 0.28,
+            "toe": 0.06,
+            "shoulder": 0.18,
+            "skew": 0.20,
+            "highlight_purity": 0.35,
+        },
+    },
+    "halation": 0.18,
+    "grain_strength": 0.15,
+    "background": {"lens_blur": 16},
+    "finish": {"fade_toe": 0.06, "highlight_drift": 0.12},
+    "shadows": 0.0,
+    "saturation_mode": "subtractive",
+    "saturation": -6.0,
+    "contrast": -2.0,
+    "vibrance": 10.0,
+    "skin_protect": 0.60,
+    "midtone_sat": 0.0,
+    "shadow_hue": 210.0,
+    "shadow_sat": 10.0,
+    "highlight_hue": 42.0,
+    "highlight_sat": 8.0,
+    "bloom": {"opacity": 0.06, "threshold": 200.0},
+    "vignette": 6.0,
+    "texture": {"opacity": 0.94},
+    "sharpen": 10.0,
     "slimming": 0.0,
 }
 

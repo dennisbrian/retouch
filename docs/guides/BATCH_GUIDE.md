@@ -34,6 +34,10 @@ By default, this will:
 | **`--max-dim`** | | *Original* | Downscale the longest side of the image to `N` pixels before processing (speeds up CPU processing significantly). e.g., `--max-dim 2048`. |
 | **`--quality`** | `-q` | `95` | Compression quality for JPEG/WebP output (1–100). |
 | **`--format`** | | `same` | Output image format: `jpg`, `png`, `webp`, or `same` to match source. |
+| **`--raf-decoder`** | | `rawpy` | RAF development path: native 16-bit `rawpy` (default), camera-JPEG `raf2jpeg`, or `rawpy-fuji-match` for full-resolution RAW calibrated to the camera preview. |
+| **`--raf2jpeg-path`** | | Auto | Explicit `raf2jpeg` executable path. By default Retouch discovers the sibling `../raf2jpeg/bin/raf2jpeg` checkout, then searches `PATH`. |
+| **`--raf2jpeg-quality`** | | `100` | JPEG quality passed to a `raf2jpeg` re-encoding fallback. The normal embedded-camera-JPEG path preserves its original bytes unchanged. |
+| **`--fuji-match-strength`** | | `0.85` | Blend from the native RAW development (0) to the camera-preview calibration (1), used with `--raf-decoder rawpy-fuji-match`. |
 | **`--no-compare`** | | *Off* | Skip generating the `_compare` side-by-side comparison files. |
 | **`--no-exif`** | | *Off* | Skip copying EXIF metadata (orientation, camera tags, etc.) from the source image. |
 | **`--dry-run`** | | *Off* | Scan the directories and print settings without executing any retouching. |
@@ -94,7 +98,51 @@ Check how many images are in a folder and verify options before running:
 python3 cli.py "/Users/dennis/Pictures/Photoshoot" --preset cosplay_3d --dry-run
 ```
 
-### Example D: Anime Cinematic / Dreamy Recipes
+### Example D: RAF Through `raf2jpeg`
+
+Use this when you prefer the RAF rendition produced by your local
+`raf2jpeg` tool. Retouch creates the converter JPEG in a temporary directory,
+retouches it, then removes the temporary file; it never writes a JPEG beside
+the source RAF. The native `rawpy` decoder remains the default because it
+keeps 16-bit float data for more grading headroom.
+
+```bash
+python3 cli.py "/Users/dennis/Pictures/Photoshoot/DSCF0001.RAF" \
+  -o "/Users/dennis/Desktop/Retouched" \
+  --raf-decoder raf2jpeg \
+  --raf2jpeg-quality 100 \
+  --recipe fuji_porcelain \
+  --format png
+```
+
+If `raf2jpeg` is not in its sibling checkout or on `PATH`, provide it
+explicitly:
+
+```bash
+python3 cli.py DSCF0001.RAF --raf-decoder raf2jpeg \
+  --raf2jpeg-path /path/to/raf2jpeg/bin/raf2jpeg -o retouched
+```
+
+### Example E: Full-Resolution RAF With Fuji-Matched Colour
+
+This is the recommended compromise when the embedded JPEG is too small for
+delivery. Retouch develops the full RAF through its 16-bit path, learns a
+global tone curve and Lab colour calibration from the embedded Fuji JPEG, then
+retouches the full-resolution result. It preserves RAW detail, but cannot copy
+the camera's proprietary local sharpening and noise reduction pixel-for-pixel.
+
+```bash
+python3 cli.py DSCF0001.RAF -o retouched \
+  --raf-decoder rawpy-fuji-match \
+  --fuji-match-strength 0.85 \
+  --recipe fuji_porcelain \
+  --format png
+```
+
+Use `0.65`–`0.75` for a more restrained camera match, or `1.0` for the
+strongest global match.
+
+### Example F: Anime Cinematic / Dreamy Recipes
 The engine ships with several specialised anime and dreamy recipes that work
 well on illustration-style or soft-light photoshoots. Pick one with
 `--recipe`/`--preset`:

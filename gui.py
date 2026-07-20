@@ -21,6 +21,7 @@ from retouch.engine import resolve_recipe
 from retouch.io import (
     EXT_MAP,
     EXPORT_RES_MAP,
+    RAW_EXTENSIONS,
     encode_write_params,
     imread_engine,
     imread_exif,
@@ -28,7 +29,7 @@ from retouch.io import (
     write_image_with_icc,
 )
 from retouch.lips import LIP_TINT_NAMES
-from retouch.recipes import RECIPES
+from retouch.recipes import CURATED_RECIPE_NAMES, RECIPE_UI_CHOICES, RECIPES
 from retouch.params import recipe_to_params, PROCESSING_PARAMS, param_names, gui_values_to_engine_kwargs
 from retouch.grading import list_available_presets
 from retouch.style_library import list_styles, save_style_profile, learn_dataset_style
@@ -41,7 +42,9 @@ from retouch.marks import MARK_POLICY_PRESET_NAMES
 
 _logger = logging.getLogger(__name__)
 
-RECIPE_NAMES = list(RECIPES.keys())
+# Keep the normal editing flow focused. Legacy recipes remain available to
+# existing saved sessions but are not presented as default creative choices.
+RECIPE_NAMES = list(CURATED_RECIPE_NAMES)
 COLOR_GRADE_NAMES = ["none"] + list_available_presets()
 LUT_CHOICES = ["none", "kodak", "fuji"]
 _TONE_CHOICES = ["rosy", "porcelain", "neutral"]
@@ -846,6 +849,10 @@ def on_search_recipes(query, category=None):
                 results = [r for r in results if r.category == cat]
         else:
             results = list_recipes(cat)
+        # The cookbook follows the same curated policy as the main recipe
+        # selector, so an archived experiment cannot be selected into a
+        # dropdown that intentionally does not expose it.
+        results = [r for r in results if r.name in RECIPE_NAMES]
     except Exception as e:
         _logger.exception("Recipe search failed: %s", e)
         return gr.update(choices=[]), f"Recipe search failed: {e}"
@@ -1681,12 +1688,12 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
             with gr.Row():
                 # Column 1: Presets & Library Panel (Left)
                 with gr.Column(scale=2, elem_classes=["library-panel"]):
-                    img_input = gr.File(label="Input Image(s) (RAW supported)", file_types=["image"], file_count="multiple")
+                    img_input = gr.File(label="Input Image(s) (RAW supported)", file_types=["image", *sorted(RAW_EXTENSIONS)], file_count="multiple")
 
                     with gr.Group():
                         recipe = gr.Radio(
-                            choices=RECIPE_NAMES, value="natural", label="Base Preset Recipe",
-                            info="Select a preset recipe to auto-fill sliders",
+                            choices=RECIPE_UI_CHOICES, value="natural", label="Base Preset Recipe",
+                            info="Recommended recipes are correction-first. Scene / creative recipes need matching light or intent.",
                             elem_classes=["preset-chips"]
                         )
                         custom_style_preset = gr.Dropdown(
@@ -1795,7 +1802,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 )
                                 face_recipe = gr.Dropdown(
                                     label="Recipe for face",
-                                    choices=RECIPE_NAMES, value=None, scale=2,
+                                    choices=RECIPE_UI_CHOICES, value=None, scale=2,
                                 )
                                 apply_face_btn = gr.Button("Apply to face", size="sm", scale=1)
                             clear_faces_btn = gr.Button("Clear per-face", size="sm")
@@ -2134,7 +2141,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
 
                         with gr.Accordion("🎨 Look Extractor (F6)", open=False):
                             gr.Markdown("Upload a reference image to reverse-engineer an editable tone/color look. The extracted params are applied on the next Process (overriding recipe defaults).")
-                            look_ref_file = gr.File(label="Reference Image (look source)", file_types=["image"], file_count="single")
+                            look_ref_file = gr.File(label="Reference Image (look source)", file_types=["image", *sorted(RAW_EXTENSIONS)], file_count="single")
                             look_extract_btn = gr.Button("✨ Extract Look", variant="secondary", size="sm", elem_classes=["secondary-btn"])
                             look_status = gr.Markdown("")
 
@@ -2165,7 +2172,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                     with gr.Group():
                         gr.Markdown("### Style Mode")
                         batch_style_type = gr.Radio(choices=["Use Standard Recipe", "Use Custom Style"], value="Use Standard Recipe", label="Style Mode", info="Choose whether to apply a built-in recipe preset or a custom learned style profile.")
-                        batch_recipe = gr.Dropdown(choices=RECIPE_NAMES, value="natural", label="Standard Recipe", info="Select standard built-in recipe preset.")
+                        batch_recipe = gr.Dropdown(choices=RECIPE_UI_CHOICES, value="natural", label="Standard Recipe", info="Recommended recipes are correction-first; scene / creative recipes are conditional.")
                         batch_custom_style = gr.Dropdown(choices=custom_style_choices, value=None, label="Custom Style Profile", interactive=True, visible=False, info="Select a custom style profile from your library.")
                     
                     with gr.Group():

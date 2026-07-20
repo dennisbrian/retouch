@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render one input image through every registered retouch recipe.
+"""Render one input image through the curated retouch recipe catalog.
 
 This is a visual-validation utility: it exports one output per recipe plus a
 contact sheet and manifest so recipe drift can be reviewed quickly.
@@ -8,6 +8,7 @@ contact sheet and manifest so recipe drift can be reviewed quickly.
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import sys
 import time
@@ -32,11 +33,22 @@ from retouch.io import (  # noqa: E402
     resize_for_processing,
     write_image_with_icc,
 )
-from retouch.recipes import RECIPES  # noqa: E402
+from retouch.recipes import (  # noqa: E402
+    CONDITIONAL_RECIPE_NAMES,
+    CURATED_RECIPE_NAMES,
+    RECOMMENDED_RECIPE_NAMES,
+    RECIPES,
+)
 
 
 def _parse_recipe_list(raw: Optional[str]) -> List[str]:
-    if raw is None or raw.strip().lower() == "all":
+    if raw is None or raw.strip().lower() in {"recommended", "default"}:
+        return list(RECOMMENDED_RECIPE_NAMES)
+    if raw.strip().lower() == "curated":
+        return list(CURATED_RECIPE_NAMES)
+    if raw.strip().lower() == "conditional":
+        return list(CONDITIONAL_RECIPE_NAMES)
+    if raw.strip().lower() == "all":
         return sorted(RECIPES.keys())
     names = [item.strip() for item in raw.split(",") if item.strip()]
     unknown = [name for name in names if name not in RECIPES]
@@ -58,6 +70,13 @@ def _write_image(path: Path, img_bgr: np.ndarray, fmt: str, quality: int) -> Non
             raise IOError(f"failed to write output image: {path}")
     if not path.exists() or path.stat().st_size <= 0:
         raise IOError(f"output image was not written: {path}")
+
+
+def _checkpoint_manifest(path: Path, manifest: Dict[str, Any]) -> None:
+    """Atomically save progress so a native crash leaves a resumable sweep."""
+    temp_path = path.with_name(f".{path.name}.tmp")
+    temp_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    temp_path.replace(path)
 
 
 def _process_recipe(
@@ -116,6 +135,7 @@ def run_sweep(args: argparse.Namespace) -> int:
     source_path = output_dir / f"00_source.{args.format}"
     _write_image(source_path, img_bgr, args.format, args.quality)
 
+    manifest_path = output_dir / "manifest.json"
     manifest: Dict[str, Any] = {
         "input": str(input_path),
         "output_dir": str(output_dir),
@@ -127,14 +147,34 @@ def run_sweep(args: argparse.Namespace) -> int:
         "scale": scale,
         "outputs": [],
     }
+    if args.resume and manifest_path.exists():
+        prior = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if prior.get("input") != str(input_path):
+            raise ValueError("cannot resume: manifest input does not match the requested image")
+        if prior.get("recipes_requested") != recipes:
+            raise ValueError("cannot resume: recipe list does not match the existing manifest")
+        manifest = prior
 
-    output_paths: List[Path] = []
+    completed_rows = {
+        row.get("recipe"): row
+        for row in manifest.get("outputs", [])
+        if row.get("status") == "done" and (output_dir / str(row.get("output", ""))).exists()
+    }
+
+    output_paths: List[Path] = [
+        output_dir / str(row["output"])
+        for row in completed_rows.values()
+    ]
+    _checkpoint_manifest(manifest_path, manifest)
     engine: Optional[RetouchEngine] = None
-    if not args.global_only:
+    if not args.global_only and not args.restart_engine_per_recipe:
         engine = RetouchEngine()
 
     try:
         for idx, recipe in enumerate(recipes, start=1):
+            if recipe in completed_rows:
+                print(f"[{idx:02d}/{len(recipes):02d}] {recipe}: resume skip")
+                continue
             started = time.perf_counter()
             out_name = f"{idx:02d}_{_safe_stem(recipe)}.{args.format}"
             out_path = output_dir / out_name
@@ -145,11 +185,14 @@ def run_sweep(args: argparse.Namespace) -> int:
                 "output": out_name,
                 "status": "pending",
             }
+            recipe_engine = engine
             try:
+                if not args.global_only and args.restart_engine_per_recipe:
+                    recipe_engine = RetouchEngine()
                 result, qa_rows = _process_recipe(
                     img_bgr=img_bgr,
                     recipe=recipe,
-                    engine=engine,
+                    engine=recipe_engine,
                     global_only=bool(args.global_only),
                     fail_on_qa=bool(args.fail_on_qa),
                 )
@@ -179,7 +222,15 @@ def run_sweep(args: argparse.Namespace) -> int:
                 if not args.keep_going:
                     raise
             finally:
+                if args.restart_engine_per_recipe and recipe_engine is not None:
+                    recipe_engine.close()
+                    gc.collect()
+                manifest["outputs"] = [
+                    existing for existing in manifest["outputs"]
+                    if existing.get("recipe") != recipe
+                ]
                 manifest["outputs"].append(row)
+                _checkpoint_manifest(manifest_path, manifest)
     finally:
         if engine is not None:
             engine.close()
@@ -190,8 +241,7 @@ def run_sweep(args: argparse.Namespace) -> int:
         manifest["contact_sheet"] = sheet_path.name
         print(f"contact sheet: {sheet_path}")
 
-    manifest_path = output_dir / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    _checkpoint_manifest(manifest_path, manifest)
     print(f"manifest: {manifest_path}")
 
     failed = [row for row in manifest["outputs"] if row["status"] != "done"]
@@ -204,14 +254,17 @@ def run_sweep(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run one image through all registered recipes and export validation outputs."
+        description="Run one image through curated recipes, or all recipes when explicitly requested."
     )
     parser.add_argument("input", help="Input image path")
     parser.add_argument("-o", "--output", required=True, help="Output directory")
     parser.add_argument(
         "--recipes",
-        default="all",
-        help="Comma-separated recipe names, or 'all' (default: all)",
+        default="recommended",
+        help=(
+            "Comma-separated recipe names; 'recommended' (default), 'conditional', "
+            "'curated' (all 50 maintained), or 'all' for legacy/experimental recipes."
+        ),
     )
     parser.add_argument(
         "--skip",
@@ -255,6 +308,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         dest="keep_going",
         help="Stop at the first recipe failure.",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume a matching partial sweep, skipping outputs recorded as done.",
+    )
+    parser.add_argument(
+        "--restart-engine-per-recipe",
+        action="store_true",
+        help="Close and recreate the native engine after every recipe to reduce long-run memory pressure.",
     )
     return parser
 

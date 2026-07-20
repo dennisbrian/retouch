@@ -14,6 +14,12 @@ the shared encoder and GUI paths. Pillow exposes an explicit JPEG subsampling
 control, but not an equivalent control for lossy WebP; WebP therefore remains
 unchanged rather than advertising an unsupported 4:4:4 setting.
 
+**Reopened (2026-07-18):** `copy_exif` (`io.py:509`) re-encodes the delivered
+JPEG a second time at PIL's unguarded defaults (quality 75, 4:2:0, no ICC),
+undoing this AB1 write on the CLI/batch export paths whenever EXIF copy runs
+— which is the default. See `RESEARCH_FRONTIER_AC_2026_07_18.md` AC1 for the
+executed round-trip proof and fix spec.
+
 ---
 
 ## 1. Working-tree status (delta since the AA doc)
@@ -191,6 +197,16 @@ provenance/edge analysis machinery).
 ---
 
 ## 4. Lighting wiring is a ~1-day item, not a research item (spec)
+
+**Shipped (2026-07-19):** implemented per `TODO_WEEK_2026_07_20.md` Day 2,
+with two corrections found by reading `relight.py` before implementing
+rather than trusting this spec verbatim — elevation cannot be left `None`
+alongside a derived azimuth (`sculpt()` couples them: either being `None`
+re-estimates both), and `relight_azimuth`'s `0.0` default (not `None`) means
+"explicit user azimuth" had to be read as "relight is active
+(`ctx.relight > 0`)," not as a literal none-check. See the TODO doc for the
+full deviation record, including an unrelated NaN-production bug found and
+fixed in the same function along the way.
 
 Re-verified: `sculpt()` **already accepts** explicit `light_azimuth` /
 `light_elevation` (`relight.py:422-423`); its only call site

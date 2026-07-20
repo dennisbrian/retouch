@@ -591,8 +591,9 @@ class TestChoiceConstants:
         assert gui.COLOR_GRADE_NAMES[0] == "none"
 
     def test_recipe_names_match_recipes_keys(self):
-        """RECIPE_NAMES should be a snapshot of RECIPES keys (in order)."""
-        assert gui.RECIPE_NAMES == list(gui.RECIPES.keys())
+        """The default GUI presents only the maintained curated catalog."""
+        from retouch.recipes import CURATED_RECIPE_NAMES
+        assert gui.RECIPE_NAMES == CURATED_RECIPE_NAMES
 
     def test_recipe_names_includes_natural(self):
         assert "natural" in gui.RECIPE_NAMES

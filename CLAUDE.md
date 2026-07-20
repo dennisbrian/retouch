@@ -110,6 +110,10 @@ Cuts memory from 7.5 GB → 1.84 GB, runtime from 15.3s → 3.09s.
 - Remaining ~4% undetected faces: extreme profiles, heavy occlusion, tiny faces in distance shots
 - LUT hot-reload (daemon thread watcher) exists but not wired into GUI/CLI yet
 
+### Verification & Honesty
+- Never simulate or describe pipeline/engine output in prose — actually invoke `RetouchEngine`/CLI/GUI and show genuine results. If you can't run it (no test image, no GPU, etc.), say so explicitly instead of narrating a plausible-looking result.
+- After any code fix, run the relevant regression tests (or full suite, per repo convention — no full pytest unprompted) and verify against a real rendered image before claiming the fix works. Delta metrics alone can hide face-region damage — view the actual output.
+
 ---
 
 ## Outstanding Fixes
@@ -158,6 +162,9 @@ Cuts memory from 7.5 GB → 1.84 GB, runtime from 15.3s → 3.09s.
 - Use `cv2.LUT` for fast 1D LUT application
 - ThreadPoolExecutor (max 4 workers) for multi-face, ProcessPoolExecutor for heavy CPU workloads
 
+### Editing Conventions
+- When editing multiple files/locations that share identical comment or value patterns (e.g., repeated recipe literals across presets), anchor `old_string` on unique surrounding context (preceding key, function name, etc.) rather than the shared snippet alone — an ambiguous match fails instead of silently editing the wrong occurrence.
+
 ### Tone-Invariance & Fairness
 - **No Absolute Intensity Thresholds:** Do not use hardcoded absolute intensity, luminance, or reflectance threshold checks (e.g., `I > 170.0`, `L > 0.85`) on signals that scale with the subject's skin tone. These absolute gates systematically degrade or fail on darker skin tones (Fitzpatrick V-VI).
 - **Tone-Adaptive Alternatives:** Use margin-above-baseline measures relative to each face's own diffuse baseline (e.g., computed via median over the skin mask or crop). See `retouch/specular.py::extract_specular` for a reference implementation.
@@ -192,6 +199,9 @@ Fixes #142
 - `main` is linear (no merge commits)
 - All commits must pass syntax + test suite
 - Tag releases as `v<major>.<minor>.<patch>-<codename>`
+
+### Commit Message Delivery
+When committing, avoid heredocs with nested backticks, unescaped quotes, or apostrophes — they break shell parsing mid-commit. Write the message to a temp file and use `git commit -F <file>` instead.
 
 ---
 

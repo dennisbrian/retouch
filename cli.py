@@ -23,16 +23,16 @@ from retouch.io import (
     IMAGE_EXTENSIONS,
     RAW_EXTENSIONS,
     _resolve_safe_path,
-    copy_exif,
     encode_write_params,
     imread_engine,
     imread_exif,
     make_comparison,
     output_format,
+    read_exif_bytes,
     read_icc_profile,
     resize_for_processing,
 )
-from retouch.recipes import RECIPES
+from retouch.recipes import CURATED_RECIPE_NAMES, RECIPES
 from retouch.params import PROCESSING_PARAMS, recipe_to_params
 from retouch.session import Session, create_session_from_params
 from retouch.recipe_cookbook import list_recipes, search_recipes
@@ -62,7 +62,7 @@ class _DeprecatedAliasAction(argparse.Action):
         )
         setattr(namespace, self.dest, values)
 
-RECIPE_CHOICES = sorted(RECIPES.keys())
+RECIPE_CHOICES = list(CURATED_RECIPE_NAMES)
 PRESET_CHOICES = RECIPE_CHOICES
 
 
@@ -196,7 +196,8 @@ def _linear_raw_to_engine_bgr(path, exposure: float = 0.0, contrast: float = 1.0
 def _process_single(args):
     (img_path, output_dir, params, format_arg, quality, force, copy_exif_flag,
      max_dim, compare_flag, global_only, bit_depth, fail_on_qa, save_session,
-     smart, linear_raw, raw_exposure, raw_contrast) = args
+     smart, linear_raw, raw_exposure, raw_contrast, raf_decoder,
+     raf2jpeg_path, raf2jpeg_quality, fuji_match_strength) = args
     try:
         fmt = output_format(img_path, format_arg)
         stem = img_path.stem
@@ -216,7 +217,13 @@ def _process_single(args):
                 img_path, exposure=raw_exposure, contrast=raw_contrast,
             )
         else:
-            img_bgr = imread_engine(img_path)
+            img_bgr = imread_engine(
+                img_path,
+                raw_decoder=raf_decoder,
+                raf2jpeg_path=raf2jpeg_path,
+                raf2jpeg_quality=raf2jpeg_quality,
+                fuji_match_strength=fuji_match_strength,
+            )
         orig_shape = img_bgr.shape[:2]
         # 16-bit RAF ingest returns float32 [0,255]; comparison stitching is
         # uint8-only, so snapshot a uint8 original for the compare image.
@@ -270,13 +277,20 @@ def _process_single(args):
             result = cv2.resize(result, (orig_shape[1], orig_shape[0]),
                                 interpolation=cv2.INTER_LINEAR)
 
-        # Use write_image_with_icc for 16-bit support
+        # Use write_image_with_icc for 16-bit support. EXIF is embedded at
+        # write time so the ICC profile, bit depth, and quality survive (the
+        # old copy_exif re-save re-encoded the destination and dropped them).
         from retouch.io import write_image_with_icc
         icc_profile = read_icc_profile(img_path) if copy_exif_flag else None
-        write_image_with_icc(str(out_path), result, icc_profile=icc_profile, bit_depth=bit_depth, quality=quality)
-
-        if copy_exif_flag and bit_depth == 8:
-            copy_exif(img_path, out_path)
+        exif_bytes = read_exif_bytes(img_path) if copy_exif_flag else None
+        write_image_with_icc(
+            str(out_path),
+            result,
+            icc_profile=icc_profile,
+            bit_depth=bit_depth,
+            quality=quality,
+            exif=exif_bytes,
+        )
 
         if compare_flag:
             compare_path = (output_dir / f"{stem}_compare.{fmt}") if output_dir else \
@@ -616,8 +630,42 @@ def main() -> None:
                         help="With --linear-raw: exposure stops (default 0)")
     parser.add_argument("--raw-contrast", type=float, default=1.0,
                         help="With --linear-raw: linear contrast factor (default 1)")
+    parser.add_argument(
+        "--raf-decoder",
+        choices=["rawpy", "raf2jpeg", "rawpy-fuji-match"],
+        default="rawpy",
+        help="RAF decoder: native 16-bit rawpy (default), external raf2jpeg, "
+             "or full-resolution rawpy calibrated to the Fuji preview",
+    )
+    parser.add_argument(
+        "--raf2jpeg-path",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Path to the raf2jpeg executable (auto-discovers ../raf2jpeg/bin/raf2jpeg)",
+    )
+    parser.add_argument(
+        "--raf2jpeg-quality",
+        type=int,
+        choices=range(1, 101),
+        default=100,
+        metavar="1-100",
+        help="Fallback JPEG quality with --raf-decoder raf2jpeg (default: 100)",
+    )
+    parser.add_argument(
+        "--fuji-match-strength",
+        type=float,
+        default=0.85,
+        metavar="0-1",
+        help="Camera-preview calibration strength with --raf-decoder rawpy-fuji-match (default: 0.85)",
+    )
 
     args = parser.parse_args()
+
+    if not 0.0 <= args.fuji_match_strength <= 1.0:
+        parser.error("--fuji-match-strength must be between 0 and 1")
+    if args.linear_raw and args.raf_decoder != "rawpy":
+        parser.error("--linear-raw can only be combined with --raf-decoder rawpy")
 
     # T4: recipe cookbook browse mode — exit before requiring an input image.
     if args.list_recipes is not None:
@@ -717,7 +765,9 @@ def main() -> None:
             (f, output_dir, params, args.format, args.quality, args.force,
              not args.no_exif, args.max_dim, args.compare, args.global_only,
              args.bit_depth, args.fail_on_qa, args.save_session, args.smart,
-             args.linear_raw, args.raw_exposure, args.raw_contrast)
+             args.linear_raw, args.raw_exposure, args.raw_contrast,
+             args.raf_decoder, args.raf2jpeg_path, args.raf2jpeg_quality,
+             args.fuji_match_strength)
             for f in files
         ]
         with ProcessPoolExecutor(
@@ -749,7 +799,13 @@ def main() -> None:
                         tqdm.write(f"  ✖ {f.name}: linear-raw {e}")
                         continue
                 else:
-                    img_bgr = imread_engine(f)
+                    img_bgr = imread_engine(
+                        f,
+                        raw_decoder=args.raf_decoder,
+                        raf2jpeg_path=args.raf2jpeg_path,
+                        raf2jpeg_quality=args.raf2jpeg_quality,
+                        fuji_match_strength=args.fuji_match_strength,
+                    )
                 if img_bgr is None:
                     failed += 1
                     tqdm.write(f"  ✖ {f.name}: failed to read")
@@ -805,13 +861,12 @@ def main() -> None:
                     result = cv2.resize(result, (orig_shape[1], orig_shape[0]),
                                         interpolation=cv2.INTER_LINEAR)
                 
-                # Use write_image_with_icc for 16-bit support
-                from retouch.io import write_image_with_icc, read_icc_profile
+                # Use write_image_with_icc for 16-bit support; embed EXIF at
+                # write time so ICC/bit-depth/quality survive.
+                from retouch.io import write_image_with_icc, read_icc_profile, read_exif_bytes
                 icc_profile = read_icc_profile(f) if not args.no_exif else None
-                write_image_with_icc(str(out_path), result, icc_profile=icc_profile, bit_depth=args.bit_depth, quality=args.quality)
-                
-                if not args.no_exif and args.bit_depth == 8:
-                    copy_exif(f, out_path)
+                exif_bytes = read_exif_bytes(f) if not args.no_exif else None
+                write_image_with_icc(str(out_path), result, icc_profile=icc_profile, bit_depth=args.bit_depth, quality=args.quality, exif=exif_bytes)
 
                 if args.compare:
                     compare_path = (output_dir / f"{f.stem}_compare.{fmt}") if output_dir else \

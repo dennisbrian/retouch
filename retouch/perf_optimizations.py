@@ -27,6 +27,7 @@ import onnxruntime as ort
 
 from .frequency import FrequencySeparator
 from .freckle import FreckleRemover
+from .lighting import LightDirection
 
 
 def _build_smooth_mask(
@@ -237,6 +238,7 @@ def _process_face_core(
     roi_w: int,
     roi_person_mask: Optional[np.ndarray],
     processors: Dict[str, Any],
+    light_direction: Optional["LightDirection"] = None,
 ) -> _FaceResult:
     """Run the per-face rendering pipeline on a private ROI canvas.
 
@@ -247,6 +249,12 @@ def _process_face_core(
     a worker process (passing freshly-instantiated processors). The
     'frequency' entry is optional: when absent, a transient
     ``FrequencySeparator`` is created for the duration of this call.
+
+    ``light_direction`` is this face's detection-time key-light estimate
+    (:class:`~retouch.lighting.LightDirection`), carried from
+    ``FaceContext`` rather than ``ctx`` (a param bag, not a detection
+    artifact). Only consulted when relight is inactive — see the sculpt
+    call site below for the coherence rule.
 
     Stage E1: Canvas is converted to float32 [0, 255] at the top and kept
     float throughout the skin operation chain to eliminate quantization noise.
@@ -655,12 +663,37 @@ def _process_face_core(
     # ---- Facial structure sculpting (C2: low-band shaping, form-frequency modulation) ----
     if ctx.sculpt > 0:
         canvas = _tr('sculpt', canvas)
+        # Coherence rule: when relight is actively shading this face, sculpt
+        # must follow the same explicit azimuth/elevation — shading two ops
+        # in different directions would look physically incoherent. Only
+        # when relight is off (no explicit user direction is in play) does
+        # sculpt fall back to this face's detected key-light direction, and
+        # only when detection is confident (LightDirection.is_known).
+        sculpt_azimuth: Optional[float] = None
+        sculpt_elevation: Optional[float] = None
+        if ctx.relight > 0:
+            sculpt_azimuth = ctx.relight_azimuth
+            sculpt_elevation = ctx.relight_elevation
+        elif light_direction is not None and light_direction.is_known:
+            # sculpt() re-estimates both angles if either is None, so a
+            # concrete elevation is required even though the 2D catchlight
+            # estimate carries no elevation signal — use sculpt's own
+            # frontal default (30deg). Azimuth: sculpt's convention is a 3D
+            # angle with z toward-camera, not LightDirection's raw screen
+            # vector, so dx is mapped as if z=1 (frontal-biased) rather
+            # than reproducing the 2D vector directly, which would
+            # degenerate to a fully-raking +-90deg light.
+            dx, _dy = light_direction.direction
+            sculpt_azimuth = float(np.degrees(np.arctan2(dx, 1.0)))
+            sculpt_elevation = 30.0
         canvas = relighter.sculpt(
             canvas,
             shifted_face.landmarks,
             regions.skin,
             face_width=face_width,
             strength=ctx.sculpt,
+            light_azimuth=sculpt_azimuth,
+            light_elevation=sculpt_elevation,
         )
 
     # ---- Subsurface-scatter finish (screen-space SSS approximation) ----
@@ -1043,12 +1076,13 @@ def _process_single_face_worker(payload: tuple) -> Dict[str, Any]:
 
     ``payload`` is a picklable tuple:
         (canvas, regions, shifted_bbox, shifted_landmarks, ied, ctx,
-         roi_box, roi_person_mask, roi_h, roi_w)
+         roi_box, roi_person_mask, roi_h, roi_w, light_direction)
 
     All inputs are plain picklable Python objects (NumPy arrays, the
     ``FaceRegions`` slots-object, the ``ProcessingContext`` dataclass,
-    the landmark compat object, floats/ints). No MediaPipe or ONNX
-    session objects cross the process boundary.
+    the landmark compat object, floats/ints, the frozen ``LightDirection``
+    dataclass). No MediaPipe or ONNX session objects cross the process
+    boundary.
 
     Returns a plain dict of NumPy arrays so the result is trivially
     picklable for IPC back to the parent process.
@@ -1064,6 +1098,7 @@ def _process_single_face_worker(payload: tuple) -> Dict[str, Any]:
         roi_person_mask,
         roi_h,
         roi_w,
+        light_direction,
     ) = payload
 
     from .detection import FaceData
@@ -1087,6 +1122,7 @@ def _process_single_face_worker(payload: tuple) -> Dict[str, Any]:
         roi_w,
         roi_person_mask,
         processors,
+        light_direction=light_direction,
     )
 
     return {

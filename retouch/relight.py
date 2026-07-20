@@ -305,7 +305,13 @@ class Relighter:
 
         lambert = np.clip(N_x * L_x + N_y * L_y + N_z * L_z, 0.0, 1.0)
         S_new = 0.55 + 0.45 * lambert
-        S_new = S_new / np.mean(S_new[valid])
+        # Unlike S_old above (guarded by the `valid >= 50` branch it lives
+        # in), this runs unconditionally — an empty `valid` mask would divide
+        # by NaN (mean of an empty slice) and poison S_new, then S_final/gain
+        # downstream. Skip normalization in that case; the gain clip to
+        # [0.55, 1.65] at 3f already bounds the result safely either way.
+        if np.sum(valid) > 0:
+            S_new = S_new / np.mean(S_new[valid])
 
         # 3f. Blend: multiplicative blend with strength cap
         t = np.clip((effective_strength / 100.0) * 0.6, 0.0, 0.6)
@@ -533,7 +539,15 @@ class Relighter:
         # Target shading using Lambertian model (matching relight v2)
         lambert = np.clip(N_x * L_x + N_y * L_y + N_z * L_z, 0.0, 1.0)
         S_target = 0.55 + 0.45 * lambert
-        S_target = S_target / np.mean(S_target[valid])
+        # Normalize by the local mean so gain clips symmetrically around 1.0
+        # below. A near-frontal/flat face crop can leave `valid` empty (no
+        # pixel clears the grazing-angle N_z threshold), which would divide
+        # by NaN (mean of an empty slice) and poison the whole canvas with
+        # NaN silently. Skip normalization in that case — the downstream
+        # gain clip to [0.7, 1.3] already bounds S_target safely either way.
+        valid_count = int(np.sum(valid))
+        if valid_count > 0:
+            S_target = S_target / np.mean(S_target[valid])
 
         # Compute sculpting gain at coarse scale
         # Sculpt uses a conservative multiplicative gain to preserve flat areas

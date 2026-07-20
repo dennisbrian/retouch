@@ -89,7 +89,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from .detection import FaceDetector, FaceData, FaceContext
-from .lighting import estimate_light_direction
+from .lighting import LightDirection, estimate_light_direction
 from .parsing import FaceParser, FaceRegions
 from .geometry import FaceReshaper
 from .makeup import MakeupEngine
@@ -2853,21 +2853,28 @@ class RetouchEngine:
         cached_contexts = ctx.face_contexts
         if cached_contexts is not None:
             all_regions = [fc.regions for fc in cached_contexts]
+            all_light_directions: List[Optional[LightDirection]] = [
+                fc.light_direction for fc in cached_contexts
+            ]
             built_contexts: Optional[List["FaceContext"]] = None
         else:
             all_regions = self._parser.parse_batch(
                 crop_list, landmarks_compat_list, face_bbox_list, person_masks, ieds,
                 mask_feather_mode=ctx.mask_feather_mode
             )
+            all_light_directions = [
+                estimate_light_direction(
+                    crop_list[i], all_regions[i], face_width=faces[i].bbox[2]
+                )
+                for i in range(len(faces))
+            ]
             built_contexts = [
                 FaceContext(
                     face_data=faces[i],
                     regions=all_regions[i],
                     index=i,
                     face_image=crop_list[i],
-                    light_direction=estimate_light_direction(
-                        crop_list[i], all_regions[i], face_width=faces[i].bbox[2]
-                    ),
+                    light_direction=all_light_directions[i],
                 )
                 for i in range(len(faces))
             ]
@@ -2876,7 +2883,8 @@ class RetouchEngine:
         if len(faces) == 1:
             results[0] = self._process_one_face(
                 img, faces[0], person_mask, self._ctx_for_face(ctx, 0), h_img, w_img,
-                regions=all_regions[0], preprepared=prepared_faces[0]
+                regions=all_regions[0], preprepared=prepared_faces[0],
+                light_direction=all_light_directions[0],
             )
             return results, built_contexts  # type: ignore[return-value]
 
@@ -2901,6 +2909,7 @@ class RetouchEngine:
                     prepared_faces[i]['roi_person_mask'],
                     prepared_faces[i]['roi_box'][3] - prepared_faces[i]['roi_box'][1],
                     prepared_faces[i]['roi_box'][2] - prepared_faces[i]['roi_box'][0],
+                    all_light_directions[i],
                 )
                 for i in range(len(faces))
             ]
@@ -2915,7 +2924,8 @@ class RetouchEngine:
                     results[i] = self._process_one_face(
                         img, faces[i], person_mask, self._ctx_for_face(ctx, i),
                         h_img, w_img,
-                        regions=all_regions[i], preprepared=prepared_faces[i]
+                        regions=all_regions[i], preprepared=prepared_faces[i],
+                        light_direction=all_light_directions[i],
                     )
                 else:
                     results[i] = _FaceResult(
@@ -2935,7 +2945,8 @@ class RetouchEngine:
                     self._process_one_face,
                     img, face, person_mask, self._ctx_for_face(ctx, i),
                     h_img, w_img,
-                    regions=all_regions[i], preprepared=prepared_faces[i]
+                    regions=all_regions[i], preprepared=prepared_faces[i],
+                    light_direction=all_light_directions[i],
                 ): i
                 for i, face in enumerate(faces)
             }
@@ -2954,6 +2965,7 @@ class RetouchEngine:
         w_img: int,
         regions: Optional[FaceRegions] = None,
         preprepared: Optional[Dict] = None,
+        light_direction: Optional["LightDirection"] = None,
     ) -> _FaceResult:
         """Full per-face pipeline. Operates on a private copy of the cropped Portrait ROI canvas.
 
@@ -3029,6 +3041,7 @@ class RetouchEngine:
         return _process_face_core(
             canvas, regions, shifted_face, ctx,
             roi_x1, roi_y1, roi_h, roi_w, roi_person_mask, processors,
+            light_direction=light_direction,
         )
 
     def _composite_faces(

@@ -213,3 +213,39 @@ def test_none_mask_unchanged():
     )
 
     assert np.array_equal(out, canvas)
+
+
+def test_v2_empty_valid_mask_does_not_produce_nan(monkeypatch):
+    """A near-frontal/flat face crop can leave zero pixels clearing the
+    grazing-angle N_z threshold, making `valid` empty. Regression for a bug
+    where S_new was normalized by np.mean() of an empty slice (NaN),
+    silently poisoning S_final/gain and the whole output with NaN pixels."""
+    relighter = Relighter()
+    canvas = np.full((100, 100, 3), 180, dtype=np.uint8)
+    mask = np.ones((100, 100), dtype=np.float32)
+    landmarks = MockLandmarksList()
+
+    def _all_frontal_geometry(canvas_shape, landmarks, face_width):
+        h, w = canvas_shape
+        w_small, h_small = 40, 40
+        ones = np.ones((h_small, w_small), dtype=np.float32)
+        return (
+            np.zeros((h_small, w_small), dtype=np.float32),
+            np.zeros((h_small, w_small), dtype=np.float32),
+            ones,
+            w_small, h_small, w_small / w,
+        )
+
+    monkeypatch.setattr(relighter, "_shading_geometry", _all_frontal_geometry)
+
+    out = relighter.relight(
+        canvas, landmarks, mask, face_width=100.0,
+        strength=60.0, engine="v2"
+    )
+
+    assert not np.isnan(out.astype(np.float64)).any(), (
+        "relight(engine='v2') produced NaN pixels when the valid-normals "
+        "mask was empty"
+    )
+    assert out.dtype == np.uint8
+    assert out.shape == canvas.shape

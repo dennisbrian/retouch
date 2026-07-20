@@ -25,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from .recipes import RECIPES
+from .recipes import CONDITIONAL_RECIPE_NAMES, RECIPES
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +106,8 @@ _DESCRIPTIONS: Dict[str, str] = {
     "con_mixed_temp_v1": "Mixed color temperatures: strong C1 unify + separation.",
     "con_crowd_bg_v1": "Crowded background: subject separation + airy haze.",
     "idol": "Idol look: vivid eyes, rose lips, moderate slimming.",
-    "wedding": "Wedding: soft romantic grade, matte lips, subtle blush.",
+    "wedding": "Wedding: correction-first polish that preserves the source palette.",
+    "wedding_timeless_v1": "Wedding/formal: restrained texture, highlight, and eye cleanup without an added color grade.",
     "anime_cosplay": "Anime cosplay: cosplay base with equalize off.",
     "scifi_cosplay": "Sci-fi cosplay: cyberpunk grade, heavy bloom, low texture.",
     "fantasy_goddess": "Fantasy goddess: high bloom, fantasy grade, soft contrast.",
@@ -122,6 +123,9 @@ _DESCRIPTIONS: Dict[str, str] = {
     "anime_cinematic_fantasy": "Fantasy anime: brighter, more bloom, glossy hair.",
     "anime_v2": "Anime v2: porcelain + flatten + quantize for cel-shade read.",
     "jp_transparent_v1": "Japanese transparent skin: airy haze, fade toe.",
+    "apex_cosplay_v1": "Apex cosplay flagship: full stack — SSS skin, chromophore evening, PatchMatch heal, film highlight purity.",
+    "apex_editorial_v1": "Apex editorial flagship: expensive-but-untouched — sculpted light, near-full texture, restrained film curve.",
+    "apex_cinema_v1": "Apex cinema flagship: Eterna base + purity tonemap, halation, grain, lens-blur separation.",
     "game_character_v1": "AAA game character: directional relight, micro-contrast.",
     "game_character_v2": "Game character v2: subsurface-scatter skin, warm translucent shadows.",
     "cosplay_character_showcase_v1": "Character showreel: dewy skin, vivid eyes, wig-lace blend, no geometry edits.",
@@ -195,6 +199,8 @@ def _categorize(name: str, recipe: Dict[str, Any]) -> str:
 
 def _describe(name: str, recipe: Dict[str, Any]) -> str:
     """Return a human description for *name*."""
+    if name in CONDITIONAL_RECIPE_NAMES:
+        return f"Scene / creative: {_DESCRIPTIONS.get(name, 'use only with matching light or intent')}"
     if name in _DESCRIPTIONS:
         return _DESCRIPTIONS[name]
     parent = recipe.get("extends")

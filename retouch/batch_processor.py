@@ -488,14 +488,19 @@ class BatchProcessor:
                 out_name = f"{file_path.stem}_retouched{ext}"
                 out_file_path = output_path / out_name
 
-                # Write to disk
-                from .io import encode_write_params
-                write_params = encode_write_params(export_fmt.lower(), export_quality)
-                cv2.imwrite(str(out_file_path), result, write_params)
-
-                # Copy EXIF if supported
-                from .io import copy_exif
-                copy_exif(file_path, out_file_path)
+                # Write to disk with ICC/EXIF embedded at write time so the
+                # destination is not re-encoded (which dropped ICC/quality).
+                from .io import write_image_with_icc, read_exif_bytes, read_icc_profile
+                icc_profile = read_icc_profile(file_path)
+                exif_bytes = read_exif_bytes(file_path)
+                write_image_with_icc(
+                    str(out_file_path),
+                    result,
+                    icc_profile=icc_profile,
+                    bit_depth=8,
+                    quality=export_quality,
+                    exif=exif_bytes,
+                )
 
                 processed_paths.append(out_file_path)
 

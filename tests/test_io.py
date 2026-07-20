@@ -11,6 +11,8 @@ from retouch.io import (
     make_comparison,
     copy_exif,
     imread_exif,
+    imread_engine,
+    read_raf_with_raf2jpeg,
 )
 
 
@@ -80,10 +82,20 @@ class TestOutputFormat:
 
 class TestEncodeWriteParams:
     def test_jpg(self):
-        assert encode_write_params("jpg", 95) == [cv2.IMWRITE_JPEG_QUALITY, 95]
+        params = encode_write_params("jpg", 95)
+        assert params[:2] == [cv2.IMWRITE_JPEG_QUALITY, 95]
+        # AB1: delivery JPEGs preserve chroma resolution (4:4:4), when the
+        # OpenCV build exposes the sampling-factor flag.
+        if hasattr(cv2, "IMWRITE_JPEG_SAMPLING_FACTOR_444"):
+            assert cv2.IMWRITE_JPEG_SAMPLING_FACTOR in params
+            assert cv2.IMWRITE_JPEG_SAMPLING_FACTOR_444 in params
 
     def test_jpeg(self):
-        assert encode_write_params("jpeg", 95) == [cv2.IMWRITE_JPEG_QUALITY, 95]
+        params = encode_write_params("jpeg", 95)
+        assert params[:2] == [cv2.IMWRITE_JPEG_QUALITY, 95]
+        if hasattr(cv2, "IMWRITE_JPEG_SAMPLING_FACTOR_444"):
+            assert cv2.IMWRITE_JPEG_SAMPLING_FACTOR in params
+            assert cv2.IMWRITE_JPEG_SAMPLING_FACTOR_444 in params
 
     def test_webp(self):
         assert encode_write_params("webp", 95) == [cv2.IMWRITE_WEBP_QUALITY, 95]
@@ -371,6 +383,81 @@ def test_imread_exif_nonexistent_returns_none(tmp_path):
     assert result is None
 
 
+def test_read_raf_with_raf2jpeg_uses_temporary_high_quality_jpeg(tmp_path, monkeypatch):
+    """raf2jpeg is invoked safely and its temporary JPEG becomes BGR input."""
+    import subprocess
+
+    source = tmp_path / "portrait.RAF"
+    source.write_bytes(b"RAF")
+    executable = tmp_path / "raf2jpeg"
+    executable.write_text("#!/bin/sh\n")
+    executable.chmod(0o755)
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        output_dir = command[command.index("--output") + 1]
+        jpeg = Path(output_dir) / "portrait.jpg"
+        Image.fromarray(np.full((4, 6, 3), 127, dtype=np.uint8)).save(jpeg, "JPEG")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("retouch.io.subprocess.run", fake_run)
+
+    image = read_raf_with_raf2jpeg(source, executable, quality=100)
+
+    assert image.shape == (4, 6, 3)
+    command, kwargs = calls[0]
+    assert command[:2] == [str(executable.resolve()), str(source.resolve())]
+    assert command[command.index("--quality") + 1] == "100"
+    assert "--force" in command and "--flat" in command
+    assert kwargs["check"] is True
+
+
+def test_imread_engine_routes_only_raf_to_raf2jpeg(tmp_path, monkeypatch):
+    """The external converter is opt-in and does not intercept other RAWs."""
+    import retouch.io as retouch_io
+
+    raf = tmp_path / "portrait.raf"
+    raf.write_bytes(b"RAF")
+    expected = np.zeros((2, 3, 3), dtype=np.uint8)
+    calls = []
+
+    def fake_raf2jpeg(path, executable, quality):
+        calls.append((path, executable, quality))
+        return expected
+
+    monkeypatch.setattr(retouch_io, "read_raf_with_raf2jpeg", fake_raf2jpeg)
+    result = imread_engine(raf, raw_decoder="raf2jpeg", raf2jpeg_path="tool", raf2jpeg_quality=99)
+
+    assert result is expected
+    assert calls == [(raf, "tool", 99)]
+
+
+def test_imread_engine_routes_raf_to_full_resolution_fuji_match(tmp_path, monkeypatch):
+    """The calibrated decoder keeps RAF handling opt-in and explicit."""
+    import retouch.io as retouch_io
+
+    raf = tmp_path / "portrait.raf"
+    raf.write_bytes(b"RAF")
+    expected = np.zeros((2, 3, 3), dtype=np.float32)
+    calls = []
+
+    def fake_fuji_match(path, executable, strength):
+        calls.append((path, executable, strength))
+        return expected
+
+    monkeypatch.setattr(retouch_io, "read_raf_with_fuji_match", fake_fuji_match)
+    result = imread_engine(
+        raf,
+        raw_decoder="rawpy-fuji-match",
+        raf2jpeg_path="tool",
+        fuji_match_strength=0.72,
+    )
+
+    assert result is expected
+    assert calls == [(raf, "tool", 0.72)]
+
+
 def test_resize_for_processing_downscales(tmp_path):
     """resize_for_processing() downscales a 4000x3000 image to fit max_dim=2048."""
     img = np.full((3000, 4000, 3), 128, dtype=np.uint8)
@@ -414,16 +501,26 @@ def test_output_format_validates_format(tmp_path):
 
 def test_encode_write_params_returns_dict(tmp_path):
     """encode_write_params() returns the expected OpenCV param lists."""
+    has_444 = hasattr(cv2, "IMWRITE_JPEG_SAMPLING_FACTOR_444")
+
+    def jpeg_params(quality):
+        # AB1: delivery JPEGs preserve chroma resolution (4:4:4), when the
+        # OpenCV build exposes the sampling-factor flag.
+        base = [cv2.IMWRITE_JPEG_QUALITY, quality]
+        if has_444:
+            base += [cv2.IMWRITE_JPEG_SAMPLING_FACTOR, cv2.IMWRITE_JPEG_SAMPLING_FACTOR_444]
+        return base
+
     # JPEG family uses IMWRITE_JPEG_QUALITY
-    assert encode_write_params("jpg", 90) == [cv2.IMWRITE_JPEG_QUALITY, 90]
-    assert encode_write_params("jpeg", 75) == [cv2.IMWRITE_JPEG_QUALITY, 75]
+    assert encode_write_params("jpg", 90) == jpeg_params(90)
+    assert encode_write_params("jpeg", 75) == jpeg_params(75)
     # WebP uses IMWRITE_WEBP_QUALITY
     assert encode_write_params("webp", 80) == [cv2.IMWRITE_WEBP_QUALITY, 80]
     # Lossless formats return an empty param list
     assert encode_write_params("png", 90) == []
     assert encode_write_params("tiff", 90) == []
     # Quality value is passed through verbatim
-    assert encode_write_params("jpg", 100) == [cv2.IMWRITE_JPEG_QUALITY, 100]
+    assert encode_write_params("jpg", 100) == jpeg_params(100)
 
 
 def test_make_comparison_creates_file(tmp_path):

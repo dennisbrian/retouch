@@ -18,6 +18,7 @@ from retouch.io import (
     convert_image_colorspace,
     encode_write_params,
     image_has_icc,
+    read_exif_bytes,
     read_icc_profile,
     write_image_with_icc,
 )
@@ -248,6 +249,27 @@ class TestWriteImageWithIcc:
         assert ok
         with Image.open(io.BytesIO(encoded.tobytes())) as decoded:
             assert get_sampling(decoded) == 0
+
+    def test_write_image_with_icc_embeds_exif_and_resets_orientation(self, tmp_path: Path) -> None:
+        # Source carries EXIF with a non-normal orientation.
+        src = tmp_path / "src.jpg"
+        arr = np.full((24, 24, 3), 200, dtype=np.uint8)
+        src_img = Image.fromarray(arr)
+        src_exif = Image.Exif()
+        from PIL.ExifTags import Base as _EB
+        src_exif[_EB.Orientation] = 6
+        src_img.save(str(src), exif=src_exif.tobytes())
+
+        out = tmp_path / "out.jpg"
+        exif_bytes = read_exif_bytes(str(src))
+        write_image_with_icc(str(out), arr, icc_profile=_srgb_icc_bytes(), quality=90, exif=exif_bytes)
+
+        with Image.open(str(out)) as decoded:
+            out_exif = decoded.getexif()
+            # Orientation force-reset to normal (1).
+            assert out_exif.get(_EB.Orientation) == 1
+            # ICC profile survived the single pass write.
+            assert decoded.info.get("icc_profile") is not None
 
     def test_writes_grayscale_image(self, tmp_path: Path) -> None:
         path = tmp_path / "gray.jpg"

@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import io
 import logging
+import os
+import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -30,6 +33,11 @@ IMAGE_EXTENSIONS = {
 RAW_EXTENSIONS = {
     ".raf", ".cr2", ".cr3", ".nef", ".nrw", ".arw", ".dng", ".orf", ".rw2", ".pef", ".srw", ".x3f",
 }
+
+# ``raf2jpeg`` is maintained as a sibling checkout in this workspace.  Keep
+# discovery here (rather than baking the absolute workstation path into the
+# CLI) so API callers and worker processes resolve it consistently.
+_RAF2JPEG_SIBLING = Path(__file__).resolve().parents[2] / "raf2jpeg" / "bin" / "raf2jpeg"
 
 EXPORT_RES_MAP: Dict[str, Optional[int]] = {
     "Original": None,
@@ -284,9 +292,121 @@ def imread_exif(path: Union[str, Path]) -> np.ndarray:
     return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
 
+def resolve_raf2jpeg(path: Optional[Union[str, Path]] = None) -> Path:
+    """Locate the ``raf2jpeg`` executable used for opt-in RAF development.
+
+    Resolution order is an explicit *path*, ``RETOUCH_RAF2JPEG_PATH``, the
+    sibling ``../raf2jpeg/bin/raf2jpeg`` checkout, then ``PATH``.  An explicit
+    path may be either a filesystem path or an executable name on ``PATH``.
+    """
+    configured = path or os.environ.get("RETOUCH_RAF2JPEG_PATH")
+    if configured:
+        candidate = Path(configured).expanduser()
+        if candidate.is_file() and os.access(str(candidate), os.X_OK):
+            return candidate.resolve()
+        located = shutil.which(str(configured))
+        if located:
+            return Path(located).resolve()
+        raise FileNotFoundError(
+            f"raf2jpeg executable not found or not executable: {configured}"
+        )
+
+    if _RAF2JPEG_SIBLING.is_file() and os.access(str(_RAF2JPEG_SIBLING), os.X_OK):
+        return _RAF2JPEG_SIBLING.resolve()
+    located = shutil.which("raf2jpeg")
+    if located:
+        return Path(located).resolve()
+    raise FileNotFoundError(
+        "raf2jpeg was not found. Install it on PATH, set RETOUCH_RAF2JPEG_PATH, "
+        "or pass --raf2jpeg-path."
+    )
+
+
+def read_raf_with_raf2jpeg(
+    path: Union[str, Path],
+    raf2jpeg_path: Optional[Union[str, Path]] = None,
+    quality: int = 100,
+) -> np.ndarray:
+    """Develop one RAF with ``raf2jpeg`` and return its uint8 BGR JPEG.
+
+    The conversion is written to a temporary directory and is never left next
+    to the user's source RAF.  ``raf2jpeg`` is deliberately opt-in: unlike
+    the native RAW path it produces an 8-bit JPEG, so callers choosing it are
+    prioritising its camera rendition over the native 16-bit edit headroom.
+    """
+    source = Path(path).expanduser().resolve()
+    if source.suffix.lower() != ".raf":
+        raise ValueError(f"raf2jpeg only supports .RAF inputs, got {source.name!r}")
+    if not source.is_file():
+        raise FileNotFoundError(f"RAF input not found: {source}")
+    if not 1 <= int(quality) <= 100:
+        raise ValueError(f"raf2jpeg quality must be between 1 and 100, got {quality!r}")
+
+    executable = resolve_raf2jpeg(raf2jpeg_path)
+    with tempfile.TemporaryDirectory(prefix="retouch-raf2jpeg-") as output_dir:
+        command = [
+            str(executable), str(source), "--output", output_dir,
+            "--quality", str(int(quality)), "--force", "--flat",
+        ]
+        try:
+            subprocess.run(
+                command,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or exc.stdout or "no diagnostic output").strip()
+            raise RuntimeError(
+                f"raf2jpeg failed while converting {source.name}: {detail}"
+            ) from exc
+
+        converted = Path(output_dir) / f"{source.stem}.jpg"
+        if not converted.is_file():
+            raise RuntimeError(
+                f"raf2jpeg completed but did not create expected JPEG: {converted.name}"
+            )
+        try:
+            image = imread_exif(converted)
+        except Exception as exc:
+            raise RuntimeError(
+                "raf2jpeg reported success but produced an unreadable JPEG; "
+                "check the converter's selected backend"
+            ) from exc
+        if image is None:
+            raise RuntimeError(
+                "raf2jpeg reported success but produced an unreadable JPEG"
+            )
+        return image
+
+
+def read_raf_with_fuji_match(
+    path: Union[str, Path],
+    raf2jpeg_path: Optional[Union[str, Path]] = None,
+    strength: float = 0.85,
+) -> np.ndarray:
+    """Load full-resolution RAF data and calibrate it to its Fuji preview.
+
+    This keeps the native 16-bit RAW decode while learning global tone and
+    colour characteristics from the RAF's embedded camera JPEG.  It is a
+    calibrated approximation of Fuji's proprietary camera processing, not a
+    byte-identical replacement for it.
+    """
+    source = read_image_16bit(path)
+    preview = read_raf_with_raf2jpeg(path, raf2jpeg_path, quality=100)
+    from .fuji_match import calibrate_to_fuji_preview
+
+    return calibrate_to_fuji_preview(source, preview, strength, inplace=True)
+
+
 def imread_engine(
     path: Union[str, Path],
     prefer_16bit: bool = True,
+    raw_decoder: str = "rawpy",
+    raf2jpeg_path: Optional[Union[str, Path]] = None,
+    raf2jpeg_quality: int = 100,
+    fuji_match_strength: float = 0.85,
 ) -> np.ndarray:
     """Load an image for the engine, using the 16-bit path for RAW.
 
@@ -309,12 +429,31 @@ def imread_engine(
         prefer_16bit: When True (default), route RAW files through the
             16-bit float32 decode. Set False to force the legacy uint8
             RAW path (:func:`imread_exif`).
+        raw_decoder: ``"rawpy"`` (default) for Retouch's 16-bit RAW path,
+            ``"raf2jpeg"`` for the embedded camera JPEG, or
+            ``"rawpy-fuji-match"`` for full-resolution RAW calibrated to
+            that JPEG. Other RAW formats still use rawpy.
+        raf2jpeg_path: Optional executable path for ``raw_decoder="raf2jpeg"``.
+        raf2jpeg_quality: JPEG quality (1--100) passed to ``raf2jpeg`` for
+            any re-encoding fallback. Its embedded-camera-JPEG path keeps the
+            original bytes unchanged.
+        fuji_match_strength: Calibration blend for ``rawpy-fuji-match`` from
+            native RAW (0) to the learned camera-preview look (1).
 
     Returns:
-        ``(H, W, 3)`` BGR image: float32 [0, 255] for RAW when
-        *prefer_16bit*, else uint8.
+        ``(H, W, 3)`` BGR image: float32 [0, 255] for native and calibrated
+        RAW paths; uint8 for ``raf2jpeg`` and non-RAW formats.
     """
     p = Path(path)
+    if raw_decoder not in ("rawpy", "raf2jpeg", "rawpy-fuji-match"):
+        raise ValueError(
+            "raw_decoder must be 'rawpy', 'raf2jpeg', or 'rawpy-fuji-match', "
+            f"got {raw_decoder!r}"
+        )
+    if raw_decoder == "raf2jpeg" and p.suffix.lower() == ".raf":
+        return read_raf_with_raf2jpeg(p, raf2jpeg_path, raf2jpeg_quality)
+    if raw_decoder == "rawpy-fuji-match" and p.suffix.lower() == ".raf":
+        return read_raf_with_fuji_match(p, raf2jpeg_path, fuji_match_strength)
     if prefer_16bit and p.suffix.lower() in RAW_EXTENSIONS:
         return read_image_16bit(p)
     return imread_exif(p)
@@ -483,6 +622,18 @@ def image_has_icc(path: Union[str, Path]) -> bool:
     return read_icc_profile(path) is not None
 
 
+def read_exif_bytes(path: Union[str, Path]) -> Optional[bytes]:
+    """Return the raw EXIF blob from *path*, or ``None`` if absent/unreadable."""
+    try:
+        with Image.open(str(path)) as pil_img:
+            exif = pil_img.getexif()
+    except (FileNotFoundError, OSError, Image.UnidentifiedImageError, Image.DecompressionBombError):
+        return None
+    if not exif:
+        return None
+    return exif.tobytes()
+
+
 def _bgr_to_pil(img: np.ndarray) -> Image.Image:
     if img.ndim == 2:
         return Image.fromarray(img)
@@ -534,6 +685,7 @@ def write_image_with_icc(
     img: np.ndarray,
     icc_profile: Optional[bytes] = None,
     bit_depth: int = 8,
+    exif: Optional[bytes] = None,
     **kwargs: Any,
 ) -> None:
     """Write *img* (BGR ndarray) to *path* with an optional embedded ICC profile.
@@ -547,6 +699,10 @@ def write_image_with_icc(
             ``[0, 255]`` (``float_range="byte"``).
         icc_profile: Raw ICC profile bytes to embed. If ``None`` or empty,
             the image is saved without an embedded profile.
+        exif: Raw EXIF bytes to embed. Orientation is force-reset to normal
+            (1) before embedding so the engine output is not re-oriented by
+            viewers. Passing EXIF here (rather than re-saving the destination
+            afterward) preserves ICC profile, bit depth, and quality settings.
         bit_depth: Output bit depth. ``8`` (default) for uint8, ``16`` for
             uint16 (PNG/TIFF only). The 16-bit OpenCV path cannot embed an
             ICC profile; JPEG/WebP always output 8-bit.
@@ -601,6 +757,11 @@ def write_image_with_icc(
     # Intermediate pipeline conversions must stay deterministic and noiseless.
     img_u8 = _to_uint8_delivery(img, float_range)
     if pil_format is None:
+        if icc_profile or exif:
+            logger.warning(
+                "%s has no PIL writer mapping; falling back to cv2.imwrite, "
+                "which embeds neither ICC profile nor EXIF", path
+            )
         cv2.imwrite(str(path), img_u8, encode_write_params(ext.lstrip("."), quality))
         return
 
@@ -612,6 +773,16 @@ def write_image_with_icc(
         save_kwargs_8["subsampling"] = 0  # 4:4:4
     if icc_profile:
         save_kwargs_8["icc_profile"] = icc_profile
+    if exif:
+        try:
+            from PIL.ExifTags import Base as _ExifBase
+            _exif = Image.Exif()
+            _exif.load(exif)
+            orientation_tag = getattr(_ExifBase, "Orientation", 0x0112)
+            _exif[orientation_tag] = 1
+            save_kwargs_8["exif"] = _exif.tobytes()
+        except Exception as exc:
+            logger.warning("Failed to embed EXIF into %s: %s", path, exc)
     save_kwargs_8.update(kwargs)
     pil_img.save(str(path), **save_kwargs_8)
 

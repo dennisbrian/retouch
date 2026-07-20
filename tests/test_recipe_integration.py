@@ -16,7 +16,12 @@ import numpy as np
 import pytest
 
 from retouch.engine import ProcessingContext, build_context, resolve_recipe
-from retouch.recipes import RECIPES
+from retouch.recipes import (
+    CONDITIONAL_RECIPE_NAMES,
+    CURATED_RECIPE_NAMES,
+    RECOMMENDED_RECIPE_NAMES,
+    RECIPES,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +155,24 @@ class TestRecipeDefaults:
             resolved = resolve_recipe(name)
             assert isinstance(resolved, dict)
             assert "frequency" in resolved
+
+    def test_curated_catalog_is_partitioned_by_safety(self):
+        """A curated recipe is either correction-first or explicitly conditional."""
+        assert len(CURATED_RECIPE_NAMES) == 50
+        assert set(RECOMMENDED_RECIPE_NAMES).isdisjoint(CONDITIONAL_RECIPE_NAMES)
+        assert set(CURATED_RECIPE_NAMES) == (
+            set(RECOMMENDED_RECIPE_NAMES) | set(CONDITIONAL_RECIPE_NAMES)
+        )
+        assert "apex_cinema_v1" in CONDITIONAL_RECIPE_NAMES
+
+    def test_wedding_and_mixed_temperature_are_conservative(self):
+        """Regression gate for the washed-out grade seen in visual QA."""
+        wedding = resolve_recipe("wedding_timeless_v1")
+        mixed = resolve_recipe("con_mixed_temp_v1")
+        assert wedding["film"]["strength"] <= 0.15
+        assert wedding["bloom"]["opacity"] <= 0.02
+        assert mixed["skin"]["hue_unify"] <= 0.25
+        assert mixed["skin"]["chroma_even"] <= 0.20
 
 
 # ---------------------------------------------------------------------------
@@ -604,6 +627,33 @@ class TestNewFeatureRecipesResolve:
         ("cosplay_clear_v1", "smooth_engine", "anisotropic"),
         ("cosplay_clear_v1", "freckle_removal", 40.0),
         ("cosplay_clear_v1", "eye_iris_saturate", 55.0),
+        ("cosplay_porcelain_protected_v1", "hb_even", 0.20),
+        ("cosplay_porcelain_protected_v1", "hb_shift", -0.07),
+        ("cosplay_porcelain_protected_v1", "mole_protect", 0.80),
+        ("cosplay_porcelain_protected_v1", "film_highlight_purity", 0.28),
+        ("cosplay_flash_rescue_v1", "hb_even", 0.30),
+        ("cosplay_flash_rescue_v1", "hb_shift", -0.10),
+        ("cosplay_flash_rescue_v1", "mole_protect", 0.80),
+        ("cosplay_flash_rescue_v1", "film_highlight_purity", 0.32),
+        ("cosplay_porcelain_color_demo_v1", "smooth", 55.0),
+        ("cosplay_porcelain_color_demo_v1", "smooth_engine", "anisotropic"),
+        ("cosplay_porcelain_color_demo_v1", "freckle_removal", 0.0),
+        ("cosplay_porcelain_color_demo_v1", "color_grade", "natural"),
+        ("cosplay_porcelain_color_demo_v1", "grade_intensity", 0.05),
+        ("cosplay_porcelain_color_demo_v1", "film_highlight_purity", 0.10),
+        ("apex_cosplay_v1", "heal_engine", "telea"),
+        ("apex_cosplay_v1", "skin_sss", 25.0),
+        ("apex_cosplay_v1", "film_highlight_purity", 0.30),
+        ("apex_cosplay_v1", "saturation_mode", "subtractive"),
+        ("apex_cosplay_v1", "hair_remove_flyaways", 30.0),
+        ("apex_editorial_v1", "heal_engine", "telea"),
+        ("apex_editorial_v1", "mole_protect", 0.90),
+        ("apex_editorial_v1", "micro_dodge_burn", 15.0),
+        ("apex_editorial_v1", "hb_even", 0.20),
+        ("apex_cinema_v1", "heal_engine", "telea"),
+        ("apex_cinema_v1", "grain_strength", 0.15),
+        ("apex_cinema_v1", "film_highlight_purity", 0.35),
+        ("apex_cinema_v1", "halation", 0.18),
         ("studio_porcelain_clear_v1", "smooth_engine", "anisotropic"),
         ("studio_porcelain_clear_v1", "regional_modulation", 0.6),
         ("studio_porcelain_clear_v1", "undereye_darken_removal", 45.0),
