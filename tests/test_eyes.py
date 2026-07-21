@@ -106,6 +106,22 @@ class TestEnhanceWhites:
         assert np.mean(np.abs(before_lab[20:23, 20:23, 1:] - after_lab[20:23, 20:23, 1:])) > 0.0
         assert np.all(out[0, 0] == image[0, 0])
 
+    def test_sclera_targets_own_bright_and_chroma_reference(self, enhancer):
+        """AA5: improve yellow/dark pixels without manufacturing display white."""
+        lab = np.full((48, 48, 3), (150, 132, 142), dtype=np.uint8)
+        lab[12:24, 12:24] = (105, 145, 170)  # dark, red/yellow sclera patch
+        image = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+        mask = np.ones((48, 48), dtype=np.float32)
+
+        out = enhancer._enhance_whites(image, mask, 1.0)
+        before = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
+        after = cv2.cvtColor(out, cv2.COLOR_BGR2LAB).astype(np.float32)
+        patch = np.s_[12:24, 12:24]
+
+        assert after[patch][:, :, 0].mean() > before[patch][:, :, 0].mean()
+        assert after[patch][:, :, 2].mean() < before[patch][:, :, 2].mean()
+        assert after[:, :, 0].max() <= np.percentile(before[:, :, 0], 90) + 1.0
+
 
 class TestSculptIris:
     def test_none_mask(self, enhancer, img):

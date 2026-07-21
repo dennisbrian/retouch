@@ -212,6 +212,14 @@ class EyeEnhancer:
         if sclera_vals.size == 0:
             return img_bgr
         l_ref = float(np.median(sclera_vals))
+        sclera_lab = lab[whites_mask > 0.1]
+        # The subject's own well-lit sclera is the target. This de-yellows
+        # toward a plausible native axis instead of neutralizing every eye to
+        # display white, and never brightens beyond the existing 90th-percentile
+        # sclera value.
+        a_target = 128.0 + 0.5 * (float(np.median(sclera_lab[:, 1])) - 128.0)
+        b_target = 128.0 + 0.5 * (float(np.median(sclera_lab[:, 2])) - 128.0)
+        l_target = float(np.percentile(sclera_vals, 90.0))
         # Ramp in over a band below the sclera's own median (soft, not a hard
         # step) so the darkest lash/liner pixels are excluded but true sclera is
         # kept whatever its absolute level.
@@ -223,14 +231,13 @@ class EyeEnhancer:
             bright_sclera = (l_chan >= lo).astype(np.float32)
         m = whites_mask * strength * bright_sclera
 
-        # Reduce redness (a channel > 128 means more red)
-        lab[:, :, 1] = lab[:, :, 1] - m * np.clip(lab[:, :, 1] - 128, 0, 30) * 0.4
+        # De-yellow/red first, only pulling excess toward the native axis.
+        lab[:, :, 1] -= m * np.maximum(lab[:, :, 1] - a_target, 0.0)
+        lab[:, :, 2] -= m * np.maximum(lab[:, :, 2] - b_target, 0.0)
 
-        # Reduce yellowness (b channel > 128 means more yellow)
-        lab[:, :, 2] = lab[:, :, 2] - m * np.clip(lab[:, :, 2] - 128, 0, 30) * 0.4
-
-        # Subtle brightness lift
-        lab[:, :, 0] = np.clip(lab[:, :, 0] + m * 6, 0, 255)
+        # Brighten second, target-seeking and bounded by this subject's own
+        # well-lit sclera rather than an absolute "super-white" target.
+        lab[:, :, 0] += m * np.maximum(l_target - lab[:, :, 0], 0.0)
 
         return _from_lab(lab, is_float)
 
