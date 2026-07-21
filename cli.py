@@ -606,6 +606,11 @@ def main() -> None:
     parser.add_argument("--search-recipes", type=str, default=None,
                         metavar="QUERY",
                         help="Search recipes by name/description and exit")
+    parser.add_argument("--reload-luts", action="store_true",
+                        help="Force-reload the 3D LUT registry (clears cache, "
+                             "re-scans luts/) and exit. Symmetric with the GUI "
+                             "Reload LUTs button; useful after adding .cube files "
+                             "mid-batch.")
 
     # F6: Look extraction from a reference image.
     parser.add_argument("--extract-look", type=str, default=None,
@@ -683,6 +688,20 @@ def main() -> None:
         print(f"Search '{args.search_recipes}' -> {len(infos)} match(es):")
         for info in infos:
             print(f"  [{info.category}] {info.name}: {info.description}")
+        return
+
+    if args.reload_luts:
+        from retouch.lut import get_registry
+        try:
+            get_registry().reload()
+            from retouch.lut import list_available_luts
+            available = list_available_luts()
+            print(f"✓ LUT registry reloaded — {len(available)} LUT(s):")
+            for stem in available:
+                print(f"  {stem}")
+        except Exception as e:
+            print(f"✖ LUT reload failed: {e}")
+            sys.exit(1)
         return
 
     input_path = Path(args.input)

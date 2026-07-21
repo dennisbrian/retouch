@@ -37,7 +37,7 @@ from retouch.batch_processor import BatchProcessor
 from retouch.style import StyleProfile
 from retouch.look_extractor import LookExtractor
 from retouch.recipe_cookbook import search_recipes, list_recipes, list_categories
-from retouch.lut import get_registry
+from retouch.lut import get_registry, watch_luts_dir
 from retouch.marks import MARK_POLICY_PRESET_NAMES
 
 _logger = logging.getLogger(__name__)
@@ -886,6 +886,23 @@ def on_reload_luts():
     except Exception as e:
         _logger.warning("LUT reload failed: %s", e)
         return f"LUT reload failed: {e}"
+
+
+# Auto-start the LUT hot-reload daemon: invalidate the registry cache entry
+# for any stem whose .cube file changes on disk. Closes the CLAUDE.md
+# "MINOR, deferred: LUT hot-reload not wired into GUI/CLI" item — the manual
+# reload button stays for force-rescan, but file changes now propagate live.
+def _on_lut_changed(stem: str) -> None:
+    try:
+        get_registry()._cache.pop(stem, None)
+    except Exception:
+        pass
+
+
+try:
+    watch_luts_dir(_on_lut_changed, interval=2.0)
+except Exception as exc:
+    _logger.warning("LUT watcher daemon did not start: %s", exc)
 
 
 def on_smart_process(img_paths, recipe, *args, prg=gr.Progress()):
