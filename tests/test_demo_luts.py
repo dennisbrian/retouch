@@ -42,6 +42,9 @@ EXPECTED_NAMES: tuple = (
     "kodak_ish_17",
     "kodak",
     "fuji",
+    "bleach_bypass_17",
+    "teal_orange_17",
+    "cross_process_17",
 )
 EXPECTED_SIZES = {
     "identity_33": 33,
@@ -50,6 +53,9 @@ EXPECTED_SIZES = {
     "kodak_ish_17": 17,
     "kodak": 17,
     "fuji": 17,
+    "bleach_bypass_17": 17,
+    "teal_orange_17": 17,
+    "cross_process_17": 17,
 }
 
 
@@ -141,6 +147,47 @@ def test_kodak_ish_lifts_midtones(gen_dir):
     out = lut.apply(mid)
     g = int(out[0, 0, 1])
     assert g > 128, f"kodak_ish G midtone lift must raise G above 128, got G={g}"
+
+
+def test_bleach_bypass_desaturates_midtones(gen_dir):
+    """Bleach bypass pulls chroma toward neutral in midtones."""
+    out_dir, _ = gen_dir
+    lut = load_cube(out_dir / "bleach_bypass_17.cube")
+    # Saturated red midtone.
+    red_mid = np.array([[[40, 20, 200]]], dtype=np.uint8)  # BGR
+    out = lut.apply(red_mid)
+    r_in, b_in = 200, 40
+    r_out, b_out = int(out[0, 0, 2]), int(out[0, 0, 0])
+    assert (r_in - b_in) > (r_out - b_out), (
+        f"bleach bypass must reduce R-B spread on saturated red mid, "
+        f"got in={(r_in, b_in)} out={(r_out, b_out)}"
+    )
+
+
+def test_teal_orange_splits_shadows_and_highlights(gen_dir):
+    """Shadows drift teal (B>R), highlights drift orange (R>B)."""
+    out_dir, _ = gen_dir
+    lut = load_cube(out_dir / "teal_orange_17.cube")
+    dark = np.full((1, 1, 3), 40, dtype=np.uint8)
+    bright = np.full((1, 1, 3), 215, dtype=np.uint8)
+    dark_out = lut.apply(dark)[0, 0]
+    bright_out = lut.apply(bright)[0, 0]
+    assert int(dark_out[0]) > int(dark_out[2]), (
+        f"shadow must be teal (B>R), got B={dark_out[0]} R={dark_out[2]}"
+    )
+    assert int(bright_out[2]) > int(bright_out[0]), (
+        f"highlight must be orange (R>B), got R={bright_out[2]} B={bright_out[0]}"
+    )
+
+
+def test_cross_process_lifts_green_in_midtones(gen_dir):
+    """Cross-process dominant tell: green midtone lift."""
+    out_dir, _ = gen_dir
+    lut = load_cube(out_dir / "cross_process_17.cube")
+    mid = np.full((1, 1, 3), 128, dtype=np.uint8)
+    out = lut.apply(mid)
+    g = int(out[0, 0, 1])
+    assert g > 128, f"cross_process G midtone lift must raise G above 128, got G={g}"
 
 
 def test_luts_dir_sees_generated_files():

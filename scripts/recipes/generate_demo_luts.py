@@ -3,13 +3,18 @@
 
 Produces a small set of safe-to-redistribute demo LUTs in ``luts/``:
 
-  * ``identity_33.cube``     -- 33^3 identity LUT (round-trip test)
-  * ``warm_boost_17.cube``   -- Mild warm midtone shift (R+, B-)
-  * ``cool_shadows_17.cube`` -- Cool (cyan) tint in shadow regions
-  * ``kodak_ish_17.cube``    -- Per-channel curves suggesting a "warm" film stock.
-                                NOT an authoritative Kodak profile.
+  * ``identity_33.cube``         -- 33^3 identity LUT (round-trip test)
+  * ``warm_boost_17.cube``       -- Mild warm midtone shift (R+, B-)
+  * ``cool_shadows_17.cube``     -- Cool (cyan) tint in shadow regions
+  * ``kodak_ish_17.cube``        -- Per-channel curves suggesting a "warm" film stock.
+                                    NOT an authoritative Kodak profile.
+  * ``kodak.cube``               -- Slightly stronger kodak_ish variant (film preset)
+  * ``fuji.cube``                -- Classic Chrome-inspired cool greens (film preset alt)
+  * ``bleach_bypass_17.cube``    -- Silver-retention look: high contrast + desaturated
+  * ``teal_orange_17.cube``      -- Complementary split-tone (shadows teal, highlights orange)
+  * ``cross_process_17.cube``    -- Slide-in-C-41 look: green mids, blue shadow lift
 
-Re-runnable: regenerates the four files each invocation (idempotent).
+Re-runnable: regenerates all files each invocation (idempotent).
 """
 from __future__ import annotations
 
@@ -137,6 +142,64 @@ def _fuji_chrome(grid: np.ndarray) -> np.ndarray:
     return out
 
 
+def _bleach_bypass(grid: np.ndarray) -> np.ndarray:
+    """Bleach bypass (silver-retention) demo: high contrast, desaturated.
+
+    Lifts contrast (+18% S-curve on luma) and pulls chroma toward neutral by
+    blending each channel 55% toward luma. Black/white endpoints preserved
+    (the S-curve is anchored at 0 and 1; the desaturation weight is a bell
+    that is 0 at luma=0 and luma=1).
+    """
+    out = grid.copy()
+    luma = _LUMA_R * out[..., 0] + _LUMA_G * out[..., 1] + _LUMA_B * out[..., 2]
+    bell = np.clip(1.0 - np.abs(luma - 0.5) * 2.0, 0.0, 1.0)
+    contrast_luma = _s_curve(luma, strength=0.18)
+    for ch in range(3):
+        # Pull each channel 45% of the way toward the contrasty luma,
+        # only in the midtones (bell weight).
+        desat = out[..., ch] * (1.0 - 0.45 * bell) + contrast_luma * (0.45 * bell)
+        out[..., ch] = np.clip(desat, 0.0, 1.0)
+    return out
+
+
+def _teal_orange(grid: np.ndarray) -> np.ndarray:
+    """Teal-and-orange demo: complementary split-tone.
+
+    Shadows drift toward teal (B up, R down), weighted by a shadow bell
+    peaking near luma=0.2. Highlights drift toward orange (R up, B down),
+    weighted by a highlight bell peaking near luma=0.8. Midtones and
+    endpoints left alone.
+    """
+    out = grid.copy()
+    luma = _LUMA_R * out[..., 0] + _LUMA_G * out[..., 1] + _LUMA_B * out[..., 2]
+    # Multiply by luma / (1-luma) so the bells are exactly 0 at the endpoints
+    # (pure black and pure white must round-trip — see test_luts_preserve_endpoints).
+    shadow_w = luma * np.exp(-((luma - 0.2) / 0.15) ** 2)
+    highlight_w = (1.0 - luma) * np.exp(-((luma - 0.8) / 0.15) ** 2)
+    out[..., 0] = np.clip(out[..., 0] - 0.06 * shadow_w + 0.06 * highlight_w, 0.0, 1.0)
+    out[..., 1] = np.clip(out[..., 1] - 0.02 * highlight_w, 0.0, 1.0)
+    out[..., 2] = np.clip(out[..., 2] + 0.06 * shadow_w - 0.06 * highlight_w, 0.0, 1.0)
+    return out
+
+
+def _cross_process(grid: np.ndarray) -> np.ndarray:
+    """Cross-process demo (slide-film processed as C-41).
+
+    Classic tells: blue/minor-green lift in shadows, heavy green push in
+    midtones, magenta/red tint in highlights. Endpoints preserved by
+    weighting with a bell that is 0 at luma=0 and luma=1.
+    """
+    out = grid.copy()
+    luma = _LUMA_R * out[..., 0] + _LUMA_G * out[..., 1] + _LUMA_B * out[..., 2]
+    bell = np.clip(1.0 - np.abs(luma - 0.5) * 2.0, 0.0, 1.0)
+    shadow_w = luma * np.exp(-((luma - 0.15) / 0.12) ** 2)
+    highlight_w = (1.0 - luma) * np.exp(-((luma - 0.85) / 0.12) ** 2)
+    out[..., 0] = np.clip(out[..., 0] + 0.05 * shadow_w - 0.03 * highlight_w + 0.02 * bell, 0.0, 1.0)
+    out[..., 1] = np.clip(out[..., 1] + 0.06 * bell + 0.02 * shadow_w, 0.0, 1.0)
+    out[..., 2] = np.clip(out[..., 2] + 0.08 * shadow_w - 0.05 * highlight_w, 0.0, 1.0)
+    return out
+
+
 def _write_cube(
     out_path: Path,
     size: int,
@@ -254,7 +317,52 @@ def generate(out_dir: Path) -> Tuple[Path, ...]:
         ),
     )
 
-    return (p_id, p_warm, p_cool, p_kodak, p_kodak_warm, p_fuji_chrome)
+    p_bleach = out_dir / "bleach_bypass_17.cube"
+    _write_cube(
+        p_bleach,
+        n17,
+        _bleach_bypass(grid17),
+        title="Demo Bleach Bypass 17x17x17",
+        header_lines=(
+            "Retouch Engine -- demo LUT (safe to redistribute).",
+            "Bleach-bypass / silver-retention look: high contrast + desaturated midtones.",
+            "Luma S-curve (+18%), channels blended 45% toward luma in midtones only.",
+            "Endpoints preserved; not a real film stock profile.",
+        ),
+    )
+
+    p_teal_orange = out_dir / "teal_orange_17.cube"
+    _write_cube(
+        p_teal_orange,
+        n17,
+        _teal_orange(grid17),
+        title="Demo Teal & Orange 17x17x17",
+        header_lines=(
+            "Retouch Engine -- demo LUT (safe to redistribute).",
+            "Complementary split-tone: shadows -> teal (B+ R-), highlights -> orange (R+ B-).",
+            "Gaussian bells peaked at L=0.2 and L=0.8; midtones and endpoints untouched.",
+            "Demonstrates luminance-masked complementary grading.",
+        ),
+    )
+
+    p_cross = out_dir / "cross_process_17.cube"
+    _write_cube(
+        p_cross,
+        n17,
+        _cross_process(grid17),
+        title="Demo Cross Process 17x17x17",
+        header_lines=(
+            "Retouch Engine -- demo LUT (safe to redistribute).",
+            "Cross-process look (slide film developed as C-41):",
+            "  R: shadow lift +5%, highlight crush -3%, midtone +2%",
+            "  G: midtone lift +6% (the dominant tell), shadow +2%",
+            "  B: shadow lift +8%, highlight crush -5%",
+            "Endpoints preserved by bell weighting.",
+        ),
+    )
+
+    return (p_id, p_warm, p_cool, p_kodak, p_kodak_warm, p_fuji_chrome,
+            p_bleach, p_teal_orange, p_cross)
 
 
 def main() -> int:
