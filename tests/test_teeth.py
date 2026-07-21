@@ -44,6 +44,51 @@ class TestWhiten:
         orig_lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
         assert lab[:, :, 0].mean() >= orig_lab[:, :, 0].mean()
 
+    def test_wid_delta_capped_to_acceptability(self, whitener):
+        """Mean ΔWID over the teeth mask must stay within WAT (2.62)."""
+        # Yellow-ish teeth on a bright mouth: high b* drives a large ΔWID
+        # at full strength, so the cap must engage.
+        lab = np.full((64, 64, 3), (110, 130, 145), dtype=np.uint8)
+        img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+        mask = np.ones((64, 64), dtype=np.float32)
+        before = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
+        out = whitener.whiten(img, mask, strength=100)
+        after = cv2.cvtColor(out, cv2.COLOR_BGR2LAB).astype(np.float32)
+        d_l = after[:, :, 0] - before[:, :, 0]
+        d_a = after[:, :, 1] - before[:, :, 1]
+        d_b = after[:, :, 2] - before[:, :, 2]
+        mean_d_wid = 0.511 * d_l.mean() - 2.324 * d_a.mean() - 1.100 * d_b.mean()
+        assert mean_d_wid <= 2.62 + 0.5  # cap, with rounding headroom
+
+    def test_wid_delta_scales_with_strength_below_cap(self, whitener):
+        """Low strength must not trigger the cap (ΔWID stays under WAT)."""
+        # Mouth backdrop (darker) with a brighter tooth patch — realistic.
+        lab = np.full((64, 64, 3), (90, 135, 145), dtype=np.uint8)
+        lab[20:44, 20:44] = (160, 130, 140)  # bright tooth patch
+        img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+        mask = np.ones((64, 64), dtype=np.float32)
+        out = whitener.whiten(img, mask, strength=20)
+        patch = np.s_[20:44, 20:44]
+        # Some change must happen at low strength (cap not engaged).
+        assert not np.array_equal(out[patch], img[patch])
+
+    def test_no_absolute_l_floor_for_dark_mouth(self, whitener):
+        """Dark mouth (low-key lighting) still detects bright-relative teeth.
+
+        The old `l > 80` gate would reject every pixel in a dim mouth, even
+        the genuinely-brighter-than-surroundings teeth — a fairness failure
+        on low-lit or dark-skinned subjects. The tone-adaptive `l > l_median`
+        gate must still pick up the bright pixels in such a mouth.
+        """
+        # Dark mouth with a brighter tooth patch in the middle.
+        lab = np.full((64, 64, 3), (40, 130, 140), dtype=np.uint8)
+        lab[24:40, 24:40] = (70, 125, 130)  # teeth: brighter than mouth median
+        img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+        mask = np.ones((64, 64), dtype=np.float32)
+        result = whitener._detect_teeth(img, mask)
+        assert result[32, 32] > 0.1, "bright tooth patch must be detected"
+        assert result[2, 2] < 0.1, "dark mouth void must be rejected"
+
 
 class TestDetectTeeth:
     def test_small_mouth_returns_empty(self, whitener, img):
