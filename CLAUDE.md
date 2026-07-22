@@ -3,7 +3,7 @@
 **Project:** Professional automated face retouching pipeline  
 **Repository:** https://github.com/dennisbrian/retouch  
 **Status:** Mature (v2.0.0 — Fuji-quality color recipe system)  
-**Last Updated:** 2026-07-17
+**Last Updated:** 2026-07-22
 
 ---
 
@@ -84,12 +84,31 @@ Each stage is a private method (`_stage_*`) that can be tested or bypassed indep
 Supply cached `face_contexts` to `process()` to skip detection + parsing. Critical for GUI slider interaction — avoid redundant inference.
 
 ### Proxy Resolution for High-Res Images
-If input > 2048px:
-1. Downscale to 2048px
-2. Run full pipeline at proxy
-3. Upscale result + masks back to original
+Above `PROXY_MAX_DIM` (2048px) the pipeline branches on `quality`
+(`engine.py::_process_with_proxy`). **The two paths have very different cost —
+the proxy does NOT bound runtime in the default mode.**
 
-Cuts memory from 7.5 GB → 1.84 GB, runtime from 15.3s → 3.09s.
+- **`quality="full"` (F8.2, DEFAULT):** only detection + segmentation run at the
+  2048px proxy. Reshaping, per-face work (BiSeNet parsing, frequency separation,
+  skin ops, composite) and the global stages all run at **native** resolution, so
+  face texture is never resampled. Cost scales with native pixels.
+- **`quality="draft"` (F8.1 legacy):** downscale → run stages 0–2 at proxy →
+  upscale + composite onto native, with F8.0 detail reinjection. For fast batch
+  contact sheets.
+
+Measured on a 6240×4160 (24 MP) input, `natural`, M3 Pro / macOS 25.5
+(2026-07-22), one recipe:
+
+| Path | Runtime | Peak RAM |
+|---|---|---|
+| `--max-dim 2048` (pre-shrunk before the engine) | 5.3 s | low |
+| full-res, `quality="draft"` | 23.5 s | 8.1 GB |
+| full-res, `quality="full"` (default) | **>25 min, never observed completing** | 11.2 GB |
+
+The older "7.5 GB → 1.84 GB, 15.3s → 3.09s" figure describes the **draft**
+round-trip only; it does not apply to the default full path. A full-res
+`quality="full"` sweep looks like a hang but is doing native-resolution work —
+prefer `--max-dim 2048` or `quality="draft"` for multi-recipe sweeps.
 
 ---
 
