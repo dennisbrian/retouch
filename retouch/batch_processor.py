@@ -335,7 +335,9 @@ class BatchProcessor:
         export_zip: bool = False,
         progress_callback: Optional[Callable[[float, str], None]] = None,
         session: _SessionInput = None,
+        num_workers: int = 4,
     ) -> Tuple[List[str], Optional[str], Optional[str], str]:
+
         """Ingests, classifies, processes, and packages a folder of photos.
 
         When ``session`` is provided (a Session object or a path to a session
@@ -453,71 +455,51 @@ class BatchProcessor:
         if progress_callback:
             progress_callback(0.2, "Processing photos...")
 
-        for idx, file_path in enumerate(all_files):
-            try:
-                img_bgr = imread_exif(file_path)
-
-                if custom_style_profile is not None:
-                    result = applier.apply(img_bgr, custom_style_profile)
-                elif session_params:
-                    # Session params are the base; they already had unknown
-                    # keys filtered out above. engine.process treats None
-                    # values as "use recipe default", so we drop None entries
-                    # to avoid overriding recipe defaults with None (which
-                    # would be a no-op anyway, but is clearer and cheaper).
-                    kwargs = {
-                        k: v for k, v in session_params.items() if v is not None
-                    }
-                    result = self.engine.process(
-                        img_bgr, recipe=style_name_or_recipe, **kwargs
-                    )
-                else:
-                    result = self.engine.process(img_bgr, recipe=style_name_or_recipe)
-
-                # Resolution resizing
-                export_max = EXPORT_RES_MAP.get(export_res)
-                
-                if export_max is not None:
-                    h, w = result.shape[:2]
-                    if max(h, w) > export_max:
-                        scale = export_max / max(h, w)
-                        result = cv2.resize(result, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-
-                # Output filename
-                ext = EXT_MAP.get(export_fmt, ".jpg")
-                out_name = f"{file_path.stem}_retouched{ext}"
-                out_file_path = output_path / out_name
-
-                # Write to disk with ICC/EXIF embedded at write time so the
-                # destination is not re-encoded (which dropped ICC/quality).
-                from .io import write_image_with_icc, read_exif_bytes, read_icc_profile
-                icc_profile = read_icc_profile(file_path)
-                exif_bytes = read_exif_bytes(file_path)
-                write_image_with_icc(
-                    str(out_file_path),
-                    result,
-                    icc_profile=icc_profile,
-                    bit_depth=8,
-                    quality=export_quality,
-                    exif=exif_bytes,
+        if num_workers > 1 and total_files > 1:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                future_to_file = {
+                    executor.submit(
+                        self._process_single_file,
+                        file_path,
+                        custom_style_profile,
+                        session_params,
+                        style_name_or_recipe,
+                        export_res,
+                        export_fmt,
+                        export_quality,
+                        output_path,
+                        applier,
+                    ): file_path
+                    for file_path in all_files
+                }
+                completed = 0
+                for future in as_completed(future_to_file):
+                    completed += 1
+                    res_path = future.result()
+                    if res_path is not None:
+                        processed_paths.append(res_path)
+                    if progress_callback:
+                        prog = 0.2 + (0.6 * completed / total_files)
+                        progress_callback(prog, f"Processed {completed}/{total_files} files...")
+        else:
+            for idx, file_path in enumerate(all_files):
+                res_path = self._process_single_file(
+                    file_path,
+                    custom_style_profile,
+                    session_params,
+                    style_name_or_recipe,
+                    export_res,
+                    export_fmt,
+                    export_quality,
+                    output_path,
+                    applier,
                 )
-
-                processed_paths.append(out_file_path)
-
+                if res_path is not None:
+                    processed_paths.append(res_path)
                 if progress_callback:
                     prog = 0.2 + (0.6 * (idx + 1) / total_files)
                     progress_callback(prog, f"Processed {idx + 1}/{total_files} files...")
-
-            except Exception as e:
-                logger.error("Failed to process %s: %s", file_path, e)
-                from .utils import log_crash
-                log_crash(e, {
-                    "stage": "process_file",
-                    "file_path": str(file_path),
-                    "style_name_or_recipe": str(style_name_or_recipe),
-                    "export_fmt": export_fmt
-                })
-                status_msg += f"Error processing {file_path.name}: {e}\n"
 
         # 5. Generate Contact Sheet
         contact_sheet_path = None
@@ -561,3 +543,62 @@ class BatchProcessor:
 
         status_msg += f"\nSuccess: Processed {len(processed_paths)}/{total_files} files successfully ✓"
         return [str(p) for p in processed_paths], contact_sheet_path, zip_path, status_msg
+
+    def _process_single_file(
+        self,
+        file_path: Path,
+        custom_style_profile: Optional[StyleProfile],
+        session_params: Dict[str, Any],
+        style_name_or_recipe: str,
+        export_res: str,
+        export_fmt: str,
+        export_quality: int,
+        output_path: Path,
+        applier: Any,
+    ) -> Optional[Path]:
+        """Process a single file and write output with embedded metadata."""
+        try:
+            img_bgr = imread_exif(file_path)
+
+            if custom_style_profile is not None:
+                result = applier.apply(img_bgr, custom_style_profile)
+            elif session_params:
+                kwargs = {k: v for k, v in session_params.items() if v is not None}
+                result = self.engine.process(img_bgr, recipe=style_name_or_recipe, **kwargs)
+            else:
+                result = self.engine.process(img_bgr, recipe=style_name_or_recipe)
+
+            export_max = EXPORT_RES_MAP.get(export_res)
+            if export_max is not None:
+                h, w = result.shape[:2]
+                if max(h, w) > export_max:
+                    scale = export_max / max(h, w)
+                    result = cv2.resize(result, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+
+            ext = EXT_MAP.get(export_fmt, ".jpg")
+            out_name = f"{file_path.stem}_retouched{ext}"
+            out_file_path = output_path / out_name
+
+            from .io import write_image_with_icc, read_exif_bytes, read_icc_profile
+            icc_profile = read_icc_profile(file_path)
+            exif_bytes = read_exif_bytes(file_path)
+            write_image_with_icc(
+                str(out_file_path),
+                result,
+                icc_profile=icc_profile,
+                bit_depth=8,
+                quality=export_quality,
+                exif=exif_bytes,
+            )
+            return out_file_path
+        except Exception as e:
+            logger.error("Failed to process %s: %s", file_path, e)
+            from .utils import log_crash
+            log_crash(e, {
+                "stage": "process_file",
+                "file_path": str(file_path),
+                "style_name_or_recipe": str(style_name_or_recipe),
+                "export_fmt": export_fmt
+            })
+            return None
+
