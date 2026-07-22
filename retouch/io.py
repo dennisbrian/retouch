@@ -26,7 +26,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 IMAGE_EXTENSIONS = {
-    ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp",
+    ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp", ".exr",
     ".raf", ".cr2", ".cr3", ".nef", ".nrw", ".arw", ".dng", ".orf", ".rw2", ".pef", ".srw", ".x3f",
 }
 
@@ -53,7 +53,42 @@ EXT_MAP: Dict[str, str] = {
     "PNG": ".png",
     "PNG-16": ".png",
     "WebP": ".webp",
+    "EXR": ".exr",
 }
+
+
+def read_c2pa_manifest(path: Union[str, Path]) -> Optional[bytes]:
+    """Read raw C2PA Content Credentials manifest bytes from a JPEG or PNG file.
+
+    Returns the raw JUMBF manifest block if present, or None if absent.
+    """
+    path = Path(path)
+    if not path.exists():
+        return None
+
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+
+        # JPEG marker check for APP11 (0xFFEB) C2PA/JUMBF block
+        if data.startswith(b"\xff\xd8"):
+            idx = 2
+            while idx < len(data) - 4:
+                if data[idx] != 0xFF:
+                    break
+                marker = data[idx + 1]
+                if marker in (0xD9, 0xDA):  # EOI or SOS
+                    break
+                length = (data[idx + 2] << 8) + data[idx + 3]
+                if marker == 0xEB:  # APP11
+                    segment = data[idx + 4 : idx + 2 + length]
+                    if b"c2pa" in segment or b"jp2c" in segment or b"JUMBF" in segment:
+                        return segment
+                idx += 2 + length
+    except Exception as exc:
+        logger.debug("Failed to read C2PA manifest from %s: %s", path, exc)
+    return None
+
 
 
 def _resolve_safe_path(path: Union[str, Path], base_dir: Optional[Union[str, Path]] = None) -> Path:

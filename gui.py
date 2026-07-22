@@ -1847,6 +1847,10 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         _hair_ring_position_state = gr.State(value=0.5)
                         _hair_ring_tint_state = gr.State(value=0.0)
                         _hair_remove_flyaways_state = gr.State(value=0.0)
+                        _purple_fringing_state = gr.State(value=0.0)
+                        _flyaway_cleanup_state = gr.State(value=0.0)
+                        _micro_grain_state = gr.State(value=0.0)
+                        _split_toning_state = gr.State(value=0.0)
                         _film_strength_state = gr.State(value=0.0)
                         _film_toe_r_state = gr.State(value=0.0)
                         _film_toe_g_state = gr.State(value=0.0)
@@ -2972,6 +2976,10 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "body_reshape_shoulder_width": body_reshape_shoulder_width,
         "body_reshape_hip_width": body_reshape_hip_width,
         "auto_body_reshape": auto_body_reshape,
+        "purple_fringing": _purple_fringing_state,
+        "flyaway_cleanup": _flyaway_cleanup_state,
+        "micro_grain": _micro_grain_state,
+        "split_toning": _split_toning_state,
         "color_ref_img": color_ref_img,
         "color_ref_strength": color_ref_strength,
         "show_compare": show_compare,

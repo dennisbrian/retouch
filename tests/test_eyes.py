@@ -349,3 +349,87 @@ class TestScleraVesselRemoval:
         orig_a = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)[:, :, 1]
         new_a = cv2.cvtColor(out, cv2.COLOR_BGR2LAB)[:, :, 1]
         assert float(new_a[15:45, 37:39].mean()) < float(orig_a[15:45, 37:39].mean())
+
+
+class TestLimbalRingCapAndGate:
+    """BB1: Limbal-ring target-seeking contrast cap and dark-iris confidence gate."""
+
+    def _build_iris(self, body_l_value: float, limbal_l_value: float):
+        # Build 64x64 LAB image with center iris
+        lab = np.zeros((64, 64, 3), dtype=np.uint8)
+        lab[:, :, 0] = 128
+        lab[:, :, 1] = 128
+        lab[:, :, 2] = 128
+
+        cy, cx, r = 32.0, 32.0, 16.0
+        yy, xx = np.mgrid[0:64, 0:64]
+        dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2) / r
+
+        iris_mask = (dist <= 1.0).astype(np.float32)
+        body_mask = ((dist >= 0.3) & (dist <= 0.8)).astype(bool)
+        limbal_mask = ((dist > 0.8) & (dist <= 1.0)).astype(bool)
+
+        lab[body_mask, 0] = int(round(body_l_value))
+        lab[limbal_mask, 0] = int(round(limbal_l_value))
+
+        img_bgr = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+        return img_bgr, iris_mask
+
+    def test_zero_strength_byte_identity(self, enhancer):
+        img_bgr, iris_mask = self._build_iris(body_l_value=70, limbal_l_value=60)
+        out = enhancer._sculpt_iris(img_bgr, iris_mask, strength=0.0)
+        assert np.all(out == img_bgr)
+
+    def test_dark_iris_gated_to_noop(self, enhancer):
+        """Very dark irises (body L* < 30) must gate limbal darkening to zero."""
+        img_bgr, iris_mask = self._build_iris(body_l_value=22, limbal_l_value=20)
+        out = enhancer._sculpt_iris(img_bgr, iris_mask, strength=1.0)
+        # Convert back to LAB to inspect limbal ring L*
+        lab_out = cv2.cvtColor(out, cv2.COLOR_BGR2LAB)
+        
+        # Limbal ring region d ~ 0.9 (outer edge of iris mask)
+        cy, cx, r = 32.0, 32.0, 16.0
+        yy, xx = np.mgrid[0:64, 0:64]
+        dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2) / r
+        limbal_annulus = (dist >= 0.85) & (dist <= 0.95)
+
+        # Without gate, subtracting 30 * strength (30) from L*=20 would black out the ring to ~0.
+        # With gate, limbal_darken = 0, so L* remains around 20 (allowing minor USM/body edge spill).
+        limbal_l_after = float(np.mean(lab_out[limbal_annulus, 0]))
+        assert limbal_l_after > 15.0, f"Dark iris limbal ring was blacked out: L*={limbal_l_after:.1f} (expected ~20)"
+
+    def test_limbal_darkening_monotonic_and_saturates_at_cap(self, enhancer):
+        """Normal iris limbal darkening increases monotonically with strength up to the cap then saturates."""
+        img_bgr, iris_mask = self._build_iris(body_l_value=80, limbal_l_value=70)
+        
+        cy, cx, r = 32.0, 32.0, 16.0
+        yy, xx = np.mgrid[0:64, 0:64]
+        dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2) / r
+        limbal_annulus = (dist >= 0.85) & (dist <= 0.95)
+
+        def get_limbal_l(strength):
+            out = enhancer._sculpt_iris(img_bgr, iris_mask, strength=strength)
+            lab_out = cv2.cvtColor(out, cv2.COLOR_BGR2LAB)
+            return float(np.mean(lab_out[limbal_annulus, 0]))
+
+        l_0 = get_limbal_l(0.0)
+        l_low = get_limbal_l(0.2)
+        l_mid = get_limbal_l(0.5)
+        l_high = get_limbal_l(1.0)
+
+        # Monotonic darkening for strength up to headroom cap (initial contrast = 80-70=10, cap=25, headroom=15)
+        # At strength 0.2: limbal_darken = 6.0 -> lightness drops
+        # At strength 0.5: limbal_darken = 15.0 (hits cap 25 - 10 = 15) -> lightness drops further
+        assert l_low < l_0, f"Expected l_low ({l_low:.1f}) < l_0 ({l_0:.1f})"
+        assert l_mid < l_low, f"Expected l_mid ({l_mid:.1f}) < l_low ({l_low:.1f})"
+
+        # Verify clear saturation inflection:
+        # Initial 0.0 -> 0.5 strength drop is large (~14.8 L* units),
+        # while doubling strength from 0.5 -> 1.0 yields only a small residual change (< 3.5 L* units) from USM micro-contrast.
+        drop_to_cap = l_0 - l_mid
+        drop_past_cap = l_mid - l_high
+        assert drop_to_cap > 10.0, f"Expected strong initial darkening up to cap, got drop={drop_to_cap:.2f}"
+        assert drop_past_cap < 3.5, f"Expected limbal darkening to saturate past cap, got additional drop={drop_past_cap:.2f}"
+
+
+

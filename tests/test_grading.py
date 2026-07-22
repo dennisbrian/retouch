@@ -4,7 +4,7 @@ import numpy as np
 import cv2
 import pytest
 
-from retouch.grading import ColorGrader, PRESETS
+from retouch.grading import ColorGrader, PRESETS, apply_split_toning
 
 
 @pytest.fixture
@@ -419,3 +419,23 @@ class TestWhiteBalanceLCH:
             ))
             # Just verify computation worked
             assert not np.isnan(neutral_shift)
+
+
+class TestSplitToning:
+    """BB4: OKLCh dual-tone split toning tests."""
+
+    def test_zero_strength_noop(self):
+        img = np.full((32, 32, 3), 128, dtype=np.uint8)
+        out = apply_split_toning(img, strength=0.0)
+        assert np.all(out == img)
+
+    def test_shifts_shadows_and_highlights(self):
+        """Shadows receive shadow hue (blue), highlights receive highlight hue (gold)."""
+        img = np.zeros((64, 64, 3), dtype=np.uint8)
+        img[0:32, :] = 20    # Dark shadow region
+        img[32:64, :] = 220  # Bright highlight region
+
+        out = apply_split_toning(img, shadow_hue=210.0, highlight_hue=35.0, strength=1.0)
+        assert not np.allclose(out, img)
+        assert out.dtype == np.uint8
+

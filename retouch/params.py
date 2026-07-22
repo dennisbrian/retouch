@@ -2449,6 +2449,50 @@ _BODY_RESHAPE_PARAMS = [
     ),
 ]
 
+_NEW_FEATURE_PARAMS: List[ParamSpec] = [
+    ParamSpec(
+        name="purple_fringing",
+        cli_flag="purple-fringing",
+        cli_type=int,
+        default=0,
+        recipe_key="finish.purple_fringing",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="flyaway_cleanup",
+        cli_flag="flyaway-cleanup",
+        cli_type=int,
+        default=0,
+        recipe_key="hair.flyaway_cleanup",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="micro_grain",
+        cli_flag="micro-grain",
+        cli_type=int,
+        default=0,
+        recipe_key="finish.micro_grain",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        name="split_toning",
+        cli_flag="split-toning",
+        cli_type=int,
+        default=0,
+        recipe_key="finish.split_toning",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+]
+
+
 
 PROCESSING_PARAMS: List[ParamSpec] = (
     _SKIN_PARAMS
@@ -2466,7 +2510,9 @@ PROCESSING_PARAMS: List[ParamSpec] = (
     + _NEURAL_BOOSTER_PARAMS
     + _COSPLAY_MOAT_PARAMS
     + _BODY_RESHAPE_PARAMS
+    + _NEW_FEATURE_PARAMS
 )
+
 
 
 # ParamSpec lookup by name (lazy-built)

@@ -20,6 +20,7 @@ from retouch.io import (
     image_has_icc,
     read_exif_bytes,
     read_icc_profile,
+    read_c2pa_manifest,
     write_image_with_icc,
 )
 
@@ -407,3 +408,35 @@ class TestEdgeCases:
         original = _write_jpeg_with_srgb_icc(src)
         result = read_icc_profile(Path(src))
         assert result == original
+
+
+class TestC2PAManifestPreservation:
+    """BB2: Content Credentials (C2PA) provenance manifest detection & preservation."""
+
+    def test_read_manifest_nonexistent(self, tmp_path: Path) -> None:
+        assert read_c2pa_manifest(tmp_path / "nonexistent.jpg") is None
+
+    def test_read_manifest_plain_jpeg(self, tmp_path: Path) -> None:
+        path = tmp_path / "plain.jpg"
+        _write_jpeg_no_icc(path)
+        assert read_c2pa_manifest(path) is None
+
+    def test_detects_c2pa_app11_marker(self, tmp_path: Path) -> None:
+        """Synthetic JPEG containing APP11 C2PA marker segment is detected by read_c2pa_manifest."""
+        path = tmp_path / "c2pa.jpg"
+        _write_jpeg_no_icc(path)
+        
+        raw_data = path.read_bytes()
+        # Construct synthetic APP11 segment carrying 'c2pa' JUMBF payload
+        payload = b"c2pa_manifest_test_jumbf_block_data"
+        seg_len = len(payload) + 2
+        app11_segment = b"\xff\xeb" + struct.pack(">H", seg_len) + payload
+        
+        # Insert APP11 right after SOI (0xFFD8)
+        c2pa_jpeg = raw_data[:2] + app11_segment + raw_data[2:]
+        path.write_bytes(c2pa_jpeg)
+
+        manifest = read_c2pa_manifest(path)
+        assert manifest is not None
+        assert b"c2pa" in manifest
+

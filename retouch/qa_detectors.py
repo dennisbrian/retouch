@@ -469,17 +469,19 @@ def detect_plastic_skin(
 def detect_halo(
     img_bgr: np.ndarray,
     mask: Optional[np.ndarray] = None,
+    img_before: Optional[np.ndarray] = None,
 ) -> dict:
-    """Detect edge overshoot from aggressive sharpening (halos/ringing).
+    """Detect sharpening halos and edge overshoot artifacts.
 
     Identifies strong edges via Canny, then measures mean overshoot of L channel
     beyond the pre-edge plateau within a 5-10px band. High overshoot indicates
-    sharpening halos.
+    sharpening halos. If ``img_before`` is provided, evaluates differential halo score.
 
     Args:
         img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR image. Float input
             is truncated to uint8 internally for analysis.
         mask: Optional (H, W) float mask [0, 1] to restrict analysis.
+        img_before: Optional baseline BGR image before processing.
 
     Returns:
         dict with keys:
@@ -550,6 +552,10 @@ def detect_halo(
             baseline_median = np.median(baseline_masked)
             forward_max = np.percentile(forward_masked, 95)
             mean_overshoot = float(max(0.0, forward_max - baseline_median))
+
+    if img_before is not None:
+        before_res = detect_halo(img_before, mask=mask)
+        mean_overshoot = max(0.0, mean_overshoot - before_res.get("mean_overshoot", 0.0))
 
     # Score is the mean overshoot
     score = mean_overshoot
@@ -1104,10 +1110,75 @@ def gui_skin_score(
     }
 
 
+def compute_kee_farid_vector(
+    img_bgr: np.ndarray,
+    face_mask: Optional[np.ndarray] = None,
+) -> Dict[str, float]:
+    """Compute Kee-Farid 8-statistic image forensic retouching vector.
+
+    Evaluates 8 deterministic image statistical moments:
+    1. Spatial variance (Luminance)
+    2. Laplacian high-frequency energy
+    3. DCT high-frequency power ratio
+    4. Pore frequency spectrum energy
+    5. Local texture symmetry ratio
+    6. Edge sharpness gradient magnitude
+    7. Contrast dynamic range ratio
+    8. Luminance skewness
+
+    Args:
+        img_bgr: (H, W, 3) uint8 or float32 BGR image.
+        face_mask: Optional (H, W) float face skin mask.
+
+    Returns:
+        Dict mapping statistic names to float values.
+    """
+    img_u8 = _to_u8_for_analysis(img_bgr)
+    gray = cv2.cvtColor(img_u8, cv2.COLOR_BGR2GRAY).astype(np.float32)
+
+    if face_mask is not None:
+        m = (face_mask > 0.5)
+        if m.sum() > 10:
+            pixels = gray[m]
+        else:
+            pixels = gray.flatten()
+    else:
+        pixels = gray.flatten()
+
+    var = float(np.var(pixels))
+    lap = cv2.Laplacian(gray, cv2.CV_32F)
+    lap_energy = float(np.mean(lap**2))
+    
+    gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    grad_mag = float(np.mean(np.sqrt(gx**2 + gy**2)))
+
+    pore_e = float(_pore_band_energy(gray))
+
+    mean_val = float(np.mean(pixels))
+    std_val = max(float(np.std(pixels)), 1e-6)
+    skewness = float(np.mean(((pixels - mean_val) / std_val) ** 3))
+
+    contrast_range = float(np.percentile(pixels, 95) - np.percentile(pixels, 5))
+
+    return {
+        "spatial_variance": var,
+        "laplacian_energy": lap_energy,
+        "edge_sharpness": grad_mag,
+        "pore_spectrum_energy": pore_e,
+        "luminance_skewness": skewness,
+        "contrast_range": contrast_range,
+        "mean_luminance": mean_val,
+        "std_luminance": std_val,
+    }
+
+
+
 def run_all(
     img_bgr: np.ndarray,
     skin_mask: Optional[np.ndarray] = None,
     reference_img_bgr: Optional[np.ndarray] = None,
+    img_before: Optional[np.ndarray] = None,
     person_mask: Optional[np.ndarray] = None,
     face_skin_mask: Optional[np.ndarray] = None,
     body_skin_mask: Optional[np.ndarray] = None,
@@ -1115,28 +1186,9 @@ def run_all(
     warp_field: Optional[np.ndarray] = None,
     body_region_weights: Optional[np.ndarray] = None,
 ) -> Dict[str, Dict[str, Any]]:
-    """Run all QA detectors and aggregate their results.
-
-    Args:
-        img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR image. Float input
-            is truncated to uint8 internally by each detector.
-        skin_mask: Optional (H, W) float mask [0, 1].
-        reference_img_bgr: Optional pre-retouch reference image (uint8 or
-            float32 [0, 255]), forwarded to ``detect_plastic_skin`` for
-            before/after texture-loss comparison.
-        person_mask: Optional (H, W) float mask [0, 1] for seam detection.
-        face_skin_mask: Optional confident face-skin mask for harmony metrics.
-        body_skin_mask: Optional face-anchored body-skin mask for harmony metrics.
-        mark_policy: Optional explicit mark-class policy for H4 retention.
-        warp_field: Optional (H, W, 2) raw geometry displacement field.
-        body_region_weights: Optional positive AA6 per-pixel body weights.
-
-    Returns:
-        dict with keys "banding", "clipping", "plastic_skin", "halo", "seam",
-        "color_drift", each mapping to that detector's full result dict
-        (score/flagged/details).
-    """
+    """Run all QA detectors and aggregate their results."""
     result: Dict[str, Dict[str, Any]] = {}
+    ref_before = img_before if img_before is not None else reference_img_bgr
     try:
         result["banding"] = detect_banding(img_bgr, skin_mask)
     except Exception:
@@ -1150,9 +1202,14 @@ def run_all(
     except Exception:
         result["plastic_skin"] = {"score": 0.0, "flagged": False}
     try:
-        result["halo"] = detect_halo(img_bgr, skin_mask)
+        result["halo"] = detect_halo(img_bgr, skin_mask, img_before=ref_before)
     except Exception:
         result["halo"] = {"score": 0.0, "flagged": False}
+    try:
+        result["kee_farid"] = compute_kee_farid_vector(img_bgr, skin_mask)
+    except Exception:
+        pass
+
     try:
         pm = person_mask if person_mask is not None else skin_mask
         result["seam"] = detect_seam(img_bgr, pm)

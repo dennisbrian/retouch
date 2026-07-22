@@ -164,3 +164,81 @@ class HairEnhancer:
 
         return _from_lab(lab, is_float)
 
+
+def cleanup_flyaway_strands(
+    img_bgr: np.ndarray,
+    hair_mask: Optional[np.ndarray],
+    face_mask: Optional[np.ndarray] = None,
+    strength: float = 1.0,
+    max_strand_width: int = 3,
+) -> np.ndarray:
+    """Detect and clean up stray flyaway hair strands across skin and background.
+
+    Uses multi-scale curvilinear morphological top-hat ridge filters. Scope-guarded
+    to operate strictly outside the hair mass silhouette so main hair body and hairline
+    are preserved 100%.
+
+    Args:
+        img_bgr: (H, W, 3) uint8 or float32 BGR image.
+        hair_mask: (H, W) float hair mask. If None, returns original.
+        face_mask: Optional (H, W) float face skin mask.
+        strength: Cleanup strength [0, 1].
+        max_strand_width: Maximum strand width in pixels (default 3).
+
+    Returns:
+        (H, W, 3) BGR image with stray flyaway hair strands cleaned up.
+    """
+    if strength <= 0.0 or hair_mask is None or hair_mask.max() < 0.01:
+        return img_bgr
+
+    is_float = img_bgr.dtype == np.float32
+    img_u8 = np.clip(img_bgr, 0, 255).astype(np.uint8) if is_float else img_bgr
+
+    H, W = img_bgr.shape[:2]
+    gray = cv2.cvtColor(img_u8, cv2.COLOR_BGR2GRAY)
+
+    # 1. Scope Guard: Region strictly OUTSIDE main hair mass
+    hair_bin = (hair_mask > 0.3).astype(np.uint8)
+    kernel_size = max(5, int(min(H, W) * 0.02)) | 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+    
+    # Hair silhouette region (hair body + 3-pixel border)
+    hair_body_dilated = cv2.dilate(hair_bin, kernel, iterations=1)
+    
+    # Allowed zone: skin or background outside hair body
+    allowed_zone = (hair_body_dilated == 0).astype(np.float32)
+    if face_mask is not None:
+        allowed_zone = np.maximum(allowed_zone, (face_mask > 0.1).astype(np.float32) * (hair_bin == 0).astype(np.float32))
+
+    # 2. Curvilinear Ridge Detection via Black Top-Hat & White Top-Hat
+    tophat_ksize = max_strand_width * 2 + 1
+    tophat_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (tophat_ksize, tophat_ksize))
+
+    black_tophat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, tophat_kernel)
+    white_tophat = cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, tophat_kernel)
+
+    # Tone-adaptive margin over local baseline
+    local_blur = cv2.GaussianBlur(gray, (15, 15), 0).astype(np.float32) + 1.0
+    strand_contrast = np.maximum(black_tophat.astype(np.float32), white_tophat.astype(np.float32)) / local_blur
+
+    # Strand candidate mask
+    strand_mask = (strand_contrast > 0.08).astype(np.float32) * allowed_zone * min(strength, 1.0)
+
+    if strand_mask.max() < 0.01:
+        return img_bgr
+
+    # 3. Inpaint detected flyaway strands
+    inpaint_mask = (strand_mask > 0.2).astype(np.uint8)
+    if not np.any(inpaint_mask):
+        return img_bgr
+
+    inpainted_u8 = cv2.inpaint(img_u8, inpaint_mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
+
+    m = strand_mask[:, :, np.newaxis]
+    blended = np.clip(img_u8.astype(np.float32) * (1.0 - m) + inpainted_u8.astype(np.float32) * m, 0, 255)
+
+    if is_float:
+        return blended.astype(np.float32)
+    return blended.astype(np.uint8)
+
+

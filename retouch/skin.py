@@ -31,6 +31,8 @@ from .color_science import (
     oklab_to_oklch,
     oklch_to_oklab,
     measure_skin_state,
+    apply_abney_hue_correction,
+    invert_abney_hue_correction,
     SKIN_LOCI,
 )
 from . import intrinsic, chromophore, skin_chromophore
@@ -1230,6 +1232,7 @@ class SkinProcessor:
 
         s = strength / 100.0
         lch = bgr_to_lch(img_bgr)
+        L = lch[:, :, 0] / 100.0  # Normalize CIELAB L [0..100] to [0..1]
         H = lch[:, :, 2]
         C = lch[:, :, 1]
 
@@ -1240,18 +1243,22 @@ class SkinProcessor:
         if w_sum < 1e-6:
             return img_bgr
 
+        # Apply K2 Abney hue linearity correction across lightness
+        H_lin = apply_abney_hue_correction(H, L)
+
         if target_hue < 0.0:
-            H_rad = np.deg2rad(H)
+            H_rad = np.deg2rad(H_lin)
             sin_sum = (w * C * np.sin(H_rad)).sum()
             cos_sum = (w * C * np.cos(H_rad)).sum()
             t = float(np.rad2deg(np.arctan2(sin_sum, cos_sum))) % 360.0
         else:
             t = target_hue
 
-        d = ((t - H + 180.0) % 360.0) - 180.0
+        d = ((t - H_lin + 180.0) % 360.0) - 180.0
         near = np.clip(1.0 - np.abs(d) / 60.0, 0.0, 1.0)
 
-        H_new = (H + d * s * 0.8 * near) % 360.0
+        H_lin_new = (H_lin + d * s * 0.8 * near) % 360.0
+        H_new = invert_abney_hue_correction(H_lin_new, L)
 
         c_mean = float((w * C).sum() / max(w_sum, 1e-6))
         C_new = C + (c_mean - C) * s * chroma_compress * near

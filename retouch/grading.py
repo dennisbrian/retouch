@@ -99,6 +99,59 @@ def _hsv_u8_conv_to_bgr_f(hsv: np.ndarray) -> np.ndarray:
     return bgr
 
 
+def apply_split_toning(
+    img_bgr: np.ndarray,
+    shadow_hue: float = 210.0,
+    highlight_hue: float = 35.0,
+    balance: float = 0.5,
+    strength: float = 0.5,
+) -> np.ndarray:
+    """Apply OKLCh dual-tone split toning for shadows and highlights.
+
+    Args:
+        img_bgr: (H, W, 3) uint8 or float32 BGR image.
+        shadow_hue: Shadow hue angle in degrees [0, 360].
+        highlight_hue: Highlight hue angle in degrees [0, 360].
+        balance: Midtone pivot balance [0, 1] (0.5 = neutral midtone split).
+        strength: Overall split-toning intensity [0, 1].
+
+    Returns:
+        (H, W, 3) BGR image with split-toning applied.
+    """
+    if strength <= 0.0:
+        return img_bgr
+
+    is_float = img_bgr.dtype == np.float32
+    img_u8 = np.clip(img_bgr, 0, 255).astype(np.uint8) if is_float else img_bgr
+
+    from .color_science import bgr_to_oklab, oklab_to_oklch, oklch_to_oklab, oklab_to_bgr
+
+    lab = bgr_to_oklab(img_u8)
+    oklch = oklab_to_oklch(lab)
+
+    L = oklch[:, :, 0]
+
+    pivot = balance
+    shadow_weight = np.clip((pivot - L) / max(pivot, 1e-6), 0.0, 1.0) ** 1.5
+    highlight_weight = np.clip((L - pivot) / max(1.0 - pivot, 1e-6), 0.0, 1.0) ** 1.5
+
+    target_chroma = 0.04 * strength
+
+    oklch[:, :, 1] += shadow_weight * target_chroma
+    oklch[:, :, 2] = np.where(shadow_weight > 0.1, oklch[:, :, 2] * (1.0 - shadow_weight) + shadow_hue * shadow_weight, oklch[:, :, 2])
+
+    oklch[:, :, 1] += highlight_weight * target_chroma
+    oklch[:, :, 2] = np.where(highlight_weight > 0.1, oklch[:, :, 2] * (1.0 - highlight_weight) + highlight_hue * highlight_weight, oklch[:, :, 2])
+
+    lab_new = oklch_to_oklab(oklch)
+    out_u8 = oklab_to_bgr(lab_new)
+
+    if is_float:
+        return out_u8.astype(np.float32)
+    return out_u8
+
+
+
 def _large_sigma_blur(
     img: np.ndarray,
     ksize: int,

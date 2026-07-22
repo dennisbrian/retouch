@@ -893,3 +893,64 @@ def safe_divide(
     result = numerator / denom
     return np.where(np.abs(denominator) < 1e-8, fallback, result)
 
+
+def remove_purple_fringing(
+    img_bgr: np.ndarray,
+    strength: float = 1.0,
+    edge_threshold: float = 35.0,
+) -> np.ndarray:
+    """Detect and desaturate lateral chromatic aberration (purple fringing).
+
+    Identifies purple/violet chroma spikes immediately adjacent to high-contrast
+    luminance edges (e.g. backlit windows, dark wigs against bright backgrounds).
+    Non-edge pixels (uniform purple fabrics, irises) are strictly protected by the
+    luminance gradient gate.
+
+    Args:
+        img_bgr: (H, W, 3) uint8 or float32 BGR image.
+        strength: Desaturation intensity [0, 1].
+        edge_threshold: Luminance gradient threshold for edge detection.
+
+    Returns:
+        (H, W, 3) BGR image with purple fringing suppressed.
+    """
+    if strength <= 0.0:
+        return img_bgr
+
+    is_float = img_bgr.dtype == np.float32
+    img_u8 = np.clip(img_bgr, 0, 255).astype(np.uint8) if is_float else img_bgr
+
+    # Convert to LAB for luminance gradient and chroma evaluation
+    lab = cv2.cvtColor(img_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
+    L = lab[:, :, 0]
+    a = lab[:, :, 1] - 128.0
+    b = lab[:, :, 2] - 128.0
+
+    # Luminance spatial gradient magnitude
+    gx = cv2.Sobel(L, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(L, cv2.CV_32F, 0, 1, ksize=3)
+    grad = np.sqrt(gx**2 + gy**2)
+
+    # Edge gate: high-contrast luminance edge
+    edge_gate = np.clip((grad - edge_threshold) / 20.0, 0.0, 1.0)
+
+    # Purple/violet color gate in LAB space: positive a (magenta), negative b (blue)
+    purple_gate = np.clip((a - 8.0) / 10.0, 0.0, 1.0) * np.clip((-b - 5.0) / 10.0, 0.0, 1.0)
+
+    fringe_mask = edge_gate * purple_gate * min(strength, 1.0)
+
+    if fringe_mask.max() < 0.01:
+        return img_bgr
+
+    # Desaturate a and b channels on fringe mask
+    lab[:, :, 1] -= fringe_mask * a
+    lab[:, :, 2] -= fringe_mask * b
+
+    lab_u8 = np.clip(lab, 0, 255).astype(np.uint8)
+    out = cv2.cvtColor(lab_u8, cv2.COLOR_LAB2BGR)
+
+    if is_float:
+        return out.astype(np.float32)
+    return out
+
+

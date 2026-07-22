@@ -253,6 +253,20 @@ class TestDetectHalo:
         assert result["flagged"] is False
         assert result["mean_overshoot"] == 0.0
 
+    def test_differential_halo_with_img_before(self):
+        """Differential halo subtracts baseline image overshoot."""
+        img_before = np.zeros((100, 100, 3), dtype=np.uint8)
+        img_before[:, 50:] = 200
+
+        # Oversharpened after image
+        blurred = cv2.GaussianBlur(img_before, (5, 5), 1)
+        img_after = np.clip(cv2.addWeighted(img_before, 1.8, blurred, -0.8, 0), 0, 255).astype(np.uint8)
+
+        diff_res = detect_halo(img_after, img_before=img_before)
+        assert "mean_overshoot" in diff_res
+        assert diff_res["score"] >= 0.0
+
+
 
 class TestDetectSeam:
     """Tests for seam detection at subject boundaries."""

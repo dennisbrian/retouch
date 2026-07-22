@@ -2,7 +2,7 @@
 import cv2
 import numpy as np
 import pytest
-from retouch.hair import HairEnhancer
+from retouch.hair import HairEnhancer, cleanup_flyaway_strands
 
 
 @pytest.fixture
@@ -93,3 +93,42 @@ def test_hair_enhance_output_range(enhancer, img, person_mask, face_oval, bbox):
     assert result.dtype == np.uint8
     assert result.min() >= 0
     assert result.max() <= 255
+
+
+class TestFlyawayStrandCleanup:
+    """AB3: Flyaway hair strand cleanup outside hair mass silhouette."""
+
+    def test_zero_strength_noop(self):
+        img = np.full((100, 100, 3), 180, dtype=np.uint8)
+        hair_mask = np.zeros((100, 100), dtype=np.float32)
+        hair_mask[10:40, 20:80] = 1.0
+        result = cleanup_flyaway_strands(img, hair_mask, strength=0.0)
+        assert np.all(result == img)
+
+    def test_hair_mass_region_byte_identical(self):
+        """Main hair mass silhouette must be byte-identical (100% scope guarded)."""
+        img = np.full((100, 100, 3), 180, dtype=np.uint8)
+        hair_mask = np.zeros((100, 100), dtype=np.float32)
+        hair_mask[10:40, 20:80] = 1.0
+
+        # Draw a synthetic strand in background outside hair mass
+        img[60:80, 50] = 20  # Dark strand
+
+        result = cleanup_flyaway_strands(img, hair_mask, strength=1.0)
+        # Hair body pixels (row 15..35, col 25..75) must be 100% byte-identical
+        assert np.all(result[15:35, 25:75] == img[15:35, 25:75])
+
+    def test_removes_background_stray_strand(self):
+        """Stray hair strand on background outside hair mass is cleaned up."""
+        img = np.full((100, 100, 3), 200, dtype=np.uint8)
+        hair_mask = np.zeros((100, 100), dtype=np.float32)
+        hair_mask[10:30, 20:80] = 1.0
+
+        # Draw a thin dark strand at y=60..70, x=50
+        img[60:70, 50] = 20
+
+        result = cleanup_flyaway_strands(img, hair_mask, strength=1.0)
+        # Inprinted strand region (row 60..70, col 50) should be restored toward background lightness (200)
+        strand_diff = float(np.mean(np.abs(result[60:70, 50].astype(float) - 200.0)))
+        assert strand_diff < 50.0, f"Strand not inpainted properly: diff={strand_diff:.1f}"
+

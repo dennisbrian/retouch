@@ -11,6 +11,18 @@ from retouch.color_science import (
     oklch_to_oklab,
     measure_skin_state,
     skin_chroma_std,
+    apply_abney_hue_correction,
+    invert_abney_hue_correction,
+    find_gamut_intersection_srgb,
+    find_gamut_intersection_p3,
+    find_gamut_intersection_rec2020,
+    compress_chroma_gamut,
+    bgr_to_cam16_ucs,
+    cam16_ucs_to_bgr,
+    cam16_ucs_delta_e,
+    chromatic_adapt_cat16,
+    linear_to_pq,
+    pq_to_linear,
     SkinState,
     SKIN_LOCI,
 )
@@ -402,3 +414,114 @@ class TestUnifyHueLineIntegration:
         assert state_25.C_mean >= 0.0  # Sanity check
         assert state_50.C_mean >= 0.0
         assert state_75.C_mean >= 0.0
+
+
+class TestAbneyHueCorrection:
+    """Tests for K2 Abney hue-linearity correction and inverse mapping."""
+
+    def test_reference_lightness_baseline(self):
+        """At baseline lightness L=0.6, correction is exact zero."""
+        for h in [25.0, 45.0, 65.0]:
+            h_lin = apply_abney_hue_correction(h, 0.6)
+            assert h_lin == pytest.approx(h, abs=1e-5)
+
+    def test_roundtrip(self):
+        """apply_abney_hue_correction and invert_abney_hue_correction must round-trip cleanly."""
+        h_arr = np.linspace(0, 359, 72, dtype=np.float32)
+        for L in [0.2, 0.5, 0.6, 0.85]:
+            h_lin = apply_abney_hue_correction(h_arr, L)
+            h_rec = invert_abney_hue_correction(h_lin, L)
+            diff = np.abs((h_arr - h_rec + 180.0) % 360.0 - 180.0)
+            assert np.max(diff) < 1e-3, f"Max roundtrip error {np.max(diff)} > 1e-3"
+
+    def test_lightness_dependent_shift_in_skin_quadrant(self):
+        """Highlights (L > 0.6) shift positive, shadows (L < 0.6) shift negative in skin quadrant."""
+        h_skin = 45.0
+        h_bright = apply_abney_hue_correction(h_skin, 0.9)
+        h_dark = apply_abney_hue_correction(h_skin, 0.3)
+
+        assert h_bright > h_skin
+        assert h_dark < h_skin
+
+    def test_outside_skin_quadrant_tapers(self):
+        """Non-skin hues (e.g. blue h=240, green h=140) receive zero skin Abney shift."""
+        for h in [0.0, 140.0, 240.0, 300.0]:
+            h_lin = apply_abney_hue_correction(h, 0.9)
+            assert h_lin == pytest.approx(h, abs=1e-4)
+
+
+class TestGamutChromaCompression:
+    """Tests for K3 soft-knee gamut-aware chroma compression."""
+
+    def test_in_gamut_unmodified(self):
+        """Moderate in-gamut chroma (C < 0.85 * C_max) must be 100% unchanged."""
+        oklch = np.zeros((10, 10, 3), dtype=np.float32)
+        oklch[..., 0] = 0.65
+        oklch[..., 1] = 0.05
+        oklch[..., 2] = 45.0
+
+        out = compress_chroma_gamut(oklch, knee=0.85)
+        assert np.allclose(oklch, out, atol=1e-5)
+
+    def test_preserves_lightness_and_hue(self):
+        """Gamut compression must leave L and h 100% untouched."""
+        oklch = np.zeros((10, 10, 3), dtype=np.float32)
+        oklch[..., 0] = 0.70
+        oklch[..., 1] = 0.35  # Oversaturated
+        oklch[..., 2] = 30.0
+
+        out = compress_chroma_gamut(oklch, knee=0.85)
+        assert np.allclose(oklch[..., 0], out[..., 0])
+        assert np.allclose(oklch[..., 2], out[..., 2])
+        assert (out[..., 1] <= oklch[..., 1]).all()
+
+    def test_sRGB_gamut_boundary(self):
+        """C_max(L, h) should return positive maximum in-gamut chroma."""
+        c_max = find_gamut_intersection_srgb(0.6, 45.0)
+        assert 0.05 < c_max < 0.35
+
+
+class TestCAM16AndCAT16:
+    """K1 & K4: CAM16-UCS appearance space & CAT16 chromatic adaptation."""
+
+    def test_cam16_ucs_roundtrip(self):
+        """BGR -> CAM16-UCS -> BGR round-trip must be accurate."""
+        img = np.random.randint(20, 235, (32, 32, 3), dtype=np.uint8)
+        cam16 = bgr_to_cam16_ucs(img)
+        recon = cam16_ucs_to_bgr(cam16)
+        max_err = np.abs(img.astype(int) - recon.astype(int)).max()
+        assert max_err <= 3, f"CAM16-UCS roundtrip error {max_err} > 3"
+
+    def test_cam16_delta_e_identical_images_zero(self):
+        """Perceptual ΔE_CAM16-UCS for identical images must be zero."""
+        img = np.full((16, 16, 3), 128, dtype=np.uint8)
+        delta_e = cam16_ucs_delta_e(img, img)
+        assert np.max(delta_e) < 1e-4
+
+    def test_cat16_identity_white_point(self):
+        """CAT16 adaptation with identical source/target white point returns original image."""
+        img = np.full((16, 16, 3), 150, dtype=np.uint8)
+        adapted = chromatic_adapt_cat16(img, source_wp=(0.95, 1.0, 1.08), target_wp=(0.95, 1.0, 1.08))
+        assert np.all(adapted == img)
+
+
+class TestPQTransferFunctions:
+    """K7: ST 2084 / PQ EOTF & OETF transfer function tests."""
+
+    def test_linear_pq_roundtrip(self):
+        """Linear -> PQ -> Linear round-trip must be accurate."""
+        lin = np.linspace(0.01, 0.99, 100, dtype=np.float32)
+        pq = linear_to_pq(lin)
+        recon = pq_to_linear(pq)
+        assert np.allclose(lin, recon, atol=1e-4)
+
+    def test_wide_gamut_solvers(self):
+        """P3 and Rec.2020 gamut solvers extend maximum allowable chroma."""
+        c_srgb = find_gamut_intersection_srgb(0.6, 45.0)
+        c_p3 = find_gamut_intersection_p3(0.6, 45.0)
+        c_2020 = find_gamut_intersection_rec2020(0.6, 45.0)
+        assert c_srgb < c_p3 < c_2020
+
+
+
+

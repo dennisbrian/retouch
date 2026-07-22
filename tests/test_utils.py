@@ -20,6 +20,7 @@ from retouch.utils import (
     soft_light_blend,
     overlay_blend,
     hard_light_blend,
+    remove_purple_fringing,
 )
 
 
@@ -404,4 +405,37 @@ class TestApplySkinDiffusion:
         result = apply_skin_diffusion(img, mask, strength=20)
         assert result.dtype == np.uint8
         assert result.shape == img.shape
+
+
+class TestRemovePurpleFringing:
+    """Tests for AB4 lateral chromatic aberration (purple fringing) removal."""
+
+    def test_zero_strength_noop(self):
+        img = np.full((64, 64, 3), 128, dtype=np.uint8)
+        img[32:, :] = [250, 50, 200]  # Magenta edge
+        result = remove_purple_fringing(img, strength=0.0)
+        assert np.all(result == img)
+
+    def test_suppresses_fringe_at_high_gradient_edge(self):
+        """Purple fringe at high-contrast edge must be desaturated."""
+        img = np.full((64, 64, 3), 20, dtype=np.uint8)
+        # High-contrast bright area (background)
+        img[0:31, :] = 240
+        # 1-pixel purple/magenta fringe at the high-gradient boundary (row 31)
+        img[31, :] = [220, 40, 200]  # High blue & red, low green -> purple fringe
+
+        out = remove_purple_fringing(img, strength=1.0, edge_threshold=20.0)
+        lab_orig = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
+        lab_out = cv2.cvtColor(out, cv2.COLOR_BGR2LAB).astype(np.float32)
+
+        orig_a = float(lab_orig[31, :].mean())
+        new_a = float(lab_out[31, :].mean())
+        assert new_a < 130.0, f"Purple fringe not desaturated to neutral: a* {orig_a:.1f} -> {new_a:.1f}"
+
+    def test_non_edge_purple_fabric_preserved(self):
+        """Uniform purple fabric (zero luminance gradient) must be preserved 100%."""
+        img = np.full((64, 64, 3), [200, 40, 200], dtype=np.uint8)  # Uniform purple
+        out = remove_purple_fringing(img, strength=1.0)
+        assert np.all(out == img)
+
 

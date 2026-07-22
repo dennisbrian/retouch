@@ -278,6 +278,14 @@ class ProcessingContext:
     reshape_mouth_size: float = 0.0
     reshape_smile: float = 0.0
     reshape_forehead: float = 0.0
+
+    # --- New Feature Extensions ---
+    purple_fringing: float = 0.0
+    flyaway_cleanup: float = 0.0
+    micro_grain: float = 0.0
+    split_toning: float = 0.0
+    catchlight_synthetic: bool = False
+
     reshape_jaw_width_l: float = 0.0
     reshape_jaw_width_r: float = 0.0
     reshape_nose_width_l: float = 0.0
@@ -1661,7 +1669,7 @@ class RetouchEngine:
 
         if proxy_scale < 1.0:
             # Upscale face-region result + masks back to native resolution
-            upscaled_core = self._upscale_core_result(core, h, w)
+            upscaled_core = self._upscale_core_result(core, h, w, native_guide=native_img_bgr)
 
             # F8.1: Composite upscaled face edits onto native image
             # Only paste the face ROIs that were actually retouched
@@ -1918,23 +1926,41 @@ class RetouchEngine:
 
     @staticmethod
     def _upscale_core_result(
-        core: _CoreResult, target_h: int, target_w: int
+        core: _CoreResult, target_h: int, target_w: int, native_guide: Optional[np.ndarray] = None
     ) -> _CoreResult:
         """Upscale a core result (image + masks + person mask) back to the
-        pre-proxy resolution."""
+        pre-proxy resolution.
+
+        Uses Bilateral Guided Upsampling (guided_filter) when native_guide is provided
+        to snap mask boundaries accurately to native edge boundaries.
+        """
         core.result = cv2.resize(
             core.result, (target_w, target_h), interpolation=cv2.INTER_LINEAR
         )
+        guide_gray = None
+        if native_guide is not None and native_guide.shape[:2] == (target_h, target_w):
+            if native_guide.ndim == 3:
+                guide_gray = cv2.cvtColor(native_guide, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+            else:
+                guide_gray = native_guide.astype(np.float32) / 255.0
+
         if core.person_mask is not None:
-            core.person_mask = cv2.resize(
+            up_person = cv2.resize(
                 core.person_mask, (target_w, target_h), interpolation=cv2.INTER_LINEAR
             )
+            if guide_gray is not None:
+                up_person = guided_filter(up_person.astype(np.float32), radius=4, eps=1e-3, guide=guide_gray)
+            core.person_mask = up_person
+
         for attr in ("acc_skin", "acc_skin_hair", "acc_lips", "acc_sharpen"):
             m = getattr(core, attr)
             if m is not None:
-                setattr(core, attr, cv2.resize(
+                up_m = cv2.resize(
                     m, (target_w, target_h), interpolation=cv2.INTER_LINEAR
-                ))
+                )
+                if guide_gray is not None and attr in ("acc_skin", "acc_skin_hair"):
+                    up_m = guided_filter(up_m.astype(np.float32), radius=4, eps=1e-3, guide=guide_gray)
+                setattr(core, attr, up_m)
         return core
 
     @staticmethod
@@ -2188,8 +2214,24 @@ class RetouchEngine:
             timings["cosplay_moat"] = (time.perf_counter() - t_cosplay) * 1000
 
             # ------------------------------------------------------------------
+            # Stage 3.7 — AB3: Flyaway Hair Cleanup
+            # ------------------------------------------------------------------
+            if getattr(ctx, "flyaway_cleanup", 0.0) > 0:
+                from .hair import cleanup_flyaway_strands
+                is_fl = result.dtype == np.float32
+                u8_canvas = np.clip(result * 255.0, 0, 255).astype(np.uint8) if is_fl else result
+                u8_out = cleanup_flyaway_strands(
+                    u8_canvas,
+                    hair_mask=acc_skin_hair if 'acc_skin_hair' in locals() else None,
+                    face_mask=acc_skin,
+                    strength=float(ctx.flyaway_cleanup) / 100.0,
+                )
+                result = u8_out.astype(np.float32) / 255.0 if is_fl else u8_out
+
+            # ------------------------------------------------------------------
             # Stage 4 — Global tonal adjustments (now in float)
             # ------------------------------------------------------------------
+
             t3 = time.perf_counter()
             result = self._stage_global(result, ctx)
             timings["global"] = (time.perf_counter() - t3) * 1000
@@ -2322,12 +2364,14 @@ class RetouchEngine:
                 result,
                 skin_mask=person_mask,
                 reference_img_bgr=reference_img_bgr,
+                img_before=reference_img_bgr,
                 person_mask=person_mask,
                 face_skin_mask=face_skin_mask,
                 body_skin_mask=body_skin_mask,
                 mark_policy=mark_policy,
                 warp_field=warp_field,
             )
+
         except Exception as e:
             logger.warning("QA detectors raised, skipping QA: %s", e)
             return []
@@ -4187,7 +4231,51 @@ class RetouchEngine:
                 result = result_u8.astype(np.float32) / 255.0
             else:
                 result = self._grader.add_impact_finish(result, ctx.impact, subject_mask=person_mask)
+
+        # AB4: Purple Fringing Removal
+        if getattr(ctx, "purple_fringing", 0.0) > 0:
+            from .utils import remove_purple_fringing
+            if is_float:
+                res_u8 = remove_purple_fringing(np.clip(result * 255.0, 0, 255).astype(np.uint8), strength=float(ctx.purple_fringing) / 100.0)
+                result = res_u8.astype(np.float32) / 255.0
+            else:
+                result = remove_purple_fringing(result, strength=float(ctx.purple_fringing) / 100.0)
+
+        # AA8: Micro Grain Synthesis
+        if getattr(ctx, "micro_grain", 0.0) > 0:
+            from .texture import synthesize_micro_grain
+            if is_float:
+                res_u8 = synthesize_micro_grain(np.clip(result * 255.0, 0, 255).astype(np.uint8), skin_mask=person_mask, intensity=float(ctx.micro_grain) / 100.0)
+                result = res_u8.astype(np.float32) / 255.0
+            else:
+                result = synthesize_micro_grain(result, skin_mask=person_mask, intensity=float(ctx.micro_grain) / 100.0)
+
+        # BB4: OKLCh Split Toning
+        if getattr(ctx, "split_toning", 0.0) > 0:
+            from .grading import apply_split_toning
+            if is_float:
+                res_u8 = apply_split_toning(np.clip(result * 255.0, 0, 255).astype(np.uint8), strength=float(ctx.split_toning) / 100.0)
+                result = res_u8.astype(np.float32) / 255.0
+            else:
+                result = apply_split_toning(result, strength=float(ctx.split_toning) / 100.0)
+
+        # K3: Gamut-Aware Soft-Knee Chroma Compression
+        from .color_science import bgr_to_oklab, oklab_to_oklch, compress_chroma_gamut, oklch_to_oklab, oklab_to_bgr
+        if is_float:
+            res_u8 = np.clip(result * 255.0, 0, 255).astype(np.uint8)
+            lab = bgr_to_oklab(res_u8)
+            oklch = oklab_to_oklch(lab)
+            oklch_comp = compress_chroma_gamut(oklch)
+            res_u8 = oklab_to_bgr(oklch_to_oklab(oklch_comp))
+            result = res_u8.astype(np.float32) / 255.0
+        else:
+            lab = bgr_to_oklab(result)
+            oklch = oklab_to_oklch(lab)
+            oklch_comp = compress_chroma_gamut(oklch)
+            result = oklab_to_bgr(oklch_to_oklab(oklch_comp))
+
         return result
+
 
     def _stage_body_reshape(
         self,

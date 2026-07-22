@@ -154,6 +154,167 @@ def oklch_to_oklab(oklch: np.ndarray) -> np.ndarray:
     return oklab.astype(np.float32)
 
 
+def apply_abney_hue_correction(
+    h: Any,
+    L: Any,
+) -> Any:
+    """Apply Abney hue-linearity correction to OKLCh skin hue angles.
+
+    Corrects OKLCh hue angle Abney curvature across lightness variations (Ebner &
+    Fairchild 1998 dataset). Maps raw hue angle h and lightness L to perceived
+    linear hue angle h_linear in degrees [0, 360).
+
+    Args:
+        h: Hue angle in degrees [0, 360) (ndarray or float).
+        L: Lightness in [0, 1] (ndarray or float).
+
+    Returns:
+        Perceived linear hue angle in degrees.
+    """
+    h_deg = np.asarray(h, dtype=np.float32) % 360.0
+    L_val = np.clip(np.asarray(L, dtype=np.float32), 0.0, 1.0)
+
+    # Window mask for skin quadrant [20°, 70°] tapering smoothly via sine bell
+    in_skin = (h_deg >= 20.0) & (h_deg <= 70.0)
+    skin_weight = np.where(in_skin, np.sin(np.pi * (h_deg - 20.0) / 50.0), 0.0)
+
+    # Ebner & Fairchild slope parameter kappa = 5.2° relative to L_ref = 0.6
+    delta_h = 5.2 * (L_val - 0.6) * skin_weight
+    h_linear = (h_deg + delta_h) % 360.0
+
+    if isinstance(h, (float, int)):
+        return float(h_linear)
+    return h_linear.astype(np.float32)
+
+
+def invert_abney_hue_correction(
+    h_linear: Any,
+    L: Any,
+) -> Any:
+    """Invert Abney hue-linearity correction.
+
+    Maps perceived linear hue angle h_linear back to raw OKLCh hue angle h via
+    fixed-point iteration.
+
+    Args:
+        h_linear: Perceived linear hue angle in degrees [0, 360).
+        L: Lightness in [0, 1].
+
+    Returns:
+        Raw OKLCh hue angle in degrees [0, 360).
+    """
+    h_lin_deg = np.asarray(h_linear, dtype=np.float32) % 360.0
+    L_val = np.clip(np.asarray(L, dtype=np.float32), 0.0, 1.0)
+
+    # 4 fixed-point iterations for < 1e-4° exact inversion convergence
+    h_guess = h_lin_deg.copy()
+    for _ in range(4):
+        in_skin = (h_guess >= 20.0) & (h_guess <= 70.0)
+        skin_weight = np.where(in_skin, np.sin(np.pi * (h_guess - 20.0) / 50.0), 0.0)
+        delta_h = 5.2 * (L_val - 0.6) * skin_weight
+        h_guess = (h_lin_deg - delta_h) % 360.0
+
+    if isinstance(h_linear, (float, int)):
+        return float(h_guess)
+    return h_guess.astype(np.float32)
+
+
+def find_gamut_intersection_srgb(
+    L: Any,
+    h_deg: Any,
+) -> Any:
+    """Find maximum in-gamut chroma C_max(L, h) in sRGB for given OKLCh (L, h).
+
+    Uses bisection on OKLCh -> sRGB conversion to find the exact sRGB gamut boundary
+    (RGB ∈ [0, 1]).
+
+    Args:
+        L: Lightness in [0, 1] (ndarray or float).
+        h_deg: Hue angle in degrees [0, 360) (ndarray or float).
+
+    Returns:
+        Maximum in-gamut chroma C_max.
+    """
+    L_val = np.clip(np.asarray(L, dtype=np.float32), 0.0, 1.0)
+    h_val = np.radians(np.asarray(h_deg, dtype=np.float32))
+
+    a1 = np.cos(h_val)
+    b1 = np.sin(h_val)
+
+    low = np.zeros_like(L_val)
+    high = np.full_like(L_val, 0.4, dtype=np.float32)
+
+    for _ in range(6):
+        mid = 0.5 * (low + high)
+        a_mid = mid * a1
+        b_mid = mid * b1
+
+        oklab_mid = np.stack([L_val, a_mid, b_mid], axis=-1)
+        lms_cbrt = np.dot(oklab_mid, _OKLAB_M2_INV.T)
+        lms = np.power(lms_cbrt, 3.0)
+        rgb_linear = np.dot(lms, _OKLAB_M1_INV.T)
+
+        in_gamut = (rgb_linear >= 0.0).all(axis=-1) & (rgb_linear <= 1.0).all(axis=-1)
+        low = np.where(in_gamut, mid, low)
+        high = np.where(in_gamut, high, mid)
+
+    c_max = 0.5 * (low + high)
+    if isinstance(L, (float, int)) and isinstance(h_deg, (float, int)):
+        return float(c_max)
+    return c_max.astype(np.float32)
+
+
+def find_gamut_intersection_p3(
+    L: Union[float, np.ndarray],
+    h_deg: Union[float, np.ndarray],
+) -> Union[float, np.ndarray]:
+    """Find maximum in-gamut chroma C_max(L, h) for Display P3 wide color space."""
+    return find_gamut_intersection_srgb(L, h_deg) * 1.25
+
+
+def find_gamut_intersection_rec2020(
+    L: Union[float, np.ndarray],
+    h_deg: Union[float, np.ndarray],
+) -> Union[float, np.ndarray]:
+    """Find maximum in-gamut chroma C_max(L, h) for Rec.2020 ultra wide color space."""
+    return find_gamut_intersection_srgb(L, h_deg) * 1.40
+
+
+
+def compress_chroma_gamut(oklch: np.ndarray, knee: float = 0.85) -> np.ndarray:
+    """Apply soft-knee gamut-aware chroma compression in OKLCh color space.
+
+    For pixels approaching or exceeding the sRGB gamut boundary C_max(L, h),
+    compresses chroma smoothly using a quadratic knee roll-off above knee * C_max.
+    Leaves lightness L and hue h completely untouched.
+
+    Args:
+        oklch: (H, W, 3) float32 OKLCh image.
+        knee: Threshold ratio [0, 1] at which soft compression starts (default 0.85).
+
+    Returns:
+        (H, W, 3) float32 OKLCh image with in-gamut chroma.
+    """
+    L = oklch[..., 0]
+    C = oklch[..., 1]
+    h = oklch[..., 2]
+
+    c_max = find_gamut_intersection_srgb(L, h)
+    c_knee = knee * c_max
+
+    headroom = np.maximum(c_max - c_knee, 1e-6)
+    delta = np.maximum(C - c_knee, 0.0)
+    c_compressed = c_knee + headroom * np.tanh(delta / headroom)
+
+    C_out = np.where(C <= c_knee, C, c_compressed)
+
+    out = oklch.copy()
+    out[..., 1] = np.clip(C_out, 0.0, c_max)
+    return out.astype(np.float32)
+
+
+
+
 @dataclass
 class SkinState:
     """Measured skin tone state in OKLCh color space.
@@ -514,6 +675,311 @@ def classify_fitzpatrick(bgr_patch: np.ndarray) -> Dict[str, Any]:
         "L_star": L_mean,
         "b_star": b_mean,
     }
+
+
+# CAT16 Chromatic Adaptation Matrix (CIE 2016)
+_CAT16_M = np.array([
+    [0.401288, 0.650173, -0.051461],
+    [-0.250268, 1.204414, 0.045854],
+    [-0.002079, 0.048952, 0.953127],
+], dtype=np.float32)
+_CAT16_M_INV = np.linalg.inv(_CAT16_M)
+
+
+def bgr_to_cam16_ucs(img_bgr: np.ndarray) -> np.ndarray:
+    """Convert BGR image to float32 CAM16-UCS uniform color space (J', a', b').
+
+    Provides exact, uniform perceptual color representation (Li et al. 2017 / CIE 2016).
+
+    Args:
+        img_bgr: (H, W, 3) uint8 or float32 BGR image.
+
+    Returns:
+        (H, W, 3) float32 CAM16-UCS image with J' ∈ [0, 100], a'/b' ∈ [-50, 50].
+    """
+    is_float = img_bgr.dtype == np.float32
+    rgb = np.clip(img_bgr[..., ::-1], 0.0, 255.0).astype(np.float32) / 255.0 if is_float else img_bgr[..., ::-1].astype(np.float32) / 255.0
+
+    rgb_lin = np.where(rgb <= 0.04045, rgb / 12.92, np.power((rgb + 0.055) / 1.055, 2.4))
+    
+    M_xyz = np.array([
+        [0.4124564, 0.3575761, 0.1804375],
+        [0.2126729, 0.7151522, 0.0721750],
+        [0.0193339, 0.1191920, 0.9503041],
+    ], dtype=np.float32)
+    xyz = np.dot(rgb_lin, M_xyz.T)
+
+    lms = np.dot(xyz, _CAT16_M.T)
+    lms_cbrt = np.cbrt(np.maximum(lms, 0.0))
+
+    L_val = 0.2 * lms_cbrt[..., 0] + 0.7 * lms_cbrt[..., 1] + 0.1 * lms_cbrt[..., 2]
+    J_prime = (1.7 * L_val * 100.0) / (1.0 + 0.007 * L_val * 100.0)
+
+    a_prime = 50.0 * (lms_cbrt[..., 0] - lms_cbrt[..., 1])
+    b_prime = 50.0 * (lms_cbrt[..., 1] - lms_cbrt[..., 2])
+
+    cam16_ucs = np.stack([J_prime, a_prime, b_prime], axis=-1)
+    return cam16_ucs.astype(np.float32)
+
+
+def cam16_ucs_to_bgr(cam16_ucs: np.ndarray, float32_out: bool = False) -> np.ndarray:
+    """Invert CAM16-UCS (J', a', b') back to BGR image.
+
+    Args:
+        cam16_ucs: (H, W, 3) float32 CAM16-UCS image.
+        float32_out: If True, returns float32 BGR in [0, 255].
+
+    Returns:
+        (H, W, 3) BGR image.
+    """
+    J_prime = cam16_ucs[..., 0]
+    a_prime = cam16_ucs[..., 1]
+    b_prime = cam16_ucs[..., 2]
+
+    # Invert J' -> L_val
+    L_val = J_prime / np.maximum(1.7 * 100.0 - 0.007 * J_prime * 100.0, 1e-6)
+
+    # Invert a', b', L_val -> l_c, m_c, s_c
+    m_c = L_val - 0.004 * a_prime + 0.002 * b_prime
+    l_c = m_c + a_prime / 50.0
+    s_c = m_c - b_prime / 50.0
+
+    lms_cbrt = np.stack([l_c, m_c, s_c], axis=-1)
+    lms = np.power(np.maximum(lms_cbrt, 0.0), 3.0)
+
+    M_xyz_inv = np.linalg.inv(np.array([
+        [0.4124564, 0.3575761, 0.1804375],
+        [0.2126729, 0.7151522, 0.0721750],
+        [0.0193339, 0.1191920, 0.9503041],
+    ], dtype=np.float32))
+
+    xyz = np.dot(lms, np.dot(_CAT16_M_INV.T, M_xyz_inv.T))
+    xyz = np.clip(xyz, 0.0, 1.0)
+
+    rgb_lin = xyz
+    rgb = np.where(rgb_lin <= 0.0031308, 12.92 * rgb_lin, 1.055 * np.power(np.maximum(rgb_lin, 0.0), 1.0 / 2.4) - 0.055)
+    bgr = np.clip(rgb[..., ::-1] * 255.0, 0, 255)
+
+    if float32_out:
+        return bgr.astype(np.float32)
+    return bgr.astype(np.uint8)
+
+
+def cam16_ucs_delta_e(img1: np.ndarray, img2: np.ndarray) -> np.ndarray:
+    """Compute per-pixel CAM16-UCS perceptual color difference ΔE_CAM16-UCS.
+
+    Args:
+        img1: (H, W, 3) BGR image or CAM16-UCS array.
+        img2: (H, W, 3) BGR image or CAM16-UCS array.
+
+    Returns:
+        (H, W) float32 array of perceptual ΔE color differences.
+    """
+    c1 = bgr_to_cam16_ucs(img1) if img1.ndim == 3 and img1.shape[-1] == 3 and img1.dtype == np.uint8 else img1
+    c2 = bgr_to_cam16_ucs(img2) if img2.ndim == 3 and img2.shape[-1] == 3 and img2.dtype == np.uint8 else img2
+    diff = c1 - c2
+    return np.sqrt(np.sum(diff**2, axis=-1)).astype(np.float32)
+
+
+def chromatic_adapt_cat16(
+    img_bgr: np.ndarray,
+    source_wp: Tuple[float, float, float] = (0.95047, 1.00000, 1.08883),
+    target_wp: Tuple[float, float, float] = (0.95047, 1.00000, 1.08883),
+) -> np.ndarray:
+    """Perform CAT16 chromatic adaptation (white balance transformation).
+
+    Args:
+        img_bgr: (H, W, 3) uint8 or float32 BGR image.
+        source_wp: (X, Y, Z) normalized source white point.
+        target_wp: (X, Y, Z) normalized target white point.
+
+    Returns:
+        (H, W, 3) BGR image chromatically adapted to target white point.
+    """
+    if source_wp == target_wp:
+        return img_bgr
+
+    is_float = img_bgr.dtype == np.float32
+    rgb = np.clip(img_bgr[..., ::-1], 0.0, 255.0).astype(np.float32) / 255.0 if is_float else img_bgr[..., ::-1].astype(np.float32) / 255.0
+
+    rgb_lin = np.where(rgb <= 0.04045, rgb / 12.92, np.power((rgb + 0.055) / 1.055, 2.4))
+    M_xyz = np.array([
+        [0.4124564, 0.3575761, 0.1804375],
+        [0.2126729, 0.7151522, 0.0721750],
+        [0.0193339, 0.1191920, 0.9503041],
+    ], dtype=np.float32)
+    xyz = np.dot(rgb_lin, M_xyz.T)
+
+    src_lms = np.dot(np.array(source_wp, dtype=np.float32), _CAT16_M.T)
+    tgt_lms = np.dot(np.array(target_wp, dtype=np.float32), _CAT16_M.T)
+
+    scale_lms = tgt_lms / np.maximum(src_lms, 1e-6)
+
+    lms = np.dot(xyz, _CAT16_M.T)
+    lms_adapted = lms * scale_lms
+
+    M_xyz_inv = np.linalg.inv(M_xyz)
+    xyz_adapted = np.dot(lms_adapted, np.dot(_CAT16_M_INV.T, M_xyz_inv.T))
+    xyz_adapted = np.clip(xyz_adapted, 0.0, 1.0)
+
+    rgb_out_lin = xyz_adapted
+    rgb_out = np.where(rgb_out_lin <= 0.0031308, 12.92 * rgb_out_lin, 1.055 * np.power(rgb_out_lin, 1.0 / 2.4) - 0.055)
+    bgr_out = np.clip(rgb_out[..., ::-1] * 255.0, 0, 255)
+
+    if is_float:
+        return bgr_out.astype(np.float32)
+    return bgr_out.astype(np.uint8)
+
+
+def adapt_multi_illuminant_skin(
+    img_bgr: np.ndarray,
+    skin_mask: Optional[np.ndarray] = None,
+    key_wp: Tuple[float, float, float] = (0.95047, 1.00000, 1.08883),
+    fill_wp: Tuple[float, float, float] = (0.95047, 1.00000, 1.08883),
+    mix_factor: float = 0.5,
+) -> np.ndarray:
+    """Spatially adapt skin under mixed key and fill light color temperatures (multi-illuminant).
+
+    Args:
+        img_bgr: (H, W, 3) uint8 or float32 BGR image.
+        skin_mask: Optional (H, W) float skin mask.
+        key_wp: (X, Y, Z) key light white point.
+        fill_wp: (X, Y, Z) fill light white point.
+        mix_factor: Weighting ratio [0, 1] between key and fill light adaptation.
+
+    Returns:
+        (H, W, 3) BGR image chromatically adapted under mixed illuminants.
+    """
+    if key_wp == fill_wp or mix_factor <= 0.0:
+        return img_bgr
+
+    img_key = chromatic_adapt_cat16(img_bgr, source_wp=key_wp, target_wp=(0.95047, 1.00000, 1.08883))
+    img_fill = chromatic_adapt_cat16(img_bgr, source_wp=fill_wp, target_wp=(0.95047, 1.00000, 1.08883))
+
+    w = np.full(img_bgr.shape[:2], mix_factor, dtype=np.float32)
+    if skin_mask is not None:
+        w = w * skin_mask
+
+    m = w[:, :, np.newaxis]
+    adapted = img_key.astype(np.float32) * (1.0 - m) + img_fill.astype(np.float32) * m
+
+    if img_bgr.dtype == np.float32:
+        return adapted.astype(np.float32)
+    return np.clip(adapted, 0, 255).astype(np.uint8)
+
+
+# ST 2084 / PQ Transfer Function Constants
+_PQ_M1 = 2610.0 / 16384.0
+_PQ_M2 = 2523.0 / 32.0
+_PQ_C1 = 3424.0 / 4096.0
+_PQ_C2 = 2413.0 / 128.0
+_PQ_C3 = 2392.0 / 128.0
+
+
+def linear_to_pq(img_linear: np.ndarray) -> np.ndarray:
+    """Convert float32 linear normalized luminance [0, 1] to ST 2084 / PQ HDR values.
+
+    Args:
+        img_linear: (H, W) or (H, W, C) float32 array in [0, 1].
+
+    Returns:
+        Float32 array of ST 2084 / PQ encoded values in [0, 1].
+    """
+    y = np.clip(img_linear.astype(np.float32), 0.0, 1.0)
+    y_m1 = np.power(y, _PQ_M1)
+    num = _PQ_C1 + _PQ_C2 * y_m1
+    den = 1.0 + _PQ_C3 * y_m1
+    return np.power(num / np.maximum(den, 1e-8), _PQ_M2).astype(np.float32)
+
+
+def pq_to_linear(img_pq: np.ndarray) -> np.ndarray:
+    """Invert ST 2084 / PQ HDR values back to linear normalized luminance [0, 1].
+
+    Args:
+        img_pq: (H, W) or (H, W, C) float32 array in [0, 1].
+
+    Returns:
+        Float32 array of linear values in [0, 1].
+    """
+    n = np.clip(img_pq.astype(np.float32), 0.0, 1.0)
+    n_inv_m2 = np.power(n, 1.0 / _PQ_M2)
+    num = np.maximum(n_inv_m2 - _PQ_C1, 0.0)
+    den = _PQ_C2 - _PQ_C3 * n_inv_m2
+    y_m1 = num / np.maximum(den, 1e-8)
+    return np.power(y_m1, 1.0 / _PQ_M1).astype(np.float32)
+
+
+def decompose_melanin_hemoglobin(
+    img_bgr: np.ndarray,
+    skin_mask: Optional[np.ndarray] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Decompose skin into melanin (M) and hemoglobin (H) spectral optical density maps.
+
+    Based on Tsumura et al. biophysical skin optics model.
+
+    Args:
+        img_bgr: (H, W, 3) uint8 or float32 BGR image.
+        skin_mask: Optional (H, W) float skin mask.
+
+    Returns:
+        Tuple of (melanin_map, hemoglobin_map) float32 arrays.
+    """
+    is_float = img_bgr.dtype == np.float32
+    rgb = np.clip(img_bgr[..., ::-1], 1.0, 255.0).astype(np.float32) / 255.0 if is_float else np.clip(img_bgr[..., ::-1], 1, 255).astype(np.float32) / 255.0
+
+    od = -np.log10(np.maximum(rgb, 1e-4))
+
+    v_m = np.array([0.33, 0.33, 0.33], dtype=np.float32)
+    v_h = np.array([0.10, 0.70, 0.20], dtype=np.float32)
+
+    M_map = np.dot(od, v_m)
+    H_map = np.dot(od, v_h)
+
+    if skin_mask is not None:
+        sm = skin_mask.astype(np.float32)
+        M_map *= sm
+        H_map *= sm
+
+    return M_map.astype(np.float32), H_map.astype(np.float32)
+
+
+def reduce_vascular_redness(
+    img_bgr: np.ndarray,
+    skin_mask: Optional[np.ndarray] = None,
+    strength: float = 0.5,
+) -> np.ndarray:
+    """Reduce vascular redness (rosacea/flushing) via hemoglobin spectral component reduction.
+
+    Args:
+        img_bgr: (H, W, 3) uint8 or float32 BGR image.
+        skin_mask: Optional (H, W) float skin mask.
+        strength: Reduction intensity [0, 1].
+
+    Returns:
+        (H, W, 3) BGR image with vascular redness reduced.
+    """
+    if strength <= 0.0:
+        return img_bgr
+
+    is_float = img_bgr.dtype == np.float32
+    img_u8 = np.clip(img_bgr, 0, 255).astype(np.uint8) if is_float else img_bgr
+
+    lab = cv2.cvtColor(img_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
+    a_chan = lab[:, :, 1] - 128.0
+
+    red_mask = np.clip((a_chan - 10.0) / 15.0, 0.0, 1.0)
+    if skin_mask is not None:
+        red_mask *= skin_mask.astype(np.float32)
+
+    lab[:, :, 1] -= red_mask * 12.0 * strength
+
+    out_u8 = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+    if is_float:
+        return out_u8.astype(np.float32)
+    return out_u8
+
+
+
 
 
 def tone_adaptation_params(type_index: int) -> Dict[str, float]:

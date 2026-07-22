@@ -100,10 +100,11 @@ class EyeEnhancer:
         if regions.right_iris is not None and regions.right_iris.max() > 0.01:
             result = self._sculpt_iris(result, regions.right_iris, s)
 
-        # Catchlights — detect and amplify existing highlights
+        # Catchlights — detect and amplify existing highlights or synthesize fallback
         iris_mask = np.clip(regions.left_iris + regions.right_iris, 0, 1)
         cl_s = catchlight_strength if catchlight_strength is not None else strength
-        result = self._enhance_catchlights(result, iris_mask, cl_s / 100.0)
+        result = self._enhance_catchlights(result, iris_mask, cl_s / 100.0, synthetic_fallback=True)
+
 
         # Specular catchlight boost — small +10% on detected iris specular pixels
         if catchlight_strength and catchlight_strength > 0:
@@ -249,8 +250,11 @@ class EyeEnhancer:
     ) -> np.ndarray:
         """Perform 3D iris sculpting: darken pupil & limbal ring, brighten iris body,
         and boost micro-contrast and saturation.
+
+        Limbal ring darkening is target-seeking (bounded by physiological max contrast
+        cap) and gated on dark irises (Peshek et al. 2011 detectability caveat).
         """
-        if iris_mask is None or iris_mask.max() < 0.01:
+        if iris_mask is None or iris_mask.max() < 0.01 or strength <= 0:
             return img_bgr
 
         is_float = img_bgr.dtype == np.float32
@@ -284,7 +288,7 @@ class EyeEnhancer:
         # 3D Sculpting masks
         # 1. Pupil mask (center dark area)
         pupil_mask = np.clip(1.0 - dist / 0.35, 0, 1) * crop_mask
-        
+
         # 2. Iris body mask (glowing middle ring)
         # Peak at d=0.55
         body_mask = np.clip(1.0 - np.abs(dist - 0.55) / 0.25, 0, 1) * crop_mask
@@ -296,14 +300,35 @@ class EyeEnhancer:
         # Apply edits in LAB and HSV spaces on the crop
         lab = _to_lab(crop, is_float)
 
+        # Measure baseline iris body & limbal ring lightness for target-seeking cap & gate
+        body_pixels = lab[:, :, 0][body_mask > 0.3]
+        limbal_pixels = lab[:, :, 0][limbal_mask > 0.3]
+
+        if len(body_pixels) > 0 and len(limbal_pixels) > 0:
+            body_l = float(np.mean(body_pixels))
+            limbal_l = float(np.mean(limbal_pixels))
+
+            # Peshek detectability gate: limbal rings are physically undetectable
+            # on dark irises (body_l < 30.0 in [0, 255] LAB L* scale).
+            if body_l < 30.0:
+                limbal_darken = 0.0
+            else:
+                # Target-seeking restoration toward max natural contrast cap (25.0 L* diff)
+                current_contrast = body_l - limbal_l
+                max_contrast_cap = 25.0
+                headroom = max(0.0, max_contrast_cap - current_contrast)
+                limbal_darken = min(30.0 * strength, headroom)
+        else:
+            limbal_darken = 0.0
+
         # Pupil: darken
         lab[:, :, 0] = np.clip(lab[:, :, 0] - pupil_mask * 45.0 * strength, 0, 255)
 
         # Iris body: brighten
         lab[:, :, 0] = np.clip(lab[:, :, 0] + body_mask * 25.0 * strength, 0, 255)
 
-        # Limbal ring: darken
-        lab[:, :, 0] = np.clip(lab[:, :, 0] - limbal_mask * 30.0 * strength, 0, 255)
+        # Limbal ring: target-seeking darken
+        lab[:, :, 0] = np.clip(lab[:, :, 0] - limbal_mask * limbal_darken, 0, 255)
 
         crop_edited = _from_lab(lab, is_float)
 
@@ -334,13 +359,14 @@ class EyeEnhancer:
         self,
         img_bgr: np.ndarray,
         iris_mask: Optional[np.ndarray],
-        strength: float,
+        strength: float = 1.0,
+        synthetic_fallback: bool = False,
     ) -> np.ndarray:
-        """Detect and amplify existing catchlights. Never create fakes.
+        """Amplify catchlight contrast and brightness within the iris region.
 
         Catchlights are small, bright specular highlights in the iris.
-        We find them via thresholding in the iris region and amplify only
-        existing ones.
+        We find them via thresholding in the iris region and amplify existing ones,
+        or synthesize a natural catchlight when synthetic_fallback=True.
         """
         if iris_mask is None or iris_mask.max() < 0.01:
             return img_bgr
@@ -368,10 +394,26 @@ class EyeEnhancer:
         catchlight_mask = ((iris_gray > threshold) & (iris_mask > 0.3)).astype(np.float32)
 
         if catchlight_mask.sum() < 2:
-            return img_bgr
+            if not synthetic_fallback:
+                return img_bgr
+            # Synthesize natural upper-quadrant catchlight when natural catchlight is absent
+            ys, xs = np.where(iris_mask > 0.5)
+            if len(ys) < 5:
+                return img_bgr
+            cy, cx = float(np.mean(ys)), float(np.mean(xs))
+            r = float(np.sqrt(len(ys) / np.pi))
 
-        # Feather the catchlight mask
-        catchlight_mask = feather_mask(catchlight_mask, radius=2)
+            cl_y = int(cy - r * 0.4)
+            cl_x = int(cx + r * 0.4)
+            cl_r = max(2, int(r * 0.18))
+
+            H, W = img_bgr.shape[:2]
+            if 0 <= cl_y < H and 0 <= cl_x < W:
+                syn_mask = np.zeros((H, W), dtype=np.float32)
+                cv2.circle(syn_mask, (cl_x, cl_y), cl_r, 1.0, -1)
+                catchlight_mask = feather_mask(syn_mask, radius=2) * iris_mask
+            else:
+                return img_bgr
 
         # Amplify: brighten catchlight areas using a safe soft-clipping formula
         # to subtly enhance the catchlights without blowing them out (max 0.25 boost coefficient)
@@ -382,3 +424,53 @@ class EyeEnhancer:
         lab[:, :, 0] = np.clip(l_chan + l_boost, 0, 255)
         
         return _from_lab(lab, is_float)
+
+
+def apply_corneal_curvature_shading(
+    img_bgr: np.ndarray,
+    eye_mask: Optional[np.ndarray],
+    strength: float = 0.5,
+) -> np.ndarray:
+    """Model 3D spherical corneal surface normals to enhance eye depth and corneal wetness.
+
+    Args:
+        img_bgr: (H, W, 3) uint8 or float32 BGR image.
+        eye_mask: (H, W) float eye/iris mask.
+        strength: Shading intensity [0, 1].
+
+    Returns:
+        (H, W, 3) BGR image with 3D corneal curvature shading.
+    """
+    if strength <= 0.0 or eye_mask is None or eye_mask.max() < 0.01:
+        return img_bgr
+
+    is_float = img_bgr.dtype == np.float32
+    img_u8 = np.clip(img_bgr, 0, 255).astype(np.uint8) if is_float else img_bgr
+
+    ys, xs = np.where(eye_mask > 0.3)
+    if len(ys) < 10:
+        return img_bgr
+
+    cy, cx = float(np.mean(ys)), float(np.mean(xs))
+    r = max(float(np.sqrt(len(ys) / np.pi)), 4.0)
+
+    H, W = img_bgr.shape[:2]
+    yy, xx = np.mgrid[0:H, 0:W]
+
+    dx = (xx - cx) / r
+    dy = (yy - cy) / r
+    dr2 = dx**2 + dy**2
+    dz = np.sqrt(np.maximum(1.0 - dr2, 0.0))
+
+    # Specular reflection component for key light direction (-0.3, -0.4, 0.86)
+    specular = np.maximum(0.0, -0.3 * dx - 0.4 * dy + 0.86 * dz) ** 16.0
+    spec_mask = specular.astype(np.float32) * eye_mask * strength * 25.0
+
+    lab = cv2.cvtColor(img_u8, cv2.COLOR_BGR2LAB).astype(np.float32)
+    lab[:, :, 0] = np.clip(lab[:, :, 0] + spec_mask, 0, 255)
+
+    out = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2BGR)
+    if is_float:
+        return out.astype(np.float32)
+    return out
+
