@@ -6,6 +6,8 @@ import os
 import json
 import logging
 import hashlib
+import queue
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Callable, Union
 
@@ -19,8 +21,93 @@ from .utils import normalize_mask
 
 logger = logging.getLogger(__name__)
 
+# Default RAM budget for in-flight batch images (~2 GB working set).
+_DEFAULT_RAM_BUDGET_BYTES = 2 * 1024 * 1024 * 1024
+
 
 _SessionInput = Optional[Union["Session", str, Path]]
+
+
+def _estimate_image_working_bytes(path: Path) -> int:
+    """Estimate peak RAM for one image (input + output + pipeline buffers)."""
+    try:
+        with Image.open(path) as im:
+            w, h = im.size
+        return h * w * 3 * 4
+    except Exception:
+        return 24 * 1024 * 1024  # conservative 4K RGB fallback
+
+
+def _compute_queue_depth(
+    num_workers: int,
+    image_paths: List[Path],
+    ram_budget_bytes: int = _DEFAULT_RAM_BUDGET_BYTES,
+) -> int:
+    """Bound in-flight work queue depth from sampled image sizes."""
+    if not image_paths:
+        return max(2, num_workers)
+    sample = image_paths[: min(8, len(image_paths))]
+    avg_bytes = sum(_estimate_image_working_bytes(p) for p in sample) // len(sample)
+    depth = max(1, min(num_workers * 2, ram_budget_bytes // max(avg_bytes, 1)))
+    return depth
+
+
+def _run_async_batch_queue(
+    image_paths: List[Path],
+    worker_fn: Callable[[Path], Optional[Path]],
+    num_workers: int,
+    total_files: int,
+    progress_callback: Optional[Callable[[float, str], None]] = None,
+    ram_budget_bytes: int = _DEFAULT_RAM_BUDGET_BYTES,
+) -> List[Path]:
+    """Producer-consumer batch queue with bounded backpressure for RAM control."""
+    if total_files <= 0:
+        return []
+
+    max_queue_depth = _compute_queue_depth(num_workers, image_paths, ram_budget_bytes)
+    work_q: queue.Queue = queue.Queue(maxsize=max_queue_depth)
+    results: List[Path] = []
+    results_lock = threading.Lock()
+    completed = [0]
+    _POISON = object()
+
+    def producer() -> None:
+        for fp in image_paths:
+            work_q.put(fp)
+        for _ in range(num_workers):
+            work_q.put(_POISON)
+
+    def consumer() -> None:
+        while True:
+            item = work_q.get()
+            try:
+                if item is _POISON:
+                    break
+                res_path = worker_fn(item)
+                if res_path is not None:
+                    with results_lock:
+                        results.append(res_path)
+            finally:
+                with results_lock:
+                    completed[0] += 1
+                    done = completed[0]
+                if progress_callback:
+                    prog = 0.2 + (0.6 * done / total_files)
+                    progress_callback(prog, f"Processed {done}/{total_files} files...")
+                work_q.task_done()
+
+    prod_thread = threading.Thread(target=producer, daemon=True)
+    workers = [
+        threading.Thread(target=consumer, daemon=True)
+        for _ in range(num_workers)
+    ]
+    prod_thread.start()
+    for t in workers:
+        t.start()
+    prod_thread.join()
+    for t in workers:
+        t.join()
+    return results
 
 
 def _resolve_session(session: _SessionInput) -> Optional["Session"]:
@@ -456,32 +543,26 @@ class BatchProcessor:
             progress_callback(0.2, "Processing photos...")
 
         if num_workers > 1 and total_files > 1:
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            with ThreadPoolExecutor(max_workers=num_workers) as executor:
-                future_to_file = {
-                    executor.submit(
-                        self._process_single_file,
-                        file_path,
-                        custom_style_profile,
-                        session_params,
-                        style_name_or_recipe,
-                        export_res,
-                        export_fmt,
-                        export_quality,
-                        output_path,
-                        applier,
-                    ): file_path
-                    for file_path in all_files
-                }
-                completed = 0
-                for future in as_completed(future_to_file):
-                    completed += 1
-                    res_path = future.result()
-                    if res_path is not None:
-                        processed_paths.append(res_path)
-                    if progress_callback:
-                        prog = 0.2 + (0.6 * completed / total_files)
-                        progress_callback(prog, f"Processed {completed}/{total_files} files...")
+            def _worker(fp: Path) -> Optional[Path]:
+                return self._process_single_file(
+                    fp,
+                    custom_style_profile,
+                    session_params,
+                    style_name_or_recipe,
+                    export_res,
+                    export_fmt,
+                    export_quality,
+                    output_path,
+                    applier,
+                )
+
+            processed_paths = _run_async_batch_queue(
+                all_files,
+                _worker,
+                num_workers,
+                total_files,
+                progress_callback,
+            )
         else:
             for idx, file_path in enumerate(all_files):
                 res_path = self._process_single_file(
