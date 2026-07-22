@@ -909,7 +909,7 @@ class RetouchEngine:
         # A5: QA auto-back-off. Conservative param reduction driven by QA
         # flags (plastic-skin). Lazily reusable; stateless per image.
         self._qa_backoff = QABackoff()
-        
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -1163,6 +1163,7 @@ class RetouchEngine:
         # ------------------------------------------------------------------
         # PERF-1: downscale *before* detection when fast=True
         # ------------------------------------------------------------------
+
         from .precision import to_uint8
 
         # ------------------------------------------------------------------

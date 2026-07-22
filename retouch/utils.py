@@ -194,7 +194,9 @@ def feather_mask(
         radius = int(sigma * 3)
 
     ksize = max(radius * 2 + 1, 3)
-    return cv2.GaussianBlur(mask_f, (ksize, ksize), sigma)
+    from .acceleration import accelerated_gaussian_blur
+    return accelerated_gaussian_blur(mask_f, ksize, sigma)
+
 
 
 def apply_u8_op_float(img_f32: np.ndarray, op, *args, **kwargs) -> np.ndarray:
