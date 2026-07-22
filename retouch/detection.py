@@ -288,11 +288,38 @@ class FaceDetector:
         return np.ones(img_bgr.shape[:2], dtype=np.float32)
 
     def close(self) -> None:
-        """Release resources."""
-        if hasattr(self, '_landmarker') and self._landmarker:
-            self._landmarker.close()
-        if hasattr(self, '_segmenter') and self._segmenter:
-            self._segmenter.close()
+        """Release resources.
+
+        Idempotent: each task is dropped after closing, so a second call is a
+        no-op. Must be called on the main thread while the dispatcher is still
+        alive — if the tasks are instead left to the garbage collector,
+        MediaPipe's own ``FaceLandmarker.__del__`` blocks forever on a pending
+        serial-dispatcher future and hangs the process.
+        """
+        for attr in ("_landmarker", "_segmenter"):
+            task = getattr(self, attr, None)
+            if task is not None:
+                self._close_task(task)
+                setattr(self, attr, None)
+
+    @staticmethod
+    def _close_task(task: Any) -> None:
+        """Close one MediaPipe task, never propagating teardown errors.
+
+        A task that is already closed (or whose native handle is gone at
+        interpreter shutdown) raises rather than returning cleanly; that must
+        not mask the caller's real error or abort the remaining closes.
+        """
+        try:
+            task.close()
+        except Exception:
+            pass
+
+    # NOTE: deliberately no __del__. MediaPipe's own FaceLandmarker.__del__
+    # blocks on a serial-dispatcher future, so adding a finalizer here cannot
+    # prevent the hang (it is a blocking call, not an exception) and would
+    # itself risk blocking on any cyclic GC. Callers must use close() or the
+    # context manager on the main thread while the dispatcher is alive.
 
     def __enter__(self) -> FaceDetector:
         return self

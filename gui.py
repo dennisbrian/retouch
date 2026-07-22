@@ -192,7 +192,22 @@ def on_process_folder(input_dir, output_dir, style_type, custom_style_name, reci
 
     gr.Info("Batch processing started...")
     processor = BatchProcessor()
-    
+
+    try:
+        return _run_batch(processor, input_dir, output_dir, style_type,
+                          custom_style_name, recipe_name, export_fmt,
+                          export_quality, export_res, auto_group,
+                          generate_sheet, export_zip, prg)
+    finally:
+        # Release MediaPipe before the GC can finalize it — FaceLandmarker's
+        # __del__ blocks forever on a serial-dispatcher future, which shows up
+        # as the GUI hanging after the batch reports complete.
+        processor.close()
+
+
+def _run_batch(processor, input_dir, output_dir, style_type, custom_style_name,
+               recipe_name, export_fmt, export_quality, export_res, auto_group,
+               generate_sheet, export_zip, prg):
     profile = None
     style_val = recipe_name
     

@@ -407,6 +407,28 @@ class BatchProcessor:
     def __init__(self, engine: Optional[Any] = None) -> None:
         from .engine import RetouchEngine
         self.engine = engine or RetouchEngine()
+        # Only an engine we created is ours to close; a caller-supplied one
+        # may outlive this processor.
+        self._owns_engine = engine is None
+
+    def close(self) -> None:
+        """Release the engine if this processor created it.
+
+        Idempotent. Leaving the engine unclosed lets MediaPipe's
+        FaceLandmarker be finalized by the garbage collector, where its
+        __del__ blocks forever on a serial-dispatcher future — the batch
+        appears to hang after processing completes.
+        """
+        if self._owns_engine and self.engine is not None:
+            self.engine.close()
+            self.engine = None
+            self._owns_engine = False
+
+    def __enter__(self) -> "BatchProcessor":
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        self.close()
 
     def process_folder(
         self,
