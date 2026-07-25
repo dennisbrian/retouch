@@ -27,6 +27,12 @@ _MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models")
 _FACE_LANDMARKER_MODEL = os.path.join(_MODELS_DIR, "face_landmarker.task")
 _SELFIE_SEGMENTER_MODEL = os.path.join(_MODELS_DIR, "selfie_segmenter.tflite")
 
+# Crop padding (as a fraction of the RetinaFace box) tried in order when
+# landmarking a detected face. 0.3 succeeds for typical forward-facing
+# portraits and is kept first so the common case costs one landmarker call;
+# wider pads are retried only when it returns no landmarks.
+_CROP_PAD_FRACTIONS = (0.3, 0.6, 1.0)
+
 
 @dataclasses.dataclass
 class _Landmark:
@@ -175,8 +181,15 @@ class FaceDetector:
             resp = None
         except Exception as exc:
             import logging
-            logging.getLogger(__name__).warning(
-                "RetinaFace raised %s: %s", type(exc).__name__, exc
+            # Surfaced at ERROR (not WARNING): a RetinaFace failure silently
+            # degrades detection to the MediaPipe-only fallback, which misses
+            # downcast/occluded faces. Known trigger: importing tensorflow or
+            # keras before `retinaface` resolves the package onto its Keras 3
+            # path and raises ValueError, so this must not pass unnoticed.
+            logging.getLogger(__name__).error(
+                "RetinaFace raised %s: %s — falling back to MediaPipe-only "
+                "detection (reduced recall on occluded faces)",
+                type(exc).__name__, exc
             )
             resp = None
 
@@ -192,41 +205,52 @@ class FaceDetector:
                 bw = x2 - x1
                 bh = y2 - y1
 
-                # Pad the crop by 30% to avoid clipping hair/neck.
-                # If the padded box exceeds image bounds, reduce padding
-                # symmetrically rather than shifting (shifting creates a
-                # larger crop, up to the full image, which kills perf).
-                pad_x = int(bw * 0.3)
-                pad_y = int(bh * 0.3)
-                if bw + 2 * pad_x > w:
-                    pad_x = max(0, (w - bw) // 2)
-                if bh + 2 * pad_y > h:
-                    pad_y = max(0, (h - bh) // 2)
-                cx1 = max(0, x1 - pad_x)
-                cy1 = max(0, y1 - pad_y)
-                cx2 = min(w, x2 + pad_x)
-                cy2 = min(h, y2 + pad_y)
-                cw = cx2 - cx1
-                ch = cy2 - cy1
+                # Pad the crop to avoid clipping hair/neck, then landmark it.
+                # RetinaFace boxes are tight; MediaPipe's landmarker needs
+                # surrounding context and fails on a 0.3 pad for downcast or
+                # occluded faces (measured: a 770x1095 downcast face yields 0
+                # landmarks at 0.3 but succeeds at 0.6). Escalate the pad and
+                # retry rather than dropping the face. Retry widens the *pad*,
+                # never downscales — MediaPipe also fails once the crop falls
+                # below ~256px, so shrinking would trade one failure for another.
+                for pad_frac in _CROP_PAD_FRACTIONS:
+                    # If the padded box exceeds image bounds, reduce padding
+                    # symmetrically rather than shifting (shifting creates a
+                    # larger crop, up to the full image, which kills perf).
+                    pad_x = int(bw * pad_frac)
+                    pad_y = int(bh * pad_frac)
+                    if bw + 2 * pad_x > w:
+                        pad_x = max(0, (w - bw) // 2)
+                    if bh + 2 * pad_y > h:
+                        pad_y = max(0, (h - bh) // 2)
+                    cx1 = max(0, x1 - pad_x)
+                    cy1 = max(0, y1 - pad_y)
+                    cx2 = min(w, x2 + pad_x)
+                    cy2 = min(h, y2 + pad_y)
+                    cw = cx2 - cx1
+                    ch = cy2 - cy1
 
-                if cw < 4 or ch < 4:
-                    continue
+                    if cw < 4 or ch < 4:
+                        continue
 
-                crop_rgb = img_rgb[cy1:cy2, cx1:cx2]
-                mp_crop = mp.Image(image_format=mp.ImageFormat.SRGB, data=crop_rgb.copy())
-                crop_result = self._landmarker.detect(mp_crop)
+                    crop_rgb = img_rgb[cy1:cy2, cx1:cx2]
+                    mp_crop = mp.Image(
+                        image_format=mp.ImageFormat.SRGB, data=crop_rgb.copy()
+                    )
+                    crop_result = self._landmarker.detect(mp_crop)
 
-                if crop_result.face_landmarks:
-                    lm_list = crop_result.face_landmarks[0]
-                    remapped = self._remap_landmarks(lm_list, cx1, cy1, cw, ch, w, h)
-                    compat = _LandmarkCompat(remapped)
-                    ied = inter_eye_distance(compat, w, h)
-                    faces.append(FaceData(
-                        landmarks=compat,
-                        bbox=(x1, y1, bw, bh),
-                        ied=ied,
-                        confidence=float(score)
-                    ))
+                    if crop_result.face_landmarks:
+                        lm_list = crop_result.face_landmarks[0]
+                        remapped = self._remap_landmarks(lm_list, cx1, cy1, cw, ch, w, h)
+                        compat = _LandmarkCompat(remapped)
+                        ied = inter_eye_distance(compat, w, h)
+                        faces.append(FaceData(
+                            landmarks=compat,
+                            bbox=(x1, y1, bw, bh),
+                            ied=ied,
+                            confidence=float(score)
+                        ))
+                        break
 
         # 2. Fallback: MediaPipe on full image
         # Run if RetinaFace found nothing, OR if some RetinaFace boxes
