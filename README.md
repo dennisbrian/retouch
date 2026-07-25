@@ -86,6 +86,22 @@ machine-readable manifests:
 
 See [RECIPE_SWEEP.md](docs/RECIPE_SWEEP.md) for the full visual-QA workflow.
 
+### Random image system test
+
+Pick one JPEG at random from an image folder and run it through the retouch
+pipeline. The output includes the selected source, recipe renders,
+`manifest.json`, and a contact sheet:
+
+```bash
+./executable/random_image_test /path/to/my/images --count 5 \
+  --recipes recommended --compare
+```
+
+Use `--seed 42` to repeat the same random selections. Each image gets its own
+folder plus a `batch_manifest.json` under `test_output/random_image_tests/`.
+For a quick local smoke test without face-model initialization, add
+`--global-only`.
+
 ### Web GUI
 
 ```bash
