@@ -16,3 +16,4 @@ build/
 *.spec
 .pytest_cache/
 .quadcodeai/
+cc.json

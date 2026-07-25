@@ -16,7 +16,7 @@ This is a **production-grade image processing engine** that applies professional
 - Color grading + Fuji film simulation presets
 - Virtual studio relighting + advanced lens effects
 
-**~46k LOC (retouch/*.py + gui.py + cli.py), 73 modules in retouch/, 3,880 tests collected (pytest --collect-only, 2026-07-17).**
+**~51k LOC (retouch/*.py + gui.py + cli.py), 86 modules in retouch/, 4,125 tests collected (pytest --collect-only, 2026-07-26).**
 
 ---
 
@@ -115,7 +115,7 @@ prefer `--max-dim 2048` or `quality="draft"` for multi-recipe sweeps.
 ## Testing & Quality
 
 ### Test Coverage
-- **3,880 tests collected** (`pytest --collect-only`, 2026-07-17) — full-suite pass/fail baseline not re-run at this count
+- **4,125 tests collected** (`pytest --collect-only`, 2026-07-26) — full-suite pass/fail baseline not re-run at this count
 - **89% coverage** on core modules (per `pytest --cov`; last measured 2026-07-01)
 - **Unit + integration tests** for every public API
 - **Deep algorithmic verification** (monotonicity checks, round-trip stability, etc.)
