@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 _MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models")
 _MANIFEST_PATH = os.path.join(_MODELS_DIR, "manifest.json")
 
+# Template host left over from the repo skeleton; no models are published
+# there. Manifest entries still carrying it cannot be downloaded.
+_PLACEHOLDER_URL_HOST = "github.com/owner/retouch-models"
+
 _NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")
 
 _manifest_lock = threading.Lock()
@@ -153,6 +157,17 @@ def download_model(
     url = entry.get("url", "")
     if not url:
         raise ModelFetchError(f"Manifest entry for {name!r} has no url")
+    # Every manifest entry currently ships the template host from the repo
+    # skeleton. Downloading it yields an opaque HTTP 404; fail up front with
+    # an actionable message instead, so a missing model reads as "not
+    # published yet" rather than "the network is broken".
+    if _PLACEHOLDER_URL_HOST in url:
+        raise ModelFetchError(
+            f"Manifest entry for {name!r} still points at the placeholder URL "
+            f"({url}). No release host is configured, so this model cannot be "
+            f"fetched automatically — install it manually into models/ or "
+            f"update models/manifest.json with a real url, sha256 and size_bytes."
+        )
 
     dest = _local_path(name)
     expected_size = int(entry.get("size_bytes", 0) or 0)

@@ -47,7 +47,7 @@
       "sha256": "",
       "size_bytes": 0,
       "license": "BSD-3-Clause",
-      "description": "Real-ESRGAN x4 super-resolution model (ONNX) — placeholder for F7. Not yet bundled; sha256/size set on acquisition."
+      "description": "Real-ESRGAN x4plus super-resolution model (ONNX) — placeholder for F7, NOT bundled: the url above is a template host and will not resolve. Until this lands, AIEnhancer.super_resolve falls back to Lanczos (it logs a warning saying so). On acquisition set sha256/size and note: must be the x4 model (_SR_NATIVE_SCALE=4 is hardcoded) exported with dynamic H/W axes (_tiled_inference feeds variable tile shapes); export via the upstream scripts/pytorch2onnx.py to keep the BSD-3-Clause provenance claimed here."
     },
     "denoise_nafnet": {
       "filename": "nafnet_denoise.onnx",

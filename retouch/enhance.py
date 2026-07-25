@@ -139,6 +139,9 @@ class AIEnhancer:
         self._sr_lock = threading.Lock()
         self._denoise_loaded = False
         self._sr_loaded = False
+        # One-shot latch so the "no SR model, falling back to Lanczos"
+        # warning fires once per instance instead of once per image.
+        self._sr_absent_warned = False
 
     # ------------------------------------------------------------------
     # Model loading
@@ -283,6 +286,19 @@ class AIEnhancer:
                 return _from_f32(self._run_sr_model(sess, f, scale), in_dtype)
             except Exception as e:
                 logger.warning("AIEnhancer.super_resolve: model inference failed (%s); fallback.", e)
+        else:
+            # The model file is simply absent (_load_session returns None
+            # without logging in that case), so without this the caller gets
+            # plain Lanczos while the flag name, docstring and manifest all
+            # promise Real-ESRGAN. Warn once per instance rather than per
+            # call so batch runs are not flooded.
+            if not self._sr_absent_warned:
+                self._sr_absent_warned = True
+                logger.warning(
+                    "AIEnhancer.super_resolve: %s model not available — "
+                    "upscaling %dx with Lanczos, NOT Real-ESRGAN.",
+                    _SR_MODEL_NAME, scale,
+                )
         return _from_f32(self._lanczos_upscale(f, scale), in_dtype)
 
     def enhance(
