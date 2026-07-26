@@ -1,6 +1,6 @@
 # Z3 — Alpha Matting & Layer-Separated Background Compositing (Scoping Plan)
 
-**Status:** 📋 **SCOPED, NOT STARTED (2026-07-26)** · supersedes the Z3 framing in
+**Status:** ✅ **PHASES 0+1 SHIPPED (2026-07-26, `52026f9`)** · phases 2–3 not started · supersedes the Z3 framing in
 `RESEARCH_PERCEPTUAL_CALIBRATION_Z_2026_07_17.md` §Pillar 2 · **Parent:** MASTER_PLAN research backlog
 **Effort:** phase 0 ~1 d · phase 1 ~2–3 d · phase 2 ~4–6 d · phase 3 ~2–3 d (~2–3 wk total, phased)
 **Standout:** kills the #1 "shopped" tell in background-blurred cosplay/wig shots, and caps
@@ -199,12 +199,49 @@ wig/hair-over-busy-background set is the intended path once the owner supplies o
 
 Each phase is independently shippable and verifiable:
 
-| Phase | Deliverable | Ships alone? |
+| Phase | Deliverable | Ships alone? | Status |
+|---|---|---|---|
+| 0 | Synthetic GT harness + §1.1 regression probe | ✅ tests only | ✅ **DONE** `52026f9` |
+| 1 | Layer-separated composite, existing masks | ✅ **visible halo fix** | ✅ **DONE** `52026f9` |
+| 2 | Closed-form alpha + F-color estimation in band | ✅ wisp fidelity | 📋 not started |
+| 3 | Wire to 4 `_feathered_person_mask` compositing sites | ✅ full feature | 📋 not started |
+
+### Phases 0+1 as shipped (2026-07-26)
+
+`background.py::_background_layer` estimates a background-only layer by normalized
+("push-pull") convolution — blur the masked image and the mask with the same kernel, then
+divide, so every output pixel averages **background pixels only**. `blur_background` and
+`lens_blur` blur that layer; the subject still composites from the sharp original.
+
+Measured against true ground truth (real subject over a known synthetic background, hard
+mask, so the correct bokeh is computable):
+
+| distance from edge | OLD err | NEW err |
 |---|---|---|
-| 0 | Synthetic GT harness + §1.1 regression probe | ✅ tests only |
-| 1 | Layer-separated composite, existing masks | ✅ **visible halo fix** |
-| 2 | Closed-form alpha + F-color estimation in band | ✅ wisp fidelity |
-| 3 | Wire to 4 `_feathered_person_mask` compositing sites | ✅ full feature |
+| 3–15 px | 23.69 | **3.40** |
+| 15–35 px | 0.44 | 0.67 |
+| 35–70 px | 0.00 | 0.67 |
+| **whole-background MAE** | **1.69** | **0.86** |
+
+The small far-field increase (~0.67) is the proxy fill's smooth extrapolation — visually
+inert, confirmed by direct render comparison against ground truth.
+
+**Performance note.** The fill is solved on a 256px proxy: it only has to be smooth and
+subject-free (the caller blurs it immediately), and image-spanning kernels at native
+resolution cost ~14.6 s at 4K. After the proxy, 4K `blur_background` is **589 ms**
+(was 14,638 ms); 1440×1080 is 99 ms.
+
+**Phase 0 harness** (`tests/test_background_layer_bleed.py`) uses a hard rectangular mask so
+mask error is zero by construction, and was confirmed to **fail pre-fix** (+47.6 levels
+`blur_background`, +14.5 `lens_blur`) before being made to pass. It also guards the obvious
+false fix — one test asserts the background is still actually blurred.
+
+> **Measurement caveat, recorded so it is not repeated.** The §1.1 probe on the raw
+> `chang_e_cosplay_tamed_shine.jpg` is **not** a valid A/B: that file is a 3×3 *collage*, so an
+> arbitrary rectangle does not bound a subject and the "background" beside it contains bright
+> collage panels lying near the subject-colour direction. Post-fix it still reads ~93 because it
+> is measuring the blur redistributing *background* content, not subject bleed. Use the
+> ground-truth composite above (or the synthetic harness) for any future A/B.
 
 **Phase 1 carries most of the user-visible value at ~2–3 d.** If budget is tight, phases 0+1
 are the high-return slice; 2+3 are the quality ceiling.
