@@ -111,6 +111,90 @@ class BackgroundReplacer:
         pm = self._feathered_person_mask(person_mask, shape, feather_frac)
         return np.clip(1.0 - pm, 0.0, 1.0).astype(np.float32)
 
+    def _background_layer(
+        self,
+        src_f: np.ndarray,
+        person_mask: Optional[np.ndarray],
+        sigma: float,
+    ) -> np.ndarray:
+        """Estimate a background-only layer with subject pixels excluded.
+
+        Z3 phase 1.  Blurring the *whole* image and compositing the result into
+        the background bleeds subject colour outward: at a background pixel
+        within ~1 sigma of the subject edge the Gaussian average is dominated by
+        subject pixels.  Measured at up to ~93 levels of subject-colour shift
+        even with a mathematically perfect mask, because the defect is in the
+        blur *source*, not the mask.  See
+        ``docs/plans/PLAN_Z3_ALPHA_MATTING.md`` §1.1.
+
+        The fix is normalized ("push-pull") convolution: blur the
+        subject-masked image and the mask itself with the same kernel, then
+        divide.  Every output pixel is a weighted average of *background pixels
+        only*, so the subject cannot contribute regardless of sigma.  Where the
+        subject is large the denominator goes to zero, so the estimate is
+        iteratively seeded from progressively coarser fills to keep it stable.
+
+        Args:
+            src_f: (H, W, 3) float32 BGR [0, 255].
+            person_mask: (H, W) subject mask; ``None`` means "all subject".
+            sigma: Gaussian sigma the caller intends to use for the bokeh.
+
+        Returns:
+            (H, W, 3) float32 background-only layer, defined everywhere
+            (subject region is filled by inward extrapolation from the
+            surrounding background).
+        """
+        h, w = src_f.shape[:2]
+        bg_weight = self._background_mask(person_mask, (h, w))
+
+        # Nothing is background — no meaningful estimate; caller falls back.
+        if float(bg_weight.max()) <= 1e-6:
+            return src_f.copy()
+
+        # The fill only has to be *smooth and subject-free*; it is blurred by
+        # the caller immediately, so no high-frequency detail survives.  Solving
+        # it on a small proxy keeps this O(1) in image size instead of paying
+        # for image-spanning kernels at native resolution (which cost ~14 s at
+        # 4K).  Known background is restored exactly at full res afterwards.
+        proxy_max = 256
+        scale = min(1.0, float(proxy_max) / max(h, w))
+        if scale < 1.0:
+            ph, pw = max(8, int(round(h * scale))), max(8, int(round(w * scale)))
+            small_src = cv2.resize(src_f, (pw, ph), interpolation=cv2.INTER_AREA)
+            small_w = cv2.resize(bg_weight, (pw, ph), interpolation=cv2.INTER_AREA)
+        else:
+            ph, pw = h, w
+            small_src, small_w = src_f, bg_weight
+
+        filled = small_src * small_w[:, :, np.newaxis]
+        weight = small_w.copy()
+
+        # Coarse-to-fine push-pull on the proxy.  Each pass only ever averages
+        # already-background-derived values, so no subject colour can enter.
+        span = max(float(max(ph, pw)) * 0.5, 4.0)
+        while span >= 2.0:
+            k = max(3, int(span) | 1)
+            num = cv2.GaussianBlur(filled, (k, k), span / 3.0)
+            den = cv2.GaussianBlur(weight, (k, k), span / 3.0)
+            safe = den > 1e-5
+            approx = np.where(
+                safe[:, :, np.newaxis],
+                num / np.maximum(den, 1e-5)[:, :, np.newaxis],
+                0.0,
+            ).astype(np.float32)
+            keep = small_w[:, :, np.newaxis]
+            filled = small_src * keep + approx * (1.0 - keep)
+            weight = np.maximum(small_w, safe.astype(np.float32))
+            span /= 2.0
+
+        if scale < 1.0:
+            filled = cv2.resize(filled, (w, h), interpolation=cv2.INTER_LINEAR)
+
+        # Restore true background pixels at full resolution; only the subject
+        # region keeps the (smooth, subject-free) extrapolation.
+        keep_full = bg_weight[:, :, np.newaxis]
+        return (src_f * keep_full + filled * (1.0 - keep_full)).astype(np.float32)
+
     def _to_f32_255(self, img: np.ndarray) -> Tuple[np.ndarray, bool]:
         """Return (img_as_float32_[0,255], was_float_input)."""
         is_float = img.dtype == np.float32
@@ -288,7 +372,10 @@ class BackgroundReplacer:
         sigma = (float(radius) / 100.0) * (min_dim * 0.04)
         ksize = max(3, int(sigma * 3.0)) | 1
 
-        blurred = cv2.GaussianBlur(src_f, (ksize, ksize), sigma)
+        # Z3 phase 1: blur a subject-excluded background layer, not the whole
+        # image, so subject colour cannot bleed outward across the seam.
+        bg_layer = self._background_layer(src_f, person_mask, sigma)
+        blurred = cv2.GaussianBlur(bg_layer, (ksize, ksize), sigma)
         bg_mask = self._background_mask(person_mask, (h, w))
         out = blend_masked(src_f, blurred, bg_mask)
         return self._restore_dtype(out, was_float)
@@ -359,9 +446,13 @@ class BackgroundReplacer:
         k2 = max(3, int(level2_sigma * 3.0)) | 1
         k3 = max(3, int(level3_sigma * 3.0)) | 1
         
-        blur1 = cv2.GaussianBlur(src_f, (k1, k1), level1_sigma)
-        blur2 = cv2.GaussianBlur(src_f, (k2, k2), level2_sigma)
-        blur3 = cv2.GaussianBlur(src_f, (k3, k3), level3_sigma)
+        # Z3 phase 1: all three levels blur a subject-excluded background layer
+        # (see _background_layer) so the defocus never smears subject colour
+        # into the near background.
+        bg_layer = self._background_layer(src_f, person_mask, level3_sigma)
+        blur1 = cv2.GaussianBlur(bg_layer, (k1, k1), level1_sigma)
+        blur2 = cv2.GaussianBlur(bg_layer, (k2, k2), level2_sigma)
+        blur3 = cv2.GaussianBlur(bg_layer, (k3, k3), level3_sigma)
 
         # 4. Blend based on depth map ranges
         mask1 = np.clip(depth / 0.33, 0.0, 1.0)[:, :, np.newaxis]
