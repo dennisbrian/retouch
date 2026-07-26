@@ -100,6 +100,15 @@ becomes principled).
 
 ### Z3 — Alpha matting for hair boundaries ⭐ the halo killer
 
+> ⚠️ **Superseded by `PLAN_Z3_ALPHA_MATTING.md` (2026-07-26).** The framing below is
+> half wrong: the dominant background-blur halo survives a *perfect* mask, because
+> `blur_background` blurs the whole image (subject included) and composites that
+> subject-contaminated result into the background. Measured: up to **93 levels** of
+> subject-color bleed 15–35px outside a hard rectangular mask. The load-bearing fix is
+> foreground/background **layer separation**; the closed-form solve is phase 2.
+> The "detect_halo scores improve" acceptance gate below is **invalid** —
+> `detect_halo` measures sharpening overshoot, not matte fidelity.
+
 **Gap:** person/hair masks are BiSeNet argmax (+ C3's guided feathering,
 default-off). Every background op — `blur_background`, `lens_blur`,
 `anime_crystal_void`, background grade/harmonize — composites through a soft
