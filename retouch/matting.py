@@ -277,6 +277,7 @@ def estimate_foreground(
     alpha: np.ndarray,
     *,
     iterations: int = 12,
+    max_dim: int = 512,
 ) -> np.ndarray:
     """Estimate the unmixed foreground colour F at partially transparent pixels.
 
@@ -298,13 +299,25 @@ def estimate_foreground(
     Returns:
         (H, W, 3) float32 estimated foreground colour, [0, 255].
     """
-    src = np.clip(img_bgr.astype(np.float32), 0.0, 255.0)
-    a = np.clip(alpha.astype(np.float32), 0.0, 1.0)
+    src_full = np.clip(img_bgr.astype(np.float32), 0.0, 255.0)
+    a_full = np.clip(alpha.astype(np.float32), 0.0, 1.0)
+    fh, fw = src_full.shape[:2]
+
+    # The diffusion is inherently smooth and only has to be right inside the
+    # thin translucent band, so solve it on a proxy: 12 full-res Gaussian
+    # blurs cost ~1.3 s at 4K, which a global stage cannot afford.
+    scale = min(1.0, float(max_dim) / max(fh, fw))
+    if scale < 1.0:
+        ph, pw = max(16, int(round(fh * scale))), max(16, int(round(fw * scale)))
+        src = cv2.resize(src_full, (pw, ph), interpolation=cv2.INTER_AREA)
+        a = cv2.resize(a_full, (pw, ph), interpolation=cv2.INTER_AREA)
+    else:
+        src, a = src_full, a_full
 
     # Trust only near-opaque pixels; they are essentially pure F.
     conf = np.clip((a - 0.85) / 0.15, 0.0, 1.0).astype(np.float32)
     if float(conf.max()) <= 1e-6:
-        return src  # nothing opaque to learn from
+        return src_full  # nothing opaque to learn from
 
     fg = src * conf[:, :, np.newaxis]
     wgt = conf.copy()
@@ -321,4 +334,12 @@ def estimate_foreground(
         fg = src * keep + est * (1.0 - keep)
         wgt = np.maximum(conf, safe.astype(np.float32))
 
+    if scale < 1.0:
+        fg = cv2.resize(fg, (fw, fh), interpolation=cv2.INTER_LINEAR)
+
+    # Opaque pixels are pure F already: keep them at full resolution so the
+    # subject never loses detail to the proxy round-trip.  Only the
+    # translucent band uses the (smooth by nature) diffused estimate.
+    conf_full = np.clip((a_full - 0.85) / 0.15, 0.0, 1.0).astype(np.float32)[:, :, np.newaxis]
+    fg = src_full * conf_full + fg * (1.0 - conf_full)
     return np.clip(fg, 0.0, 255.0).astype(np.float32)

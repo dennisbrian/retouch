@@ -65,7 +65,77 @@ class BackgroundReplacer:
     """
 
     def __init__(self) -> None:
-        pass
+        # Z3 phase 3: image-level alpha-matte cache.  The matte is whole-image
+        # (unlike FaceContext, which is per-face), and GUI slider drags re-enter
+        # process() with cached contexts — without this every drag would pay for
+        # the closed-form solve.  Keyed by mask identity + shape, not pixels, so
+        # it costs no hashing of full-res buffers.
+        self._matte_cache: dict = {}
+
+    def _composite_alpha(
+        self,
+        src_f: np.ndarray,
+        person_mask: Optional[np.ndarray],
+        hair_mask: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """Return the alpha matte to composite with, falling back to the mask.
+
+        Z3 phase 3.  Used **only** by operations that composite a modified
+        *background* against the subject, where a true matte (rather than a
+        soft mask) is what keeps hair wisps from being eaten or haloed.
+
+        Falls back to ``_feathered_person_mask`` whenever the closed-form solve
+        is unavailable (no SciPy) or declines, so behaviour is never worse than
+        before.
+        """
+        h, w = src_f.shape[:2]
+        feathered = self._feathered_person_mask(person_mask, (h, w))
+        if person_mask is None:
+            return feathered
+
+        # Content-derived key: id() alone is unsafe because CPython recycles
+        # ids after GC, which would serve a stale matte for a different mask.
+        # A cheap decimated checksum keeps this O(1)-ish without hashing the
+        # full-res buffer every call.
+        # The image is part of the key too: earlier stages mutate the pixels
+        # between calls, and the matte is solved from image colour, so keying
+        # on the mask alone would serve a matte fitted to a stale frame.
+        probe = np.asarray(person_mask)[::16, ::16]
+        img_probe = src_f[::32, ::32]
+        key = (
+            h,
+            w,
+            probe.shape,
+            float(probe.sum()),
+            float(probe.std()),
+            float(img_probe.sum()),
+            float(img_probe.std()),
+        )
+        cached = self._matte_cache.get(key)
+        if cached is not None:
+            return cached
+
+        try:
+            from .matting import build_auto_trimap, solve_closed_form_alpha
+
+            binary = (feathered > 0.5).astype(np.float32)
+            if not binary.any() or binary.all():
+                self._matte_cache[key] = feathered
+                return feathered
+            trimap = build_auto_trimap(binary, hair_mask=hair_mask, band_radius=4)
+            alpha = solve_closed_form_alpha(
+                np.clip(src_f, 0, 255).astype(np.uint8), trimap
+            )
+        except Exception:  # pragma: no cover - never fail a render on the matte
+            logger.warning("alpha matte solve failed; using feathered mask", exc_info=True)
+            alpha = None
+
+        result = feathered if alpha is None else alpha.astype(np.float32)
+        # Bounded cache: these are full-res float planes.
+        if len(self._matte_cache) > 4:
+            self._matte_cache.clear()
+        self._matte_cache[key] = result
+        return result
 
     # ------------------------------------------------------------------
     # Mask helpers
@@ -209,6 +279,31 @@ class BackgroundReplacer:
         # a fill *source* is also one we must not copy back verbatim.
         keep_full = bg_weight[:, :, np.newaxis]
         return (src_f * keep_full + filled * (1.0 - keep_full)).astype(np.float32)
+
+    def _composite_over(
+        self,
+        src_f: np.ndarray,
+        new_background: np.ndarray,
+        alpha: np.ndarray,
+    ) -> np.ndarray:
+        """Composite ``alpha*F + (1-alpha)*new_background`` with F unmixed.
+
+        Z3 phase 3.  The naive form ``alpha*src + (1-alpha)*new_bg`` is wrong at
+        translucent pixels: ``src`` already equals ``a*F + (1-a)*B_original``, so
+        it drags the *old* background into the result and leaves a colour fringe
+        (measured at 4.295 vs 0.000 with true F, even with a perfect matte).
+        Estimating F first removes that term.
+        """
+        a = np.clip(alpha, 0.0, 1.0).astype(np.float32)
+        try:
+            from .matting import estimate_foreground
+
+            fg = estimate_foreground(src_f, a)
+        except Exception:  # pragma: no cover - degrade to the naive composite
+            logger.warning("foreground estimation failed; naive composite", exc_info=True)
+            fg = src_f
+        a3 = a[:, :, np.newaxis]
+        return (fg * a3 + new_background * (1.0 - a3)).astype(np.float32)
 
     def _to_f32_255(self, img: np.ndarray) -> Tuple[np.ndarray, bool]:
         """Return (img_as_float32_[0,255], was_float_input)."""
@@ -391,8 +486,12 @@ class BackgroundReplacer:
         # image, so subject colour cannot bleed outward across the seam.
         bg_layer = self._background_layer(src_f, person_mask, sigma)
         blurred = cv2.GaussianBlur(bg_layer, (ksize, ksize), sigma)
-        bg_mask = self._background_mask(person_mask, (h, w))
-        out = blend_masked(src_f, blurred, bg_mask)
+
+        # Z3 phase 3: composite through a true alpha matte, unmixing the
+        # foreground so translucent hair re-blends over the new background
+        # without carrying the old background's colour (the fringe).
+        alpha = self._composite_alpha(src_f, person_mask)
+        out = self._composite_over(src_f, blurred, alpha)
         return self._restore_dtype(out, was_float)
 
     def lens_blur(
@@ -572,7 +671,10 @@ class BackgroundReplacer:
         out_lch[:, :, 2] = H
 
         graded = lch_f32_to_bgr_f32(out_lch)
-        out = blend_masked(src_f, graded, bg_mask)
+        # Z3 phase 3: matte-composite so a graded background does not tint the
+        # translucent hair band (the same fringe mechanism as the bokeh path).
+        alpha = self._composite_alpha(src_f, person_mask)
+        out = self._composite_over(src_f, graded, alpha)
         return self._restore_dtype(out, was_float)
 
     def light_wrap(

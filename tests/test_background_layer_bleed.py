@@ -144,3 +144,125 @@ class TestCleanInputIdentity:
         assert f32.dtype == np.float32
         # The two paths must agree to within rounding.
         assert np.abs(f32 - u8.astype(np.float32)).mean() < 1.5
+
+
+class TestPhase2ClosedFormMatting:
+    """Z3 phase 2 — closed-form alpha + foreground estimation."""
+
+    def _soft_alpha_scene(self):
+        """Known soft alpha (anti-aliased strands) over a known background."""
+        rng = np.random.default_rng(0)
+        h, w = 300, 420
+        alpha = np.zeros((h, w), np.float32)
+        import cv2
+
+        cv2.rectangle(alpha, (120, 40), (260, h), 1.0, -1)
+        for _ in range(70):
+            x0 = int(rng.integers(115, 265))
+            y0 = int(rng.integers(40, 150))
+            ang = float(rng.uniform(-1.2, 1.2))
+            ln = int(rng.integers(30, 90))
+            cv2.line(
+                alpha, (x0, y0),
+                (int(x0 + ln * np.sin(ang)), int(y0 - ln * np.cos(ang))),
+                float(rng.uniform(0.5, 1.0)),
+                thickness=int(rng.integers(1, 3)), lineType=cv2.LINE_AA,
+            )
+        alpha = np.clip(cv2.GaussianBlur(alpha, (3, 3), 0.6), 0, 1)
+        F = np.zeros((h, w, 3), np.float32)
+        F[:, :, 0], F[:, :, 1], F[:, :, 2] = 45, 40, 38
+        B = np.zeros((h, w, 3), np.float32)
+        B[:, :, 1] = np.linspace(70, 190, w)[None, :]
+        B[:, :, 0], B[:, :, 2] = 50, 35
+        comp = (alpha[:, :, None] * F + (1 - alpha[:, :, None]) * B).astype(np.float32)
+        return comp, alpha, F, B
+
+    def test_closed_form_alpha_beats_feathered_mask(self):
+        from retouch.matting import build_auto_trimap, solve_closed_form_alpha, _HAVE_SCIPY
+
+        if not _HAVE_SCIPY:
+            pytest.skip("scipy not installed; solver falls back by design")
+
+        comp, alpha, _F, _B = self._soft_alpha_scene()
+        h, w = alpha.shape
+        binary = (alpha > 0.5).astype(np.float32)
+        feathered = BackgroundReplacer()._feathered_person_mask(binary, (h, w))
+        trimap = build_auto_trimap(binary, band_radius=4)
+        solved = solve_closed_form_alpha(comp.astype(np.uint8), trimap)
+        assert solved is not None
+
+        band = (alpha > 0.02) & (alpha < 0.98)
+        sad_feather = np.abs(feathered[band] - alpha[band]).mean()
+        sad_solved = np.abs(solved[band] - alpha[band]).mean()
+        assert sad_solved < sad_feather, (
+            f"closed-form alpha ({sad_solved:.4f}) must beat the feathered "
+            f"mask ({sad_feather:.4f}) on ground truth"
+        )
+
+    def test_foreground_estimation_removes_the_colour_fringe(self):
+        """The naive composite double-counts the old background; F removes it."""
+        from retouch.matting import estimate_foreground
+
+        comp, alpha, F, _B = self._soft_alpha_scene()
+        band = (alpha > 0.02) & (alpha < 0.98)
+        est = estimate_foreground(comp, alpha)
+        # The estimate must be closer to true F than the observed pixel is.
+        err_naive = np.abs(comp - F)[band].mean()
+        err_est = np.abs(est - F)[band].mean()
+        assert err_est < err_naive, (
+            f"F estimate ({err_est:.2f}) must beat using src directly ({err_naive:.2f})"
+        )
+
+    def test_solver_returns_none_without_scipy(self, monkeypatch):
+        """SciPy is an optional dependency; callers must get a clean fallback."""
+        import retouch.matting as m
+
+        monkeypatch.setattr(m, "_HAVE_SCIPY", False)
+        comp, alpha, _F, _B = self._soft_alpha_scene()
+        trimap = m.build_auto_trimap((alpha > 0.5).astype(np.float32), band_radius=4)
+        assert m.solve_closed_form_alpha(comp.astype(np.uint8), trimap) is None
+
+
+class TestPhase3Wiring:
+    """Z3 phase 3 — matte compositing wired into the background ops."""
+
+    def test_matte_cache_reuses_and_invalidates(self):
+        img, mask, _ = _synthetic_scene()
+        r = BackgroundReplacer()
+        src = img.astype(np.float32)
+        a1 = r._composite_alpha(src, mask)
+        a2 = r._composite_alpha(src, mask)
+        assert a1 is a2, "identical inputs must hit the matte cache"
+
+        # A different image with the same mask must NOT reuse the matte:
+        # the matte is solved from image colour.
+        other = np.clip(src * 0.4 + 30.0, 0, 255).astype(np.float32)
+        a3 = r._composite_alpha(other, mask)
+        assert a3 is not a1, "cache must key on image content, not the mask alone"
+
+    def test_wired_ops_still_protect_the_subject(self):
+        """Matte compositing must not eat into the opaque subject interior."""
+        img, mask, _ = _synthetic_scene()
+        for op, arg in (("blur_background", 100.0), ("grade_background", None)):
+            r = BackgroundReplacer()
+            if arg is None:
+                out = r.grade_background(img, mask, {"desaturation": 80.0})
+            else:
+                out = getattr(r, op)(img, mask, arg)
+            ys, xs = np.where(mask > 0.99)
+            y0, y1 = ys.min() + 12, ys.max() - 12
+            x0, x1 = xs.min() + 12, xs.max() - 12
+            delta = np.abs(
+                out[y0:y1, x0:x1].astype(np.float32)
+                - img[y0:y1, x0:x1].astype(np.float32)
+            )
+            assert delta.max() < 3.0, f"{op} modified the subject interior"
+
+    def test_no_scipy_path_still_produces_a_valid_render(self, monkeypatch):
+        import retouch.matting as m
+
+        monkeypatch.setattr(m, "_HAVE_SCIPY", False)
+        img, mask, _ = _synthetic_scene()
+        out = BackgroundReplacer().blur_background(img, mask, 100.0)
+        assert out.shape == img.shape and out.dtype == img.dtype
+        assert np.isfinite(out.astype(np.float32)).all()
