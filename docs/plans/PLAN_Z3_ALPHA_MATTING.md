@@ -1,6 +1,6 @@
 # Z3 — Alpha Matting & Layer-Separated Background Compositing (Scoping Plan)
 
-**Status:** ✅ **PHASES 0+1 SHIPPED (2026-07-26, `52026f9`)** · phases 2–3 not started · supersedes the Z3 framing in
+**Status:** ✅ **ALL PHASES SHIPPED (2026-07-26)** — 0+1 `52026f9`, 2 `6dd0089`, 3 `5ea3dbf` · validated on synthetic GT only (see §5 corpus gap) · supersedes the Z3 framing in
 `RESEARCH_PERCEPTUAL_CALIBRATION_Z_2026_07_17.md` §Pillar 2 · **Parent:** MASTER_PLAN research backlog
 **Effort:** phase 0 ~1 d · phase 1 ~2–3 d · phase 2 ~4–6 d · phase 3 ~2–3 d (~2–3 wk total, phased)
 **Standout:** kills the #1 "shopped" tell in background-blurred cosplay/wig shots, and caps
@@ -203,8 +203,60 @@ Each phase is independently shippable and verifiable:
 |---|---|---|---|
 | 0 | Synthetic GT harness + §1.1 regression probe | ✅ tests only | ✅ **DONE** `52026f9` |
 | 1 | Layer-separated composite, existing masks | ✅ **visible halo fix** | ✅ **DONE** `52026f9` |
-| 2 | Closed-form alpha + F-color estimation in band | ✅ wisp fidelity | 📋 not started |
-| 3 | Wire to 4 `_feathered_person_mask` compositing sites | ✅ full feature | 📋 not started |
+| 2 | Closed-form alpha + F-color estimation in band | ✅ wisp fidelity | ✅ **DONE** `6dd0089` |
+| 3 | Wire to the background-compositing sites | ✅ full feature | ✅ **DONE** `5ea3dbf` |
+
+### Phases 2+3 as shipped (2026-07-26)
+
+**The headline finding: F-estimation is load-bearing, alpha alone is not.** An observed edge
+pixel already is `src = a·F + (1−a)·B_original`, so compositing `a·src + (1−a)·new_bg`
+double-counts the old background, leaving `a·(1−a)·(B_original − new_bg)` — the colour
+fringe. Measured with a **perfect** matte: composite error **4.295** using `src` as
+foreground vs **0.000** using true F. A better matte with no F-estimate buys nothing.
+
+**A phase-1 bug the soft-alpha GT exposed.** `_background_layer` seeded its push-pull fill
+from the soft weight `1−a`. A translucent pixel carries subject colour, so admitting it
+reintroduced the very bleed phase 1 removed — precisely at the wisp band. The estimated
+background layer was **9.68** levels off GT; seeding from confident background only (≥ 0.98)
+brings that to **1.06**, and *improved phase 1's own* hard-mask numbers (near-edge
+3.40 → 0.65, whole-bg MAE 0.86 → 0.70).
+
+Composite error vs GT in the unknown band (70 anti-aliased strands over a known background):
+
+| configuration | error |
+|---|---|
+| feathered mask, no F | 2.199 ← previous behaviour |
+| closed-form, no F | 2.000 |
+| **closed-form + F** | **1.765** ← shipped |
+| GT alpha + F | 1.502 (ceiling) |
+
+Alpha SAD in band: 0.1508 (feathered) → 0.1351 (closed-form).
+
+**Wire-in decisions.** Matte applies to `blur_background` and `grade_background` — the ops
+that composite a modified *background* against the subject. Deliberately unchanged:
+`lens_blur` (composites through a graded 3-level depth map, not a single mask — needs the
+depth blend reworked, not a substitution), `light_wrap` (reads the silhouette to spill glow
+inward; alpha changes wrap geometry), `sharpen_subject` (targets the subject),
+`replace` / `relight_scene` (full-frame). Statistics masks stay as-is per §2.
+
+**Performance.** `estimate_foreground` ran 12 full-res Gaussian blurs — 1282 ms at 4K alone.
+Now solved on a 512px proxy with full-res opaque pixels preserved exactly. The matte is
+cached per (mask ⊕ image) decimated checksum, since GUI drags re-enter `process()`.
+
+| resolution | cold | warm |
+|---|---|---|
+| 1440×1080 | 566 ms | 150 ms |
+| 2880×2160 | 1183 ms | 712 ms |
+
+**SciPy stays optional and undeclared** (§3 option 2): `solve_closed_form_alpha` returns
+`None` without it and callers fall back to the guided-filter refinement. A regression test
+pins that the no-SciPy path still renders.
+
+> ⚠️ **Validated on synthetic ground truth only.** No real wig/hair corpus exists in-repo, so
+> the hair-wisp fidelity claim rests on synthetic anti-aliased strands, not photographs. Real
+> renders were viewed for absence of halos/artifacts, but not for wisp fidelity against a
+> reference. Point `./executable/random_image_test <folder>` at a wig-over-busy-background
+> set to close this.
 
 ### Phases 0+1 as shipped (2026-07-26)
 
