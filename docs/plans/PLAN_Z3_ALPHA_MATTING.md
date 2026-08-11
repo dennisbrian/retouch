@@ -419,5 +419,5 @@ admits hair contiguous with the silhouette.
 F from trimap-known-255 topology rather than alpha magnitude, and diffuse *along* the hair band
 so F propagates down the strand instead of across background; or (b) raise the solve resolution
 for thin structures (`solve_closed_form_alpha`'s `max_dim=320` proxy is a second, still-unmeasured
-wall at 2048px input) . A+B are necessary but not sufficient; they are committed because they are
+wall at 2048px input). A+B are necessary but not sufficient; they are committed because they are
 correct, tested, and a strict precondition for any of the above.
