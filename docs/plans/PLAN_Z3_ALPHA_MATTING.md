@@ -376,3 +376,48 @@ are the high-return slice; 2+3 are the quality ceiling.
 `retouch/background.py` (composite paths), `retouch/matting.py` (solver — currently a spike),
 `retouch/utils.py` (reuse `guided_filter`), `retouch/params.py` (+ `gui.py` component entry
 per the single-source-of-truth rule), `tests/test_matting.py`, new synthetic-GT test module.
+
+### Defects A+B fixed (2026-08-12) — wisps now reach the solver, but still do not render
+
+`57ac259`. Defect A (vacuous hair branch) and Defect B (`hair_mask` never passed) are both
+fixed, with the engine resolving a hair mask in `_stage_background` via `parse_hair_full_image`
+(the body-skin path computes the same mask but runs in a *later* stage, so it cannot be
+reused — the plan's open "recompute or reuse?" question resolves to *recompute*, gated on a
+matte op being active).
+
+**Both fixes verified working at their own layer.** On `DSCF7585.jpg` at `--max-dim 2048` the
+trimap gains 81,557 unknown pixels overall and 6,835 in the wig region — the wisps now enter
+the solve, which is exactly what A+B were for.
+
+**But the rendered output barely moves: only 57 px change in the head/wig third (max delta 6,
+visually nothing), against 7,188 px on the legs/costume.** The wisps reach the solver and are
+then discarded downstream. Root cause measured on controlled synthetics:
+
+- Closed-form matting is under-confident on thin structures. An *opaque* 6px strand solves to
+  alpha 0.544, and alpha is non-monotonic in strand width (4px 0.195 · 6px 0.544 · 10px 0.294 ·
+  20px 1.000 · 30px 0.656 · 60px 0.000). A strand disconnected from the main silhouette solves
+  to exactly 0.000 — closed-form propagates alpha from known-foreground through colour affinity,
+  so an unknown island surrounded by known-background has no foreground constraint to draw from.
+- `estimate_foreground` seeds trusted foreground only from `alpha > 0.85`. At 0.544 the strand
+  contributes **0 of 390** seed pixels, so its colour is diffused in from the body across
+  intervening zero-weight background and diluted toward the background colour.
+- Sweeping `lambda_known` (1→1000) and `eps` (1e-7→1e-4) does not recover it; neither is a
+  principled fix.
+
+**Do not lower the 0.85 seed gate.** At alpha 0.5 the observed pixel is half old background by
+construction (`src = a*F + (1-a)*B`), so seeding from it propagates old background into F —
+reintroducing the exact fringe that phase 1 fixed and F-estimation exists to remove. That would
+trade erased wisps for tinted wisps across every image, a regression on corpus-verified behaviour.
+
+**Also worth noting:** BiSeNet's full-image hair confidence maxes at 0.190 on this frame (it
+returns confidence, not argmax, by design) and is scattered across dark costume fabric — which
+is why most of the render delta landed on the legs rather than the wig. Any real wisp fix needs
+hair evidence that is better localized than this mask, or a connectivity constraint that only
+admits hair contiguous with the silhouette.
+
+**Next session — the real fix is in the solve/estimate layer, not the trimap:** either (a) seed
+F from trimap-known-255 topology rather than alpha magnitude, and diffuse *along* the hair band
+so F propagates down the strand instead of across background; or (b) raise the solve resolution
+for thin structures (`solve_closed_form_alpha`'s `max_dim=320` proxy is a second, still-unmeasured
+wall at 2048px input) . A+B are necessary but not sufficient; they are committed because they are
+correct, tested, and a strict precondition for any of the above.
