@@ -508,3 +508,41 @@ topology is fixed. Worth revisiting only if wisp fidelity is judged insufficient
 corpus. The `estimate_foreground` 0.85 seed gate remains a synthetic-only finding, not implicated
 on real frames.
 
+### Corpus check widened (2026-08-12): 18 frames, no regressions found
+
+Sampled evenly across both folders (10 Nikke wig frames, 8 bonodori real-hair frames) at
+`--max-dim 2048`, `background_blur=35`, old path vs new. **Every one of the 18 frames changed**;
+16 had face-crop hair evidence, 2 had none.
+
+*Harness note:* the first sweep produced triplicated and self-contradictory rows (one frame
+reported both `hair=314151` and `hair=0`) because `FaceProcessorPool` workers re-imported the
+script and raced the monkey-patched `_stage_background`. Numbers below come from a rewritten
+two-pass harness that renders each mode in its own process and diffs saved arrays — the first
+sweep's numbers were discarded, not reported.
+
+Reviewed the four largest-delta frames as before/after crops
+(`corpus18_largest_deltas_old_vs_new.png`) rather than trusting the deltas:
+
+| frame | Δpx | what changed |
+|---|---|---|
+| DSCF8180 | 524,113 | hand + railing sharper; OLD smeared them into the bokeh |
+| DSCF7945 | 492,839 | hand/fingers and amulet text crisper |
+| DSCF7720 | 305,454 | OLD dragged a murky costume blob into the foreground; NEW blurs it correctly |
+| DSCF8156 | 300,452 | real hair strands at the crown preserved, halo removed |
+
+**The old mask was not merely ineffective — it was corrupting frames.** On DSCF7676 a face was
+detected but produced *zero* face-crop hair px, so the new path correctly passes no hair
+evidence while the old one fell back to `parse_hair_full_image` and dumped **1,497,927** clutter
+px into the trimap. The result (`nikke_clutter_removal_no_face_hair.png`) is a large smeared,
+halo-ringed blob of background costume/foliage pulled into the foreground layer. NEW renders it
+cleanly. Note the wins are frequently **hands and props**, not only hair — the old mask was
+pulling arbitrary background objects into the subject layer.
+
+**No frame in the sample looked worse.** The earlier "inert on DSCF7590" observation still holds
+as a category (no hair evidence outside the silhouette → nothing to recover), but it is not the
+common case: 16/18 frames had usable evidence.
+
+*Caveat, stated rather than glossed:* 18 of 657 available frames were reviewed, and only the top
+4 by delta were inspected pixel-by-pixel. This establishes no regressions among the largest
+changes; it does not prove the fix is universally safe.
+
