@@ -23,11 +23,14 @@ CLI_PATH = Path(__file__).resolve().parent.parent / "cli.py"
 
 def _run_cli(*args, timeout=60):
     """Run cli.py with given args; return (returncode, stdout, stderr)."""
+    env = os.environ.copy()
+    env["PYTHONWARNINGS"] = "ignore::UserWarning"
     result = subprocess.run(
         [sys.executable, str(CLI_PATH), *args],
         capture_output=True,
         text=True,
         timeout=timeout,
+        env=env,
     )
     return result.returncode, result.stdout, result.stderr
 
@@ -110,7 +113,7 @@ class TestBasicProcessing:
 
 
 class TestRecipeApplication:
-    @pytest.mark.parametrize("recipe", ["natural", "cosplay", "beauty", "pink_dream"])
+    @pytest.mark.parametrize("recipe", ["natural", "portrait", "matsuri_glow_v1", "reala_ace"])
     def test_recipe_applied(self, tmp_path, recipe):
         """`--recipe <name>` should be accepted and not crash."""
         input_path = tmp_path / f"input_{recipe}.jpg"
@@ -340,7 +343,7 @@ class TestGlobalOnlyMode:
             str(input_path),
             "-o", str(output_dir),
             "--global-only",
-            "--recipe", "beauty",
+            "--recipe", "portrait",
             "--max-dim", "200",
             "--no-compare",
             "--force",

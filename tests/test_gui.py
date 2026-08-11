@@ -94,6 +94,7 @@ EXPECTED_RECIPE_KEYS = [
     "vibrance", "vignette", "white_balance_kelvin", "white_balance_tint", "white_costume_lift",
     "whiten", "whiten_hue_stable", "whiten_tone", "whites", "wrinkle_soften",
     "wrinkle_soften_forehead", "wrinkle_soften_nasolabial", "wrinkle_soften_neck",
+    "micro_grain", "purple_fringing", "flyaway_cleanup", "split_toning",
 ]
 
 # Add new HSL / Calibration / lens_blur keys dynamically
@@ -103,7 +104,7 @@ for color in ["red", "green", "blue"]:
     EXPECTED_RECIPE_KEYS.extend([f"calibration_{color}_hue", f"calibration_{color}_sat", f"calibration_{color}_lum"])
 EXPECTED_RECIPE_KEYS.append("lens_blur")
 
-EXPECTED_RECIPE_KEY_COUNT = 246
+EXPECTED_RECIPE_KEY_COUNT = 250
 # Self-updating: the recipe/smart-style slider tuple length is the contract
 # defined by RECIPE_OUTPUT_KEYS, so this constant can never go stale.
 EXPECTED_UI_OUTPUT_COUNT = len(gui.RECIPE_OUTPUT_KEYS)
@@ -858,10 +859,10 @@ class TestResetFunctions:
         assert isinstance(result, tuple)
         assert len(result) == 2
 
-    def test_reset_film_effects_returns_eight_values(self):
+    def test_reset_film_effects_returns_ten_values(self):
         result = gui.reset_film_effects("natural")
         assert isinstance(result, tuple)
-        assert len(result) == 8
+        assert len(result) == 10
 
     def test_reset_split_toning_returns_six_values(self):
         result = gui.reset_split_toning("natural")
@@ -1275,7 +1276,7 @@ class TestIntegrationConstantCrossRef:
 
     def test_ext_map_keys_match_radio_choices(self):
         """The EXT_MAP keys should match the format radio used in the UI."""
-        assert set(gui.EXT_MAP.keys()) == {"JPEG", "PNG", "PNG-16", "WebP"}
+        assert set(gui.EXT_MAP.keys()) == {"EXR", "JPEG", "PNG", "PNG-16", "WebP"}
 
     def test_export_res_map_keys_match_dropdown_choices(self):
         """The EXPORT_RES_MAP keys should match the resolution dropdown choices."""
