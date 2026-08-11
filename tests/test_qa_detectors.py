@@ -4,6 +4,7 @@ import numpy as np
 import cv2
 import pytest
 
+import retouch.qa_detectors as qa_detectors
 from retouch.qa_detectors import (
     detect_banding,
     detect_clipping,
@@ -361,6 +362,21 @@ class TestRunAll:
 
         for detector_name in ["banding", "clipping", "plastic_skin", "halo", "seam"]:
             assert result[detector_name]["flagged"] is False
+
+    def test_detector_exception_is_explicit_and_fail_closed(
+        self, monkeypatch, caplog
+    ):
+        def fail(*_args, **_kwargs):
+            raise RuntimeError("synthetic detector failure")
+
+        monkeypatch.setattr(qa_detectors, "detect_banding", fail)
+
+        result = run_all(np.full((32, 32, 3), 128, dtype=np.uint8))
+
+        assert result["banding"]["flagged"] is True
+        assert result["banding"]["available"] is False
+        assert "RuntimeError" in result["banding"]["error"]
+        assert "QA detector banding failed" in caplog.text
 
 
 class TestIntegrationScenarios:

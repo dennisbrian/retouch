@@ -16,12 +16,16 @@ Each detector returns a dict with:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 from typing import Any, Dict, List, Mapping, Optional
 
 import cv2
 import numpy as np
 
 from .harmony import evaluate_harmony
+
+
+logger = logging.getLogger(__name__)
 
 
 def _to_u8_for_analysis(img: np.ndarray) -> np.ndarray:
@@ -48,6 +52,17 @@ class QAWarning:
     message: str
     threshold: float = 0.0
     details: Dict[str, Any] = field(default_factory=dict)
+
+
+def _detector_failure(name: str, exc: Exception) -> Dict[str, Any]:
+    """Return an explicit fail-closed result for an unavailable detector."""
+    logger.warning("QA detector %s failed: %s", name, exc, exc_info=True)
+    return {
+        "score": 1.0,
+        "flagged": True,
+        "available": False,
+        "error": f"{type(exc).__name__}: {exc}",
+    }
 
 
 # Threshold constants — adjust based on tuning
@@ -1191,57 +1206,52 @@ def run_all(
     ref_before = img_before if img_before is not None else reference_img_bgr
     try:
         result["banding"] = detect_banding(img_bgr, skin_mask)
-    except Exception:
-        result["banding"] = {"score": 0.0, "flagged": False}
+    except Exception as exc:
+        result["banding"] = _detector_failure("banding", exc)
     try:
         result["clipping"] = detect_clipping(img_bgr, skin_mask)
-    except Exception:
-        result["clipping"] = {"score": 0.0, "flagged": False}
+    except Exception as exc:
+        result["clipping"] = _detector_failure("clipping", exc)
     try:
         result["plastic_skin"] = detect_plastic_skin(img_bgr, skin_mask, reference_img_bgr)
-    except Exception:
-        result["plastic_skin"] = {"score": 0.0, "flagged": False}
+    except Exception as exc:
+        result["plastic_skin"] = _detector_failure("plastic_skin", exc)
     try:
         result["halo"] = detect_halo(img_bgr, skin_mask, img_before=ref_before)
-    except Exception:
-        result["halo"] = {"score": 0.0, "flagged": False}
+    except Exception as exc:
+        result["halo"] = _detector_failure("halo", exc)
     try:
         result["kee_farid"] = compute_kee_farid_vector(img_bgr, skin_mask)
-    except Exception:
-        pass
+    except Exception as exc:
+        result["kee_farid"] = _detector_failure("kee_farid", exc)
 
     try:
         pm = person_mask if person_mask is not None else skin_mask
         result["seam"] = detect_seam(img_bgr, pm)
-    except Exception:
-        result["seam"] = {"score": 0.0, "flagged": False}
+    except Exception as exc:
+        result["seam"] = _detector_failure("seam", exc)
     try:
         result["color_drift"] = detect_color_drift(
             img_bgr, skin_mask, reference_img_bgr
         )
-    except Exception:
-        result["color_drift"] = {"score": 0.0, "flagged": False}
+    except Exception as exc:
+        result["color_drift"] = _detector_failure("color_drift", exc)
     try:
         result["pore_spectrum"] = detect_pore_spectrum_distance(
             img_bgr, skin_mask, reference_img_bgr
         )
-    except Exception:
-        result["pore_spectrum"] = {"score": 0.0, "flagged": False}
+    except Exception as exc:
+        result["pore_spectrum"] = _detector_failure("pore_spectrum", exc)
     try:
         result["asymmetry"] = detect_over_retouch_asymmetry(img_bgr, skin_mask)
-    except Exception:
-        result["asymmetry"] = {"score": 0.0, "flagged": False}
+    except Exception as exc:
+        result["asymmetry"] = _detector_failure("asymmetry", exc)
     try:
         result["skin_score"] = gui_skin_score(
             img_bgr, skin_mask, reference_img_bgr
         )
-    except Exception:
-        result["skin_score"] = {
-            "score": 100.0,
-            "chroma_var": 0.0,
-            "texture_metric": 1.0,
-            "flagged": False,
-        }
+    except Exception as exc:
+        result["skin_score"] = _detector_failure("skin_score", exc)
     try:
         result["harmony"] = evaluate_harmony(
             img_bgr,
@@ -1250,8 +1260,8 @@ def run_all(
             reference_img_bgr=reference_img_bgr,
             mark_policy=mark_policy,
         )
-    except Exception:
-        result["harmony"] = {"score": 0.0, "flagged": False, "available": False}
+    except Exception as exc:
+        result["harmony"] = _detector_failure("harmony", exc)
     if reference_img_bgr is not None:
         try:
             result["perceived_retouching"] = perceived_retouching_vector(
@@ -1264,6 +1274,8 @@ def run_all(
             )
             result["perceived_retouching"]["score"] = 0.0
             result["perceived_retouching"]["flagged"] = False
-        except Exception:
-            result["perceived_retouching"] = {"score": 0.0, "flagged": False}
+        except Exception as exc:
+            result["perceived_retouching"] = _detector_failure(
+                "perceived_retouching", exc
+            )
     return result

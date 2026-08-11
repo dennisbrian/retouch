@@ -172,6 +172,10 @@ class _FaceResult:
     lips_mask: np.ndarray
     sharpen_mask: np.ndarray
     roi_box: Tuple[int, int, int, int]
+    # Hair alone (no skin/neck union). Optional + last so existing positional
+    # constructors keep working; consumed by Z3 wisp recovery in
+    # engine._stage_background.
+    hair_only_mask: Optional[np.ndarray] = None
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -282,11 +286,16 @@ def _process_face_core(
 
     acc_skin = np.zeros((roi_h, roi_w), dtype=np.float32)
     acc_skin_hair = np.zeros((roi_h, roi_w), dtype=np.float32)
+    # Hair *alone*, kept separate from the skin+hair+neck union above: Z3
+    # alpha matting needs hair evidence that does not drag face/neck skin into
+    # the trimap's unknown band.  See _stage_background's wisp-recovery block.
+    acc_hair_only = np.zeros((roi_h, roi_w), dtype=np.float32)
     if skin_n is not None:
         acc_skin = np.clip(acc_skin + skin_n, 0.0, 1.0)
         acc_skin_hair = np.clip(acc_skin_hair + skin_n, 0.0, 1.0)
     if hair_n is not None:
         acc_skin_hair = np.clip(acc_skin_hair + hair_n, 0.0, 1.0)
+        acc_hair_only = np.clip(acc_hair_only + hair_n, 0.0, 1.0)
     if neck_n is not None:
         acc_skin_hair = np.clip(acc_skin_hair + neck_n, 0.0, 1.0)
 
@@ -1025,6 +1034,7 @@ def _process_face_core(
         canvas=canvas,
         skin_mask=acc_skin,
         skin_hair_mask=acc_skin_hair,
+        hair_only_mask=acc_hair_only,
         lips_mask=acc_lips,
         sharpen_mask=acc_sharpen,
         roi_box=(roi_x1, roi_y1, roi_x1 + roi_w, roi_y1 + roi_h)
@@ -1129,6 +1139,7 @@ def _process_single_face_worker(payload: tuple) -> Dict[str, Any]:
         "canvas": fr.canvas,
         "skin_mask": fr.skin_mask,
         "skin_hair_mask": fr.skin_hair_mask,
+        "hair_only_mask": fr.hair_only_mask,
         "lips_mask": fr.lips_mask,
         "sharpen_mask": fr.sharpen_mask,
         "roi_box": fr.roi_box,

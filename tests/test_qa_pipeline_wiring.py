@@ -46,6 +46,25 @@ def test_qa_detectors_called_in_pipeline():
         "engine.py should call qa_detectors.run_all"
 
 
+def test_qa_pipeline_exception_is_a_warning(monkeypatch):
+    from retouch.engine import RetouchEngine
+    import retouch.engine as engine_mod
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("synthetic QA pipeline failure")
+
+    monkeypatch.setattr(engine_mod.qa_detectors, "run_all", fail)
+    warnings = RetouchEngine._run_qa(
+        np.full((16, 16, 3), 128, dtype=np.uint8),
+        np.ones((16, 16), dtype=np.float32),
+    )
+
+    assert len(warnings) == 1
+    assert warnings[0].detector == "qa_pipeline"
+    assert warnings[0].flagged is True
+    assert warnings[0].details["available"] is False
+
+
 @requires_retouch
 def test_qa_results_stored_on_context():
     """ProcessingContext._qa_results should be populated after pipeline."""

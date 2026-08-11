@@ -76,3 +76,19 @@ def test_lut_reload_callable():
     assert hasattr(gui, "on_reload_luts")
     status = gui.on_reload_luts()
     assert isinstance(status, str)
+
+
+def test_lut_change_invalidates_live_engine(monkeypatch):
+    class FakeEngine:
+        def __init__(self):
+            self.invalidated = []
+
+        def invalidate_lut_cache(self, stem=None):
+            self.invalidated.append(stem)
+
+    fake = FakeEngine()
+    monkeypatch.setattr(gui, "_engine", fake)
+
+    gui._on_lut_changed("kodak")
+
+    assert fake.invalidated == ["kodak"]

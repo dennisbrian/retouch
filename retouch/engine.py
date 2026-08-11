@@ -914,6 +914,10 @@ class RetouchEngine:
     # Public API
     # ------------------------------------------------------------------
 
+    def invalidate_lut_cache(self, name: Optional[str] = None) -> None:
+        """Invalidate LUTs cached by the live render-path ColorGrader."""
+        self._grader.invalidate_lut_cache(name)
+
     def process(
         self,
         img_bgr: np.ndarray,
@@ -2374,22 +2378,39 @@ class RetouchEngine:
             )
 
         except Exception as e:
-            logger.warning("QA detectors raised, skipping QA: %s", e)
-            return []
+            logger.warning("QA pipeline failed: %s", e, exc_info=True)
+            return [QAWarning(
+                detector="qa_pipeline",
+                score=1.0,
+                flagged=True,
+                threshold=0.0,
+                message="QA pipeline failed; output could not be validated",
+                details={
+                    "available": False,
+                    "error": f"{type(e).__name__}: {e}",
+                },
+            )]
         for detector_name, det_result in qa_raw.items():
             if not det_result.get("flagged", False):
                 continue
-            msg = {
-                "banding": "Banding visible in smooth gradient regions",
-                "clipping": "Highlight/shadow clipping detected",
-                "plastic_skin": "Skin texture loss detected — may appear plastic",
-                "halo": "Edge overshoot halos detected from sharpening",
-                "seam": "Seam visible at subject boundary",
-                "color_drift": "Skin hue shift detected — color grade drifted beyond budget",
-                "pore_spectrum": "Skin pore-spectrum loss detected — may appear plastic",
-                "asymmetry": "Asymmetric over-smoothing detected — one face zone over-retouched",
-                "skin_score": "Skin quality score low — plastic/over-evolved appearance",
-            }.get(detector_name, f"{detector_name} artifact detected")
+            unavailable = det_result.get("available") is False
+            if unavailable:
+                msg = (
+                    f"QA detector {detector_name} failed; "
+                    "output could not be validated"
+                )
+            else:
+                msg = {
+                    "banding": "Banding visible in smooth gradient regions",
+                    "clipping": "Highlight/shadow clipping detected",
+                    "plastic_skin": "Skin texture loss detected — may appear plastic",
+                    "halo": "Edge overshoot halos detected from sharpening",
+                    "seam": "Seam visible at subject boundary",
+                    "color_drift": "Skin hue shift detected — color grade drifted beyond budget",
+                    "pore_spectrum": "Skin pore-spectrum loss detected — may appear plastic",
+                    "asymmetry": "Asymmetric over-smoothing detected — one face zone over-retouched",
+                    "skin_score": "Skin quality score low — plastic/over-evolved appearance",
+                }.get(detector_name, f"{detector_name} artifact detected")
             _qa_thresholds = {
                 "banding": qa_detectors.BANDING_THRESHOLD,
                 "clipping": qa_detectors.CLIPPING_THRESHOLD,
@@ -3107,6 +3128,10 @@ class RetouchEngine:
         acc_skin_hair = np.zeros((h_img, w_img), dtype=np.float32)
         acc_lips = np.zeros((h_img, w_img), dtype=np.float32)
         acc_sharpen = np.zeros((h_img, w_img), dtype=np.float32)
+        # Hair alone (no skin/neck), stashed on the instance rather than added
+        # to the return tuple so the 5-tuple contract and its callers stay put.
+        # Consumed by _stage_background for Z3 wisp recovery.
+        acc_hair_only = np.zeros((h_img, w_img), dtype=np.float32)
 
         result = base.copy()
         for fr in face_results:
@@ -3130,9 +3155,15 @@ class RetouchEngine:
             # Accumulate cropped masks into full-resolution canvas masks
             acc_skin[y1:y2, x1:x2] = np.maximum(acc_skin[y1:y2, x1:x2], fr.skin_mask)
             acc_skin_hair[y1:y2, x1:x2] = np.maximum(acc_skin_hair[y1:y2, x1:x2], fr.skin_hair_mask)
+            hair_only = getattr(fr, "hair_only_mask", None)
+            if hair_only is not None:
+                acc_hair_only[y1:y2, x1:x2] = np.maximum(
+                    acc_hair_only[y1:y2, x1:x2], hair_only
+                )
             acc_lips[y1:y2, x1:x2] = np.maximum(acc_lips[y1:y2, x1:x2], fr.lips_mask)
             acc_sharpen[y1:y2, x1:x2] = np.maximum(acc_sharpen[y1:y2, x1:x2], fr.sharpen_mask)
 
+        self._acc_hair_only = acc_hair_only
         return result, acc_skin, acc_skin_hair, acc_lips, acc_sharpen
 
     def _stage_subject_separation(
@@ -3295,19 +3326,42 @@ class RetouchEngine:
             or ctx.cyan_midtone_grade > 0
             or ctx.matte_black > 0
         )
-        parser = getattr(self, "_parser", None)
-        if matte_active and parser is not None:
-            try:
-                hair_mask = parser.parse_hair_full_image(
-                    np.clip(img_255, 0, 255).astype(np.uint8)
-                )
-            except Exception:  # pragma: no cover - never fail a render on wisps
-                logger.warning(
-                    "hair parse for wisp matting failed; "
-                    "compositing without hair evidence",
-                    exc_info=True,
-                )
-                hair_mask = None
+        if matte_active:
+            # Prefer the per-face BiSeNet hair *label* accumulated during face
+            # compositing over ``parse_hair_full_image``.  The full-image call
+            # returns coarse confidence explicitly designed as a soft body-skin
+            # *exclusion* signal, and it localizes the wig poorly: measured on
+            # the Z3 corpus it scored background flowers (0.0699) higher than
+            # the actual white wig (0.0405), so the only pixels it added to the
+            # trimap were background clutter a median 347 px from any
+            # foreground — unknown islands the solver correctly returns 0 for.
+            # The face-crop label scores 0.5058 on the wig vs 0.0022 on
+            # background and its added pixels are 100 % foreground-connected.
+            hair_mask = getattr(self, "_acc_hair_only", None)
+            if hair_mask is not None:
+                if hair_mask.shape != img_255.shape[:2]:
+                    # Face compositing may have run at a different resolution
+                    # (proxy paths); the trimap needs a same-shape mask.
+                    hair_mask = cv2.resize(
+                        hair_mask,
+                        (img_255.shape[1], img_255.shape[0]),
+                        interpolation=cv2.INTER_LINEAR,
+                    )
+                if not hair_mask.any():
+                    hair_mask = None
+            parser = getattr(self, "_parser", None)
+            if hair_mask is None and parser is not None:
+                try:
+                    hair_mask = parser.parse_hair_full_image(
+                        np.clip(img_255, 0, 255).astype(np.uint8)
+                    )
+                except Exception:  # pragma: no cover - never fail on wisps
+                    logger.warning(
+                        "hair parse for wisp matting failed; "
+                        "compositing without hair evidence",
+                        exc_info=True,
+                    )
+                    hair_mask = None
 
         # 1. Background colour grade (desat + blue shadow + cyan midtone +
         #    matte black) — applied first so the blur softens the grade.

@@ -273,6 +273,20 @@ class ColorGrader:
         self._lut_cache: Dict[str, CubeLUT] = {}
         self._lock: threading.Lock = threading.Lock()
 
+    def invalidate_lut_cache(self, name: Optional[str] = None) -> None:
+        """Evict one LUT by stem/path, or clear every cached render LUT."""
+        with self._lock:
+            if name is None:
+                self._lut_cache.clear()
+                return
+            stem = Path(name).stem
+            stale_keys = [
+                key for key in self._lut_cache
+                if Path(key).stem == stem
+            ]
+            for key in stale_keys:
+                self._lut_cache.pop(key, None)
+
     def grade(
         self,
         img_bgr: np.ndarray,

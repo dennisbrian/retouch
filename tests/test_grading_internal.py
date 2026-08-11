@@ -431,6 +431,27 @@ class TestLUTIntegration:
         grader._add_film_emulation(np.zeros((4, 4, 3), dtype=np.uint8), str(p))
         assert grader._lut_cache[key] is cached
 
+    def test_invalidate_lut_cache_by_stem(self, tmp_path):
+        p = tmp_path / "identity.cube"
+        p.write_text(self.CUBE_IDENTITY_2)
+        grader = ColorGrader()
+        grader._add_film_emulation(np.zeros((4, 4, 3), dtype=np.uint8), str(p))
+        key = str(p.resolve())
+
+        grader.invalidate_lut_cache("identity")
+
+        assert key not in grader._lut_cache
+
+    def test_invalidate_lut_cache_all(self, tmp_path):
+        p = tmp_path / "identity.cube"
+        p.write_text(self.CUBE_IDENTITY_2)
+        grader = ColorGrader()
+        grader._add_film_emulation(np.zeros((4, 4, 3), dtype=np.uint8), str(p))
+
+        grader.invalidate_lut_cache()
+
+        assert grader._lut_cache == {}
+
 
 class TestAddSparkles:
     def test_zero_strength(self, grader, img):

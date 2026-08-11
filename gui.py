@@ -894,24 +894,31 @@ def on_browse_category(category):
 
 
 def on_reload_luts():
-    """Trigger a LUT registry reload (clears cache, re-scans luts dir)."""
+    """Clear LUT discovery and live render caches."""
     try:
         get_registry().reload()
+        _invalidate_live_engine_luts()
         return "LUTs reloaded successfully."
     except Exception as e:
         _logger.warning("LUT reload failed: %s", e)
         return f"LUT reload failed: {e}"
 
 
-# Auto-start the LUT hot-reload daemon: invalidate the registry cache entry
-# for any stem whose .cube file changes on disk. Closes the CLAUDE.md
-# "MINOR, deferred: LUT hot-reload not wired into GUI/CLI" item — the manual
-# reload button stays for force-rescan, but file changes now propagate live.
+def _invalidate_live_engine_luts(stem=None):
+    """Invalidate the active engine without forcing lazy initialization."""
+    with _engine_lock:
+        live_engine = _engine
+    if live_engine is not None:
+        live_engine.invalidate_lut_cache(stem)
+
+
+# The registry watcher already evicts its discovery cache. The callback also
+# evicts the independent ColorGrader cache used by the live render path.
 def _on_lut_changed(stem: str) -> None:
     try:
-        get_registry()._cache.pop(stem, None)
-    except Exception:
-        pass
+        _invalidate_live_engine_luts(stem)
+    except Exception as exc:
+        _logger.warning("Live LUT cache invalidation failed for %s: %s", stem, exc)
 
 
 try:
