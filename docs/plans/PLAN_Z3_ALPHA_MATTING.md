@@ -421,3 +421,48 @@ so F propagates down the strand instead of across background; or (b) raise the s
 for thin structures (`solve_closed_form_alpha`'s `max_dim=320` proxy is a second, still-unmeasured
 wall at 2048px input). A+B are necessary but not sufficient; they are committed because they are
 correct, tested, and a strict precondition for any of the above.
+
+### Probe (2026-08-12): the blocker is the hair *mask*, not the solver — earlier diagnosis corrected
+
+Ran the hair-mask-localization probe. It failed, and in failing it overturned the previous
+section's diagnosis. Recording the corrected chain because the earlier one would send the next
+session at the wrong layer.
+
+**What the probe measured on `DSCF7585.jpg` @2048px:**
+
+1. **Localization made the wig *worse*.** Restricting hair components to those contiguous with
+   the subject dropped the wig-region trimap gain from 6,835 px to **0**, and left the render
+   byte-identical (both 6,854 changed px, all on the legs; raw-vs-localized max diff 2).
+2. **The 6,835 "wig" unknowns solve to alpha exactly 0.000** — mean *and* max — and stay 0.000
+   at `max_dim` 320 / 640 / 1024 / **2048** (27.4 s, no proxy at all).
+3. **Not the proxy, not solver under-confidence.** Exact zeros at native resolution rule both
+   out. **0 of 6,835** gained px sit in a trimap component connected to known-foreground: they
+   are unknown islands surrounded by known-background, so CG correctly returns 0.
+4. **Bridging cannot fix it.** Dilating the hair band at radius 4/8/16/24 leaves connectivity at
+   0/6,835 — because those pixels are a median **347 px** (min 232, max 512) from the nearest
+   known-foreground, in a bbox of **x 0–115**: the extreme left frame edge.
+5. **Root cause — the mask is inverted for this purpose.** Mean `parse_hair_full_image`
+   confidence is **higher on the background flowers/banner (0.0699) than on the actual white wig
+   (0.0405)**. 82.9 % of the evidence lands *inside* the person mask (where it cannot add
+   unknowns, since those px are already core/unknown); the 17.1 % outside — the only part that
+   can add unknowns — is background clutter. See
+   `docs/reference_targets/z3_corpus_evidence_2026-07-30/nikke_hair_vs_person_mask_overlay.png`
+   (green = person, red = hair evidence: red sits on the flowers, not the wig).
+
+**Correction to the previous section.** The `estimate_foreground` 0.85-seed-gate analysis is
+real on synthetics but is **not** what blocks this corpus: alpha here is 0.000, so the strand
+never gets near the gate. The thin-strand under-confidence numbers stand as a synthetic finding;
+they are not the binding constraint on real frames. Do not start with the estimator.
+
+**Why the person mask also matters:** the overlay shows the person mask already covering the wig
+including its edges, so on this frame there is little genuine wisp *outside* the silhouette for
+any trimap to recover. Whether the corpus's visible wisp loss comes from the mask cutting them
+or from a later stage needs re-establishing before more matting work is done.
+
+**Next session, in order:** (1) get hair evidence that actually localizes the wig — the
+face-crop `parse()` hair label, or a colour/texture-based wig segmenter — since
+`parse_hair_full_image` returns coarse confidence explicitly designed as a *soft body-skin
+exclusion* signal and is being misused here as a wisp locator; (2) only then revisit trimap
+topology; (3) the solver and `estimate_foreground` are **not** implicated on real frames and
+should be left alone until (1) lands.
+
