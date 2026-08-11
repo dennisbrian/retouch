@@ -474,3 +474,37 @@ retention where hair evidence overlapped fabric — with no halo, fringe, or art
 Neutral-to-marginally-positive, so A+B stay in. They remain a strict precondition for any real
 wisp fix, and the trimap contract they establish is now under test.
 
+### RESOLVED (2026-08-12): face-crop hair label recovers wisps — `08a8689` / `7f4f928`
+
+The mask was the blocker, and swapping the evidence source fixes it. `_stage_background` now
+prefers the per-face BiSeNet hair *label* (from `parse()`, hard argmax on class 17) over
+`parse_hair_full_image`, falling back to the latter when no face was detected.
+
+| hair source | wig conf | bg conf | ratio | trimap px added | FG-connected | median dist |
+|---|---|---|---|---|---|---|
+| `parse_hair_full_image` (old) | 0.0405 | 0.0699 | **0.6:1 (inverted)** | 81,557 | 17.5 % | 111 px |
+| face-crop `parse()` label (new) | 0.5058 | 0.0022 | **230:1** | 4,897 | **100 %** | 15 px |
+
+**Verified through the real `process()` path**, not a harness: `_composite_alpha` receives
+76,330 hair px; full-pipeline delta 14,088 px at max 112, centred on the wig
+(y 579, x 596). Viewed as a before/after crop — fine strands along the wig edge and shoulder
+that the old path smoothed into the bokeh survive, the antler prop is sharper, no halo or fringe.
+See `nikke_wisp_recovered_facecrop_hair.png`.
+
+**Implementation note:** accumulates hair *alone*, not the existing `acc_skin_hair`
+(skin+hair+neck union), which would drag face and neck skin into the unknown band. Stashed on
+the engine as `_acc_hair_only` rather than widening `_composite_faces`' 5-tuple, so its three
+callers (including a positional-unpack test) stay untouched. `_FaceResult.hair_only_mask` is
+optional and last for the same reason.
+
+**Scope, measured on 3 frames:** helps 2 (DSCF7585 74.8 % of render delta in the head region;
+DSCF8056 92.3 %), inert on DSCF7590 — that frame has *no* hair evidence outside the silhouette
+at any `band_radius` (3/4/6 all gain 0 px), so there is no wisp to recover. `band_radius` is not
+a useful lever: `build_auto_trimap` uses a fixed 9×9 kernel internally regardless of it.
+
+**Still open:** the earlier resolution finding stands — `max_dim` 320→1024 raises alpha `>0.5`
+from 32 to 735 px on the gained band, so the proxy is a real but *secondary* constraint now that
+topology is fixed. Worth revisiting only if wisp fidelity is judged insufficient on a wider
+corpus. The `estimate_foreground` 0.85 seed gate remains a synthetic-only finding, not implicated
+on real frames.
+
