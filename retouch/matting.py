@@ -63,15 +63,23 @@ def build_auto_trimap(
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (band_radius * 2 + 1, band_radius * 2 + 1))
     core = cv2.erode((fg > 0.80).astype(np.uint8), kernel) > 0
     background = cv2.erode((fg < 0.08).astype(np.uint8), kernel) > 0
-    trimap = np.full(fg.shape, 128, dtype=np.uint8)
-    trimap[background] = 0
-    trimap[core] = 255
     if hair_mask is not None:
         hair = _mask(hair_mask)
         if hair.shape != fg.shape:
             raise ValueError("hair_mask must match foreground_mask")
+        # Hair evidence must carve *into* the background set, not merely
+        # re-mark already-unknown pixels.  The unknown band is exactly
+        # ``~core & ~background`` by construction, so an assignment gated on
+        # ``& ~background`` cannot mark a single additional pixel unknown --
+        # flyaway wisps past the silhouette sit in ``background`` and were
+        # erased by the solver rather than matted (Z3 corpus, 2026-07-30).
+        # Removing the band from ``background`` first lets those pixels enter
+        # the solve.  ``core`` still wins, so known foreground stays exact.
         hair_band = cv2.dilate((hair > 0.05).astype(np.uint8), kernel) > 0
-        trimap[hair_band & ~core & ~background] = 128
+        background = background & ~hair_band
+    trimap = np.full(fg.shape, 128, dtype=np.uint8)
+    trimap[background] = 0
+    trimap[core] = 255
     return trimap
 
 

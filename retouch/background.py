@@ -102,6 +102,14 @@ class BackgroundReplacer:
         # on the mask alone would serve a matte fitted to a stale frame.
         probe = np.asarray(person_mask)[::16, ::16]
         img_probe = src_f[::32, ::32]
+        # The hair mask changes the trimap (and therefore the solved matte),
+        # so it has to be part of the key -- otherwise a matte solved without
+        # wisp evidence is served to a call that supplied it.
+        if hair_mask is None:
+            hair_key: tuple = (False, 0.0, 0.0)
+        else:
+            hair_probe = np.asarray(hair_mask)[::16, ::16]
+            hair_key = (True, float(hair_probe.sum()), float(hair_probe.std()))
         key = (
             h,
             w,
@@ -110,7 +118,7 @@ class BackgroundReplacer:
             float(probe.std()),
             float(img_probe.sum()),
             float(img_probe.std()),
-        )
+        ) + hair_key
         cached = self._matte_cache.get(key)
         if cached is not None:
             return cached
@@ -454,6 +462,7 @@ class BackgroundReplacer:
         img: np.ndarray,
         person_mask: np.ndarray,
         radius: float,
+        hair_mask: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Apply bokeh / background blur, subject stays sharp.
 
@@ -490,7 +499,7 @@ class BackgroundReplacer:
         # Z3 phase 3: composite through a true alpha matte, unmixing the
         # foreground so translucent hair re-blends over the new background
         # without carrying the old background's colour (the fringe).
-        alpha = self._composite_alpha(src_f, person_mask)
+        alpha = self._composite_alpha(src_f, person_mask, hair_mask)
         out = self._composite_over(src_f, blurred, alpha)
         return self._restore_dtype(out, was_float)
 
@@ -584,6 +593,7 @@ class BackgroundReplacer:
         img: np.ndarray,
         person_mask: np.ndarray,
         params: dict,
+        hair_mask: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Apply a colour grade to the background only.
 
@@ -673,7 +683,7 @@ class BackgroundReplacer:
         graded = lch_f32_to_bgr_f32(out_lch)
         # Z3 phase 3: matte-composite so a graded background does not tint the
         # translucent hair band (the same fringe mechanism as the bokeh path).
-        alpha = self._composite_alpha(src_f, person_mask)
+        alpha = self._composite_alpha(src_f, person_mask, hair_mask)
         out = self._composite_over(src_f, graded, alpha)
         return self._restore_dtype(out, was_float)
 

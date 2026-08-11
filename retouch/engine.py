@@ -3280,6 +3280,35 @@ class RetouchEngine:
         out = img_255
         replacer = self._background_replacer
 
+        # Z3 wisp recovery: the two matte-compositing ops below need hair
+        # evidence so ``build_auto_trimap`` can admit flyaway strands past the
+        # silhouette as *unknown* rather than hard background — without it the
+        # solver erases them (Z3 corpus, 2026-07-30).  The body-skin path
+        # computes the same mask, but that stage runs *after* this one, so it
+        # cannot be reused; solve it here and only when a matte op is active,
+        # keeping the BiSeNet pass off the early-out and lens_blur-only paths.
+        hair_mask: Optional[np.ndarray] = None
+        matte_active = (
+            ctx.background_blur > 0
+            or ctx.background_desaturation > 0
+            or ctx.blue_shadow_grade > 0
+            or ctx.cyan_midtone_grade > 0
+            or ctx.matte_black > 0
+        )
+        parser = getattr(self, "_parser", None)
+        if matte_active and parser is not None:
+            try:
+                hair_mask = parser.parse_hair_full_image(
+                    np.clip(img_255, 0, 255).astype(np.uint8)
+                )
+            except Exception:  # pragma: no cover - never fail a render on wisps
+                logger.warning(
+                    "hair parse for wisp matting failed; "
+                    "compositing without hair evidence",
+                    exc_info=True,
+                )
+                hair_mask = None
+
         # 1. Background colour grade (desat + blue shadow + cyan midtone +
         #    matte black) — applied first so the blur softens the grade.
         if (
@@ -3297,11 +3326,14 @@ class RetouchEngine:
                     "cyan_midtone_grade": float(ctx.cyan_midtone_grade),
                     "matte_black": float(ctx.matte_black),
                 },
+                hair_mask=hair_mask,
             )
 
         # 2. Background blur (bokeh) — subject stays sharp.
         if ctx.background_blur > 0:
-            out = replacer.blur_background(out, person_mask, float(ctx.background_blur))
+            out = replacer.blur_background(
+                out, person_mask, float(ctx.background_blur), hair_mask=hair_mask
+            )
         if ctx.lens_blur > 0:
             out = replacer.lens_blur(out, person_mask, float(ctx.lens_blur))
 
