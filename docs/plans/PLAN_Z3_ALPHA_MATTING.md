@@ -1,6 +1,10 @@
 # Z3 — Alpha Matting & Layer-Separated Background Compositing (Scoping Plan)
 
-**Status:** ✅ **ALL PHASES SHIPPED (2026-07-26)** — 0+1 `52026f9`, 2 `6dd0089`, 3 `5ea3dbf` · validated on synthetic GT only (see §5 corpus gap) · supersedes the Z3 framing in
+**Status:** ✅ phases 0–3 SHIPPED (2026-07-26) — 0+1 `52026f9`, 2 `6dd0089`, 3 `5ea3dbf` · halo fix
+confirmed on real photos 2026-07-30 · ⚠️ **known gap found on real photos (2026-07-30):**
+flyaway wisps past the main silhouette are erased, not haloed — two stacked defects
+(`build_auto_trimap`'s hair branch is vacuous as written, and `hair_mask` is separately never
+passed at the call sites) — see "Corpus gap closed" below · supersedes the Z3 framing in
 `RESEARCH_PERCEPTUAL_CALIBRATION_Z_2026_07_17.md` §Pillar 2 · **Parent:** MASTER_PLAN research backlog
 **Effort:** phase 0 ~1 d · phase 1 ~2–3 d · phase 2 ~4–6 d · phase 3 ~2–3 d (~2–3 wk total, phased)
 **Standout:** kills the #1 "shopped" tell in background-blurred cosplay/wig shots, and caps
@@ -257,6 +261,73 @@ pins that the no-SciPy path still renders.
 > renders were viewed for absence of halos/artifacts, but not for wisp fidelity against a
 > reference. Point `./executable/random_image_test <folder>` at a wig-over-busy-background
 > set to close this.
+
+### Corpus gap closed (2026-07-30) — real photos confirm phase 1, find a phase-2 wiring gap
+
+Owner supplied two real folders: `~/Desktop/duotian nikke` (Nikke cosplay, white wig,
+flyaway strands, busy indoor set) and `~/Desktop/bonodori2026` (matsuri crowd, real hair,
+string-light bokeh background). Swept both through `studio_dream_v2`, `film_noir_cinema_v1`,
+`editorial_elegance_v1`, `high_energy_glow_v1`, `minimal_film_v1` (all set `background_blur`,
+the Z3-affected path), `anime_crystal_void`, and `apex_cinema_v1` (`lens_blur` only — negative
+control, deliberately unwired per §"Wire-in decisions") at `--max-dim 2048`.
+
+**Phase-1 halo fix holds on real photos.** Across every blur strength tested (6–35) and both
+subjects, no bright ring or subject-colour bleed at the hair/bokeh boundary — the defect
+measured in §1.1 does not reproduce post-fix on real images either.
+
+**New finding: flyaway wisps are still erased, and the cause is two stacked defects upstream
+of the solver — not just a missing wire.** Every fine flyaway strand extending past the main
+wig/hair silhouette (the Nikke wig's loose strands past the antler prop; a strand crossing the
+kimono/flower background in the bonodori shot) is cut cleanly at the silhouette edge — not
+haloed, just gone — regardless of blur strength. Root-caused by reading the call sites and
+verified with a synthetic unit check, not assumed:
+
+- **Defect A — `build_auto_trimap`'s hair branch is vacuous as written.** Read the set algebra
+  at `matting.py:60–75`: `trimap` starts all-128, then `background = erode(fg < 0.08)` is set to
+  0 and `core = erode(fg > 0.80)` is set to 255. The remaining 128 pixels are *exactly*
+  `~core & ~background`. The hair line then does
+  `trimap[hair_band & ~core & ~background] = 128` — assigning 128 to a subset of pixels that
+  are already 128. It cannot mark a single additional pixel unknown, no matter what
+  `hair_mask` contains. Verified directly:
+  ```python
+  fg = np.zeros((200,200), np.float32); fg[60:140, 60:140] = 1.0
+  hair = np.zeros((200,200), np.float32); hair[95:105, 140:180] = 1.0  # strand 40px past the edge
+  build_auto_trimap(fg) == build_auto_trimap(fg, hair_mask=hair)  # True, 0-pixel delta
+  ```
+  `tests/test_matting.py` has zero references to `hair_mask` — this branch has never been
+  under test, vacuous or otherwise.
+- **Defect B — `hair_mask` is additionally never passed at either call site.**
+  `background.py::blur_background` / `grade_background` both call `_composite_alpha(src_f,
+  person_mask)` with no `hair_mask` argument (lines 493, 676) — it defaults to `None`. Even
+  if Defect A were fixed, wisp recovery would still be inert without this.
+- **Fixing B alone does nothing.** A future session must fix Defect A first (let hair evidence
+  carve *into* the background set — e.g. subtract `hair_band` from `background` before the 0
+  assignment, or add `trimap[hair_band & ~core] = 128` so it can flip pixels currently in
+  `background`) — then wire `parse_hair_full_image` through `_stage_background`
+  (`engine.py:3240`, no hair-mask parameter today) to `_composite_alpha`. The plan named the
+  right mask source (§Method phase 2, "available at `parsing.py:359`") but neither the carving
+  logic nor the plumbing exists.
+
+**Where the next wall is, once A+B are fixed:** `solve_closed_form_alpha`'s proxy resolution
+(default `max_dim=320`) is currently masked by Defect A — the wisp pixels never enter the solve
+at all, so the proxy can't be blamed yet. Once the trimap actually admits wisps as unknown, a
+1px strand at a 2048px input becomes ~0.16px in the 320px solve grid, which will be the next
+binding constraint on wisp fidelity. Not measured this session; flagged so the next session
+doesn't rediscover it from scratch.
+
+**Not closed by this session:** both defects above need fixing, plus a decision on whether
+`_stage_background` recomputes `parse_hair_full_image` (extra BiSeNet pass cost) or reuses the
+`body_hair_mask` already computed in the body-skin-exclusion path (`engine.py` ~line 3430) —
+real plumbing, not a one-line fix, and left for a follow-up session.
+
+**Unrelated defect spotted, logged separately, not chased here:** `high_energy_glow_v1` on
+the Nikke image produces a blown-out pink/red periocular region — a colour-grading issue, not
+a background/matting one. Needs its own investigation.
+
+Source images: `~/Desktop/duotian nikke/DSCF7585.jpg`, `~/Desktop/bonodori2026/DSCF8056.jpg`
+(owner's machine, not copied into the repo — 24 MP RAF-derived JPEGs, too large to check in).
+Cropped comparison evidence (source vs. rendered, wisp region) saved at
+`docs/reference_targets/z3_corpus_evidence_2026-07-30/`.
 
 ### Phases 0+1 as shipped (2026-07-26)
 
