@@ -1,10 +1,11 @@
 # Z3 — Alpha Matting & Layer-Separated Background Compositing (Scoping Plan)
 
-**Status:** ✅ phases 0–3 SHIPPED (2026-07-26) — 0+1 `52026f9`, 2 `6dd0089`, 3 `5ea3dbf` · halo fix
-confirmed on real photos 2026-07-30 · ⚠️ **known gap found on real photos (2026-07-30):**
-flyaway wisps past the main silhouette are erased, not haloed — two stacked defects
-(`build_auto_trimap`'s hair branch is vacuous as written, and `hair_mask` is separately never
-passed at the call sites) — see "Corpus gap closed" below · supersedes the Z3 framing in
+**Status:** ✅ **phases 0–3 SHIPPED + wisp recovery RESOLVED (2026-08-12)** — 0+1 `52026f9`,
+2 `6dd0089`, 3 `5ea3dbf`; wisp defects A+B `57ac259`/`08a8689`, hair-source fix `7f4f928`.
+Halo fix confirmed on real photos 2026-07-30; wisp recovery corpus-verified on 18 frames
+2026-08-12 with no regressions found. Remaining known constraint: the closed-form solve proxy
+(`max_dim=320`) is a *secondary* limit on wisp fidelity now that trimap topology is fixed —
+revisit only if fidelity is judged insufficient on a wider corpus. Supersedes the Z3 framing in
 `RESEARCH_PERCEPTUAL_CALIBRATION_Z_2026_07_17.md` §Pillar 2 · **Parent:** MASTER_PLAN research backlog
 **Effort:** phase 0 ~1 d · phase 1 ~2–3 d · phase 2 ~4–6 d · phase 3 ~2–3 d (~2–3 wk total, phased)
 **Standout:** kills the #1 "shopped" tell in background-blurred cosplay/wig shots, and caps
