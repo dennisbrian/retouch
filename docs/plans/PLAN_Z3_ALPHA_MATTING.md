@@ -466,3 +466,11 @@ exclusion* signal and is being misused here as a wisp locator; (2) only then rev
 topology; (3) the solver and `estimate_foreground` are **not** implicated on real frames and
 should be left alone until (1) lands.
 
+**Is shipping A+B safe on real frames, given they do not yet recover wisps?** Checked, yes.
+On `DSCF7585.jpg` the A+B delta is 7,263 px at max 35/255, entirely on the legs/costume where
+BiSeNet's stray hair confidence overlaps dark fabric. Viewed as a before/after crop (not judged
+from the metric alone): the costume edge is marginally *less* blurred — slightly better detail
+retention where hair evidence overlapped fabric — with no halo, fringe, or artifact introduced.
+Neutral-to-marginally-positive, so A+B stay in. They remain a strict precondition for any real
+wisp fix, and the trimap contract they establish is now under test.
+
