@@ -1398,7 +1398,7 @@ class TestJobDashboard:
                             recipe_name, export_fmt, export_quality, export_res, auto_group,
                             generate_sheet, export_zip, prg, only_files=None):
             captured["only_files"] = only_files
-            return [], None, None, "ok"
+            return None, None, "ok"
 
         monkeypatch.setattr("gui._run_batch", fake_run_batch)
 

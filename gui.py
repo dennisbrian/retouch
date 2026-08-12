@@ -364,7 +364,7 @@ def on_rerun_flagged(job_id, prg=gr.Progress()):
     gr.Info(f"Re-running {len(flagged)} flagged file(s)...")
     processor = BatchProcessor()
     try:
-        _, _, _, log = _run_batch(
+        _, _, log = _run_batch(
             processor, job.input_dir, job.output_dir, job.style_type,
             job.recipe_or_style if job.style_type == "Use Custom Style" else "",
             job.recipe_or_style if job.style_type != "Use Custom Style" else "natural",
