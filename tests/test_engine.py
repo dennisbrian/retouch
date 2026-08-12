@@ -239,9 +239,11 @@ class TestCompositeFaces:
         skin_hair = np.zeros((4, 4), dtype=np.float32)
         lips = np.zeros((4, 4), dtype=np.float32)
         sharpen = np.zeros((4, 4), dtype=np.float32)
+        hair_only = np.zeros((4, 4), dtype=np.float32)
         skin_hair[1, 1] = 1.0
         lips[1, 2] = 1.0
         sharpen[2, 1] = 1.0
+        hair_only[0, 1] = 1.0
 
         face_result = _FaceResult(
             canvas=canvas,
@@ -250,6 +252,7 @@ class TestCompositeFaces:
             lips_mask=lips,
             sharpen_mask=sharpen,
             roi_box=(0, 0, 4, 4),
+            hair_only_mask=hair_only,
         )
 
         result, _, _, acc_lips, acc_sharpen = engine._composite_faces(base, [face_result], 4, 4)
@@ -259,6 +262,7 @@ class TestCompositeFaces:
         assert np.array_equal(result[2, 1], [70, 80, 90])
         assert acc_lips[1, 2] == 1.0
         assert acc_sharpen[2, 1] == 1.0
+        assert engine._acc_hair_only[0, 1] == 1.0
 
 
 class TestApplyWhiteCostumeLift:

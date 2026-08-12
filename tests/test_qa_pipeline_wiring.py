@@ -23,6 +23,20 @@ requires_retouch = pytest.mark.skipif(
 )
 
 
+def _mocked_engine_for(img_h: int, img_w: int, *, no_face: bool = True):
+    """Build an engine without initializing native MediaPipe resources."""
+    from retouch.engine import RetouchEngine
+    import retouch.engine as engine_mod
+    from tests.benchmark_pipeline import _make_mock_engine_cls, _wire_mocks
+
+    build_detector, build_parser, detectors, parsers = _make_mock_engine_cls()
+    with patch.object(engine_mod, "FaceDetector", build_detector), \
+         patch.object(engine_mod, "FaceParser", build_parser):
+        engine = RetouchEngine()
+    _wire_mocks(detectors[0], parsers[0], img_h, img_w, no_face=no_face)
+    return engine
+
+
 def test_qa_detectors_importable():
     """qa_detectors module should be importable."""
     from retouch import qa_detectors
@@ -82,7 +96,12 @@ def test_qa_results_stored_on_context():
     img = np.random.RandomState(42).randint(0, 255, (200, 200, 3), dtype=np.uint8)
     _wire_mocks(det, par, 200, 200, no_face=False)
 
-    result = eng.process(img, recipe="natural", fast=False)
+    flagged = {
+        name: {"score": 1.0, "flagged": True, "probe": name}
+        for name in ("banding", "clipping", "plastic_skin")
+    }
+    with patch.object(engine_mod.qa_detectors, "run_all", return_value=flagged):
+        result = eng.process(img, recipe="natural", fast=False)
     qa = result.params._qa_results
     assert isinstance(qa, dict)
     assert "banding" in qa
@@ -93,7 +112,7 @@ def test_qa_results_stored_on_context():
 @requires_retouch
 def test_qa_detectors_benchmark_integration():
     """Benchmark script should have qa_detector_metrics function."""
-    from scripts.benchmark import qa_detector_metrics
+    from scripts.bench.benchmark import qa_detector_metrics
 
     img = np.random.RandomState(42).randint(0, 255, (100, 100, 3), dtype=np.uint8)
     mask = np.ones((100, 100), dtype=np.float32)
@@ -108,7 +127,7 @@ def test_qa_detectors_benchmark_integration():
 
 def test_qa_detector_benchmark_parsing():
     """Benchmark should parse QA detector output lines."""
-    from scripts.benchmark import parse_benchmark_lines
+    from scripts.bench.benchmark import parse_benchmark_lines
 
     test_line = \
         "[benchmark] qa_detector_output: banding=0.1200 clipping=0.0500 plastic=0.3400"
@@ -123,10 +142,9 @@ def test_qa_detector_benchmark_parsing():
 @requires_retouch
 def test_processing_result_has_qa_attribute():
     """ProcessingResult should have .qa attribute after pipeline."""
-    from retouch.engine import RetouchEngine, ProcessingResult
     img = np.random.randint(50, 200, (100, 100, 3), dtype=np.uint8)
-    engine = RetouchEngine()
-    result = engine.process(img, recipe="natural")
+    with _mocked_engine_for(100, 100) as engine:
+        result = engine.process(img, recipe="natural")
     assert hasattr(result, "qa")
     assert isinstance(result.qa, list)
 
@@ -134,8 +152,7 @@ def test_processing_result_has_qa_attribute():
 @requires_retouch
 def test_qa_attribute_empty_for_clean_image():
     """A clean low-processing image should have empty qa list."""
-    from retouch.engine import RetouchEngine
     img = np.random.randint(50, 200, (100, 100, 3), dtype=np.uint8)
-    engine = RetouchEngine()
-    result = engine.process(img, recipe="natural")
+    with _mocked_engine_for(100, 100) as engine:
+        result = engine.process(img, recipe="natural")
     assert isinstance(result.qa, list)
