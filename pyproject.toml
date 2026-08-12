@@ -9,9 +9,9 @@ description = "Professional automated face retouching engine"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
-    "opencv-python>=4.8.0",
-    "mediapipe>=0.10.0",
-    "numpy>=1.24.0",
+    "opencv-contrib-python>=4.8.0,<4.12",
+    "mediapipe>=0.10.0,<0.11",
+    "numpy>=1.24.0,<2",
     "onnxruntime>=1.16.0",
     "tqdm>=4.65.0",
     "Pillow>=10.0.0",
@@ -21,6 +21,7 @@ dependencies = [
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=6.0.0",
+    "pytest-timeout>=2.3.0,<3",
 ]
 gui = [
     "gradio>=4.0.0",
@@ -31,3 +32,11 @@ raw = ["rawpy>=0.19.0"]
 
 [tool.setuptools.packages.find]
 include = ["retouch*"]
+
+[tool.pytest.ini_options]
+timeout = 120
+timeout_method = "thread"
+markers = [
+    "slow: long-running regression or golden-image test",
+    "native: initializes native MediaPipe or accelerator resources",
+]

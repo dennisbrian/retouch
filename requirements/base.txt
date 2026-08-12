@@ -1,6 +1,6 @@
-opencv-python>=4.8.0
-mediapipe>=0.10.0
-numpy>=1.24.0
+opencv-contrib-python>=4.8.0,<4.12
+mediapipe>=0.10.0,<0.11
+numpy>=1.24.0,<2
 onnxruntime>=1.16.0
 tqdm>=4.65.0
 Pillow>=10.0.0

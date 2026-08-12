@@ -12,7 +12,8 @@ Quick fixes for common issues. If your problem isn't here, open an issue on GitH
 **Fix:**
 ```bash
 source venv/bin/activate
-pip install -e .  # Install in editable mode
+python -m pip install --upgrade pip
+python -m pip install -e .  # Install in editable mode
 ```
 
 ### Models downloading very slowly
