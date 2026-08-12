@@ -1284,3 +1284,125 @@ class TestIntegrationConstantCrossRef:
         expected = {"Original", "4K (3840px)", "2K (2048px)",
                     "Full HD (1920px)", "HD (1280px)", "720px"}
         assert set(gui.EXPORT_RES_MAP.keys()) == expected
+
+
+# ---------------------------------------------------------------------------
+# TestJobDashboard
+# ---------------------------------------------------------------------------
+
+
+class TestJobDashboard:
+    """Tests for the Job Dashboard tab handlers (on_refresh_jobs, on_select_job,
+    on_rerun_flagged). All disk access goes through a monkeypatched JobStore
+    pointed at tmp_path — no MediaPipe/model loading needed."""
+
+    def _job_store(self, tmp_path):
+        from retouch.jobs import JobStore
+        return JobStore(jobs_dir=str(tmp_path))
+
+    def test_on_refresh_jobs_lists_saved_jobs(self, tmp_path, monkeypatch):
+        from retouch.jobs import Job, JobStore
+
+        store = self._job_store(tmp_path)
+        store.save(Job(job_id="j1", recipe_or_style="natural", total_files=3))
+
+        monkeypatch.setattr("retouch.jobs.JobStore", lambda: store)
+
+        rows = gui.on_refresh_jobs()
+        assert len(rows) == 1
+        assert rows[0][0] == "j1"
+        assert rows[0][3] == "natural"
+        assert rows[0][4] == 3
+
+    def test_on_refresh_jobs_empty(self, tmp_path, monkeypatch):
+        store = self._job_store(tmp_path)
+        monkeypatch.setattr("retouch.jobs.JobStore", lambda: store)
+        assert gui.on_refresh_jobs() == []
+
+    def test_on_select_job_returns_file_rows(self, tmp_path, monkeypatch):
+        from retouch.jobs import FileRecord, Job, QA_STATE_FLAGGED
+
+        store = self._job_store(tmp_path)
+        job = Job(job_id="j1", log="done", files=[
+            FileRecord(source_path="/in/a.jpg", status="done", qa_state=QA_STATE_FLAGGED,
+                       qa_warnings=[{"detector": "halo"}]),
+        ])
+        store.save(job)
+        monkeypatch.setattr("retouch.jobs.JobStore", lambda: store)
+
+        class FakeSelectData:
+            index = [0, 0]
+
+        visible_update, rows, log, selected_id = gui.on_select_job(FakeSelectData(), [["j1", "", "", "", 0, 0]])
+        assert selected_id == "j1"
+        assert log == "done"
+        assert rows[0][0] == "/in/a.jpg"
+        assert rows[0][3] == "halo"
+
+    def test_on_select_job_missing_job_warns(self, tmp_path, monkeypatch):
+        store = self._job_store(tmp_path)
+        monkeypatch.setattr("retouch.jobs.JobStore", lambda: store)
+        monkeypatch.setattr("gui.gr", __import__("unittest.mock", fromlist=["MagicMock"]).MagicMock())
+
+        class FakeSelectData:
+            index = [0, 0]
+
+        _, rows, log, selected_id = gui.on_select_job(FakeSelectData(), [["missing", "", "", "", 0, 0]])
+        assert rows == []
+        assert selected_id is None
+
+    def test_on_rerun_flagged_no_job_selected(self, monkeypatch):
+        from unittest.mock import MagicMock
+        monkeypatch.setattr("gui.gr", MagicMock())
+        result = gui.on_rerun_flagged(None)
+        assert "no job selected" in result.lower()
+
+    def test_on_rerun_flagged_no_flagged_files(self, tmp_path, monkeypatch):
+        from unittest.mock import MagicMock
+        from retouch.jobs import FileRecord, Job, QA_STATE_CLEAN
+
+        store = self._job_store(tmp_path)
+        job = Job(job_id="j1", files=[
+            FileRecord(source_path="/in/a.jpg", status="done", qa_state=QA_STATE_CLEAN),
+        ])
+        store.save(job)
+        monkeypatch.setattr("retouch.jobs.JobStore", lambda: store)
+        monkeypatch.setattr("gui.gr", MagicMock())
+
+        result = gui.on_rerun_flagged("j1")
+        assert "no flagged files" in result.lower()
+
+    def test_on_rerun_flagged_calls_run_batch_with_flagged_subset(self, tmp_path, monkeypatch):
+        from unittest.mock import MagicMock
+        from retouch.jobs import FileRecord, Job, QA_STATE_CLEAN, QA_STATE_FLAGGED
+
+        store = self._job_store(tmp_path)
+        job = Job(
+            job_id="j1", input_dir="/in", output_dir="/out",
+            style_type="Use Standard Recipe", recipe_or_style="natural",
+            export_fmt="JPEG", export_quality=95, export_res="Original",
+            files=[
+                FileRecord(source_path="/in/a.jpg", status="done", qa_state=QA_STATE_FLAGGED),
+                FileRecord(source_path="/in/b.jpg", status="done", qa_state=QA_STATE_CLEAN),
+            ],
+        )
+        store.save(job)
+        monkeypatch.setattr("retouch.jobs.JobStore", lambda: store)
+        monkeypatch.setattr("gui.gr", MagicMock())
+        monkeypatch.setattr("retouch.batch_processor.BatchProcessor.close", lambda self: None)
+        monkeypatch.setattr("retouch.batch_processor.BatchProcessor.__init__", lambda self: None)
+
+        captured = {}
+
+        def fake_run_batch(processor, input_dir, output_dir, style_type, custom_style_name,
+                            recipe_name, export_fmt, export_quality, export_res, auto_group,
+                            generate_sheet, export_zip, prg, only_files=None):
+            captured["only_files"] = only_files
+            return None, None, "ok"
+
+        monkeypatch.setattr("gui._run_batch", fake_run_batch)
+
+        result = gui.on_rerun_flagged("j1")
+        assert result == "ok"
+        assert captured["only_files"] is not None
+        assert {p.name for p in captured["only_files"]} == {"a.jpg"}

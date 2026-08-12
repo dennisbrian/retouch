@@ -98,3 +98,130 @@ def test_batch_processor_uses_async_queue(monkeypatch, tmp_path):
         in_dir, out_dir, generate_sheet=False, num_workers=2,
     )
     assert called["async"] is True
+
+
+class _FakeResult(np.ndarray):
+    """Minimal ndarray subclass mirroring ProcessingResult's .qa attribute."""
+
+
+def _fake_result(shape=(64, 64, 3), qa=None):
+    arr = np.zeros(shape, dtype=np.uint8)
+    r = arr.view(_FakeResult)
+    r.qa = qa if qa is not None else []
+    return r
+
+
+def _make_input_dir(tmp_path, names=("a.jpg", "b.jpg")):
+    in_dir = tmp_path / "in"
+    out_dir = tmp_path / "out"
+    in_dir.mkdir()
+    out_dir.mkdir()
+    for name in names:
+        Image.new("RGB", (64, 64)).save(in_dir / name)
+    return in_dir, out_dir
+
+
+def test_only_files_restricts_processing(monkeypatch, tmp_path):
+    in_dir, out_dir = _make_input_dir(tmp_path, names=("a.jpg", "b.jpg", "c.jpg"))
+    engine = MagicMock()
+    engine.process.return_value = _fake_result()
+    processor = BatchProcessor(engine)
+
+    monkeypatch.setattr(
+        "retouch.batch_processor.analyze_and_group",
+        lambda paths, cache, eng: {"Group": paths},
+    )
+
+    seen = []
+    monkeypatch.setattr(
+        processor, "_process_single_file",
+        lambda fp, *args, **kwargs: (seen.append(fp), out_dir / f"{fp.stem}_out.jpg")[1],
+    )
+
+    processor.process_folder(
+        in_dir, out_dir, generate_sheet=False, num_workers=1,
+        only_files=[in_dir / "a.jpg", in_dir / "c.jpg"],
+    )
+
+    assert {p.name for p in seen} == {"a.jpg", "c.jpg"}
+
+
+def test_on_file_result_fires_for_success_and_failure(monkeypatch, tmp_path):
+    in_dir, out_dir = _make_input_dir(tmp_path, names=("good.jpg", "bad.jpg"))
+    engine = MagicMock()
+
+    def fake_process(img_bgr, recipe=None, **kwargs):
+        return _fake_result()
+
+    engine.process.side_effect = fake_process
+    processor = BatchProcessor(engine)
+
+    monkeypatch.setattr(
+        "retouch.batch_processor.analyze_and_group",
+        lambda paths, cache, eng: {"Group": paths},
+    )
+
+    def fake_imread(path):
+        if "bad" in str(path):
+            raise ValueError("corrupt file")
+        return np.zeros((64, 64, 3), dtype=np.uint8)
+
+    monkeypatch.setattr("retouch.batch_processor.imread_exif", fake_imread)
+    monkeypatch.setattr(
+        "retouch.io.write_image_with_icc", lambda *args, **kwargs: None,
+    )
+
+    results = {}
+
+    def on_file_result(source_path, output_path, qa_list, error):
+        results[source_path.name] = (output_path, qa_list, error)
+
+    processor.process_folder(
+        in_dir, out_dir, generate_sheet=False, num_workers=1,
+        on_file_result=on_file_result,
+    )
+
+    assert results["good.jpg"][0] is not None
+    assert results["good.jpg"][2] is None
+    assert results["bad.jpg"][0] is None
+    assert results["bad.jpg"][2] is not None
+
+
+def test_on_file_result_receives_qa_before_export_resize(monkeypatch, tmp_path):
+    """Regression: cv2.resize on the export path drops the ProcessingResult
+    subclass and its .qa attribute. QA must be captured before that resize,
+    not after — this test forces the resize branch and asserts QA survives.
+    """
+    in_dir, out_dir = _make_input_dir(tmp_path, names=("big.jpg",))
+    engine = MagicMock()
+
+    fake_qa = [{"detector": "halo", "score": 0.9, "flagged": True, "message": "halo"}]
+    big_result = _fake_result(shape=(2000, 2000, 3), qa=fake_qa)
+    engine.process.return_value = big_result
+
+    processor = BatchProcessor(engine)
+
+    monkeypatch.setattr(
+        "retouch.batch_processor.analyze_and_group",
+        lambda paths, cache, eng: {"Group": paths},
+    )
+    monkeypatch.setattr(
+        "retouch.batch_processor.imread_exif",
+        lambda path: np.zeros((2000, 2000, 3), dtype=np.uint8),
+    )
+    monkeypatch.setattr(
+        "retouch.io.write_image_with_icc", lambda *args, **kwargs: None,
+    )
+
+    captured = {}
+
+    def on_file_result(source_path, output_path, qa_list, error):
+        captured["qa_list"] = qa_list
+
+    processor.process_folder(
+        in_dir, out_dir, generate_sheet=False, num_workers=1,
+        export_res="720px",  # forces the cv2.resize branch (2000px > 720px)
+        on_file_result=on_file_result,
+    )
+
+    assert captured["qa_list"] == fake_qa

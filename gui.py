@@ -207,10 +207,12 @@ def on_process_folder(input_dir, output_dir, style_type, custom_style_name, reci
 
 def _run_batch(processor, input_dir, output_dir, style_type, custom_style_name,
                recipe_name, export_fmt, export_quality, export_res, auto_group,
-               generate_sheet, export_zip, prg):
+               generate_sheet, export_zip, prg, only_files=None):
+    from retouch.jobs import Job, FileRecord, JobStore, make_job_id, QA_STATE_UNKNOWN, QA_STATE_CLEAN, QA_STATE_FLAGGED, QA_STATE_ERROR
+
     profile = None
     style_val = recipe_name
-    
+
     if style_type == "Use Custom Style":
         style_val = ""
         if not custom_style_name:
@@ -227,6 +229,44 @@ def _run_batch(processor, input_dir, output_dir, style_type, custom_style_name,
         print(f"[Batch Progress {progress * 100:.1f}%]: {message}")
         prg(progress, desc=message)
 
+    job_store = JobStore()
+    job = Job(
+        job_id=make_job_id(input_dir),
+        input_dir=input_dir,
+        output_dir=output_dir,
+        style_type=style_type,
+        recipe_or_style=custom_style_name if style_type == "Use Custom Style" else recipe_name,
+        export_fmt=export_fmt,
+        export_quality=export_quality,
+        export_res=export_res,
+    )
+    job_store.save(job)
+
+    def _qa_state_for(qa_list):
+        if qa_list is None:
+            return QA_STATE_UNKNOWN, []
+        warnings = [dict(w) if isinstance(w, dict) else vars(w) for w in qa_list]
+        if any(w.get("details", {}).get("available") is False for w in warnings):
+            return QA_STATE_ERROR, warnings
+        if warnings:
+            return QA_STATE_FLAGGED, warnings
+        return QA_STATE_CLEAN, warnings
+
+    def on_file_result(source_path, output_path, qa_list, error):
+        if error is not None:
+            record = FileRecord(source_path=str(source_path), status="failed", error=error)
+        else:
+            qa_state, warnings = _qa_state_for(qa_list)
+            record = FileRecord(
+                source_path=str(source_path),
+                output_path=str(output_path) if output_path else None,
+                status="done",
+                qa_state=qa_state,
+                qa_warnings=warnings,
+            )
+        job.files.append(record)
+        job_store.save(job)
+
     try:
         processed, sheet_path, zip_path, log = processor.process_folder(
             input_dir=input_dir,
@@ -240,14 +280,101 @@ def _run_batch(processor, input_dir, output_dir, style_type, custom_style_name,
             generate_sheet=generate_sheet,
             export_zip=export_zip,
             progress_callback=prg_cb,
+            on_file_result=on_file_result,
+            only_files=only_files,
         )
-        
+
+        job.total_files = len(job.files)
+        job.status = "done"
+        job.log = log
+        job_store.save(job)
+
         gr.Info("Batch processing complete!")
         return sheet_path, zip_path, log
     except Exception as e:
         _logger.exception("Batch processing failed: %s", e)
+        job.status = "failed"
+        job.log = str(e)
+        job_store.save(job)
         gr.Warning(f"Batch processing failed: {e}")
         return None, None, f"Exception during batch processing: {e}"
+
+
+# ---------------------------------------------------------------------------
+# Job Dashboard handlers
+# ---------------------------------------------------------------------------
+
+def _job_row(job) -> list:
+    return [job.job_id, job.created, job.status, job.recipe_or_style, job.total_files, job.flagged_count]
+
+
+def on_refresh_jobs():
+    from retouch.jobs import JobStore
+    jobs = JobStore().list_jobs()
+    return [_job_row(j) for j in jobs]
+
+
+def _file_row(rec) -> list:
+    detectors = ", ".join(w.get("detector", "?") for w in rec.qa_warnings)
+    return [rec.source_path, rec.status, rec.qa_state, detectors]
+
+
+def on_select_job(evt: gr.SelectData, job_rows):
+    from retouch.jobs import JobStore
+
+    if evt.index is None:
+        return gr.update(visible=False), [], "", None
+
+    row_idx = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
+    if job_rows is None or row_idx >= len(job_rows):
+        return gr.update(visible=False), [], "", None
+
+    job_id = job_rows[row_idx][0]
+    try:
+        job = JobStore().load(job_id)
+    except (OSError, KeyError, ValueError) as e:
+        gr.Warning(f"Could not load job {job_id}: {e}")
+        return gr.update(visible=False), [], "", None
+
+    rows = [_file_row(f) for f in job.files]
+    return gr.update(visible=True), rows, job.log, job_id
+
+
+def on_rerun_flagged(job_id, prg=gr.Progress()):
+    from pathlib import Path
+    from retouch.jobs import JobStore
+    from retouch.batch_processor import BatchProcessor
+
+    if not job_id:
+        gr.Warning("Select a job first.")
+        return "No job selected."
+
+    job_store = JobStore()
+    try:
+        job = job_store.load(job_id)
+    except (OSError, KeyError, ValueError) as e:
+        gr.Warning(f"Could not load job {job_id}: {e}")
+        return f"Error loading job: {e}"
+
+    flagged = job.flagged_files()
+    if not flagged:
+        gr.Info("No flagged files in this job.")
+        return "No flagged files to re-run."
+
+    gr.Info(f"Re-running {len(flagged)} flagged file(s)...")
+    processor = BatchProcessor()
+    try:
+        _, _, log = _run_batch(
+            processor, job.input_dir, job.output_dir, job.style_type,
+            job.recipe_or_style if job.style_type == "Use Custom Style" else "",
+            job.recipe_or_style if job.style_type != "Use Custom Style" else "natural",
+            job.export_fmt, job.export_quality, job.export_res,
+            False, False, False, prg,
+            only_files=[Path(f.source_path) for f in flagged],
+        )
+        return log
+    finally:
+        processor.close()
 
 
 # PROCESS_INPUT_KEYS — the ordered list of inputs the process_image() Gradio
@@ -2241,6 +2368,28 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         batch_zip_out = gr.File(label="Download Packaged ZIP")
                         batch_status = gr.Textbox(label="Execution Log & Statistics", lines=12, interactive=False, placeholder="Click 'Process Entire Folder' to start batch processing...")
 
+        with gr.Tab("Job Dashboard"):
+            with gr.Group() as job_list_group:
+                gr.Markdown("### Batch Job History")
+                job_refresh_btn = gr.Button("Refresh 🔄")
+                job_list_df = gr.Dataframe(
+                    headers=["job_id", "created", "status", "recipe", "total_files", "flagged"],
+                    interactive=False,
+                    label="Past batch jobs (click a row to view details)",
+                )
+
+            with gr.Group(visible=False) as job_detail_group:
+                gr.Markdown("### Job Detail")
+                job_detail_log = gr.Textbox(label="Job Log", lines=4, interactive=False)
+                job_detail_df = gr.Dataframe(
+                    headers=["source_path", "status", "qa_state", "detectors"],
+                    interactive=False,
+                    label="Per-file results",
+                )
+                job_selected_id = gr.State(value=None)
+                job_rerun_btn = gr.Button("Re-run Flagged Files ⚠️", variant="primary")
+                job_rerun_status = gr.Textbox(label="Re-run Status", lines=3, interactive=False)
+
         with gr.Tab("Custom Style Library"):
             with gr.Row():
                 with gr.Column(scale=1):
@@ -2741,6 +2890,20 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         inputs=[folder_in, folder_out, batch_style_type, batch_custom_style, batch_recipe,
                 batch_fmt, batch_quality, batch_res, auto_group_toggle, sheet_toggle, zip_toggle],
         outputs=[batch_sheet_out, batch_zip_out, batch_status]
+    )
+
+    job_refresh_btn.click(fn=on_refresh_jobs, inputs=[], outputs=[job_list_df])
+
+    job_list_df.select(
+        fn=on_select_job,
+        inputs=[job_list_df],
+        outputs=[job_detail_group, job_detail_df, job_detail_log, job_selected_id],
+    )
+
+    job_rerun_btn.click(
+        fn=on_rerun_flagged,
+        inputs=[job_selected_id],
+        outputs=[job_rerun_status],
     )
 
     # Name → Gradio component map.  Keyed by PROCESS_INPUT_KEYS so that adding
