@@ -63,13 +63,13 @@ F8 makes global stages run at native res (6000×4000 float32 = **288MB per buffe
 
 The app already builds (`build_app.sh` → PyInstaller .app with PyWebView shell). Gaps between "builds on your Mac" and "shippable":
 
-1. **Model acquisition UX:** `models/manifest.json` (name, url, sha256, size, license) + `retouch/model_fetch.py`: download-on-first-use with progress in GUI + checksum verify. Required before F4.b/F7 (LaMa ~200MB, SR models — can't bundle). `luts/ACQUISITION.md` is the documentation precedent.
-2. **macOS signing + notarization** in `build_app.sh` (codesign + notarytool; needs your Developer ID) — without it, users get Gatekeeper-blocked.
-3. **Version + update check:** embed version string (single source in `retouch/__init__.py`); on launch, non-blocking check against GitHub releases; "update available" toast. No auto-download.
-4. **Diagnostics:** rotating log file in `~/Library/Logs/ProMaxRetouch/`; "Copy diagnostics" button in GUI (versions, providers from `build_ort_providers()`, last error) — makes remote debugging of user reports possible.
-5. **Windows build validation:** run the PyInstaller path on Windows (DirectML provider already handled in `build_ort_providers`); document in `BUILD.md`. Timebox — if PyWebView misbehaves, ship "open in browser" mode there.
+1. **Model acquisition UX:** ✅ DONE (P4.a, 2026-07-07) — `models/manifest.json` + `retouch/model_fetch.py` with checksum verify + path-traversal guard.
+2. **macOS signing + notarization** — ✅ SCRIPTED 2026-08-12 in `scripts/build/build_app.sh` (codesign `--options runtime` + notarytool + stapler, gated on `CODESIGN_IDENTITY`/`NOTARY_PROFILE` env vars). **Needs your Developer ID credentials to actually run** — untested end-to-end until then.
+3. **Version + update check:** ✅ DONE 2026-08-12 — `retouch/update_check.py` (stdlib-only, non-blocking, parses `v2.1.0-codename` tags, all failures swallow to None) + GUI launch toast. No auto-download, per spec.
+4. **Diagnostics:** ✅ DONE 2026-08-12 — `retouch/diagnostics.py`: rotating log (1 MB x 3) at `~/Library/Logs/ProMaxRetouch/retouch.log`, wired into GUI startup; 🩺 Diagnostics accordion in GUI emits the version/platform/ORT-provider bundle.
+5. **Windows build validation:** 📋 DOCUMENTED ONLY — PyInstaller path + DirectML provider noted in `BUILD.md`; needs real Windows hardware to validate. Fallback documented: `gui.py` browser mode.
 
-**Files:** `models/manifest.json` (new), `retouch/model_fetch.py` (new), `build_app.sh`, `desktop.py`, `gui.py`, `retouch/__init__.py`, `BUILD.md` (new), tests for manifest/checksum logic.
+**Files:** `models/manifest.json` ✅, `retouch/model_fetch.py` ✅, `build_app.sh` ✅ (signing hooks), `retouch/update_check.py` (new), `retouch/diagnostics.py` (new), `gui.py` (toast + diagnostics button + file logging), `BUILD.md` (new), `tests/test_update_check.py` + `tests/test_diagnostics.py` (17 tests).
 
 ---
 

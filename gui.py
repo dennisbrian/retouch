@@ -37,6 +37,7 @@ from retouch.batch_processor import BatchProcessor
 from retouch.style import StyleProfile
 from retouch.look_extractor import LookExtractor
 from retouch.recipe_cookbook import search_recipes, list_recipes, list_categories
+from retouch.diagnostics import diagnostics_report
 from retouch.lut import get_registry, watch_luts_dir
 from retouch.marks import MARK_POLICY_PRESET_NAMES
 
@@ -2325,6 +2326,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             reset_debug_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                             debug_mode = gr.Checkbox(label="Generate Debug Masks", value=False, info="Save skin/lips/frequency-layer masks and display them for tuning")
 
+                        with gr.Accordion("🩺 Diagnostics", open=False):
+                            gr.Markdown("Version/environment bundle for bug reports. Click, then copy the text below.")
+                            diagnostics_btn = gr.Button("📋 Generate Diagnostics", variant="secondary", size="sm", elem_classes=["secondary-btn"])
+                            diagnostics_out = gr.Textbox(label="Diagnostics", lines=8, interactive=False)
+
                         process_btn_bottom = gr.Button("Apply Overrides & Process ⚡", variant="primary", size="lg", elem_classes=["primary-btn"])
 
                         gr.HTML("""
@@ -2867,6 +2873,13 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         outputs=[reload_luts_status],
     )
 
+    # Diagnostics bundle wiring
+    diagnostics_btn.click(
+        fn=lambda: diagnostics_report(),
+        inputs=[],
+        outputs=[diagnostics_out],
+    )
+
 
     save_style_btn.click(
         fn=on_save_style,
@@ -3273,4 +3286,20 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     )
 
 if __name__ == "__main__":
+    from retouch.diagnostics import setup_file_logging
+    setup_file_logging()
+
+    # Non-blocking update check; surfaces a toast once the UI is up.
+    import threading
+    from retouch.update_check import check_for_update
+
+    def _bg_update_check():
+        info = check_for_update()
+        if info is not None:
+            try:
+                gr.Info(f"Update available: {info.latest_version} — {info.url}", duration=20)
+            except Exception:  # noqa: BLE001 — UI not ready yet; drop silently
+                pass
+
+    threading.Thread(target=_bg_update_check, daemon=True).start()
     app.queue(default_concurrency_limit=1).launch(server_name="127.0.0.1", server_port=7860)

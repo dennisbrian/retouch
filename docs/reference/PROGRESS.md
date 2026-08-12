@@ -29,7 +29,7 @@
 | Phase 5 — Intelligence | ✅ |
 | Phase 6 — Creative Expansion & Moat | ✅ |
 | P4.a (model-fetch infra) | ✅ |
-| Phase 7 — Ship | 🔴 not started |
+| Phase 7 — Ship | 🔄 mostly done (2026-08-12) |
 
 ## Leftover (~5%)
 
@@ -54,8 +54,13 @@
 - **`models/manifest.json` URLs are placeholders** (`github.com/owner/retouch-models`).
 - **No packaging metadata**: no `pyproject.toml` / `setup.py`; requirements unpinned.
 
-### 1. Phase 7 — Ship (0% started)
-- Code signing, update-check, diagnostics, Windows build.
+### 1. Phase 7 — Ship (~80% done 2026-08-12)
+- ✅ Update-check (`retouch/update_check.py` + GUI launch toast), diagnostics
+  (`retouch/diagnostics.py`, rotating log + GUI 🩺 accordion), signing/notarization
+  hooks in `scripts/build/build_app.sh`, `BUILD.md`. 17 new tests.
+- 🔲 Remaining (owner/hardware-gated): run signing with real Developer ID
+  credentials; Windows build validation on real hardware (browser-mode fallback
+  documented in BUILD.md).
 - Packaging/shipping work, not algorithm.
 
 ### 2. A1 / A2 — owner-gated tuning (blocked)

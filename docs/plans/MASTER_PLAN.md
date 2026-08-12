@@ -220,7 +220,7 @@ committed as `40721d6`; no longer a pending action.)_
 
 | # | Stage | What | Effort | Deps | Status |
 |---|---|---|---|---|---|
-| 37 | **P4** | Distribution hardening (signing/notarization, update check, diagnostics, Windows) | 1 wk | P4.a | 📋 NOT STARTED — final ship step (after visual-QA + wiring burn-down). |
+| 37 | **P4** | Distribution hardening (signing/notarization, update check, diagnostics, Windows) | 1 wk | P4.a | 🔄 MOSTLY DONE 2026-08-12 — update-check + diagnostics + BUILD.md + signing/notarization hooks in `build_app.sh` shipped. Remaining: run signing with real Developer ID credentials (owner step); Windows hardware validation (documented fallback). |
 
 ## Phase 8 — Video Face Retouch (new track, added 2026-07-20; not sequenced against Phases 0–7)
 
