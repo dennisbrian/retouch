@@ -445,9 +445,21 @@ class BatchProcessor:
         progress_callback: Optional[Callable[[float, str], None]] = None,
         session: _SessionInput = None,
         num_workers: int = 4,
+        on_file_result: Optional[
+            Callable[[Path, Optional[Path], Optional[List[Any]], Optional[str]], None]
+        ] = None,
+        only_files: Optional[List[Path]] = None,
     ) -> Tuple[List[str], Optional[str], Optional[str], str]:
 
         """Ingests, classifies, processes, and packages a folder of photos.
+
+        ``on_file_result``, if given, is called once per file (success or
+        failure) as ``(source_path, output_path_or_None, qa_list_or_None,
+        error_or_None)``. This is the hook the Job Dashboard uses to record
+        per-file QA state without this module needing to know about jobs.py.
+
+        ``only_files``, if given, restricts processing to this subset of the
+        walked file list (used for "re-run flagged files only").
 
         When ``session`` is provided (a Session object or a path to a session
         JSON file), its params dict is used as the base processing parameters
@@ -537,6 +549,10 @@ class BatchProcessor:
                 if ext in IMAGE_EXTENSIONS:
                     all_files.append(Path(root) / f)
 
+        if only_files is not None:
+            only_set = {Path(p).resolve() for p in only_files}
+            all_files = [fp for fp in all_files if fp.resolve() in only_set]
+
         if not all_files:
             return [], None, None, "No supported images found in the input folder."
 
@@ -576,6 +592,7 @@ class BatchProcessor:
                     export_quality,
                     output_path,
                     applier,
+                    on_file_result,
                 )
 
             processed_paths = _run_async_batch_queue(
@@ -597,6 +614,7 @@ class BatchProcessor:
                     export_quality,
                     output_path,
                     applier,
+                    on_file_result,
                 )
                 if res_path is not None:
                     processed_paths.append(res_path)
@@ -658,6 +676,9 @@ class BatchProcessor:
         export_quality: int,
         output_path: Path,
         applier: Any,
+        on_file_result: Optional[
+            Callable[[Path, Optional[Path], Optional[List[Any]], Optional[str]], None]
+        ] = None,
     ) -> Optional[Path]:
         """Process a single file and write output with embedded metadata."""
         try:
@@ -670,6 +691,13 @@ class BatchProcessor:
                 result = self.engine.process(img_bgr, recipe=style_name_or_recipe, **kwargs)
             else:
                 result = self.engine.process(img_bgr, recipe=style_name_or_recipe)
+
+            # Capture QA now, before any cv2 op below reassigns `result` to a
+            # plain ndarray (cv2.resize/cvtColor drop the ProcessingResult
+            # subclass and its .qa attribute). Must stay the first thing done
+            # with `result` after it's produced — see docs/plans for the Job
+            # Dashboard on why this ordering is load-bearing.
+            qa_list = getattr(result, "qa", None)
 
             export_max = EXPORT_RES_MAP.get(export_res)
             if export_max is not None:
@@ -693,6 +721,8 @@ class BatchProcessor:
                 quality=export_quality,
                 exif=exif_bytes,
             )
+            if on_file_result is not None:
+                on_file_result(file_path, out_file_path, qa_list, None)
             return out_file_path
         except Exception as e:
             logger.error("Failed to process %s: %s", file_path, e)
@@ -703,5 +733,7 @@ class BatchProcessor:
                 "style_name_or_recipe": str(style_name_or_recipe),
                 "export_fmt": export_fmt
             })
+            if on_file_result is not None:
+                on_file_result(file_path, None, None, str(e))
             return None
 
