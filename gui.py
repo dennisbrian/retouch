@@ -2192,6 +2192,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             reset_eyes_lips_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                             eye_enhance = gr.Slider(0, 100, 5, step=1, label="Eye Enhance", info="Boost eye clarity, iris reflection details, and whites brightness")
                             catchlight = gr.Slider(0, 100, 0, step=1, label="Catchlight Boost", info="Amplify existing catchlight highlights in the iris (0 = follow Eye Enhance)")
+                            corneal_shading = gr.Slider(0, 100, 0, step=1, label="Corneal Curvature", info="3D spherical corneal shading for eye depth and wetness (0 = off)")
                             dark_circles = gr.Slider(0, 100, 0, step=1, label="Dark Circle Repair", info="Under-eye dark circle detection and repair")
                             undereye_shadow_strength = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Under-Eye Shadow Smooth", info="Soften under-eye shadows conservatively (0=off)")
                             undereye_darken_removal = gr.Slider(0, 100, 0, step=1, label="Under-Eye Darken Removal", info="Lift under-eye darkening / discoloration (0=off)")
@@ -2463,6 +2464,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
  "skin_sss",
         "eye_enhance",
  "catchlight",
+ "corneal_shading",
  "dark_circles",
  "undereye_darken_removal",
  "undereye_puffiness_reduction",
@@ -2604,6 +2606,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
  "skin_sss": skin_sss,
  "eye_enhance": eye_enhance,
         "catchlight": catchlight,
+ "corneal_shading": corneal_shading,
  "dark_circles": dark_circles,
  "undereye_darken_removal": undereye_darken_removal,
         "undereye_puffiness_reduction": undereye_puffiness_reduction,
@@ -2985,6 +2988,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "mask_feather_mode": mask_feather_mode,
         "eye_enhance": eye_enhance,
         "catchlight": catchlight,
+        "corneal_shading": corneal_shading,
         "dark_circles": dark_circles,
         "undereye_darken_removal": undereye_darken_removal,
         "undereye_puffiness_reduction": undereye_puffiness_reduction,

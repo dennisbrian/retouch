@@ -58,6 +58,7 @@ class EyeEnhancer:
         strength: int = 40,
         catchlight_strength: Optional[int] = None,
         vessel_strength: Optional[int] = None,
+        corneal_strength: int = 0,
     ) -> np.ndarray:
         """Run the full eye enhancement pipeline.
 
@@ -67,6 +68,8 @@ class EyeEnhancer:
             strength: 0–100 overall intensity.
             catchlight_strength: 0–100 catchlight-specific intensity. If None,
                 falls back to ``strength`` (backward compatible).
+            corneal_strength: 0–100 corneal curvature shading intensity
+                (AA5). 0 disables; off by default.
 
         Returns:
             (H, W, 3) result matching input dtype.
@@ -99,6 +102,12 @@ class EyeEnhancer:
             result = self._sculpt_iris(result, regions.left_iris, s)
         if regions.right_iris is not None and regions.right_iris.max() > 0.01:
             result = self._sculpt_iris(result, regions.right_iris, s)
+
+        # Corneal curvature — 3D spherical specular shading per eye (AA5),
+        # opt-in via corneal_shading; off by default so existing recipes are unchanged
+        if corneal_strength > 0:
+            for eye_m in (regions.left_iris, regions.right_iris):
+                result = apply_corneal_curvature_shading(result, eye_m, corneal_strength / 100.0)
 
         # Catchlights — detect and amplify existing highlights or synthesize fallback
         iris_mask = np.clip(regions.left_iris + regions.right_iris, 0, 1)

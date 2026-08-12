@@ -898,6 +898,16 @@ _FACE_FEATURE_PARAMS = [
         max_val=100,
     ),
     ParamSpec(
+        name="corneal_shading",
+        cli_flag="corneal-shading",
+        cli_type=int,
+        default=0,
+        recipe_key="eyes.corneal_shading",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
         name="dark_circles",
         cli_flag="dark-circles",
         cli_type=int,

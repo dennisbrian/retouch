@@ -95,6 +95,7 @@ EXPECTED_RECIPE_KEYS = [
     "whiten", "whiten_hue_stable", "whiten_tone", "whites", "wrinkle_soften",
     "wrinkle_soften_forehead", "wrinkle_soften_nasolabial", "wrinkle_soften_neck",
     "micro_grain", "purple_fringing", "flyaway_cleanup", "split_toning",
+    "corneal_shading",
 ]
 
 # Add new HSL / Calibration / lens_blur keys dynamically
@@ -104,7 +105,7 @@ for color in ["red", "green", "blue"]:
     EXPECTED_RECIPE_KEYS.extend([f"calibration_{color}_hue", f"calibration_{color}_sat", f"calibration_{color}_lum"])
 EXPECTED_RECIPE_KEYS.append("lens_blur")
 
-EXPECTED_RECIPE_KEY_COUNT = 250
+EXPECTED_RECIPE_KEY_COUNT = 251
 # Self-updating: the recipe/smart-style slider tuple length is the contract
 # defined by RECIPE_OUTPUT_KEYS, so this constant can never go stale.
 EXPECTED_UI_OUTPUT_COUNT = len(gui.RECIPE_OUTPUT_KEYS)

@@ -251,6 +251,7 @@ class ProcessingContext:
     undereye_puffiness_reduction: float = 0.0
     undereye_shadow_strength: float = 0.0
     catchlight: float = 0.0
+    corneal_shading: float = 0.0
     eye_sclera_brighten: float = 0.0
     eye_iris_saturate: float = 0.0
     eye_iris_hue_shift: float = 0.0
