@@ -223,3 +223,19 @@ The **bottleneck** is the bilateral filter in `FrequencySeparator.combine` (~600
 | Should I turn off `fast` for final exports? | **Yes.** |
 | Can I inspect processing stages live? | Not yet. Debug mode exposes masks after processing; a stage timeline is planned. |
 | What's the output file format? | JPEG, PNG, PNG-16, or WebP — see Export Format dropdown. |
+
+---
+
+## 7. Job Dashboard
+
+The **Job Dashboard** tab (after "Batch Library Ingestion") records every batch run started from that tab and lets you review per-file QA results without re-opening each output image.
+
+* **Job List**: A `Refresh` button loads past jobs from `~/.retouch/jobs/` into a table (job id, created time, status, recipe/style, file count, flagged count). Jobs are written when a batch starts (`status="running"`) and finalized on completion or failure — the list is not live-updating, click Refresh to see new jobs.
+* **Job Detail**: Click a row to see the job's log and a per-file table (source path, status, QA state, flagged detectors). QA state is one of:
+  * `clean` — QA ran and found no artifacts.
+  * `flagged` — QA found one or more artifacts (banding, halo, skin-score, etc.).
+  * `unknown` — QA didn't produce a result for this file (no person detected, or a downstream resize/style-tone-correction step dropped the QA data before it could be recorded).
+  * `error` — the QA pipeline itself failed on this file (distinct from a genuine artifact flag).
+* **Re-run Flagged Files**: Re-processes only the files marked `flagged` in the selected job, using that job's original recipe/style/export settings, and writes a new job record (the original job is never overwritten).
+
+This tab only surfaces jobs started through "Batch Library Ingestion" — it has no equivalent for single-photo edits or the CLI.
