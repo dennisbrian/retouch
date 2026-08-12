@@ -135,13 +135,13 @@ def run_pytest_subset(
     ]
     if test_filter:
         cmd.extend(["-k", test_filter])
+    env = os.environ.copy()
     if iterations_override is not None:
-        # Set an environment variable the benchmarks honour if defined.
-        os.environ["BENCHMARK_ITERATIONS"] = str(iterations_override)
+        env["BENCHMARK_ITERATIONS"] = str(iterations_override)
     try:
         proc = subprocess.run(
             cmd, cwd=str(PROJECT_ROOT), capture_output=capture, text=True,
-            timeout=900,
+            timeout=900, env=env,
         )
     except subprocess.TimeoutExpired:
         return {"returncode": -1, "durations": [], "stdout": "", "stderr": "timeout"}
@@ -539,6 +539,10 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
 
+    if args.iterations is not None and args.iterations < 1:
+        print("  ! --iterations must be at least 1.")
+        return 2
+
     if args.peak_rss:
         print(">>> P2 row 3b grading peak-RSS guard (4K / 6K)")
         dims = [(2160, 3840), (3240, 5760)]
@@ -577,6 +581,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     raw_runs: List[Dict[str, Any]] = []
     all_rows: List[Dict[str, Any]] = []
+    had_failures = False
 
     for f in selected_files:
         if not f.exists():
@@ -604,6 +609,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print("STDERR:", run["stderr"])
 
         if run["returncode"] != 0:
+            had_failures = True
             print(f"  ! pytest exited with code {run['returncode']}")
 
     print_table(all_rows)
@@ -617,7 +623,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         out_path.write_text(json.dumps(report, indent=2))
         print(f"Wrote report: {out_path}")
 
-    return 0
+    return 1 if had_failures else 0
 
 
 if __name__ == "__main__":

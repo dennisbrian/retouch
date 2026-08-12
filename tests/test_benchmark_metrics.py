@@ -11,6 +11,27 @@ import cv2
 import pytest
 
 
+@pytest.mark.parametrize(
+    "module_name",
+    ["tests.benchmark_modules", "tests.benchmark_pipeline"],
+)
+def test_benchmark_iterations_environment_override(monkeypatch, module_name):
+    """The benchmark CLI's iteration override must control sample count."""
+    import importlib
+
+    benchmark_module = importlib.import_module(module_name)
+    calls = []
+    monkeypatch.setenv("BENCHMARK_ITERATIONS", "3")
+
+    median, samples = benchmark_module._bench(
+        lambda: calls.append(None), iterations=20, warmup=0
+    )
+
+    assert len(samples) == 3
+    assert len(calls) == 3
+    assert median >= 0.0
+
+
 def test_blotchy_vs_clean_synthetic_skin():
     """Test (a): synthetic blotchy skin has strictly higher blotch_std than clean.
 

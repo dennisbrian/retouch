@@ -33,6 +33,8 @@ import cv2
 import numpy as np
 import pytest
 
+from tests.benchmark_utils import benchmark_iterations
+
 
 # ---------------------------------------------------------------------------
 # Mock helpers — fully synthetic face / regions / person mask.
@@ -189,7 +191,9 @@ def _wire_mocks(detector_mock, parser_mock, img_h, img_w, no_face=False):
         return _synthetic_regions(h, w)
     parser_mock.parse.side_effect = _parse
 
-    def _parse_batch(crops, landmarks_list, face_bboxes, person_masks, ieds):
+    def _parse_batch(
+        crops, landmarks_list, face_bboxes, person_masks, ieds, **_kwargs
+    ):
         return [_synthetic_regions(c.shape[:2][0], c.shape[:2][1]) for c in crops]
     parser_mock.parse_batch.side_effect = _parse_batch
 
@@ -225,6 +229,7 @@ def _bench(
 
     Returns ``(median_ms, samples_ms_sorted)``.
     """
+    iterations = benchmark_iterations(iterations)
     for _ in range(max(0, warmup)):
         fn()
     samples: List[float] = []
@@ -352,7 +357,7 @@ class TestBenchmarkPerFace:
         """Compute skin quality metrics before and after processing."""
         from retouch import engine as engine_mod
         from retouch.engine import RetouchEngine
-        from scripts.benchmark import skin_quality_metrics
+        from scripts.bench.benchmark import skin_quality_metrics
 
         _bd, _bp, dets, pars = _make_mock_engine_cls()
         with patch.object(engine_mod, "FaceDetector", _bd), \

@@ -113,3 +113,31 @@ def test_parse_qa_detector_benchmark_lines():
     assert abs(qa_results[0]["banding"] - 0.12) < 0.001
     assert abs(qa_results[0]["clipping"] - 0.05) < 0.001
     assert abs(qa_results[0]["plastic"] - 0.34) < 0.001
+
+
+def test_benchmark_main_propagates_pytest_failure(monkeypatch):
+    from scripts.bench import benchmark
+
+    monkeypatch.setattr(
+        benchmark,
+        "discover_benchmarks",
+        lambda _path: [{"full_id": "synthetic"}],
+    )
+    monkeypatch.setattr(
+        benchmark,
+        "run_pytest_subset",
+        lambda *_args, **_kwargs: {
+            "returncode": 1,
+            "durations": [],
+            "stdout": "",
+            "stderr": "synthetic failure",
+        },
+    )
+
+    assert benchmark.main(["--module", "modules", "--no-save", "--quiet"]) == 1
+
+
+def test_benchmark_main_rejects_nonpositive_iterations():
+    from scripts.bench.benchmark import main
+
+    assert main(["--iterations", "0", "--no-save"]) == 2

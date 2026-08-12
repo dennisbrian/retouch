@@ -22,6 +22,8 @@ import cv2
 import numpy as np
 import pytest
 
+from tests.benchmark_utils import benchmark_iterations
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -37,6 +39,7 @@ def _bench(
 
     Returns ``(median_ms, per_run_ms_list)``.
     """
+    iterations = benchmark_iterations(iterations)
     for _ in range(max(0, warmup)):
         fn()
     samples: List[float] = []
