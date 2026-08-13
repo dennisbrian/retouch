@@ -22,7 +22,7 @@ from .style_transfer import (
     subject_aware_transfer,
     weighted_mean_std,
 )
-from .utils import bgr_f32_to_lab_f32, lab_f32_to_bgr_f32, normalize_mask
+from .utils import bgr_f32_to_lab_f32, get_cache_dir, lab_f32_to_bgr_f32, normalize_mask
 
 
 @dataclass
@@ -464,7 +464,7 @@ class StyleAnalyzer:
         self, preset: Dict[str, Any], name: str
     ) -> Path:
         """Save preset to presets/ directory."""
-        presets_dir = Path(__file__).resolve().parent.parent / "presets"
+        presets_dir = get_cache_dir() / "presets"
         presets_dir.mkdir(parents=True, exist_ok=True)
 
         filename = "".join(c if c.isalnum() or c == "_" else "_" for c in name.lower())

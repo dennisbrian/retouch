@@ -12,16 +12,17 @@ from retouch.model_fetch import (
 )
 
 
-def test_bundled_nafnet_matches_manifest():
+def test_optional_onnx_models_are_not_claimed_as_wheel_bundled():
     manifest = json.loads(Path("models/manifest.json").read_text(encoding="utf-8"))
-    entry = manifest["models"]["denoise_nafnet"]
-    path = Path("models") / entry["filename"]
-    assert entry["availability"] == "bundled"
-    assert path.is_file()
-    assert path.stat().st_size == entry["size_bytes"]
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    assert digest == entry["sha256"]
-    assert verify_model("denoise_nafnet") is True
+    for name in ("resnet18_bisenet", "retinaface_mv1", "denoise_nafnet"):
+        entry = manifest["models"][name]
+        assert entry["availability"] == "unavailable"
+        assert not entry.get("url")
+        path = Path("models") / entry["filename"]
+        if path.is_file():
+            assert path.stat().st_size == entry["size_bytes"]
+            assert hashlib.sha256(path.read_bytes()).hexdigest() == entry["sha256"]
+            assert verify_model(name) is True
 
 
 def test_optional_models_are_explicitly_unavailable_and_not_downloadable():
@@ -37,6 +38,7 @@ def test_downloadable_models_have_pinned_urls_and_integrity_metadata():
     manifest = json.loads(Path("models/manifest.json").read_text(encoding="utf-8"))
     for name in ("face_landmarker", "selfie_segmenter", "pose_landmarker_full"):
         entry = manifest["models"][name]
+        assert entry["availability"] == "downloadable"
         assert entry["url"]
         assert "generation=" in entry["url"]
         assert len(entry["sha256"]) == 64

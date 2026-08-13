@@ -20,6 +20,7 @@ import os
 import onnxruntime as ort
 from .perf_optimizations import build_ort_providers
 
+from .model_fetch import model_status
 from .utils import create_polygon_mask, feather_mask, get_points, normalize_mask
 
 logger = logging.getLogger(__name__)
@@ -231,13 +232,21 @@ class FaceParser:
     """Generate precise per-region masks using BiSeNet ONNX + MediaPipe Face Mesh coordinates."""
 
     def __init__(self) -> None:
-        self._model_path = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), "models", "resnet18.onnx"
-        )
+        self._model_path = None
         self._sess = None
-        if os.path.exists(self._model_path):
-            import logging
-            logger = logging.getLogger(__name__)
+        try:
+            status = model_status("resnet18_bisenet")
+            if status.get("available"):
+                self._model_path = status.get("path")
+            else:
+                logger.info(
+                    "BiSeNet face parsing unavailable; using landmark-only masks (%s)",
+                    status.get("reason") or status.get("description", "model not verified"),
+                )
+        except Exception as exc:  # optional model must never block landmark parsing
+            logger.info("BiSeNet face parsing unavailable: %s", exc)
+
+        if self._model_path and os.path.exists(self._model_path):
             try:
                 # Auto-discover execution providers in order of preference
                 providers = build_ort_providers()

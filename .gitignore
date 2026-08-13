@@ -18,6 +18,7 @@ build/
 scripts/build/*
 !scripts/build/build_app.sh
 *.spec
+!scripts/build/retouch_app.spec
 .pytest_cache/
 .venv-face-aware/
 .quadcodeai/

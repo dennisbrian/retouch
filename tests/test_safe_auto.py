@@ -107,3 +107,36 @@ def test_auto_body_reshape_skips_uncertain_pose(monkeypatch):
     np.testing.assert_array_equal(result, image)
     assert ctx._safe_auto_decisions[-1]["stage"] == "body_reshape"
     assert ctx._safe_auto_decisions[-1]["action"] == "skip"
+
+
+def test_auto_body_reshape_skip_preserves_manual_result_when_pose_unavailable(monkeypatch):
+    class _Pose:
+        detected = False
+        body_visible = False
+        landmarks = None
+        visibility = []
+        feature_flags = {}
+
+    class _Detector:
+        def detect(self, _image):
+            return _Pose()
+
+    class _Reshaper:
+        def __init__(self):
+            self.detector = _Detector()
+
+        def reshape(self, image, **kwargs):
+            # Manual and automatic renders are deliberately distinct so a
+            # regression that returns the original frame cannot pass.
+            amount = int(abs(kwargs["arm_length"]) * 2)
+            return np.clip(image.astype(np.int16) + amount, 0, 255).astype(np.uint8)
+
+    monkeypatch.setattr("retouch.body_reshape.BodyReshaper", _Reshaper)
+    engine = RetouchEngine.__new__(RetouchEngine)
+    ctx = ProcessingContext(auto_body_reshape=100.0, body_reshape_arm_length=60.0)
+    image = np.zeros((12, 12, 3), dtype=np.uint8)
+
+    result = engine._stage_body_reshape(image, ctx)
+
+    assert np.all(result == 20)
+    assert ctx._safe_auto_decisions[-1]["action"] == "skip"

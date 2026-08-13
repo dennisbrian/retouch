@@ -20,7 +20,7 @@ import numpy as np
 
 from . import lut as _lut_mod
 from .lut import CubeLUT, list_available_luts, load_cube, luts_dir
-from .utils import apply_curve, blend_masked, normalize_mask, screen_blend, squeeze_mask, bgr_f32_to_lab_f32, lab_f32_to_bgr_f32
+from .utils import apply_curve, blend_masked, get_cache_dir, normalize_mask, screen_blend, squeeze_mask, bgr_f32_to_lab_f32, lab_f32_to_bgr_f32
 
 from . import skin_protect
 from .color_science import apply_subtractive_saturation
@@ -200,6 +200,15 @@ _DEFAULT_PRESETS_DIR = Path(__file__).resolve().parent.parent / "presets"
 _USER_PRESETS_DIRS: List[Path] = []
 
 
+def _preset_directories() -> List[Path]:
+    """Return bundled plus current user preset directories.
+
+    Resolve the cache path at call time so RETOUCH_CACHE_DIR works for a
+    frozen app and for isolated test/user sessions without an import reload.
+    """
+    return [_DEFAULT_PRESETS_DIR, get_cache_dir() / "presets"] + _USER_PRESETS_DIRS
+
+
 def register_presets_dir(directory: str | Path) -> None:
     _USER_PRESETS_DIRS.append(Path(directory))
 
@@ -224,7 +233,7 @@ def _bundled_preset_names() -> List[str]:
 
 
 def _find_preset_file(name: str) -> Optional[Path]:
-    for d in [_DEFAULT_PRESETS_DIR] + _USER_PRESETS_DIRS:
+    for d in _preset_directories():
         for ext in ("", ".json"):
             p = d / f"{name}{ext}"
             if p.exists():
@@ -259,7 +268,7 @@ def load_all_presets() -> Dict[str, Dict[str, Any]]:
     sources = []
     for name in _bundled_preset_names():
         sources.append((name, _bundled_preset_resource(name)))
-    for directory in [_DEFAULT_PRESETS_DIR] + _USER_PRESETS_DIRS:
+    for directory in _preset_directories():
         if directory.exists():
             for fpath in sorted(directory.glob("*.json")):
                 sources.append((fpath.stem, fpath))
@@ -281,7 +290,7 @@ def list_available_presets() -> List[str]:
     for name in _bundled_preset_names():
         seen.add(name)
         names.append(name)
-    for d in [_DEFAULT_PRESETS_DIR] + _USER_PRESETS_DIRS:
+    for d in _preset_directories():
         if d.exists():
             for fpath in sorted(d.glob("*.json")):
                 name = fpath.stem

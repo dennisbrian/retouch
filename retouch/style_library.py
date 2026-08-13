@@ -14,15 +14,13 @@ import numpy as np
 
 from .style import StyleProfile, StyleAnalyzer
 from .io import imread_exif, IMAGE_EXTENSIONS
+from .utils import get_cache_dir
 
 logger = logging.getLogger(__name__)
 
-# Default styles directory relative to the package root or workspace root
-import sys
-if getattr(sys, "frozen", False):
-    DEFAULT_STYLE_DIR = Path.home() / ".cache" / "retouch" / "styles"
-else:
-    DEFAULT_STYLE_DIR = Path(__file__).resolve().parent.parent / "styles"
+# Learned styles are user data, not package data. This stays writable in both
+# wheels and frozen bundles and can be isolated with RETOUCH_CACHE_DIR.
+DEFAULT_STYLE_DIR = get_cache_dir() / "styles"
 
 
 def ensure_style_dir(directory: Path | str = DEFAULT_STYLE_DIR) -> Path:

@@ -24,6 +24,15 @@ class TestStyleProfile:
         assert d["brightness_delta"] == 10.5
         assert d["contrast_delta"] == 5.0
 
+    def test_analyzer_saved_preset_uses_user_cache(self, tmp_path, monkeypatch):
+        from retouch.style import StyleAnalyzer
+
+        monkeypatch.setenv("RETOUCH_CACHE_DIR", str(tmp_path / "cache"))
+        analyzer = StyleAnalyzer.__new__(StyleAnalyzer)
+        path = analyzer._save_preset({"description": "test"}, "learned look")
+        assert path == tmp_path / "cache" / "presets" / "learned_look.json"
+        assert path.exists()
+
     def test_to_json(self):
         sp = StyleProfile(skin_l_mean_delta=3.0)
         j = sp.to_json()

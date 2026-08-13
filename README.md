@@ -32,15 +32,15 @@ Create a `models/` directory and download these files before running the full pi
 ```bash
 mkdir -p models
 
-# MediaPipe face landmarker (required)
+# MediaPipe face landmarker (downloaded on demand; verify before use)
 curl -L -o models/face_landmarker.task \
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task?generation=1683136941916318"
 
-# MediaPipe selfie segmenter (required for hair/person masking)
+# MediaPipe selfie segmenter (downloaded on demand for hair/person masking)
 curl -L -o models/selfie_segmenter.tflite \
   "https://storage.googleapis.com/download/storage/v1/b/mediapipe-models/o/image_segmenter%2Fselfie_segmenter%2Ffloat16%2Flatest%2Fselfie_segmenter.tflite?alt=media&generation=1683436453600523"
 
-# MediaPipe Pose Landmarker Full (required only for body reshape)
+# MediaPipe Pose Landmarker Full (downloaded on demand for body reshape)
 curl -L -o models/pose_landmarker_full.task \
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task?generation=1682642785209422"
 
@@ -48,12 +48,14 @@ curl -L -o models/pose_landmarker_full.task \
 python scripts/qa/verify_models.py \
   --model face_landmarker --model selfie_segmenter --model pose_landmarker_full
 
-# BiSeNet face parsing ONNX (required for pixel-precise region masks)
-# Place your resnet18.onnx BiSeNet export at:
+# Optional local BiSeNet face parsing ONNX (not distributed by the wheel)
+# Place a manifest-matching resnet18.onnx export at:
 #   models/resnet18.onnx
 ```
 
-The engine falls back to landmark-based masks if `resnet18.onnx` is missing, but quality is best with the bundled parsing and segmentation models present.
+The engine falls back to landmark-based masks if `resnet18.onnx` is missing.
+The manifest reports this model as unavailable until a verified release URL is
+provided; local binaries are accepted only when their SHA-256 and size match.
 
 Set `RETOUCH_OFFLINE=1` before launching the GUI to disable update checks and
 prevent model downloads; the Advanced Retouch status panel shows the mode.

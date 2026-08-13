@@ -28,6 +28,7 @@ from retouch.io import (
     imread_exif,
     read_icc_profile,
     read_exif_bytes,
+    read_c2pa_manifest,
     write_image_with_icc,
 )
 from retouch.lips import LIP_TINT_NAMES
@@ -42,7 +43,7 @@ from retouch.recipe_cookbook import search_recipes, list_recipes, list_categorie
 from retouch.diagnostics import clear_diagnostics, diagnostics_report
 from retouch.lut import get_registry, watch_luts_dir
 from retouch.marks import MARK_POLICY_PRESET_NAMES
-from retouch.model_fetch import model_exists
+from retouch.model_fetch import model_exists, model_status
 from retouch.project_profiles import (
     LookBoard,
     LookReference,
@@ -104,7 +105,12 @@ def advanced_model_status_text():
 
     lama = "available" if model_exists("lama_inpaint") else "unavailable — Telea fallback"
     sr = "available" if model_exists("sr_real_esrgan") else "unavailable — standard resize fallback"
-    nafnet = "bundled" if model_exists("denoise_nafnet") else "unavailable"
+    nafnet = "verified local" if model_exists("denoise_nafnet") else "unavailable"
+    try:
+        parsing_status = model_status("resnet18_bisenet")
+        parsing = "verified local" if parsing_status.get("available") else "unavailable — landmark fallback"
+    except Exception as exc:  # noqa: BLE001 — capability text must never block startup
+        parsing = f"unavailable — {type(exc).__name__}"
     pose_status = body_reshape_capability_status()
     pose = "available" if pose_status.get("available") else "unavailable — model not verified"
     try:
@@ -119,7 +125,7 @@ def advanced_model_status_text():
         face = f"unavailable — {type(exc).__name__}"
     return (
         f"**Model status:** LaMa: {lama} · Real-ESRGAN: {sr} · "
-        f"NAFNet denoise: {nafnet} · Body reshape: {pose}.  "
+        f"NAFNet denoise: {nafnet} · Face parsing: {parsing} · Body reshape: {pose}.  "
         f"**Face-aware status:** {face}.  **Network:** "
         f"{'offline/privacy mode' if offline_mode_enabled() else 'update checks enabled'}."
     )
@@ -832,16 +838,24 @@ def process_image(*args):
             filename = Path(curr_path).stem
             out_path = os.path.join(temp_dir, f"{filename}_{idx:03d}_retouched{ext}")
             if export_fmt == "PNG-16":
-                from retouch.io import write_image_16bit
-                write_image_16bit(out_path, export_img, format="png")
-            else:
-                # Keep source ICC metadata on GUI output and route JPEG through
-                # the 4:4:4 delivery encoder. PNG-16 stays on its explicit
-                # writer until engine float output is available end-to-end.
                 write_image_with_icc(
                     out_path,
                     export_img,
                     icc_profile=read_icc_profile(curr_path),
+                    exif=read_exif_bytes(curr_path),
+                    c2pa_manifest=read_c2pa_manifest(curr_path),
+                    bit_depth=16,
+                    quality=export_quality,
+                )
+            else:
+                # Keep source ICC metadata on GUI output and route JPEG through
+                # the 4:4:4 delivery encoder; the shared writer preserves
+                # PNG-16 depth and metadata in the same export boundary.
+                write_image_with_icc(
+                    out_path,
+                    export_img,
+                    icc_profile=read_icc_profile(curr_path),
+                    c2pa_manifest=read_c2pa_manifest(curr_path),
                     bit_depth=8,
                     quality=export_quality,
                 )
@@ -1420,11 +1434,12 @@ def advanced_export_handler(current_rgb, export_fmt, source_paths=None):
     source_path = _resolve_image_path(source_paths)
     icc = read_icc_profile(source_path) if source_path else None
     exif = read_exif_bytes(source_path) if source_path else None
+    c2pa_manifest = read_c2pa_manifest(source_path) if source_path else None
     if fmt in {"PNG-16", "TIFF-16"}:
-        write_image_with_icc(output_path, bgr, icc_profile=icc, exif=exif, bit_depth=16, quality=95)
+        write_image_with_icc(output_path, bgr, icc_profile=icc, exif=exif, c2pa_manifest=c2pa_manifest, bit_depth=16, quality=95)
     else:
         write_image_with_icc(
-            output_path, bgr, icc_profile=icc, exif=exif,
+            output_path, bgr, icc_profile=icc, exif=exif, c2pa_manifest=c2pa_manifest,
             bit_depth=8, quality=95, float_range="byte",
         )
     if not os.path.isfile(output_path) or os.path.getsize(output_path) <= 0:

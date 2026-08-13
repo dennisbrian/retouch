@@ -1,15 +1,15 @@
-# Progress (as of 2026-07-10)
+# Progress (as of 2026-08-13)
 
 > Snapshot of `MASTER_PLAN.md` status. Source of truth for stage receipts remains
 > `MASTER_PLAN.md`; this file is a condensed progress view.
 
 ## Headline
 
-- **~95% of plan scope complete.**
+- **Core pipeline and first release-hardening tranche are implemented; release certification remains hardware/corpus-gated.**
 - All **6 phases ✅ COMPLETE** + P4.a ✅. 37 numbered stage rows, all `✅ DONE`.
 - **11/11 flagship recipes**, **85 recipes** total.
 - Core engine is **feature-complete and unit-tested**.
-- **Post-plan (2026-07-10) — all COMMITTED**: `af54d2d` RAF import faithful neutral dev +
+- **Post-plan (2026-07-10 onward) — committed**: `af54d2d` RAF import faithful neutral dev +
   highlight recovery + `face_exposure` param; `ef31d55` sclera vessel removal + auto backdrop
   cleanup; `742825f` fabric wrinkles; `25c445c` per-region wrinkles; `1b89d1e` reshape
   completeness (L/R + neck); `3c3f78d` auto body reshape; `ea7697e` forehead-mask fix;
@@ -29,12 +29,12 @@
 | Phase 5 — Intelligence | ✅ |
 | Phase 6 — Creative Expansion & Moat | ✅ |
 | P4.a (model-fetch infra) | ✅ |
-| Phase 7 — Ship | 🔄 mostly done (2026-08-12) |
+| Phase 7 — Ship | 🔄 release hardening in progress (2026-08-13) |
 
 ## Leftover (~5%)
 
-### 0. Wiring debt + distribution gaps (2026-07-10 snapshot)
-- **Unwired islands — mostly resolved (2nd pass, UNCOMMITTED)**: `plugin_api.py` (T4) now
+### 0. Wiring debt + distribution status (2026-08-13)
+- **Wiring islands — resolved for the current scope**: `plugin_api.py` (T4) now
   discovered+initialised in `RetouchEngine.__init__` (guarded, never fatal); `recipe_cookbook.py`
   (T4) + `look_extractor.py` (F6) now reachable via new `cli.py` flags (`--list-recipes`,
   `--search-recipes`, `--extract-look`/`--look-base`). `raw_develop.py` (T5) still unwired (gamma
@@ -51,19 +51,30 @@
   (excluded from `PROCESS_INPUT_KEYS` by design).
 - **Remaining auto-gap backlog item**: #5 auto stray-hair (A4-gated — needs a hair-strand
   segmentation model / evidence gate).
-- **Optional model distribution is truthful**: bundled models have no fake
-  release URL, while LaMa and Real-ESRGAN are explicitly unavailable until
-  verified artifacts and controlled release URLs are supplied.
-- **No packaging metadata**: no `pyproject.toml` / `setup.py`; requirements unpinned.
+- **Model distribution is explicit**: Face Landmarker, Selfie Segmenter, and
+  Pose Landmarker are pinned, hash/size-verified downloads into the user cache.
+  BiSeNet, RetinaFace MV1, and NAFNet are unavailable to a wheel unless a
+  verified release artifact or controlled URL is supplied; local source models
+  are accepted only after integrity verification. LaMa and Real-ESRGAN remain
+  unavailable with their classical fallbacks.
+- **Packaging gates are present**: `pyproject.toml`, `uv.lock`, `pylock.toml`,
+  package-resource smoke coverage, and the portable
+  `scripts/build/retouch_app.spec` include `presets` as well as model manifests.
+  Downloads use a writable user cache and fail closed on integrity mismatch.
+- **Export provenance is tiered**: ICC/EXIF and raw JPEG C2PA APP11 blocks are
+  preserved where supported. A transformed export does not create a new signed
+  C2PA assertion; full claim generation/verification remains open.
 
-### 1. Phase 7 — Ship (~80% done 2026-08-12)
-- ✅ Update-check (`retouch/update_check.py` + GUI launch toast), diagnostics
-  (`retouch/diagnostics.py`, rotating log + GUI 🩺 accordion), signing/notarization
-  hooks in `scripts/build/build_app.sh`, `BUILD.md`. 17 new tests.
-- 🔲 Remaining (owner/hardware-gated): run signing with real Developer ID
-  credentials; Windows build validation on real hardware (browser-mode fallback
-  documented in BUILD.md).
-- Packaging/shipping work, not algorithm.
+### 1. Phase 7 — Ship (release hardening in progress)
+- ✅ Update-check/privacy mode, redacted diagnostics with clear action, model
+  capability reporting, strict cache acquisition, wheel smoke/attestation, and
+  pinned CI actions/model URLs.
+- ✅ Portable frozen-app source of truth with `presets`; macOS release workflow
+  uploads/attests the archived app bundle and DMG and enforces stapler/spctl
+  gates when `RELEASE_BUILD=1`.
+- 🔲 Remaining owner/hardware gates: real Developer ID signing/notarization,
+  fresh-machine macOS launch, real Windows validation, and CI execution of the
+  signed macOS workflow.
 
 ### 2. A1 / A2 — owner-gated tuning (blocked)
 - **A1**: owner must supply Evoto / R4me / PixCake reference corpus (dev cannot do).
@@ -77,11 +88,10 @@
 - `masterwork_v1` — commit cites QA on `DSCF6102`, but that file is **not present** in
   `test_output/` (only DSCF4xxx / DSCF7xxx / DSCF8007 exist). Verify or fix the note.
 
-### 4. Known bug, still-unfixed (documented, decision pending)
-- `anime_cinematic_v1`: `relight_azimuth` / `relight_elevation` nested under `"skin"`
-  instead of top level → silently ignored (resolves to defaults 0°/30° since before
-  this session). Fix requires updating the recipe **and** `test_recipe_validation.py`'s
-  `_VALID_KEYS` (which builds from `spec.recipe_key`, not `spec.engine_recipe_key`).
+### 4. Recipe integrity
+- The formerly documented `anime_cinematic_v1` relight nesting and dead nested
+  recipe keys are fixed. Recursive dead-key validation now covers the recipe
+  tree and includes engine-side aliases; keep this test in the release gate.
 
 ## Recipe generation artifacts
 - `test_output/masterwork_v1/DSCF8007.jpg` + `_compare.jpg` + `.session.json` generated
@@ -101,9 +111,10 @@
 - **`face_exposure` param**: new masked L-lift skin-brightness knob, 0–100, independent of
   `relight` (caps at 1.0). Files: `params.py`/`engine.py`/`skin.py`/`perf_optimizations.py`
   + `tests/test_skin.py::TestFaceExposureLift` (3/3). 10-level RAF sample rendered
-  (`_DSF1853_fe1..fe10.jpg`). Fixed `cli_type="float"`→`float` argparse crash.
-  **[VISUAL QA PENDING]** (Visual-Critical `skin.py`); GUI/CLI slider not wired.
-- Post-plan feature work is **committed and pushed** through `0610660`; current uncommitted tree is the in-flight 2nd-pass wiring + RAW-ingest work.
+  (`_DSF1853_fe1..fe10.jpg`). Fixed `cli_type="float"`→`float` argparse crash;
+  the GUI/CLI slider is wired. **[VISUAL QA PENDING]** (Visual-Critical `skin.py`).
+- Post-plan feature work is committed through `0610660`; the current release
+  hardening tranche is tracked separately from those historical receipts.
 - `MASTER_PLAN.md` updated with a "Post-plan enhancements (2026-07-10)" section.
 - **RAW research (2026-07-10)**: new `PLAN_RAW_PROCESSING.md` — full-data RAF ingestion
   audit + rawpy parameter research + wiring plan. Key findings: T5's `raw_develop.py` is an
@@ -131,23 +142,21 @@
   already available, unused**), per-region wrinkle sliders, auto stray hair (only true A4-class
   item), neck/L-R reshape, one-click auto body reshape. ~7–9 wk total; items 1–4/6–7 classical.
 
-- **Wiring-debt audit (2026-07-10 discovery pass)**: 4 unwired islands all marked ✅ with green
+- **Wiring-debt audit (2026-07-10 discovery pass, historical)**: 4 unwired islands all marked ✅ with green
   tests — `raw_develop.py` (T5), `plugin_api.py` (T4, discover never called), `recipe_cookbook.py`
   (T4 UI, no GUI), `look_extractor.py` (F6, unreachable) — plus LUT hot-reload (known). 11
   GUI-invisible params; **T3 `body_reshape_*` and A3 `cosplay_*` appear in NO recipe either →
   dark in both user paths.** Root cause: "✅ DONE" = module+tests, not user-reachable. ~4–6 d
   to wire everything. Detail: MASTER_PLAN.md Post-plan "Wiring-debt audit" row.
 
-- **Recipe integrity audit (2026-07-10 final discovery pass)**: 4 dead-key classes across
-  21 recipe-instances, verified via `recipe_to_params()` — **`film.preset` (6 film-branded
-  recipes get NO film look; preset names don't exist anywhere)**, `skin.exposure_lock`
-  (9 recipes, param doesn't exist), `frequency.nose_smooth` (5 recipes; ParamSpec has no
-  recipe_key), `skin.micro_dodge_burn` (1; correct key `skin.micro_db`). **`masterwork_v1`
-  flagship carries two dead keys.** Root cause: `test_no_dead_recipe_keys` validates
-  top-level keys only, never recurses into nested roots. ~0.5–1 d to fix (+ film.preset
-  design decision). Detail: MASTER_PLAN.md Post-plan "Recipe integrity audit" row.
+- **Recipe integrity audit (2026-07-10 discovery, resolved)**: the formerly reported
+  dead nested recipe keys were corrected and recursive `test_no_dead_recipe_keys`
+  coverage now guards the full recipe tree and engine-side aliases.
 
-#### Research log (2026-07-10, RAF import)
+#### Historical research log (2026-07-10, RAF import)
+
+The dated notes below record investigation evidence; current release status is
+summarized in the sections above.
 - **Dead parallel RAW path**: `retouch/raw_develop.py` (`RawDeveloper`) decodes to 16-bit
   **linear** RGB `[0,1]` but is NOT wired into engine/cli/gui (only `tests/test_raw_develop.py`
   references it). It also lacks `highlight_mode` (defaults to clip). Not a drop-in for 16-bit

@@ -29,6 +29,7 @@ from retouch.io import (
     make_comparison,
     output_format,
     read_exif_bytes,
+    read_c2pa_manifest,
     read_icc_profile,
     resize_for_processing,
 )
@@ -288,6 +289,7 @@ def _process_single(args):
         from retouch.io import write_image_with_icc
         icc_profile = read_icc_profile(img_path) if copy_exif_flag else None
         exif_bytes = read_exif_bytes(img_path) if copy_exif_flag else None
+        c2pa_manifest = read_c2pa_manifest(img_path) if copy_exif_flag else None
         write_image_with_icc(
             str(out_path),
             result,
@@ -295,6 +297,7 @@ def _process_single(args):
             bit_depth=bit_depth,
             quality=quality,
             exif=exif_bytes,
+            c2pa_manifest=c2pa_manifest,
         )
 
         if compare_flag:
@@ -900,7 +903,8 @@ def main() -> None:
                 from retouch.io import write_image_with_icc, read_icc_profile, read_exif_bytes
                 icc_profile = read_icc_profile(f) if not args.no_exif else None
                 exif_bytes = read_exif_bytes(f) if not args.no_exif else None
-                write_image_with_icc(str(out_path), result, icc_profile=icc_profile, bit_depth=args.bit_depth, quality=args.quality, exif=exif_bytes)
+                c2pa_manifest = read_c2pa_manifest(f) if not args.no_exif else None
+                write_image_with_icc(str(out_path), result, icc_profile=icc_profile, bit_depth=args.bit_depth, quality=args.quality, exif=exif_bytes, c2pa_manifest=c2pa_manifest)
 
                 if args.compare:
                     compare_path = (output_dir / f"{f.stem}_compare.{fmt}") if output_dir else \

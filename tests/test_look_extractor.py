@@ -205,3 +205,9 @@ class TestDtypeAndEdgeCases:
         ref = _gradient(512, 512)
         result = le.extract(ref)
         assert "engine_params" in result
+
+    def test_saved_preset_uses_user_cache(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RETOUCH_CACHE_DIR", str(tmp_path / "cache"))
+        path = LookExtractor()._save_preset({"description": "test"}, "learned look")
+        assert path == tmp_path / "cache" / "presets" / "learned_look.json"
+        assert path.exists()

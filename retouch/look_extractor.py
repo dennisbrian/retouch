@@ -29,6 +29,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import cv2
 import numpy as np
 
+from .utils import get_cache_dir
+
 logger = logging.getLogger(__name__)
 
 _EPS = 1e-6
@@ -710,7 +712,7 @@ class LookExtractor:
     # ------------------------------------------------------------------
 
     def _save_preset(self, preset: Dict[str, Any], name: str) -> Path:
-        presets_dir = Path(__file__).resolve().parent.parent / "presets"
+        presets_dir = get_cache_dir() / "presets"
         presets_dir.mkdir(parents=True, exist_ok=True)
 
         filename = "".join(c if c.isalnum() or c == "_" else "_" for c in name.lower())

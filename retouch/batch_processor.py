@@ -711,9 +711,10 @@ class BatchProcessor:
             out_name = f"{file_path.stem}_retouched{ext}"
             out_file_path = output_path / out_name
 
-            from .io import write_image_with_icc, read_exif_bytes, read_icc_profile
+            from .io import write_image_with_icc, read_c2pa_manifest, read_exif_bytes, read_icc_profile
             icc_profile = read_icc_profile(file_path)
             exif_bytes = read_exif_bytes(file_path)
+            c2pa_manifest = read_c2pa_manifest(file_path)
             write_image_with_icc(
                 str(out_file_path),
                 result,
@@ -721,6 +722,7 @@ class BatchProcessor:
                 bit_depth=8,
                 quality=export_quality,
                 exif=exif_bytes,
+                c2pa_manifest=c2pa_manifest,
             )
             if on_file_result is not None:
                 on_file_result(file_path, out_file_path, qa_list, None)

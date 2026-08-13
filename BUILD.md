@@ -4,8 +4,8 @@ Audience: maintainer producing shippable builds. For development setup see `docs
 
 ## Prerequisites (macOS)
 
-- Python 3.9+ with project deps: `pip install -r requirements/gui.txt`
-- PyInstaller (pulled in by requirements)
+- Python 3.9+ with the locked desktop environment (`uv sync --locked --extra desktop`)
+- PyInstaller (declared by the desktop extra)
 - For signed/notarized builds:
   - Apple Developer Program membership
   - **Developer ID Application** certificate in Keychain
@@ -31,7 +31,9 @@ export NOTARY_PROFILE="promax-notary"
 bash scripts/build/build_app.sh
 ```
 
-Output: `dist/Pro Max Retouch Studio.app` (+ notarized `.dmg` when credentials present).
+Output: `dist/Pro Max Retouch Studio.app` (+ notarized `.dmg` for a release build).
+The portable source of truth is `scripts/build/retouch_app.spec`; it includes
+the `retouch`, `models`, and `presets` package data directories.
 
 App-only signed build without DMG/notarization:
 
@@ -43,8 +45,15 @@ SKIP_DMG=1 CODESIGN_IDENTITY="..." bash scripts/build/build_app.sh
 
 ```bash
 codesign --verify --deep --strict dist/"Pro Max Retouch Studio".app
-spctl -a -vv dist/"Pro Max Retouch Studio".app   # should say: accepted, source=Notarized Developer ID
+spctl --assess --type open --context context:primary-signature -vv dist/"Pro Max Retouch Studio".app
+xcrun stapler validate dist/"Pro Max Retouch Studio".dmg
+spctl --assess --type open -vv dist/"Pro Max Retouch Studio".dmg
 ```
+
+`RELEASE_BUILD=1` makes signing, notarization, stapling, and both `spctl`
+checks mandatory. The macOS release workflow also uploads and attests the
+archived `.app` bundle and DMG; configure its Developer ID and App Store
+Connect secrets before dispatching it.
 
 Fresh-machine smoke test (the P4 acceptance gate): copy the DMG to a Mac
 without dev tools → install → first launch downloads models with progress →

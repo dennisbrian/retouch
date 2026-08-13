@@ -4506,6 +4506,8 @@ class RetouchEngine:
         torso_w = (ctx.body_reshape_torso_width - 50.0)
         shoulder_w = (ctx.body_reshape_shoulder_width - 50.0)
         hip_w = (ctx.body_reshape_hip_width - 50.0)
+        manual_offsets = (arm_len, leg_len, torso_w, shoulder_w, hip_w)
+        manual_active = any(manual_offsets)
 
         # Early-return: manual-only path when auto is off and all sliders neutral.
         if ctx.auto_body_reshape <= 0 and not any(
@@ -4569,7 +4571,7 @@ class RetouchEngine:
                 getattr(ctx, "_safe_auto_decisions", []).append(auto_decision.to_dict())
             if pose.landmarks is None:
                 # No pose detected -> fall back to manual-only behavior.
-                if not any([arm_len, leg_len, torso_w, shoulder_w, hip_w]):
+                if not manual_active:
                     return img
             else:
                 scale = ctx.auto_body_reshape / 100.0
@@ -4592,7 +4594,21 @@ class RetouchEngine:
         )
 
         if auto_decision is not None and bool(getattr(ctx, "safe_auto", True)):
-            result_u8 = apply_decision(img_u8, result_u8, auto_decision)
+            # Safe Auto must never erase an explicit manual edit.  Use the
+            # manual-only render as the conservative baseline: skip/review
+            # retain it, dampen blends only the automatic delta into it.
+            decision_base = img_u8
+            if manual_active:
+                decision_base = reshaper.reshape(
+                    img_u8,
+                    arm_length=manual_offsets[0],
+                    leg_length=manual_offsets[1],
+                    torso_width=manual_offsets[2],
+                    shoulder_width=manual_offsets[3],
+                    hip_width=manual_offsets[4],
+                    person_mask=person_mask,
+                )
+            result_u8 = apply_decision(decision_base, result_u8, auto_decision)
 
         if is_float:
             return result_u8.astype(np.float32) / 255.0

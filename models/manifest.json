@@ -7,8 +7,8 @@
       "sha256": "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff",
       "size_bytes": 3758596,
       "license": "Apache-2.0",
-      "availability": "bundled",
-      "description": "MediaPipe FaceLandmarker (float16, 478 landmarks) — bundled and used by detection.py for face landmark extraction."
+      "availability": "downloadable",
+      "description": "MediaPipe FaceLandmarker (float16, 478 landmarks) — downloaded on demand into the verified user model cache and used by detection.py."
     },
     "selfie_segmenter": {
       "filename": "selfie_segmenter.tflite",
@@ -16,8 +16,8 @@
       "sha256": "191ac9529ae506ee0beefa6b2c945a172dab9d07d1e802a290a4e4038226658b",
       "size_bytes": 249537,
       "license": "Apache-2.0",
-      "availability": "bundled",
-      "description": "MediaPipe Selfie Segmenter (TFLite) — bundled person/hair segmentation fallback in detection.py."
+      "availability": "downloadable",
+      "description": "MediaPipe Selfie Segmenter (TFLite) — downloaded on demand into the verified user model cache for person/hair segmentation."
     },
     "pose_landmarker_full": {
       "filename": "pose_landmarker_full.task",
@@ -34,8 +34,8 @@
       "sha256": "0d9bd318e46987c3bdbfacae9e2c0f461cae1c6ac6ea6d43bbe541a91727e33f",
       "size_bytes": 53205364,
       "license": "MIT",
-      "availability": "bundled",
-      "description": "BiSeNet face-parsing model (ResNet-18 backbone, ONNX) — bundled per-region face masks in parsing.py."
+      "availability": "unavailable",
+      "description": "BiSeNet face-parsing model (ResNet-18 backbone, ONNX) — not shipped in the wheel and has no controlled download URL; landmark-only masks are used until a release artifact is supplied."
     },
     "retinaface_mv1": {
       "filename": "retinaface_mv1.onnx",
@@ -43,8 +43,8 @@
       "sha256": "75c961aaf0aff03d13c074e9ec656e5510e174454dd4964a161aab4fe5f04153",
       "size_bytes": 16638325,
       "license": "MIT",
-      "availability": "bundled",
-      "description": "RetinaFace MobileNetV1 (ONNX) — bundled face bounding-box detector used by detection.py (primary path)."
+      "availability": "unavailable",
+      "description": "RetinaFace MobileNetV1 (ONNX) — not shipped in the wheel and has no controlled download URL; the maintained detector path remains the capability reported by detection.py."
     },
     "lama_inpaint": {
       "filename": "lama.onnx",
@@ -70,8 +70,8 @@
       "sha256": "a2b1aa5a5c9d901779948faad92930e13a25b314c89b12cbee4d1e1d9f6cbbf7",
       "size_bytes": 117316673,
       "license": "MIT",
-      "availability": "bundled",
-      "description": "NAFNet-SIDD-width32 denoise model (ONNX, opset 17, dynamic H/W, RGB [0,1] NCHW) — bundled and used by enhance.py AIEnhancer.denoise (F7)."
+      "availability": "unavailable",
+      "description": "NAFNet-SIDD-width32 denoise model (ONNX, opset 17, dynamic H/W, RGB [0,1] NCHW) — not shipped in the wheel and has no controlled download URL; denoise reports the unavailable model instead of claiming a bundle."
     }
   }
 }
