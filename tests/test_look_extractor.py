@@ -27,6 +27,19 @@ def _color_gradient(h: int = 256, w: int = 256) -> np.ndarray:
     return np.clip(img, 0, 255).astype(np.uint8)
 
 
+def test_extract_board_weighted_references_returns_board_mode():
+    le = LookExtractor()
+    warm = np.full((64, 64, 3), (80, 100, 180), dtype=np.uint8)
+    cool = np.full((64, 64, 3), (180, 100, 80), dtype=np.uint8)
+
+    result = le.extract_board([(warm, 0.75), (cool, 0.25)])
+
+    assert result["mode"] == "board"
+    assert result["reference_count"] == 2
+    assert result["weights"] == [0.75, 0.25]
+    assert "saturation" in result["engine_params"]
+
+
 class TestExtractReturnsValidParams:
     def test_returns_dict_with_expected_keys(self):
         le = LookExtractor()

@@ -34,7 +34,7 @@ import cv2
 import numpy as np
 
 from . import model_fetch
-from .perf_optimizations import build_ort_providers
+from .perf_optimizations import build_ort_providers, get_ort_provider_diagnostics
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +140,7 @@ class AIEnhancer:
         self._sr_lock = threading.Lock()
         self._denoise_loaded = False
         self._sr_loaded = False
+        self.last_runtime: dict[str, object] = {}
         # One-shot latch so the "no SR model, falling back to Lanczos"
         # warning fires once per instance instead of once per image.
         self._sr_absent_warned = False
@@ -258,13 +259,33 @@ class AIEnhancer:
 
         sess = self._denoise_model()
         if sess is not None:
+            self.last_runtime["denoise"] = {
+                "backend": "onnx",
+                "providers": list(getattr(sess, "get_providers", lambda: [])()),
+                "provider_order": ["CPUExecutionProvider"],
+                "fallback_chain": ["onnx", "bilateral"],
+            }
             try:
                 denoised = self._run_denoise_model(sess, f)
             except Exception as e:
                 logger.warning("AIEnhancer.denoise: model inference failed (%s); fallback.", e)
                 denoised = self._bilateral_denoise(f, strength)
+                self.last_runtime["denoise"] = {
+                    "backend": "bilateral",
+                    "providers": [],
+                    "provider_order": ["CPUExecutionProvider"],
+                    "fallback_chain": ["onnx", "bilateral"],
+                    "fallback_reason": "onnx_inference_failed",
+                }
         else:
             denoised = self._bilateral_denoise(f, strength)
+            self.last_runtime["denoise"] = {
+                "backend": "bilateral",
+                "providers": [],
+                "provider_order": ["CPUExecutionProvider"],
+                "fallback_chain": ["onnx", "bilateral"],
+                "fallback_reason": "model_unavailable",
+            }
 
         out = f * (1.0 - strength) + denoised * strength
         return _from_f32(out, in_dtype)
@@ -283,10 +304,23 @@ class AIEnhancer:
 
         sess = self._sr_model()
         if sess is not None:
+            self.last_runtime["super_resolution"] = {
+                "backend": "onnx",
+                "providers": list(getattr(sess, "get_providers", lambda: [])()),
+                "provider_order": get_ort_provider_diagnostics().get("ordered", []),
+                "fallback_chain": ["onnx", "lanczos"],
+            }
             try:
                 return _from_f32(self._run_sr_model(sess, f, scale), in_dtype)
             except Exception as e:
                 logger.warning("AIEnhancer.super_resolve: model inference failed (%s); fallback.", e)
+                self.last_runtime["super_resolution"] = {
+                    "backend": "lanczos",
+                    "providers": [],
+                    "provider_order": get_ort_provider_diagnostics().get("ordered", []),
+                    "fallback_chain": ["onnx", "lanczos"],
+                    "fallback_reason": "onnx_inference_failed",
+                }
         else:
             # The model file is simply absent (_load_session returns None
             # without logging in that case), so without this the caller gets
@@ -300,6 +334,13 @@ class AIEnhancer:
                     "upscaling %dx with Lanczos, NOT Real-ESRGAN.",
                     _SR_MODEL_NAME, scale,
                 )
+            self.last_runtime["super_resolution"] = {
+                "backend": "lanczos",
+                "providers": [],
+                "provider_order": get_ort_provider_diagnostics().get("ordered", []),
+                "fallback_chain": ["onnx", "lanczos"],
+                "fallback_reason": "model_unavailable",
+            }
         return _from_f32(self._lanczos_upscale(f, scale), in_dtype)
 
     def enhance(

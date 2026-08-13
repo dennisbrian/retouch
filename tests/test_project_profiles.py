@@ -60,3 +60,11 @@ def test_project_profile_store_handles_corrupt_state(tmp_path: Path):
 
     assert store.list_profiles() == []
     assert store.list_boards() == []
+
+
+def test_project_profile_store_uses_shared_cache_override(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("RETOUCH_CACHE_DIR", str(tmp_path / "cache"))
+
+    store = ProjectProfileStore()
+
+    assert store.path == tmp_path / "cache" / "projects.json"

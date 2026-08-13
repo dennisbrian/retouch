@@ -28,6 +28,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from retouch.core_recipes import CORE_RECIPE_NAMES, CORE_RECIPE_REVIEW_DIMENSIONS
 from retouch.certification import (
+    core_corpus_coverage,
     certification_fields,
     core_case_automatic_pass,
     core_matrix_final_certified,
@@ -57,8 +58,50 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", required=True, help="Output directory")
     parser.add_argument("--max-dim", type=int, default=None)
     parser.add_argument("--global-only", action="store_true", help="Diagnostic only; never face-aware certification")
+    parser.add_argument(
+        "--allow-incomplete-corpus",
+        action="store_true",
+        help="Generate a diagnostic matrix without the required six-case corpus gate",
+    )
     parser.add_argument("--stop-on-fail", action="store_true")
     return parser
+
+
+def _human_review_markdown(rows: Sequence[Dict[str, object]], corpus: Dict[str, object]) -> str:
+    """Create an inspectable companion to the machine-readable review JSON."""
+    lines = [
+        "# Core Recipe Human Review Worksheet",
+        "",
+        "Automatic and human evidence are separate. Do not mark this review approved until the contact sheet is inspected at 100%.",
+        "",
+        "## Corpus coverage",
+        "",
+        f"- Complete: `{bool(corpus.get('complete'))}`",
+        f"- Missing: {', '.join(corpus.get('missing') or []) or 'none'}",
+        "",
+    ]
+    for case in rows:
+        lines.extend([
+            f"## {case['case']}",
+            "",
+            f"- Input: `{case['input']}`",
+            f"- Face-aware run: `{case['face_aware_run']}`",
+            f"- Automatic pass: `{case['automatic_pass']}`",
+            f"- Corpus dimensions: {', '.join(case.get('corpus_dimensions') or []) or 'none'}",
+            "",
+            "| Recipe | Review dimension | Natural output | Reviewer | Notes |",
+            "| --- | --- | --- | --- | --- |",
+        ])
+        for recipe in case["recipes"]:
+            lines.append(f"| {recipe} | {CORE_RECIPE_REVIEW_DIMENSIONS[recipe]} | pending |  |  |")
+        lines.append("")
+    lines.extend([
+        "## Finalisation",
+        "",
+        "Copy approved/rejected decisions into `human_review.json`, then run `finalize_core_recipe_certification.py`. A completed worksheet alone does not make the matrix certified.",
+        "",
+    ])
+    return "\n".join(lines)
 
 
 def run(args: argparse.Namespace) -> int:
@@ -66,6 +109,13 @@ def run(args: argparse.Namespace) -> int:
     if unknown:
         raise RuntimeError(f"Core recipe selection contains unknown recipes: {unknown}")
     cases = _parse_cases(args.case)
+    corpus = core_corpus_coverage(case_name for case_name, _ in cases)
+    if corpus["missing"] and not args.allow_incomplete_corpus:
+        raise ValueError(
+            "representative certification corpus is incomplete; missing: "
+            + ", ".join(corpus["missing"])
+            + ". Use --allow-incomplete-corpus only for diagnostics."
+        )
     output = Path(args.output).expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
     recipes = ",".join(CORE_RECIPE_NAMES)
@@ -104,6 +154,9 @@ def run(args: argparse.Namespace) -> int:
             "status": "done" if completed.returncode == 0 else "failed",
             "recipes": list(CORE_RECIPE_NAMES),
             "recipe_count": len(case_manifest.get("outputs", [])) if isinstance(case_manifest.get("outputs"), list) else 0,
+            "corpus_dimensions": [
+                dimension for dimension, matched in corpus["covered"].items() if case_name.lower() in matched
+            ],
             **certification_fields(
                 face_aware_run=face_aware_run,
                 automatic_pass=automatic_pass,
@@ -119,6 +172,8 @@ def run(args: argparse.Namespace) -> int:
         "recipe_count": len(CORE_RECIPE_NAMES),
         "full_catalog_count_at_run": len(RECIPES),
         "global_only": bool(args.global_only),
+        "corpus_complete": bool(corpus["complete"]),
+        "corpus_coverage": corpus,
         "cases": rows,
     }
     review_rows = []
@@ -136,13 +191,23 @@ def run(args: argparse.Namespace) -> int:
     matrix.update({
         **certification_fields(
             face_aware_run=bool(rows) and all(row["face_aware_run"] for row in rows),
-            automatic_pass=bool(rows) and all(row["automatic_pass"] for row in rows),
+            automatic_pass=(
+                bool(corpus["complete"])
+                and bool(rows)
+                and all(row["automatic_pass"] for row in rows)
+            ),
             human_review="pending",
         ),
-        "final_certified": core_matrix_final_certified(rows, review_rows, len(CORE_RECIPE_NAMES)),
+        "final_certified": core_matrix_final_certified(
+            rows,
+            review_rows,
+            len(CORE_RECIPE_NAMES),
+            corpus_complete=bool(corpus["complete"]),
+        ),
     })
     (output / "matrix_manifest.json").write_text(json.dumps(matrix, indent=2), encoding="utf-8")
     (output / "human_review.json").write_text(json.dumps({"version": 1, "rows": review_rows}, indent=2), encoding="utf-8")
+    (output / "human_review.md").write_text(_human_review_markdown(rows, corpus), encoding="utf-8")
     return 0 if matrix["automatic_pass"] else 1
 
 

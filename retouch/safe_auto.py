@@ -45,6 +45,26 @@ class SafeAutoDecision:
         }
 
 
+def record_decision(target: Any, decision: SafeAutoDecision) -> None:
+    """Append a serialisable decision to a mutable processing context.
+
+    The helper deliberately accepts ``Any`` because worker processes use a
+    lightweight context mapping while the engine uses ``ProcessingContext``.
+    Manual Advanced Retouch edits do not call this helper; their explicit edit
+    records remain separate from Safe Auto evidence.
+    """
+    decisions = getattr(target, "_safe_auto_decisions", None)
+    if decisions is None and isinstance(target, dict):
+        decisions = target.setdefault("_safe_auto_decisions", [])
+    if decisions is None:
+        decisions = []
+        try:
+            setattr(target, "_safe_auto_decisions", decisions)
+        except Exception:
+            return
+    decisions.append(decision.to_dict())
+
+
 def decide(
     stage: str,
     *,

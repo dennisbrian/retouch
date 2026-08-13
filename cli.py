@@ -197,7 +197,7 @@ def _process_single(args):
     (img_path, output_dir, params, format_arg, quality, force, copy_exif_flag,
      max_dim, compare_flag, global_only, bit_depth, fail_on_qa, save_session,
      smart, linear_raw, raw_exposure, raw_contrast, raf_decoder,
-     raf2jpeg_path, raf2jpeg_quality, fuji_match_strength) = args
+     raf2jpeg_path, raf2jpeg_quality, fuji_match_strength, optical_correction) = args
     try:
         fmt = output_format(img_path, format_arg)
         stem = img_path.stem
@@ -217,13 +217,18 @@ def _process_single(args):
                 img_path, exposure=raw_exposure, contrast=raw_contrast,
             )
         else:
+            correction_status = {}
             img_bgr = imread_engine(
                 img_path,
                 raw_decoder=raf_decoder,
                 raf2jpeg_path=raf2jpeg_path,
                 raf2jpeg_quality=raf2jpeg_quality,
                 fuji_match_strength=fuji_match_strength,
+                optical_correction=optical_correction,
+                correction_status=correction_status,
             )
+            if optical_correction:
+                print(f"  ℹ {img_path.name}: Lensfun {correction_status.get('reason') or correction_status.get('applied', ())}")
         orig_shape = img_bgr.shape[:2]
         # 16-bit RAF ingest returns float32 [0,255]; comparison stitching is
         # uint8-only, so snapshot a uint8 original for the compare image.
@@ -539,6 +544,8 @@ def main() -> None:
                         help="Preview without processing")
     parser.add_argument("--global-only", action="store_true",
                         help="Skip face detection and apply only global color/impact retouch")
+    parser.add_argument("--optical-correction", action="store_true",
+                        help="Apply verified Lensfun distortion/TCA/vignetting from EXIF; reports unavailable, unmatched, or precision-preserving skips")
 
     # Processing controls
     parser.add_argument("--recipe", choices=RECIPE_CHOICES,
@@ -786,7 +793,7 @@ def main() -> None:
              args.bit_depth, args.fail_on_qa, args.save_session, args.smart,
              args.linear_raw, args.raw_exposure, args.raw_contrast,
              args.raf_decoder, args.raf2jpeg_path, args.raf2jpeg_quality,
-             args.fuji_match_strength)
+             args.fuji_match_strength, args.optical_correction)
             for f in files
         ]
         with ProcessPoolExecutor(
@@ -818,13 +825,21 @@ def main() -> None:
                         tqdm.write(f"  ✖ {f.name}: linear-raw {e}")
                         continue
                 else:
+                    correction_status = {}
                     img_bgr = imread_engine(
                         f,
                         raw_decoder=args.raf_decoder,
                         raf2jpeg_path=args.raf2jpeg_path,
                         raf2jpeg_quality=args.raf2jpeg_quality,
                         fuji_match_strength=args.fuji_match_strength,
+                        optical_correction=args.optical_correction,
+                        correction_status=correction_status,
                     )
+                    if args.optical_correction:
+                        tqdm.write(
+                            f"  ℹ {f.name}: Lensfun "
+                            f"{correction_status.get('reason') or correction_status.get('applied', ())}"
+                        )
                 if img_bgr is None:
                     failed += 1
                     tqdm.write(f"  ✖ {f.name}: failed to read")

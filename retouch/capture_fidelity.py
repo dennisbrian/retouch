@@ -222,7 +222,14 @@ def apply_optical_corrections(
     *,
     corrections: Sequence[str] = ("distortion", "tca", "vignetting"),
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
-    """Apply explicit Lensfun corrections, or return a truthful no-op status."""
+    """Apply explicit Lensfun corrections, or return a truthful no-op status.
+
+    ``lensfunpy``'s image modifiers operate on 8-bit display-referred arrays.
+    Retouch must therefore never silently pass a 16-bit/float capture through
+    an 8-bit buffer and cast it back. Such inputs remain unchanged until a
+    precision-preserving Lensfun backend is available; the returned status is
+    deliberately actionable for CLI and GUI callers.
+    """
     requested = tuple(str(item) for item in corrections)
     valid = {"distortion", "tca", "vignetting"}
     if any(item not in valid for item in requested):
@@ -240,6 +247,19 @@ def apply_optical_corrections(
             "available": True, "backend": "lensfunpy", "applied": (),
             "requested": requested, "reason": "focal length or aperture EXIF is missing",
         }
+    source = np.asarray(img_bgr)
+    if source.dtype != np.uint8:
+        return img_bgr.copy(), {
+            "available": True,
+            "backend": "lensfunpy",
+            "applied": (),
+            "requested": requested,
+            "precision_preserved": True,
+            "reason": (
+                "Lensfun correction skipped: installed backend accepts only uint8; "
+                "non-8-bit input was left unchanged to preserve precision"
+            ),
+        }
     try:
         import lensfunpy  # type: ignore
         database = lensfunpy.Database()
@@ -249,10 +269,7 @@ def apply_optical_corrections(
         lenses = database.find_lenses(cameras[0], metadata.lens_model)
         if not lenses:
             raise LookupError("lens is not present in Lensfun database")
-        source = np.asarray(img_bgr)
-        original_dtype = source.dtype
-        source_u8 = source.copy() if source.dtype == np.uint8 else np.clip(source, 0.0, 255.0).astype(np.uint8)
-        rgb = source_u8[..., ::-1].copy()
+        rgb = source[..., ::-1].copy()
         modifier = lensfunpy.Modifier(lenses[0], 1.0, rgb.shape[1], rgb.shape[0])
         modifier.initialize(metadata.focal_length_mm, metadata.aperture, 10.0)
         applied = []
@@ -266,11 +283,10 @@ def apply_optical_corrections(
             rgb = modifier.apply_color_modification(rgb)
             applied.append("vignetting")
         corrected = np.asarray(rgb)[..., ::-1]
-        if original_dtype != np.uint8:
-            corrected = corrected.astype(np.float32)
-        return corrected.astype(original_dtype, copy=False), {
+        return corrected.astype(source.dtype, copy=False), {
             "available": True, "backend": "lensfunpy", "applied": tuple(applied),
             "requested": requested,
+            "precision_preserved": True,
             "reason": None if applied else "Lensfun backend exposes no requested correction",
         }
     except Exception as exc:

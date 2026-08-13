@@ -17,7 +17,7 @@ import logging
 import multiprocessing as mp
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, Dict, Optional, Tuple
 
@@ -28,6 +28,7 @@ import onnxruntime as ort
 from .frequency import FrequencySeparator
 from .freckle import FreckleRemover
 from .lighting import LightDirection
+from .safe_auto import apply_decision, decide, decide_mask_stage
 
 
 def _build_smooth_mask(
@@ -176,6 +177,7 @@ class _FaceResult:
     # constructors keep working; consumed by Z3 wisp recovery in
     # engine._stage_background.
     hair_only_mask: Optional[np.ndarray] = None
+    safe_auto_decisions: list[Dict[str, Any]] = field(default_factory=list)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -264,6 +266,12 @@ def _process_face_core(
     float throughout the skin operation chain to eliminate quantization noise.
     Single uint8 conversion at the end.
     """
+    # Keep a pristine ROI so the Safe Auto decision can discard or dampen the
+    # complete automatic face edit when detection/segmentation evidence is
+    # uncertain. Manual Advanced Retouch edits do not enter this function.
+    source_canvas = canvas.copy()
+    safe_auto_decisions: list[Dict[str, Any]] = []
+
     skin = processors['skin']
     relighter = processors['relighter']
     blemish = processors['blemish']
@@ -1031,6 +1039,41 @@ def _process_face_core(
     if canvas.dtype == np.float32:
         canvas = _e1_to_u8(canvas)
 
+    if bool(getattr(ctx, "safe_auto", True)):
+        skin_area = float(np.mean(skin_n > 0.1)) if skin_n is not None else 0.0
+        # A face mask is evidence of coverage, not a request to edit every
+        # pixel in the ROI. Normalise against a conservative expected face
+        # area so a valid portrait mask can reach the apply band.
+        mask_coverage = float(np.clip(skin_area / 0.18, 0.0, 1.0))
+        face_confidence = float(np.clip(getattr(shifted_face, "confidence", 1.0), 0.0, 1.0))
+        decision = decide_mask_stage(
+            "facial_automatic_edits",
+            mask_coverage=mask_coverage,
+            landmark_stability=face_confidence,
+            model_confidence=face_confidence,
+        )
+        decision_evidence = dict(decision.evidence)
+        decision_evidence.update({
+            "automatic_stages": [
+                "skin_smoothing", "blemish_removal", "under_eye_repair",
+                "eye_enhancement", "teeth_whitening", "lip_enhancement",
+                "makeup_and_hair",
+            ],
+            "roi_shape": [int(roi_h), int(roi_w)],
+        })
+        # Rebuild the immutable decision with the expanded evidence.
+        decision = decide(
+            decision.stage,
+            confidence=decision.confidence,
+            evidence=decision_evidence,
+            reason=decision.reason,
+            apply_at=0.85,
+            dampen_at=0.65,
+            review_at=0.40,
+        )
+        canvas = apply_decision(source_canvas, canvas, decision)
+        safe_auto_decisions.append(decision.to_dict())
+
     return _FaceResult(
         canvas=canvas,
         skin_mask=acc_skin,
@@ -1038,7 +1081,8 @@ def _process_face_core(
         hair_only_mask=acc_hair_only,
         lips_mask=acc_lips,
         sharpen_mask=acc_sharpen,
-        roi_box=(roi_x1, roi_y1, roi_x1 + roi_w, roi_y1 + roi_h)
+        roi_box=(roi_x1, roi_y1, roi_x1 + roi_w, roi_y1 + roi_h),
+        safe_auto_decisions=safe_auto_decisions,
     )
 
 
@@ -1087,7 +1131,7 @@ def _process_single_face_worker(payload: tuple) -> Dict[str, Any]:
 
     ``payload`` is a picklable tuple:
         (canvas, regions, shifted_bbox, shifted_landmarks, ied, ctx,
-         roi_box, roi_person_mask, roi_h, roi_w, light_direction)
+         confidence, roi_box, roi_person_mask, roi_h, roi_w, light_direction)
 
     All inputs are plain picklable Python objects (NumPy arrays, the
     ``FaceRegions`` slots-object, the ``ProcessingContext`` dataclass,
@@ -1104,6 +1148,7 @@ def _process_single_face_worker(payload: tuple) -> Dict[str, Any]:
         shifted_bbox,
         shifted_landmarks,
         ied,
+        face_confidence,
         ctx,
         roi_box,
         roi_person_mask,
@@ -1119,6 +1164,7 @@ def _process_single_face_worker(payload: tuple) -> Dict[str, Any]:
         bbox=shifted_bbox,
         landmarks=shifted_landmarks,
         ied=ied,
+        confidence=face_confidence,
     )
     roi_x1, roi_y1 = roi_box[0], roi_box[1]
 
@@ -1144,6 +1190,7 @@ def _process_single_face_worker(payload: tuple) -> Dict[str, Any]:
         "lips_mask": fr.lips_mask,
         "sharpen_mask": fr.sharpen_mask,
         "roi_box": fr.roi_box,
+        "safe_auto_decisions": fr.safe_auto_decisions or [],
     }
 
 
@@ -1287,3 +1334,14 @@ def build_ort_providers() -> list[str | tuple[str, dict]]:
     providers.append("CPUExecutionProvider")
     return providers
 
+
+def get_ort_provider_diagnostics() -> Dict[str, Any]:
+    """Expose provider availability, precedence, and the guaranteed CPU tail."""
+    ordered = build_ort_providers()
+    names = [provider[0] if isinstance(provider, tuple) else provider for provider in ordered]
+    return {
+        "available": list(ort.get_available_providers()),
+        "ordered": names,
+        "selected": names[0] if names else None,
+        "fallback_chain": names,
+    }

@@ -27,11 +27,32 @@ Example:
 
 ```bash
 python scripts/recipes/core_recipe_certification.py \
-  --case skin_tone_a=/path/to/skin_tone_a.jpg \
+  --case skin_tone_dark=/path/to/skin_tone_dark.jpg \
+  --case mixed_lighting=/path/to/mixed_lighting.jpg \
   --case glasses=/path/to/glasses.jpg \
-  --case group=/path/to/group.jpg \
+  --case wig=/path/to/wig.jpg \
+  --case hands_on_face=/path/to/hands_on_face.jpg \
+  --case group_portrait=/path/to/group_portrait.jpg \
   --output /tmp/retouch-core-cert
 ```
+
+The runner requires these six semantic strata by default. Use
+`--allow-incomplete-corpus` only for a diagnostic matrix; that matrix records
+`corpus_complete: false`, cannot pass the automatic gate, and cannot be final
+certified.
+
+Each matrix output now includes both the machine-readable
+`human_review.json` and an inspectable `human_review.md`. Complete the JSON
+from the worksheet, then run:
+
+```bash
+python scripts/recipes/finalize_core_recipe_certification.py /path/to/core-cert
+```
+
+The finaliser does not re-render or change source/output images; it only
+recomputes per-case human-review state and the final certification gate.
+Use [the corpus and review template](CORE_RECIPE_CORPUS_AND_HUMAN_REVIEW_TEMPLATE.md)
+to record consented private assets and reviewer evidence outside the repository.
 
 `--global-only` is retained for headless smoke testing only and marks the
 result non-certifying in `matrix_manifest.json`. The aggregator rejects
@@ -40,14 +61,15 @@ and pending human review.
 
 ## Current status
 
-The certification harness and review worksheet are implemented. The pinned
-MediaPipe 0.10.5 CPU/XNNPACK environment produced 12 face-aware recipe
-renders and an automatic matrix pass for the sample case. Final certification
-remains pending until the human natural-output worksheet is reviewed. The
-default system environment remains a blocked diagnostic because of
-`DrishtiMetalHelper` initialization.
+The certification harness and review worksheet are implemented. The
+representative six-stratum corpus gate is now executable, but no release claim
+is made until all six cases produce 12 face-aware outputs each and the human
+natural-output worksheet is reviewed. The pinned one-case sample remains a
+diagnostic reference, not a representative automatic pass. The default system
+environment remains a blocked diagnostic because of `DrishtiMetalHelper`
+initialization.
 
 The pinned sample evidence is available at
 `/private/tmp/retouch-core-cert-working/matrix_manifest.json`; it records one
-face-aware case, 12 rendered Core recipes, `automatic_pass: true`, and
-`final_certified: false` pending human review.
+face-aware case, 12 rendered Core recipes, incomplete corpus coverage, and
+`final_certified: false` pending corpus completion and human review.

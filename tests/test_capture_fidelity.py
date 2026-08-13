@@ -90,3 +90,23 @@ def test_optical_correction_is_fail_closed_without_verified_lens_match():
     assert np.array_equal(corrected, image)
     assert status["applied"] == ()
     assert status["requested"] == ("distortion", "tca", "vignetting")
+
+
+def test_optical_correction_never_downconverts_non_8bit_input(monkeypatch):
+    image = np.array([[[1, 257, 65535]]], dtype=np.uint16)
+    metadata = CaptureMetadata(
+        make="Acme", model="Camera", lens_model="Prime 50mm",
+        focal_length_mm=50.0, aperture=1.4,
+    )
+    monkeypatch.setattr(
+        "retouch.capture_fidelity.lens_correction_status",
+        lambda: {"available": True, "backend": "lensfunpy", "reason": None},
+    )
+
+    corrected, status = apply_optical_corrections(image, metadata)
+
+    assert np.array_equal(corrected, image)
+    assert corrected.dtype == np.uint16
+    assert status["applied"] == ()
+    assert status["precision_preserved"] is True
+    assert "left unchanged" in status["reason"]

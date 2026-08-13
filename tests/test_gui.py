@@ -625,9 +625,9 @@ class TestProcessInputKeys:
     def test_count_matches_process_image_arity(self):
         """PROCESS_INPUT_KEYS length must equal the arity of process_image."""
         from retouch.params import param_names
-        # 2 leading + registry (minus 2 excluded) + 12 trailing transport keys
+        # 2 leading + registry (minus 2 excluded) + 13 trailing transport keys
         # (look_params + face_params State + face_params_json).
-        expected = 2 + (len(param_names()) - 2) + 12
+        expected = 2 + (len(param_names()) - 2) + 13
         assert len(gui.PROCESS_INPUT_KEYS) == expected
 
     def test_first_key_is_img_paths(self):
@@ -1101,7 +1101,7 @@ class TestProcessImageValidation:
         defaults = {s.name: s.default for s in PROCESSING_PARAMS}
         # Transport keys that are not ParamSpecs.
         defaults.update({
-            "look_params": None, "face_params": None, "face_params_json": None,
+            "optical_correction": False, "look_params": None, "face_params": None, "face_params_json": None,
         })
         defaults.update({
             "img_paths": None,

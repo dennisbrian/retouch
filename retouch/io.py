@@ -6,14 +6,21 @@ import io
 import logging
 import os
 import shutil
+import struct
 import subprocess
 import tempfile
+import zlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, TiffImagePlugin, TiffTags
+
+try:
+    from PIL.ExifTags import Base as _ExifBase
+except ImportError:  # pragma: no cover - Pillow >=10 is the supported range
+    _ExifBase = None  # type: ignore[assignment]
 
 try:
     from PIL import ImageCms
@@ -443,6 +450,7 @@ def imread_engine(
     raf2jpeg_quality: int = 100,
     fuji_match_strength: float = 0.85,
     optical_correction: bool = False,
+    correction_status: Optional[Dict[str, Any]] = None,
 ) -> np.ndarray:
     """Load an image for the engine, using the 16-bit path for RAW.
 
@@ -475,6 +483,10 @@ def imread_engine(
             original bytes unchanged.
         fuji_match_strength: Calibration blend for ``rawpy-fuji-match`` from
             native RAW (0) to the learned camera-preview look (1).
+        optical_correction: Apply verified Lensfun corrections at ingest.
+        correction_status: Optional mutable dict populated with the
+            correction result. This makes an unavailable backend, metadata
+            mismatch, or precision-preserving skip visible to UI/CLI callers.
 
     Returns:
         ``(H, W, 3)`` BGR image: float32 [0, 255] for native and calibrated
@@ -497,6 +509,9 @@ def imread_engine(
     if optical_correction:
         from .capture_fidelity import apply_optical_corrections, read_capture_metadata
         image, status = apply_optical_corrections(image, read_capture_metadata(p))
+        if correction_status is not None:
+            correction_status.clear()
+            correction_status.update(status)
         logger.info("Optical correction status for %s: %s", p, status)
     return image
 
@@ -718,6 +733,177 @@ def _to_uint8_delivery(img: np.ndarray, float_range: str) -> np.ndarray:
     return np.clip(img, 0, 255).astype(np.uint8)
 
 
+def _to_uint16_delivery(img: np.ndarray, float_range: str) -> np.ndarray:
+    """Convert an image to uint16 without passing through an 8-bit buffer."""
+    if img.dtype == np.uint16:
+        return img
+    if img.dtype == np.uint8:
+        return (img.astype(np.uint16) * np.uint16(257)).astype(np.uint16)
+    if img.dtype in (np.float32, np.float64):
+        scale = 65535.0 if float_range == "unit" else 257.0
+        return np.clip(np.round(img * scale), 0, 65535).astype(np.uint16)
+    return np.clip(img, 0, 65535).astype(np.uint16)
+
+
+def _normalise_exif_bytes(exif: Optional[bytes]) -> Tuple[Optional[bytes], Dict[int, Any]]:
+    """Return normalised EXIF bytes and simple tag values for TIFF writing."""
+    if not exif:
+        return None, {}
+    try:
+        exif_obj = Image.Exif()
+        exif_obj.load(exif)
+        orientation_tag = getattr(_ExifBase, "Orientation", 0x0112)
+        exif_obj[orientation_tag] = 1
+        return exif_obj.tobytes(), dict(exif_obj.items())
+    except Exception as exc:
+        logger.warning("Failed to normalise EXIF metadata: %s", exc)
+        return bytes(exif), {}
+
+
+def _png_chunk(kind: bytes, payload: bytes) -> bytes:
+    return (
+        struct.pack(">I", len(payload))
+        + kind
+        + payload
+        + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+    )
+
+
+def _embed_png_metadata(
+    path: Union[str, Path],
+    icc_profile: Optional[bytes],
+    exif: Optional[bytes],
+) -> None:
+    """Add ICC/EXIF chunks without decoding or re-encoding PNG pixels."""
+    target = Path(path)
+    raw = target.read_bytes()
+    signature = b"\x89PNG\r\n\x1a\n"
+    if not raw.startswith(signature):
+        raise ValueError(f"{target} is not a PNG file")
+
+    normalised_exif, _ = _normalise_exif_bytes(exif)
+    metadata: List[bytes] = []
+    if icc_profile:
+        # PNG iCCP stores a profile name, a compression method, and a zlib
+        # stream. The profile name is deliberately stable for read-back QA.
+        metadata.append(_png_chunk(b"iCCP", b"RetouchICC\0\0" + zlib.compress(bytes(icc_profile))))
+    if normalised_exif:
+        # PNG eXIf omits the leading Exif\0\0 signature.
+        exif_payload = normalised_exif[6:] if normalised_exif.startswith(b"Exif\0\0") else normalised_exif
+        metadata.append(_png_chunk(b"eXIf", exif_payload))
+
+    if not metadata:
+        return
+
+    chunks: List[bytes] = []
+    pos = len(signature)
+    inserted = False
+    while pos < len(raw):
+        if pos + 12 > len(raw):
+            raise ValueError(f"truncated PNG chunk table in {target}")
+        length = struct.unpack_from(">I", raw, pos)[0]
+        end = pos + 12 + length
+        if end > len(raw):
+            raise ValueError(f"truncated PNG chunk payload in {target}")
+        kind = raw[pos + 4 : pos + 8]
+        chunk = raw[pos:end]
+        # Replace, rather than duplicate, metadata emitted by a prior pass.
+        if kind not in (b"iCCP", b"eXIf"):
+            chunks.append(chunk)
+        if kind == b"IHDR" and not inserted:
+            chunks.extend(metadata)
+            inserted = True
+        pos = end
+    if not inserted:
+        raise ValueError(f"PNG {target} has no IHDR chunk")
+    target.write_bytes(signature + b"".join(chunks))
+
+
+def _set_tiff_tag(
+    ifd: TiffImagePlugin.ImageFileDirectory_v2,
+    tag: int,
+    tag_type: int,
+    value: Any,
+) -> None:
+    ifd.tagtype[tag] = tag_type
+    ifd[tag] = value
+
+
+def _write_tiff_16bit(
+    path: Union[str, Path],
+    img_u16: np.ndarray,
+    icc_profile: Optional[bytes],
+    exif: Optional[bytes],
+) -> None:
+    """Write a lossless classic TIFF while retaining 16-bit RGB/RGBA data.
+
+    Pillow's public ``Image.fromarray`` path does not represent multi-channel
+    uint16 images on all supported versions. This small TIFF writer uses
+    Pillow's TIFF IFD encoder for standards-compliant tags and writes the
+    interleaved uint16 strip directly, so neither ICC nor EXIF requires an
+    8-bit Pillow round-trip.
+    """
+    if img_u16.ndim not in (2, 3) or (img_u16.ndim == 3 and img_u16.shape[2] not in (3, 4)):
+        raise ValueError(f"16-bit export: unsupported image shape {img_u16.shape}")
+    height, width = img_u16.shape[:2]
+    samples = 1 if img_u16.ndim == 2 else img_u16.shape[2]
+    if samples > 1:
+        # Engine arrays are BGR(A); TIFF's RGB photometric order is RGB(A).
+        if samples == 3:
+            pixels_rgb = img_u16[..., ::-1]
+        else:
+            pixels_rgb = np.concatenate(
+                (img_u16[..., 2:3], img_u16[..., 1:2], img_u16[..., 0:1], img_u16[..., 3:4]),
+                axis=2,
+            )
+        pixels = np.ascontiguousarray(pixels_rgb.astype("<u2", copy=False))
+        photometric = 2
+    else:
+        pixels = np.ascontiguousarray(img_u16.astype("<u2", copy=False))
+        photometric = 1
+
+    normalised_exif, exif_tags = _normalise_exif_bytes(exif)
+    prefix = b"II*\x00\x08\x00\x00\x00"
+    ifd = TiffImagePlugin.ImageFileDirectory_v2(prefix)
+    _set_tiff_tag(ifd, 256, TiffTags.LONG, width)
+    _set_tiff_tag(ifd, 257, TiffTags.LONG, height)
+    _set_tiff_tag(ifd, 258, TiffTags.SHORT, (16,) * samples)
+    _set_tiff_tag(ifd, 259, TiffTags.SHORT, 1)  # no compression
+    _set_tiff_tag(ifd, 262, TiffTags.SHORT, photometric)
+    _set_tiff_tag(ifd, 273, TiffTags.LONG, 0)  # Pillow adjusts this past IFD data
+    _set_tiff_tag(ifd, 277, TiffTags.SHORT, samples)
+    _set_tiff_tag(ifd, 278, TiffTags.LONG, height)
+    _set_tiff_tag(ifd, 279, TiffTags.LONG, len(pixels))
+    _set_tiff_tag(ifd, 284, TiffTags.SHORT, 1)  # chunky/interleaved
+    _set_tiff_tag(ifd, 339, TiffTags.SHORT, (1,) * samples)  # unsigned integer
+    if samples == 4:
+        _set_tiff_tag(ifd, 338, TiffTags.SHORT, 2)  # unassociated alpha
+    if icc_profile:
+        _set_tiff_tag(ifd, 34675, TiffTags.UNDEFINED, bytes(icc_profile))
+
+    # Keep common EXIF fields readable by both Pillow and OpenCV. TIFF-aware
+    # consumers see the values in the primary IFD; avoiding a nested pointer
+    # also keeps ``read_exif_bytes`` safe after Pillow closes the image.
+    if exif_tags:
+        for tag, value in exif_tags.items():
+            if tag in (256, 257, 258, 259, 262, 273, 277, 278, 279, 284, 338, 339, 34665, 34675):
+                continue
+            info = TiffTags.TAGS_V2.get(tag)
+            if info is None:
+                continue
+            try:
+                _set_tiff_tag(ifd, tag, info.type, value)
+            except (TypeError, ValueError, OverflowError):
+                logger.debug("Skipping unsupported EXIF tag %s in TIFF export", tag)
+        if 274 in exif_tags:
+            _set_tiff_tag(ifd, 274, TiffTags.SHORT, 1)
+    elif normalised_exif:
+        logger.warning("Could not parse EXIF tags for TIFF %s; embedding was not possible", path)
+
+    ifd_bytes = ifd.tobytes(8)
+    Path(path).write_bytes(prefix + ifd_bytes + pixels.tobytes())
+
+
 def _icc_to_profile(icc_profile: bytes) -> "ImageCms.core.CmsProfile":  # type: ignore[name-defined]
     return ImageCms.getOpenProfile(io.BytesIO(icc_profile))
 
@@ -746,8 +932,9 @@ def write_image_with_icc(
             viewers. Passing EXIF here (rather than re-saving the destination
             afterward) preserves ICC profile, bit depth, and quality settings.
         bit_depth: Output bit depth. ``8`` (default) for uint8, ``16`` for
-            uint16 (PNG/TIFF only). The 16-bit OpenCV path cannot embed an
-            ICC profile; JPEG/WebP always output 8-bit.
+            uint16 (PNG/TIFF only). PNG/TIFF 16-bit writes preserve the pixel
+            depth and can embed ICC/EXIF in the same pass; JPEG/WebP always
+            output 8-bit.
         **kwargs: ``quality`` (int, default ``95``), ``format`` (str), and
             ``float_range`` (``"auto"``, ``"unit"``, or ``"byte"``) are
             consumed; all remaining kwargs are forwarded to ``PIL.Image.save``.
@@ -770,29 +957,16 @@ def write_image_with_icc(
             )
             bit_depth = 8
         else:
-            # Convert to uint16 for 16-bit export
-            if img.dtype == np.float32 or img.dtype == np.float64:
-                scale = 65535.0 if float_range == "unit" else 257.0
-                img_16 = np.clip(img * scale + 0.5, 0, 65535).astype(np.uint16)
-            elif img.dtype == np.uint8:
-                # Upscale uint8 to uint16: multiply by 257 to fill the range
-                img_16 = (img.astype(np.uint16) * 257).astype(np.uint16)
+            img_16 = _to_uint16_delivery(img, float_range)
+            if ext in (".tif", ".tiff"):
+                _write_tiff_16bit(path, img_16, icc_profile, exif)
             else:
-                img_16 = img.astype(np.uint16)
-            
-            if img_16.ndim not in (2, 3) or (
-                img_16.ndim == 3 and img_16.shape[2] not in (3, 4)
-            ):
-                raise ValueError(f"16-bit export: unsupported image shape {img_16.shape}")
-
-            # Pillow cannot reliably construct 16-bit RGB/RGBA images across
-            # supported versions. OpenCV preserves the actual channel depth;
-            # unlike the old path, it cannot attach an ICC profile, so report
-            # that limitation instead of writing an invalid or 8-bit file.
-            if icc_profile:
-                logger.warning("16-bit export does not embed ICC profiles; OpenCV writer is used")
-            if not cv2.imwrite(str(path), img_16):
-                raise cv2.error(f"cv2.imwrite returned False for 16-bit write to {path}")
+                # OpenCV is used only for the lossless pixel encoder. Metadata
+                # is inserted into the PNG container afterward without a
+                # decode/re-encode, so the 16-bit samples remain untouched.
+                if not cv2.imwrite(str(path), img_16):
+                    raise cv2.error(f"cv2.imwrite returned False for 16-bit write to {path}")
+                _embed_png_metadata(path, icc_profile, exif)
             return
 
     # 8-bit delivery is the only place where blue-noise dither is allowed.

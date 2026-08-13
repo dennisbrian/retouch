@@ -1,4 +1,9 @@
-from retouch.certification import core_case_automatic_pass, core_matrix_final_certified
+from retouch.certification import (
+    core_case_automatic_pass,
+    core_case_human_review_status,
+    core_corpus_coverage,
+    core_matrix_final_certified,
+)
 from retouch.core_recipes import CORE_RECIPE_NAMES, CORE_RECIPE_REVIEW_DIMENSIONS
 from retouch.recipes import RECIPES
 
@@ -85,3 +90,46 @@ def test_core_final_aggregator_requires_approved_human_review(tmp_path):
         for recipe in CORE_RECIPE_NAMES
     ]
     assert core_matrix_final_certified([row], human_rows, len(CORE_RECIPE_NAMES))
+
+
+def test_core_corpus_requires_representative_conditions():
+    coverage = core_corpus_coverage([
+        "skin_tone_dark",
+        "mixed_lighting",
+        "glasses_portrait",
+        "cosplay_wig",
+        "hands_on_face",
+        "group_portrait",
+    ])
+
+    assert coverage["complete"] is True
+    assert coverage["missing"] == []
+
+
+def test_core_final_aggregator_rejects_incomplete_corpus_even_if_reviewed():
+    human_rows = [
+        {"case": "portrait", "recipe": recipe, "human_natural_output": "approved", "reviewer": "qa"}
+        for recipe in CORE_RECIPE_NAMES
+    ]
+    row = {
+        "case": "portrait",
+        "recipes": list(CORE_RECIPE_NAMES),
+        "recipe_count": len(CORE_RECIPE_NAMES),
+        "face_aware_run": True,
+        "automatic_pass": True,
+        "human_review": "approved",
+    }
+    assert not core_matrix_final_certified(
+        [row], human_rows, len(CORE_RECIPE_NAMES), corpus_complete=False
+    )
+
+
+def test_core_case_human_review_requires_every_recipe_and_reviewer():
+    rows = [
+        {"case": "portrait", "recipe": recipe, "human_natural_output": "approved", "reviewer": "qa"}
+        for recipe in CORE_RECIPE_NAMES
+    ]
+
+    assert core_case_human_review_status("portrait", CORE_RECIPE_NAMES, rows) == "approved"
+    rows[0]["reviewer"] = ""
+    assert core_case_human_review_status("portrait", CORE_RECIPE_NAMES, rows) == "pending"

@@ -451,6 +451,12 @@ class ProcessingContext:
     # survives inter-stage uint8 quantization. None ⇒ uint8 ingest.
     hi_ref: Optional[np.ndarray] = None
 
+    # P0 Safe Auto contract. Automatic engine stages are confidence-gated by
+    # default; explicit Advanced Retouch edits use their own edit-record path.
+    safe_auto: bool = True
+    _safe_auto_decisions: List[Dict[str, Any]] = field(default_factory=list, repr=False)
+    _runtime_diagnostics: Dict[str, Any] = field(default_factory=dict, repr=False)
+
     # F4: Manual heal marks — list of {"mask_png_b64": str, "method": str}
     heals: Optional[List[Dict[str, Any]]] = None
 
@@ -550,6 +556,8 @@ class ProcessingResult(np.ndarray):
         face_contexts: Optional[List["FaceContext"]] = None,
         qa: Optional[List[QAWarning]] = None,
         face_recipes: Optional[Dict[int, Dict[str, Any]]] = None,
+        safe_auto_decisions: Optional[List[Dict[str, Any]]] = None,
+        runtime_diagnostics: Optional[Dict[str, Any]] = None,
     ):
         obj = np.asarray(image).view(cls)
         obj.image = image
@@ -563,6 +571,8 @@ class ProcessingResult(np.ndarray):
         obj.face_contexts = face_contexts
         obj.qa = qa or []
         obj.face_recipes = face_recipes
+        obj.safe_auto_decisions = list(safe_auto_decisions or [])
+        obj.runtime_diagnostics = dict(runtime_diagnostics or {})
         return obj
 
     def __array_finalize__(self, obj):
@@ -579,6 +589,8 @@ class ProcessingResult(np.ndarray):
         self.face_contexts = getattr(obj, "face_contexts", None)
         self.qa = getattr(obj, "qa", None) or []
         self.face_recipes = getattr(obj, "face_recipes", None)
+        self.safe_auto_decisions = getattr(obj, "safe_auto_decisions", [])
+        self.runtime_diagnostics = getattr(obj, "runtime_diagnostics", {})
 
 
 # ---------------------------------------------------------------------------
@@ -1112,6 +1124,7 @@ class RetouchEngine:
         face_contexts: Optional[List["FaceContext"]] = None,
         heals: Optional[List[Dict[str, Any]]] = None,
         quality: Optional[str] = None,
+        safe_auto: Optional[bool] = None,
         local_adjustments: Optional[List[Dict[str, Any]]] = None,
         ai_denoise: Optional[float] = None,
         ai_sr_scale: Optional[int] = None,
@@ -1426,6 +1439,8 @@ class RetouchEngine:
         overrides.update(kwargs)
 
         ctx = build_context(active_recipe, rec, overrides)
+        if safe_auto is not None:
+            ctx.safe_auto = bool(safe_auto)
         ctx.hi_ref = hi_ref
         if face_contexts is not None:
             ctx.face_contexts = face_contexts
@@ -1472,7 +1487,33 @@ class RetouchEngine:
                 self._enhancer = AIEnhancer()
             t_dn = time.perf_counter()
             strength = float(ctx.ai_denoise) / 100.0
+            before_denoise = img_bgr.copy()
             img_bgr = self._enhancer.denoise(img_bgr, strength=strength)
+            ctx._runtime_diagnostics.update(getattr(self._enhancer, "last_runtime", {}))
+            if bool(getattr(ctx, "safe_auto", True)):
+                from .safe_auto import apply_decision, decide
+                runtime = getattr(self._enhancer, "last_runtime", {}).get("denoise", {})
+                backend = runtime.get("backend", "unknown") if isinstance(runtime, dict) else "unknown"
+                confidence = 0.95 if backend == "onnx" else 0.50
+                decision = decide(
+                    "optional_model.denoise",
+                    confidence=confidence,
+                    evidence={
+                        "requested_strength": strength,
+                        "backend": backend,
+                        "runtime": runtime,
+                    },
+                    reason=(
+                        "verified ONNX denoise runtime"
+                        if backend == "onnx"
+                        else "denoise model unavailable; fallback requires review"
+                    ),
+                    apply_at=0.90,
+                    dampen_at=0.70,
+                    review_at=0.50,
+                )
+                img_bgr = apply_decision(before_denoise, img_bgr, decision)
+                ctx._safe_auto_decisions.append(decision.to_dict())
             timings["ai_denoise"] = (time.perf_counter() - t_dn) * 1000
 
         # ------------------------------------------------------------------
@@ -1526,6 +1567,8 @@ class RetouchEngine:
                 timings=timings,
                 face_contexts=built_contexts,
                 qa=core.qa,
+                safe_auto_decisions=getattr(ctx, "_safe_auto_decisions", []),
+                runtime_diagnostics=getattr(ctx, "_runtime_diagnostics", {}),
             )
 
         # ------------------------------------------------------------------
@@ -1603,6 +1646,8 @@ class RetouchEngine:
             face_contexts=built_contexts,
             qa=core.qa,
             face_recipes=face_recipes or None,
+            safe_auto_decisions=getattr(ctx, "_safe_auto_decisions", []),
+            runtime_diagnostics=getattr(ctx, "_runtime_diagnostics", {}),
         )
 
     # ------------------------------------------------------------------
@@ -1621,7 +1666,39 @@ class RetouchEngine:
         if self._enhancer is None:
             self._enhancer = AIEnhancer()
         t_sr = time.perf_counter()
+        before_sr = result.copy()
         out = self._enhancer.super_resolve(result, scale=int(ctx.ai_sr_scale))
+        ctx._runtime_diagnostics.update(getattr(self._enhancer, "last_runtime", {}))
+        if bool(getattr(ctx, "safe_auto", True)):
+            from .safe_auto import apply_decision, decide
+            runtime = getattr(self._enhancer, "last_runtime", {}).get("super_resolution", {})
+            backend = runtime.get("backend", "unknown") if isinstance(runtime, dict) else "unknown"
+            confidence = 0.95 if backend == "onnx" else 0.50
+            decision = decide(
+                "optional_model.super_resolution",
+                confidence=confidence,
+                evidence={
+                    "requested_scale": int(ctx.ai_sr_scale),
+                    "backend": backend,
+                    "runtime": runtime,
+                },
+                reason=(
+                    "verified ONNX super-resolution runtime"
+                    if backend == "onnx"
+                    else "super-resolution model unavailable; fallback requires review"
+                ),
+                apply_at=0.90,
+                dampen_at=0.70,
+                review_at=0.50,
+            )
+            if decision.action in {"skip", "review"}:
+                out = before_sr
+            else:
+                base = before_sr
+                if base.shape != out.shape:
+                    base = cv2.resize(base, (out.shape[1], out.shape[0]), interpolation=cv2.INTER_LINEAR)
+                out = apply_decision(base, out, decision)
+            ctx._safe_auto_decisions.append(decision.to_dict())
         timings["ai_sr"] = (time.perf_counter() - t_sr) * 1000
         return out
 
@@ -2973,12 +3050,23 @@ class RetouchEngine:
             ]
 
         results: List[Optional[_FaceResult]] = [None] * len(faces)
+
+        def _collect_safe_auto_decisions() -> None:
+            decisions = getattr(ctx, "_safe_auto_decisions", None)
+            if decisions is None:
+                decisions = []
+                ctx._safe_auto_decisions = decisions
+            for face_result in results:
+                if face_result is not None:
+                    decisions.extend(getattr(face_result, "safe_auto_decisions", []) or [])
+
         if len(faces) == 1:
             results[0] = self._process_one_face(
                 img, faces[0], person_mask, self._ctx_for_face(ctx, 0), h_img, w_img,
                 regions=all_regions[0], preprepared=prepared_faces[0],
                 light_direction=all_light_directions[0],
             )
+            _collect_safe_auto_decisions()
             return results, built_contexts  # type: ignore[return-value]
 
         # Multi-face: try ProcessPool (FaceProcessorPool) for true parallelism,
@@ -2997,6 +3085,7 @@ class RetouchEngine:
                     prepared_faces[i]['shifted_bbox'],
                     prepared_faces[i]['shifted_landmarks'],
                     ieds[i],
+                    faces[i].confidence,
                     _slim_ctx(self._ctx_for_face(ctx, i)),
                     prepared_faces[i]['roi_box'],
                     prepared_faces[i]['roi_person_mask'],
@@ -3028,7 +3117,10 @@ class RetouchEngine:
                         lips_mask=pr['lips_mask'],
                         sharpen_mask=pr['sharpen_mask'],
                         roi_box=pr['roi_box'],
+                        hair_only_mask=pr.get('hair_only_mask'),
+                        safe_auto_decisions=pr.get('safe_auto_decisions', []),
                     )
+            _collect_safe_auto_decisions()
             return results, built_contexts  # type: ignore[return-value]
 
         # Fallback: ThreadPoolExecutor (engine instance shared via memory)
@@ -3046,6 +3138,7 @@ class RetouchEngine:
             for future in as_completed(future_to_idx):
                 idx = future_to_idx[future]
                 results[idx] = future.result()
+        _collect_safe_auto_decisions()
         return results, built_contexts  # type: ignore[return-value]
 
     def _process_one_face(
@@ -4405,6 +4498,7 @@ class RetouchEngine:
             (H, W, 3) body-reshaped image, same dtype as input.
         """
         from .body_reshape import BodyReshaper, suggest_body_reshape
+        from .safe_auto import apply_decision, decide
 
         # Check if any body_reshape params are active (non-default)
         arm_len = (ctx.body_reshape_arm_length - 50.0)  # Center at 50.0
@@ -4427,11 +4521,45 @@ class RetouchEngine:
             img_u8 = img
 
         reshaper = BodyReshaper()
+        auto_decision = None
 
         # One-click auto: detect pose, suggest balanced proportions, and blend
         # the suggestion (scaled by strength) with any manual slider offsets.
         if ctx.auto_body_reshape > 0:
             pose = reshaper.detector.detect(img_u8)
+            visibility = list(getattr(pose, "visibility", None) or [])
+            key_indices = [11, 12, 23, 24, 27, 28]
+            visible_values = [
+                float(np.clip(visibility[i], 0.0, 1.0))
+                for i in key_indices
+                if i < len(visibility)
+            ]
+            visibility_confidence = (
+                float(np.mean(visible_values)) if visible_values else 0.0
+            )
+            detected_confidence = 1.0 if getattr(pose, "detected", False) else 0.0
+            confidence = min(detected_confidence, visibility_confidence or detected_confidence)
+            auto_decision = decide(
+                "body_reshape",
+                confidence=confidence,
+                evidence={
+                    "pose_detected": bool(getattr(pose, "detected", False)),
+                    "body_visible": bool(getattr(pose, "body_visible", False)),
+                    "visible_key_landmarks": len(visible_values),
+                    "mean_key_visibility": visibility_confidence,
+                    "model": "mediapipe_pose",
+                },
+                reason=(
+                    "pose evidence supports automatic body reshape"
+                    if confidence >= 0.85
+                    else "pose evidence requires review"
+                ),
+                apply_at=0.90,
+                dampen_at=0.70,
+                review_at=0.50,
+            )
+            if bool(getattr(ctx, "safe_auto", True)):
+                getattr(ctx, "_safe_auto_decisions", []).append(auto_decision.to_dict())
             if pose.landmarks is None:
                 # No pose detected -> fall back to manual-only behavior.
                 if not any([arm_len, leg_len, torso_w, shoulder_w, hip_w]):
@@ -4455,6 +4583,9 @@ class RetouchEngine:
             hip_width=hip_w,
             person_mask=person_mask,
         )
+
+        if auto_decision is not None and bool(getattr(ctx, "safe_auto", True)):
+            result_u8 = apply_decision(img_u8, result_u8, auto_decision)
 
         if is_float:
             return result_u8.astype(np.float32) / 255.0
@@ -4535,6 +4666,7 @@ class RetouchEngine:
 
         # Currently disabled: placeholders return empty masks
         from .neural_boosters import StrayHairSegmenter, DefectSegmenter
+        from .safe_auto import decide
 
         # Normalize to uint8 for processing (or use float if already float32)
         is_float = img.dtype == np.float32
@@ -4553,6 +4685,14 @@ class RetouchEngine:
                 pass
             else:
                 self._warn_neural_booster_disabled("stray_hair_boost")
+                if bool(getattr(ctx, "safe_auto", True)):
+                    decision = decide(
+                        "optional_model.stray_hair",
+                        confidence=0.0,
+                        evidence={"segmenter_enabled": False, "requested_strength": stray_hair_strength},
+                        reason="optional stray-hair model is unavailable",
+                    )
+                    ctx._safe_auto_decisions.append(decision.to_dict())
 
         # Apply defect boosting if enabled
         if defect_strength > 0:
@@ -4565,6 +4705,14 @@ class RetouchEngine:
                 pass
             else:
                 self._warn_neural_booster_disabled("defect_boost")
+                if bool(getattr(ctx, "safe_auto", True)):
+                    decision = decide(
+                        "optional_model.defect",
+                        confidence=0.0,
+                        evidence={"segmenter_enabled": False, "requested_strength": defect_strength},
+                        reason="optional defect model is unavailable",
+                    )
+                    ctx._safe_auto_decisions.append(decision.to_dict())
 
         return img
 

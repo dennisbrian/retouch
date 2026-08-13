@@ -17,6 +17,7 @@ import pytest
 
 import gui
 from retouch.recipe_cookbook import search_recipes
+from retouch.project_profiles import LookBoard, LookReference, ProjectProfileStore
 
 
 def test_look_extractor_strips_underscore_keys(tmp_path):
@@ -58,6 +59,23 @@ def test_look_extractor_real_image(tmp_path):
     assert isinstance(clean, dict)
     assert all(not str(k).startswith("_") for k in clean)
     assert "failed" not in status.lower()
+
+
+def test_apply_saved_look_board_populates_process_params(monkeypatch, tmp_path):
+    reference = np.full((64, 64, 3), (80, 100, 180), dtype=np.uint8)
+    reference_path = tmp_path / "reference.png"
+    cv2.imwrite(str(reference_path), reference)
+    store = ProjectProfileStore(tmp_path / "projects.json")
+    board = LookBoard("warm-board")
+    board.add_reference(LookReference(str(reference_path), "warm", 1.0))
+    store.upsert_board(board)
+    monkeypatch.setattr(gui, "ProjectProfileStore", lambda: store)
+
+    params, status = gui.on_apply_look_board("warm-board", None)
+
+    assert params
+    assert all(not key.startswith("_") for key in params)
+    assert "applied look board" in status.lower()
 
 
 def test_cookbook_search_returns_results():

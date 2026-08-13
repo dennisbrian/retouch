@@ -440,6 +440,7 @@ PROCESS_INPUT_KEYS = (
         "export_fmt", "export_quality", "export_res",
         "quality_tier",
         "debug_mode",
+        "optical_correction",
         "look_params",
         "face_params",
         "face_params_json",
@@ -642,6 +643,7 @@ def process_image(*args):
     export_res = params.get("export_res")
     debug_mode = params.get("debug_mode")
     quality_tier = params.get("quality_tier")
+    optical_correction = bool(params.get("optical_correction"))
     quality = "draft" if quality_tier and quality_tier.startswith("Draft") else "full"
 
     if not img_paths:
@@ -659,6 +661,7 @@ def process_image(*args):
     first_result = None
     first_processed_rgb = None
     debug_images = []
+    capture_notes = []
 
     color_ref_bgr = None
     if color_ref_img is not None and color_ref_strength > 0:
@@ -741,8 +744,18 @@ def process_image(*args):
             if isinstance(path_item, dict):
                 curr_path = path_item.get("name") or path_item.get("path")
             
-            # T5: RAW via 16-bit path; JPEG/PNG unchanged (imread_engine)
-            img_bgr = imread_engine(curr_path)
+            # T5: RAW via 16-bit path; JPEG/PNG unchanged (imread_engine).
+            # The caller-owned status dict makes an optional Lensfun fallback
+            # or non-8-bit precision-preserving skip visible in this GUI.
+            correction_status = {}
+            img_bgr = imread_engine(
+                curr_path,
+                optical_correction=optical_correction,
+                correction_status=correction_status,
+            )
+            if optical_correction:
+                detail = correction_status.get("reason") or ", ".join(correction_status.get("applied", ()))
+                capture_notes.append(f"{Path(curr_path).name}: {detail or 'no correction applied'}")
             original = (
                 np.clip(img_bgr, 0, 255).astype(np.uint8)
                 if img_bgr.dtype != np.uint8
@@ -863,14 +876,26 @@ def process_image(*args):
         gr.Info(f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s")
 
         if show_compare:
-            return gr.update(visible=False), gr.update(value=slide_html, visible=True), first_processed_rgb, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓", debug_gallery, debug_vis, qa_html
-        return preview, gr.update(visible=False), first_processed_rgb, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓", debug_gallery, debug_vis, qa_html
+            message = f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓"
+            if capture_notes:
+                message += " | Lens: " + " ; ".join(capture_notes)
+            return gr.update(visible=False), gr.update(value=slide_html, visible=True), first_processed_rgb, zip_path, message, debug_gallery, debug_vis, qa_html
+        message = f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓"
+        if capture_notes:
+            message += " | Lens: " + " ; ".join(capture_notes)
+        return preview, gr.update(visible=False), first_processed_rgb, zip_path, message, debug_gallery, debug_vis, qa_html
     else:
         gr.Info(f"Done in {elapsed:.1f}s")
 
         if show_compare:
-            return gr.update(visible=False), gr.update(value=slide_html, visible=True), first_processed_rgb, exported_paths[0], f"Done in {elapsed:.1f}s ✓", debug_gallery, debug_vis, qa_html
-        return preview, gr.update(visible=False), first_processed_rgb, exported_paths[0], f"Done in {elapsed:.1f}s ✓", debug_gallery, debug_vis, qa_html
+            message = f"Done in {elapsed:.1f}s ✓"
+            if capture_notes:
+                message += " | Lens: " + " ; ".join(capture_notes)
+            return gr.update(visible=False), gr.update(value=slide_html, visible=True), first_processed_rgb, exported_paths[0], message, debug_gallery, debug_vis, qa_html
+        message = f"Done in {elapsed:.1f}s ✓"
+        if capture_notes:
+            message += " | Lens: " + " ; ".join(capture_notes)
+        return preview, gr.update(visible=False), first_processed_rgb, exported_paths[0], message, debug_gallery, debug_vis, qa_html
 
 
 def on_recipe_change(recipe):
@@ -1057,6 +1082,45 @@ def on_save_look_board(board_id, project_id, reference_files):
         return summary, board.to_json()
     except Exception as exc:
         return f"Look Board save failed: {exc}", "{}"
+
+
+def on_apply_look_board(board_id, img_input):
+    """Load a saved Look Board and place its extracted params in Process state."""
+    if not board_id:
+        return {}, "Enter a Look Board ID first."
+    try:
+        board = ProjectProfileStore().boards.get(str(board_id).strip())
+        if board is None:
+            return {}, f"Look Board '{board_id}' was not found."
+        references = []
+        missing = []
+        for reference in board.references:
+            path = Path(reference.path).expanduser()
+            if not path.is_file():
+                missing.append(str(path))
+                continue
+            references.append((imread_exif(path), reference.weight))
+        if not references:
+            detail = f" Missing: {missing[0]}" if missing else ""
+            return {}, f"Look Board '{board.board_id}' has no readable references.{detail}"
+
+        base = None
+        base_path = _resolve_image_path(img_input)
+        if base_path:
+            base = imread_exif(base_path)
+        result = LookExtractor().extract_board(references, base_img=base)
+        clean = {
+            key: value for key, value in (result.get("engine_params") or {}).items()
+            if not str(key).startswith("_")
+        }
+        suffix = f" {len(missing)} reference(s) unavailable." if missing else ""
+        return clean, (
+            f"Applied Look Board '{board.board_id}' from {result['reference_count']} reference(s)."
+            f" Click Process to render.{suffix}"
+        )
+    except Exception as exc:
+        _logger.exception("Look Board apply failed: %s", exc)
+        return {}, f"Look Board apply failed: {exc}"
 
 
 def on_detect_faces(img_paths):
@@ -2360,6 +2424,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             info="Downscales image if it exceeds target dimension while maintaining aspect ratio"
                         )
                         quality_tier = gr.Radio(choices=["Full (native face crops)", "Draft (proxy, fast)"], value="Full (native face crops)", label="Processing Quality", interactive=True, info="Full: faces processed at native resolution (F8.2). Draft: legacy proxy path for fast batch contact sheets.")
+                        optical_correction = gr.Checkbox(label="Apply Lensfun corrections", value=False, info="Uses camera/lens EXIF. Non-8-bit sources are skipped rather than downconverted; the status explains why.")
 
                 # Column 2: Workspace Canvas (Center)
                 with gr.Column(scale=4, elem_classes=["viewer-panel"]):
@@ -2977,6 +3042,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                     look_board_project = gr.Textbox(label="Linked profile ID (optional)")
                     look_board_refs = gr.File(label="Reference images", file_types=["image", *sorted(RAW_EXTENSIONS)], file_count="multiple")
                 look_board_save_btn = gr.Button("Save Look Board", variant="secondary")
+                look_board_apply_btn = gr.Button("Apply Look Board to Process", variant="primary")
                 look_board_status = gr.Markdown("")
                 look_board_json = gr.Code(label="Look Board manifest", language="json", interactive=False)
 
@@ -3626,6 +3692,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         inputs=[look_board_id, look_board_project, look_board_refs],
         outputs=[look_board_status, look_board_json],
     )
+    look_board_apply_btn.click(
+        fn=on_apply_look_board,
+        inputs=[look_board_id, img_input],
+        outputs=[_look_params_state, look_board_status],
+    )
 
     # Name → Gradio component map.  Keyed by PROCESS_INPUT_KEYS so that adding
     # a ParamSpec (which auto-inserts a name into PROCESS_INPUT_KEYS via
@@ -3896,6 +3967,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "export_res": export_res,
         "quality_tier": quality_tier,
         "debug_mode": debug_mode,
+        "optical_correction": optical_correction,
         "look_params": _look_params_state,
         "face_params": _face_params_state,
         "face_params_json": face_params_json,

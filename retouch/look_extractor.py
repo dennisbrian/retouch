@@ -142,6 +142,64 @@ class LookExtractor:
             "mode": mode,
         }
 
+    def extract_board(
+        self,
+        references: Sequence[Tuple[np.ndarray, float]],
+        base_img: Optional[np.ndarray] = None,
+    ) -> Dict[str, Any]:
+        """Extract one stable look from weighted Look Board references.
+
+        Each reference is measured independently, then scalar engine
+        parameters are combined by normalized reference weight. This keeps a
+        board explainable and avoids pretending that unrelated reference
+        pixels can be spatially aligned. Non-scalar values use the
+        highest-weight reference, while the first extracted preset remains
+        available as a representative editable preset.
+        """
+        if not references:
+            raise ValueError("Look Board requires at least one reference")
+
+        prepared = [(image, float(weight)) for image, weight in references if float(weight) > 0.0]
+        if not prepared:
+            raise ValueError("Look Board reference weights must contain a positive value")
+        total_weight = sum(weight for _, weight in prepared)
+        extracted = [self.extract(image, base_img=base_img) for image, _ in prepared]
+
+        keys = set()
+        for item in extracted:
+            keys.update(item.get("engine_params", {}).keys())
+
+        engine_params: Dict[str, Any] = {}
+        for key in sorted(keys):
+            values = [item.get("engine_params", {}).get(key) for item in extracted]
+            weighted_values = [
+                (value, weight)
+                for value, (_, weight) in zip(values, prepared)
+                if isinstance(value, (int, float)) and not isinstance(value, bool)
+            ]
+            if weighted_values:
+                value_weight = sum(weight for _, weight in weighted_values)
+                engine_params[key] = round(
+                    sum(float(value) * weight for value, weight in weighted_values) / value_weight,
+                    3,
+                )
+                continue
+            present = [(value, weight) for value, (_, weight) in zip(values, prepared) if value is not None]
+            if present:
+                engine_params[key] = max(present, key=lambda item: item[1])[0]
+
+        representative = max(
+            zip(extracted, prepared),
+            key=lambda item: item[1][1],
+        )[0]
+        return {
+            "engine_params": engine_params,
+            "preset": representative.get("preset", {}),
+            "mode": "board",
+            "reference_count": len(prepared),
+            "weights": [round(weight / total_weight, 4) for _, weight in prepared],
+        }
+
     def extract_to_preset(
         self,
         reference_img: np.ndarray,

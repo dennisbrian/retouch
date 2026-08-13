@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
+from .utils import get_cache_dir
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -117,8 +119,13 @@ class LookBoard:
 class ProjectProfileStore:
     """Atomic JSON store for project profiles and Look Boards."""
 
+    @staticmethod
+    def default_path() -> Path:
+        """Return the shared, environment-isolated profile store path."""
+        return get_cache_dir() / "projects.json"
+
     def __init__(self, path: Optional[Union[str, Path]] = None) -> None:
-        self.path = Path(path).expanduser() if path else Path.home() / ".retouch" / "projects.json"
+        self.path = Path(path).expanduser() if path else self.default_path()
         self.profiles: Dict[str, ProjectProfile] = {}
         self.boards: Dict[str, LookBoard] = {}
         self.load()

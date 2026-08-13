@@ -52,7 +52,13 @@ def _uint8_bgr(image: np.ndarray) -> np.ndarray:
 
 def _resize(image: np.ndarray, shape: Sequence[int]) -> np.ndarray:
     h, w = int(shape[0]), int(shape[1])
-    return cv2.resize(image, (w, h), interpolation=cv2.INTER_AREA if h < image.shape[0] else cv2.INTER_LINEAR)
+    shrinking = h < image.shape[0] or w < image.shape[1]
+    # The inverse of a proxy resize is a delivery-quality reconstruction. A
+    # linear upsample leaves enough edge quantisation in the restored image to
+    # trip the p95 gate on the reference portrait; Lanczos reduces that
+    # reconstruction error without relaxing the 24.0 threshold.
+    interpolation = cv2.INTER_AREA if shrinking else cv2.INTER_LANCZOS4
+    return cv2.resize(image, (w, h), interpolation=interpolation)
 
 
 def _restore_shape(image: np.ndarray, shape: Sequence[int]) -> np.ndarray:

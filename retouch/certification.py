@@ -7,6 +7,46 @@ from typing import Any, Mapping
 
 HUMAN_REVIEW_STATES = {"pending", "approved", "rejected", "not_applicable"}
 
+# A single portrait is not representative enough for release certification.
+# Case names are intentionally semantic so the corpus can remain outside the
+# repository while the gate still proves that the required strata were run.
+CORE_CORPUS_DIMENSIONS = (
+    "skin_tone",
+    "lighting",
+    "glasses",
+    "wig",
+    "hands_on_face",
+    "group_portrait",
+)
+
+_CORE_CORPUS_ALIASES = {
+    "skin_tone": ("skin_tone", "skin-tone", "dark_skin", "deep_skin", "light_skin", "tone"),
+    "lighting": ("lighting", "light", "lowlight", "mixed_light", "venue"),
+    "glasses": ("glasses", "eyeglass", "spectacle"),
+    "wig": ("wig", "cosplay", "hair"),
+    "hands_on_face": ("hands_on_face", "hands-on-face", "hand_face", "handsonface"),
+    "group_portrait": ("group", "family", "multi_face", "multiface"),
+}
+
+
+def core_corpus_coverage(case_names: Any) -> dict[str, Any]:
+    """Report whether named cases cover every required certification stratum."""
+    names = [str(name).strip().lower() for name in case_names]
+    covered = {
+        dimension: sorted(
+            name for name in names
+            if any(alias in name for alias in aliases)
+        )
+        for dimension, aliases in _CORE_CORPUS_ALIASES.items()
+    }
+    missing = [dimension for dimension in CORE_CORPUS_DIMENSIONS if not covered[dimension]]
+    return {
+        "required": list(CORE_CORPUS_DIMENSIONS),
+        "covered": covered,
+        "missing": missing,
+        "complete": not missing,
+    }
+
 
 def certification_fields(
     *,
@@ -32,6 +72,34 @@ def certification_fields(
         # final gate, never merely "the flag was absent".
         "face_aware_certification": final_certified,
     }
+
+
+def core_case_human_review_status(
+    case_name: str,
+    recipe_names: Any,
+    human_rows: Any,
+) -> str:
+    """Return the independent reviewer state for one completed corpus case."""
+    expected = {str(recipe) for recipe in recipe_names}
+    matching = {
+        str(row.get("recipe")): row
+        for row in human_rows
+        if isinstance(row, Mapping) and str(row.get("case")) == str(case_name)
+    }
+    if not expected or not expected <= set(matching):
+        return "pending"
+    states = {
+        recipe: str(matching[recipe].get("human_natural_output", "pending")).lower()
+        for recipe in expected
+    }
+    if "rejected" in states.values():
+        return "rejected"
+    if all(
+        states[recipe] == "approved" and str(matching[recipe].get("reviewer", "")).strip()
+        for recipe in expected
+    ):
+        return "approved"
+    return "pending"
 
 
 def core_case_automatic_pass(
@@ -62,9 +130,11 @@ def core_matrix_final_certified(
     rows: list[Mapping[str, Any]],
     human_rows: list[Mapping[str, Any]],
     expected_recipes: int,
+    *,
+    corpus_complete: bool = True,
 ) -> bool:
     """Reject incomplete cases, non-face-aware evidence, and pending review."""
-    if not rows or not human_rows:
+    if not corpus_complete or not rows or not human_rows:
         return False
     if any(
         not bool(row.get("face_aware_run"))

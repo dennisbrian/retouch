@@ -3,7 +3,8 @@
 import numpy as np
 import pytest
 
-from retouch.safe_auto import apply_decision, decide, decide_mask_stage
+from retouch.engine import ProcessingContext, ProcessingResult, RetouchEngine
+from retouch.safe_auto import apply_decision, decide, decide_mask_stage, record_decision
 
 
 def test_safe_auto_actions_follow_confidence_bands():
@@ -54,3 +55,55 @@ def test_safe_auto_rejects_invalid_thresholds_and_shapes():
         decide("stage", confidence=0.8, review_at=0.8, dampen_at=0.7)
     with pytest.raises(ValueError):
         apply_decision(np.zeros((2, 2)), np.zeros((3, 3)), decide("stage", confidence=1.0))
+
+
+def test_safe_auto_decisions_are_recorded_on_processing_context_and_result():
+    ctx = ProcessingContext()
+    decision = decide("body_reshape", confidence=0.1)
+    record_decision(ctx, decision)
+
+    result = ProcessingResult(
+        np.zeros((2, 2, 3), dtype=np.uint8),
+        params=ctx,
+        safe_auto_decisions=ctx._safe_auto_decisions,
+    )
+
+    assert result.safe_auto_decisions[0]["stage"] == "body_reshape"
+    assert result.safe_auto_decisions[0]["action"] == "skip"
+
+
+def test_auto_body_reshape_skips_uncertain_pose(monkeypatch):
+    class _Pose:
+        detected = True
+        body_visible = False
+        landmarks = [(0.5, 0.5)] * 33
+        visibility = [0.2] * 33
+        feature_flags = {}
+
+    class _Detector:
+        def detect(self, _image):
+            return _Pose()
+
+    class _Reshaper:
+        def __init__(self):
+            self.detector = _Detector()
+
+        def reshape(self, image, **_kwargs):
+            return np.full_like(image, 255)
+
+    monkeypatch.setattr("retouch.body_reshape.BodyReshaper", _Reshaper)
+    monkeypatch.setattr(
+        "retouch.body_reshape.suggest_body_reshape",
+        lambda _pose: {name: 60.0 for name in (
+            "arm_length", "leg_length", "torso_width", "shoulder_width", "hip_width"
+        )},
+    )
+
+    engine = RetouchEngine.__new__(RetouchEngine)
+    ctx = ProcessingContext(auto_body_reshape=100.0)
+    image = np.zeros((12, 12, 3), dtype=np.uint8)
+    result = engine._stage_body_reshape(image, ctx)
+
+    np.testing.assert_array_equal(result, image)
+    assert ctx._safe_auto_decisions[-1]["stage"] == "body_reshape"
+    assert ctx._safe_auto_decisions[-1]["action"] == "skip"

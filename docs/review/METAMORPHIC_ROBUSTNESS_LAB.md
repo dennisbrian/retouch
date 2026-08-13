@@ -22,11 +22,11 @@ record independent `face_aware_run`, `automatic_pass`, `human_review`, and
 configurable because different stages have different legitimate sensitivity;
 the report always retains the raw error metrics and reason for failure.
 
-Initial diagnostic smoke result on the bundled Chang'e reference at 600px
-(`global_only: true`): rotation, JPEG, exposure, white-balance, and bit-depth
-roundtrip passed; proxy resize flagged p95 error `25.0` against the default
-`24.0` threshold. This is an actionable robustness finding, not a reason to
-weaken the threshold and not face-aware certification.
+The resize inverse now uses Lanczos reconstruction for the upsampled result.
+On the bundled Chang'e reference at 600px (`global_only: true`), rotation,
+proxy resize, JPEG, exposure, white-balance, and bit-depth roundtrip pass the
+default p95 threshold of `24.0`. The threshold remains unchanged; the next
+gate is a face-aware/native run on the representative corpus.
 
 ## Verification status
 

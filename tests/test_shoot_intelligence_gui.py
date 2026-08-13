@@ -13,6 +13,7 @@ def test_gui_exposes_shoot_intelligence_controls_and_handlers():
     assert "Scan shoot" in source
     assert "Save project profile" in source
     assert "Save Look Board" in source
+    assert "Apply Look Board to Process" in source
     assert "Run watch pass" in source
 
     config = gui.app.get_config_file()

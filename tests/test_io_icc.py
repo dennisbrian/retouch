@@ -233,6 +233,44 @@ class TestWriteImageWithIcc:
         assert decoded.dtype == np.uint16
         assert decoded.mean() == pytest.approx(127.5 * 257.0, abs=1.0)
 
+    @pytest.mark.parametrize("extension", ["png", "tif"])
+    def test_16bit_round_trip_preserves_pixels_icc_and_exif(
+        self, tmp_path: Path, extension: str
+    ) -> None:
+        """16-bit export must not trade metadata fidelity for bit depth."""
+        path = tmp_path / f"roundtrip.{extension}"
+        bgr16 = np.array(
+            [
+                [[1, 2, 3], [1025, 2049, 4097]],
+                [[32769, 40000, 65535], [0, 257, 511]],
+            ],
+            dtype=np.uint16,
+        )
+        exif = Image.Exif()
+        from PIL.ExifTags import Base as _ExifBase
+        exif[_ExifBase.Orientation] = 6
+        exif[_ExifBase.Make] = "Retouch Test Camera"
+        exif_bytes = exif.tobytes()
+        icc = _srgb_icc_bytes()
+
+        write_image_with_icc(
+            path,
+            bgr16,
+            icc_profile=icc,
+            bit_depth=16,
+            exif=exif_bytes,
+        )
+
+        decoded = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+        assert decoded is not None
+        assert decoded.dtype == np.uint16
+        np.testing.assert_array_equal(decoded, bgr16)
+        assert read_icc_profile(path) == icc
+        assert read_exif_bytes(path) is not None
+        with Image.open(path) as image:
+            assert image.getexif().get(_ExifBase.Orientation) == 1
+            assert image.getexif().get(_ExifBase.Make) == "Retouch Test Camera"
+
     def test_jpeg_uses_444_subsampling(self, tmp_path: Path) -> None:
         path = tmp_path / "444.jpg"
         arr = np.zeros((32, 32, 3), dtype=np.uint8)
@@ -439,4 +477,3 @@ class TestC2PAManifestPreservation:
         manifest = read_c2pa_manifest(path)
         assert manifest is not None
         assert b"c2pa" in manifest
-
