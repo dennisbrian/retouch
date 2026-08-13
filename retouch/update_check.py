@@ -20,6 +20,8 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
+from .utils import offline_mode_enabled
+
 logger = logging.getLogger(__name__)
 
 _RELEASES_API = "https://api.github.com/repos/dennisbrian/retouch/releases/latest"
@@ -52,6 +54,9 @@ def check_for_update(timeout: float = 3.0) -> Optional[UpdateInfo]:
     must never break app startup.
     """
     from . import __version__
+    if offline_mode_enabled():
+        logger.info("update_check: skipped because RETOUCH_OFFLINE is enabled")
+        return None
 
     current = _parse_version(__version__)
     if current is None:

@@ -2,6 +2,7 @@
 # Anchored so scripts/models/ (export tooling) is not swallowed.
 /models/*
 !/models/manifest.json
+!/models/__init__.py
 *.task
 test_output/
 benchmark_results.json
@@ -13,6 +14,9 @@ htmlcov/
 *.egg-info/
 dist/
 build/
+!scripts/build/
+scripts/build/*
+!scripts/build/build_app.sh
 *.spec
 .pytest_cache/
 .venv-face-aware/

@@ -57,6 +57,12 @@ class TestCheckForUpdate:
         with mock.patch("urllib.request.urlopen", side_effect=urllib.error.URLError("down")):
             assert check_for_update() is None
 
+    def test_offline_mode_skips_network(self, monkeypatch):
+        monkeypatch.setenv("RETOUCH_OFFLINE", "1")
+        with mock.patch("urllib.request.urlopen") as urlopen:
+            assert check_for_update() is None
+        urlopen.assert_not_called()
+
     def test_malformed_json_returns_none(self):
         resp = mock.MagicMock()
         resp.read.return_value = b"not json{"

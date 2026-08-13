@@ -69,26 +69,32 @@ class PoseContext:
 class PoseDetector:
     """Wrapper around MediaPipe Pose for robust pose landmark extraction.
 
-    Currently a graceful no-op fallback when pose_landmarker.task model is not
-    available. In production, this would load the MediaPipe Tasks API PoseLandmarker.
+    Uses the manifest-registered, integrity-verified Pose Landmarker and
+    exposes a truthful no-op capability state when it is unavailable.
     """
 
     def __init__(self):
         """Initialize MediaPipe Pose detector.
 
-        Note: pose_landmarker.task must be downloaded separately. If unavailable,
-        pose detection is disabled and body reshape becomes a no-op.
+        The verified model is resolved through the user model cache. If it is
+        unavailable, pose detection is disabled and body reshape is a no-op.
         """
         self.detector = None
+        self.status: Dict[str, Any] = {
+            "feature": "body_reshape",
+            "model": "pose_landmarker_full",
+            "available": False,
+            "backend": None,
+            "reason": "not initialized",
+        }
         try:
             from mediapipe.tasks import vision
             from mediapipe.tasks import BaseOptions
-            import os
 
-            # Try to load pose landmarker model
             pose_model_path = self._get_pose_model_path()
             if pose_model_path is None:
-                logger.debug("Pose model not found; pose detection disabled")
+                self.status["reason"] = "verified pose model is unavailable"
+                logger.info("Body reshape unavailable: verified pose model is unavailable")
                 return
 
             base_options = BaseOptions(model_asset_path=pose_model_path)
@@ -97,38 +103,32 @@ class PoseDetector:
                 output_segmentation_masks=False,
             )
             self.detector = vision.PoseLandmarker.create_from_options(options)
-            logger.debug(f"PoseLandmarker initialized from {pose_model_path}")
+            self.status.update(
+                available=True,
+                backend="mediapipe.tasks.PoseLandmarker",
+                path=pose_model_path,
+                reason="ready",
+            )
+            logger.debug("PoseLandmarker initialized from %s", pose_model_path)
 
-        except (ImportError, AttributeError, Exception) as e:
-            logger.debug(f"Failed to initialize MediaPipe Pose: {type(e).__name__}: {e}")
+        except Exception as e:  # noqa: BLE001 — optional capability must be truthful
+            self.status["reason"] = f"{type(e).__name__}: {e}"
+            logger.warning("Body reshape unavailable: %s", self.status["reason"])
 
     @staticmethod
     def _get_pose_model_path() -> Optional[str]:
-        """Try to find pose landmarker model in standard locations.
+        """Resolve the manifest-registered model through verified fetch logic."""
+        from .model_fetch import ModelFetchError, get_model_path
 
-        Returns path if found, None otherwise.
-        """
-        import os
+        try:
+            return get_model_path("pose_landmarker_full")
+        except ModelFetchError as exc:
+            logger.info("Pose model unavailable: %s", exc)
+            return None
 
-        candidates = [
-            # User home directory
-            os.path.expanduser("~/.mediapipe/pose_landmarker.task"),
-            # System paths
-            "/opt/mediapipe/pose_landmarker.task",
-            # Local project
-            "./models/pose_landmarker.task",
-            # Parent directory
-            "../models/pose_landmarker.task",
-        ]
-
-        for path in candidates:
-            try:
-                if os.path.exists(path):
-                    return os.path.abspath(path)
-            except (OSError, TypeError):
-                pass
-
-        return None
+    def capability_status(self) -> Dict[str, Any]:
+        """Return the runtime capability state for GUI/diagnostics evidence."""
+        return dict(self.status)
 
     def detect(self, img_bgr: np.ndarray) -> PoseContext:
         """Detect pose landmarks in image.
@@ -200,6 +200,10 @@ class BodyReshaper:
         """Initialize body reshaper with MediaPipe Pose detector."""
         self.detector = PoseDetector()
         self.pose_ctx: Optional[PoseContext] = None
+
+    def capability_status(self) -> Dict[str, Any]:
+        return self.detector.capability_status()
+
 
     def reshape(
         self,
@@ -708,3 +712,30 @@ def suggest_body_reshape(pose_ctx: PoseContext) -> Dict[str, float]:
         if not warps:
             return 0.0
         return max(R for _, _, R in warps)
+
+
+def body_reshape_capability_status() -> Dict[str, Any]:
+    """Return side-effect-free model capability status for UI and diagnostics."""
+    from .model_fetch import model_status
+
+    try:
+        status = model_status("pose_landmarker_full")
+        return {
+            "feature": "body_reshape",
+            "model": "pose_landmarker_full",
+            "available": bool(status.get("available")),
+            "downloadable": bool(status.get("downloadable")),
+            "path": status.get("path"),
+            "reason": status.get("integrity_error") or (
+                "ready" if status.get("available") else "verified pose model is unavailable"
+            ),
+        }
+    except Exception as exc:  # noqa: BLE001 — status must never block the UI
+        return {
+            "feature": "body_reshape",
+            "model": "pose_landmarker_full",
+            "available": False,
+            "downloadable": False,
+            "path": None,
+            "reason": f"{type(exc).__name__}: {exc}",
+        }

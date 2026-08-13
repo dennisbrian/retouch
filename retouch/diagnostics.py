@@ -51,15 +51,37 @@ def setup_file_logging(level: int = logging.INFO) -> Path:
     return path
 
 
+def clear_diagnostics() -> str:
+    """Remove Retouch log/crash artifacts from the user's diagnostic stores."""
+    from .utils import get_cache_dir
+
+    removed = 0
+    targets = [log_dir(), get_cache_dir()]
+    for directory in targets:
+        if not directory.exists():
+            continue
+        for pattern in ("retouch.log*", "crash.log*"):
+            for path in directory.glob(pattern):
+                try:
+                    path.unlink()
+                    removed += 1
+                except OSError:
+                    logging.getLogger(__name__).warning("Could not clear diagnostic file %s", path)
+    return f"Cleared {removed} diagnostic file(s)."
+
+
 def diagnostics_report() -> str:
     """Plain-text diagnostics bundle for bug reports."""
     from . import __version__
+
+    from .utils import offline_mode_enabled, redact_diagnostics_text
 
     lines = [
         f"retouch version: {__version__}",
         f"python: {sys.version.split()[0]}",
         f"platform: {platform.platform()}",
         f"machine: {platform.machine()}",
+        f"offline mode: {'enabled' if offline_mode_enabled() else 'disabled'}",
     ]
     try:
         import cv2
@@ -99,7 +121,16 @@ def diagnostics_report() -> str:
     except Exception as e:  # noqa: BLE001 — diagnostics must never raise
         lines.append(f"model manifest: unavailable ({e})")
     try:
-        lines.append(f"log file: {log_dir() / 'retouch.log'}")
+        from .body_reshape import body_reshape_capability_status
+        pose = body_reshape_capability_status()
+        lines.append(
+            f"body reshape: {'available' if pose.get('available') else 'unavailable'} "
+            f"({pose.get('reason', 'unknown')})"
+        )
+    except Exception as e:  # noqa: BLE001
+        lines.append(f"body reshape: unavailable ({e})")
+    try:
+        lines.append(f"log file: {redact_diagnostics_text(log_dir() / 'retouch.log')}")
     except Exception:  # noqa: BLE001
         pass
-    return "\n".join(lines)
+    return redact_diagnostics_text("\n".join(lines))

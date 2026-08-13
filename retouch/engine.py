@@ -4521,6 +4521,12 @@ class RetouchEngine:
             img_u8 = img
 
         reshaper = BodyReshaper()
+        capability = (
+            reshaper.capability_status()
+            if hasattr(reshaper, "capability_status")
+            else {"feature": "body_reshape", "available": True, "reason": "legacy adapter"}
+        )
+        ctx._runtime_diagnostics["body_reshape"] = capability
         auto_decision = None
 
         # One-click auto: detect pose, suggest balanced proportions, and blend
@@ -4548,6 +4554,7 @@ class RetouchEngine:
                     "visible_key_landmarks": len(visible_values),
                     "mean_key_visibility": visibility_confidence,
                     "model": "mediapipe_pose",
+                    "capability": capability,
                 },
                 reason=(
                     "pose evidence supports automatic body reshape"

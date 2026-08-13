@@ -3,7 +3,7 @@
   "models": {
     "face_landmarker": {
       "filename": "face_landmarker.task",
-      "url": "",
+      "url": "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task?generation=1683136941916318",
       "sha256": "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff",
       "size_bytes": 3758596,
       "license": "Apache-2.0",
@@ -12,12 +12,21 @@
     },
     "selfie_segmenter": {
       "filename": "selfie_segmenter.tflite",
-      "url": "",
+      "url": "https://storage.googleapis.com/download/storage/v1/b/mediapipe-models/o/image_segmenter%2Fselfie_segmenter%2Ffloat16%2Flatest%2Fselfie_segmenter.tflite?alt=media&generation=1683436453600523",
       "sha256": "191ac9529ae506ee0beefa6b2c945a172dab9d07d1e802a290a4e4038226658b",
       "size_bytes": 249537,
       "license": "Apache-2.0",
       "availability": "bundled",
       "description": "MediaPipe Selfie Segmenter (TFLite) — bundled person/hair segmentation fallback in detection.py."
+    },
+    "pose_landmarker_full": {
+      "filename": "pose_landmarker_full.task",
+      "url": "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task?generation=1682642785209422",
+      "sha256": "5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1",
+      "size_bytes": 9398198,
+      "license": "Apache-2.0",
+      "availability": "downloadable",
+      "description": "MediaPipe Pose Landmarker Full (float16) — verified on demand for body reshape."
     },
     "resnet18_bisenet": {
       "filename": "resnet18.onnx",

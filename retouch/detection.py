@@ -160,12 +160,21 @@ class FaceDetector:
                     return
                 raise error
 
-        if not os.path.exists(_FACE_LANDMARKER_MODEL):
+        # Resolve task assets through the manifest/cache layer. This is
+        # important for wheels and frozen apps, whose package directory may be
+        # read-only and cannot receive a first-use download.
+        try:
+            from .model_fetch import ModelFetchError, get_model_path, model_status
+
+            global _FACE_LANDMARKER_MODEL, _SELFIE_SEGMENTER_MODEL
+            _FACE_LANDMARKER_MODEL = get_model_path("face_landmarker")
+            selfie_status = model_status("selfie_segmenter")
+            if selfie_status.get("available") and selfie_status.get("path"):
+                _SELFIE_SEGMENTER_MODEL = selfie_status["path"]
+        except ModelFetchError as exc:
             error = FileNotFoundError(
-                f"Face landmarker model not found at {_FACE_LANDMARKER_MODEL}\n"
-                f"Download it from:\n"
-                f"  https://storage.googleapis.com/mediapipe-models/"
-                f"face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
+                f"Verified face landmarker model is unavailable: {exc}\n"
+                f"Expected package/cache path: {_FACE_LANDMARKER_MODEL}"
             )
             if allow_unavailable:
                 self._mark_unavailable(error)

@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import threading
+from importlib import resources
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
@@ -203,6 +204,25 @@ def register_presets_dir(directory: str | Path) -> None:
     _USER_PRESETS_DIRS.append(Path(directory))
 
 
+def _bundled_preset_resource(name: str):
+    """Return installed package data for a preset, if available."""
+    try:
+        resource = resources.files("presets").joinpath(f"{name}.json")
+        return resource if resource.is_file() else None
+    except (AttributeError, FileNotFoundError, ModuleNotFoundError, OSError):
+        return None
+
+
+def _bundled_preset_names() -> List[str]:
+    try:
+        return sorted(
+            item.stem for item in resources.files("presets").iterdir()
+            if item.is_file() and item.name.endswith(".json")
+        )
+    except (AttributeError, FileNotFoundError, ModuleNotFoundError, OSError):
+        return []
+
+
 def _find_preset_file(name: str) -> Optional[Path]:
     for d in [_DEFAULT_PRESETS_DIR] + _USER_PRESETS_DIRS:
         for ext in ("", ".json"):
@@ -225,21 +245,30 @@ def load_preset(name: str) -> Dict[str, Any]:
         FileNotFoundError: If the preset cannot be located in any search dir.
     """
     fpath = _find_preset_file(name)
-    if fpath is None:
+    if fpath is not None:
+        with open(fpath, "r", encoding="utf-8") as f:
+            return json.load(f)
+    resource = _bundled_preset_resource(name)
+    if resource is None:
         raise FileNotFoundError(f"Preset '{name}' not found")
-    with open(fpath, "r", encoding="utf-8") as f:
-        return json.load(f)
+    return json.loads(resource.read_text(encoding="utf-8"))
 
 
 def load_all_presets() -> Dict[str, Dict[str, Any]]:
     presets: Dict[str, Dict[str, Any]] = {}
-    if not _DEFAULT_PRESETS_DIR.exists():
-        return presets
-    for fpath in sorted(_DEFAULT_PRESETS_DIR.glob("*.json")):
-        name = fpath.stem
+    sources = []
+    for name in _bundled_preset_names():
+        sources.append((name, _bundled_preset_resource(name)))
+    for directory in [_DEFAULT_PRESETS_DIR] + _USER_PRESETS_DIRS:
+        if directory.exists():
+            for fpath in sorted(directory.glob("*.json")):
+                sources.append((fpath.stem, fpath))
+    for name, source in sources:
         try:
-            with open(fpath, "r", encoding="utf-8") as f:
-                presets[name] = json.load(f)
+            if isinstance(source, Path):
+                presets[name] = json.loads(source.read_text(encoding="utf-8"))
+            elif source is not None:
+                presets[name] = json.loads(source.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as e:
             import warnings
             warnings.warn(f"Failed to load preset '{name}': {e}")
@@ -249,6 +278,9 @@ def load_all_presets() -> Dict[str, Dict[str, Any]]:
 def list_available_presets() -> List[str]:
     names: List[str] = []
     seen: set = set()
+    for name in _bundled_preset_names():
+        seen.add(name)
+        names.append(name)
     for d in [_DEFAULT_PRESETS_DIR] + _USER_PRESETS_DIRS:
         if d.exists():
             for fpath in sorted(d.glob("*.json")):

@@ -7,6 +7,7 @@ and colour/tone primitives used across the retouch modules.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any, List, Optional, Sequence, Tuple
 
@@ -31,6 +32,47 @@ def get_cache_dir() -> Path:
     if xdg_root:
         return Path(xdg_root).expanduser() / "retouch"
     return Path.home() / ".cache" / "retouch"
+
+
+def offline_mode_enabled() -> bool:
+    """Return whether user-requested offline/privacy mode is enabled."""
+    return os.environ.get("RETOUCH_OFFLINE", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+_PATH_CONTEXT_KEYS = {
+    "file_path", "image_path", "source_path", "input_path", "output_path",
+    "file", "image", "source", "output", "input", "filename", "filepath",
+}
+_UNIX_PATH_RE = re.compile(r"(?<![A-Za-z0-9_])/(?!/)(?:[^\s:'\"]+/)*[^\s:'\"]+")
+_WINDOWS_PATH_RE = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z]:[\\/][^\s:'\"]+")
+
+
+def redact_diagnostics_text(value: Any) -> str:
+    """Redact common local path forms before diagnostics leave the machine."""
+    text = str(value)
+    replacements = [str(Path.cwd()), str(Path.home())]
+    for path in replacements:
+        if path and path != "/":
+            text = text.replace(path, "<redacted-path>")
+    text = _WINDOWS_PATH_RE.sub("<redacted-path>", text)
+    text = _UNIX_PATH_RE.sub("<redacted-path>", text)
+    return text
+
+
+def redact_diagnostics_context(context_info: Optional[dict]) -> dict:
+    """Return crash context with path-bearing fields removed or redacted."""
+    if not context_info:
+        return {}
+    redacted = {}
+    for key, value in context_info.items():
+        key_text = str(key)
+        if key_text.lower() in _PATH_CONTEXT_KEYS or key_text.lower().endswith("_path"):
+            redacted[key_text] = "<redacted-path>"
+        else:
+            redacted[key_text] = redact_diagnostics_text(value)
+    return redacted
 
 
 # ---------------------------------------------------------------------------
@@ -871,20 +913,45 @@ def log_crash(exc: Exception, context_info: Optional[dict] = None) -> str:
         crash_log_file = cache_dir / "crash.log"
 
         timestamp = datetime.now().isoformat()
-        tb_str = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        tb_str = redact_diagnostics_text(
+            "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        )
 
         entry = []
         entry.append(f"=== CRASH RECORDED AT {timestamp} ===")
         if context_info:
             entry.append("Context Metadata:")
-            for k, v in context_info.items():
+            for k, v in redact_diagnostics_context(context_info).items():
                 entry.append(f"  {k}: {v}")
         entry.append("Traceback:")
         entry.append(tb_str)
-        entry.append("=====================================\n\n")
+        entry_text = "\n".join(entry) + "=====================================\n\n"
+
+        try:
+            max_bytes = max(64 * 1024, int(os.environ.get("RETOUCH_CRASH_MAX_BYTES", "5000000")))
+        except (TypeError, ValueError):
+            max_bytes = 5_000_000
+        if crash_log_file.exists() and crash_log_file.stat().st_size + len(entry_text.encode("utf-8")) > max_bytes:
+            rotated = crash_log_file.with_name("crash.log.1")
+            try:
+                os.replace(crash_log_file, rotated)
+            except OSError:
+                pass
 
         with open(crash_log_file, "a", encoding="utf-8") as f:
-            f.write("\n".join(entry))
+            f.write(entry_text)
+
+        try:
+            retention_days = max(1, int(os.environ.get("RETOUCH_CRASH_RETENTION_DAYS", "30")))
+        except (TypeError, ValueError):
+            retention_days = 30
+        cutoff = datetime.now().timestamp() - (retention_days * 86400)
+        for candidate in cache_dir.glob("crash.log*"):
+            try:
+                if candidate.stat().st_mtime < cutoff:
+                    candidate.unlink()
+            except OSError:
+                pass
 
         return str(crash_log_file)
     except Exception as log_err:
@@ -970,4 +1037,3 @@ def remove_purple_fringing(
     if is_float:
         return out.astype(np.float32)
     return out
-

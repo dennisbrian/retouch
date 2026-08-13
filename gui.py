@@ -39,7 +39,7 @@ from retouch.batch_processor import BatchProcessor
 from retouch.style import StyleProfile
 from retouch.look_extractor import LookExtractor
 from retouch.recipe_cookbook import search_recipes, list_recipes, list_categories
-from retouch.diagnostics import diagnostics_report
+from retouch.diagnostics import clear_diagnostics, diagnostics_report
 from retouch.lut import get_registry, watch_luts_dir
 from retouch.marks import MARK_POLICY_PRESET_NAMES
 from retouch.model_fetch import model_exists
@@ -99,9 +99,14 @@ def get_engine():
 
 def advanced_model_status_text():
     """Truthful status line for optional model-backed Advanced Retouch paths."""
+    from retouch.body_reshape import body_reshape_capability_status
+    from retouch.update_check import offline_mode_enabled
+
     lama = "available" if model_exists("lama_inpaint") else "unavailable — Telea fallback"
     sr = "available" if model_exists("sr_real_esrgan") else "unavailable — standard resize fallback"
     nafnet = "bundled" if model_exists("denoise_nafnet") else "unavailable"
+    pose_status = body_reshape_capability_status()
+    pose = "available" if pose_status.get("available") else "unavailable — model not verified"
     try:
         import mediapipe as mp
         if not hasattr(mp, "solutions"):
@@ -114,7 +119,9 @@ def advanced_model_status_text():
         face = f"unavailable — {type(exc).__name__}"
     return (
         f"**Model status:** LaMa: {lama} · Real-ESRGAN: {sr} · "
-        f"NAFNet denoise: {nafnet}.  **Face-aware status:** {face}."
+        f"NAFNet denoise: {nafnet} · Body reshape: {pose}.  "
+        f"**Face-aware status:** {face}.  **Network:** "
+        f"{'offline/privacy mode' if offline_mode_enabled() else 'update checks enabled'}."
     )
 
 
@@ -2928,7 +2935,10 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
 
                         with gr.Accordion("🩺 Diagnostics", open=False):
                             gr.Markdown("Version/environment bundle for bug reports. Click, then copy the text below.")
-                            diagnostics_btn = gr.Button("📋 Generate Diagnostics", variant="secondary", size="sm", elem_classes=["secondary-btn"])
+                            with gr.Row():
+                                diagnostics_btn = gr.Button("📋 Generate Diagnostics", variant="secondary", size="sm", elem_classes=["secondary-btn"])
+                                clear_diagnostics_btn = gr.Button("🗑️ Clear Diagnostics", variant="secondary", size="sm", elem_classes=["secondary-btn"])
+                            diagnostics_status = gr.Markdown("")
                             diagnostics_out = gr.Textbox(label="Diagnostics", lines=8, interactive=False)
 
                         process_btn_bottom = gr.Button("Apply Overrides & Process ⚡", variant="primary", size="lg", elem_classes=["primary-btn"])
@@ -3625,6 +3635,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         inputs=[],
         outputs=[diagnostics_out],
     )
+    clear_diagnostics_btn.click(
+        fn=clear_diagnostics,
+        inputs=[],
+        outputs=[diagnostics_status],
+    )
 
 
     save_style_btn.click(
@@ -4079,7 +4094,7 @@ if __name__ == "__main__":
 
     # Non-blocking update check; surfaces a toast once the UI is up.
     import threading
-    from retouch.update_check import check_for_update
+    from retouch.update_check import check_for_update, offline_mode_enabled
 
     def _bg_update_check():
         info = check_for_update()
@@ -4089,5 +4104,6 @@ if __name__ == "__main__":
             except Exception:  # noqa: BLE001 — UI not ready yet; drop silently
                 pass
 
-    threading.Thread(target=_bg_update_check, daemon=True).start()
+    if not offline_mode_enabled():
+        threading.Thread(target=_bg_update_check, daemon=True).start()
     app.queue(default_concurrency_limit=1).launch(server_name="127.0.0.1", server_port=7860)
