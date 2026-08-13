@@ -33,8 +33,8 @@ def test_coerce_face_params_auto():
     assert coerce_face_params(None) is None
 
 
-def test_suggest_face_recipe_child():
-    # Child: eye_width_ratio > 0.43 (ied / w_face)
+def test_suggest_face_recipe_is_neutral_even_for_child_like_geometry():
+    # Geometry must not select a demographic treatment.
     img = np.full((128, 128, 3), 128, dtype=np.uint8)
     
     # Setup landmarks: we want bottom_ratio low and aspect_ratio low, or ied / w_face high
@@ -44,10 +44,10 @@ def test_suggest_face_recipe_child():
     ied = 40.0
     
     recipe = suggest_face_recipe(img, lm, bbox, ied)
-    assert recipe == "child"
+    assert recipe == "natural"
 
 
-def test_suggest_face_recipe_female_default():
+def test_suggest_face_recipe_is_neutral_when_appearance_is_ambiguous():
     img = np.full((128, 128, 3), 128, dtype=np.uint8)
     lm = LandmarksMockList()
     bbox = (10, 10, 100, 120)
@@ -64,8 +64,7 @@ def test_suggest_face_recipe_female_default():
     lm.landmark[13] = LandmarkMock(x=0.5, y=0.45) # lips
     
     recipe = suggest_face_recipe(img, lm, bbox, ied)
-    # Default is female
-    assert recipe == "female"
+    assert recipe == "natural"
 
 
 def test_lens_blur_param():

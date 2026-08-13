@@ -151,8 +151,13 @@ def natural_image_path():
     """Path to a real human face image for integration tests.
 
     Returns None if no suitable image is found (tests should skip).
-    Uses the first JPEG from ``test_output/`` as a convenience.
+    Prefers the repository's known clear single-portrait reference, then
+    falls back to the first JPEG from ``test_output/``.
     """
+    reference = Path("test_output/DSCF8007.jpg")
+    if reference.exists():
+        return str(reference)
+
     candidates = [
         p
         for p in sorted(Path("test_output").glob("*.jpg"))

@@ -16,10 +16,11 @@ Design notes
   Gradio UI shares one ``AIEnhancer`` across worker threads.
 * Inference is tiled (512 px, 32 px overlap, feathered merge) so 4K inputs do
   not OOM the GPU/CPU. Tile size scales with ``KERNEL_SCALE`` when set.
-* Model availability is checked via ``model_fetch.model_exists()``; the
-  placeholder manifest entry (``sr_real_esrgan``) has an empty sha256 so
-  ``model_exists`` returns False until the real file is dropped in. A
-  separate ``denoise`` manifest entry is consulted the same way.
+* Model availability is checked via ``model_fetch.model_exists()``. The
+  ``sr_real_esrgan`` entry is explicitly unavailable until a verified model
+  and controlled release URL are supplied, so its fallback is standard
+  Lanczos resizing rather than an inaccurately named AI feature. The bundled
+  NAFNet denoise entry is consulted the same way.
 """
 
 from __future__ import annotations

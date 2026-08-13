@@ -87,6 +87,18 @@ def diagnostics_report() -> str:
     except ImportError:
         lines.append("mediapipe: NOT INSTALLED")
     try:
+        from .model_fetch import load_manifest, model_status
+        for model_name, entry in load_manifest().get("models", {}).items():
+            status = model_status(model_name)
+            availability = entry.get("availability", "unspecified")
+            lines.append(
+                f"model {model_name}: availability={availability} "
+                f"local={'yes' if status.get('available') else 'no'} "
+                f"downloadable={'yes' if status.get('downloadable') else 'no'}"
+            )
+    except Exception as e:  # noqa: BLE001 — diagnostics must never raise
+        lines.append(f"model manifest: unavailable ({e})")
+    try:
         lines.append(f"log file: {log_dir() / 'retouch.log'}")
     except Exception:  # noqa: BLE001
         pass

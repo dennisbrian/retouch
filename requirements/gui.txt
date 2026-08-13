@@ -1,4 +1,4 @@
 -r base.txt
-gradio>=4.0.0
-pywebview>=5.0.0
-pyinstaller>=6.0.0
+gradio>=4.0.0,<5
+# Gradio 4 imports HfFolder, which was removed in huggingface-hub 1.x.
+huggingface-hub>=0.19.3,<1

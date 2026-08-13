@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import base64
+import json
 import logging
 import sys
 import os
@@ -26,6 +27,7 @@ from retouch.io import (
     imread_engine,
     imread_exif,
     read_icc_profile,
+    read_exif_bytes,
     write_image_with_icc,
 )
 from retouch.lips import LIP_TINT_NAMES
@@ -40,6 +42,32 @@ from retouch.recipe_cookbook import search_recipes, list_recipes, list_categorie
 from retouch.diagnostics import diagnostics_report
 from retouch.lut import get_registry, watch_luts_dir
 from retouch.marks import MARK_POLICY_PRESET_NAMES
+from retouch.model_fetch import model_exists
+from retouch.project_profiles import (
+    LookBoard,
+    LookReference,
+    ProjectProfile,
+    ProjectProfileStore,
+)
+from retouch.shoot_intelligence import (
+    ProjectGraph,
+    ProjectNode,
+    group_bursts,
+    inspect_asset,
+    rank_burst_candidates,
+)
+from retouch.watch_folder import WatchFolder
+from retouch.advanced_retouch import (
+    ADVANCED_HEAL_METHODS,
+    ADVANCED_OPERATIONS,
+    ADVANCED_REMOVE_ENGINES,
+    ADVANCED_SEMANTIC_MASKS,
+    apply_advanced_edit,
+    before_after,
+    extract_editor_image_and_mask,
+    mask_overlay,
+    replay_advanced_edits,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -67,6 +95,27 @@ def get_engine():
             if _engine is None:
                 _engine = RetouchEngine()
     return _engine
+
+
+def advanced_model_status_text():
+    """Truthful status line for optional model-backed Advanced Retouch paths."""
+    lama = "available" if model_exists("lama_inpaint") else "unavailable — Telea fallback"
+    sr = "available" if model_exists("sr_real_esrgan") else "unavailable — standard resize fallback"
+    nafnet = "bundled" if model_exists("denoise_nafnet") else "unavailable"
+    try:
+        import mediapipe as mp
+        if not hasattr(mp, "solutions"):
+            face = "unavailable — native MediaPipe runtime blocked; global-only fallback"
+        elif getattr(mp, "__version__", "") == "0.10.5":
+            face = "available — MediaPipe 0.10.5 CPU/XNNPACK backend"
+        else:
+            face = f"available — legacy MediaPipe backend ({getattr(mp, '__version__', 'unknown')})"
+    except Exception as exc:  # noqa: BLE001 — status must never block the GUI
+        face = f"unavailable — {type(exc).__name__}"
+    return (
+        f"**Model status:** LaMa: {lama} · Real-ESRGAN: {sr} · "
+        f"NAFNet denoise: {nafnet}.  **Face-aware status:** {face}."
+    )
 
 
 def recipe_defaults(recipe_name):
@@ -427,7 +476,9 @@ def save_session_handler(*args):
     from retouch.session import create_session_from_params
     import tempfile, os
 
-    params = dict(zip(PROCESS_INPUT_KEYS, args))
+    process_args = args[:len(PROCESS_INPUT_KEYS)]
+    advanced_edits = args[len(PROCESS_INPUT_KEYS)] if len(args) > len(PROCESS_INPUT_KEYS) else []
+    params = dict(zip(PROCESS_INPUT_KEYS, process_args))
     img_paths = params.get("img_paths")
     image_path = None
     if img_paths and isinstance(img_paths, list) and len(img_paths) > 0:
@@ -438,6 +489,10 @@ def save_session_handler(*args):
 
     recipe = params.get("recipe", "natural")
     session = create_session_from_params(params, recipe=recipe, image_path=image_path)
+    session.advanced_retouch = {
+        "version": 1,
+        "edits": list(advanced_edits or []),
+    }
 
     tmpdir = tempfile.mkdtemp()
     filepath = os.path.join(tmpdir, f"{recipe or 'session'}.session.json")
@@ -475,6 +530,31 @@ def load_session_handler(session_file, *current_args):
                 if i < len(result):
                     result[i] = val
     return tuple(result)
+
+
+def load_advanced_session_handler(session_file, source_rgb):
+    """Restore serialized Advanced Retouch edits when a source is available."""
+    from retouch.session import Session
+
+    if session_file is None:
+        return source_rgb, [], source_rgb, source_rgb, None, before_after(source_rgb, source_rgb) if source_rgb is not None else None, {"undo": [], "redo": []}, [], None, ""
+    try:
+        path = session_file.name if hasattr(session_file, "name") else str(session_file)
+        session = Session.from_file(path)
+        advanced = session.advanced_retouch or {}
+        edits = list(advanced.get("edits") or [])
+    except Exception as exc:
+        _logger.warning("Failed to load Advanced Retouch session data: %s", exc)
+        return source_rgb, [], source_rgb, source_rgb, None, before_after(source_rgb, source_rgb) if source_rgb is not None else None, {"undo": [], "redo": []}, [], None, f"Advanced Retouch session data unavailable: {exc}"
+
+    if source_rgb is None:
+        return source_rgb, edits, source_rgb, None, None, None, {"undo": [], "redo": []}, [], None, f"Loaded {len(edits)} Advanced Retouch edit(s). Load the source image to replay them."
+    try:
+        current = replay_advanced_edits(source_rgb, edits, get_engine()._detector, get_engine()._parser)
+        return source_rgb, [], current, current, None, before_after(source_rgb, current), {"undo": [], "redo": []}, edits, None, f"Replayed {len(edits)} Advanced Retouch edit(s)."
+    except Exception as exc:
+        _logger.warning("Failed to replay Advanced Retouch session data: %s", exc)
+        return source_rgb, edits, source_rgb, source_rgb, None, before_after(source_rgb, source_rgb), {"undo": [], "redo": []}, [], None, f"Could not replay Advanced Retouch edits: {exc}"
 
 
 def push_undo_handler(*args, undo_stack=None):
@@ -518,9 +598,14 @@ def save_snapshot_handler(name, *args, snapshots=None):
         gr.Warning("Please enter a snapshot name")
         return gr.update(), snapshots or {}
 
-    params = dict(zip(PROCESS_INPUT_KEYS, args))
+    process_args = args[:len(PROCESS_INPUT_KEYS)]
+    advanced_edits = args[len(PROCESS_INPUT_KEYS)] if len(args) > len(PROCESS_INPUT_KEYS) else []
+    if snapshots is None and len(args) > len(PROCESS_INPUT_KEYS) + 1:
+        snapshots = args[len(PROCESS_INPUT_KEYS) + 1]
+    params = dict(zip(PROCESS_INPUT_KEYS, process_args))
     recipe = params.get("recipe", "natural")
     session = Session(recipe=recipe, params=params)
+    session.advanced_retouch = {"version": 1, "edits": list(advanced_edits or [])}
     snap = Snapshot(name=name.strip(), session=session)
 
     if snapshots is None:
@@ -533,6 +618,8 @@ def save_snapshot_handler(name, *args, snapshots=None):
 
 def compare_snapshot_handler(selected_name, *args, snapshots=None):
     """Compare current output with a saved snapshot."""
+    if snapshots is None and len(args) > len(PROCESS_INPUT_KEYS):
+        snapshots = args[len(PROCESS_INPUT_KEYS)]
     if not selected_name or snapshots is None or selected_name not in snapshots:
         gr.Warning("Select a snapshot to compare")
         return None
@@ -570,6 +657,7 @@ def process_image(*args):
     first_combined = None
     first_original = None
     first_result = None
+    first_processed_rgb = None
     debug_images = []
 
     color_ref_bgr = None
@@ -674,6 +762,7 @@ def process_image(*args):
                 first_original = original
                 first_result = result
                 first_result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
+                first_processed_rgb = first_result_rgb.copy()
                 if show_compare:
                     h = min(original.shape[0], result.shape[0])
                     sep = np.full((h, COMPARE_SEPARATOR_WIDTH, 3), COMPARE_SEPARATOR_COLOR, dtype=np.uint8)
@@ -774,14 +863,14 @@ def process_image(*args):
         gr.Info(f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s")
 
         if show_compare:
-            return gr.update(visible=False), gr.update(value=slide_html, visible=True), first_original, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓", debug_gallery, debug_vis, qa_html
-        return preview, gr.update(visible=False), first_original, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓", debug_gallery, debug_vis, qa_html
+            return gr.update(visible=False), gr.update(value=slide_html, visible=True), first_processed_rgb, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓", debug_gallery, debug_vis, qa_html
+        return preview, gr.update(visible=False), first_processed_rgb, zip_path, f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓", debug_gallery, debug_vis, qa_html
     else:
         gr.Info(f"Done in {elapsed:.1f}s")
 
         if show_compare:
-            return gr.update(visible=False), gr.update(value=slide_html, visible=True), first_original, exported_paths[0], f"Done in {elapsed:.1f}s ✓", debug_gallery, debug_vis, qa_html
-        return preview, gr.update(visible=False), first_original, exported_paths[0], f"Done in {elapsed:.1f}s ✓", debug_gallery, debug_vis, qa_html
+            return gr.update(visible=False), gr.update(value=slide_html, visible=True), first_processed_rgb, exported_paths[0], f"Done in {elapsed:.1f}s ✓", debug_gallery, debug_vis, qa_html
+        return preview, gr.update(visible=False), first_processed_rgb, exported_paths[0], f"Done in {elapsed:.1f}s ✓", debug_gallery, debug_vis, qa_html
 
 
 def on_recipe_change(recipe):
@@ -865,6 +954,111 @@ def _resolve_image_path(value):
     return str(value)
 
 
+def _resolve_image_paths(value):
+    """Extract all filesystem paths from single/multiple Gradio file values."""
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        paths = []
+        for item in value:
+            path = _resolve_image_path(item)
+            if path:
+                paths.append(path)
+        return paths
+    path = _resolve_image_path(value)
+    return [path] if path else []
+
+
+def on_shoot_intelligence_scan(input_dir, recursive=True):
+    """Scan a shoot and return explainable burst/culling rows plus graph JSON."""
+    if not input_dir or not str(input_dir).strip():
+        return [], "Enter a shoot folder first.", "{}"
+    try:
+        root = Path(str(input_dir)).expanduser().resolve()
+        candidates = root.rglob("*") if recursive else root.iterdir()
+        assets = [
+            inspect_asset(path)
+            for path in sorted(candidates)
+            if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp"}
+        ]
+        bursts = group_bursts(assets)
+        rows = []
+        for asset in assets:
+            rows.append(["asset", "", asset.path, "", asset.camera_model or "unknown", asset.capture_time or "", "inspected"])
+        for burst in bursts:
+            candidates = rank_burst_candidates(burst)
+            for candidate in candidates:
+                rows.append([
+                    "burst", burst.group_id, candidate.path, round(candidate.score, 4),
+                    " / ".join(burst.reasons), candidate.rank, "review required",
+                ])
+        graph = ProjectGraph([
+            ProjectNode("ingest", "ingest", status="succeeded", outputs=[str(input_dir)]),
+            ProjectNode("burst_grouping", "burst_grouping", dependencies=["ingest"], status="succeeded", outputs=[f"{len(bursts)} burst group(s)"]),
+            ProjectNode("human_cull_review", "human_cull_review", dependencies=["burst_grouping"]),
+        ])
+        graph.refresh_ready()
+        status = f"Inspected {len(assets)} asset(s), found {len(bursts)} burst group(s). Candidate ranks are recommendations; human review is required."
+        return rows, status, graph.to_json()
+    except Exception as exc:
+        _logger.exception("Shoot Intelligence scan failed: %s", exc)
+        return [], f"Shoot scan failed: {exc}", "{}"
+
+
+def on_watch_folder_process(input_dir, state_path, limit=None):
+    """Run one safe watch-folder polling pass using a status-only callback."""
+    if not input_dir:
+        return "Enter a watch folder first."
+    try:
+        watcher = WatchFolder(input_dir, state_path=state_path or None)
+        records = watcher.process_pending(lambda _path: None, limit=int(limit) if limit else None)
+        done = sum(record.status == "done" for record in records)
+        failed = sum(record.status == "failed" for record in records)
+        return f"Watch pass: {done} processed, {failed} failed/retryable, state saved to {watcher.state_path}."
+    except Exception as exc:
+        _logger.exception("Watch-folder pass failed: %s", exc)
+        return f"Watch-folder pass failed: {exc}"
+
+
+def on_save_project_profile(profile_id, subject_key, display_name, recipe_name, style_name, preferred_json, marks_json):
+    """Persist a subject-linked profile without storing image pixels."""
+    if not profile_id or not subject_key or not display_name:
+        return "Profile ID, subject key, and display name are required."
+    try:
+        preferred = json.loads(preferred_json or "{}")
+        marks = json.loads(marks_json or "[]")
+        if not isinstance(preferred, dict) or not isinstance(marks, list):
+            raise ValueError("preferred parameters must be an object and marks must be a list")
+        profile = ProjectProfile(
+            profile_id=str(profile_id).strip(), subject_key=str(subject_key).strip(),
+            display_name=str(display_name).strip(), recipe=recipe_name or "natural",
+            style_name=style_name or None, preferred_params=preferred,
+            protected_marks=marks,
+        )
+        ProjectProfileStore().upsert_profile(profile)
+        return f"Saved project profile '{profile.display_name}' ({profile.profile_id}). No face pixels were stored."
+    except Exception as exc:
+        return f"Profile save failed: {exc}"
+
+
+def on_save_look_board(board_id, project_id, reference_files):
+    """Persist a multi-reference Look Board linked to an optional profile."""
+    if not board_id:
+        return "Enter a Look Board ID.", "{}"
+    paths = _resolve_image_paths(reference_files)
+    if not paths:
+        return "Add at least one reference image.", "{}"
+    try:
+        board = LookBoard(str(board_id).strip(), project_id=project_id or None)
+        for index, path in enumerate(paths):
+            board.add_reference(LookReference(path=str(Path(path).expanduser().resolve()), label=f"Reference {index + 1}"))
+        ProjectProfileStore().upsert_board(board)
+        summary = f"Saved Look Board '{board.board_id}' with {len(board.references)} reference(s)."
+        return summary, board.to_json()
+    except Exception as exc:
+        return f"Look Board save failed: {exc}", "{}"
+
+
 def on_detect_faces(img_paths):
     """Detect faces → Gallery thumbs + face index choices. Clears face_params."""
     if not img_paths:
@@ -936,6 +1130,236 @@ def on_clear_face_params():
 
 def on_img_change_clear_faces():
     return {}, [], gr.update(choices=[], value=None), "Image changed — re-detect faces."
+
+
+def _advanced_empty_state(source_rgb=None, status=""):
+    current = source_rgb.copy() if isinstance(source_rgb, np.ndarray) else source_rgb
+    return (
+        source_rgb,
+        current,
+        current,
+        None,
+        before_after(source_rgb, current) if source_rgb is not None and current is not None else None,
+        {"undo": [], "redo": []},
+        [],
+        None,
+        status,
+        [],
+    )
+
+
+def _advanced_load_rgb_source(source_rgb, pending_edits=None, status_prefix="Loaded source image"):
+    """Initialize the Advanced Retouch state from an already-decoded RGB image."""
+    if source_rgb is None:
+        return _advanced_empty_state(None, "Process an image or upload one to begin Advanced Retouch.")
+    source = np.ascontiguousarray(source_rgb).copy()
+    edits = list(pending_edits or [])
+    needs_face_models = any(
+        str(edit.get("mode", "Adjust")) == "Reshape"
+        or str(edit.get("semantic", "None")) != "None"
+        for edit in edits
+    )
+    detector = parser = None
+    if needs_face_models:
+        engine = get_engine()
+        detector, parser = engine._detector, engine._parser
+    current = replay_advanced_edits(source, edits, detector, parser) if edits else source.copy()
+    status = f"{status_prefix}{f' and replayed {len(edits)} saved edit(s)' if edits else ''}."
+    return source, current, current, None, before_after(source, current), {"undo": [], "redo": []}, edits, None, status, []
+
+
+def on_advanced_source_change(img_paths, pending_edits=None):
+    """Load the first source image into the Advanced Retouch canvas."""
+    path = _resolve_image_path(img_paths)
+    if not path:
+        return _advanced_empty_state(None, "Upload an image to begin Advanced Retouch.")
+    try:
+        image_bgr = imread_engine(path)
+        if image_bgr.dtype != np.uint8:
+            image_bgr = np.clip(image_bgr, 0, 255).astype(np.uint8)
+        source = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+        return _advanced_load_rgb_source(source, pending_edits, "Loaded uploaded source image")
+    except Exception as exc:
+        _logger.warning("Advanced Retouch source load failed: %s", exc)
+        return _advanced_empty_state(None, f"Could not load image: {exc}")
+
+
+def on_advanced_processed_result(processed_rgb, pending_edits=None):
+    """Switch the Advanced Retouch workspace to the latest recipe result."""
+    return _advanced_load_rgb_source(processed_rgb, pending_edits, "Loaded processed recipe result")
+
+
+def on_advanced_face_choices(img_paths):
+    path = _resolve_image_path(img_paths)
+    if not path:
+        return gr.update(choices=["All faces"], value="All faces"), "Upload an image first."
+    try:
+        image = imread_engine(path)
+        if image.dtype != np.uint8:
+            image = np.clip(image, 0, 255).astype(np.uint8)
+        faces = get_engine()._detector.detect(image)
+        choices = ["All faces"] + [str(i) for i in range(len(faces))]
+        return gr.update(choices=choices, value="All faces"), f"Detected {len(faces)} face(s)."
+    except Exception as exc:
+        return gr.update(choices=["All faces"], value="All faces"), f"Face detection unavailable: {exc}"
+
+
+def _advanced_history_push(history, current, edit_log):
+    history = dict(history or {})
+    undo = list(history.get("undo") or [])
+    undo.append({"image": np.asarray(current).copy(), "edits": list(edit_log or [])})
+    return {"undo": undo[-20:], "redo": []}
+
+
+def advanced_apply_handler(
+    editor_value,
+    current_rgb,
+    source_rgb,
+    history,
+    edit_log,
+    mode,
+    operation,
+    strength,
+    semantic,
+    selection,
+    heal_method,
+    remove_engine,
+    overlay_visible,
+    overlay_opacity,
+    *reshape_values,
+):
+    if current_rgb is None:
+        return (gr.update(), current_rgb, history, edit_log, None, None, None, "Load an image first.")
+    reshape_keys = (
+        "eye_size", "eye_distance", "nose_width", "nose_length", "jaw_width",
+        "chin_length", "mouth_size", "smile", "forehead",
+        "eye_size_l", "eye_size_r", "nose_width_l", "nose_width_r",
+        "jaw_width_l", "jaw_width_r",
+    )
+    reshape = dict(zip(reshape_keys, list(reshape_values)[:len(reshape_keys)]))
+    mask_action = str(reshape_values[len(reshape_keys)] if len(reshape_values) > len(reshape_keys) else "Keep")
+    mask_feather = float(reshape_values[len(reshape_keys) + 1] if len(reshape_values) > len(reshape_keys) + 1 else 0.0)
+    try:
+        needs_face_models = str(mode or "Adjust") == "Reshape" or str(semantic or "None") != "None"
+        detector = parser = None
+        if needs_face_models:
+            engine = get_engine()
+            detector, parser = engine._detector, engine._parser
+        editor_for_apply = editor_value
+        if str(mode or "Adjust") != "Reshape":
+            base, painted_mask = extract_editor_image_and_mask(editor_value, fallback_rgb=current_rgb)
+            if mask_action == "Clear":
+                painted_mask = np.zeros_like(painted_mask)
+            elif mask_action == "Invert":
+                painted_mask = 1.0 - painted_mask
+            if mask_feather > 0:
+                painted_mask = cv2.GaussianBlur(painted_mask.astype(np.float32), (0, 0), sigmaX=mask_feather)
+            editor_for_apply = {"background": base, "layers": [painted_mask]}
+        result = apply_advanced_edit(
+            current_rgb,
+            editor_for_apply,
+            mode,
+            operation,
+            float(strength or 0.0),
+            semantic,
+            selection,
+            reshape,
+            detector,
+            parser,
+            heal_method=heal_method,
+            remove_engine=remove_engine,
+        )
+        new_log = list(edit_log or []) + [result.edit]
+        new_history = _advanced_history_push(history, current_rgb, edit_log)
+        overlay = mask_overlay(result.image_rgb, result.mask, float(overlay_opacity or 42) / 100.0) if overlay_visible else result.image_rgb
+        return result.image_rgb, result.image_rgb, new_history, new_log, result.mask, overlay, before_after(source_rgb, result.image_rgb), result.status
+    except Exception as exc:
+        _logger.warning("Advanced Retouch action failed: %s", exc)
+        return gr.update(), current_rgb, history, edit_log, None, None, before_after(source_rgb, current_rgb) if source_rgb is not None else None, f"Advanced Retouch failed: {exc}"
+
+
+def advanced_undo_handler(current_rgb, source_rgb, history, edit_log=None):
+    history = dict(history or {})
+    undo = list(history.get("undo") or [])
+    if not undo:
+        return gr.update(), current_rgb, history, list(edit_log or []), None, None, before_after(source_rgb, current_rgb) if source_rgb is not None else None, "Nothing to undo."
+    previous = undo.pop()
+    redo = list(history.get("redo") or [])
+    redo.append({"image": np.asarray(current_rgb).copy(), "edits": list(edit_log or [])})
+    return previous["image"], previous["image"], {"undo": undo, "redo": redo[-20:]}, previous.get("edits", []), None, None, before_after(source_rgb, previous["image"]) if source_rgb is not None else None, "Undid the last Advanced Retouch edit."
+
+
+def advanced_redo_handler(current_rgb, source_rgb, history, edit_log=None):
+    history = dict(history or {})
+    redo = list(history.get("redo") or [])
+    if not redo:
+        return gr.update(), current_rgb, history, list(edit_log or []), None, None, before_after(source_rgb, current_rgb) if source_rgb is not None else None, "Nothing to redo."
+    next_state = redo.pop()
+    undo = list(history.get("undo") or [])
+    undo.append({"image": np.asarray(current_rgb).copy(), "edits": list(edit_log or [])})
+    return next_state["image"], next_state["image"], {"undo": undo[-20:], "redo": redo}, next_state.get("edits", []), None, None, before_after(source_rgb, next_state["image"]) if source_rgb is not None else None, "Redid the last Advanced Retouch edit."
+
+
+def advanced_reset_handler(source_rgb):
+    return _advanced_empty_state(source_rgb, "Advanced Retouch edits reset.")[1:-1]
+
+
+def advanced_overlay_handler(current_rgb, mask, visible, opacity):
+    if current_rgb is None:
+        return None
+    return mask_overlay(current_rgb, mask, float(opacity or 42) / 100.0) if visible and mask is not None else current_rgb
+
+
+def advanced_clear_mask_handler(editor_value, current_rgb, source_rgb):
+    """Clear only the painted mask; leave the current pixels untouched."""
+    if current_rgb is None:
+        return gr.update(), None, None, None, "Load an image first."
+    base, _ = extract_editor_image_and_mask(editor_value, fallback_rgb=current_rgb)
+    cleared_editor = {"background": base, "layers": []}
+    return cleared_editor, None, current_rgb, before_after(source_rgb, current_rgb), "Cleared Advanced Retouch mask."
+
+
+def advanced_save_snapshot_handler(name, current_rgb, edit_log, snapshots):
+    if not name or not str(name).strip():
+        return gr.update(), snapshots or {}, "Enter a snapshot name."
+    if current_rgb is None:
+        return gr.update(), snapshots or {}, "Load an image first."
+    snapshots = dict(snapshots or {})
+    key = str(name).strip()
+    snapshots[key] = {"image": np.asarray(current_rgb).copy(), "edits": list(edit_log or [])}
+    return gr.update(choices=list(snapshots.keys()), value=key), snapshots, f"Saved Advanced Retouch snapshot '{key}'."
+
+
+def advanced_compare_snapshot_handler(name, current_rgb, snapshots):
+    snapshots = snapshots or {}
+    if not name or name not in snapshots or current_rgb is None:
+        return None, "Select a snapshot and load an image first."
+    return before_after(snapshots[name]["image"], current_rgb), f"Comparing current edit with snapshot '{name}'."
+
+
+def advanced_export_handler(current_rgb, export_fmt, source_paths=None):
+    """Export the full-resolution canvas with source ICC/EXIF metadata."""
+    if current_rgb is None:
+        return gr.update(visible=False), "Load an image first."
+    fmt = str(export_fmt or "PNG").upper()
+    ext = {"JPEG": ".jpg", "PNG": ".png", "PNG-16": ".png", "TIFF-16": ".tiff", "WEBP": ".webp"}.get(fmt, ".png")
+    output_dir = tempfile.mkdtemp(prefix="retouch_advanced_export_")
+    output_path = os.path.join(output_dir, f"advanced_retouch{ext}")
+    bgr = cv2.cvtColor(np.asarray(current_rgb).astype(np.uint8), cv2.COLOR_RGB2BGR)
+    source_path = _resolve_image_path(source_paths)
+    icc = read_icc_profile(source_path) if source_path else None
+    exif = read_exif_bytes(source_path) if source_path else None
+    if fmt in {"PNG-16", "TIFF-16"}:
+        write_image_with_icc(output_path, bgr, icc_profile=icc, exif=exif, bit_depth=16, quality=95)
+    else:
+        write_image_with_icc(
+            output_path, bgr, icc_profile=icc, exif=exif,
+            bit_depth=8, quality=95, float_range="byte",
+        )
+    if not os.path.isfile(output_path) or os.path.getsize(output_path) <= 0:
+        return gr.update(visible=False), "Advanced Retouch export failed."
+    metadata = " with source ICC/EXIF" if source_path else ""
+    return gr.update(value=output_path, visible=True), f"Exported full-resolution Advanced Retouch canvas as {fmt}{metadata}."
 
 
 def on_extract_look(look_ref_file, img_input):
@@ -1943,7 +2367,118 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         gr.Markdown("### 🖼️ Preview Canvas")
                         img_output = gr.Image(height=600, show_label=False, elem_id="retouch-output")
                         compare_viewer = gr.HTML(visible=False, elem_id="retouch-compare")
-                        _original_state = gr.State(value=None)
+                        # Latest full-resolution processed recipe result used by
+                        # the Advanced Retouch "Edit processed result" path.
+                        _processed_result_state = gr.State(value=None)
+                        with gr.Accordion("✨ Advanced Retouch", open=False):
+                            gr.Markdown(
+                                "Paint a mask on the canvas, choose an operation, and apply it. "
+                                "Reshape uses the selected detected face; local edits can be restricted "
+                                "to semantic regions."
+                            )
+                            advanced_model_status = gr.Markdown(advanced_model_status_text())
+                            advanced_edit_processed_btn = gr.Button(
+                                "Edit processed result",
+                                variant="secondary",
+                            )
+                            gr.Markdown("Uses the latest recipe output as the Advanced Retouch source.")
+                            advanced_editor = gr.ImageEditor(
+                                label="Brush mask canvas",
+                                type="numpy",
+                                image_mode="RGBA",
+                                height=520,
+                                sources=(),
+                                brush=gr.Brush(default_size=32, default_color="#ff304f"),
+                                eraser=gr.Eraser(default_size=40),
+                                show_download_button=False,
+                                elem_id="advanced-retouch-editor",
+                            )
+                            with gr.Row():
+                                advanced_mode = gr.Radio(
+                                    choices=["Adjust", "Heal", "Remove", "Reshape"],
+                                    value="Adjust", label="Mode", scale=1,
+                                )
+                                advanced_operation = gr.Dropdown(
+                                    choices=list(ADVANCED_OPERATIONS), value="exposure", label="Operation", scale=1,
+                                )
+                                advanced_strength = gr.Slider(
+                                    -100, 100, 25, step=1, label="Strength", scale=1,
+                                )
+                            with gr.Row():
+                                advanced_semantic = gr.Dropdown(
+                                    choices=list(ADVANCED_SEMANTIC_MASKS), value="None", label="Semantic intersection",
+                                    info="Keeps the brush effect inside the selected parsed region.", scale=2,
+                                )
+                                advanced_face_select = gr.Dropdown(
+                                    choices=["All faces"], value="All faces", label="Face selection", scale=1,
+                                )
+                                advanced_face_detect_btn = gr.Button("Detect faces", size="sm", variant="secondary", scale=1)
+                            with gr.Row():
+                                advanced_heal_method = gr.Dropdown(
+                                    choices=list(ADVANCED_HEAL_METHODS), value="telea", label="Heal engine", scale=1,
+                                )
+                                advanced_remove_engine = gr.Dropdown(
+                                    choices=list(ADVANCED_REMOVE_ENGINES), value=ADVANCED_REMOVE_ENGINES[0],
+                                    label="Remove engine", scale=2,
+                                    info="LaMa is used only when models/lama.onnx is installed; otherwise the status reports Telea fallback.",
+                                )
+                            with gr.Row():
+                                advanced_mask_action = gr.Dropdown(
+                                    choices=["Keep", "Clear", "Invert"], value="Keep", label="Mask action",
+                                    info="Clear or invert the painted mask before applying the edit.", scale=1,
+                                )
+                                advanced_mask_feather = gr.Slider(
+                                    0, 40, 0, step=1, label="Mask feather", info="Softens the painted mask edge.", scale=1,
+                                )
+                                advanced_clear_mask_btn = gr.Button("Clear mask", size="sm", variant="secondary", scale=1)
+                            with gr.Accordion("Face reshape controls", open=False):
+                                with gr.Row():
+                                    advanced_eye_size = gr.Slider(-100, 100, 0, step=1, label="Eye size")
+                                    advanced_eye_distance = gr.Slider(-100, 100, 0, step=1, label="Eye distance")
+                                    advanced_nose_width = gr.Slider(-100, 100, 0, step=1, label="Nose width")
+                                with gr.Row():
+                                    advanced_nose_length = gr.Slider(-100, 100, 0, step=1, label="Nose length")
+                                    advanced_jaw_width = gr.Slider(-100, 100, 0, step=1, label="Jaw width")
+                                    advanced_chin_length = gr.Slider(-100, 100, 0, step=1, label="Chin length")
+                                with gr.Row():
+                                    advanced_mouth_size = gr.Slider(-100, 100, 0, step=1, label="Mouth size")
+                                    advanced_smile = gr.Slider(-100, 100, 0, step=1, label="Smile")
+                                    advanced_forehead = gr.Slider(-100, 100, 0, step=1, label="Forehead")
+                                with gr.Row():
+                                    advanced_eye_size_l = gr.Slider(-100, 100, 0, step=1, label="Left eye size")
+                                    advanced_eye_size_r = gr.Slider(-100, 100, 0, step=1, label="Right eye size")
+                                    advanced_nose_width_l = gr.Slider(-100, 100, 0, step=1, label="Left nose width")
+                                with gr.Row():
+                                    advanced_nose_width_r = gr.Slider(-100, 100, 0, step=1, label="Right nose width")
+                                    advanced_jaw_width_l = gr.Slider(-100, 100, 0, step=1, label="Left jaw width")
+                                    advanced_jaw_width_r = gr.Slider(-100, 100, 0, step=1, label="Right jaw width")
+                            with gr.Row():
+                                advanced_apply_btn = gr.Button("Apply edit", variant="primary")
+                                advanced_undo_btn = gr.Button("↩ Undo", variant="secondary")
+                                advanced_redo_btn = gr.Button("↻ Redo", variant="secondary")
+                                advanced_reset_btn = gr.Button("Reset", variant="secondary")
+                            with gr.Row():
+                                advanced_overlay_visible = gr.Checkbox(label="Show mask overlay", value=True)
+                                advanced_overlay_opacity = gr.Slider(0, 100, 42, step=1, label="Overlay opacity")
+                            advanced_mask_overlay = gr.Image(label="Mask overlay", show_label=True, height=260)
+                            advanced_before_after = gr.Image(label="Before / after", show_label=True, height=260)
+                            with gr.Row():
+                                advanced_snapshot_name = gr.Textbox(label="Advanced snapshot name", scale=2)
+                                advanced_save_snapshot_btn = gr.Button("📸 Save snapshot", size="sm", variant="secondary")
+                                advanced_snapshot_dropdown = gr.Dropdown(label="Snapshots", choices=[], scale=2)
+                                advanced_compare_snapshot_btn = gr.Button("Compare", size="sm", variant="secondary")
+                            with gr.Row():
+                                advanced_export_fmt = gr.Radio(choices=["PNG", "PNG-16", "TIFF-16", "JPEG", "WEBP"], value="PNG", label="Export format", scale=1)
+                                advanced_export_btn = gr.Button("Download current canvas", size="sm", variant="secondary", scale=1)
+                                advanced_export_file = gr.File(label="Advanced export", visible=False, scale=2)
+                            advanced_status = gr.Markdown("Advanced Retouch is ready.")
+                            _advanced_source_state = gr.State(value=None)
+                            _advanced_current_state = gr.State(value=None)
+                            _advanced_history_state = gr.State(value={"undo": [], "redo": []})
+                            _advanced_edit_log_state = gr.State(value=[])
+                            _advanced_mask_state = gr.State(value=None)
+                            _advanced_snapshots_state = gr.State(value={})
+                            _advanced_pending_session_state = gr.State(value=[])
                         # Hidden state variables for newly-added parameters (skin_hue_unify, skin_chroma_even)
                         # These maintain alignment with PROCESS_INPUT_KEYS but don't have visible UI yet.
                         _skin_hue_unify_state = gr.State(value=0)
@@ -2397,6 +2932,54 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                 job_rerun_btn = gr.Button("Re-run Flagged Files ⚠️", variant="primary")
                 job_rerun_status = gr.Textbox(label="Re-run Status", lines=3, interactive=False)
 
+        with gr.Tab("Shoot Intelligence"):
+            gr.Markdown(
+                "Build an explainable shoot map, review burst candidates, and keep subject/look metadata linked without storing face pixels. "
+                "Culling recommendations never delete or reject source files."
+            )
+            with gr.Row():
+                shoot_folder = gr.Textbox(
+                    label="Shoot folder",
+                    placeholder="/path/to/shoot",
+                    info="Folder containing JPEG/PNG/TIFF captures."
+                )
+                shoot_recursive = gr.Checkbox(label="Scan subfolders", value=True)
+                shoot_scan_btn = gr.Button("Scan shoot", variant="primary")
+            shoot_status = gr.Markdown("No shoot scanned yet.")
+            shoot_rows = gr.Dataframe(
+                headers=["kind", "group", "path", "score", "evidence", "rank/time", "status"],
+                interactive=False,
+                label="Assets and burst candidates",
+                wrap=True,
+            )
+            shoot_graph_json = gr.Code(label="Dependency/status graph", language="json", interactive=False)
+            with gr.Row():
+                watch_folder = gr.Textbox(label="Watch folder", placeholder="/path/to/incoming-shoot")
+                watch_state = gr.Textbox(label="State file (optional)", placeholder="/path/to/watch-state.json")
+                watch_limit = gr.Number(label="Max files per pass", value=20, precision=0)
+                watch_btn = gr.Button("Run watch pass", variant="secondary")
+            watch_status = gr.Markdown("")
+            with gr.Accordion("Subject-linked project profile", open=False):
+                with gr.Row():
+                    profile_id = gr.Textbox(label="Profile ID", placeholder="subject-001")
+                    profile_subject_key = gr.Textbox(label="Subject key", placeholder="subject-001")
+                    profile_display_name = gr.Textbox(label="Display name", placeholder="Portrait subject")
+                with gr.Row():
+                    profile_recipe = gr.Dropdown(label="Default recipe", choices=RECIPE_UI_CHOICES, value="natural")
+                    profile_style = gr.Textbox(label="Style profile (optional)")
+                profile_params = gr.Code(label="Preferred parameters JSON", language="json", value="{}")
+                profile_marks = gr.Code(label="Protected marks JSON", language="json", value="[]")
+                profile_save_btn = gr.Button("Save project profile", variant="secondary")
+                profile_status = gr.Markdown("")
+            with gr.Accordion("Multi-reference Look Board", open=False):
+                with gr.Row():
+                    look_board_id = gr.Textbox(label="Look Board ID", placeholder="wedding-daylight")
+                    look_board_project = gr.Textbox(label="Linked profile ID (optional)")
+                    look_board_refs = gr.File(label="Reference images", file_types=["image", *sorted(RAW_EXTENSIONS)], file_count="multiple")
+                look_board_save_btn = gr.Button("Save Look Board", variant="secondary")
+                look_board_status = gr.Markdown("")
+                look_board_json = gr.Code(label="Look Board manifest", language="json", interactive=False)
+
         with gr.Tab("Custom Style Library"):
             with gr.Row():
                 with gr.Column(scale=1):
@@ -2849,6 +3432,103 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         outputs=[_face_params_state, face_gallery, face_select, face_params_status],
     )
 
+    # Advanced Retouch workspace.  The editor is kept separate from the main
+    # recipe canvas so manual edits remain reversible and can be serialized as
+    # compact mask/action records in sessions and snapshots.
+    img_input.change(
+        fn=on_advanced_source_change,
+        inputs=[img_input, _advanced_pending_session_state],
+        outputs=[
+            _advanced_source_state, _advanced_current_state, advanced_editor,
+            advanced_mask_overlay, advanced_before_after, _advanced_history_state,
+            _advanced_edit_log_state, _advanced_mask_state, advanced_status,
+            _advanced_pending_session_state,
+        ],
+    )
+    advanced_edit_processed_btn.click(
+        fn=on_advanced_processed_result,
+        inputs=[_processed_result_state, _advanced_pending_session_state],
+        outputs=[
+            _advanced_source_state, _advanced_current_state, advanced_editor,
+            advanced_mask_overlay, advanced_before_after, _advanced_history_state,
+            _advanced_edit_log_state, _advanced_mask_state, advanced_status,
+            _advanced_pending_session_state,
+        ],
+    )
+    advanced_face_detect_btn.click(
+        fn=on_advanced_face_choices,
+        inputs=[img_input],
+        outputs=[advanced_face_select, advanced_status],
+    )
+    advanced_apply_btn.click(
+        fn=advanced_apply_handler,
+        inputs=[
+            advanced_editor, _advanced_current_state, _advanced_source_state,
+            _advanced_history_state, _advanced_edit_log_state,
+            advanced_mode, advanced_operation, advanced_strength,
+            advanced_semantic, advanced_face_select, advanced_heal_method,
+            advanced_remove_engine, advanced_overlay_visible, advanced_overlay_opacity,
+            advanced_eye_size, advanced_eye_distance,
+            advanced_nose_width, advanced_nose_length, advanced_jaw_width,
+            advanced_chin_length, advanced_mouth_size, advanced_smile,
+            advanced_forehead, advanced_eye_size_l, advanced_eye_size_r,
+            advanced_nose_width_l, advanced_nose_width_r,
+            advanced_jaw_width_l, advanced_jaw_width_r,
+            advanced_mask_action, advanced_mask_feather,
+        ],
+        outputs=[
+            advanced_editor, _advanced_current_state, _advanced_history_state,
+            _advanced_edit_log_state, _advanced_mask_state, advanced_mask_overlay,
+            advanced_before_after, advanced_status,
+        ],
+        concurrency_limit=1,
+    )
+    advanced_undo_btn.click(
+        fn=advanced_undo_handler,
+        inputs=[_advanced_current_state, _advanced_source_state, _advanced_history_state, _advanced_edit_log_state],
+        outputs=[advanced_editor, _advanced_current_state, _advanced_history_state, _advanced_edit_log_state, _advanced_mask_state, advanced_mask_overlay, advanced_before_after, advanced_status],
+    )
+    advanced_redo_btn.click(
+        fn=advanced_redo_handler,
+        inputs=[_advanced_current_state, _advanced_source_state, _advanced_history_state, _advanced_edit_log_state],
+        outputs=[advanced_editor, _advanced_current_state, _advanced_history_state, _advanced_edit_log_state, _advanced_mask_state, advanced_mask_overlay, advanced_before_after, advanced_status],
+    )
+    advanced_reset_btn.click(
+        fn=advanced_reset_handler,
+        inputs=[_advanced_source_state],
+        outputs=[_advanced_current_state, advanced_editor, advanced_mask_overlay, advanced_before_after, _advanced_history_state, _advanced_edit_log_state, _advanced_mask_state, advanced_status],
+    )
+    advanced_overlay_visible.change(
+        fn=advanced_overlay_handler,
+        inputs=[_advanced_current_state, _advanced_mask_state, advanced_overlay_visible, advanced_overlay_opacity],
+        outputs=[advanced_mask_overlay],
+    )
+    advanced_overlay_opacity.change(
+        fn=advanced_overlay_handler,
+        inputs=[_advanced_current_state, _advanced_mask_state, advanced_overlay_visible, advanced_overlay_opacity],
+        outputs=[advanced_mask_overlay],
+    )
+    advanced_clear_mask_btn.click(
+        fn=advanced_clear_mask_handler,
+        inputs=[advanced_editor, _advanced_current_state, _advanced_source_state],
+        outputs=[advanced_editor, _advanced_mask_state, advanced_mask_overlay, advanced_before_after, advanced_status],
+    )
+    advanced_save_snapshot_btn.click(
+        fn=advanced_save_snapshot_handler,
+        inputs=[advanced_snapshot_name, _advanced_current_state, _advanced_edit_log_state, _advanced_snapshots_state],
+        outputs=[advanced_snapshot_dropdown, _advanced_snapshots_state, advanced_status],
+    )
+    advanced_compare_snapshot_btn.click(
+        fn=advanced_compare_snapshot_handler,
+        inputs=[advanced_snapshot_dropdown, _advanced_current_state, _advanced_snapshots_state],
+        outputs=[advanced_before_after, advanced_status],
+    )
+    advanced_export_btn.click(
+        fn=advanced_export_handler,
+        inputs=[_advanced_current_state, advanced_export_fmt, img_input],
+        outputs=[advanced_export_file, advanced_status],
+    )
+
     # T4: Recipe Cookbook wiring
     cookbook_search_btn.click(
         fn=on_search_recipes,
@@ -2920,6 +3600,31 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         fn=on_rerun_flagged,
         inputs=[job_selected_id],
         outputs=[job_rerun_status],
+    )
+
+    # Shoot Intelligence: explainable scan, safe watch pass, profiles, and
+    # multi-reference Look Board persistence. These handlers are intentionally
+    # separate from the image renderer and never mutate source captures.
+    shoot_scan_btn.click(
+        fn=on_shoot_intelligence_scan,
+        inputs=[shoot_folder, shoot_recursive],
+        outputs=[shoot_rows, shoot_status, shoot_graph_json],
+    )
+    watch_btn.click(
+        fn=on_watch_folder_process,
+        inputs=[watch_folder, watch_state, watch_limit],
+        outputs=[watch_status],
+    )
+    profile_save_btn.click(
+        fn=on_save_project_profile,
+        inputs=[profile_id, profile_subject_key, profile_display_name, profile_recipe,
+                profile_style, profile_params, profile_marks],
+        outputs=[profile_status],
+    )
+    look_board_save_btn.click(
+        fn=on_save_look_board,
+        inputs=[look_board_id, look_board_project, look_board_refs],
+        outputs=[look_board_status, look_board_json],
     )
 
     # Name → Gradio component map.  Keyed by PROCESS_INPUT_KEYS so that adding
@@ -3207,7 +3912,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
             f"missing={sorted(_missing_components)} extra={sorted(_extra_components)}"
         )
     _process_inputs = [_process_input_components[k] for k in PROCESS_INPUT_KEYS]
-    _process_outputs = [img_output, compare_viewer, _original_state, export_file, status, debug_gallery, debug_panel, qa_status]
+    _process_outputs = [img_output, compare_viewer, _processed_result_state, export_file, status, debug_gallery, debug_panel, qa_status]
 
     # F2: Undo/Redo history.  Push the current slider state onto the stack
     # after every mutation so undo_handler/redo_handler (wired below) can step
@@ -3251,7 +3956,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     # F2: Session wiring
     save_session_btn.click(
         fn=save_session_handler,
-        inputs=_process_inputs,
+        inputs=_process_inputs + [_advanced_edit_log_state],
         outputs=[session_download],
     )
 
@@ -3259,6 +3964,17 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         fn=load_session_handler,
         inputs=[load_session_file] + _process_inputs,
         outputs=list(_process_inputs),
+    )
+
+    load_session_file.change(
+        fn=load_advanced_session_handler,
+        inputs=[load_session_file, _advanced_source_state],
+        outputs=[
+            _advanced_source_state, _advanced_pending_session_state, _advanced_current_state,
+            advanced_editor, advanced_mask_overlay, advanced_before_after,
+            _advanced_history_state, _advanced_edit_log_state, _advanced_mask_state,
+            advanced_status,
+        ],
     )
 
     undo_btn.click(
@@ -3275,7 +3991,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
 
     save_snapshot_btn.click(
         fn=save_snapshot_handler,
-        inputs=[snapshot_name] + _process_inputs + [_snapshot_state],
+        inputs=[snapshot_name] + _process_inputs + [_advanced_edit_log_state] + [_snapshot_state],
         outputs=[snapshot_dropdown, _snapshot_state],
     )
 

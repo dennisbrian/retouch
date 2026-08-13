@@ -336,24 +336,24 @@ class TestNeuralBoostersParamSpecs:
         assert neural_param_names.issubset(registered_names)
 
     def test_stray_hair_param_spec_properties(self):
-        """neural_stray_hair_boost param has correct properties."""
+        """Parked neural controls remain session-compatible but not advertised."""
         from retouch.params import get_param
 
         spec = get_param("neural_stray_hair_boost")
         assert spec.name == "neural_stray_hair_boost"
-        assert spec.cli_flag == "neural-stray-hair-boost"
+        assert spec.cli_flag is None
         assert spec.default == 0
         assert spec.conversion == "recipe_pct"
         assert spec.min_val == 0
         assert spec.max_val == 100
 
     def test_defect_param_spec_properties(self):
-        """neural_defect_boost param has correct properties."""
+        """Parked neural controls remain session-compatible but not advertised."""
         from retouch.params import get_param
 
         spec = get_param("neural_defect_boost")
         assert spec.name == "neural_defect_boost"
-        assert spec.cli_flag == "neural-defect-boost"
+        assert spec.cli_flag is None
         assert spec.default == 0
         assert spec.conversion == "recipe_pct"
         assert spec.min_val == 0

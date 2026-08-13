@@ -245,8 +245,15 @@ class TestProcessSignatureCompleteness:
         from retouch.params import PROCESSING_PARAMS
         from retouch.engine import RetouchEngine
 
-        sig = set(inspect.signature(RetouchEngine.process).parameters)
-        missing = [p.name for p in PROCESSING_PARAMS if p.name not in sig]
+        signature = inspect.signature(RetouchEngine.process)
+        sig = set(signature.parameters)
+        accepts_registry_kwargs = any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in signature.parameters.values()
+        )
+        missing = [] if accepts_registry_kwargs else [
+            p.name for p in PROCESSING_PARAMS if p.name not in sig
+        ]
         assert not missing, (
             f"ParamSpecs missing from RetouchEngine.process() signature "
             f"(GUI will crash with unexpected-kwarg TypeError): {missing}"
@@ -259,23 +266,13 @@ class TestGuiProcessInputsAlignment:
     ai_denoise received a string -> TypeError in engine.process)."""
 
     def test_process_inputs_matches_keys(self):
-        import re
         import gui
 
-        src = open("gui.py").read()
-        m = re.search(r"_process_inputs = \[(.*?)\n\s*\]", src, re.S)
-        assert m, "_process_inputs list not found in gui.py"
-        comps = [e.strip() for e in m.group(1).split(",") if e.strip()]
         keys = list(gui.PROCESS_INPUT_KEYS)
+        comps = list(gui._process_inputs)
         assert len(comps) == len(keys), (
             f"_process_inputs has {len(comps)} components but "
             f"PROCESS_INPUT_KEYS has {len(keys)} keys"
         )
-        aliases = {"img_paths": "img_input"}
-        bad = []
-        for i, (k, c) in enumerate(zip(keys, comps)):
-            norm = c.lstrip("_")
-            norm = norm[:-6] if norm.endswith("_state") else norm
-            if norm != k and aliases.get(k) != c:
-                bad.append((i, k, c))
-        assert not bad, f"misaligned key/component pairs: {bad}"
+        expected = [gui._process_input_components[key] for key in keys]
+        assert all(actual is wanted for actual, wanted in zip(comps, expected))

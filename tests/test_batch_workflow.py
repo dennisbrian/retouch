@@ -95,10 +95,10 @@ def test_dataset_style_learning(tmp_path, engine):
 
 
 def test_cache_and_grouping(tmp_path):
-    """Test that Cache reads, writes, and invalidates mtimes under home user cache folder."""
+    """Test that Cache reads, writes, and invalidates mtimes in the configured cache."""
     cache = BatchProcessorCache(tmp_path)
     
-    # Cache file should be located inside ~/.cache/retouch/ and named as a sha256 hash
+    # Cache file is named from a stable SHA-256 hash of the input directory.
     expected_hash = hashlib.sha256(str(tmp_path.resolve()).encode("utf-8")).hexdigest()
     assert cache.cache_file.name == f"{expected_hash}.json"
     assert cache.cache_file.parent.name == "retouch"

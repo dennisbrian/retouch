@@ -1,7 +1,10 @@
 """Oklab color space converters and skin-tone measurement utilities.
 
 Provides vectorized Oklab/OKLCh conversions using the standard Björn Ottosson
-matrices, plus skin-tone classification and chroma variance metrics.
+matrices, plus continuous tone observations and chroma variance metrics.
+
+Discrete Fitzpatrick helpers remain only for historical QA parity. They are not
+used to select a recipe or a beauty treatment.
 """
 
 from __future__ import annotations
@@ -330,6 +333,138 @@ class SkinState:
     C_mean: float
     C_std: float
     h_mean: float
+
+
+@dataclass(frozen=True)
+class ToneObservation:
+    """Continuous, uncertainty-aware tone evidence for QA and diagnostics.
+
+    Values are measured from the supplied photograph, not mapped to a
+    demographic category. Highlight and shadow coverage are reported because
+    they make apparent skin color less reliable under difficult lighting.
+    ``confidence`` is a measurement-quality signal only and must not select a
+    recipe.
+    """
+
+    L_mean: float
+    a_mean: float
+    b_mean: float
+    ita_mean: float
+    ita_std: float
+    texture_std: float
+    valid_fraction: float
+    highlight_fraction: float
+    shadow_fraction: float
+    uncertainty: float
+    confidence: float
+
+    def to_dict(self) -> Dict[str, float]:
+        """Serialize the observation without adding a tone label."""
+        return {
+            "L_mean": self.L_mean,
+            "a_mean": self.a_mean,
+            "b_mean": self.b_mean,
+            "ita_mean": self.ita_mean,
+            "ita_std": self.ita_std,
+            "texture_std": self.texture_std,
+            "valid_fraction": self.valid_fraction,
+            "highlight_fraction": self.highlight_fraction,
+            "shadow_fraction": self.shadow_fraction,
+            "uncertainty": self.uncertainty,
+            "confidence": self.confidence,
+        }
+
+
+def measure_tone_observation(
+    img_bgr: np.ndarray,
+    mask: Optional[np.ndarray] = None,
+    *,
+    mask_threshold: float = 0.3,
+) -> ToneObservation:
+    """Measure continuous CIELAB/ITA tone evidence and its quality.
+
+    The calculation uses robust image evidence: clipped highlights and deep
+    shadows are excluded from the central Lab/ITA estimate, while their
+    coverage is retained as an uncertainty signal. The result is suitable for
+    QA parity, logging, and confidence-aware decisions; it deliberately has no
+    Fitzpatrick/Monk label and cannot choose a treatment.
+    """
+    img = np.asarray(img_bgr)
+    if img.ndim != 3 or img.shape[-1] != 3:
+        raise ValueError("img_bgr must be (H, W, 3) BGR")
+
+    scale = 255.0 if img.dtype == np.uint8 or float(np.nanmax(img)) > 1.5 else 1.0
+    rgb = np.clip(img.astype(np.float32) / scale, 0.0, 1.0)[..., ::-1]
+    lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB).astype(np.float32)
+
+    if mask is None:
+        base = np.ones(img.shape[:2], dtype=bool)
+    else:
+        mask_arr = np.asarray(mask)
+        if mask_arr.shape != img.shape[:2]:
+            raise ValueError("mask must match image height and width")
+        base = mask_arr.astype(bool) if mask_arr.dtype == bool else mask_arr > mask_threshold
+
+    total = int(np.count_nonzero(base))
+    if total == 0:
+        return ToneObservation(
+            L_mean=50.0, a_mean=0.0, b_mean=0.0, ita_mean=0.0,
+            ita_std=90.0, texture_std=0.0, valid_fraction=0.0,
+            highlight_fraction=0.0, shadow_fraction=0.0,
+            uncertainty=1.0, confidence=0.0,
+        )
+
+    L = lab[..., 0]
+    clipped_high = np.max(rgb, axis=-1) >= 0.995
+    clipped_shadow = np.min(rgb, axis=-1) <= 0.005
+    highlight_fraction = float(np.count_nonzero(base & clipped_high) / total)
+    shadow_fraction = float(np.count_nonzero(base & clipped_shadow) / total)
+
+    usable = base & ~clipped_high & ~clipped_shadow
+    if int(np.count_nonzero(usable)) < max(16, int(total * 0.10)):
+        usable = base
+    valid_fraction = float(np.count_nonzero(usable) / total)
+
+    L_values = L[usable]
+    a_values = lab[..., 1][usable]
+    b_values = lab[..., 2][usable]
+    ita_valid = usable & (np.abs(lab[..., 2]) >= 1.0)
+    if np.any(ita_valid):
+        ita_values = np.degrees(np.arctan((L[ita_valid] - 50.0) / lab[..., 2][ita_valid]))
+    else:
+        ita_values = np.array([0.0], dtype=np.float32)
+
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    lap = cv2.Laplacian(gray, cv2.CV_32F)
+    texture_std = float(np.std(lap[base])) if np.any(base) else 0.0
+    ita_std = float(np.std(ita_values))
+
+    coverage_uncertainty = 1.0 - valid_fraction
+    spread_uncertainty = float(np.clip(ita_std / 60.0, 0.0, 1.0))
+    lighting_uncertainty = float(np.clip((highlight_fraction + shadow_fraction) / 0.5, 0.0, 1.0))
+    texture_uncertainty = float(np.clip(texture_std / 20.0, 0.0, 1.0))
+    uncertainty = float(np.clip(
+        0.30 * coverage_uncertainty
+        + 0.30 * spread_uncertainty
+        + 0.30 * lighting_uncertainty
+        + 0.10 * texture_uncertainty,
+        0.0,
+        1.0,
+    ))
+
+    return ToneObservation(
+        L_mean=float(np.mean(L_values)),
+        a_mean=float(np.mean(a_values)),
+        b_mean=float(np.mean(b_values)),
+        ita_mean=float(np.mean(ita_values)),
+        ita_std=ita_std,
+        texture_std=texture_std,
+        valid_fraction=valid_fraction,
+        highlight_fraction=highlight_fraction,
+        shadow_fraction=shadow_fraction,
+        uncertainty=uncertainty,
+        confidence=1.0 - uncertainty,
+    )
 
 
 def measure_skin_state(

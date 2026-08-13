@@ -365,12 +365,12 @@ class RAWDeveloper:
             FileNotFoundError: If path does not exist.
             ValueError: If file cannot be decoded as RAW.
         """
-        if not HAS_RAWPY:
-            raise ImportError("rawpy is required for RAW loading. Install: pip install rawpy")
-
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(f"RAW file not found: {path}")
+
+        if not HAS_RAWPY:
+            raise ImportError("rawpy is required for RAW loading. Install: pip install rawpy")
 
         try:
             with rawpy.imread(str(path)) as raw:

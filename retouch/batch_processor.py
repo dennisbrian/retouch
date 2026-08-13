@@ -17,7 +17,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from .style import StyleProfile
 from .io import imread_exif, IMAGE_EXTENSIONS, EXPORT_RES_MAP, EXT_MAP
-from .utils import normalize_mask
+from .utils import get_cache_dir, normalize_mask
 
 logger = logging.getLogger(__name__)
 
@@ -148,13 +148,14 @@ def _resolve_session(session: _SessionInput) -> Optional["Session"]:
 class BatchProcessorCache:
     """Persistent JSON cache for face counts, sizes, and color statistics.
 
-    Stored under ~/.cache/retouch/ to prevent write errors on read-only folders.
+    Stored under the configured Retouch cache directory to prevent write
+    errors on read-only input folders.
     Keyed by the SHA-256 hash of the resolved input directory.
     """
 
     def __init__(self, input_dir: Path) -> None:
         self.input_dir = input_dir
-        self.cache_dir = Path.home() / ".cache" / "retouch"
+        self.cache_dir = get_cache_dir()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         
         input_hash = hashlib.sha256(str(input_dir.resolve()).encode("utf-8")).hexdigest()
@@ -736,4 +737,3 @@ class BatchProcessor:
             if on_file_result is not None:
                 on_file_result(file_path, None, None, str(e))
             return None
-

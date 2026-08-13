@@ -227,11 +227,11 @@ class TestGlobalBloom:
 
 class TestLogCrash:
     def test_log_crash_writes_file(self):
-        from retouch.utils import log_crash
+        from retouch.utils import get_cache_dir, log_crash
         from pathlib import Path
 
         # Clean up any existing crash log
-        cache_dir = Path.home() / ".cache" / "retouch"
+        cache_dir = get_cache_dir()
         crash_log_file = cache_dir / "crash.log"
         if crash_log_file.exists():
             crash_log_file.unlink()
@@ -437,5 +437,4 @@ class TestRemovePurpleFringing:
         img = np.full((64, 64, 3), [200, 40, 200], dtype=np.uint8)  # Uniform purple
         out = remove_purple_fringing(img, strength=1.0)
         assert np.all(out == img)
-
 

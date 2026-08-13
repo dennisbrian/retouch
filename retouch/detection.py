@@ -1,4 +1,4 @@
-"""Face detection layer — MediaPipe Tasks API (v0.10.35+).
+"""Face detection layer — MediaPipe Tasks with a legacy compatibility path.
 
 Primary:   RetinaFace (pip) for bounding boxes + MediaPipe FaceLandmarker for 478 landmarks.
 Fallback:  MediaPipe FaceLandmarker on full image (if RetinaFace unavailable or finds nothing).
@@ -74,12 +74,34 @@ class _LandmarkCompat:
         self.landmark = landmark_list
 
 
+def _detach_landmarks(landmark_list: Any) -> List[_Landmark]:
+    """Copy MediaPipe landmarks into Retouch-owned plain dataclasses.
+
+    The legacy Solutions API exposes protobuf-backed landmark proxies whose
+    owner is the short-lived ``FaceMesh.process()`` result. Retaining those
+    proxies makes later ``deepcopy``/session caching fail with ``ReferenceError``
+    after the native result is released. The engine only consumes x/y/z, so
+    detach those values at the detection boundary.
+    """
+    return [
+        _Landmark(
+            x=float(landmark.x),
+            y=float(landmark.y),
+            z=float(getattr(landmark, "z", 0.0)),
+        )
+        for landmark in landmark_list
+    ]
+
+
 class FaceDetector:
     """Detect faces and extract 478 landmarks.
 
     Primary: RetinaFace (pip) for bounding boxes, then MediaPipe FaceLandmarker
-    on each crop for precise 478 landmarks.
-    Fallback: MediaPipe FaceLandmarker on the full image.
+    on each crop for precise 478 landmarks.  The pinned legacy wheel is also
+    supported where its Solutions API is available.  ``allow_unavailable`` is
+    reserved for application startup: it produces a clearly non-face-aware
+    detector instead of allowing an incompatible native runtime to abort the
+    host process.
     """
 
     def __init__(
@@ -87,17 +109,68 @@ class FaceDetector:
         max_faces: int = 10,
         min_confidence: float = 0.4,
         refine_landmarks: bool = True,
+        allow_unavailable: bool = False,
     ):
         self.max_faces = max_faces
         self.min_confidence = min_confidence
+        self.available = True
+        self.unavailable_reason: Optional[str] = None
+        self._legacy_mesh = None
+        self._legacy_segmenter = None
+        self._landmarker = None
+        self._segmenter = None
+
+        backend = os.environ.get("RETOUCH_MEDIAPIPE_BACKEND", "auto").strip().lower()
+        has_legacy_solutions = hasattr(mp, "solutions")
+        # Unit tests replace the factory with a mock so downstream parsing can
+        # be exercised without constructing native MediaPipe.  Keep that seam
+        # intact while the real runtime capability check protects production
+        # processes from the macOS native abort.
+        factory_is_mocked = hasattr(self._create_tasks, "mock_calls")
+        if backend not in {"auto", "tasks", "legacy"}:
+            raise ValueError("RETOUCH_MEDIAPIPE_BACKEND must be auto, tasks, or legacy")
+        if not factory_is_mocked and (backend == "legacy" or (backend == "auto" and has_legacy_solutions)):
+            if not has_legacy_solutions:
+                error = RuntimeError(
+                    "Legacy MediaPipe backend requested, but this MediaPipe build removed mp.solutions. "
+                    "Install mediapipe==0.10.5 and protobuf<5 from requirements/base.txt."
+                )
+                if allow_unavailable:
+                    self._mark_unavailable(error)
+                    return
+                raise error
+            try:
+                self._init_legacy_backend(max_faces, min_confidence, refine_landmarks)
+            except Exception as exc:
+                if allow_unavailable:
+                    self._mark_unavailable(exc)
+                    return
+                raise
+            return
+
+        if backend in {"auto", "tasks"} and not has_legacy_solutions and not factory_is_mocked:
+            version = getattr(mp, "__version__", "unknown")
+            if version == "0.10.35":
+                error = RuntimeError(
+                    "MediaPipe 0.10.35 Tasks FaceLandmarker is not supported by this macOS runtime; "
+                    "install mediapipe==0.10.5 and protobuf<5, then use the legacy CPU backend."
+                )
+                if allow_unavailable:
+                    self._mark_unavailable(error)
+                    return
+                raise error
 
         if not os.path.exists(_FACE_LANDMARKER_MODEL):
-            raise FileNotFoundError(
+            error = FileNotFoundError(
                 f"Face landmarker model not found at {_FACE_LANDMARKER_MODEL}\n"
                 f"Download it from:\n"
                 f"  https://storage.googleapis.com/mediapipe-models/"
                 f"face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
             )
+            if allow_unavailable:
+                self._mark_unavailable(error)
+                return
+            raise error
 
         vision = mp.tasks.vision
         base = mp.tasks.BaseOptions
@@ -118,7 +191,36 @@ class FaceDetector:
                     base, vision, base.Delegate.CPU, max_faces, min_confidence
                 )
             else:
+                if allow_unavailable:
+                    self._mark_unavailable(exc)
+                    return
                 raise
+
+    def _mark_unavailable(self, error: BaseException) -> None:
+        """Keep the host application usable without pretending faces were found."""
+        import logging
+        self.available = False
+        self.unavailable_reason = f"{type(error).__name__}: {error}"
+        logging.getLogger(__name__).warning(
+            "Face-aware detection unavailable; using global-only fallback: %s",
+            self.unavailable_reason,
+        )
+
+    def _init_legacy_backend(self, max_faces: int, min_confidence: float, refine_landmarks: bool) -> None:
+        """Initialize the stable CPU FaceMesh backend used by the pinned runtime."""
+        self._legacy_mesh = mp.solutions.face_mesh.FaceMesh(
+            static_image_mode=True,
+            max_num_faces=max_faces,
+            refine_landmarks=refine_landmarks,
+            min_detection_confidence=min_confidence,
+            min_tracking_confidence=min_confidence,
+        )
+        try:
+            self._legacy_segmenter = mp.solutions.selfie_segmentation.SelfieSegmentation(
+                model_selection=1
+            )
+        except Exception:
+            self._legacy_segmenter = None
 
     @staticmethod
     def _create_tasks(
@@ -170,8 +272,23 @@ class FaceDetector:
         unavailable or returns nothing.
         """
         h, w = img_bgr.shape[:2]
+        if not self.available:
+            return []
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
         faces: List[FaceData] = []
+
+        if self._legacy_mesh is not None:
+            result = self._legacy_mesh.process(img_rgb)
+            for landmarks in getattr(result, "multi_face_landmarks", None) or []:
+                compat = _LandmarkCompat(_detach_landmarks(landmarks.landmark))
+                bbox = self._bbox_from_landmarks(compat, w, h)
+                faces.append(FaceData(
+                    landmarks=compat,
+                    bbox=bbox,
+                    ied=inter_eye_distance(compat, w, h),
+                    confidence=1.0,
+                ))
+            return faces
 
         # 1. RetinaFace (pip) for bounding-box detection
         try:
@@ -296,6 +413,14 @@ class FaceDetector:
 
         Values 0.0 = background, 1.0 = person.
         """
+        if not self.available:
+            return np.ones(img_bgr.shape[:2], dtype=np.float32)
+        if self._legacy_segmenter is not None:
+            img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+            result = self._legacy_segmenter.process(img_rgb)
+            mask = getattr(result, "segmentation_mask", None)
+            if mask is not None:
+                return np.asarray(mask, dtype=np.float32)
         if self._segmenter is None:
             return np.ones(img_bgr.shape[:2], dtype=np.float32)
 
@@ -320,7 +445,7 @@ class FaceDetector:
         MediaPipe's own ``FaceLandmarker.__del__`` blocks forever on a pending
         serial-dispatcher future and hangs the process.
         """
-        for attr in ("_landmarker", "_segmenter"):
+        for attr in ("_legacy_mesh", "_legacy_segmenter", "_landmarker", "_segmenter"):
             task = getattr(self, attr, None)
             if task is not None:
                 self._close_task(task)

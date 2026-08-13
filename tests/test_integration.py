@@ -201,6 +201,7 @@ class TestRetouchFunction:
 # Real-image integration  (only if test_output/ images exist)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.native
 class TestWithRealImage:
     """Full pipeline tests with a real human face image.
 
@@ -226,6 +227,7 @@ class TestWithRealImage:
         _assert_valid_output(result, real_face)
         assert result.face_count >= 1
 
+    @pytest.mark.slow
     def test_multiple_recipes_real_face(self, engine, real_face):
         for recipe in ("natural", "cosplay", "pink_dream", "beauty", "film"):
             result = engine.process(real_face, recipe=recipe)
@@ -328,9 +330,9 @@ class TestProxyPipeline:
         upscale_calls = {"n": 0}
         original = RetouchEngine._upscale_core_result
 
-        def _wrapped(core, target_h, target_w):
+        def _wrapped(core, target_h, target_w, **kwargs):
             upscale_calls["n"] += 1
-            return original(core, target_h, target_w)
+            return original(core, target_h, target_w, **kwargs)
 
         monkeypatch.setattr(RetouchEngine, "_upscale_core_result", staticmethod(_wrapped))
 
@@ -367,9 +369,9 @@ class TestProxyPipeline:
         upscale_calls = {"n": 0}
         original = RetouchEngine._upscale_core_result
 
-        def _wrapped(core, target_h, target_w):
+        def _wrapped(core, target_h, target_w, **kwargs):
             upscale_calls["n"] += 1
-            return original(core, target_h, target_w)
+            return original(core, target_h, target_w, **kwargs)
 
         monkeypatch.setattr(RetouchEngine, "_upscale_core_result", staticmethod(_wrapped))
 

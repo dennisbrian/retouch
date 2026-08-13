@@ -442,6 +442,7 @@ def imread_engine(
     raf2jpeg_path: Optional[Union[str, Path]] = None,
     raf2jpeg_quality: int = 100,
     fuji_match_strength: float = 0.85,
+    optical_correction: bool = False,
 ) -> np.ndarray:
     """Load an image for the engine, using the 16-bit path for RAW.
 
@@ -486,12 +487,18 @@ def imread_engine(
             f"got {raw_decoder!r}"
         )
     if raw_decoder == "raf2jpeg" and p.suffix.lower() == ".raf":
-        return read_raf_with_raf2jpeg(p, raf2jpeg_path, raf2jpeg_quality)
-    if raw_decoder == "rawpy-fuji-match" and p.suffix.lower() == ".raf":
-        return read_raf_with_fuji_match(p, raf2jpeg_path, fuji_match_strength)
-    if prefer_16bit and p.suffix.lower() in RAW_EXTENSIONS:
-        return read_image_16bit(p)
-    return imread_exif(p)
+        image = read_raf_with_raf2jpeg(p, raf2jpeg_path, raf2jpeg_quality)
+    elif raw_decoder == "rawpy-fuji-match" and p.suffix.lower() == ".raf":
+        image = read_raf_with_fuji_match(p, raf2jpeg_path, fuji_match_strength)
+    elif prefer_16bit and p.suffix.lower() in RAW_EXTENSIONS:
+        image = read_image_16bit(p)
+    else:
+        image = imread_exif(p)
+    if optical_correction:
+        from .capture_fidelity import apply_optical_corrections, read_capture_metadata
+        image, status = apply_optical_corrections(image, read_capture_metadata(p))
+        logger.info("Optical correction status for %s: %s", p, status)
+    return image
 
 
 def resize_for_processing(

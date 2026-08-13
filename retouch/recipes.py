@@ -40,8 +40,7 @@ RECIPES = {
     "senior": {
         "extends": "portrait",
         "frequency": {"smooth": 0.35},
-        "skin": {"equalize": 0.25, "rosy": 0.10},
-        "wrinkle_soften": 35.0,
+        "skin": {"equalize": 0.25, "rosy": 0.10, "wrinkle_soften": 0.35},
     },
     "natural": {
         "frequency": {"smooth": 0.30},
@@ -3202,7 +3201,9 @@ RECIPES["auto_clean_v1"] = {
         "deglare": 30,
         "remove_flyaways": 35,
     },
-    "neural": {"stray_hair_boost": 30, "defect_boost": 30},
+    # Neural boosters are compatibility-only until real segmenters/models
+    # exist; non-zero recipe defaults would advertise a silent no-op.
+    "neural": {"stray_hair_boost": 0, "defect_boost": 0},
     "body_reshape": {"auto": 30},
     "bloom": {"opacity": 0.03, "softness": 45},
     "sharpen": 10.0,

@@ -6,6 +6,8 @@ and colour/tone primitives used across the retouch modules.
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Any, List, Optional, Sequence, Tuple
 
 import cv2
@@ -13,6 +15,22 @@ import logging
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+
+def get_cache_dir() -> Path:
+    """Return the writable Retouch cache directory.
+
+    ``RETOUCH_CACHE_DIR`` is an application-specific override. Otherwise honor
+    the standard ``XDG_CACHE_HOME`` base before falling back to
+    ``~/.cache/retouch``. The directory is not created by this resolver.
+    """
+    explicit = os.environ.get("RETOUCH_CACHE_DIR")
+    if explicit:
+        return Path(explicit).expanduser()
+    xdg_root = os.environ.get("XDG_CACHE_HOME")
+    if xdg_root:
+        return Path(xdg_root).expanduser() / "retouch"
+    return Path.home() / ".cache" / "retouch"
 
 
 # ---------------------------------------------------------------------------
@@ -834,7 +852,7 @@ def apply_skin_diffusion(
 
 
 def log_crash(exc: Exception, context_info: Optional[dict] = None) -> str:
-    """Log details of a crash (traceback, timestamp, context params) to ``~/.cache/retouch/crash.log``.
+    """Log details of a crash to the configured Retouch cache directory.
 
     Args:
         exc: The exception instance to log.
@@ -843,14 +861,12 @@ def log_crash(exc: Exception, context_info: Optional[dict] = None) -> str:
     Returns:
         The path of the crash log file, or an empty string if writing failed.
     """
-    import os
     import sys
     import traceback
     from datetime import datetime
-    from pathlib import Path
 
     try:
-        cache_dir = Path.home() / ".cache" / "retouch"
+        cache_dir = get_cache_dir()
         cache_dir.mkdir(parents=True, exist_ok=True)
         crash_log_file = cache_dir / "crash.log"
 
@@ -954,5 +970,4 @@ def remove_purple_fringing(
     if is_float:
         return out.astype(np.float32)
     return out
-
 

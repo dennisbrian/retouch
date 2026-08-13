@@ -92,6 +92,24 @@ class TestSessionJsonRoundTrip:
         round_tripped.params["skin_smoothing"] = 0.99
         assert s.params["skin_smoothing"] == 0.5
 
+    def test_style_events_round_trip_without_pixel_payloads(self) -> None:
+        s = _make_session()
+        s.record_style_event(
+            stage="smooth",
+            suggested={"strength": 0.4},
+            final={"strength": 0.2},
+            outcome="accepted",
+            scene_features={"lighting": "mixed"},
+        )
+        round_tripped = Session.from_json(s.to_json())
+
+        assert round_tripped.style_events == s.style_events
+        assert "pixels" not in s.to_json().lower()
+
+    def test_style_event_rejects_unknown_outcome(self) -> None:
+        with pytest.raises(ValueError):
+            _make_session().record_style_event(stage="eyes", outcome="maybe")
+
     def test_to_json_is_sorted(self) -> None:
         s = _make_session()
         text = s.to_json()

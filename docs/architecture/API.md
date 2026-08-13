@@ -600,6 +600,21 @@ Passing an explicit value override to these parameters takes precedence over the
 
 ## 3. Convenience Function: `retouch()`
 
+### Recently added advanced parameters
+
+The registry also accepts these keyword overrides through `process(..., **kwargs)`:
+
+* `corneal_shading`
+* `film_highlight_purity`
+* `flyaway_cleanup`
+* `hb_even`
+* `hb_shift`
+* `heal_engine`
+* `mark_policy`
+* `micro_grain`
+* `purple_fringing`
+* `split_toning`
+
 For simple scripts or backward-compatibility, you can use the `retouch` module-level wrapper. It handles the instantiation and teardown of the engine automatically.
 
 ```python

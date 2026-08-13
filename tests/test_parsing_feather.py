@@ -200,10 +200,14 @@ class TestMasksFromLabelMapGuided:
         )
 
         skin_mask = result['skin']
-        # Erode to get interior
+        # Define the interior from the original binary class map. Eroding the
+        # already-soft output and selecting every value above 0.01 also samples
+        # the feather halo, so its median varies with the OpenCV guided-filter
+        # implementation rather than measuring interior saturation.
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
-        eroded = cv2.erode(skin_mask, kernel, iterations=1)
-        interior = eroded[eroded > 0.01]
+        hard_skin = (label_map == 1).astype(np.uint8)
+        interior_mask = cv2.erode(hard_skin, kernel, iterations=1).astype(bool)
+        interior = skin_mask[interior_mask]
 
         if len(interior) > 0:
             # Median should be close to 1.0

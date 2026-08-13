@@ -117,6 +117,19 @@ def model_exists(name: str) -> bool:
     return os.path.isfile(path) and os.path.getsize(path) > 0
 
 
+def model_status(name: str) -> Dict[str, Any]:
+    """Return a truthful, side-effect-free status for a manifest entry.
+
+    ``available`` means a usable local file is present; it does not imply that
+    an optional model is downloadable.  This distinction keeps UI and
+    diagnostics honest when a feature intentionally falls back.
+    """
+    entry = dict(_manifest_entry(name))
+    entry["available"] = model_exists(name)
+    entry["downloadable"] = bool(entry.get("url")) and _PLACEHOLDER_URL_HOST not in str(entry.get("url", ""))
+    return entry
+
+
 def verify_model(name: str) -> bool:
     entry = _manifest_entry(name)
     expected = entry.get("sha256", "")
@@ -157,10 +170,9 @@ def download_model(
     url = entry.get("url", "")
     if not url:
         raise ModelFetchError(f"Manifest entry for {name!r} has no url")
-    # Every manifest entry currently ships the template host from the repo
-    # skeleton. Downloading it yields an opaque HTTP 404; fail up front with
-    # an actionable message instead, so a missing model reads as "not
-    # published yet" rather than "the network is broken".
+    # A legacy manifest must never be allowed to turn a placeholder host into
+    # a confusing network failure. Current optional entries use an empty URL
+    # and are explicitly unavailable until a verified release is supplied.
     if _PLACEHOLDER_URL_HOST in url:
         raise ModelFetchError(
             f"Manifest entry for {name!r} still points at the placeholder URL "

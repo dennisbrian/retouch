@@ -9,6 +9,7 @@ import pytest
 from retouch.detection import (
     _Landmark,
     _LandmarkCompat,
+    _detach_landmarks,
     FaceData,
     FaceContext,
     FaceDetector,
@@ -110,6 +111,14 @@ class TestLandmarkCompat:
         assert compat.landmark[0].x == 0.5
         assert compat.landmark[0].y == 0.6
         assert compat.landmark[0].z == 0.7
+
+    def test_detach_landmarks_copies_foreign_objects(self):
+        foreign = [MagicMock(x=0.2, y=0.4, z=-0.1)]
+
+        detached = _detach_landmarks(foreign)
+
+        assert detached == [_Landmark(0.2, 0.4, -0.1)]
+        assert detached[0] is not foreign[0]
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +313,21 @@ def _mock_create_tasks_default():
 
 class TestFaceDetectorInit:
     """Tests for FaceDetector.__init__ — covered via _create_tasks mock."""
+
+    def test_allow_unavailable_is_explicit_global_only_fallback(self):
+        """The application may start, but the detector must remain non-certifying."""
+        with patch.object(
+            FaceDetector, "_create_tasks", side_effect=RuntimeError("native probe failed"),
+        ):
+            detector = FaceDetector(allow_unavailable=True)
+        try:
+            assert detector.available is False
+            assert "native probe failed" in detector.unavailable_reason
+            image = np.zeros((12, 16, 3), dtype=np.uint8)
+            assert detector.detect(image) == []
+            assert np.all(detector.segment_person(image) == 1.0)
+        finally:
+            detector.close()
 
     def test_default_params(self):
         with patch.object(

@@ -146,12 +146,9 @@ class TestBuiltInRecipesPostEffects:
         assert ctx.auto_exposure is True
 
     def test_matsuri_glow_v1_post_effects(self):
-        """matsuri_glow_v1 recipe supplies halation, grain, and makeup_v2 ombre settings."""
+        """matsuri_glow_v1 keeps its reviewed, restrained event finish."""
         rec = resolve_recipe("matsuri_glow_v1")
         ctx = build_context("matsuri_glow_v1", rec, {})
-        assert ctx.halation == 0.20
-        assert ctx.grain == 0.04
-        # Check makeup_v2 ombre fields wired from recipe
-        assert ctx.mv2_ombre is True
-        assert ctx.mv2_ombre_color1 == "nude"
-        assert ctx.mv2_ombre_color2 == "rose"
+        assert ctx.halation == 0.08
+        assert ctx.grain == 0.03
+        assert ctx.mv2_ombre is False

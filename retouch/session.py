@@ -55,23 +55,30 @@ class Session:
     created: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     image_hash: Optional[str] = None
     local_adjustments: List[Dict[str, Any]] = field(default_factory=list)
+    advanced_retouch: Dict[str, Any] = field(default_factory=dict)
+    # P4 instrumentation: parameter/evidence metadata only. Face pixels and
+    # image arrays are intentionally never stored here.
+    style_events: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_json(self, indent: int = 2) -> str:
         """Serialize session to JSON string."""
-        return json.dumps(
-            {
-                "version": self.version,
-                "recipe": self.recipe,
-                "params": self.params,
-                "image_path": self.image_path,
-                "created": self.created,
-                "image_hash": self.image_hash,
-                "local_adjustments": self.local_adjustments,
-            },
-            indent=indent,
-            sort_keys=True,
-            ensure_ascii=False,
-        )
+        payload = {
+            "version": self.version,
+            "recipe": self.recipe,
+            "params": self.params,
+            "image_path": self.image_path,
+            "created": self.created,
+            "image_hash": self.image_hash,
+            "local_adjustments": self.local_adjustments,
+        }
+        if self.style_events:
+            payload["style_events"] = self.style_events
+        # Keep legacy sessions byte/schema-compatible when no Advanced
+        # Retouch actions exist; populated sessions carry the versioned edit
+        # log needed to reproduce the manual canvas.
+        if self.advanced_retouch:
+            payload["advanced_retouch"] = self.advanced_retouch
+        return json.dumps(payload, indent=indent, sort_keys=True, ensure_ascii=False)
 
     def to_file(self, path: str) -> str:
         """Save session to a JSON file. Returns the absolute path."""
@@ -97,7 +104,7 @@ class Session:
 
         Forward-compatible: unknown keys warn, missing keys use defaults.
         """
-        known_keys = {"version", "recipe", "params", "image_path", "created", "image_hash", "local_adjustments"}
+        known_keys = {"version", "recipe", "params", "image_path", "created", "image_hash", "local_adjustments", "advanced_retouch", "style_events"}
         unknown = set(data.keys()) - known_keys
         if unknown:
             logger.warning(
@@ -119,6 +126,8 @@ class Session:
             created=data.get("created", datetime.now(timezone.utc).isoformat()),
             image_hash=data.get("image_hash"),
             local_adjustments=data.get("local_adjustments", []),
+            advanced_retouch=data.get("advanced_retouch", {}),
+            style_events=data.get("style_events", []),
         )
 
     @classmethod
@@ -156,7 +165,37 @@ class Session:
             created=self.created,
             image_hash=self.image_hash,
             local_adjustments=self.local_adjustments,
+            advanced_retouch=self.advanced_retouch,
+            style_events=self.style_events,
         )
+
+    def record_style_event(
+        self,
+        *,
+        stage: str,
+        suggested: Optional[Dict[str, Any]] = None,
+        final: Optional[Dict[str, Any]] = None,
+        outcome: str = "accepted",
+        scene_features: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Record inspectable style deltas without storing face pixels."""
+        if outcome not in {"accepted", "rejected", "skipped", "review"}:
+            raise ValueError(f"unknown style event outcome: {outcome!r}")
+
+        def safe_mapping(values: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+            out: Dict[str, Any] = {}
+            for key, value in (values or {}).items():
+                if isinstance(value, (str, int, float, bool)) or value is None:
+                    out[str(key)] = value
+            return out
+
+        self.style_events.append({
+            "stage": str(stage),
+            "suggested": safe_mapping(suggested),
+            "final": safe_mapping(final),
+            "outcome": outcome,
+            "scene_features": safe_mapping(scene_features),
+        })
 
 
 @dataclass

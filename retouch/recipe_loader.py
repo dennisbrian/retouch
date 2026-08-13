@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .params import PROCESSING_PARAMS, ParamSpec, resolve_recipe
 from .recipe_schema import validate_recipe
 from .recipes import RECIPES
+from .utils import get_cache_dir
 
 
 def _user_recipes_dir() -> Path:
@@ -27,7 +28,7 @@ def _user_recipes_dir() -> Path:
     if "RETOUCH_USER_RECIPES" in os.environ:
         d = Path(os.environ["RETOUCH_USER_RECIPES"])
     else:
-        d = Path.home() / ".cache" / "retouch" / "user_recipes"
+        d = get_cache_dir() / "user_recipes"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -110,7 +111,6 @@ def _flat_to_engine_recipe(flat: Dict[str, Any]) -> Dict[str, Any]:
         tint = flat["lip_tint"]
         engine.setdefault("lips", {})["tint"] = None if tint == "none" else tint
     if "lip_finish" in flat:
-        engine.setdefault("lips", {})["gloss"] = _convert_param_to_engine("lip_finish", flat["lip_finish"])
         engine["lip_finish"] = flat["lip_finish"]
 
     if "blush" in flat:
@@ -211,8 +211,8 @@ def _engine_to_flat_recipe(engine: Dict[str, Any]) -> Dict[str, Any]:
         flat["lip_enhance"] = lips["gloss"]
     if "tint" in lips:
         flat["lip_tint"] = "none" if lips["tint"] is None else lips["tint"]
-    if "gloss" in lips:
-        flat["lip_finish"] = _convert_param_from_engine("lip_finish", lips["gloss"])
+    if "lip_finish" in engine:
+        flat["lip_finish"] = engine["lip_finish"]
 
     if "blush" in engine:
         flat["blush"] = _convert_param_from_engine("blush", engine["blush"])

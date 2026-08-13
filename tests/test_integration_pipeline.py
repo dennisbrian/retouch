@@ -178,6 +178,12 @@ def _make_mock_engine(face_count: int = 1) -> RetouchEngine:
 
     engine._frequency.separate = lambda img, radius: _FakeLayers(img)
 
+    # RetouchEngine.__init__ normally builds this required registry. This
+    # lightweight fixture intentionally uses __new__ to avoid model startup,
+    # so reproduce that initialization explicitly.
+    from retouch.stage_wrappers import build_global_registry
+    engine._global_registry = build_global_registry(engine)
+
     return engine
 
 
@@ -224,8 +230,8 @@ class TestPipelineOrder:
         assert order == [
             "_stage_reshape",
             "_stage_per_face",
-            "_stage_global",
             "_stage_subject_separation",
+            "_stage_global",
             "_stage_grade",
             "_stage_finish",
         ], f"Unexpected order: {order}"

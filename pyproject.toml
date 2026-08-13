@@ -10,25 +10,42 @@ readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
     "opencv-contrib-python>=4.8.0,<4.12",
-    "mediapipe>=0.10.0,<0.11",
+    # 0.10.5 is the last tested macOS legacy CPU graph for this project.
+    "mediapipe==0.10.5",
+    "protobuf>=3.20,<4",
     "numpy>=1.24.0,<2",
     "onnxruntime>=1.16.0",
     "tqdm>=4.65.0",
     "Pillow>=10.0.0",
+    "jsonschema>=4.18.0,<5",
 ]
 
 [project.optional-dependencies]
 dev = [
+    "gradio>=4.0.0,<5",
+    "huggingface-hub>=0.19.3,<1",
     "pytest>=7.0.0",
     "pytest-cov>=6.0.0",
     "pytest-timeout>=2.3.0,<3",
 ]
 gui = [
-    "gradio>=4.0.0",
-    "pywebview>=5.0.0",
-    "pyinstaller>=6.0.0",
+    "gradio>=4.0.0,<5",
+    "huggingface-hub>=0.19.3,<1",
+]
+desktop = [
+    "gradio>=4.0.0,<5",
+    "huggingface-hub>=0.19.3,<1",
+    "pywebview>=5.0.0,<7",
+    "pyinstaller>=6.0.0,<7",
+    "pyobjc-core<12; sys_platform == 'darwin' and python_version < '3.10'",
+    "pyobjc-framework-Cocoa<12; sys_platform == 'darwin' and python_version < '3.10'",
+    "pyobjc-framework-Quartz<12; sys_platform == 'darwin' and python_version < '3.10'",
+    "pyobjc-framework-Security<12; sys_platform == 'darwin' and python_version < '3.10'",
+    "pyobjc-framework-UniformTypeIdentifiers<12; sys_platform == 'darwin' and python_version < '3.10'",
+    "pyobjc-framework-WebKit<12; sys_platform == 'darwin' and python_version < '3.10'",
 ]
 raw = ["rawpy>=0.19.0"]
+capture = ["lensfunpy>=1.6.0"]
 
 [tool.setuptools.packages.find]
 include = ["retouch*"]

@@ -378,9 +378,15 @@ class TestBodySkinProcessing:
         call_count = {"n": 0}
         original_remove = engine_module.BlemishRemover.remove
 
-        def _counting_remove(self, img_bgr, skin_mask, strength=30):
+        def _counting_remove(self, img_bgr, skin_mask, strength=30, **kwargs):
             call_count["n"] += 1
-            return original_remove(self, img_bgr, skin_mask, strength=strength)
+            return original_remove(
+                self,
+                img_bgr,
+                skin_mask,
+                strength=strength,
+                **kwargs,
+            )
 
         engine_module.BlemishRemover.remove = _counting_remove
         try:

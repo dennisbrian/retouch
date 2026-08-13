@@ -2325,14 +2325,14 @@ _MAKEUP_V2_PARAMS = [
 ]
 
 
-# --- A4: Neural boosters (PARKED — await A1 evidence) ---
-# Gated on enabled=False by default. When A1 evidence supports enabling,
-# change default to True and implement real StrayHairSegmenter/DefectSegmenter.
-# See MASTER_PLAN.md line 112 and retouch/neural_boosters.py for details.
+# --- A4: Neural boosters (PARKED — compatibility-only) ---
+# Keep the parameter names for loading old sessions, but do not expose CLI
+# controls for effects whose segmenters intentionally return empty masks.
+# See retouch/neural_boosters.py for the explicit unavailable status.
 _NEURAL_BOOSTER_PARAMS = [
     ParamSpec(
         name="neural_stray_hair_boost",
-        cli_flag="neural-stray-hair-boost",
+        cli_flag=None,
         cli_type=int,
         default=0,
         gui_default=0,
@@ -2343,7 +2343,7 @@ _NEURAL_BOOSTER_PARAMS = [
     ),
     ParamSpec(
         name="neural_defect_boost",
-        cli_flag="neural-defect-boost",
+        cli_flag=None,
         cli_type=int,
         default=0,
         gui_default=0,

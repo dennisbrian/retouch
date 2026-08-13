@@ -60,6 +60,7 @@ class TestBasicProcessing:
             "--max-dim", "200",
             "--no-compare",
             "--force",
+            "--workers", "1",
         )
         assert rc == 0, f"CLI failed: {err}"
         out_files = list(output_dir.iterdir())
@@ -80,6 +81,7 @@ class TestBasicProcessing:
             "--max-dim", "200",
             "--no-compare",
             "--force",
+            "--workers", "1",
         )
         assert rc == 0, f"CLI failed: {err}"
         out_files = [p for p in output_dir.iterdir() if not p.name.startswith(".")]
@@ -103,6 +105,7 @@ class TestBasicProcessing:
             "--max-dim", "200",
             "--no-compare",
             "--force",
+            "--workers", "1",
         )
         assert rc == 0, f"CLI failed: {err}"
 

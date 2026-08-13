@@ -860,6 +860,7 @@ class RetouchEngine:
             max_faces=max_faces,
             min_confidence=min_confidence,
             refine_landmarks=True,
+            allow_unavailable=True,
         )
         self._parser = FaceParser()
         self._reshaper = FaceReshaper()
@@ -1883,7 +1884,11 @@ class RetouchEngine:
         # Stages 1–2 — Reshape + per-face + composite at NATIVE resolution
         # ------------------------------------------------------------------
         if ctx.face_params == "auto":
-            ctx.face_params = self.suggest_face_params(native_img_bgr, faces_data=faces_native)
+            # Automatic demographic treatment selection was removed in the P0
+            # safety audit.  Keep the explicit per-face API, but make the
+            # automatic mode a true no-op so it cannot alter a person's
+            # treatment based on guessed age, sex, or appearance.
+            ctx.face_params = None
 
         t1 = time.perf_counter()
         result_native = self._stage_reshape(native_img_bgr, faces_native, ctx)
@@ -2072,7 +2077,10 @@ class RetouchEngine:
         # Stage 1 — Face reshaping (global, applied once before per-face work)
         # ------------------------------------------------------------------
         if ctx.face_params == "auto":
-            ctx.face_params = self.suggest_face_params(img_bgr, faces_data=faces)
+            # See the native-resolution path above: automatic face selection
+            # is intentionally neutral. Users may still assign a recipe to a
+            # specific face explicitly through the face_params API or GUI.
+            ctx.face_params = None
 
         t1 = time.perf_counter()
         result = self._stage_reshape(img_bgr, faces, ctx)
@@ -2784,18 +2792,30 @@ class RetouchEngine:
         face_contexts: Optional[List["FaceContext"]] = None,
         faces_data: Optional[List["FaceData"]] = None,
     ) -> Dict[int, Dict[str, Any]]:
-        """Suggest per-face recipe overrides based on classical demographics detection."""
+        """Suggest neutral per-face entries plus continuous QA observations.
+
+        The returned recipe is always ``natural``. Tone evidence is included
+        only as diagnostic metadata and is never used to choose treatment.
+        """
         if faces_data is None:
             if not face_contexts:
                 faces_data = self._detector.detect(img_bgr)
             else:
                 faces_data = [f.face_data for f in face_contexts]
 
-        from .face_params import suggest_face_recipe
+        from .color_science import measure_tone_observation
         out = {}
         for i, face_data in enumerate(faces_data):
-            recipe = suggest_face_recipe(img_bgr, face_data.landmarks, face_data.bbox, face_data.ied)
-            out[i] = {"recipe": recipe}
+            x, y, w, h = (int(v) for v in face_data.bbox)
+            x1, y1 = max(0, x), max(0, y)
+            x2, y2 = min(img_bgr.shape[1], x + max(0, w)), min(img_bgr.shape[0], y + max(0, h))
+            crop = img_bgr[y1:y2, x1:x2]
+            observation = measure_tone_observation(crop) if crop.size else measure_tone_observation(img_bgr[:1, :1])
+            out[i] = {
+                "recipe": "natural",
+                "tone_observation": observation.to_dict(),
+                "selection_reason": "neutral default; demographic inference disabled",
+            }
         return out
 
     def _face_ctxs_for_reshape(self, ctx: ProcessingContext, n_faces: int):

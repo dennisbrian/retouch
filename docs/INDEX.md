@@ -23,6 +23,8 @@
 
 ## Plans (`docs/plans/`)
 - `MASTER_PLAN.md` — Overall roadmap
+- `PLAN_NEXT_FEATURE_IMPROVEMENTS_2026_08_12.md` — Productization-first next-feature plan
+- `RESEARCH_NEXT_FEATURE_FRONTIER_2026_08_12.md` — Post-Advanced-Retouch workflow and quality frontier research
 - `PLAN_*.md` — Tier-based initiatives
 - `PHOTOSHOP_PARITY_ROADMAP.md` — Feature parity goals
 - `V1_PLAN.md`, `TASK_P2_PERF_GUARDS.md` — Historical plans
@@ -35,6 +37,8 @@
 
 ## Review & QA (`docs/review/`)
 - `AUDIT_REPORT.md` — Security & coverage audit
+- `CORE_RECIPE_CERTIFICATION_2026_08_12.md` — 12-recipe automatic and human review gate
+- `METAMORPHIC_ROBUSTNESS_LAB.md` — Cross-cutting input-variant robustness gate and Advanced Retouch evidence runner
 - `TEST_REPORT_*.md` — Test results
 - `session/` — Session progress logs
 

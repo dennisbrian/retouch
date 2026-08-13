@@ -127,7 +127,7 @@ python3 cli.py --help
 
 ```bash
 pip install -r requirements/dev.txt
-python3 -m pytest tests/ -v
+scripts/dev/test tests/ -v
 ```
 
 ## Development

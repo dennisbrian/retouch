@@ -10,6 +10,10 @@ parked here, not scope-crept into S6/C5. Revisit once A1 evidence exists.
 See MASTER_PLAN.md line 112 (Phase 6, A4) for status and context.
 
 Current implementation: placeholders that return empty masks, no processing cost.
+They are not exposed as production GUI/CLI controls and all built-in recipe
+defaults are zero. Old sessions may still carry the fields; the engine emits a
+warning when such a requested value is encountered and leaves the image
+unchanged.
 When real implementations are added, keep them classical (segmentation/masking),
 not generative (synthesis/diffusion).
 

@@ -451,6 +451,16 @@ and 0–360 for split-toning hue).
 | Hsl Sat Yellow | `hsl_adjustments.saturation.yellow` | direct |
 | Impact | `finish.impact` | ÷ 100 |
 | Lens Blur | `background.lens_blur` | direct |
+| Corneal Shading (`corneal_shading`) | `eyes.corneal_shading` | ÷ 100 |
+| Film Highlight Purity (`film_highlight_purity`) | `film.tonemap.highlight_purity` | direct |
+| Flyaway Cleanup (`flyaway_cleanup`) | `hair.flyaway_cleanup` | ÷ 100 |
+| Hemoglobin Even (`hb_even`) | `skin.hb_even` | direct |
+| Hemoglobin Shift (`hb_shift`) | `skin.hb_shift` | direct |
+| Heal Engine (`heal_engine`) | `frequency.heal_engine` | direct |
+| Mark Policy | `mark_policy` | direct |
+| Micro Grain (`micro_grain`) | `finish.micro_grain` | ÷ 100 |
+| Purple Fringing (`purple_fringing`) | `finish.purple_fringing` | ÷ 100 |
+| Split Toning (`split_toning`) | `finish.split_toning` | ÷ 100 |
 | Light Wrap | `background.light_wrap` | direct |
 | Lip Enhance | `lips.gloss` | ÷ 100 |
 | Lip Finish | `lip_finish` | direct |

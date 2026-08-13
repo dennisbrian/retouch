@@ -384,11 +384,13 @@ class TestRAWDeveloper:
         with pytest.raises(FileNotFoundError):
             developer.load_raw("/nonexistent/file.cr2")
 
-    def test_load_raw_no_rawpy(self, developer):
+    def test_load_raw_no_rawpy(self, developer, tmp_path):
         """load_raw should raise ImportError if rawpy not available."""
+        existing_raw = tmp_path / "existing.cr2"
+        existing_raw.write_bytes(b"not decoded because rawpy is unavailable")
         with mock.patch("retouch.raw_develop.HAS_RAWPY", False):
             with pytest.raises(ImportError, match="rawpy is required"):
-                developer.load_raw("/some/file.cr2")
+                developer.load_raw(existing_raw)
 
     def test_load_raw_invalid_file(self, developer, tmp_path):
         """load_raw should raise ValueError for non-RAW file."""

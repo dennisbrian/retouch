@@ -15,5 +15,6 @@ dist/
 build/
 *.spec
 .pytest_cache/
+.venv-face-aware/
 .quadcodeai/
 cc.json

@@ -1,0 +1,11 @@
+-r gui.txt
+pywebview>=5.0.0,<7
+pyinstaller>=6.0.0,<7
+# PyObjC 12.0 was yanked because it incorrectly advertised Python 3.9
+# support. Constrain every macOS binding pywebview resolves on Python 3.9.
+pyobjc-core<12; sys_platform == "darwin" and python_version < "3.10"
+pyobjc-framework-Cocoa<12; sys_platform == "darwin" and python_version < "3.10"
+pyobjc-framework-Quartz<12; sys_platform == "darwin" and python_version < "3.10"
+pyobjc-framework-Security<12; sys_platform == "darwin" and python_version < "3.10"
+pyobjc-framework-UniformTypeIdentifiers<12; sys_platform == "darwin" and python_version < "3.10"
+pyobjc-framework-WebKit<12; sys_platform == "darwin" and python_version < "3.10"

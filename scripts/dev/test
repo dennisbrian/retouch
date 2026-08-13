@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Run Retouch tests without inheriting user-level Python packages or caches.
+set -euo pipefail
+
+project_root="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$project_root"
+
+if [[ -n "${RETOUCH_PYTHON:-}" ]]; then
+    test_python="$RETOUCH_PYTHON"
+elif [[ -x "$project_root/.venv/bin/python" ]]; then
+    test_python="$project_root/.venv/bin/python"
+elif [[ -x "$project_root/.venv-face-aware/bin/python" ]]; then
+    test_python="$project_root/.venv-face-aware/bin/python"
+else
+    test_python="python3"
+fi
+
+test_cache_base="${TMPDIR:-/tmp}/retouch-test-cache"
+mkdir -p "$test_cache_base/retouch" "$test_cache_base/matplotlib" "$test_cache_base/tmp"
+
+export PYTHONNOUSERSITE=1
+export XDG_CACHE_HOME="$test_cache_base"
+export RETOUCH_CACHE_DIR="$test_cache_base/retouch"
+export MPLCONFIGDIR="$test_cache_base/matplotlib"
+export TMPDIR="$test_cache_base/tmp"
+export RETOUCH_GPU="${RETOUCH_GPU:-0}"
+export RETOUCH_MEDIAPIPE_BACKEND="${RETOUCH_MEDIAPIPE_BACKEND:-legacy}"
+
+if ! "$test_python" -s -c "import cv2, gradio, jsonschema, mediapipe, pytest" >/dev/null 2>&1; then
+    echo "Retouch test dependencies are missing from: $test_python" >&2
+    echo "Create .venv and install: python3 -m venv .venv && .venv/bin/python -m pip install -r requirements/dev.txt" >&2
+    exit 2
+fi
+
+exec "$test_python" -s -m pytest -p no:cacheprovider "$@"

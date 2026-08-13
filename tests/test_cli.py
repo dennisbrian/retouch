@@ -89,7 +89,11 @@ class TestProcessing:
         input_path = tmp_path / "input.jpg"
         cv2.imwrite(str(input_path), synthetic_face)
 
-        for recipe in ("natural", "cosplay", "beauty"):
+        for recipe in (
+            "natural",
+            "cosplay_clear_v1",
+            "beauty_editorial_clear_v1",
+        ):
             output_dir = tmp_path / f"output_{recipe}"
             output_dir.mkdir()
 

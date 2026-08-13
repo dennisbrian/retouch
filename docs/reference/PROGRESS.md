@@ -51,7 +51,9 @@
   (excluded from `PROCESS_INPUT_KEYS` by design).
 - **Remaining auto-gap backlog item**: #5 auto stray-hair (A4-gated — needs a hair-strand
   segmentation model / evidence gate).
-- **`models/manifest.json` URLs are placeholders** (`github.com/owner/retouch-models`).
+- **Optional model distribution is truthful**: bundled models have no fake
+  release URL, while LaMa and Real-ESRGAN are explicitly unavailable until
+  verified artifacts and controlled release URLs are supplied.
 - **No packaging metadata**: no `pyproject.toml` / `setup.py`; requirements unpinned.
 
 ### 1. Phase 7 — Ship (~80% done 2026-08-12)

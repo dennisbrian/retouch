@@ -239,6 +239,24 @@ phases above._
 | 41 | **V3** | Multi-face + professional export (job queue, resumable, codec profiles) | — | V2 | 📋 NOT STARTED |
 | 42 | **V4** | Live camera effects (GPU compositor, latency/frame-rate tiers) | — | V3 | 📋 NOT STARTED |
 
+### Next productization tranche (proposed 2026-08-12)
+
+`PLAN_NEXT_FEATURE_IMPROVEMENTS_2026_08_12.md` records the next execution order
+after the current engine/ship work. Tranche 1 Advanced Retouch implementation
+and the model-truth slice are now landed; real face-aware visual certification,
+verified optional model acquisition, and the later color/video tranches remain
+separately gated.
+
+Authorized additions to that sequence:
+
+| Placement | Capability | Status |
+|---|---|---|
+| P1.1 | Sensor Calibration Pack | Added under Capture Fidelity; implementation pending |
+| QA gate | Metamorphic Robustness Lab | Cross-cutting gate implemented; face-aware run and resize finding remain open |
+| P6 | Identity & Likeness Lock | GO; gated by Advanced Retouch and QA evidence |
+| P7 | Output-Conditioned Master | GO; gated by export/soft-proof foundations |
+| Experimental | Intrinsic portrait relighting | Deferred; no production slot |
+
 ---
 
 ## Post-plan enhancements (2026-07-10)
