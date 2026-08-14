@@ -22,16 +22,16 @@ graph TD
 * **Inputs**: Image file upload zone (`img_input`) with multi-file and RAW support.
 * **Style Presets**: Vertical scrollable presets sidebar listing all built-in recipes (custom `gr.Radio` chips), plus the **Recipe Cookbook** search/category browser.
 * **Library Styles**: Dropdown to load learned custom style profiles (`custom_style_preset`).
-* **Preferences**: Side-by-side comparison (`show_compare`), **Fast Preview**, Smart Process, recipe-default reset, sessions, snapshots, undo, and redo.
-* **Export Menu**: Compact options for format (JPEG, PNG, WebP), compression quality, and resolution limits.
+* **Preferences**: Side-by-side comparison (`show_compare`), Smart Process, recipe-default reset, sessions, snapshots, undo, and redo. Slider edits remain interactive while a queued render runs; the active render uses its captured settings revision.
+* **Export Menu**: Compact options for format (JPEG, PNG, PNG-16, WebP), compression quality, resolution limits, and an explicit **Preserve source ICC profile on export** choice.
 * **Processing Quality**: **Full (native face crops)** is the default. Use **Draft (proxy, fast)** for contact sheets and quick iteration.
-* **Control Triggers**: Primary action button (`process_btn`) and defaults reset (`reset_btn`).
+* **Control Triggers**: `Render Preview` (first image, fast, no export), `Export Full Quality` (one image, full/native quality, metadata-preserving export), `Export All → Batch` (hands off a shoot to Batch), and defaults reset (`reset_btn`).
 
 ### 1.2 Column 2: Preview Canvas (Center Column, `scale=4.0`)
-* **Image Viewer**: Main preview frame (`img_output`) displaying the processed or side-by-side compared result at `600px` height.
+* **Image Viewer**: Main preview frame (`img_output`) displaying the processed or side-by-side compared result. Native inspection provides Fit, 100%, Face, and ROI crops from the current render revision; inspection downloads are disabled.
 * **Before/After Slider**: Draggable HTML overlay (`retouch-compare`) with `ew-resize` cursor, toggled via `show_compare` checkbox. Embedded base64 to avoid temp file security restrictions in Gradio 4.x.
 * **Status Console**: Text input box displaying pipeline logs and execution results.
-* **Asset Downloader**: File download interface (`export_file`) to fetch finished images.
+* **Asset Downloader**: File download interface (`export_file`) for finished exports. Preview output is intentionally not a delivery download.
 * **Debug Console**: Hidden panel (`debug_panel` / `debug_gallery`) showing mask segmentations (Skin, Lips, Sharpen, Frequency Layers) when debug mode is checked.
 * **Live stages**: The GUI currently shows the completed preview only. A per-stage processing timeline is planned and must not be presented as an available control.
 
@@ -160,7 +160,7 @@ bash dev.sh
 ```
 
 * **Default Port**: `7860` (accessible at `http://127.0.0.1:7860/`).
-* **Performance Note**: Enabling **Fast Preview** is highly recommended during slider adjustments to process downsampled images and maintain low latency round-trips.
+* **Performance Note**: `Render Preview` uses the fast 800px path. `Export Full Quality` uses `fast=False` and the Full quality tier; the legacy fast checkbox is not allowed to weaken a final export. The render manifest reports the effective precision and color context.
 * **Auto-Reload**: Uses `watchfiles` — any edit to `gui.py` or `retouch/` triggers a restart.
 
 ---
@@ -189,7 +189,7 @@ controls where detail is evaluated, not the requested export dimensions:
 
 | Mode | What runs at reduced resolution | Recommended use |
 |---|---|---|
-| **Fast Preview** (`fast=True`) | The input is reduced to 800px before detection and processing, then the result is restored to the source dimensions. | Slider and recipe tuning. |
+| **Render Preview** | The first image is reduced to 800px before detection and processing, then shown in memory without an export side effect. | Slider and recipe tuning. |
 | **Full (native face crops)** | Detection may use a proxy on very large inputs, but face crops and global phases run at native resolution. | Final export. |
 | **Draft (proxy, fast)** | Per-face processing uses the proxy path before the result is restored. | Batch contact sheets and quick visual comparison. |
 
@@ -205,10 +205,11 @@ controls where detail is evaluated, not the requested export dimensions:
 
 For **batch processing high-res photos** (e.g., 24MP+):
 
-1. Keep **Fast Preview** on while tuning sliders and recipes.
-2. Turn **Fast Preview** off and select **Full (native face crops)** for final export.
-3. Use **Draft** only when lower-detail proxy processing is acceptable.
-4. Export at **Original** unless a delivery size is required.
+1. Use **Render Preview** while tuning sliders and recipes.
+2. Use **Export Full Quality** for a single final image.
+3. Use **Export All → Batch** for a shoot; choose the batch output settings there.
+4. Use **Draft** only in the Batch workflow when lower-detail proxy processing is acceptable.
+5. Export at **Original** unless a delivery size is required.
 
 The **bottleneck** is the bilateral filter in `FrequencySeparator.combine` (~600-800ms per face at 200×200). If processing 100+ high-res photos, consider using the CLI with `--workers 8` for parallel processing.
 
@@ -220,7 +221,7 @@ The **bottleneck** is the bilateral filter in `FrequencySeparator.combine` (~600
 |---|---|
 | Will my output be at full resolution? | **Yes**, if `export_res = "Original"` (default) |
 | Is the per-face work done at full resolution? | **Yes** with Full quality and Fast Preview off; Draft uses proxy processing. |
-| Should I turn off `fast` for final exports? | **Yes.** |
+| Should I turn off `fast` for final exports? | No manual toggle is required: **Export Full Quality** forces the full path. |
 | Can I inspect processing stages live? | Not yet. Debug mode exposes masks after processing; a stage timeline is planned. |
 | What's the output file format? | JPEG, PNG, PNG-16, or WebP — see Export Format dropdown. |
 

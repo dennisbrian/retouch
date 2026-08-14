@@ -10,8 +10,11 @@
 - `BATCH_GUIDE.md` — Batch processing via CLI
 - `RECIPE_SWEEP.md` — Single-photo recipe sweeps and folder visual QA
 - `PERFORMANCE_TUNING.md` — Optimization tips
+- `COLOR_DELIVERY_TRUTH.md` — Working-space, precision, preview, and export contracts
 - `TROUBLESHOOTING.md` — Common issues & fixes
 - `RECIPE_GENERATOR.md` — Recipe generation
+- `RUNTIME_RECOVERY.md` — Isolated legacy recovery and Python 3.12 migration gates
+- `CERTIFICATION_EVIDENCE_V2.md` — Versioned render, detector, quality, corpus, and review evidence contract
 
 ## Architecture (`docs/architecture/`)
 - `ARCHITECTURE.md` — Pipeline design & modules
@@ -25,6 +28,9 @@
 - `MASTER_PLAN.md` — Overall roadmap
 - `PLAN_NEXT_FEATURE_IMPROVEMENTS_2026_08_12.md` — Productization-first next-feature plan
 - `RESEARCH_NEXT_FEATURE_FRONTIER_2026_08_12.md` — Post-Advanced-Retouch workflow and quality frontier research
+- `RESEARCH_PROJECT_SHOOT_WORKFLOW_DELTA_2026_08_14.md` — Current implementation re-baseline and next Project/Shoot workflow gates
+- `RESEARCH_SHOOT_REVIEW_NEXT_TRANCHE_2026_08_14.md` — Watch-job truth contract, face evidence, and XMP interoperability research
+- `RESEARCH_FACE_QUALITY_EVIDENCE_V1_2026_08_14.md` — Transparent face/eye evidence contract and corpus-certification gates
 - `PLAN_*.md` — Tier-based initiatives
 - `PHOTOSHOP_PARITY_ROADMAP.md` — Feature parity goals
 - `V1_PLAN.md`, `TASK_P2_PERF_GUARDS.md` — Historical plans

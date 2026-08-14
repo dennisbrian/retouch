@@ -7,6 +7,7 @@ import json
 import logging
 import hashlib
 import queue
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Callable, Union
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 # Default RAM budget for in-flight batch images (~2 GB working set).
 _DEFAULT_RAM_BUDGET_BYTES = 2 * 1024 * 1024 * 1024
+_ANALYSIS_CACHE_VERSION = "batch-analysis-v2"
 
 
 _SessionInput = Optional[Union["Session", str, Path]]
@@ -172,6 +174,13 @@ class BatchProcessorCache:
             except Exception as e:
                 logger.warning("Failed to load cache file %s: %s", self.cache_file, e)
 
+    def relative_key(self, path: Path) -> str:
+        """Return a normalized input-relative cache key, never basename-only."""
+        try:
+            return path.resolve().relative_to(self.input_dir.resolve()).as_posix()
+        except ValueError:
+            return path.resolve().as_posix()
+
     def save(self) -> None:
         try:
             with open(self.cache_file, "w", encoding="utf-8") as f:
@@ -181,12 +190,13 @@ class BatchProcessorCache:
 
     def get(self, filename: str, mtime: float) -> Optional[Dict[str, Any]]:
         entry = self.data.get(filename)
-        if entry and entry.get("mtime") == mtime:
+        if entry and entry.get("mtime") == mtime and entry.get("cache_version") == _ANALYSIS_CACHE_VERSION:
             return entry
         return None
 
     def set(self, filename: str, mtime: float, info: Dict[str, Any]) -> None:
         info["mtime"] = mtime
+        info["cache_version"] = _ANALYSIS_CACHE_VERSION
         self.data[filename] = info
 
 
@@ -221,6 +231,14 @@ def classify_image(faces_count: int, mean_s: float, mean_v: float) -> str:
     return f"{img_type} ({exposure}/{saturation})"
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def analyze_and_group(
     image_paths: List[Path],
     cache: BatchProcessorCache,
@@ -241,7 +259,7 @@ def analyze_and_group(
     for path in image_paths:
         try:
             mtime = os.path.getmtime(path)
-            filename = path.name
+            filename = cache.relative_key(path)
             cached_info = cache.get(filename, mtime)
 
             if cached_info is not None:
@@ -270,6 +288,10 @@ def analyze_and_group(
                     "faces": faces,
                     "mean_s": mean_s,
                     "mean_v": mean_v,
+                    # New or changed files are content-addressed before the
+                    # analysis result is considered reusable. Unchanged
+                    # records take the persisted mtime fast path above.
+                    "content_id": _file_sha256(path),
                 }
                 cache.set(filename, mtime, info)
 
@@ -480,7 +502,7 @@ class BatchProcessor:
         once at the start of the call; no shared mutable state is mutated
         across concurrent invocations.
         """
-        input_path = Path(input_dir)
+        input_path = Path(input_dir).expanduser().resolve()
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
@@ -594,6 +616,7 @@ class BatchProcessor:
                     output_path,
                     applier,
                     on_file_result,
+                    input_root=input_path,
                 )
 
             processed_paths = _run_async_batch_queue(
@@ -616,6 +639,7 @@ class BatchProcessor:
                     output_path,
                     applier,
                     on_file_result,
+                    input_root=input_path,
                 )
                 if res_path is not None:
                     processed_paths.append(res_path)
@@ -649,7 +673,11 @@ class BatchProcessor:
             try:
                 with zipfile.ZipFile(z_path, "w") as zipf:
                     for exp_path in processed_paths:
-                        zipf.write(exp_path, arcname=exp_path.name)
+                        try:
+                            arcname = Path(exp_path).resolve().relative_to(output_path.resolve()).as_posix()
+                        except ValueError:
+                            arcname = Path(exp_path).name
+                        zipf.write(exp_path, arcname=arcname)
                     if contact_sheet_path:
                         zipf.write(contact_sheet_path, arcname="contact_sheet.jpg")
                 zip_path = str(z_path)
@@ -663,7 +691,17 @@ class BatchProcessor:
         if progress_callback:
             progress_callback(1.0, "Complete!")
 
-        status_msg += f"\nSuccess: Processed {len(processed_paths)}/{total_files} files successfully ✓"
+        succeeded_count = len(processed_paths)
+        failed_count = total_files - succeeded_count
+        if failed_count == 0:
+            status_msg += f"\nSuccess: Processed {succeeded_count}/{total_files} files successfully ✓"
+        elif succeeded_count:
+            status_msg += (
+                f"\nPartial: Processed {succeeded_count}/{total_files} files successfully; "
+                f"{failed_count} failed and remain retryable."
+            )
+        else:
+            status_msg += f"\nFailed: 0/{total_files} files completed; all files remain retryable."
         return [str(p) for p in processed_paths], contact_sheet_path, zip_path, status_msg
 
     def _process_single_file(
@@ -680,6 +718,7 @@ class BatchProcessor:
         on_file_result: Optional[
             Callable[[Path, Optional[Path], Optional[List[Any]], Optional[str]], None]
         ] = None,
+        input_root: Optional[Path] = None,
     ) -> Optional[Path]:
         """Process a single file and write output with embedded metadata."""
         try:
@@ -708,22 +747,42 @@ class BatchProcessor:
                     result = cv2.resize(result, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
 
             ext = EXT_MAP.get(export_fmt, ".jpg")
-            out_name = f"{file_path.stem}_retouched{ext}"
-            out_file_path = output_path / out_name
+            source_root = input_root.resolve() if input_root is not None else None
+            try:
+                relative_source = file_path.resolve().relative_to(source_root) if source_root is not None else Path(file_path.name)
+            except ValueError:
+                relative_source = Path(file_path.name)
+            out_file_path = output_path / relative_source.parent / f"{relative_source.stem}_retouched{ext}"
+            out_file_path.parent.mkdir(parents=True, exist_ok=True)
 
             from .io import write_image_with_icc, read_c2pa_manifest, read_exif_bytes, read_icc_profile
             icc_profile = read_icc_profile(file_path)
             exif_bytes = read_exif_bytes(file_path)
             c2pa_manifest = read_c2pa_manifest(file_path)
-            write_image_with_icc(
-                str(out_file_path),
-                result,
-                icc_profile=icc_profile,
-                bit_depth=8,
-                quality=export_quality,
-                exif=exif_bytes,
-                c2pa_manifest=c2pa_manifest,
+            fd, temp_name = tempfile.mkstemp(
+                prefix=f".{out_file_path.stem}-", suffix=out_file_path.suffix,
+                dir=str(out_file_path.parent),
             )
+            os.close(fd)
+            try:
+                write_image_with_icc(
+                    temp_name,
+                    result,
+                    icc_profile=icc_profile,
+                    bit_depth=8,
+                    quality=export_quality,
+                    exif=exif_bytes,
+                    c2pa_manifest=c2pa_manifest,
+                )
+                if not os.path.isfile(temp_name) or os.path.getsize(temp_name) <= 0:
+                    raise IOError("image writer produced no non-empty output")
+                os.replace(temp_name, out_file_path)
+            except Exception:
+                try:
+                    os.remove(temp_name)
+                except OSError:
+                    pass
+                raise
             if on_file_result is not None:
                 on_file_result(file_path, out_file_path, qa_list, None)
             return out_file_path

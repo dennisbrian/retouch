@@ -17,7 +17,7 @@ import numpy as np
 import gradio as gr
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from retouch import RetouchEngine
+from retouch import RetouchEngine, __version__
 from retouch.engine import resolve_recipe
 from retouch.io import (
     EXT_MAP,
@@ -25,12 +25,15 @@ from retouch.io import (
     RAW_EXTENSIONS,
     encode_write_params,
     imread_engine,
+    imread_engine_with_context,
     imread_exif,
     read_icc_profile,
     read_exif_bytes,
     read_c2pa_manifest,
     write_image_with_icc,
+    write_image_with_color_context,
 )
+from retouch.color_context import ColorContext
 from retouch.lips import LIP_TINT_NAMES
 from retouch.recipes import CURATED_RECIPE_NAMES, RECIPE_UI_CHOICES, RECIPES
 from retouch.params import recipe_to_params, PROCESSING_PARAMS, param_names, gui_values_to_engine_kwargs
@@ -41,6 +44,11 @@ from retouch.style import StyleProfile
 from retouch.look_extractor import LookExtractor
 from retouch.recipe_cookbook import search_recipes, list_recipes, list_categories
 from retouch.diagnostics import clear_diagnostics, diagnostics_report
+from retouch.runtime_doctor import (
+    check_detector,
+    format_runtime_report,
+    runtime_doctor_report,
+)
 from retouch.lut import get_registry, watch_luts_dir
 from retouch.marks import MARK_POLICY_PRESET_NAMES
 from retouch.model_fetch import model_exists, model_status
@@ -57,6 +65,14 @@ from retouch.shoot_intelligence import (
     inspect_asset,
     rank_burst_candidates,
 )
+from retouch.shoot_review import (
+    DECISIONS,
+    ShootReviewManifest,
+    ShootReviewManifestStore,
+    build_review_manifest,
+)
+from retouch.detection import FaceDetector
+from retouch.face_quality import FaceQualityAnalyzer
 from retouch.watch_folder import WatchFolder
 from retouch.advanced_retouch import (
     ADVANCED_HEAL_METHODS,
@@ -69,6 +85,34 @@ from retouch.advanced_retouch import (
     mask_overlay,
     replay_advanced_edits,
 )
+from retouch.advanced_history import AdvancedHistory
+from retouch.gui_preview_cache import (
+    GuiPreviewCache,
+    make_preview_cache_key,
+    source_identity,
+)
+from retouch.gui_render_modes import (
+    MODE_EXPORT_ALL,
+    MODE_EXPORT_FULL_QUALITY,
+    MODE_RENDER_PREVIEW,
+    RenderContractError,
+    build_export_all,
+    build_export_full_quality,
+    build_render_preview,
+    capture_settings_snapshot,
+    validate_render_contract,
+)
+from retouch.gui_inspection import (
+    MODE_100_PERCENT as INSPECTION_MODE_100_PERCENT,
+    MODE_FACE as INSPECTION_MODE_FACE,
+    MODE_FIT as INSPECTION_MODE_FIT,
+    MODE_ROI as INSPECTION_MODE_ROI,
+    InspectionContractError,
+    build_inspection_contract,
+    crop_from_inspection_contract,
+)
+from retouch.render_manifest import RenderManifest, canonical_sha256
+from retouch.gui_workspace import SessionWorkspace, cleanup_workspace
 
 _logger = logging.getLogger(__name__)
 
@@ -86,9 +130,16 @@ PREVIEW_MAX_HEIGHT = 900
 COMPARE_SEPARATOR_WIDTH = 4
 COMPARE_SEPARATOR_COLOR = 200
 TEMP_CLEANUP_AGE_SEC = 300
+GUI_WORKSPACE_ROOT_ENV = "RETOUCH_GUI_WORKSPACE_ROOT"
+ADVANCED_PREVIEW_MAX_DIM = 640
+ADVANCED_SNAPSHOT_MAX_COUNT = 20
+_RENDER_EXPORT_SENTINEL = object()
 
 _engine = None
 _engine_lock = threading.Lock()
+GUI_ENGINE_CONCURRENCY_ID = "retouch-engine"
+
+
 def get_engine():
     global _engine
     if _engine is None:
@@ -96,6 +147,51 @@ def get_engine():
             if _engine is None:
                 _engine = RetouchEngine()
     return _engine
+
+
+def _workspace_for_request(request=None):
+    """Return the session-owned workspace for a Gradio request, if present."""
+    session_hash = getattr(request, "session_hash", None)
+    if session_hash in (None, ""):
+        return None
+    try:
+        return SessionWorkspace(session_hash)
+    except Exception as exc:  # noqa: BLE001 - workspace must not block fallback renders
+        _logger.warning("Session workspace unavailable; using legacy temp fallback: %s", exc)
+        return None
+
+
+def cleanup_gui_request(request=None):
+    """Clean one browser session's workspace at Gradio unload/shutdown."""
+    workspace = _workspace_for_request(request)
+    return cleanup_workspace(workspace)
+
+
+def _source_color_cache_descriptor(path):
+    """Describe source color/decode policy without decoding image pixels."""
+    suffix = Path(path).suffix.lower()
+    if suffix in RAW_EXTENSIONS:
+        return {"source_kind": "raw-srgb", "profile_sha256": None}
+    try:
+        profile = read_icc_profile(path)
+    except Exception:
+        profile = None
+    if profile:
+        import hashlib
+        return {
+            "source_kind": "embedded-icc",
+            "profile_sha256": hashlib.sha256(profile).hexdigest(),
+        }
+    return {"source_kind": "assumed-srgb", "profile_sha256": None}
+
+
+def _detector_cache_descriptor(engine):
+    detector = getattr(engine, "_detector", None)
+    return {
+        "backend": str(getattr(detector, "backend_name", "unknown")),
+        "available": bool(getattr(detector, "available", False)),
+        "model": str(getattr(detector, "model_path", "unknown")),
+    }
 
 
 def advanced_model_status_text():
@@ -114,21 +210,534 @@ def advanced_model_status_text():
     pose_status = body_reshape_capability_status()
     pose = "available" if pose_status.get("available") else "unavailable — model not verified"
     try:
-        import mediapipe as mp
-        if not hasattr(mp, "solutions"):
-            face = "unavailable — native MediaPipe runtime blocked; global-only fallback"
-        elif getattr(mp, "__version__", "") == "0.10.5":
-            face = "available — MediaPipe 0.10.5 CPU/XNNPACK backend"
+        face_model_status = model_status("face_landmarker")
+        face_check = check_detector({"face_landmarker": face_model_status}, probe=False)
+        if face_check.get("available"):
+            face = (
+                f"Face-aware — {face_check.get('backend', 'detector')} "
+                "(native initialization unprobed)"
+            )
         else:
-            face = f"available — legacy MediaPipe backend ({getattr(mp, '__version__', 'unknown')})"
+            face = f"Global-only — {face_check.get('reason', 'detector unavailable')}"
     except Exception as exc:  # noqa: BLE001 — status must never block the GUI
-        face = f"unavailable — {type(exc).__name__}"
+        face = f"Global-only — {type(exc).__name__}: {exc}"
     return (
         f"**Model status:** LaMa: {lama} · Real-ESRGAN: {sr} · "
         f"NAFNet denoise: {nafnet} · Face parsing: {parsing} · Body reshape: {pose}.  "
         f"**Face-aware status:** {face}.  **Network:** "
         f"{'offline/privacy mode' if offline_mode_enabled() else 'update checks enabled'}."
     )
+
+
+def runtime_doctor_text() -> str:
+    """Return a copyable, side-effect-free Runtime Doctor report for the GUI."""
+    try:
+        report = runtime_doctor_report(probe_detector=False, probe_parser=False)
+        return format_runtime_report(report) + "\n\n" + json.dumps(
+            report, indent=2, sort_keys=True
+        )
+    except Exception as exc:  # noqa: BLE001 — diagnostics must never block the GUI
+        _logger.exception("Runtime Doctor failed: %s", exc)
+        return f"Runtime Doctor failed: {type(exc).__name__}: {exc}"
+
+
+def _face_runtime_label(detector) -> str:
+    """Format the engine detector's explicit capability mode for the GUI."""
+    if detector is None:
+        return "Face-aware: unprobed"
+    try:
+        runtime = detector.runtime_status()
+    except AttributeError:
+        available = bool(getattr(detector, "available", False))
+        runtime = {
+            "mode": "face_aware" if available else "global_only",
+            "backend": getattr(detector, "backend_name", "unknown"),
+            "reason": getattr(detector, "unavailable_reason", None),
+        }
+    if runtime.get("mode") == "face_aware":
+        return f"Face-aware: {runtime.get('backend', 'initialized')}"
+    return f"Global-only: {runtime.get('reason') or 'face detector unavailable'}"
+
+
+def _coerce_settings_revision(value) -> int:
+    """Return a non-negative settings revision for UI/state boundaries."""
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def on_settings_changed(current_revision=0):
+    """Advance a session-owned draft revision without touching controls.
+
+    The revision is deliberately supplied by ``gr.State``.  Keeping this
+    callback pure prevents one browser session's slider edits from marking a
+    different session's render stale.
+    """
+    current = _coerce_settings_revision(current_revision)
+    revision = current + 1
+    return revision, (
+        f"Settings revision {revision} — Settings changed — preview is out of date."
+    )
+
+
+def _remember_settings_revision(revision: int) -> int:
+    """Compatibility shim that never stores process-global revision state."""
+    return _coerce_settings_revision(revision)
+
+
+def _current_settings_revision() -> int:
+    """Return the neutral value for callers that have no session State."""
+    return 0
+
+
+def render_status_for_revision(status, snapshot_revision, current_revision=None):
+    """Annotate a completed render with its immutable settings snapshot."""
+    snapshot = _coerce_settings_revision(snapshot_revision)
+    current = _coerce_settings_revision(current_revision)
+    message = (
+        f"{status} | Rendering settings revision {snapshot} | "
+        f"Preview revision {snapshot} | Draft revision {current}"
+    )
+    if current > snapshot:
+        message += " | Settings changed while rendering — preview is out of date"
+    return message
+
+
+def render_start_status(snapshot_revision):
+    """Show the snapshot revision before a long render begins."""
+    revision = _coerce_settings_revision(snapshot_revision)
+    return f"Rendering settings revision {revision} | Draft revision {revision}…"
+
+
+def smart_start_status(snapshot_revision):
+    """Show the Smart Process snapshot before analysis begins."""
+    return f"Smart analysis settings revision {_coerce_settings_revision(snapshot_revision)}…"
+
+
+def _render_contract_value(value):
+    """Convert transient Gradio values to a bounded JSON-safe snapshot value."""
+    if value is None or isinstance(value, (str, bool, int, float)):
+        if isinstance(value, float) and not np.isfinite(value):
+            return repr(value)
+        return value
+    if isinstance(value, np.generic):
+        return _render_contract_value(value.item())
+    if isinstance(value, os.PathLike):
+        return os.fspath(value)
+    if isinstance(value, dict):
+        return {str(key): _render_contract_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_render_contract_value(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return {
+            "__type__": "ndarray",
+            "shape": [int(item) for item in value.shape],
+            "dtype": str(value.dtype),
+        }
+    name = getattr(value, "name", None) or getattr(value, "path", None)
+    if name is not None:
+        return str(name)
+    return {"__type__": type(value).__name__, "repr": repr(value)[:256]}
+
+
+def _render_contract_paths(img_paths):
+    values = img_paths if isinstance(img_paths, list) else [img_paths]
+    result = []
+    for value in values:
+        if isinstance(value, dict):
+            value = value.get("name") or value.get("path")
+        elif not isinstance(value, (str, os.PathLike)):
+            value = getattr(value, "name", None) or getattr(value, "path", None)
+        if value:
+            result.append(os.fspath(value))
+    return result
+
+
+def _build_gui_render_contract(
+    mode,
+    process_args,
+    revision,
+    preserve_source_profile=False,
+):
+    """Build the pure render contract when the browser supplied valid paths."""
+    params = dict(zip(PROCESS_INPUT_KEYS, process_args))
+    settings = {
+        key: _render_contract_value(value)
+        for key, value in params.items()
+        if key != "img_paths"
+    }
+    # Hash the effective render policy, not a stale UI checkbox.  The mode
+    # boundary is authoritative: Preview is fast; Full Quality is full-speed
+    # and always uses the native/full quality tier.
+    settings["render_mode"] = mode
+    if mode == MODE_RENDER_PREVIEW:
+        settings["fast"] = True
+    elif mode == MODE_EXPORT_FULL_QUALITY:
+        settings["fast"] = False
+        settings["quality_tier"] = "Full (native face crops)"
+    settings["preserve_source_profile"] = bool(preserve_source_profile)
+    snapshot = capture_settings_snapshot(settings, revision)
+    paths = _render_contract_paths(params.get("img_paths"))
+    if not paths:
+        raise RenderContractError("no source paths")
+    if mode == MODE_RENDER_PREVIEW:
+        return build_render_preview(paths, snapshot, revision)
+    if mode == MODE_EXPORT_FULL_QUALITY:
+        return build_export_full_quality(paths, snapshot, revision)
+    return build_export_all(paths, snapshot, revision)
+
+
+def capture_render_snapshot(*args):
+    """Capture all render inputs before the chained long-running event."""
+    process_args = tuple(args[:len(PROCESS_INPUT_KEYS)])
+    snapshot_revision = args[len(PROCESS_INPUT_KEYS)] if len(args) > len(PROCESS_INPUT_KEYS) else 0
+    render_mode = args[len(PROCESS_INPUT_KEYS) + 1] if len(args) > len(PROCESS_INPUT_KEYS) + 1 else None
+    preserve_source_profile = (
+        bool(args[len(PROCESS_INPUT_KEYS) + 2])
+        if len(args) > len(PROCESS_INPUT_KEYS) + 2
+        else False
+    )
+    snapshot = {
+        "process_args": process_args,
+        "settings_revision": _coerce_settings_revision(snapshot_revision),
+        "preserve_source_profile": preserve_source_profile,
+    }
+    if render_mode in {MODE_RENDER_PREVIEW, MODE_EXPORT_FULL_QUALITY, MODE_EXPORT_ALL}:
+        snapshot["render_mode"] = render_mode
+        try:
+            snapshot["render_contract"] = _build_gui_render_contract(
+                render_mode,
+                process_args,
+                _coerce_settings_revision(snapshot_revision),
+                preserve_source_profile,
+            )
+        except Exception as exc:  # contract details are diagnostic; the handler remains fail-closed
+            snapshot["render_contract_error"] = f"{type(exc).__name__}: {exc}"
+    return snapshot, render_start_status(snapshot_revision)
+
+
+def capture_render_preview_snapshot(*args):
+    return capture_render_snapshot(*args, MODE_RENDER_PREVIEW)
+
+
+def capture_export_full_snapshot(*args):
+    return capture_render_snapshot(*args, MODE_EXPORT_FULL_QUALITY)
+
+
+def capture_smart_snapshot(img_paths, recipe, settings_revision=0):
+    """Capture Smart Process inputs before analysis is queued."""
+    return {
+        "img_paths": img_paths,
+        "recipe": recipe,
+        "settings_revision": _coerce_settings_revision(settings_revision),
+    }, smart_start_status(settings_revision)
+
+
+def render_completion_status(
+    status,
+    snapshot,
+    current_revision=0,
+    export_file=_RENDER_EXPORT_SENTINEL,
+):
+    """Finalize a render status using the current session revision.
+
+    This runs after the expensive render and reads the live ``gr.State`` value
+    at completion, so edits made while the engine was busy are reported as a
+    stale preview instead of being lost in a process-global counter.
+    """
+    snapshot_revision = snapshot.get("settings_revision", 0) if isinstance(snapshot, dict) else 0
+    result = render_status_for_revision(status, snapshot_revision, current_revision)
+    if isinstance(snapshot, dict) and snapshot.get("render_contract_error"):
+        result += f" | Render contract: {snapshot['render_contract_error']}"
+    if export_file is not _RENDER_EXPORT_SENTINEL:
+        stale = _coerce_settings_revision(current_revision) > _coerce_settings_revision(snapshot_revision)
+        if stale and isinstance(snapshot, dict) and snapshot.get("render_mode") == MODE_EXPORT_FULL_QUALITY:
+            return result + " | Full export discarded because settings changed during rendering", gr.update(value=None, visible=False)
+        return result, gr.skip()
+    return result
+
+
+def inspect_render_handler(
+    processed_image,
+    render_snapshot,
+    current_revision=0,
+    inspection_mode=INSPECTION_MODE_FIT,
+    face_index=0,
+    roi_json="",
+    preview_cache=None,
+):
+    """Inspect a native crop from the exact render revision shown in State."""
+    if processed_image is None:
+        return gr.update(value=None, visible=False), "No rendered image is available for inspection."
+    if not isinstance(render_snapshot, dict):
+        return gr.update(value=None, visible=False), "Inspection unavailable: render revision evidence is missing."
+
+    evidence = {}
+    face_contexts = []
+    if isinstance(preview_cache, GuiPreviewCache):
+        evidence = preview_cache.latest_render_evidence
+        face_contexts = list(preview_cache.latest_render_face_contexts)
+
+    native_height, native_width = np.asarray(processed_image).shape[:2]
+    native = evidence.get("native") if isinstance(evidence, dict) else None
+    if isinstance(native, dict):
+        native_width = int(native.get("width", native_width))
+        native_height = int(native.get("height", native_height))
+    render_revision = _coerce_settings_revision(
+        render_snapshot.get("settings_revision", evidence.get("render_revision", 0))
+    )
+    try:
+        requested_face = int(face_index or 0)
+    except (TypeError, ValueError):
+        requested_face = 0
+    roi = None
+    if isinstance(roi_json, str) and roi_json.strip():
+        try:
+            roi = json.loads(roi_json)
+        except json.JSONDecodeError as exc:
+            return gr.update(value=None, visible=False), f"Inspection unavailable: ROI JSON is invalid ({exc})."
+    elif isinstance(roi_json, (dict, list, tuple)):
+        roi = roi_json
+
+    try:
+        contract = build_inspection_contract(
+            mode=inspection_mode,
+            native_size=(native_width, native_height),
+            render_revision=render_revision,
+            current_revision=_coerce_settings_revision(current_revision),
+            faces=face_contexts,
+            face_index=requested_face,
+            face_padding=24,
+            roi=roi,
+        )
+        cropped = crop_from_inspection_contract(
+            np.asarray(processed_image),
+            contract,
+            _coerce_settings_revision(current_revision),
+        )
+    except InspectionContractError as exc:
+        stale_suffix = " (stale render)" if _coerce_settings_revision(current_revision) > render_revision else ""
+        return gr.update(value=None, visible=False), f"Inspection unavailable: {exc}{stale_suffix}"
+    except (IndexError, KeyError, TypeError, ValueError) as exc:
+        return gr.update(value=None, visible=False), f"Inspection unavailable: {type(exc).__name__}: {exc}"
+
+    return (
+        gr.update(value=cropped, visible=True),
+        json.dumps(
+            {
+                "mode": contract["mode"],
+                "render_revision": contract["render"]["revision"],
+                "crop": contract["crop"],
+                "native": contract["native"],
+                "download_enabled": False,
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+    )
+
+
+def build_render_manifest_handler(
+    render_snapshot,
+    current_revision=0,
+    preview_cache=None,
+    export_file=None,
+):
+    """Build a pixel-free manifest for the latest GUI render."""
+    snapshot = render_snapshot if isinstance(render_snapshot, dict) else {}
+    evidence = (
+        preview_cache.latest_render_evidence
+        if isinstance(preview_cache, GuiPreviewCache)
+        else {}
+    )
+    render_revision = _coerce_settings_revision(
+        snapshot.get("settings_revision", evidence.get("render_revision", 0))
+    )
+    current = _coerce_settings_revision(current_revision)
+    mode_value = snapshot.get("render_mode", MODE_RENDER_PREVIEW)
+    mode = "full" if mode_value == MODE_EXPORT_FULL_QUALITY else "preview"
+    settings_sha256 = None
+    contract = snapshot.get("render_contract")
+    if isinstance(contract, dict):
+        settings_sha256 = (
+            contract.get("settings", {})
+            if isinstance(contract.get("settings"), dict)
+            else {}
+        ).get("settings_sha256")
+    if not isinstance(settings_sha256, str) or len(settings_sha256) != 64:
+        settings_sha256 = canonical_sha256(
+            {
+                "revision": render_revision,
+                "mode": mode_value,
+                "preserve_source_profile": bool(
+                    snapshot.get("preserve_source_profile", False)
+                ),
+            }
+        )
+
+    source_path = evidence.get("source_path")
+    source: Dict[str, Any] = {
+        "id": str(source_path or "unknown-source"),
+    }
+    if source_path:
+        try:
+            identity = source_identity(source_path)
+            source.update(
+                {
+                    "path": identity.path,
+                    "mtime_ns": identity.mtime_ns,
+                    "size_bytes": identity.size_bytes,
+                    "sha256": identity.content_sha256,
+                }
+            )
+        except (FileNotFoundError, OSError, ValueError):
+            pass
+
+    output_id = export_file or "preview-%d" % render_revision
+    output: Dict[str, Any] = {
+        "id": str(output_id),
+        "dimensions": {
+            "width": int(evidence.get("output", {}).get("width", 1)),
+            "height": int(evidence.get("output", {}).get("height", 1)),
+            "channels": 3,
+        },
+        "dtype": str(evidence.get("output", {}).get("dtype", "uint8")),
+    }
+    hashes = {"settings_sha256": settings_sha256}
+    if export_file and isinstance(export_file, (str, os.PathLike)):
+        try:
+            output_identity = source_identity(export_file)
+            output.update(
+                {
+                    "path": output_identity.path,
+                    "mtime_ns": output_identity.mtime_ns,
+                    "size_bytes": output_identity.size_bytes,
+                    "sha256": output_identity.content_sha256,
+                }
+            )
+            hashes["output_sha256"] = output_identity.content_sha256
+        except (FileNotFoundError, OSError, ValueError):
+            pass
+
+    cache_status = str(evidence.get("cache_status", "unknown"))
+    if cache_status not in {"hit", "miss", "bypassed", "unknown"}:
+        cache_status = "unknown"
+    manifest = RenderManifest(
+        render_revision=render_revision,
+        settings_sha256=settings_sha256,
+        mode=mode,
+        status="completed",
+        source=source,
+        output=output,
+        cache={
+            "status": cache_status,
+            "hit": cache_status == "hit" if cache_status != "unknown" else False,
+        },
+        color_context=evidence.get("color_context", {}),
+        metadata_result=evidence.get("metadata_result", {}),
+        face_count=evidence.get("face_count"),
+        timings_ms=evidence.get("timings_ms", {}),
+        qa=evidence.get("qa", {}),
+        safe_auto_decisions=evidence.get("safe_auto_decisions", []),
+        backend=evidence.get("backend", {}),
+        provider=evidence.get("provider"),
+        hashes=hashes,
+        extensions={
+            "stale": current > render_revision,
+            "render_mode": mode_value,
+            "precision": evidence.get("precision", {}),
+        },
+    )
+    return manifest.to_json(indent=2)
+
+
+def smart_completion_status(status, snapshot, current_revision=0):
+    """Annotate Smart analysis with the revision it actually analyzed."""
+    if not isinstance(snapshot, dict):
+        return status
+    snapshot_revision = _coerce_settings_revision(snapshot.get("settings_revision", 0))
+    current = _coerce_settings_revision(current_revision)
+    suffix = f" Smart analysis settings revision {snapshot_revision}."
+    if current > snapshot_revision:
+        suffix += " Settings changed during analysis; proposal remains unapplied."
+    return f"{status}{suffix}"
+
+
+def process_image_event(*args, request=None):
+    """UI wrapper that preserves ``process_image``'s legacy eight outputs."""
+    current_revision = None
+    snapshot = None
+    preview_cache = None
+    if isinstance(args[0], dict) and "process_args" in args[0]:
+        snapshot = args[0]
+        process_args = tuple(snapshot.get("process_args") or ())
+        snapshot_revision = snapshot.get("settings_revision", 0)
+        render_mode = snapshot.get("render_mode")
+        preserve_source_profile = bool(snapshot.get("preserve_source_profile", False))
+        if len(args) > 1:
+            current_revision = args[1]
+        if len(args) > 2 and isinstance(args[2], GuiPreviewCache):
+            preview_cache = args[2]
+    else:
+        process_args = args[:len(PROCESS_INPUT_KEYS)]
+        snapshot_revision = args[len(PROCESS_INPUT_KEYS)] if len(args) > len(PROCESS_INPUT_KEYS) else 0
+        render_mode = None
+        preserve_source_profile = False
+        if len(args) > len(PROCESS_INPUT_KEYS) + 1:
+            current_revision = args[len(PROCESS_INPUT_KEYS) + 1]
+    current_for_contract = (
+        _coerce_settings_revision(snapshot_revision)
+        if current_revision is None
+        else _coerce_settings_revision(current_revision)
+    )
+    def _contract_failure(message):
+        result = (None, gr.update(visible=False), None, None, message, None, gr.update(visible=False), "")
+        return result + (preview_cache,) if preview_cache is not None else result
+    if isinstance(snapshot, dict) and snapshot.get("render_contract"):
+        contract_validation = validate_render_contract(snapshot["render_contract"])
+        if not contract_validation["valid"]:
+            message = "Render contract rejected: " + ", ".join(contract_validation["errors"])
+            return _contract_failure(message)
+        if (
+            render_mode == MODE_EXPORT_FULL_QUALITY
+            and current_for_contract > _coerce_settings_revision(snapshot_revision)
+        ):
+            return _contract_failure(
+                "Export Full Quality cancelled: settings changed before rendering started."
+            )
+    process_kwargs = {}
+    if render_mode in {MODE_RENDER_PREVIEW, MODE_EXPORT_FULL_QUALITY}:
+        process_kwargs["render_mode"] = render_mode
+    if preview_cache is not None:
+        process_kwargs["preview_cache"] = preview_cache
+    if isinstance(snapshot, dict) and preserve_source_profile:
+        process_kwargs["preserve_source_profile"] = preserve_source_profile
+    workspace = _workspace_for_request(request)
+    if workspace is not None:
+        process_kwargs["workspace"] = workspace
+    result = process_image(*process_args, **process_kwargs)
+    if preview_cache is not None and isinstance(result, tuple) and len(result) >= 8:
+        latest = preview_cache.latest_render_evidence
+        latest["render_revision"] = _coerce_settings_revision(snapshot_revision)
+        latest["render_mode"] = render_mode or MODE_RENDER_PREVIEW
+        if isinstance(snapshot, dict) and snapshot.get("render_contract"):
+            settings = snapshot["render_contract"].get("settings", {})
+            latest["settings_sha256"] = settings.get("settings_sha256")
+        preview_cache.set_latest_render(
+            latest,
+            face_contexts=preview_cache.latest_render_face_contexts,
+        )
+    if isinstance(result, tuple) and len(result) > 4 and result[0] is not None:
+        result = list(result)
+        result[4] = render_status_for_revision(
+            result[4], snapshot_revision,
+            current_for_contract,
+        )
+        result = tuple(result)
+    if preview_cache is not None and isinstance(result, tuple) and len(result) == 8:
+        return result + (preview_cache,)
+    return result
 
 
 def recipe_defaults(recipe_name):
@@ -348,15 +957,25 @@ def _run_batch(processor, input_dir, output_dir, style_type, custom_style_name,
         )
 
         job.total_files = len(job.files)
-        job.status = "done"
+        if job.total_files > 0 and job.failed_count == 0 and job.done_count == job.total_files:
+            job.status = "done"
+        elif job.done_count:
+            job.status = "partial"
+        else:
+            job.status = "failed"
         job.log = log
         job_store.save(job)
 
-        gr.Info("Batch processing complete!")
+        if job.status == "done":
+            gr.Info("Batch processing complete!")
+        elif job.status == "partial":
+            gr.Warning(f"Batch processing partial: {job.done_count}/{job.total_files} files succeeded.")
+        else:
+            gr.Warning("Batch processing failed: no files completed.")
         return sheet_path, zip_path, log
     except Exception as e:
         _logger.exception("Batch processing failed: %s", e)
-        job.status = "failed"
+        job.status = "partial" if job.done_count else "failed"
         job.log = str(e)
         job_store.save(job)
         gr.Warning(f"Batch processing failed: {e}")
@@ -551,7 +1170,18 @@ def load_advanced_session_handler(session_file, source_rgb):
     from retouch.session import Session
 
     if session_file is None:
-        return source_rgb, [], source_rgb, source_rgb, None, before_after(source_rgb, source_rgb) if source_rgb is not None else None, {"undo": [], "redo": []}, [], None, ""
+        return (
+            source_rgb,
+            [],
+            source_rgb,
+            source_rgb,
+            None,
+            before_after(source_rgb, source_rgb) if source_rgb is not None else None,
+            AdvancedHistory().to_state(),
+            [],
+            None,
+            "",
+        )
     try:
         path = session_file.name if hasattr(session_file, "name") else str(session_file)
         session = Session.from_file(path)
@@ -559,49 +1189,153 @@ def load_advanced_session_handler(session_file, source_rgb):
         edits = list(advanced.get("edits") or [])
     except Exception as exc:
         _logger.warning("Failed to load Advanced Retouch session data: %s", exc)
-        return source_rgb, [], source_rgb, source_rgb, None, before_after(source_rgb, source_rgb) if source_rgb is not None else None, {"undo": [], "redo": []}, [], None, f"Advanced Retouch session data unavailable: {exc}"
+        return (
+            source_rgb,
+            [],
+            source_rgb,
+            source_rgb,
+            None,
+            before_after(source_rgb, source_rgb) if source_rgb is not None else None,
+            AdvancedHistory().to_state(),
+            [],
+            None,
+            f"Advanced Retouch session data unavailable: {exc}",
+        )
 
     if source_rgb is None:
-        return source_rgb, edits, source_rgb, None, None, None, {"undo": [], "redo": []}, [], None, f"Loaded {len(edits)} Advanced Retouch edit(s). Load the source image to replay them."
+        return (
+            source_rgb,
+            edits,
+            source_rgb,
+            None,
+            None,
+            None,
+            _advanced_history_from_edits(edits).to_state(),
+            edits,
+            None,
+            f"Loaded {len(edits)} Advanced Retouch edit(s). Load the source image to replay them.",
+        )
     try:
-        current = replay_advanced_edits(source_rgb, edits, get_engine()._detector, get_engine()._parser)
-        return source_rgb, [], current, current, None, before_after(source_rgb, current), {"undo": [], "redo": []}, edits, None, f"Replayed {len(edits)} Advanced Retouch edit(s)."
+        current = _replay_advanced_state(source_rgb, edits)
+        return (
+            source_rgb,
+            [],
+            current,
+            current,
+            None,
+            before_after(source_rgb, current),
+            _advanced_history_from_edits(edits).to_state(),
+            edits,
+            None,
+            f"Replayed {len(edits)} Advanced Retouch edit(s).",
+        )
     except Exception as exc:
         _logger.warning("Failed to replay Advanced Retouch session data: %s", exc)
-        return source_rgb, edits, source_rgb, source_rgb, None, before_after(source_rgb, source_rgb), {"undo": [], "redo": []}, [], None, f"Could not replay Advanced Retouch edits: {exc}"
+        return (
+            source_rgb,
+            edits,
+            source_rgb,
+            source_rgb,
+            None,
+            before_after(source_rgb, source_rgb),
+            _advanced_history_from_edits(edits).to_state(),
+            [],
+            None,
+            f"Could not replay Advanced Retouch edits: {exc}",
+        )
+
+
+def _history_button_updates(undo_stack):
+    """Derive button state from the session history cursor."""
+    if undo_stack is None:
+        return gr.update(interactive=False), gr.update(interactive=False)
+    return (
+        gr.update(interactive=bool(undo_stack.can_undo)),
+        gr.update(interactive=bool(undo_stack.can_redo)),
+    )
+
+
+def _history_args(args, undo_stack=None):
+    """Split process parameters from the optional session history state."""
+    process_args = tuple(args[:len(PROCESS_INPUT_KEYS)])
+    if undo_stack is None and len(args) > len(PROCESS_INPUT_KEYS):
+        undo_stack = args[len(PROCESS_INPUT_KEYS)]
+    return process_args, undo_stack
+
+
+def record_history(*args):
+    """Record the post-mutation settings in the session-owned history.
+
+    The callback is intentionally small and can run unqueued.  It receives the
+    updated component values only after a mutation event's ``success`` chain,
+    or after a slider's ``release`` event, so the history cursor never stores
+    the pre-mutation values.
+    """
+    from retouch.session import UndoRedoStack
+
+    process_args, undo_stack = _history_args(args)
+    params = dict(zip(PROCESS_INPUT_KEYS, process_args))
+    if not isinstance(undo_stack, UndoRedoStack):
+        undo_stack = UndoRedoStack()
+    undo_stack._last_history_change = False
+    if undo_stack.current() != params:
+        undo_stack.push(params)
+    undo_btn_update, redo_btn_update = _history_button_updates(undo_stack)
+    return undo_stack, undo_btn_update, redo_btn_update
+
+
+def initialize_history(*args):
+    """Seed a new browser session with its baseline settings."""
+    return record_history(*args, None)
 
 
 def push_undo_handler(*args, undo_stack=None):
-    """Push current params onto the undo stack."""
-    from retouch.session import UndoRedoStack
+    """Backward-compatible alias for recording a post-mutation state."""
+    if undo_stack is not None:
+        args = tuple(args[:len(PROCESS_INPUT_KEYS)]) + (undo_stack,)
+    return record_history(*args)
 
-    params = dict(zip(PROCESS_INPUT_KEYS, args))
-    if undo_stack is None:
-        undo_stack = UndoRedoStack()
-    undo_stack.push(params)
-    return undo_stack, gr.update(interactive=undo_stack.can_undo), gr.update(interactive=undo_stack.can_redo)
+
+def _skip_process_inputs():
+    """Preserve all processing controls when history cannot move."""
+    return tuple(gr.skip() for _ in PROCESS_INPUT_KEYS)
 
 
 def undo_handler(undo_stack):
-    """Undo: move cursor back and return params tuple."""
+    """Undo settings, preserving controls when the cursor is at the start."""
     if undo_stack is None:
-        return tuple(None for _ in PROCESS_INPUT_KEYS), None, gr.update(interactive=False), gr.update(interactive=False)
+        undo_btn_update, redo_btn_update = _history_button_updates(None)
+        return (*_skip_process_inputs(), gr.skip(), undo_btn_update, redo_btn_update)
     params = undo_stack.undo()
+    undo_stack._last_history_change = params is not None
     if params is None:
-        return tuple(None for _ in PROCESS_INPUT_KEYS), undo_stack, gr.update(interactive=False), gr.update(interactive=undo_stack.can_redo)
+        undo_btn_update, redo_btn_update = _history_button_updates(undo_stack)
+        return (*_skip_process_inputs(), gr.skip(), undo_btn_update, redo_btn_update)
     result = tuple(params.get(k) for k in PROCESS_INPUT_KEYS)
-    return result, undo_stack, gr.update(interactive=undo_stack.can_undo), gr.update(interactive=undo_stack.can_redo)
+    undo_btn_update, redo_btn_update = _history_button_updates(undo_stack)
+    return (*result, undo_stack, undo_btn_update, redo_btn_update)
 
 
 def redo_handler(undo_stack):
-    """Redo: move cursor forward and return params tuple."""
+    """Redo settings, preserving controls when the cursor is at the end."""
     if undo_stack is None:
-        return tuple(None for _ in PROCESS_INPUT_KEYS), None, gr.update(interactive=False), gr.update(interactive=False)
+        undo_btn_update, redo_btn_update = _history_button_updates(None)
+        return (*_skip_process_inputs(), gr.skip(), undo_btn_update, redo_btn_update)
     params = undo_stack.redo()
+    undo_stack._last_history_change = params is not None
     if params is None:
-        return tuple(None for _ in PROCESS_INPUT_KEYS), undo_stack, gr.update(interactive=undo_stack.can_undo), gr.update(interactive=False)
+        undo_btn_update, redo_btn_update = _history_button_updates(undo_stack)
+        return (*_skip_process_inputs(), gr.skip(), undo_btn_update, redo_btn_update)
     result = tuple(params.get(k) for k in PROCESS_INPUT_KEYS)
-    return result, undo_stack, gr.update(interactive=undo_stack.can_undo), gr.update(interactive=undo_stack.can_redo)
+    undo_btn_update, redo_btn_update = _history_button_updates(undo_stack)
+    return (*result, undo_stack, undo_btn_update, redo_btn_update)
+
+
+def revision_after_history(current_revision, undo_stack):
+    """Advance the draft only when Undo/Redo actually moved the cursor."""
+    if getattr(undo_stack, "_last_history_change", False):
+        return on_settings_changed(current_revision)
+    return _coerce_settings_revision(current_revision), gr.skip()
 
 
 def save_snapshot_handler(name, *args, snapshots=None):
@@ -631,7 +1365,12 @@ def save_snapshot_handler(name, *args, snapshots=None):
 
 
 def compare_snapshot_handler(selected_name, *args, snapshots=None):
-    """Compare current output with a saved snapshot."""
+    """Inspect the serialized settings for a saved snapshot.
+
+    Standard snapshots currently contain settings, not a second rendered
+    image.  The UI therefore calls this action ``Inspect Settings`` rather
+    than implying an image comparison that it does not perform.
+    """
     if snapshots is None and len(args) > len(PROCESS_INPUT_KEYS):
         snapshots = args[len(PROCESS_INPUT_KEYS)]
     if not selected_name or snapshots is None or selected_name not in snapshots:
@@ -639,11 +1378,17 @@ def compare_snapshot_handler(selected_name, *args, snapshots=None):
         return None
 
     snap = snapshots[selected_name]
-    gr.Info(f"Comparing with snapshot '{selected_name}' (recipe: {snap.session.recipe})")
+    gr.Info(f"Inspecting settings for snapshot '{selected_name}' (recipe: {snap.session.recipe})")
     return snap.session.to_json()
 
 
-def process_image(*args):
+def process_image(
+    *args,
+    render_mode=None,
+    preview_cache=None,
+    preserve_source_profile=False,
+    workspace=None,
+):
     params = dict(zip(PROCESS_INPUT_KEYS, args))
     img_paths = params.get("img_paths")
     recipe = params.get("recipe")
@@ -651,16 +1396,37 @@ def process_image(*args):
     color_ref_strength = _coerce_float(params.get("color_ref_strength"))
     show_compare = params.get("show_compare")
     fast = params.get("fast")
+    preview_only = render_mode == MODE_RENDER_PREVIEW
+    full_quality_export = render_mode == MODE_EXPORT_FULL_QUALITY
+    if preview_only:
+        fast = True
+    elif full_quality_export:
+        fast = False
     export_fmt = params.get("export_fmt")
     export_quality = params.get("export_quality")
     export_res = params.get("export_res")
     debug_mode = params.get("debug_mode")
     quality_tier = params.get("quality_tier")
     optical_correction = bool(params.get("optical_correction"))
+    preserve_source_profile = bool(preserve_source_profile)
     quality = "draft" if quality_tier and quality_tier.startswith("Draft") else "full"
+    if full_quality_export:
+        quality = "full"
 
     if not img_paths:
         return None, gr.update(visible=False), None, None, "Please upload an image first.", None, gr.update(visible=False), ""
+
+    if full_quality_export and isinstance(img_paths, list) and len(img_paths) != 1:
+        return (
+            None,
+            gr.update(visible=False),
+            None,
+            None,
+            "Export Full Quality accepts one image. Use Export All in the Batch workflow for a shoot.",
+            None,
+            gr.update(visible=False),
+            "",
+        )
 
     if not isinstance(img_paths, list):
         img_paths = [img_paths]
@@ -673,8 +1439,10 @@ def process_image(*args):
     first_original = None
     first_result = None
     first_processed_rgb = None
+    first_color_context = None
     debug_images = []
     capture_notes = []
+    successful_count = 0
 
     color_ref_bgr = None
     if color_ref_img is not None and color_ref_strength > 0:
@@ -688,25 +1456,30 @@ def process_image(*args):
                 _logger.warning("Failed to load color reference image: %s", e)
 
     engine = get_engine()
+    runtime_note = _face_runtime_label(getattr(engine, "_detector", None))
     start = time.time()
 
-    # Clean up older temp directories and ZIPs from previous runs (older than 5 minutes)
-    try:
-        temp_root = Path(tempfile.gettempdir())
-        now = time.time()
-        for p in temp_root.glob("retouch_tmp_*"):
-            if p.is_dir() and (now - p.stat().st_mtime > TEMP_CLEANUP_AGE_SEC):
-                shutil.rmtree(p, ignore_errors=True)
-        for p in temp_root.glob("retouch_export_*.zip"):
-            if p.is_file() and (now - p.stat().st_mtime > TEMP_CLEANUP_AGE_SEC):
-                try:
-                    p.unlink()
-                except Exception:
-                    pass
-    except Exception as e:
-        _logger.warning("Temp directory cleanup warning: %s", e)
-
-    temp_dir = tempfile.mkdtemp(prefix="retouch_tmp_")
+    # Legacy direct callers retain the old temporary fallback. GUI requests
+    # use a session-owned request workspace so cleanup cannot touch another
+    # browser session's files.
+    if workspace is None:
+        try:
+            temp_root = Path(tempfile.gettempdir())
+            now = time.time()
+            for p in temp_root.glob("retouch_tmp_*"):
+                if p.is_dir() and (now - p.stat().st_mtime > TEMP_CLEANUP_AGE_SEC):
+                    shutil.rmtree(p, ignore_errors=True)
+            for p in temp_root.glob("retouch_export_*.zip"):
+                if p.is_file() and (now - p.stat().st_mtime > TEMP_CLEANUP_AGE_SEC):
+                    try:
+                        p.unlink()
+                    except Exception:
+                        pass
+        except Exception as e:
+            _logger.warning("Temp directory cleanup warning: %s", e)
+        temp_dir = tempfile.mkdtemp(prefix="retouch_tmp_")
+    else:
+        temp_dir = str(workspace.request_workspace("render"))
     debug_dir = os.path.join(temp_dir, "debug") if debug_mode else None
     qa_warnings = []
     qa_html = ""
@@ -756,16 +1529,54 @@ def process_image(*args):
             curr_path = path_item
             if isinstance(path_item, dict):
                 curr_path = path_item.get("name") or path_item.get("path")
+
+            cache_key = None
+            cache_entry = None
+            cache_hit = False
+            color_context = None
+            identity = None
+            if isinstance(preview_cache, GuiPreviewCache):
+                try:
+                    identity = source_identity(curr_path)
+                    engine_for_cache = get_engine()
+                    cache_key = make_preview_cache_key(
+                        identity,
+                        "fast-800" if fast else "native",
+                        geometry={"quality": quality, "fast": bool(fast)},
+                        optical_correction=bool(optical_correction),
+                        color_contract=_source_color_cache_descriptor(curr_path),
+                        bit_depth=(
+                            "float32"
+                            if Path(curr_path).suffix.lower() in RAW_EXTENSIONS
+                            else "uint8"
+                        ),
+                        raw_settings={"prefer_16bit": True, "raw_decoder": "rawpy"},
+                        detector_backend=_detector_cache_descriptor(engine_for_cache),
+                        engine_version=__version__,
+                    )
+                    cache_entry = preview_cache.get(cache_key)
+                except Exception as exc:
+                    _logger.debug("Preview cache key unavailable for %s: %s", curr_path, exc)
             
             # T5: RAW via 16-bit path; JPEG/PNG unchanged (imread_engine).
             # The caller-owned status dict makes an optional Lensfun fallback
             # or non-8-bit precision-preserving skip visible in this GUI.
             correction_status = {}
-            img_bgr = imread_engine(
-                curr_path,
-                optical_correction=optical_correction,
-                correction_status=correction_status,
-            )
+            if (
+                cache_entry is not None
+                and cache_entry.decoded_source is not None
+                and isinstance(cache_entry.runtime_color_context, ColorContext)
+            ):
+                img_bgr = np.asarray(cache_entry.decoded_source).copy()
+                color_context = cache_entry.runtime_color_context
+                cache_hit = True
+                correction_status["cached"] = True
+            else:
+                img_bgr, color_context = imread_engine_with_context(
+                    curr_path,
+                    optical_correction=optical_correction,
+                    correction_status=correction_status,
+                )
             if optical_correction:
                 detail = correction_status.get("reason") or ", ".join(correction_status.get("applied", ()))
                 capture_notes.append(f"{Path(curr_path).name}: {detail or 'no correction applied'}")
@@ -780,13 +1591,90 @@ def process_image(*args):
             )
 
             engine_kwargs["quality"] = quality
+            if cache_hit and cache_entry.runtime_face_contexts:
+                engine_kwargs["face_contexts"] = list(cache_entry.runtime_face_contexts)
+            else:
+                engine_kwargs.pop("face_contexts", None)
 
             result = engine.process(img_bgr, **engine_kwargs)
+            if cache_key is not None:
+                try:
+                    runtime_contexts = list(getattr(result, "face_contexts", None) or [])
+                    preview_cache.put(
+                        cache_key,
+                        decoded_source=img_bgr,
+                        decoded_source_metadata={
+                            "path": str(curr_path),
+                            "width": int(img_bgr.shape[1]),
+                            "height": int(img_bgr.shape[0]),
+                            "dtype": str(img_bgr.dtype),
+                            "cached": bool(cache_hit),
+                        },
+                        face_contexts=runtime_contexts,
+                        runtime_face_contexts=runtime_contexts,
+                        color_context=color_context,
+                        runtime_color_context=color_context,
+                    )
+                except Exception as exc:
+                    _logger.warning("Preview cache store skipped for %s: %s", curr_path, exc)
             qa_warnings = getattr(result, 'qa', [])
+
+            if (
+                isinstance(preview_cache, GuiPreviewCache)
+                and first_result_rgb is None
+                and first_combined is None
+            ):
+                runtime_contexts = list(getattr(result, "face_contexts", None) or [])
+                runtime_diagnostics = getattr(result, "runtime_diagnostics", {}) or {}
+                preview_cache.set_latest_render(
+                    {
+                        "source_path": str(curr_path),
+                        "native": {
+                            "width": int(img_bgr.shape[1]),
+                            "height": int(img_bgr.shape[0]),
+                        },
+                        "output": {
+                            "width": int(result.shape[1]),
+                            "height": int(result.shape[0]),
+                            "dtype": str(result.dtype),
+                        },
+                        "render_revision": 0,
+                        "cache_status": "hit" if cache_hit else "miss",
+                        "color_context": (
+                            color_context.to_dict()
+                            if isinstance(color_context, ColorContext)
+                            else {}
+                        ),
+                        "metadata_result": {
+                            "source_icc": bool(
+                                isinstance(color_context, ColorContext)
+                                and color_context.is_tagged
+                            ),
+                            "source_profile_preserved": bool(preserve_source_profile),
+                            "c2pa": "copied-unverified-passthrough",
+                        },
+                        "face_count": int(getattr(result, "face_count", 0)),
+                        "timings_ms": dict(getattr(result, "timings", {}) or {}),
+                        "qa": {
+                            "warning_count": len(qa_warnings),
+                            "warnings": [
+                                getattr(item, "message", str(item))
+                                for item in qa_warnings
+                            ],
+                        },
+                        "safe_auto_decisions": list(
+                            getattr(result, "safe_auto_decisions", []) or []
+                        ),
+                        "backend": runtime_diagnostics,
+                        "precision": getattr(result, "precision_metadata", {}),
+                    },
+                    face_contexts=runtime_contexts,
+                )
 
             if first_result_rgb is None and first_combined is None:
                 first_original = original
                 first_result = result
+                first_color_context = color_context
                 first_result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
                 first_processed_rgb = first_result_rgb.copy()
                 if show_compare:
@@ -825,6 +1713,12 @@ def process_image(*args):
                             if mask_img is not None:
                                 debug_images.append((cv2.cvtColor(mask_img, cv2.COLOR_BGR2RGB), label))
 
+            # Render Preview intentionally stops at the in-memory preview. It
+            # never creates an export file or ZIP as a side effect.
+            if preview_only:
+                successful_count += 1
+                break
+
             export_img = result
             export_max = EXPORT_RES_MAP.get(export_res)
             if export_max is not None:
@@ -836,30 +1730,51 @@ def process_image(*args):
 
             ext = EXT_MAP.get(export_fmt, ".jpg")
             filename = Path(curr_path).stem
-            out_path = os.path.join(temp_dir, f"{filename}_{idx:03d}_retouched{ext}")
-            if export_fmt == "PNG-16":
-                write_image_with_icc(
-                    out_path,
-                    export_img,
-                    icc_profile=read_icc_profile(curr_path),
-                    exif=read_exif_bytes(curr_path),
-                    c2pa_manifest=read_c2pa_manifest(curr_path),
-                    bit_depth=16,
-                    quality=export_quality,
+            if workspace is not None:
+                out_path = str(
+                    workspace.allocate_artifact(
+                        f"{filename}_{idx:03d}_retouched",
+                        ext,
+                        request_dir=temp_dir,
+                    )
                 )
             else:
-                # Keep source ICC metadata on GUI output and route JPEG through
-                # the 4:4:4 delivery encoder; the shared writer preserves
-                # PNG-16 depth and metadata in the same export boundary.
+                out_path = os.path.join(temp_dir, f"{filename}_{idx:03d}_retouched{ext}")
+            write_kwargs = {
+                "exif": read_exif_bytes(curr_path),
+                "c2pa_manifest": read_c2pa_manifest(curr_path),
+                "quality": export_quality,
+            }
+            if isinstance(color_context, ColorContext):
+                write_image_with_color_context(
+                    out_path,
+                    export_img,
+                    color_context,
+                    preserve_source_profile=preserve_source_profile,
+                    bit_depth=16 if export_fmt == "PNG-16" else 8,
+                    **write_kwargs,
+                )
+            elif export_fmt == "PNG-16":
+                # Fail-safe compatibility for an old cache entry without a
+                # color context: label/metadata remain explicit, but do not
+                # attach a possibly incorrect source ICC profile.
                 write_image_with_icc(
                     out_path,
                     export_img,
-                    icc_profile=read_icc_profile(curr_path),
-                    c2pa_manifest=read_c2pa_manifest(curr_path),
+                    icc_profile=None,
+                    bit_depth=16,
+                    **write_kwargs,
+                )
+            else:
+                write_image_with_icc(
+                    out_path,
+                    export_img,
+                    icc_profile=None,
                     bit_depth=8,
-                    quality=export_quality,
+                    **write_kwargs,
                 )
             exported_paths.append(out_path)
+            successful_count += 1
 
         except Exception as e:
             _logger.exception("Failed to process %s", path_item)
@@ -873,7 +1788,7 @@ def process_image(*args):
             if crash_path:
                 _logger.info("Crash details saved to: %s", crash_path)
 
-    if not exported_paths:
+    if successful_count == 0:
         gr.Warning("No images were successfully processed.")
         return None, gr.update(visible=False), None, None, "Error: No images were successfully processed.", None, gr.update(visible=False), qa_html
 
@@ -888,35 +1803,124 @@ def process_image(*args):
 
     elapsed = time.time() - start
     slide_html = _make_comparison_html(first_original, first_result) if (first_original is not None and first_result is not None) else ""
+    delivery_notes = []
+    precision = getattr(first_result, "precision", None)
+    if precision is not None:
+        if getattr(precision, "downgraded", False):
+            delivery_notes.append(
+                "Precision: 8-bit processed data; PNG-16 is a 16-bit container"
+            )
+        else:
+            delivery_notes.append(
+                f"Precision: {getattr(precision, 'precision_status', 'unknown')}"
+            )
+    if isinstance(first_color_context, ColorContext):
+        if first_color_context.is_tagged:
+            delivery_notes.append(
+                "Color: embedded ICC converted to working sRGB"
+                + ("; source profile preserved on export" if preserve_source_profile else "")
+            )
+        else:
+            delivery_notes.append("Color: untagged input assumed sRGB")
+
+    def _append_delivery_notes(message):
+        if capture_notes:
+            message += " | Lens: " + " ; ".join(capture_notes)
+        if delivery_notes:
+            message += " | " + " ; ".join(delivery_notes)
+        return message
+
+    if preview_only:
+        message = f"Preview rendered in {elapsed:.1f}s ✓ | {runtime_note}"
+        message = _append_delivery_notes(message)
+        if show_compare:
+            return gr.update(visible=False), gr.update(value=slide_html, visible=True), first_processed_rgb, None, message, debug_gallery, debug_vis, qa_html
+        return first_processed_rgb, gr.update(visible=False), first_processed_rgb, None, message, debug_gallery, debug_vis, qa_html
+
     if len(exported_paths) > 1:
         zip_stamp = time.strftime("%Y%m%d_%H%M%S")
-        zip_path = os.path.join(tempfile.gettempdir(), f"retouch_export_{zip_stamp}.zip")
+        if workspace is not None:
+            zip_path = str(
+                workspace.allocate_artifact(
+                    f"retouch_export_{zip_stamp}",
+                    ".zip",
+                    request_dir=temp_dir,
+                )
+            )
+        else:
+            zip_path = os.path.join(tempfile.gettempdir(), f"retouch_export_{zip_stamp}.zip")
         with zipfile.ZipFile(zip_path, 'w') as zipf:
             for exp_path in exported_paths:
                 zipf.write(exp_path, arcname=os.path.basename(exp_path))
         gr.Info(f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s")
 
         if show_compare:
-            message = f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓"
-            if capture_notes:
-                message += " | Lens: " + " ; ".join(capture_notes)
+            message = f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓ | {runtime_note}"
+            message = _append_delivery_notes(message)
             return gr.update(visible=False), gr.update(value=slide_html, visible=True), first_processed_rgb, zip_path, message, debug_gallery, debug_vis, qa_html
-        message = f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓"
-        if capture_notes:
-            message += " | Lens: " + " ; ".join(capture_notes)
+        message = f"Processed {len(exported_paths)}/{len(img_paths)} images in {elapsed:.1f}s ✓ | {runtime_note}"
+        message = _append_delivery_notes(message)
         return preview, gr.update(visible=False), first_processed_rgb, zip_path, message, debug_gallery, debug_vis, qa_html
     else:
         gr.Info(f"Done in {elapsed:.1f}s")
 
         if show_compare:
-            message = f"Done in {elapsed:.1f}s ✓"
-            if capture_notes:
-                message += " | Lens: " + " ; ".join(capture_notes)
+            message = f"Done in {elapsed:.1f}s ✓ | {runtime_note}"
+            message = _append_delivery_notes(message)
             return gr.update(visible=False), gr.update(value=slide_html, visible=True), first_processed_rgb, exported_paths[0], message, debug_gallery, debug_vis, qa_html
-        message = f"Done in {elapsed:.1f}s ✓"
-        if capture_notes:
-            message += " | Lens: " + " ; ".join(capture_notes)
+        message = f"Done in {elapsed:.1f}s ✓ | {runtime_note}"
+        message = _append_delivery_notes(message)
         return preview, gr.update(visible=False), first_processed_rgb, exported_paths[0], message, debug_gallery, debug_vis, qa_html
+
+
+def export_all_handler(*args):
+    """Direct multi-image final delivery to the existing Batch workflow."""
+    process_args = tuple(args[:len(PROCESS_INPUT_KEYS)])
+    current_revision = args[len(PROCESS_INPUT_KEYS)] if len(args) > len(PROCESS_INPUT_KEYS) else 0
+    preserve_source_profile = bool(
+        args[len(PROCESS_INPUT_KEYS) + 1]
+        if len(args) > len(PROCESS_INPUT_KEYS) + 1
+        else False
+    )
+    params = dict(zip(PROCESS_INPUT_KEYS, process_args))
+    paths = _render_contract_paths(params.get("img_paths"))
+    if not paths:
+        return "Export All: upload one or more images first."
+    try:
+        settings = {
+            key: _render_contract_value(value)
+            for key, value in params.items()
+            if key != "img_paths"
+        }
+        settings["render_mode"] = MODE_EXPORT_ALL
+        settings["fast"] = False
+        settings["quality_tier"] = "Full (native face crops)"
+        settings["preserve_source_profile"] = preserve_source_profile
+        settings_snapshot = capture_settings_snapshot(
+            settings,
+            _coerce_settings_revision(current_revision),
+        )
+        contract = build_export_all(
+            paths,
+            settings_snapshot,
+            _coerce_settings_revision(current_revision),
+        )
+        return (
+            f"Export All is ready for the Batch workflow ({len(paths)} image(s), "
+            f"Draft revision {_coerce_settings_revision(current_revision)}). "
+            "Open Batch, choose the output settings, and run the final job. "
+            f"Handoff hash: {contract['batch_handoff']['settings_snapshot_sha256']}"
+        )
+    except Exception as exc:
+        return f"Export All unavailable: {type(exc).__name__}: {exc}"
+
+
+def invalidate_preview_cache_handler(cache):
+    """Invalidate session preview/runtime contexts after an input change."""
+    if not isinstance(cache, GuiPreviewCache):
+        return GuiPreviewCache()
+    cache.clear()
+    return cache
 
 
 def on_recipe_change(recipe):
@@ -1015,12 +2019,22 @@ def _resolve_image_paths(value):
     return [path] if path else []
 
 
-def on_shoot_intelligence_scan(input_dir, recursive=True):
-    """Scan a shoot and return explainable burst/culling rows plus graph JSON."""
+def on_shoot_intelligence_scan(
+    input_dir,
+    recursive=True,
+    manifest_path=None,
+    analyze_face_quality=False,
+):
+    """Scan a shoot and persist explainable review evidence without culling."""
     if not input_dir or not str(input_dir).strip():
         return [], "Enter a shoot folder first.", "{}"
     try:
         root = Path(str(input_dir)).expanduser().resolve()
+        resolved_manifest_path = (
+            Path(str(manifest_path)).expanduser().resolve()
+            if manifest_path and str(manifest_path).strip()
+            else ShootReviewManifest.default_path(root)
+        )
         candidates = root.rglob("*") if recursive else root.iterdir()
         assets = [
             inspect_asset(path)
@@ -1028,15 +2042,134 @@ def on_shoot_intelligence_scan(input_dir, recursive=True):
             if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp"}
         ]
         bursts = group_bursts(assets)
+        candidates_by_group = {
+            burst.group_id: rank_burst_candidates(burst)
+            for burst in bursts
+        }
+        face_evidence_by_path = None
+        face_uncertainty_by_path = None
+        face_status = "Face quality was not requested."
+        if bool(analyze_face_quality):
+            face_evidence_by_path = {}
+            face_uncertainty_by_path = {}
+            detector = None
+            try:
+                detector = FaceDetector(allow_unavailable=True)
+                if not detector.available:
+                    for asset in assets:
+                        face_uncertainty_by_path[asset.path] = ["face_detector_unavailable"]
+                    face_status = (
+                        "Face quality unavailable: "
+                        f"{detector.unavailable_reason or 'detector initialization failed'}."
+                    )
+                else:
+                    import mediapipe as mp
+
+                    face_model_status = model_status("face_landmarker")
+                    analyzer = FaceQualityAnalyzer(detector_details={
+                        "runtime": "mediapipe",
+                        "runtime_version": str(getattr(mp, "__version__", "unknown")),
+                        "backend": str(getattr(detector, "backend_name", "unknown")),
+                        "bbox_pipeline": "retinaface-when-available; mediapipe fallback",
+                        "model_id": "face_landmarker",
+                        "model_sha256": str(face_model_status.get("sha256", "")),
+                        "model_integrity_verified": bool(face_model_status.get("available")),
+                        "retinaface_model_integrity_verified": False,
+                    })
+                    analyzed_assets = 0
+                    detected_faces = 0
+                    failed_assets = 0
+                    for asset in assets:
+                        try:
+                            image_bgr = imread_exif(asset.path)
+                            detected = detector.detect(image_bgr)
+                            evidence = analyzer.analyze(image_bgr, detected)
+                            face_evidence_by_path[asset.path] = evidence
+                            analyzed_assets += 1
+                            detected_faces += len(evidence)
+                        except Exception as exc:  # one unreadable asset must not erase the shoot scan
+                            failed_assets += 1
+                            face_uncertainty_by_path[asset.path] = [
+                                f"face_quality_analysis_failed:{type(exc).__name__}"
+                            ]
+                            _logger.warning("Face-quality analysis failed for %s: %s", asset.path, exc)
+                    face_status = (
+                        f"Face quality measured for {analyzed_assets} asset(s): "
+                        f"{detected_faces} face(s), {failed_assets} failed asset(s)."
+                    )
+            except Exception as exc:
+                for asset in assets:
+                    face_uncertainty_by_path.setdefault(
+                        asset.path, [f"face_detector_initialization_failed:{type(exc).__name__}"]
+                    )
+                face_status = f"Face quality unavailable: {type(exc).__name__}: {exc}."
+                _logger.warning("Face-quality initialization failed: %s", exc)
+            finally:
+                if detector is not None:
+                    try:
+                        detector.close()
+                    except Exception as exc:
+                        _logger.warning("Face detector close failed after shoot scan: %s", exc)
+        manifest = build_review_manifest(
+            root,
+            assets,
+            bursts,
+            candidates_by_group,
+            face_evidence_by_path=face_evidence_by_path,
+            face_uncertainty_by_path=face_uncertainty_by_path,
+            manifest_path=resolved_manifest_path,
+        )
+        asset_ids_by_path = {
+            record.relative_path: record.asset_id
+            for record in manifest.assets.values()
+            if record.present
+        }
+        asset_ids_by_absolute_path = {
+            str((root / relative_path).resolve()): asset_id
+            for relative_path, asset_id in asset_ids_by_path.items()
+        }
+        review_by_absolute_path = {
+            str((root / record.relative_path).resolve()): record
+            for record in manifest.assets.values()
+            if record.present
+        }
+
+        def format_evidence_metric(value):
+            return "unavailable" if value is None else f"{float(value):.6g}"
+
         rows = []
         for asset in assets:
-            rows.append(["asset", "", asset.path, "", asset.camera_model or "unknown", asset.capture_time or "", "inspected"])
+            review_record = review_by_absolute_path.get(asset.path)
+            asset_status = "inspected"
+            if review_record and review_record.faces:
+                asset_status = f"{len(review_record.faces)} face evidence record(s); review required"
+            rows.append([
+                "asset", "", asset_ids_by_absolute_path.get(asset.path, ""), asset.path, "",
+                asset.camera_model or "unknown", asset.capture_time or "", asset_status,
+            ])
+            if review_record:
+                for face in review_record.faces:
+                    evidence_text = (
+                        f"coverage={format_evidence_metric(face.coverage)}; "
+                        f"confidence={format_evidence_metric(face.detector_confidence)} "
+                        f"({face.detector_confidence_source}); "
+                        f"eye_sharpness=L:{format_evidence_metric(face.left_eye_sharpness)} "
+                        f"R:{format_evidence_metric(face.right_eye_sharpness)}; "
+                        f"method={face.sharpness_method}; "
+                        f"uncertainty={','.join(face.uncertainty) or 'none'}"
+                    )
+                    rows.append([
+                        "face", "", review_record.asset_id, asset.path,
+                        format_evidence_metric(face.face_sharpness), evidence_text, face.face_id,
+                        "evidence only; human review required",
+                    ])
         for burst in bursts:
-            candidates = rank_burst_candidates(burst)
+            candidates = candidates_by_group[burst.group_id]
             for candidate in candidates:
                 rows.append([
-                    "burst", burst.group_id, candidate.path, round(candidate.score, 4),
-                    " / ".join(burst.reasons), candidate.rank, "review required",
+                    "burst", burst.group_id, asset_ids_by_absolute_path.get(candidate.path, ""),
+                    candidate.path, round(candidate.score, 4), " / ".join(burst.reasons),
+                    candidate.rank, "review required",
                 ])
         graph = ProjectGraph([
             ProjectNode("ingest", "ingest", status="succeeded", outputs=[str(input_dir)]),
@@ -1044,26 +2177,193 @@ def on_shoot_intelligence_scan(input_dir, recursive=True):
             ProjectNode("human_cull_review", "human_cull_review", dependencies=["burst_grouping"]),
         ])
         graph.refresh_ready()
-        status = f"Inspected {len(assets)} asset(s), found {len(bursts)} burst group(s). Candidate ranks are recommendations; human review is required."
+        status = (
+            f"Inspected {len(assets)} asset(s), found {len(bursts)} burst group(s). "
+            f"Review manifest saved to {resolved_manifest_path}. "
+            f"{face_status} "
+            "Candidate ranks and face evidence are recommendations; human review is required."
+        )
         return rows, status, graph.to_json()
     except Exception as exc:
         _logger.exception("Shoot Intelligence scan failed: %s", exc)
         return [], f"Shoot scan failed: {exc}", "{}"
 
 
-def on_watch_folder_process(input_dir, state_path, limit=None):
-    """Run one safe watch-folder polling pass using a status-only callback."""
+def on_watch_folder_process(input_dir, state_path, limit=None, output_dir=None,
+                            job_kind="preview", recipe_name="natural", manifest_path=None):
+    """Scan, queue, and run real preview/final jobs when an output is supplied."""
     if not input_dir:
         return "Enter a watch folder first."
     try:
         watcher = WatchFolder(input_dir, state_path=state_path or None)
-        records = watcher.process_pending(lambda _path: None, limit=int(limit) if limit else None)
-        done = sum(record.status == "done" for record in records)
-        failed = sum(record.status == "failed" for record in records)
-        return f"Watch pass: {done} processed, {failed} failed/retryable, state saved to {watcher.state_path}."
+        if limit is not None and int(limit) < 0:
+            raise ValueError("limit must be non-negative")
+        if output_dir and str(output_dir).strip():
+            input_root = Path(input_dir).expanduser().resolve()
+            output_root = Path(str(output_dir)).expanduser().resolve()
+            try:
+                output_root.relative_to(input_root)
+            except ValueError:
+                pass
+            else:
+                raise ValueError("output folder must be outside the watched folder")
+            selected_kind = str(job_kind or "preview").strip().lower()
+            if selected_kind not in {"preview", "final"}:
+                raise ValueError("job kind must be preview or final")
+            settings = {
+                "recipe": str(recipe_name or "natural").strip(),
+                "settings_source": "selected_recipe",
+                "export_fmt": "JPEG",
+                "export_quality": 95 if selected_kind == "final" else 85,
+                "export_res": "Original" if selected_kind == "final" else "720px",
+            }
+            review_path = (
+                Path(str(manifest_path)).expanduser().resolve()
+                if manifest_path and str(manifest_path).strip()
+                else ShootReviewManifest.default_path(input_root)
+            )
+            review = ShootReviewManifest.load(review_path)
+            review.project_root = str(input_root)
+
+            def asset_instance_resolver(source_path, content_id):
+                relative = source_path.relative_to(input_root).as_posix()
+                matches = [
+                    asset for asset in review.assets.values()
+                    if asset.relative_path == relative and asset.content_id == content_id
+                ]
+                if len(matches) == 1:
+                    return matches[0].asset_id
+                # An unscanned or ambiguous path remains a distinct instance;
+                # it must not inherit another asset's human decision.
+                return f"unmanifested:{relative}:{content_id}"
+
+            queued = watcher.queue_jobs(
+                kind=selected_kind,
+                output_root=output_root,
+                settings=settings,
+                pipeline_fingerprint="retouch-batch-v2",
+                asset_instance_resolver=asset_instance_resolver,
+                limit=int(limit) if limit is not None else None,
+            )
+
+            def process_watch_job(job):
+                processor = BatchProcessor()
+                try:
+                    processed, _, _, log = processor.process_folder(
+                        input_dir=input_root,
+                        output_dir=output_root / selected_kind,
+                        style_name_or_recipe=settings["recipe"],
+                        export_fmt=settings["export_fmt"],
+                        export_quality=settings["export_quality"],
+                        export_res=settings["export_res"],
+                        auto_group=False,
+                        generate_sheet=False,
+                        export_zip=False,
+                        num_workers=1,
+                        only_files=[Path(job.source_path)],
+                    )
+                    if len(processed) != 1:
+                        raise RuntimeError(
+                            f"batch processor returned {len(processed)} output(s): {log}"
+                        )
+                    return Path(processed[0])
+                finally:
+                    processor.close()
+
+            watcher.run_queued(process_watch_job)
+            job_ids = {
+                record.job_ids.get(selected_kind)
+                for record in watcher.state.records.values()
+                if record.job_ids.get(selected_kind)
+            }
+            relevant_jobs = [
+                watcher.state.jobs[job_id]
+                for job_id in job_ids
+                if job_id in watcher.state.jobs
+            ]
+            succeeded = sum(job.status == "done" for job in relevant_jobs)
+            failed = sum(job.status == "failed" for job in relevant_jobs)
+            retryable_failed = sum(job.status == "failed" and job.retryable for job in relevant_jobs)
+            permanent_failed = failed - retryable_failed
+            queued_count = sum(job.status in {"queued", "processing"} for job in relevant_jobs)
+
+            for job in relevant_jobs:
+                if not job.asset_instance_id.startswith("unmanifested:") and job.asset_instance_id in review.assets:
+                    review.attach_job_provenance(job.asset_instance_id, selected_kind, {
+                        "job_id": job.job_id,
+                        "status": job.status,
+                        "output_path": job.output_path,
+                        "output_size": job.output_size,
+                        "output_sha256": job.output_sha256,
+                        "settings_fingerprint": job.settings_fingerprint,
+                        "pipeline_fingerprint": job.pipeline_fingerprint,
+                    })
+            review.save(review_path)
+            return (
+                f"Watch jobs: {succeeded} {selected_kind} succeeded, {failed} failed "
+                f"({retryable_failed} retryable, {permanent_failed} permanent), "
+                f"{queued_count} still queued. {len(queued)} new durable job(s); "
+                "completion requires a verified output hash. Preview and final jobs are independent."
+            )
+        ready = watcher.scan_once()
+        stable_count = len(ready)
+        shown_count = min(stable_count, int(limit)) if limit is not None else stable_count
+        return (
+            f"Watch scan: {stable_count} stable file(s) detected ({shown_count} shown by the limit); "
+            "no processing job was submitted, "
+            f"so no files were marked done. State saved to {watcher.state_path}."
+        )
     except Exception as exc:
         _logger.exception("Watch-folder pass failed: %s", exc)
         return f"Watch-folder pass failed: {exc}"
+
+
+def _review_store(manifest_path):
+    if not manifest_path or not str(manifest_path).strip():
+        raise ValueError("Enter the saved review manifest path first.")
+    return ShootReviewManifestStore(str(manifest_path).strip())
+
+
+def on_save_shoot_review(manifest_path, asset_id, decision, rating=None, labels="", reviewer="", note=""):
+    """Persist a human review override; this never mutates the source image."""
+    try:
+        store = _review_store(manifest_path)
+        parsed_rating = None if rating in (None, "") else int(rating)
+        parsed_labels = [item.strip() for item in str(labels or "").split(",") if item.strip()]
+        asset = store.manifest.set_human_review(
+            str(asset_id or "").strip(),
+            str(decision or "hold").strip(),
+            rating=parsed_rating,
+            labels=parsed_labels,
+            reviewer=reviewer,
+            note=note,
+        )
+        store.save()
+        return (
+            f"Saved human review for {asset.relative_path}: {asset.decision}, "
+            f"rating={asset.rating if asset.rating is not None else 'unset'}. "
+            "Source file was not changed."
+        )
+    except Exception as exc:
+        return f"Review save failed: {exc}"
+
+
+def on_export_shoot_review_json(manifest_path):
+    try:
+        store = _review_store(manifest_path)
+        target = store.save()
+        return str(target), f"JSON manifest ready: {target}"
+    except Exception as exc:
+        return None, f"JSON export failed: {exc}"
+
+
+def on_export_shoot_review_csv(manifest_path, selected_only=False):
+    try:
+        store = _review_store(manifest_path)
+        target = store.export_csv(selected_only=bool(selected_only))
+        return str(target), f"CSV export ready: {target}"
+    except Exception as exc:
+        return None, f"CSV export failed: {exc}"
 
 
 def on_save_project_profile(profile_id, subject_key, display_name, recipe_name, style_name, preferred_json, marks_json):
@@ -1217,6 +2517,106 @@ def on_img_change_clear_faces():
     return {}, [], gr.update(choices=[], value=None), "Image changed — re-detect faces."
 
 
+def _advanced_preview_image(image_rgb, max_dim=ADVANCED_PREVIEW_MAX_DIM):
+    """Return one bounded preview copy for Advanced history/snapshots."""
+    if image_rgb is None:
+        return None
+    image = np.asarray(image_rgb)
+    if image.ndim != 3 or image.shape[2] not in (3, 4):
+        return None
+    if image.shape[2] == 4:
+        image = image[:, :, :3]
+    if image.dtype != np.uint8:
+        image = np.clip(image, 0, 255).astype(np.uint8)
+    image = np.ascontiguousarray(image)
+    height, width = image.shape[:2]
+    scale = min(float(max_dim) / max(width, height), 1.0)
+    if scale < 1.0:
+        image = cv2.resize(
+            image,
+            (max(1, int(round(width * scale))), max(1, int(round(height * scale)))),
+            interpolation=cv2.INTER_AREA,
+        )
+    return image.copy()
+
+
+def _advanced_preview_payload(image_rgb):
+    """Encode a bounded preview so snapshots do not retain NumPy arrays."""
+    preview = _advanced_preview_image(image_rgb)
+    if preview is None:
+        return None
+    try:
+        bgr = cv2.cvtColor(preview, cv2.COLOR_RGB2BGR)
+        ok, encoded = cv2.imencode(
+            ".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 85]
+        )
+        if ok:
+            return {
+                "encoding": "jpeg",
+                "data": base64.b64encode(encoded.tobytes()).decode("ascii"),
+                "width": int(preview.shape[1]),
+                "height": int(preview.shape[0]),
+            }
+    except Exception as exc:
+        _logger.debug("Advanced preview encoding failed: %s", exc)
+    return {"encoding": "unavailable", "shape": list(preview.shape)}
+
+
+def _advanced_preview_from_payload(value):
+    """Decode a compact snapshot preview; accept legacy array snapshots."""
+    if isinstance(value, dict) and value.get("encoding") == "jpeg":
+        try:
+            raw = base64.b64decode(value.get("data", ""), validate=True)
+            decoded = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
+            if decoded is not None:
+                return cv2.cvtColor(decoded, cv2.COLOR_BGR2RGB)
+        except Exception as exc:
+            _logger.debug("Advanced preview decoding failed: %s", exc)
+        return None
+    if isinstance(value, np.ndarray):
+        return _advanced_preview_image(value)
+    return value if isinstance(value, (list, tuple)) else None
+
+
+def _advanced_history_from_edits(edit_log=None):
+    """Build compact history from a serialized edit log."""
+    history = AdvancedHistory()
+    for edit in list(edit_log or []):
+        outcome = history.append(edit)
+        if not outcome.changed:
+            _logger.warning("Advanced edit was not retained in compact history: %s", outcome.message)
+            break
+    return history
+
+
+def _advanced_history_object(history, edit_log=None):
+    """Accept the new compact state and migrate the old undo/redo shape."""
+    if isinstance(history, AdvancedHistory):
+        return history
+    if isinstance(history, dict) and "entries" in history and "cursor" in history:
+        try:
+            return AdvancedHistory.from_state(history)
+        except (TypeError, ValueError, KeyError) as exc:
+            _logger.warning("Invalid compact Advanced Retouch history; rebuilding: %s", exc)
+    # Older sessions contained full RGB arrays under undo/redo.  Do not copy
+    # them into the new state; the edit log is the replayable source of truth.
+    return _advanced_history_from_edits(edit_log)
+
+
+def _replay_advanced_state(source_rgb, edits):
+    """Replay compact edits, loading face backends only when required."""
+    needs_face_models = any(
+        str(edit.get("mode", "Adjust")) == "Reshape"
+        or str(edit.get("semantic", "None")) != "None"
+        for edit in list(edits or [])
+    )
+    detector = parser = None
+    if needs_face_models:
+        engine = get_engine()
+        detector, parser = engine._detector, engine._parser
+    return replay_advanced_edits(source_rgb, edits, detector, parser)
+
+
 def _advanced_empty_state(source_rgb=None, status=""):
     current = source_rgb.copy() if isinstance(source_rgb, np.ndarray) else source_rgb
     return (
@@ -1225,7 +2625,7 @@ def _advanced_empty_state(source_rgb=None, status=""):
         current,
         None,
         before_after(source_rgb, current) if source_rgb is not None and current is not None else None,
-        {"undo": [], "redo": []},
+        AdvancedHistory().to_state(),
         [],
         None,
         status,
@@ -1244,13 +2644,10 @@ def _advanced_load_rgb_source(source_rgb, pending_edits=None, status_prefix="Loa
         or str(edit.get("semantic", "None")) != "None"
         for edit in edits
     )
-    detector = parser = None
-    if needs_face_models:
-        engine = get_engine()
-        detector, parser = engine._detector, engine._parser
-    current = replay_advanced_edits(source, edits, detector, parser) if edits else source.copy()
+    current = _replay_advanced_state(source, edits) if edits else source.copy()
+    history = _advanced_history_from_edits(edits)
     status = f"{status_prefix}{f' and replayed {len(edits)} saved edit(s)' if edits else ''}."
-    return source, current, current, None, before_after(source, current), {"undo": [], "redo": []}, edits, None, status, []
+    return source, current, current, None, before_after(source, current), history.to_state(), history.current_edit_log(), None, status, []
 
 
 def on_advanced_source_change(img_paths, pending_edits=None):
@@ -1289,11 +2686,12 @@ def on_advanced_face_choices(img_paths):
         return gr.update(choices=["All faces"], value="All faces"), f"Face detection unavailable: {exc}"
 
 
-def _advanced_history_push(history, current, edit_log):
-    history = dict(history or {})
-    undo = list(history.get("undo") or [])
-    undo.append({"image": np.asarray(current).copy(), "edits": list(edit_log or [])})
-    return {"undo": undo[-20:], "redo": []}
+def _advanced_history_push(history, current, edit_log, edit=None):
+    """Append a compact operation and never retain a full-resolution frame."""
+    compact = _advanced_history_object(history, edit_log)
+    if edit is not None:
+        compact.append(edit, preview=_advanced_preview_image(current))
+    return compact
 
 
 def advanced_apply_handler(
@@ -1354,8 +2752,24 @@ def advanced_apply_handler(
             heal_method=heal_method,
             remove_engine=remove_engine,
         )
-        new_log = list(edit_log or []) + [result.edit]
-        new_history = _advanced_history_push(history, current_rgb, edit_log)
+        compact_history = _advanced_history_object(history, edit_log)
+        history_outcome = compact_history.append(
+            result.edit,
+            preview=_advanced_preview_image(result.image_rgb),
+        )
+        if not history_outcome.changed:
+            return (
+                gr.update(),
+                current_rgb,
+                history,
+                list(edit_log or []),
+                None,
+                None,
+                before_after(source_rgb, current_rgb) if source_rgb is not None else None,
+                f"Advanced Retouch history rejected the edit: {history_outcome.message}",
+            )
+        new_history = compact_history.to_state()
+        new_log = compact_history.current_edit_log()
         overlay = mask_overlay(result.image_rgb, result.mask, float(overlay_opacity or 42) / 100.0) if overlay_visible else result.image_rgb
         return result.image_rgb, result.image_rgb, new_history, new_log, result.mask, overlay, before_after(source_rgb, result.image_rgb), result.status
     except Exception as exc:
@@ -1364,25 +2778,35 @@ def advanced_apply_handler(
 
 
 def advanced_undo_handler(current_rgb, source_rgb, history, edit_log=None):
-    history = dict(history or {})
-    undo = list(history.get("undo") or [])
-    if not undo:
-        return gr.update(), current_rgb, history, list(edit_log or []), None, None, before_after(source_rgb, current_rgb) if source_rgb is not None else None, "Nothing to undo."
-    previous = undo.pop()
-    redo = list(history.get("redo") or [])
-    redo.append({"image": np.asarray(current_rgb).copy(), "edits": list(edit_log or [])})
-    return previous["image"], previous["image"], {"undo": undo, "redo": redo[-20:]}, previous.get("edits", []), None, None, before_after(source_rgb, previous["image"]) if source_rgb is not None else None, "Undid the last Advanced Retouch edit."
+    compact_history = _advanced_history_object(history, edit_log)
+    if compact_history.history_truncated:
+        return gr.update(), current_rgb, compact_history.to_state(), list(edit_log or []), None, None, before_after(source_rgb, current_rgb) if source_rgb is not None else None, "Undo unavailable: the compact history boundary has no full-resolution replay baseline."
+    outcome = compact_history.undo()
+    if not outcome.changed:
+        return gr.update(), current_rgb, compact_history.to_state(), list(edit_log or []), None, None, before_after(source_rgb, current_rgb) if source_rgb is not None else None, "Nothing to undo."
+    edits = compact_history.current_edit_log()
+    try:
+        previous = _replay_advanced_state(source_rgb, edits)
+    except Exception as exc:
+        _logger.warning("Advanced Retouch undo replay failed: %s", exc)
+        return gr.update(), current_rgb, history, list(edit_log or []), None, None, before_after(source_rgb, current_rgb) if source_rgb is not None else None, f"Undo replay failed: {exc}"
+    return previous, previous, compact_history.to_state(), edits, None, None, before_after(source_rgb, previous) if source_rgb is not None else None, "Undid the last Advanced Retouch edit."
 
 
 def advanced_redo_handler(current_rgb, source_rgb, history, edit_log=None):
-    history = dict(history or {})
-    redo = list(history.get("redo") or [])
-    if not redo:
-        return gr.update(), current_rgb, history, list(edit_log or []), None, None, before_after(source_rgb, current_rgb) if source_rgb is not None else None, "Nothing to redo."
-    next_state = redo.pop()
-    undo = list(history.get("undo") or [])
-    undo.append({"image": np.asarray(current_rgb).copy(), "edits": list(edit_log or [])})
-    return next_state["image"], next_state["image"], {"undo": undo[-20:], "redo": redo}, next_state.get("edits", []), None, None, before_after(source_rgb, next_state["image"]) if source_rgb is not None else None, "Redid the last Advanced Retouch edit."
+    compact_history = _advanced_history_object(history, edit_log)
+    if compact_history.history_truncated:
+        return gr.update(), current_rgb, compact_history.to_state(), list(edit_log or []), None, None, before_after(source_rgb, current_rgb) if source_rgb is not None else None, "Redo unavailable: the compact history boundary has no full-resolution replay baseline."
+    outcome = compact_history.redo()
+    if not outcome.changed:
+        return gr.update(), current_rgb, compact_history.to_state(), list(edit_log or []), None, None, before_after(source_rgb, current_rgb) if source_rgb is not None else None, "Nothing to redo."
+    edits = compact_history.current_edit_log()
+    try:
+        next_image = _replay_advanced_state(source_rgb, edits)
+    except Exception as exc:
+        _logger.warning("Advanced Retouch redo replay failed: %s", exc)
+        return gr.update(), current_rgb, history, list(edit_log or []), None, None, before_after(source_rgb, current_rgb) if source_rgb is not None else None, f"Redo replay failed: {exc}"
+    return next_image, next_image, compact_history.to_state(), edits, None, None, before_after(source_rgb, next_image) if source_rgb is not None else None, "Redid the last Advanced Retouch edit."
 
 
 def advanced_reset_handler(source_rgb):
@@ -1411,7 +2835,13 @@ def advanced_save_snapshot_handler(name, current_rgb, edit_log, snapshots):
         return gr.update(), snapshots or {}, "Load an image first."
     snapshots = dict(snapshots or {})
     key = str(name).strip()
-    snapshots[key] = {"image": np.asarray(current_rgb).copy(), "edits": list(edit_log or [])}
+    snapshots[key] = {
+        "preview": _advanced_preview_payload(current_rgb),
+        "edits": list(edit_log or []),
+        "preview_resolution": ADVANCED_PREVIEW_MAX_DIM,
+    }
+    while len(snapshots) > ADVANCED_SNAPSHOT_MAX_COUNT:
+        snapshots.pop(next(iter(snapshots)))
     return gr.update(choices=list(snapshots.keys()), value=key), snapshots, f"Saved Advanced Retouch snapshot '{key}'."
 
 
@@ -1419,7 +2849,13 @@ def advanced_compare_snapshot_handler(name, current_rgb, snapshots):
     snapshots = snapshots or {}
     if not name or name not in snapshots or current_rgb is None:
         return None, "Select a snapshot and load an image first."
-    return before_after(snapshots[name]["image"], current_rgb), f"Comparing current edit with snapshot '{name}'."
+    snapshot = snapshots[name]
+    snapshot_image = _advanced_preview_from_payload(snapshot.get("preview"))
+    if snapshot_image is None:
+        snapshot_image = _advanced_preview_from_payload(snapshot.get("image"))
+    if snapshot_image is None:
+        return None, f"Snapshot '{name}' has no preview image."
+    return before_after(snapshot_image, _advanced_preview_image(current_rgb)), f"Comparing current edit with snapshot '{name}'."
 
 
 def advanced_export_handler(current_rgb, export_fmt, source_paths=None):
@@ -1565,22 +3001,87 @@ except Exception as exc:
     _logger.warning("LUT watcher daemon did not start: %s", exc)
 
 
-def on_smart_process(img_paths, recipe, *args, prg=gr.Progress()):
-    """F10 Smart Process — analyze the first image and auto-set sliders.
+def build_smart_proposal(suggestion):
+    """Build a serializable Smart Process proposal without changing UI state."""
+    defaults = recipe_defaults(suggestion.recipe)
+    params = dict(getattr(suggestion, "params", {}) or {})
+    for key, value in params.items():
+        if key in defaults:
+            defaults[key] = value
+    explanation_html = _format_smart_explanations(suggestion)
+    return {
+        "proposal_version": 1,
+        "recipe": suggestion.recipe,
+        "params": params,
+        "slider_values": {key: defaults[key] for key in RECIPE_OUTPUT_KEYS},
+        "explanations": list(getattr(suggestion, "explanations", []) or []),
+        "explanation_html": explanation_html,
+    }
 
-    Returns the new recipe value, the full slider tuple (matching
-    ``_recipe_outputs``), and a status string with the explanation text.
-    The caller (Gradio event) wires this to the recipe Radio + slider
-    outputs + status Textbox so the UI updates in place. The user can then
-    hit "Process Image(s)" to actually run the pipeline, or tweak the
-    auto-filled sliders first.
-    """
+
+def apply_smart_suggestion(proposal, current_revision=0):
+    """Apply a stored proposal only after the user explicitly requests it."""
+    revision = _coerce_settings_revision(current_revision)
+    if not isinstance(proposal, dict):
+        return (
+            gr.update(),
+            *([gr.update()] * len(RECIPE_OUTPUT_KEYS)),
+            proposal,
+            "No Smart suggestion is waiting to be applied.",
+            gr.update(),
+            gr.update(interactive=False),
+            revision,
+        )
+
+    recipe_name = proposal.get("recipe")
+    slider_values = proposal.get("slider_values")
+    if not recipe_name or not isinstance(slider_values, dict):
+        return (
+            gr.update(),
+            *([gr.update()] * len(RECIPE_OUTPUT_KEYS)),
+            proposal,
+            "Smart suggestion is invalid or incomplete; nothing was applied.",
+            gr.update(),
+            gr.update(interactive=False),
+            revision,
+        )
+
+    missing = [key for key in RECIPE_OUTPUT_KEYS if key not in slider_values]
+    if missing:
+        return (
+            gr.update(),
+            *([gr.update()] * len(RECIPE_OUTPUT_KEYS)),
+            proposal,
+            f"Smart suggestion is missing {len(missing)} control value(s); nothing was applied.",
+            gr.update(),
+            gr.update(interactive=False),
+            revision,
+        )
+
+    next_revision = revision + 1
+    explanation_html = proposal.get("explanation_html") or ""
+    status = (
+        f"🧠 Applied Smart suggestion ({recipe_name}). Click Process to render. "
+        f"Settings revision {next_revision}."
+    )
+    return (
+        recipe_name,
+        *(slider_values[key] for key in RECIPE_OUTPUT_KEYS),
+        None,
+        status,
+        explanation_html,
+        gr.update(interactive=False),
+        next_revision,
+    )
+
+
+def on_smart_process(img_paths, recipe, *args, prg=gr.Progress()):
+    """F10 Smart Process — analyze and store a proposal without changing sliders."""
     from retouch.smart_default import SmartProcessor
 
     if not img_paths:
         gr.Warning("Please upload an image first.")
-        return (gr.update(), *([gr.update()] * len(_recipe_outputs)),
-                "Please upload an image first.", gr.update())
+        return None, "Please upload an image first.", gr.update()
 
     curr_path = img_paths[0]
     if isinstance(curr_path, dict):
@@ -1591,13 +3092,11 @@ def on_smart_process(img_paths, recipe, *args, prg=gr.Progress()):
     except (TypeError, FileNotFoundError, OSError) as e:
         _logger.warning("Smart Process: failed to load %s: %s", curr_path, e)
         gr.Warning(f"Failed to load image: {e}")
-        return (gr.update(), *([gr.update()] * len(_recipe_outputs)),
-                f"Failed to load image: {e}", gr.update())
+        return None, f"Failed to load image: {e}", gr.update()
 
     if img_bgr is None:
         gr.Warning("Could not read the image.")
-        return (gr.update(), *([gr.update()] * len(_recipe_outputs)),
-                "Could not read the image.", gr.update())
+        return None, "Could not read the image.", gr.update()
 
     gr.Info("🧠 Analyzing image...")
     sp = SmartProcessor()
@@ -1606,26 +3105,28 @@ def on_smart_process(img_paths, recipe, *args, prg=gr.Progress()):
     except ValueError as e:
         _logger.exception("Smart Process analysis failed: %s", e)
         gr.Warning(f"Analysis failed: {e}")
-        return (gr.update(), *([gr.update()] * len(_recipe_outputs)),
-                f"Analysis failed: {e}", gr.update())
+        return None, f"Analysis failed: {e}", gr.update()
 
-    # Start from the suggested recipe's defaults, then layer the suggestion
-    # overrides on top. This produces the full slider tuple that
-    # on_recipe_change would return, with the smart overrides applied.
-    d = recipe_defaults(suggestion.recipe)
-    for k, v in suggestion.params.items():
-        if k in d:
-            d[k] = v
-
-    # Build the slider output tuple in RECIPE_OUTPUT_KEYS order (key-based,
-    # so it can never drift from the canonical output contract).
-    slider_outputs = tuple(d[k] for k in RECIPE_OUTPUT_KEYS)
-
+    proposal = build_smart_proposal(suggestion)
     explanation_html = _format_smart_explanations(suggestion)
-    status_msg = f"🧠 Smart suggestion applied ({suggestion.recipe}). Click Process to run."
-    gr.Info(f"Smart suggestion: {suggestion.recipe} ({len(suggestion.params)} overrides)")
+    status_msg = (
+        f"🧠 Smart suggestion ready ({suggestion.recipe}); sliders were not changed. "
+        "Review it, then click Apply Smart Suggestion."
+    )
+    gr.Info(f"Smart suggestion ready: {suggestion.recipe} ({len(suggestion.params)} overrides)")
 
-    return (suggestion.recipe, *slider_outputs, status_msg, explanation_html)
+    return proposal, status_msg, explanation_html
+
+
+def on_smart_process_event(img_paths, recipe=None, settings_revision=0):
+    """Queue wrapper that preserves the analysis snapshot and enables Apply."""
+    if isinstance(img_paths, dict) and "img_paths" in img_paths:
+        snapshot = img_paths
+        recipe = snapshot.get("recipe")
+        settings_revision = snapshot.get("settings_revision", 0)
+        img_paths = snapshot.get("img_paths")
+    proposal, status, explanation = on_smart_process(img_paths, recipe)
+    return proposal, status, explanation, gr.update(interactive=proposal is not None)
 
 
 def _format_smart_explanations(suggestion) -> str:
@@ -2346,12 +3847,12 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
 """) as app:
 
     # Liquid Glass Header bar
-    gr.HTML("""
+    gr.HTML(f"""
     <div class="header-bar">
         <div class="header-left">
             <span class="header-badge">RP</span>
             <span class="header-title">Retouch Pro</span>
-            <span class="header-version">v2.0.0</span>
+            <span class="header-version">v{__version__}</span>
         </div>
         <div class="header-workspace">
             Liquid Glass Workspace
@@ -2412,33 +3913,49 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         show_compare = gr.Checkbox(label="Show side-by-side comparison screen", value=True, info="Split view: original | separator | retouched result")
 
                         with gr.Row():
-                            fast = gr.Checkbox(label="Fast Preview (Recommended)", value=True,
-                                               info="Process at half resolution for preview; final export always uses full quality")
+                            fast = gr.Checkbox(label="Legacy fast override", value=True,
+                                               info="Render Preview is always fast; Export Full Quality is always full resolution.")
                         
                         with gr.Row():
-                            process_btn = gr.Button("Process Image(s) ⚡", variant="primary", size="lg", elem_classes=["primary-btn"])
+                            process_btn = gr.Button("Render Preview ⚡", variant="primary", size="lg", elem_classes=["primary-btn"])
+                            export_full_btn = gr.Button("Export Full Quality", variant="primary", size="lg", elem_classes=["primary-btn"])
+                            export_all_btn = gr.Button("Export All → Batch", variant="secondary", size="lg", elem_classes=["secondary-btn"])
                             smart_process_btn = gr.Button("🧠 Smart Process", variant="primary", size="lg", elem_classes=["primary-btn"])
+                            apply_smart_btn = gr.Button("Apply Smart Suggestion", variant="secondary", size="lg", interactive=False, elem_classes=["secondary-btn"])
                             reset_btn = gr.Button("Reload Recipe Defaults 🔄", variant="secondary", size="lg", elem_classes=["secondary-btn"], elem_id="reset-btn")
 
                         with gr.Accordion("💾 Session & History", open=False):
                             with gr.Row():
                                 save_session_btn = gr.Button("Save Session", variant="secondary", size="sm")
                                 load_session_file = gr.File(label="Load Session", file_types=[".json"], file_count="single")
-                                undo_btn = gr.Button("↩ Undo", variant="secondary", size="sm")
-                                redo_btn = gr.Button("↻ Redo", variant="secondary", size="sm")
+                                undo_btn = gr.Button("↩ Undo", variant="secondary", size="sm", interactive=False)
+                                redo_btn = gr.Button("↻ Redo", variant="secondary", size="sm", interactive=False)
                             with gr.Row():
                                 snapshot_name = gr.Textbox(label="Snapshot Name", placeholder="e.g. 'warm tone'", scale=3)
                                 save_snapshot_btn = gr.Button("📸 Save Snapshot", variant="secondary", size="sm", scale=1)
                                 snapshot_dropdown = gr.Dropdown(label="Snapshots", choices=[], scale=3)
-                                compare_snapshot_btn = gr.Button("Compare", variant="secondary", size="sm", scale=1)
+                                compare_snapshot_btn = gr.Button("Inspect Settings", variant="secondary", size="sm", scale=1)
                             session_download = gr.File(label="Download Session", visible=False)
                             _undo_stack_state = gr.State(value=None)
                             _snapshot_state = gr.State(value={})
+                            _settings_revision_state = gr.State(value=0)
+                            _render_preview_mode_state = gr.State(value=MODE_RENDER_PREVIEW)
+                            _export_full_mode_state = gr.State(value=MODE_EXPORT_FULL_QUALITY)
+                            _render_snapshot_state = gr.State(value=None)
+                            _preview_cache_state = gr.State(value=GuiPreviewCache())
+                            _smart_analysis_snapshot_state = gr.State(value=None)
+                            _smart_proposal_state = gr.State(value=None)
+                            snapshot_inspection_out = gr.Textbox(
+                                label="Snapshot settings (JSON) — not an image comparison",
+                                lines=5,
+                                interactive=False,
+                                visible=True,
+                            )
 
                     with gr.Group():
                         gr.Markdown("### ⚙️ Export Settings")
                         with gr.Row():
-                            export_fmt = gr.Radio(choices=["JPEG", "PNG", "PNG-16", "WebP"], value="JPEG", label="Format", interactive=True, info="PNG-16 = 16-bit (higher precision, larger file)")
+                            export_fmt = gr.Radio(choices=["JPEG", "PNG", "PNG-16", "WebP"], value="JPEG", label="Format", interactive=True, info="PNG-16 = 16-bit container; processed precision is reported in the render status/manifest")
                             export_quality = gr.Slider(10, 100, 95, step=1, label="Compression Quality", info="For JPEG/WebP formats")
                         export_res = gr.Dropdown(
                             choices=["Original", "4K (3840px)", "2K (2048px)", "Full HD (1920px)", "HD (1280px)", "720px"],
@@ -2447,6 +3964,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         )
                         quality_tier = gr.Radio(choices=["Full (native face crops)", "Draft (proxy, fast)"], value="Full (native face crops)", label="Processing Quality", interactive=True, info="Full: faces processed at native resolution (F8.2). Draft: legacy proxy path for fast batch contact sheets.")
                         optical_correction = gr.Checkbox(label="Apply Lensfun corrections", value=False, info="Uses camera/lens EXIF. Non-8-bit sources are skipped rather than downconverted; the status explains why.")
+                        preserve_source_profile = gr.Checkbox(
+                            label="Preserve source ICC profile on export",
+                            value=False,
+                            info="Off: export working-space sRGB. On: convert back to the embedded source profile explicitly.",
+                        )
 
                 # Column 2: Workspace Canvas (Center)
                 with gr.Column(scale=4, elem_classes=["viewer-panel"]):
@@ -2454,6 +3976,49 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         gr.Markdown("### 🖼️ Preview Canvas")
                         img_output = gr.Image(height=600, show_label=False, elem_id="retouch-output")
                         compare_viewer = gr.HTML(visible=False, elem_id="retouch-compare")
+                        with gr.Row():
+                            inspection_mode = gr.Dropdown(
+                                choices=[
+                                    ("Fit", INSPECTION_MODE_FIT),
+                                    ("100%", INSPECTION_MODE_100_PERCENT),
+                                    ("Face", INSPECTION_MODE_FACE),
+                                    ("ROI", INSPECTION_MODE_ROI),
+                                ],
+                                value=INSPECTION_MODE_FIT,
+                                label="Native inspection",
+                                scale=2,
+                            )
+                            inspection_face_index = gr.Number(
+                                value=0,
+                                precision=0,
+                                label="Face #",
+                                minimum=0,
+                                scale=1,
+                            )
+                            inspection_roi = gr.Textbox(
+                                value="",
+                                label="ROI JSON",
+                                placeholder='{"x": 100, "y": 100, "width": 400, "height": 400}',
+                                scale=3,
+                            )
+                            inspect_render_btn = gr.Button(
+                                "Inspect Native Crop",
+                                variant="secondary",
+                                size="sm",
+                                scale=2,
+                            )
+                        inspection_output = gr.Image(
+                            label="Native inspection (download disabled)",
+                            height=520,
+                            show_download_button=False,
+                            visible=False,
+                        )
+                        inspection_status = gr.Code(
+                            label="Inspection contract",
+                            language="json",
+                            interactive=False,
+                            visible=False,
+                        )
                         # Latest full-resolution processed recipe result used by
                         # the Advanced Retouch "Edit processed result" path.
                         _processed_result_state = gr.State(value=None)
@@ -2561,7 +4126,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             advanced_status = gr.Markdown("Advanced Retouch is ready.")
                             _advanced_source_state = gr.State(value=None)
                             _advanced_current_state = gr.State(value=None)
-                            _advanced_history_state = gr.State(value={"undo": [], "redo": []})
+                            _advanced_history_state = gr.State(value=AdvancedHistory().to_state())
                             _advanced_edit_log_state = gr.State(value=[])
                             _advanced_mask_state = gr.State(value=None)
                             _advanced_snapshots_state = gr.State(value={})
@@ -2952,11 +4517,23 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             gr.Markdown("Version/environment bundle for bug reports. Click, then copy the text below.")
                             with gr.Row():
                                 diagnostics_btn = gr.Button("📋 Generate Diagnostics", variant="secondary", size="sm", elem_classes=["secondary-btn"])
+                                runtime_doctor_btn = gr.Button("🩺 Runtime Doctor", variant="secondary", size="sm", elem_classes=["secondary-btn"])
                                 clear_diagnostics_btn = gr.Button("🗑️ Clear Diagnostics", variant="secondary", size="sm", elem_classes=["secondary-btn"])
                             diagnostics_status = gr.Markdown("")
                             diagnostics_out = gr.Textbox(label="Diagnostics", lines=8, interactive=False)
+                            runtime_doctor_out = gr.Textbox(
+                                label="Runtime Doctor (static; no native probe)",
+                                lines=16,
+                                interactive=False,
+                            )
+                            render_manifest_out = gr.Code(
+                                label="Render Manifest (pixel-free)",
+                                language="json",
+                                lines=18,
+                                interactive=False,
+                            )
 
-                        process_btn_bottom = gr.Button("Apply Overrides & Process ⚡", variant="primary", size="lg", elem_classes=["primary-btn"])
+                        process_btn_bottom = gr.Button("Render Preview ⚡", variant="primary", size="lg", elem_classes=["primary-btn"])
 
                         gr.HTML("""
                         <div style="margin-top:12px;text-align:center;font-size:0.7rem;color:rgba(255,255,255,0.4);border-top:1px solid rgba(255,255,255,0.06);padding-top:10px">
@@ -3034,10 +4611,15 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                     info="Folder containing JPEG/PNG/TIFF captures."
                 )
                 shoot_recursive = gr.Checkbox(label="Scan subfolders", value=True)
+                shoot_face_quality = gr.Checkbox(
+                    label="Measure face/eye sharpness",
+                    value=False,
+                    info="Optional evidence only; blink analysis remains unavailable.",
+                )
                 shoot_scan_btn = gr.Button("Scan shoot", variant="primary")
             shoot_status = gr.Markdown("No shoot scanned yet.")
             shoot_rows = gr.Dataframe(
-                headers=["kind", "group", "path", "score", "evidence", "rank/time", "status"],
+                headers=["kind", "group", "asset ID", "path", "score", "evidence", "rank/time", "status"],
                 interactive=False,
                 label="Assets and burst candidates",
                 wrap=True,
@@ -3047,8 +4629,35 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                 watch_folder = gr.Textbox(label="Watch folder", placeholder="/path/to/incoming-shoot")
                 watch_state = gr.Textbox(label="State file (optional)", placeholder="/path/to/watch-state.json")
                 watch_limit = gr.Number(label="Max files per pass", value=20, precision=0)
-                watch_btn = gr.Button("Run watch pass", variant="secondary")
+                watch_btn = gr.Button("Scan stable files", variant="secondary")
+            with gr.Row():
+                watch_output_dir = gr.Textbox(
+                    label="Job output folder (optional)",
+                    placeholder="Leave empty for scan-only; must be outside watch folder",
+                )
+                watch_job_kind = gr.Dropdown(label="Job kind", choices=["preview", "final"], value="preview")
+                watch_recipe = gr.Dropdown(label="Job recipe", choices=RECIPE_UI_CHOICES, value="natural")
             watch_status = gr.Markdown("")
+            with gr.Accordion("Persistent Shoot Review Manifest", open=False):
+                shoot_manifest_path = gr.Textbox(
+                    label="Manifest path (optional for scan)",
+                    placeholder="Defaults to <shoot-folder>/.retouch-shoot-review.json",
+                )
+                with gr.Row():
+                    review_asset_id = gr.Textbox(label="Asset ID")
+                    review_decision = gr.Dropdown(label="Human decision", choices=sorted(DECISIONS), value="hold")
+                    review_rating = gr.Number(label="Rating (0-5)", precision=0)
+                with gr.Row():
+                    review_labels = gr.Textbox(label="Labels (comma-separated)")
+                    review_reviewer = gr.Textbox(label="Reviewer")
+                review_note = gr.Textbox(label="Review note")
+                review_save_btn = gr.Button("Save human review", variant="secondary")
+                review_export_selected = gr.Checkbox(label="CSV: selected assets only", value=False)
+                with gr.Row():
+                    review_json_btn = gr.Button("Export JSON")
+                    review_csv_btn = gr.Button("Export CSV")
+                review_export_file = gr.File(label="Review export", interactive=False)
+                review_status = gr.Markdown("")
             with gr.Accordion("Subject-linked project profile", open=False):
                 with gr.Row():
                     profile_id = gr.Textbox(label="Profile ID", placeholder="subject-001")
@@ -3385,143 +4994,203 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         )
     _recipe_outputs = [_recipe_output_components[k] for k in RECIPE_OUTPUT_KEYS]
 
+    _mutation_events = []
+    _reset_mutation_events = []
 
-    recipe.change(
+    def _track_reset_event(event):
+        _mutation_events.append(event)
+        _reset_mutation_events.append(event)
+        return event
+
+    _mutation_events.append(recipe.change(
         fn=on_recipe_change,
         inputs=[recipe],
         outputs=_recipe_outputs,
-    )
+        queue=False,
+        show_progress="hidden",
+    ))
 
-    custom_style_preset.change(
+    _mutation_events.append(custom_style_preset.change(
         fn=apply_custom_style,
         inputs=[custom_style_preset, recipe],
         outputs=_recipe_outputs,
-    )
+        queue=False,
+        show_progress="hidden",
+    ))
 
-    reset_btn.click(
+    _track_reset_event(reset_btn.click(
         fn=on_recipe_change,
         inputs=[recipe],
         outputs=_recipe_outputs,
-    )
+        queue=False,
+        show_progress="hidden",
+    ))
 
-    reset_skin_smooth_btn.click(
+    _track_reset_event(reset_skin_smooth_btn.click(
         fn=reset_skin_smoothing,
         inputs=[recipe],
-        outputs=[smooth, nose_smooth, mid_reduction, texture_opacity, micro_restore, pore_synthesis, blemish, skin_flatten, skin_quantize]
-    )
+        outputs=[smooth, nose_smooth, mid_reduction, texture_opacity, micro_restore, pore_synthesis, blemish, skin_flatten, skin_quantize],
+        queue=False,
+        show_progress="hidden",
+    ))
 
-    reset_skin_tone_btn.click(
+    _track_reset_event(reset_skin_tone_btn.click(
         fn=reset_skin_tone,
         inputs=[recipe],
-        outputs=[whiten, whiten_tone, equalize, shadow_lift, nose_restore, skin_sss, skin_unify, skin_unify_hue, auto_exposure, white_costume_lift, face_exposure]
-    )
+        outputs=[whiten, whiten_tone, equalize, shadow_lift, nose_restore, skin_sss, skin_unify, skin_unify_hue, auto_exposure, white_costume_lift, face_exposure],
+        queue=False,
+        show_progress="hidden",
+    ))
 
-    reset_basic_tone_btn.click(
+    _track_reset_event(reset_basic_tone_btn.click(
         fn=reset_basic_tone,
         inputs=[recipe],
-        outputs=[contrast, brightness, clarity, vibrance, saturation]
-    )
+        outputs=[contrast, brightness, clarity, vibrance, saturation],
+        queue=False,
+        show_progress="hidden",
+    ))
 
-    reset_tone_curve_btn.click(
+    _track_reset_event(reset_tone_curve_btn.click(
         fn=reset_tone_curve,
         inputs=[recipe],
-        outputs=[highlights, shadows, whites, blacks]
-    )
+        outputs=[highlights, shadows, whites, blacks],
+        queue=False,
+        show_progress="hidden",
+    ))
 
-    reset_relighting_btn.click(
+    _track_reset_event(reset_relighting_btn.click(
         fn=reset_relighting,
         inputs=[recipe],
-        outputs=[relight, relight_azimuth, relight_elevation]
-    )
+        outputs=[relight, relight_azimuth, relight_elevation],
+        queue=False,
+        show_progress="hidden",
+    ))
 
-    reset_eyes_lips_btn.click(
+    _track_reset_event(reset_eyes_lips_btn.click(
         fn=reset_eyes_lips,
         inputs=[recipe],
-        outputs=[eye_enhance, catchlight, dark_circles, undereye_darken_removal, undereye_puffiness_reduction, eye_sclera_brighten, eye_iris_saturate, eye_iris_hue_shift, eye_iris_brightness, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, nose_blush, under_eye_blush]
-    )
+        outputs=[eye_enhance, catchlight, dark_circles, undereye_darken_removal, undereye_puffiness_reduction, eye_sclera_brighten, eye_iris_saturate, eye_iris_hue_shift, eye_iris_brightness, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, nose_blush, under_eye_blush],
+        queue=False,
+        show_progress="hidden",
+    ))
 
-    reset_face_reshaping_btn.click(
+    _track_reset_event(reset_face_reshaping_btn.click(
         fn=reset_face_reshaping,
         inputs=[recipe],
-        outputs=[slimming]
-    )
+        outputs=[slimming],
+        queue=False,
+        show_progress="hidden",
+    ))
 
-    reset_structure_effects_btn.click(
+    _track_reset_event(reset_structure_effects_btn.click(
         fn=reset_structure_effects,
         inputs=[recipe],
-        outputs=[hair_enhance, dodge_burn, impact, specular_bloom, specular_bloom_tone, bloom, bloom_threshold, bloom_softness, sharpen, sharpen_radius, glow, skin_glow, mask_feather_mode, vignette, subject_separation]
-    )
+        outputs=[hair_enhance, dodge_burn, impact, specular_bloom, specular_bloom_tone, bloom, bloom_threshold, bloom_softness, sharpen, sharpen_radius, glow, skin_glow, mask_feather_mode, vignette, subject_separation],
+        queue=False,
+        show_progress="hidden",
+    ))
 
-    reset_color_grading_btn.click(
+    _track_reset_event(reset_color_grading_btn.click(
         fn=reset_color_grading,
         inputs=[recipe],
-        outputs=[color_grade, grade_intensity]
-    )
+        outputs=[color_grade, grade_intensity],
+        queue=False,
+        show_progress="hidden",
+    ))
 
-    reset_film_effects_btn.click(
+    _track_reset_event(reset_film_effects_btn.click(
         fn=reset_film_effects,
         inputs=[recipe],
-        outputs=[chromatic_aberration, grain, halation, lut, tonal_curve_strength, skin_protect_strength, grain_strength, highlight_rolloff_strength, film_enable, film_highlight_purity]
-    )
+        outputs=[chromatic_aberration, grain, halation, lut, tonal_curve_strength, skin_protect_strength, grain_strength, highlight_rolloff_strength, film_enable, film_highlight_purity],
+        queue=False,
+        show_progress="hidden",
+    ))
 
-    reset_split_toning_btn.click(
+    _track_reset_event(reset_split_toning_btn.click(
         fn=reset_split_toning,
         inputs=[recipe],
-        outputs=[shadow_hue, shadow_sat, midtone_hue, midtone_sat, highlight_hue, highlight_sat]
-    )
+        outputs=[shadow_hue, shadow_sat, midtone_hue, midtone_sat, highlight_hue, highlight_sat],
+        queue=False,
+        show_progress="hidden",
+    ))
 
-    reset_color_transfer_btn.click(
+    _track_reset_event(reset_color_transfer_btn.click(
         fn=reset_color_transfer,
         inputs=[],
-        outputs=[color_ref_img, color_ref_strength]
-    )
+        outputs=[color_ref_img, color_ref_strength],
+        queue=False,
+        show_progress="hidden",
+    ))
 
-    reset_debug_btn.click(
+    _track_reset_event(reset_debug_btn.click(
         fn=reset_debug,
         inputs=[recipe],
-        outputs=[debug_mode]
-    )
+        outputs=[debug_mode],
+        queue=False,
+        show_progress="hidden",
+    ))
 
-    reset_body_skin_btn.click(
+    _track_reset_event(reset_body_skin_btn.click(
         fn=reset_body_skin,
         inputs=[recipe],
-        outputs=[body_smooth, body_equalize, body_whiten, body_match_face, body_relight, body_dodge_burn, body_shadow_lift]
-    )
+        outputs=[body_smooth, body_equalize, body_whiten, body_match_face, body_relight, body_dodge_burn, body_shadow_lift],
+        queue=False,
+        show_progress="hidden",
+    ))
 
-    reset_lch_btn.click(
+    _track_reset_event(reset_lch_btn.click(
         fn=reset_lch,
         inputs=[recipe],
-        outputs=[white_balance_kelvin, white_balance_tint, bw_channel_mixer_r, bw_channel_mixer_g, bw_channel_mixer_b, negative_split_tone_shadow, negative_split_tone_highlight, hsl_hue_global, hsl_sat_global, hsl_lum_global]
-    )
+        outputs=[white_balance_kelvin, white_balance_tint, bw_channel_mixer_r, bw_channel_mixer_g, bw_channel_mixer_b, negative_split_tone_shadow, negative_split_tone_highlight, hsl_hue_global, hsl_sat_global, hsl_lum_global],
+        queue=False,
+        show_progress="hidden",
+    ))
 
     # F6: Look Extractor wiring
-    look_extract_btn.click(
+    _look_extract_event = look_extract_btn.click(
         fn=on_extract_look,
         inputs=[look_ref_file, img_input],
         outputs=[_look_params_state, look_status],
+        show_progress="minimal",
+        concurrency_limit=1,
+        concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
     )
+    _mutation_events.append(_look_extract_event)
 
     # Per-face recipe picker
-    detect_faces_btn.click(
+    _detect_faces_event = detect_faces_btn.click(
         fn=on_detect_faces,
         inputs=[img_input],
         outputs=[face_gallery, _face_params_state, face_select, face_params_status],
+        show_progress="minimal",
+        concurrency_limit=1,
+        concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
     )
-    apply_face_btn.click(
+    _mutation_events.append(_detect_faces_event)
+    _apply_face_event = apply_face_btn.click(
         fn=on_apply_face_recipe,
         inputs=[face_select, face_recipe, _face_params_state],
         outputs=[_face_params_state, face_params_status],
+        show_progress="hidden",
+        queue=False,
     )
-    clear_faces_btn.click(
+    _mutation_events.append(_apply_face_event)
+    _clear_faces_event = clear_faces_btn.click(
         fn=on_clear_face_params,
         inputs=[],
         outputs=[_face_params_state, face_gallery, face_select, face_params_status],
+        show_progress="hidden",
+        queue=False,
     )
-    img_input.change(
+    _mutation_events.append(_clear_faces_event)
+    _source_faces_event = img_input.change(
         fn=on_img_change_clear_faces,
         inputs=[],
         outputs=[_face_params_state, face_gallery, face_select, face_params_status],
+        show_progress="hidden",
+        queue=False,
     )
+    _mutation_events.append(_source_faces_event)
 
     # Advanced Retouch workspace.  The editor is kept separate from the main
     # recipe canvas so manual edits remain reversible and can be serialized as
@@ -3535,6 +5204,9 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
             _advanced_edit_log_state, _advanced_mask_state, advanced_status,
             _advanced_pending_session_state,
         ],
+        show_progress="minimal",
+        concurrency_limit=1,
+        concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
     )
     advanced_edit_processed_btn.click(
         fn=on_advanced_processed_result,
@@ -3545,11 +5217,17 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
             _advanced_edit_log_state, _advanced_mask_state, advanced_status,
             _advanced_pending_session_state,
         ],
+        show_progress="minimal",
+        concurrency_limit=1,
+        concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
     )
     advanced_face_detect_btn.click(
         fn=on_advanced_face_choices,
         inputs=[img_input],
         outputs=[advanced_face_select, advanced_status],
+        show_progress="minimal",
+        concurrency_limit=1,
+        concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
     )
     advanced_apply_btn.click(
         fn=advanced_apply_handler,
@@ -3573,21 +5251,31 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
             advanced_before_after, advanced_status,
         ],
         concurrency_limit=1,
+        concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
+        show_progress="minimal",
     )
     advanced_undo_btn.click(
         fn=advanced_undo_handler,
         inputs=[_advanced_current_state, _advanced_source_state, _advanced_history_state, _advanced_edit_log_state],
         outputs=[advanced_editor, _advanced_current_state, _advanced_history_state, _advanced_edit_log_state, _advanced_mask_state, advanced_mask_overlay, advanced_before_after, advanced_status],
+        concurrency_limit=1,
+        concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
+        show_progress="minimal",
     )
     advanced_redo_btn.click(
         fn=advanced_redo_handler,
         inputs=[_advanced_current_state, _advanced_source_state, _advanced_history_state, _advanced_edit_log_state],
         outputs=[advanced_editor, _advanced_current_state, _advanced_history_state, _advanced_edit_log_state, _advanced_mask_state, advanced_mask_overlay, advanced_before_after, advanced_status],
+        concurrency_limit=1,
+        concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
+        show_progress="minimal",
     )
     advanced_reset_btn.click(
         fn=advanced_reset_handler,
         inputs=[_advanced_source_state],
         outputs=[_advanced_current_state, advanced_editor, advanced_mask_overlay, advanced_before_after, _advanced_history_state, _advanced_edit_log_state, _advanced_mask_state, advanced_status],
+        queue=False,
+        show_progress="hidden",
     )
     advanced_overlay_visible.change(
         fn=advanced_overlay_handler,
@@ -3618,6 +5306,9 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         fn=advanced_export_handler,
         inputs=[_advanced_current_state, advanced_export_fmt, img_input],
         outputs=[advanced_export_file, advanced_status],
+        concurrency_limit=1,
+        concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
+        show_progress="minimal",
     )
 
     # T4: Recipe Cookbook wiring
@@ -3650,6 +5341,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         inputs=[],
         outputs=[diagnostics_out],
     )
+    runtime_doctor_btn.click(
+        fn=runtime_doctor_text,
+        inputs=[],
+        outputs=[runtime_doctor_out],
+    )
     clear_diagnostics_btn.click(
         fn=clear_diagnostics,
         inputs=[],
@@ -3681,7 +5377,10 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         fn=on_process_folder,
         inputs=[folder_in, folder_out, batch_style_type, batch_custom_style, batch_recipe,
                 batch_fmt, batch_quality, batch_res, auto_group_toggle, sheet_toggle, zip_toggle],
-        outputs=[batch_sheet_out, batch_zip_out, batch_status]
+        outputs=[batch_sheet_out, batch_zip_out, batch_status],
+        concurrency_limit=1,
+        concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
+        show_progress="minimal",
     )
 
     job_refresh_btn.click(fn=on_refresh_jobs, inputs=[], outputs=[job_list_df])
@@ -3696,6 +5395,9 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         fn=on_rerun_flagged,
         inputs=[job_selected_id],
         outputs=[job_rerun_status],
+        concurrency_limit=1,
+        concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
+        show_progress="minimal",
     )
 
     # Shoot Intelligence: explainable scan, safe watch pass, profiles, and
@@ -3703,13 +5405,36 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     # separate from the image renderer and never mutate source captures.
     shoot_scan_btn.click(
         fn=on_shoot_intelligence_scan,
-        inputs=[shoot_folder, shoot_recursive],
+        inputs=[shoot_folder, shoot_recursive, shoot_manifest_path, shoot_face_quality],
         outputs=[shoot_rows, shoot_status, shoot_graph_json],
+        concurrency_limit=1,
+        concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
+        show_progress="minimal",
     )
     watch_btn.click(
         fn=on_watch_folder_process,
-        inputs=[watch_folder, watch_state, watch_limit],
+        inputs=[watch_folder, watch_state, watch_limit, watch_output_dir, watch_job_kind,
+                watch_recipe, shoot_manifest_path],
         outputs=[watch_status],
+        concurrency_limit=1,
+        concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
+        show_progress="minimal",
+    )
+    review_save_btn.click(
+        fn=on_save_shoot_review,
+        inputs=[shoot_manifest_path, review_asset_id, review_decision, review_rating,
+                review_labels, review_reviewer, review_note],
+        outputs=[review_status],
+    )
+    review_json_btn.click(
+        fn=on_export_shoot_review_json,
+        inputs=[shoot_manifest_path],
+        outputs=[review_export_file, review_status],
+    )
+    review_csv_btn.click(
+        fn=on_export_shoot_review_csv,
+        inputs=[shoot_manifest_path, review_export_selected],
+        outputs=[review_export_file, review_status],
     )
     profile_save_btn.click(
         fn=on_save_project_profile,
@@ -3722,11 +5447,12 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         inputs=[look_board_id, look_board_project, look_board_refs],
         outputs=[look_board_status, look_board_json],
     )
-    look_board_apply_btn.click(
+    _look_board_apply_event = look_board_apply_btn.click(
         fn=on_apply_look_board,
         inputs=[look_board_id, img_input],
         outputs=[_look_params_state, look_board_status],
     )
+    _mutation_events.append(_look_board_apply_event)
 
     # Name → Gradio component map.  Keyed by PROCESS_INPUT_KEYS so that adding
     # a ParamSpec (which auto-inserts a name into PROCESS_INPUT_KEYS via
@@ -4016,43 +5742,188 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     _process_inputs = [_process_input_components[k] for k in PROCESS_INPUT_KEYS]
     _process_outputs = [img_output, compare_viewer, _processed_result_state, export_file, status, debug_gallery, debug_panel, qa_status]
 
-    # F2: Undo/Redo history.  Push the current slider state onto the stack
-    # after every mutation so undo_handler/redo_handler (wired below) can step
-    # through history.  Registered after _process_inputs exists; each source's
-    # mutation listener was registered earlier, so push fires post-mutation.
-    recipe.change(push_undo_handler, inputs=_process_inputs, outputs=[_undo_stack_state, undo_btn, redo_btn])
-    custom_style_preset.change(push_undo_handler, inputs=_process_inputs, outputs=[_undo_stack_state, undo_btn, redo_btn])
-    for _reset_src in (
-        reset_btn, reset_skin_smooth_btn, reset_skin_tone_btn, reset_basic_tone_btn,
-        reset_tone_curve_btn, reset_relighting_btn, reset_eyes_lips_btn,
-        reset_face_reshaping_btn, reset_structure_effects_btn, reset_color_grading_btn,
-        reset_film_effects_btn, reset_split_toning_btn, reset_color_transfer_btn,
-        reset_debug_btn, reset_body_skin_btn, reset_lch_btn, smart_process_btn,
+    # Detection/source caches are invalidated before a subsequent render when
+    # any input that changes decoded pixels or the processing resolution moves.
+    # The callback is unqueued and only replaces compact session state.
+    for _cache_invalidation_component in (
+        img_input,
+        optical_correction,
+        export_res,
+        quality_tier,
+        fast,
     ):
-        _reset_src.click(push_undo_handler, inputs=_process_inputs, outputs=[_undo_stack_state, undo_btn, redo_btn])
+        _cache_invalidation_component.change(
+            fn=invalidate_preview_cache_handler,
+            inputs=[_preview_cache_state],
+            outputs=[_preview_cache_state],
+            show_progress="hidden",
+            queue=False,
+        )
 
-    process_btn.click(
-        fn=process_image,
+    # Draft changes update only session State and the lightweight status badge.
+    # One consolidated dependency replaces hundreds of per-control listeners.
+    # Slider input is intentionally never used to write controls or history.
+    _settings_revision_triggers = []
+    _history_triggers = []
+    _history_outputs = [_undo_stack_state, undo_btn, redo_btn]
+    for _settings_component in _process_inputs[1:]:
+        # Recipe changes are revisioned after their defaults have been
+        # applied by the mutation event below; registering both paths would
+        # advance the draft twice for one user action.
+        if _settings_component is recipe:
+            continue
+        _input_event = getattr(_settings_component, "input", None)
+        if callable(_input_event):
+            _settings_revision_triggers.append(_input_event)
+        if isinstance(_settings_component, gr.Slider):
+            _release_event = getattr(_settings_component, "release", None)
+            if callable(_release_event):
+                _history_triggers.append(_release_event)
+        elif _settings_component is not recipe and _settings_component is not custom_style_preset:
+            # Dropdowns/checkboxes have no release event; their user input is
+            # still a lightweight, non-queued history boundary.
+            if callable(_input_event):
+                _history_triggers.append(_input_event)
+
+    gr.on(
+        triggers=_settings_revision_triggers,
+        fn=on_settings_changed,
+        inputs=[_settings_revision_state],
+        outputs=[_settings_revision_state, status],
+        show_progress="hidden",
+        queue=False,
+    )
+    if _history_triggers:
+        gr.on(
+            triggers=_history_triggers,
+            fn=record_history,
+            inputs=_process_inputs + [_undo_stack_state],
+            outputs=_history_outputs,
+            show_progress="hidden",
+            queue=False,
+        )
+
+    # Seed each browser session with a baseline.  The stack and button state
+    # remain session-owned and deepcopy-compatible through gr.State.
+    app.load(
+        fn=initialize_history,
         inputs=_process_inputs,
-        outputs=_process_outputs,
-        concurrency_limit=1,
+        outputs=_history_outputs,
+        show_progress="hidden",
+        queue=False,
     )
 
-    process_btn_bottom.click(
-        fn=process_image,
-        inputs=_process_inputs,
-        outputs=_process_outputs,
-        concurrency_limit=1,
+    # Mutation events were registered before _process_inputs was assembled.
+    # Attach history and one revision increment only after their outputs have
+    # committed, so recipe/style/reset mutations cannot race the draft state.
+    for _mutation_event in _mutation_events:
+        _history_event = _mutation_event.success(
+            fn=record_history,
+            inputs=_process_inputs + [_undo_stack_state],
+            outputs=_history_outputs,
+            show_progress="hidden",
+            queue=False,
+        )
+        _history_event.success(
+            fn=on_settings_changed,
+            inputs=[_settings_revision_state],
+            outputs=[_settings_revision_state, status],
+            show_progress="hidden",
+            queue=False,
+        )
+
+    def _bind_process_event(_button, _mode_state):
+        _capture_event = _button.click(
+            fn=capture_render_snapshot,
+            inputs=_process_inputs + [
+                _settings_revision_state,
+                _mode_state,
+                preserve_source_profile,
+            ],
+            outputs=[_render_snapshot_state, status],
+            show_progress="hidden",
+            queue=False,
+        )
+        _render_event = _capture_event.then(
+            fn=process_image_event,
+            inputs=[_render_snapshot_state, _settings_revision_state, _preview_cache_state],
+            outputs=_process_outputs + [_preview_cache_state],
+            show_progress="minimal",
+            concurrency_limit=1,
+            concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
+        )
+        _completion_event = _render_event.then(
+            fn=render_completion_status,
+            inputs=[status, _render_snapshot_state, _settings_revision_state, export_file],
+            outputs=[status, export_file],
+            show_progress="hidden",
+            queue=False,
+        )
+        _completion_event.then(
+            fn=build_render_manifest_handler,
+            inputs=[
+                _render_snapshot_state,
+                _settings_revision_state,
+                _preview_cache_state,
+                export_file,
+            ],
+            outputs=[render_manifest_out],
+            show_progress="hidden",
+            queue=False,
+        )
+
+    _bind_process_event(process_btn, _render_preview_mode_state)
+    _bind_process_event(process_btn_bottom, _render_preview_mode_state)
+    _bind_process_event(export_full_btn, _export_full_mode_state)
+    export_all_btn.click(
+        fn=export_all_handler,
+        inputs=_process_inputs + [_settings_revision_state, preserve_source_profile],
+        outputs=[status],
+        show_progress="hidden",
+        queue=False,
     )
 
-    # F10: Smart Process — analyze first image, auto-fill sliders + show
-    # explanation readout. Outputs: recipe Radio, slider tuple (matching
-    # _recipe_outputs), status Textbox, smart-analysis HTML.
-    smart_process_btn.click(
-        fn=on_smart_process,
-        inputs=[img_input, recipe] + list(_process_inputs[1:]),
-        outputs=[recipe] + list(_recipe_outputs) + [status, smart_analysis_html],
+    # F10: Smart Process stores a proposal in State. It never writes recipe
+    # controls until Apply Smart Suggestion is explicitly clicked.
+    _smart_capture_event = smart_process_btn.click(
+        fn=capture_smart_snapshot,
+        inputs=[img_input, recipe, _settings_revision_state],
+        outputs=[_smart_analysis_snapshot_state, status],
+        show_progress="hidden",
+        queue=False,
+    )
+    _smart_analysis_event = _smart_capture_event.then(
+        fn=on_smart_process_event,
+        inputs=[_smart_analysis_snapshot_state],
+        outputs=[_smart_proposal_state, status, smart_analysis_html, apply_smart_btn],
+        show_progress="minimal",
         concurrency_limit=1,
+        concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
+    )
+    _smart_analysis_event.then(
+        fn=smart_completion_status,
+        inputs=[status, _smart_analysis_snapshot_state, _settings_revision_state],
+        outputs=[status],
+        show_progress="hidden",
+        queue=False,
+    )
+
+    _smart_apply_event = apply_smart_btn.click(
+        fn=apply_smart_suggestion,
+        inputs=[_smart_proposal_state, _settings_revision_state],
+        outputs=[recipe] + list(_recipe_outputs) + [
+            _smart_proposal_state, status, smart_analysis_html, apply_smart_btn,
+            _settings_revision_state,
+        ],
+        show_progress="hidden",
+        queue=False,
+    )
+    _smart_apply_event.success(
+        fn=record_history,
+        inputs=_process_inputs + [_undo_stack_state],
+        outputs=_history_outputs,
+        show_progress="hidden",
+        queue=False,
     )
 
     # F2: Session wiring
@@ -4062,10 +5933,24 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         outputs=[session_download],
     )
 
-    load_session_file.change(
+    _load_session_event = load_session_file.change(
         fn=load_session_handler,
         inputs=[load_session_file] + _process_inputs,
         outputs=list(_process_inputs),
+    )
+    _load_history_event = _load_session_event.success(
+        fn=record_history,
+        inputs=_process_inputs + [_undo_stack_state],
+        outputs=_history_outputs,
+        show_progress="hidden",
+        queue=False,
+    )
+    _load_history_event.success(
+        fn=on_settings_changed,
+        inputs=[_settings_revision_state],
+        outputs=[_settings_revision_state, status],
+        show_progress="hidden",
+        queue=False,
     )
 
     load_session_file.change(
@@ -4077,18 +5962,39 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
             _advanced_history_state, _advanced_edit_log_state, _advanced_mask_state,
             advanced_status,
         ],
+        show_progress="minimal",
+        concurrency_limit=1,
+        concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
     )
 
-    undo_btn.click(
+    _undo_event = undo_btn.click(
         fn=undo_handler,
         inputs=[_undo_stack_state],
         outputs=_process_inputs + [_undo_stack_state, undo_btn, redo_btn],
+        show_progress="hidden",
+        queue=False,
+    )
+    _undo_event.success(
+        fn=revision_after_history,
+        inputs=[_settings_revision_state, _undo_stack_state],
+        outputs=[_settings_revision_state, status],
+        show_progress="hidden",
+        queue=False,
     )
 
-    redo_btn.click(
+    _redo_event = redo_btn.click(
         fn=redo_handler,
         inputs=[_undo_stack_state],
         outputs=_process_inputs + [_undo_stack_state, undo_btn, redo_btn],
+        show_progress="hidden",
+        queue=False,
+    )
+    _redo_event.success(
+        fn=revision_after_history,
+        inputs=[_settings_revision_state, _undo_stack_state],
+        outputs=[_settings_revision_state, status],
+        show_progress="hidden",
+        queue=False,
     )
 
     save_snapshot_btn.click(
@@ -4100,8 +6006,31 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     compare_snapshot_btn.click(
         fn=compare_snapshot_handler,
         inputs=[snapshot_dropdown] + _process_inputs + [_snapshot_state],
-        outputs=[gr.Textbox(visible=False)],
+        outputs=[snapshot_inspection_out],
+        show_progress="hidden",
+        queue=False,
     )
+
+    inspect_render_btn.click(
+        fn=inspect_render_handler,
+        inputs=[
+            _processed_result_state,
+            _render_snapshot_state,
+            _settings_revision_state,
+            inspection_mode,
+            inspection_face_index,
+            inspection_roi,
+            _preview_cache_state,
+        ],
+        outputs=[inspection_output, inspection_status],
+        show_progress="hidden",
+        queue=False,
+    )
+
+    # Session-owned artifact cleanup is scoped by Gradio's request hash. Keep
+    # the hook optional for older Gradio versions used by headless tests.
+    if callable(getattr(app, "unload", None)):
+        app.unload(fn=cleanup_gui_request)
 
 if __name__ == "__main__":
     from retouch.diagnostics import setup_file_logging

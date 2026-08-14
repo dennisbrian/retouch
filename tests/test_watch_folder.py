@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from retouch.watch_folder import WatchFolder
+from retouch.watch_folder import PermanentWatchJobError, WatchFolder
 
 
 def _write_image(path: Path, value: int = 100) -> None:
@@ -68,3 +68,85 @@ def test_watch_folder_ignores_non_images_and_supports_limit(tmp_path: Path):
 
     assert len(completed) == 1
     assert sum(record.status == "done" for record in watcher.state.records.values()) == 1
+
+
+def test_watch_jobs_are_idempotent_and_preview_final_are_independent(tmp_path: Path):
+    source = tmp_path / "card-a" / "IMG_0001.jpg"
+    source.parent.mkdir()
+    _write_image(source)
+    watcher = WatchFolder(tmp_path, state_path=tmp_path / "watch.json")
+    output = tmp_path.parent / (tmp_path.name + "-deliveries")
+    settings = {"recipe": "natural", "export_fmt": "JPEG"}
+
+    assert watcher.queue_jobs(
+        kind="preview", output_root=output, settings=settings,
+        pipeline_fingerprint="test-v1",
+    ) == []
+    queued = watcher.queue_jobs(
+        kind="preview", output_root=output, settings=settings,
+        pipeline_fingerprint="test-v1",
+    )
+    assert len(queued) == 1
+    preview_id = queued[0].job_id
+
+    def write_output(job):
+        Path(job.output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(job.output_path).write_bytes(b"preview bytes")
+        return Path(job.output_path)
+
+    done = watcher.run_queued(write_output)
+    assert done[0].status == "done"
+    assert done[0].output_sha256
+    assert next(iter(watcher.state.records.values())).status == "done"
+    assert watcher.queue_jobs(
+        kind="preview", output_root=output, settings=settings,
+        pipeline_fingerprint="test-v1",
+    ) == []
+
+    final = watcher.queue_jobs(
+        kind="final", output_root=output, settings=settings,
+        pipeline_fingerprint="test-v1",
+    )
+    assert len(final) == 1
+    assert final[0].job_id != preview_id
+    assert final[0].kind == "final"
+
+
+def test_watch_job_failure_is_retryable_and_never_done_without_verified_output(tmp_path: Path):
+    source = tmp_path / "capture.jpg"
+    _write_image(source)
+    watcher = WatchFolder(tmp_path, state_path=tmp_path / "watch.json")
+    kwargs = {
+        "kind": "preview", "output_root": tmp_path.parent / (tmp_path.name + "-out"),
+        "settings": {"recipe": "natural"}, "pipeline_fingerprint": "test-v1",
+    }
+    watcher.queue_jobs(**kwargs)
+    jobs = watcher.queue_jobs(**kwargs)
+    assert len(jobs) == 1
+
+    failed = watcher.run_queued(lambda _job: None)
+    assert failed[0].status == "failed"
+    assert failed[0].output_sha256 is None
+    assert next(iter(watcher.state.records.values())).status == "failed"
+
+    retry = watcher.queue_jobs(**kwargs)
+    assert len(retry) == 1
+    assert retry[0].job_id == failed[0].job_id
+
+
+def test_permanent_watch_job_failure_requires_explicit_retry(tmp_path: Path):
+    source = tmp_path / "capture.jpg"
+    _write_image(source)
+    watcher = WatchFolder(tmp_path, state_path=tmp_path / "watch.json")
+    kwargs = {
+        "kind": "preview", "output_root": tmp_path.parent / (tmp_path.name + "-out"),
+        "settings": {"recipe": "natural"}, "pipeline_fingerprint": "test-v1",
+    }
+    watcher.queue_jobs(**kwargs)
+    jobs = watcher.queue_jobs(**kwargs)
+    assert len(jobs) == 1
+    watcher.run_queued(lambda _job: (_ for _ in ()).throw(PermanentWatchJobError("model unavailable")))
+
+    assert watcher.queue_jobs(**kwargs) == []
+    explicit = watcher.queue_jobs(**kwargs, retry_failed=True)
+    assert len(explicit) == 1

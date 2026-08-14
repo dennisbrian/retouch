@@ -1,6 +1,6 @@
 # Performance Tuning Guide
 
-**Quick answer:** Use `fast=True` for interactive work, `fast=False` for final exports. Batch processing? Use `--workers 4-8`.
+**Quick answer:** Use the GUI's **Render Preview** for interactive work; it uses `fast=True` and never exports. Use **Export Full Quality** for one final image; it forces `fast=False` and the Full quality tier. Use **Export All → Batch** for shoots. Batch processing? Use `--workers 4-8`.
 
 ---
 
@@ -20,8 +20,8 @@ The pipeline has **three independent resolution controls** that don't affect out
 
 ## When to Use Each Mode
 
-### Fast Preview (`fast=True`) — GUI Default
-- **Settings:** `fast=True` in GUI
+### Render Preview (`fast=True`) — GUI Interactive Path
+- **Settings:** The `Render Preview` action sets `fast=True`; the legacy checkbox is not the final-export control.
 - **Processing resolution:** 800px downscaled
 - **Speed:** ~3-5× faster than native
 - **Memory:** ~600 MB
@@ -32,6 +32,11 @@ The pipeline has **three independent resolution controls** that don't affect out
   - ✅ Real-time preview in GUI
 - **NOT for:**
   - ❌ Final exports (too soft for print/large displays)
+
+### Export Full Quality (`fast=False`) — GUI Final Path
+- **Settings:** The `Export Full Quality` action sets `fast=False` and `quality="full"` for one image.
+- **Metadata:** The writer preserves source ICC/EXIF intent for the exported derivative.
+- **Use for:** Final single-image delivery.
 
 ### Proxy Resolution — Automatic for High-Res
 - **When:** Input image > 2048px automatically activates

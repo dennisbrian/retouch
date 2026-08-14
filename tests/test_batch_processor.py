@@ -9,6 +9,7 @@ from PIL import Image
 
 from retouch.batch_processor import (
     BatchProcessor,
+    BatchProcessorCache,
     _compute_queue_depth,
     _estimate_image_working_bytes,
     _run_async_batch_queue,
@@ -27,6 +28,93 @@ def test_compute_queue_depth_scales_with_resolution(tmp_path):
     Image.new("RGB", (640, 480), color=(0, 0, 0)).save(small)
     depth = _compute_queue_depth(4, [small], ram_budget_bytes=50 * 1024 * 1024)
     assert 1 <= depth <= 8
+
+
+def test_recursive_cache_keys_do_not_collide_on_same_basename(tmp_path):
+    input_dir = tmp_path / "input"
+    (input_dir / "card-a").mkdir(parents=True)
+    (input_dir / "card-b").mkdir(parents=True)
+    first = input_dir / "card-a" / "IMG_0001.jpg"
+    second = input_dir / "card-b" / "IMG_0001.jpg"
+    Image.new("RGB", (8, 8), color=(10, 10, 10)).save(first)
+    Image.new("RGB", (8, 8), color=(20, 20, 20)).save(second)
+    cache = BatchProcessorCache(input_dir)
+
+    assert cache.relative_key(first) == "card-a/IMG_0001.jpg"
+    assert cache.relative_key(second) == "card-b/IMG_0001.jpg"
+    cache.set(cache.relative_key(first), first.stat().st_mtime, {"faces": 1})
+    cache.set(cache.relative_key(second), second.stat().st_mtime, {"faces": 2})
+    assert cache.get(cache.relative_key(first), first.stat().st_mtime)["faces"] == 1
+    assert cache.get(cache.relative_key(second), second.stat().st_mtime)["faces"] == 2
+
+
+def test_recursive_outputs_preserve_relative_directories(monkeypatch, tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    (input_dir / "card-a").mkdir(parents=True)
+    (input_dir / "card-b").mkdir(parents=True)
+    first = input_dir / "card-a" / "IMG_0001.jpg"
+    second = input_dir / "card-b" / "IMG_0001.jpg"
+    Image.new("RGB", (8, 8), color=(10, 10, 10)).save(first)
+    Image.new("RGB", (8, 8), color=(20, 20, 20)).save(second)
+
+    engine = MagicMock()
+    engine.process.return_value = _fake_result()
+    processor = BatchProcessor(engine)
+    monkeypatch.setattr(
+        "retouch.batch_processor.analyze_and_group",
+        lambda paths, cache, eng: {"Group": paths},
+    )
+    monkeypatch.setattr(
+        "retouch.batch_processor.imread_exif",
+        lambda path: np.zeros((8, 8, 3), dtype=np.uint8),
+    )
+
+    def fake_write(path, *args, **kwargs):
+        Path(path).write_bytes(b"verified test output")
+
+    monkeypatch.setattr("retouch.io.write_image_with_icc", fake_write)
+    processed, _, _, _ = processor.process_folder(
+        input_dir, output_dir, generate_sheet=False, num_workers=1,
+    )
+
+    assert {Path(path).relative_to(output_dir).as_posix() for path in processed} == {
+        "card-a/IMG_0001_retouched.jpg",
+        "card-b/IMG_0001_retouched.jpg",
+    }
+
+
+def test_batch_log_reports_partial_failure_truthfully(monkeypatch, tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    Image.new("RGB", (8, 8), color=(10, 10, 10)).save(input_dir / "ok.jpg")
+    Image.new("RGB", (8, 8), color=(20, 20, 20)).save(input_dir / "bad.jpg")
+    engine = MagicMock()
+    engine.process.return_value = _fake_result()
+    processor = BatchProcessor(engine)
+    monkeypatch.setattr(
+        "retouch.batch_processor.analyze_and_group",
+        lambda paths, cache, eng: {"Group": paths},
+    )
+    monkeypatch.setattr(
+        "retouch.batch_processor.imread_exif",
+        lambda path: np.zeros((8, 8, 3), dtype=np.uint8),
+    )
+
+    def fake_write(path, *args, **kwargs):
+        if "bad" in str(path):
+            raise IOError("simulated output failure")
+        Path(path).write_bytes(b"verified test output")
+
+    monkeypatch.setattr("retouch.io.write_image_with_icc", fake_write)
+    processed, _, _, log = processor.process_folder(
+        input_dir, output_dir, generate_sheet=False, num_workers=1,
+    )
+
+    assert len(processed) == 1
+    assert "Partial: Processed 1/2" in log
+    assert "1 failed" in log
 
 
 def test_run_async_batch_queue_processes_all_files(tmp_path):
@@ -167,9 +255,10 @@ def test_on_file_result_fires_for_success_and_failure(monkeypatch, tmp_path):
         return np.zeros((64, 64, 3), dtype=np.uint8)
 
     monkeypatch.setattr("retouch.batch_processor.imread_exif", fake_imread)
-    monkeypatch.setattr(
-        "retouch.io.write_image_with_icc", lambda *args, **kwargs: None,
-    )
+    def fake_write(path, *args, **kwargs):
+        Path(path).write_bytes(b"verified test output")
+
+    monkeypatch.setattr("retouch.io.write_image_with_icc", fake_write)
 
     results = {}
 
@@ -209,9 +298,10 @@ def test_on_file_result_receives_qa_before_export_resize(monkeypatch, tmp_path):
         "retouch.batch_processor.imread_exif",
         lambda path: np.zeros((2000, 2000, 3), dtype=np.uint8),
     )
-    monkeypatch.setattr(
-        "retouch.io.write_image_with_icc", lambda *args, **kwargs: None,
-    )
+    def fake_write(path, *args, **kwargs):
+        Path(path).write_bytes(b"verified test output")
+
+    monkeypatch.setattr("retouch.io.write_image_with_icc", fake_write)
 
     captured = {}
 

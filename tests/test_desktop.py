@@ -11,6 +11,7 @@ import importlib.util
 import os
 import sys
 from unittest.mock import MagicMock
+from urllib.error import URLError
 
 import pytest
 
@@ -84,3 +85,224 @@ def test_start_gradio_invokes_app_launch_with_expected_kwargs(desktop_module):
     assert kwargs.get("server_port") == 7860
     assert kwargs.get("inbrowser") is False
     assert kwargs.get("show_error") is True
+
+
+class _FakeSocket:
+    instances = []
+    busy_ports = {7860, 7861}
+
+    def __init__(self, *_args):
+        self.bound_port = None
+        self.closed = False
+        self.options = []
+        self.__class__.instances.append(self)
+
+    def setsockopt(self, *args):
+        self.options.append(args)
+
+    def bind(self, address):
+        _host, port = address
+        if port in self.busy_ports:
+            raise OSError("address already in use")
+        self.bound_port = port
+
+    def getsockname(self):
+        return ("127.0.0.1", 49152)
+
+    def close(self):
+        self.closed = True
+
+
+def test_select_available_port_skips_collisions_and_closes_probe_sockets(desktop_module):
+    module, _ = desktop_module
+    _FakeSocket.instances = []
+
+    selected = module.select_available_port(
+        preferred_port=7860,
+        attempts=4,
+        socket_factory=_FakeSocket,
+    )
+
+    assert selected == 7862
+    assert len(_FakeSocket.instances) == 3
+    assert all(sock.closed for sock in _FakeSocket.instances)
+
+
+class _Response:
+    def __init__(self, status=200):
+        self.status = status
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+def test_wait_for_readiness_retries_transient_http_failures(desktop_module):
+    module, _ = desktop_module
+    responses = [URLError("not listening"), _Response(status=503), _Response(status=200)]
+    sleeps = []
+    now = [0.0]
+
+    def opener(_url, timeout=None):
+        del timeout
+        result = responses.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    def sleeper(delay):
+        sleeps.append(delay)
+        now[0] += delay
+
+    assert module.wait_for_readiness(
+        "http://127.0.0.1:7860",
+        timeout=2.0,
+        interval=0.25,
+        opener=opener,
+        sleeper=sleeper,
+        clock=lambda: now[0],
+    ) is True
+    assert len(sleeps) == 2
+    assert responses == []
+
+
+def test_start_gradio_hands_backend_exception_to_startup_state(desktop_module):
+    module, _ = desktop_module
+    app = MagicMock()
+    app.launch.side_effect = RuntimeError("port bind failed")
+    state = module.StartupState()
+
+    result = module.start_gradio(
+        app_instance=app,
+        port=7862,
+        startup_state=state,
+    )
+
+    assert result is state
+    assert state.finished.is_set()
+    assert state.error is not None
+    assert state.error.phase == "gradio"
+    assert "port bind failed" in state.error.message
+
+
+def test_handoff_startup_error_loads_escaped_error_document(desktop_module):
+    module, _ = desktop_module
+    window = MagicMock()
+
+    document = module.handoff_startup_error(
+        window,
+        RuntimeError("bad <binding>"),
+        url="http://127.0.0.1:7862",
+    )
+
+    window.load_html.assert_called_once_with(document)
+    assert "bad &lt;binding&gt;" in document
+    assert "127.0.0.1:7862" in document
+
+
+class _ClosedEvent:
+    def __init__(self):
+        self.callbacks = []
+
+    def __iadd__(self, callback):
+        self.callbacks.append(callback)
+        return self
+
+
+class _FakeWindow:
+    def __init__(self):
+        self.events = type("Events", (), {"closed": _ClosedEvent()})()
+
+
+class _FakeWebview:
+    def __init__(self):
+        self.create_calls = []
+        self.window = _FakeWindow()
+        self.start_calls = 0
+
+    def create_window(self, *args, **kwargs):
+        self.create_calls.append((args, kwargs))
+        return self.window
+
+    def start(self):
+        self.start_calls += 1
+        for callback in list(self.window.events.closed.callbacks):
+            callback()
+
+
+class _FakeThread:
+    def __init__(self, target, daemon=False):
+        self.target = target
+        self.daemon = daemon
+        self.started = False
+        self.join_calls = []
+        self._alive = True
+
+    def start(self):
+        self.started = True
+
+    def is_alive(self):
+        return self._alive
+
+    def join(self, timeout=None):
+        self.join_calls.append(timeout)
+        self._alive = False
+
+
+def test_desktop_runtime_waits_for_ready_and_shuts_down_on_window_close(desktop_module):
+    module, _ = desktop_module
+    app = MagicMock()
+    webview = _FakeWebview()
+    thread = _FakeThread(target=lambda: None)
+
+    def thread_factory(target, daemon=False):
+        thread.target = target
+        thread.daemon = daemon
+        return thread
+
+    runtime = module.DesktopRuntime(
+        app_instance=app,
+        webview_module=webview,
+        socket_factory=_FakeSocket,
+        readiness_opener=lambda _url, timeout=None: _Response(status=200),
+        thread_factory=thread_factory,
+    )
+
+    assert runtime.run() is True
+    assert runtime.url == "http://127.0.0.1:7862"
+    assert webview.start_calls == 1
+    assert app.close.called
+    assert thread.join_calls == [module.DEFAULT_JOIN_TIMEOUT]
+    assert runtime.state.stop_requested.is_set()
+    assert webview.create_calls[0][0] == (module.DEFAULT_WINDOW_TITLE, runtime.url)
+
+
+def test_desktop_runtime_hands_readiness_timeout_to_error_window(desktop_module):
+    module, _ = desktop_module
+    app = MagicMock()
+    webview = _FakeWebview()
+    thread = _FakeThread(target=lambda: None)
+
+    def thread_factory(target, daemon=False):
+        thread.target = target
+        thread.daemon = daemon
+        return thread
+
+    def never_ready(_url, timeout=None):
+        del timeout
+        raise URLError("connection refused")
+
+    runtime = module.DesktopRuntime(
+        app_instance=app,
+        webview_module=webview,
+        socket_factory=_FakeSocket,
+        readiness_opener=never_ready,
+        startup_timeout=0,
+        thread_factory=thread_factory,
+    )
+
+    assert runtime.run() is False
+    assert "Retouch could not start" in webview.create_calls[0][1]["html"]
+    assert "Timed out waiting" in webview.create_calls[0][1]["html"]
+    assert app.close.called
+    assert thread.join_calls == [module.DEFAULT_JOIN_TIMEOUT]

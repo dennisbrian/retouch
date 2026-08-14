@@ -49,6 +49,10 @@ class FaceData:
     bbox: Tuple[int, int, int, int]      # (x, y, w, h) bounding box
     ied: float                           # inter-eye distance in pixels
     confidence: float = 1.0
+    # A numeric default kept for compatibility is not automatically measured
+    # confidence. Consumers must inspect this source before using the value as
+    # evidence.
+    confidence_source: str = "unknown"
 
 
 @dataclasses.dataclass
@@ -115,6 +119,7 @@ class FaceDetector:
         self.min_confidence = min_confidence
         self.available = True
         self.unavailable_reason: Optional[str] = None
+        self.backend_name = "uninitialized"
         self._legacy_mesh = None
         self._legacy_segmenter = None
         self._landmarker = None
@@ -146,6 +151,7 @@ class FaceDetector:
                     self._mark_unavailable(exc)
                     return
                 raise
+            self.backend_name = "mediapipe_legacy"
             return
 
         if backend in {"auto", "tasks"} and not has_legacy_solutions and not factory_is_mocked:
@@ -204,16 +210,35 @@ class FaceDetector:
                     self._mark_unavailable(exc)
                     return
                 raise
+        self.backend_name = "mediapipe_tasks"
 
     def _mark_unavailable(self, error: BaseException) -> None:
         """Keep the host application usable without pretending faces were found."""
         import logging
         self.available = False
+        self.backend_name = "unavailable"
         self.unavailable_reason = f"{type(error).__name__}: {error}"
         logging.getLogger(__name__).warning(
             "Face-aware detection unavailable; using global-only fallback: %s",
             self.unavailable_reason,
         )
+
+    def runtime_status(self) -> dict[str, Any]:
+        """Return the authoritative face-runtime capability snapshot.
+
+        ``available`` describes whether the detector backend initialized; it
+        intentionally does not depend on whether a particular image contains
+        a face.  Consumers can therefore distinguish an initialized
+        face-aware runtime from a global-only fallback without guessing from
+        a zero-length detection result.
+        """
+        return {
+            "mode": "face_aware" if self.available else "global_only",
+            "available": bool(self.available),
+            "backend": self.backend_name,
+            "reason": self.unavailable_reason,
+            "probe_state": "initialized" if self.available else "blocked",
+        }
 
     def _init_legacy_backend(self, max_faces: int, min_confidence: float, refine_landmarks: bool) -> None:
         """Initialize the stable CPU FaceMesh backend used by the pinned runtime."""
@@ -296,6 +321,7 @@ class FaceDetector:
                     bbox=bbox,
                     ied=inter_eye_distance(compat, w, h),
                     confidence=1.0,
+                    confidence_source="mediapipe_presence_unavailable",
                 ))
             return faces
 
@@ -374,7 +400,8 @@ class FaceDetector:
                             landmarks=compat,
                             bbox=(x1, y1, bw, bh),
                             ied=ied,
-                            confidence=float(score)
+                            confidence=float(score),
+                            confidence_source="retinaface",
                         ))
                         break
 
@@ -413,7 +440,12 @@ class FaceDetector:
                         continue
                     existing.add(key)
                     ied = inter_eye_distance(compat, w, h)
-                    faces.append(FaceData(landmarks=compat, bbox=bbox, ied=ied))
+                    faces.append(FaceData(
+                        landmarks=compat,
+                        bbox=bbox,
+                        ied=ied,
+                        confidence_source="mediapipe_presence_unavailable",
+                    ))
 
         return faces
 

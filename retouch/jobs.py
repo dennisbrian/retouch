@@ -112,7 +112,7 @@ class Job:
     created: str = field(default_factory=_now_iso)
     updated: str = field(default_factory=_now_iso)
     version: int = JOB_VERSION
-    status: str = "running"  # running | done | failed
+    status: str = "running"  # running | partial | done | failed
     input_dir: str = ""
     output_dir: str = ""
     style_type: str = ""  # "Use Standard Recipe" | "Use Custom Style"

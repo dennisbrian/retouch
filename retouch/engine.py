@@ -536,11 +536,132 @@ class ProcessingContext:
 # ProcessingResult — rich return value
 # ---------------------------------------------------------------------------
 
+
+def _integer_bit_depth(dtype: np.dtype) -> Optional[int]:
+    """Return the storage bit depth for an integer dtype, if applicable."""
+    if np.issubdtype(dtype, np.integer):
+        return int(np.iinfo(dtype).bits)
+    return None
+
+
+@dataclass(frozen=True)
+class ProcessingPrecision:
+    """Truthful precision metadata for one processed result.
+
+    ``storage_bit_depth`` describes the returned ndarray/container.  The
+    separate ``processed_bit_depth`` describes the effective precision that
+    the engine can prove survived its public output boundary.  Keeping these
+    fields separate prevents a future uint16/PNG-16 container from being
+    mistaken for 16-bit processed data.
+
+    The current engine has a final ``to_uint8`` delivery boundary, so engine
+    results report ``processed_bit_depth=8`` and
+    ``supports_16bit_export=False`` even when the source arrived as float32
+    from a high-bit-depth decoder.
+    """
+
+    source_dtype: str
+    source_bit_depth: Optional[int]
+    storage_dtype: str
+    storage_bit_depth: Optional[int]
+    processed_precision: str
+    processed_bit_depth: Optional[int]
+    precision_status: str
+    downgraded: bool
+    downgrade_reason: Optional[str]
+    is_true_16bit: bool
+    supports_16bit_export: bool
+
+    @classmethod
+    def from_output(
+        cls,
+        image: np.ndarray,
+        *,
+        source_dtype: Optional[Any] = None,
+    ) -> "ProcessingPrecision":
+        """Describe an output conservatively from its actual ndarray dtype.
+
+        A uint8 result is provably 8-bit.  Other integer containers are not
+        treated as true high-precision output unless a future producer
+        supplies a separately verified contract; dtype alone cannot prove
+        that a uint16 container contains more than 256 processed levels.
+        """
+        source = np.dtype(source_dtype if source_dtype is not None else image.dtype)
+        storage = np.dtype(image.dtype)
+        source_bits = _integer_bit_depth(source)
+        storage_bits = _integer_bit_depth(storage)
+
+        if storage == np.dtype(np.uint8):
+            processed_precision = "uint8"
+            processed_bits: Optional[int] = 8
+        elif np.issubdtype(storage, np.floating):
+            processed_precision = storage.name
+            processed_bits = None
+        else:
+            processed_precision = storage.name
+            processed_bits = None
+
+        source_is_higher_precision = np.issubdtype(source, np.floating) or (
+            source_bits is not None and source_bits > 8
+        )
+        downgraded = storage == np.dtype(np.uint8) and source_is_higher_precision
+
+        if downgraded:
+            precision_status = "downgraded_to_uint8"
+            downgrade_reason = (
+                "the engine's final delivery boundary converts processed data "
+                "to uint8; no true 16-bit export is available"
+            )
+        elif storage == np.dtype(np.uint8):
+            precision_status = "native_8bit"
+            downgrade_reason = None
+        else:
+            precision_status = "unverified_container_precision"
+            downgrade_reason = (
+                "container dtype alone does not prove effective processed "
+                "precision"
+            )
+
+        return cls(
+            source_dtype=source.name,
+            source_bit_depth=source_bits,
+            storage_dtype=storage.name,
+            storage_bit_depth=storage_bits,
+            processed_precision=processed_precision,
+            processed_bit_depth=processed_bits,
+            precision_status=precision_status,
+            downgraded=downgraded,
+            downgrade_reason=downgrade_reason,
+            # These are intentionally conservative.  A producer must add a
+            # verified high-precision contract before either can be true.
+            is_true_16bit=False,
+            supports_16bit_export=False,
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a JSON-safe snapshot for manifests and diagnostics."""
+        return {
+            "source_dtype": self.source_dtype,
+            "source_bit_depth": self.source_bit_depth,
+            "storage_dtype": self.storage_dtype,
+            "storage_bit_depth": self.storage_bit_depth,
+            "processed_precision": self.processed_precision,
+            "processed_bit_depth": self.processed_bit_depth,
+            "precision_status": self.precision_status,
+            "downgraded": self.downgraded,
+            "downgrade_reason": self.downgrade_reason,
+            "is_true_16bit": self.is_true_16bit,
+            "supports_16bit_export": self.supports_16bit_export,
+        }
+
+
 class ProcessingResult(np.ndarray):
     """Return value of RetouchEngine.process().
 
     Inherits from np.ndarray so OpenCV, Pillow, and other downstream callers
-    can treat it directly as a standard uint8 BGR image array.
+    can treat it directly as a standard BGR image array.  ``precision`` and
+    ``precision_metadata`` state what precision the returned pixels actually
+    carry; they do not infer 16-bit quality from a container name.
     """
 
     def __new__(
@@ -558,6 +679,8 @@ class ProcessingResult(np.ndarray):
         face_recipes: Optional[Dict[int, Dict[str, Any]]] = None,
         safe_auto_decisions: Optional[List[Dict[str, Any]]] = None,
         runtime_diagnostics: Optional[Dict[str, Any]] = None,
+        precision: Optional[ProcessingPrecision] = None,
+        source_dtype: Optional[Any] = None,
     ):
         obj = np.asarray(image).view(cls)
         obj.image = image
@@ -573,6 +696,10 @@ class ProcessingResult(np.ndarray):
         obj.face_recipes = face_recipes
         obj.safe_auto_decisions = list(safe_auto_decisions or [])
         obj.runtime_diagnostics = dict(runtime_diagnostics or {})
+        obj.precision = precision or ProcessingPrecision.from_output(
+            np.asarray(image), source_dtype=source_dtype
+        )
+        obj.precision_metadata = obj.precision.to_dict()
         return obj
 
     def __array_finalize__(self, obj):
@@ -591,6 +718,8 @@ class ProcessingResult(np.ndarray):
         self.face_recipes = getattr(obj, "face_recipes", None)
         self.safe_auto_decisions = getattr(obj, "safe_auto_decisions", [])
         self.runtime_diagnostics = getattr(obj, "runtime_diagnostics", {})
+        self.precision = getattr(obj, "precision", None)
+        self.precision_metadata = getattr(obj, "precision_metadata", {})
 
 
 # ---------------------------------------------------------------------------
@@ -1178,6 +1307,7 @@ class RetouchEngine:
         use the result directly as an ndarray (legacy-compatible).
         """
         timings: Dict[str, float] = {}
+        source_dtype = np.dtype(img_bgr.dtype)
 
         # ------------------------------------------------------------------
         # PERF-1: downscale *before* detection when fast=True
@@ -1569,6 +1699,7 @@ class RetouchEngine:
                 qa=core.qa,
                 safe_auto_decisions=getattr(ctx, "_safe_auto_decisions", []),
                 runtime_diagnostics=getattr(ctx, "_runtime_diagnostics", {}),
+                source_dtype=source_dtype,
             )
 
         # ------------------------------------------------------------------
@@ -1648,6 +1779,7 @@ class RetouchEngine:
             face_recipes=face_recipes or None,
             safe_auto_decisions=getattr(ctx, "_safe_auto_decisions", []),
             runtime_diagnostics=getattr(ctx, "_runtime_diagnostics", {}),
+            source_dtype=source_dtype,
         )
 
     # ------------------------------------------------------------------
@@ -2391,7 +2523,10 @@ class RetouchEngine:
                 timings["fabric_wrinkle_smooth"] = (time.perf_counter() - t_fab) * 1000
 
         # ------------------------------------------------------------------
-        # F1: Convert back to uint8 for output
+        # F1: Convert back to uint8 for output.  This is the current public
+        # delivery boundary: ProcessingResult records the resulting precision
+        # explicitly so a high-bit-depth source is never advertised as a
+        # true 16-bit processed export.
         # ------------------------------------------------------------------
         result = to_uint8(result)
 

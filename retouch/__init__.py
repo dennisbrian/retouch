@@ -17,7 +17,25 @@ Usage:
     result = engine.process(img_bgr, smooth=60, whiten=30)
 """
 
-from .engine import RetouchEngine, retouch
+from typing import Any
+
 
 __version__ = "2.0.0"
 __all__ = ["RetouchEngine", "retouch", "__version__"]
+
+
+def __getattr__(name: str) -> Any:
+    """Load the engine only when a caller actually requests it.
+
+    Runtime diagnostics must remain usable in a partially installed
+    environment.  Importing the package used to eagerly import OpenCV,
+    MediaPipe, ONNX Runtime, and every pipeline stage, which turned a missing
+    optional binary into an unreportable import traceback.  The public API is
+    unchanged for callers importing ``RetouchEngine`` or ``retouch``.
+    """
+    if name in {"RetouchEngine", "retouch"}:
+        from .engine import RetouchEngine, retouch
+
+        globals().update(RetouchEngine=RetouchEngine, retouch=retouch)
+        return globals()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

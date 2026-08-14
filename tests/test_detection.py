@@ -43,10 +43,18 @@ class TestFaceData:
         assert fd.bbox == (10, 20, 100, 150)
         assert fd.ied == 60.0
         assert fd.confidence == 1.0
+        assert fd.confidence_source == "unknown"
 
     def test_creates_with_confidence(self):
-        fd = FaceData(landmarks=None, bbox=(0, 0, 50, 60), ied=30.0, confidence=0.95)
+        fd = FaceData(
+            landmarks=None,
+            bbox=(0, 0, 50, 60),
+            ied=30.0,
+            confidence=0.95,
+            confidence_source="retinaface",
+        )
         assert fd.confidence == 0.95
+        assert fd.confidence_source == "retinaface"
 
     def test_with_mock_landmark_compat(self):
         compat = _LandmarkCompat([_Landmark(0.1, 0.2), _Landmark(0.3, 0.4)])

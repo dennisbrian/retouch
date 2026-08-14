@@ -10,12 +10,15 @@ import struct
 import subprocess
 import tempfile
 import zlib
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import cv2
 import numpy as np
 from PIL import Image, TiffImagePlugin, TiffTags
+
+from .color_context import ColorContext
 
 try:
     from PIL.ExifTags import Base as _ExifBase
@@ -345,14 +348,103 @@ def read_image_16bit(path: Union[str, Path]) -> np.ndarray:
     return out
 
 
-def imread_exif(path: Union[str, Path]) -> np.ndarray:
-    """Read image (supports RAW via rawpy), applying EXIF orientation.
+@lru_cache(maxsize=1)
+def get_working_srgb_icc() -> Optional[bytes]:
+    """Return the generated sRGB ICC used by the engine when available."""
+    if not _HAS_IMAGECMS:
+        return None
+    try:
+        profile = ImageCms.createProfile("sRGB")
+        return bytes(ImageCms.ImageCmsProfile(profile).tobytes())
+    except Exception as exc:  # pragma: no cover - depends on Pillow build
+        logger.warning("Unable to create the engine sRGB ICC profile: %s", exc)
+        return None
 
-    Args:
-        path: Filesystem path to the image. RAW formats are decoded via rawpy.
+
+def _icc_description(icc_profile: bytes) -> Optional[str]:
+    """Return an ICC description without making it part of the contract."""
+    if not _HAS_IMAGECMS:
+        return None
+    try:
+        description = ImageCms.getProfileDescription(_icc_to_profile(icc_profile))
+    except Exception:
+        return None
+    description = str(description).strip()
+    return description or None
+
+
+def _color_context_for_source(icc_profile: Optional[bytes]) -> ColorContext:
+    """Create the explicit context for a non-RAW source profile."""
+    working_profile = get_working_srgb_icc()
+    if icc_profile:
+        return ColorContext.from_embedded_profile(
+            bytes(icc_profile),
+            working_profile,
+            conversion_applied=False,
+            source_profile_name=_icc_description(bytes(icc_profile)),
+        )
+    return ColorContext.assumed_srgb_context(working_profile)
+
+
+def _read_non_raw_with_color_context(
+    path: Union[str, Path],
+) -> Tuple[np.ndarray, ColorContext]:
+    """Decode one non-RAW image into BGR sRGB plus its color contract."""
+    from PIL import ImageOps
+
+    with Image.open(path) as opened:
+        embedded_icc = opened.info.get("icc_profile")
+        source_icc = bytes(embedded_icc) if embedded_icc else None
+        pil_img = ImageOps.exif_transpose(opened) or opened
+        pil_img = pil_img.convert("RGB")
+
+        context = _color_context_for_source(source_icc)
+        if source_icc:
+            working_icc = context.working_profile
+            if not working_icc:
+                raise RuntimeError(
+                    "Tagged image requires Pillow ImageCms/LittleCMS to convert "
+                    "its embedded profile to Retouch's sRGB working space"
+                )
+            if source_icc != working_icc:
+                try:
+                    transformed = ImageCms.profileToProfile(
+                        pil_img,
+                        _icc_to_profile(source_icc),
+                        _icc_to_profile(working_icc),
+                    )
+                except Exception as exc:
+                    raise RuntimeError(
+                        "Failed to convert tagged input to the Retouch sRGB working space"
+                    ) from exc
+                pil_img = transformed.convert("RGB")
+                context = ColorContext.from_embedded_profile(
+                    source_icc,
+                    working_icc,
+                    conversion_applied=True,
+                    source_profile_name=context.source_profile_name,
+                )
+
+        # Copy before the Pillow image closes. This preserves the historical
+        # uint8 BGR non-RAW contract and keeps metadata handling unchanged.
+        rgb = np.array(pil_img, dtype=np.uint8, copy=True)
+
+    return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), context
+
+
+def imread_exif_with_context(
+    path: Union[str, Path],
+) -> Tuple[np.ndarray, ColorContext]:
+    """Read an image with EXIF orientation and an explicit color contract.
+
+    Non-RAW images with an embedded ICC profile are transformed to Retouch's
+    display-referred sRGB working space. Untagged images retain their pixel
+    values and are marked ``assumed-srgb``. RAW decoders already request an
+    sRGB rendition and are marked ``raw-srgb``.
 
     Returns:
-        (H, W, 3) uint8 BGR image.
+        ``(image_bgr, color_context)`` where non-RAW images retain the legacy
+        uint8 BGR array contract.
     """
     path = Path(path)
     if path.suffix.lower() in RAW_EXTENSIONS:
@@ -362,8 +454,7 @@ def imread_exif(path: Union[str, Path]) -> np.ndarray:
             # Faithful, neutral RAW development that matches the camera's own
             # rendition: in-camera white balance, no auto-exposure, and a
             # standard 1.0 brightness (rawpy's sRGB output is the closest
-            # neutral analogue to the camera JPEG). The previous bright=1.5
-            # over-lit the image ~50% vs what was shot.
+            # neutral analogue to the camera JPEG).
             rgb = raw.postprocess(
                 use_camera_wb=True,
                 no_auto_bright=True,
@@ -371,15 +462,26 @@ def imread_exif(path: Union[str, Path]) -> np.ndarray:
                 output_color=rawpy.ColorSpace.sRGB,
                 highlight_mode=rawpy.HighlightMode.ReconstructDefault,
             )
-        return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), ColorContext.raw_srgb_context(
+            get_working_srgb_icc()
+        )
+    return _read_non_raw_with_color_context(path)
 
-    from PIL import ImageOps
 
-    pil_img = Image.open(path)
-    pil_img = ImageOps.exif_transpose(pil_img) or pil_img
-    if pil_img.mode != "RGB":
-        pil_img = pil_img.convert("RGB")
-    return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+def imread_exif(path: Union[str, Path]) -> np.ndarray:
+    """Read image (supports RAW via rawpy), applying EXIF orientation.
+
+    Non-RAW images with embedded ICC profiles are converted to Retouch's sRGB
+    working space. Use :func:`imread_exif_with_context` when the source profile
+    and the untagged-input assumption must be retained for delivery.
+
+    Args:
+        path: Filesystem path to the image. RAW formats are decoded via rawpy.
+
+    Returns:
+        (H, W, 3) uint8 BGR image.
+    """
+    return imread_exif_with_context(path)[0]
 
 
 def resolve_raf2jpeg(path: Optional[Union[str, Path]] = None) -> Path:
@@ -490,7 +592,7 @@ def read_raf_with_fuji_match(
     return calibrate_to_fuji_preview(source, preview, strength, inplace=True)
 
 
-def imread_engine(
+def imread_engine_with_context(
     path: Union[str, Path],
     prefer_16bit: bool = True,
     raw_decoder: str = "rawpy",
@@ -499,16 +601,17 @@ def imread_engine(
     fuji_match_strength: float = 0.85,
     optical_correction: bool = False,
     correction_status: Optional[Dict[str, Any]] = None,
-) -> np.ndarray:
+) -> Tuple[np.ndarray, ColorContext]:
     """Load an image for the engine, using the 16-bit path for RAW.
 
     This is the wired ingest entry: RAW camera files (``.raf``/``.cr2``/…)
     are decoded through the 16-bit pipeline (:func:`read_image_16bit`),
     returning **float32 [0, 255] sRGB BGR** so the extra tonal headroom
     reaches ``RetouchEngine.process()`` (which now accepts float32 and
-    threads that precision through global grading). Non-RAW formats fall
-    back to :func:`imread_exif` (uint8 BGR with EXIF orientation applied),
-    so JPEG/PNG/TIFF loading is byte-identical to before.
+    threads that precision through global grading). Non-RAW formats use
+    :func:`imread_exif_with_context`: tagged inputs are converted to the
+    working sRGB space, while untagged inputs retain their values and are
+    explicitly marked as assumed sRGB.
 
     Note: the 16-bit RAW decode stays in the engine's native sRGB
     (display-referred) domain — it is *not* gamma-linearised — because the
@@ -537,8 +640,9 @@ def imread_engine(
             mismatch, or precision-preserving skip visible to UI/CLI callers.
 
     Returns:
-        ``(H, W, 3)`` BGR image: float32 [0, 255] for native and calibrated
-        RAW paths; uint8 for ``raf2jpeg`` and non-RAW formats.
+        ``(image_bgr, color_context)``. The image is float32 [0, 255] for
+        native and calibrated RAW paths, and uint8 for ``raf2jpeg`` and
+        non-RAW formats.
     """
     p = Path(path)
     if raw_decoder not in ("rawpy", "raf2jpeg", "rawpy-fuji-match"):
@@ -548,12 +652,15 @@ def imread_engine(
         )
     if raw_decoder == "raf2jpeg" and p.suffix.lower() == ".raf":
         image = read_raf_with_raf2jpeg(p, raf2jpeg_path, raf2jpeg_quality)
+        context = ColorContext.raw_srgb_context(get_working_srgb_icc())
     elif raw_decoder == "rawpy-fuji-match" and p.suffix.lower() == ".raf":
         image = read_raf_with_fuji_match(p, raf2jpeg_path, fuji_match_strength)
+        context = ColorContext.raw_srgb_context(get_working_srgb_icc())
     elif prefer_16bit and p.suffix.lower() in RAW_EXTENSIONS:
         image = read_image_16bit(p)
+        context = ColorContext.raw_srgb_context(get_working_srgb_icc())
     else:
-        image = imread_exif(p)
+        image, context = imread_exif_with_context(p)
     if optical_correction:
         from .capture_fidelity import apply_optical_corrections, read_capture_metadata
         image, status = apply_optical_corrections(image, read_capture_metadata(p))
@@ -561,7 +668,30 @@ def imread_engine(
             correction_status.clear()
             correction_status.update(status)
         logger.info("Optical correction status for %s: %s", p, status)
-    return image
+    return image, context
+
+
+def imread_engine(
+    path: Union[str, Path],
+    prefer_16bit: bool = True,
+    raw_decoder: str = "rawpy",
+    raf2jpeg_path: Optional[Union[str, Path]] = None,
+    raf2jpeg_quality: int = 100,
+    fuji_match_strength: float = 0.85,
+    optical_correction: bool = False,
+    correction_status: Optional[Dict[str, Any]] = None,
+) -> np.ndarray:
+    """Load an image for the engine while retaining the legacy array API."""
+    return imread_engine_with_context(
+        path,
+        prefer_16bit=prefer_16bit,
+        raw_decoder=raw_decoder,
+        raf2jpeg_path=raf2jpeg_path,
+        raf2jpeg_quality=raf2jpeg_quality,
+        fuji_match_strength=fuji_match_strength,
+        optical_correction=optical_correction,
+        correction_status=correction_status,
+    )[0]
 
 
 def resize_for_processing(
@@ -963,6 +1093,8 @@ def write_image_with_icc(
     bit_depth: int = 8,
     exif: Optional[bytes] = None,
     c2pa_manifest: Optional[bytes] = None,
+    color_context: Optional[ColorContext] = None,
+    preserve_source_profile: bool = False,
     **kwargs: Any,
 ) -> None:
     """Write *img* (BGR ndarray) to *path* with an optional embedded ICC profile.
@@ -988,6 +1120,14 @@ def write_image_with_icc(
             uint16 (PNG/TIFF only). PNG/TIFF 16-bit writes preserve the pixel
             depth and can embed ICC/EXIF in the same pass; JPEG/WebP always
             output 8-bit.
+        color_context: Optional explicit ingest contract. When supplied and
+            ``icc_profile`` is omitted, the image is written with the sRGB
+            working profile by default. This is the safe delivery path for
+            pixels returned by :func:`imread_exif_with_context`.
+        preserve_source_profile: Convert working-space pixels back to the
+            embedded source profile only when explicitly set to ``True``.
+            Untagged inputs have no source profile to restore and remain in
+            the sRGB working space.
         **kwargs: ``quality`` (int, default ``95``), ``format`` (str), and
             ``float_range`` (``"auto"``, ``"unit"``, or ``"byte"``) are
             consumed; all remaining kwargs are forwarded to ``PIL.Image.save``.
@@ -996,6 +1136,30 @@ def write_image_with_icc(
     destination format is unavailable.
     """
     path = Path(path)
+    if color_context is not None:
+        if icc_profile is not None:
+            raise ValueError(
+                "Pass either icc_profile or color_context, not both; the color "
+                "context selects the working or explicitly preserved source profile"
+            )
+        input_float_range = str(kwargs.get("float_range", "auto"))
+        source_conversion = (
+            preserve_source_profile
+            and color_context.source_profile is not None
+            and color_context.working_profile is not None
+            and color_context.source_profile != color_context.working_profile
+        )
+        img, icc_profile = prepare_color_managed_export(
+            img,
+            color_context,
+            preserve_source_profile=preserve_source_profile,
+            float_range=input_float_range,
+        )
+        # Only a source-profile conversion changes the range contract: it
+        # returns unit-range float32. Leave legacy caller range inference
+        # untouched for the no-conversion working-space path.
+        if source_conversion:
+            kwargs["float_range"] = "unit"
     ext = path.suffix.lower()
     pil_format = kwargs.pop("format", _ICC_WRITE_FORMAT_MAP.get(ext))
     quality = int(kwargs.pop("quality", 95))
@@ -1101,3 +1265,94 @@ def convert_image_colorspace(
     if was_float:
         return out
     return out
+
+
+def _to_unit_bgr_for_color_transform(
+    img: np.ndarray,
+    float_range: str = "auto",
+) -> np.ndarray:
+    """Normalize an engine/output image to float32 BGR in [0, 1]."""
+    if float_range not in ("auto", "unit", "byte"):
+        raise ValueError("float_range must be 'auto', 'unit', or 'byte'")
+    if img.dtype == np.uint8:
+        return img.astype(np.float32) / 255.0
+    if img.dtype == np.uint16:
+        return img.astype(np.float32) / 65535.0
+    if img.dtype in (np.float32, np.float64):
+        values = np.asarray(img, dtype=np.float32)
+        if float_range == "unit":
+            return np.clip(values, 0.0, 1.0)
+        if float_range == "byte":
+            return np.clip(values / 255.0, 0.0, 1.0)
+        finite = values[np.isfinite(values)]
+        if finite.size == 0 or float(finite.max()) <= 1.0:
+            return np.clip(values, 0.0, 1.0)
+        return np.clip(values / 255.0, 0.0, 1.0)
+    raise TypeError(
+        f"Unsupported image dtype for color conversion: {img.dtype!r}; "
+        "expected uint8, uint16, float32, or float64"
+    )
+
+
+def prepare_color_managed_export(
+    img: np.ndarray,
+    color_context: ColorContext,
+    *,
+    preserve_source_profile: bool = False,
+    float_range: str = "auto",
+) -> Tuple[np.ndarray, Optional[bytes]]:
+    """Prepare pixels and ICC metadata for a context-aware export.
+
+    The normal path is a no-op on pixels and returns the engine sRGB profile.
+    A source-profile conversion is performed only for an embedded source ICC
+    when ``preserve_source_profile=True``. The returned float32 unit-range
+    array is accepted by :func:`write_image_with_icc` for both 8- and 16-bit
+    delivery without an intermediate uint8 conversion.
+    """
+    target_profile = color_context.profile_for_export(preserve_source_profile)
+    if not preserve_source_profile or color_context.source_profile is None:
+        return img, target_profile
+
+    source_profile = color_context.source_profile
+    working_profile = color_context.working_profile
+    if not working_profile:
+        raise RuntimeError(
+            "Cannot preserve a source ICC profile without the Retouch sRGB "
+            "working profile and LittleCMS support"
+        )
+    if source_profile == working_profile:
+        return img, target_profile
+
+    converted = convert_image_colorspace(
+        _to_unit_bgr_for_color_transform(img, float_range),
+        working_profile,
+        source_profile,
+    )
+    return converted, target_profile
+
+
+def write_image_with_color_context(
+    path: Union[str, Path],
+    img: np.ndarray,
+    color_context: ColorContext,
+    *,
+    preserve_source_profile: bool = False,
+    **kwargs: Any,
+) -> None:
+    """Write an image using the explicit working/source-profile contract.
+
+    This is a convenience wrapper around :func:`write_image_with_icc`. It
+    makes the delivery policy visible at the call site and prevents a caller
+    from accidentally supplying a second, conflicting ICC profile.
+    """
+    if "icc_profile" in kwargs:
+        raise ValueError(
+            "write_image_with_color_context selects ICC metadata from the ColorContext"
+        )
+    write_image_with_icc(
+        path,
+        img,
+        color_context=color_context,
+        preserve_source_profile=preserve_source_profile,
+        **kwargs,
+    )
