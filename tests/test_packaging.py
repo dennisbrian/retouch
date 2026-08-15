@@ -19,3 +19,15 @@ def test_build_wrapper_uses_spec_instead_of_divergent_data_flags():
     assert 'SPEC_PATH="$SCRIPT_DIR/retouch_app.spec"' in script
     assert '"${PYINSTALLER_CMD[@]}" --clean "$SPEC_PATH"' in script
     assert "--add-data" not in script
+
+
+def test_lut_assets_are_declared_for_wheels_and_frozen_apps():
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    spec = (ROOT / "scripts" / "build" / "retouch_app.spec").read_text(encoding="utf-8")
+
+    assert '"luts"' in pyproject
+    assert 'luts = ["*.cube", "ACQUISITION.md"]' in pyproject
+    assert '(str(ROOT / "luts"), "luts")' in spec
+    assert (ROOT / "luts" / "__init__.py").is_file()
+    assert (ROOT / "luts" / "kodak.cube").is_file()
+    assert (ROOT / "luts" / "fuji.cube").is_file()

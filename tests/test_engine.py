@@ -255,14 +255,20 @@ class TestCompositeFaces:
             hair_only_mask=hair_only,
         )
 
-        result, _, _, acc_lips, acc_sharpen = engine._composite_faces(base, [face_result], 4, 4)
+        result, _, _, acc_lips, acc_sharpen, acc_hair_only = engine._composite_faces(
+            base, [face_result], 4, 4,
+        )
 
         assert np.array_equal(result[1, 1], [10, 20, 30])
         assert np.array_equal(result[1, 2], [40, 50, 60])
         assert np.array_equal(result[2, 1], [70, 80, 90])
         assert acc_lips[1, 2] == 1.0
         assert acc_sharpen[2, 1] == 1.0
-        assert engine._acc_hair_only[0, 1] == 1.0
+        assert acc_hair_only[0, 1] == 1.0
+        assert not hasattr(engine, "_acc_hair_only")
+
+        _, _, _, _, _, next_hair_only = engine._composite_faces(base, [], 4, 4)
+        assert float(next_hair_only.max()) == 0.0
 
 
 class TestApplyWhiteCostumeLift:
@@ -775,6 +781,44 @@ class TestProcessFaceCore:
 
         assert fr.canvas.shape == canvas.shape
         assert fr.skin_mask.max() == 0.0  # zero skin ⇒ zero acc_skin
+
+    def test_safe_auto_review_preserves_parameter_driven_face_render(self):
+        """Unavailable detector confidence may request review, but must not
+        erase a recipe/explicit face edit that is not an inferred auto delta."""
+        import dataclasses
+
+        from retouch.perf_optimizations import _process_face_core
+
+        roi = 128
+        canvas = np.full((roi, roi, 3), 120, dtype=np.uint8)
+        regions = _build_synthetic_regions(roi, roi, skin_value=0.5)
+        face = _build_synthetic_face(ied=24.0, size=80)
+        face.confidence = 1.0
+        face.confidence_source = "mediapipe_presence_unavailable"
+        safe_ctx = self._all_zero_ctx()
+        safe_ctx.whiten = 35.0
+        safe_ctx._parameter_provenance = {
+            "recipe": "natural",
+            "explicit_overrides": ["whiten"],
+        }
+        unsafe_ctx = dataclasses.replace(safe_ctx, safe_auto=False)
+
+        safe = _process_face_core(
+            canvas, regions, face, safe_ctx,
+            0, 0, roi, roi, np.ones((roi, roi), dtype=np.float32),
+            self._make_processors(),
+        )
+        ungated = _process_face_core(
+            canvas, regions, face, unsafe_ctx,
+            0, 0, roi, roi, np.ones((roi, roi), dtype=np.float32),
+            self._make_processors(),
+        )
+
+        np.testing.assert_array_equal(safe.canvas, ungated.canvas)
+        assert safe.safe_auto_decisions[-1]["action"] == "review"
+        evidence = safe.safe_auto_decisions[-1]["evidence"]
+        assert evidence["detector_confidence"]["confidence_measured"] is False
+        assert evidence["enforcement"]["parameter_driven_pixels_preserved"] is True
 
     def test_function_is_module_level_and_picklable(self):
         """_process_face_core must live at module scope (not as a method on

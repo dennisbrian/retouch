@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import json
 import logging
 import hashlib
@@ -17,7 +18,13 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from .style import StyleProfile
-from .io import imread_exif, IMAGE_EXTENSIONS, EXPORT_RES_MAP, EXT_MAP
+from .io import (
+    imread_exif,
+    color_context_for_path,
+    IMAGE_EXTENSIONS,
+    EXPORT_RES_MAP,
+    EXT_MAP,
+)
 from .utils import get_cache_dir, normalize_mask
 
 logger = logging.getLogger(__name__)
@@ -28,6 +35,98 @@ _ANALYSIS_CACHE_VERSION = "batch-analysis-v2"
 
 
 _SessionInput = Optional[Union["Session", str, Path]]
+
+
+def _path_within(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve(strict=False).relative_to(parent.resolve(strict=False))
+        return True
+    except ValueError:
+        return False
+
+
+def validate_batch_roots(input_dir: Union[str, Path], output_dir: Union[str, Path]) -> Tuple[Path, Path]:
+    """Resolve roots and reject self-ingesting output layouts."""
+
+    input_path = Path(input_dir).expanduser().resolve()
+    output_path = Path(output_dir).expanduser().resolve()
+    if _path_within(output_path, input_path):
+        raise ValueError(
+            "Batch output directory must be outside the input tree: %s" % output_path
+        )
+    return input_path, output_path
+
+
+def _batch_destination(
+    file_path: Path,
+    input_root: Path,
+    output_root: Path,
+    extension: str,
+    *,
+    discriminator: Optional[str] = None,
+) -> Path:
+    try:
+        relative = file_path.resolve().relative_to(input_root.resolve())
+    except ValueError:
+        relative = Path(file_path.name)
+    suffix = "_%s" % discriminator if discriminator else ""
+    return output_root / relative.parent / ("%s%s_retouched%s" % (relative.stem, suffix, extension))
+
+
+def _destination_key(path: Path) -> str:
+    value = os.path.normcase(str(path.resolve(strict=False)))
+    return value.casefold() if sys.platform == "darwin" else value
+
+
+def plan_batch_outputs(
+    files: List[Path],
+    input_root: Path,
+    output_root: Path,
+    export_fmt: str,
+) -> Dict[str, Path]:
+    """Preflight unique deterministic destinations for every batch source."""
+
+    extension = EXT_MAP.get(export_fmt, ".jpg")
+    grouped: Dict[str, List[Path]] = {}
+    for source in files:
+        candidate = _batch_destination(source, input_root, output_root, extension)
+        grouped.setdefault(_destination_key(candidate), []).append(source)
+
+    plan: Dict[str, Path] = {}
+    claimed: Dict[str, Path] = {}
+    for sources in grouped.values():
+        for source in sources:
+            discriminator = None
+            if len(sources) > 1:
+                source_ext = source.suffix.lower().lstrip(".") or "image"
+                discriminator = source_ext
+            candidate = _batch_destination(
+                source,
+                input_root,
+                output_root,
+                extension,
+                discriminator=discriminator,
+            )
+            key = _destination_key(candidate)
+            if key in claimed:
+                relative = str(source.resolve()).encode("utf-8")
+                short_hash = hashlib.sha256(relative).hexdigest()[:8]
+                discriminator = "%s_%s" % (discriminator or "image", short_hash)
+                candidate = _batch_destination(
+                    source,
+                    input_root,
+                    output_root,
+                    extension,
+                    discriminator=discriminator,
+                )
+                key = _destination_key(candidate)
+            if key in claimed:
+                raise ValueError(
+                    "Batch output collision between %s and %s" % (claimed[key], source)
+                )
+            claimed[key] = source
+            plan[str(source.resolve())] = candidate
+    return plan
 
 
 def _estimate_image_working_bytes(path: Path) -> int:
@@ -472,6 +571,7 @@ class BatchProcessor:
             Callable[[Path, Optional[Path], Optional[List[Any]], Optional[str]], None]
         ] = None,
         only_files: Optional[List[Path]] = None,
+        output_path_overrides: Optional[Dict[Union[str, Path], Union[str, Path]]] = None,
     ) -> Tuple[List[str], Optional[str], Optional[str], str]:
 
         """Ingests, classifies, processes, and packages a folder of photos.
@@ -502,8 +602,7 @@ class BatchProcessor:
         once at the start of the call; no shared mutable state is mutated
         across concurrent invocations.
         """
-        input_path = Path(input_dir).expanduser().resolve()
-        output_path = Path(output_dir)
+        input_path, output_path = validate_batch_roots(input_dir, output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
         # Resolve session once (immutable snapshot for the whole batch).
@@ -578,6 +677,32 @@ class BatchProcessor:
 
         if not all_files:
             return [], None, None, "No supported images found in the input folder."
+        output_plan = plan_batch_outputs(
+            all_files, input_path, output_path, export_fmt,
+        )
+        if output_path_overrides:
+            for source_value, destination_value in output_path_overrides.items():
+                source_key = str(Path(source_value).expanduser().resolve())
+                if source_key not in output_plan:
+                    raise ValueError(
+                        "Batch output override references a source outside this batch: %s" % source_value
+                    )
+                destination = Path(destination_value).expanduser().resolve()
+                if not _path_within(destination, output_path):
+                    raise ValueError(
+                        "Batch output override must stay inside the output root: %s" % destination
+                    )
+                output_plan[source_key] = destination
+            destination_keys: Dict[str, str] = {}
+            for source_key, destination in output_plan.items():
+                key = _destination_key(destination)
+                if key in destination_keys:
+                    raise ValueError(
+                        "Batch output overrides collide for %s and %s" % (
+                            destination_keys[key], source_key,
+                        )
+                    )
+                destination_keys[key] = source_key
 
         # 2. Setup cache (stored under user home to prevent read-only directory issues)
         cache = BatchProcessorCache(input_path)
@@ -604,28 +729,98 @@ class BatchProcessor:
             progress_callback(0.2, "Processing photos...")
 
         if num_workers > 1 and total_files > 1:
-            def _worker(fp: Path) -> Optional[Path]:
-                return self._process_single_file(
-                    fp,
-                    custom_style_profile,
-                    session_params,
-                    style_name_or_recipe,
-                    export_res,
-                    export_fmt,
-                    export_quality,
-                    output_path,
-                    applier,
-                    on_file_result,
-                    input_root=input_path,
+            if not self._owns_engine:
+                # A caller-supplied engine may be a test double or a custom
+                # stateful implementation. Never invoke it concurrently;
+                # the default GUI path uses worker-local engines below.
+                logger.warning(
+                    "Batch received a caller-supplied engine; using one worker "
+                    "to preserve engine isolation"
                 )
+                effective_workers = 1
+            else:
+                effective_workers = min(int(num_workers), total_files)
 
-            processed_paths = _run_async_batch_queue(
-                all_files,
-                _worker,
-                num_workers,
-                total_files,
-                progress_callback,
-            )
+            if effective_workers == 1:
+                # Keep the queue contract (and its bounded backpressure) even
+                # when a caller-supplied engine must be serialized. The
+                # important invariant is that no engine is invoked by two
+                # threads at once.
+                def _serial_worker(fp: Path) -> Optional[Path]:
+                    return self._process_single_file(
+                        fp,
+                        custom_style_profile,
+                        session_params,
+                        style_name_or_recipe,
+                        export_res,
+                        export_fmt,
+                        export_quality,
+                        output_path,
+                        applier,
+                        on_file_result,
+                        input_root=input_path,
+                        engine=self.engine,
+                        output_file=output_plan[str(fp.resolve())],
+                    )
+
+                processed_paths = _run_async_batch_queue(
+                    all_files,
+                    _serial_worker,
+                    1,
+                    total_files,
+                    progress_callback,
+                )
+            else:
+                # RetouchEngine owns detector/parser/mask caches. One engine
+                # and one StyleApplier per queue thread keeps request state
+                # isolated while retaining bounded parallelism.
+                worker_local = threading.local()
+                worker_engines: List[Any] = []
+                worker_engines_lock = threading.Lock()
+
+                def _worker(fp: Path) -> Optional[Path]:
+                    worker_engine = getattr(worker_local, "engine", None)
+                    if worker_engine is None:
+                        from .engine import RetouchEngine
+
+                        worker_engine = RetouchEngine()
+                        worker_local.engine = worker_engine
+                        worker_local.applier = StyleApplier(worker_engine)
+                        with worker_engines_lock:
+                            worker_engines.append(worker_engine)
+                    return self._process_single_file(
+                        fp,
+                        custom_style_profile,
+                        session_params,
+                        style_name_or_recipe,
+                        export_res,
+                        export_fmt,
+                        export_quality,
+                        output_path,
+                        worker_local.applier,
+                        on_file_result,
+                        input_root=input_path,
+                        engine=worker_engine,
+                        output_file=output_plan[str(fp.resolve())],
+                    )
+
+                try:
+                    processed_paths = _run_async_batch_queue(
+                        all_files,
+                        _worker,
+                        effective_workers,
+                        total_files,
+                        progress_callback,
+                    )
+                finally:
+                    for worker_engine in worker_engines:
+                        try:
+                            worker_engine.close()
+                        except Exception:
+                            logger.warning(
+                                "Failed to close a batch worker engine",
+                                exc_info=True,
+                            )
         else:
             for idx, file_path in enumerate(all_files):
                 res_path = self._process_single_file(
@@ -640,6 +835,7 @@ class BatchProcessor:
                     applier,
                     on_file_result,
                     input_root=input_path,
+                    output_file=output_plan[str(file_path.resolve())],
                 )
                 if res_path is not None:
                     processed_paths.append(res_path)
@@ -719,18 +915,22 @@ class BatchProcessor:
             Callable[[Path, Optional[Path], Optional[List[Any]], Optional[str]], None]
         ] = None,
         input_root: Optional[Path] = None,
+        engine: Optional[Any] = None,
+        output_file: Optional[Path] = None,
     ) -> Optional[Path]:
         """Process a single file and write output with embedded metadata."""
         try:
             img_bgr = imread_exif(file_path)
+            request_engine = engine if engine is not None else self.engine
+            color_context = color_context_for_path(file_path)
 
             if custom_style_profile is not None:
                 result = applier.apply(img_bgr, custom_style_profile)
             elif session_params:
                 kwargs = {k: v for k, v in session_params.items() if v is not None}
-                result = self.engine.process(img_bgr, recipe=style_name_or_recipe, **kwargs)
+                result = request_engine.process(img_bgr, recipe=style_name_or_recipe, **kwargs)
             else:
-                result = self.engine.process(img_bgr, recipe=style_name_or_recipe)
+                result = request_engine.process(img_bgr, recipe=style_name_or_recipe)
 
             # Capture QA now, before any cv2 op below reassigns `result` to a
             # plain ndarray (cv2.resize/cvtColor drop the ProcessingResult
@@ -747,16 +947,20 @@ class BatchProcessor:
                     result = cv2.resize(result, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
 
             ext = EXT_MAP.get(export_fmt, ".jpg")
-            source_root = input_root.resolve() if input_root is not None else None
-            try:
-                relative_source = file_path.resolve().relative_to(source_root) if source_root is not None else Path(file_path.name)
-            except ValueError:
-                relative_source = Path(file_path.name)
-            out_file_path = output_path / relative_source.parent / f"{relative_source.stem}_retouched{ext}"
+            if output_file is not None:
+                out_file_path = Path(output_file)
+            else:
+                source_root = input_root.resolve() if input_root is not None else file_path.parent.resolve()
+                out_file_path = _batch_destination(
+                    file_path, source_root, output_path, ext,
+                )
             out_file_path.parent.mkdir(parents=True, exist_ok=True)
 
-            from .io import write_image_with_icc, read_c2pa_manifest, read_exif_bytes, read_icc_profile
-            icc_profile = read_icc_profile(file_path)
+            from .io import (
+                write_image_with_color_context,
+                read_c2pa_manifest,
+                read_exif_bytes,
+            )
             exif_bytes = read_exif_bytes(file_path)
             c2pa_manifest = read_c2pa_manifest(file_path)
             fd, temp_name = tempfile.mkstemp(
@@ -765,10 +969,10 @@ class BatchProcessor:
             )
             os.close(fd)
             try:
-                write_image_with_icc(
+                write_image_with_color_context(
                     temp_name,
                     result,
-                    icc_profile=icc_profile,
+                    color_context,
                     bit_depth=8,
                     quality=export_quality,
                     exif=exif_bytes,

@@ -5,7 +5,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from cli import _finalize_params
+from cli import (
+    _destination_for_image,
+    _finalize_params,
+    _preflight_destinations,
+)
 from retouch.io import imread_exif, output_format
 
 
@@ -55,6 +59,72 @@ class TestOutputFormat:
         png = tmp_path / "photo.png"
         png.touch()
         assert output_format(png, "webp") == "webp"
+
+
+class TestDestinationSafety:
+    def test_recursive_destination_preserves_relative_path(self, tmp_path):
+        input_root = tmp_path / "input"
+        source = input_root / "card-a" / "IMG_0001.jpg"
+        output_root = tmp_path / "output"
+
+        destination = _destination_for_image(
+            source, output_root, "jpg", input_root=input_root,
+        )
+
+        assert destination == output_root / "card-a" / "IMG_0001.jpg"
+
+    def test_preflight_rejects_flattened_duplicate_destinations(self, tmp_path):
+        first = tmp_path / "card-a" / "IMG_0001.jpg"
+        second = tmp_path / "card-b" / "IMG_0001.jpg"
+        first.parent.mkdir()
+        second.parent.mkdir()
+        first.touch()
+        second.touch()
+
+        with pytest.raises(ValueError, match="Duplicate output destination"):
+            _preflight_destinations(
+                [first, second], tmp_path / "output", "jpg", 8,
+                recursive_root=None, compare=False, save_session=None,
+            )
+
+    def test_preflight_rejects_same_format_source_overwrite(self, tmp_path):
+        source = tmp_path / "photo.jpg"
+        source.touch()
+
+        with pytest.raises(ValueError, match="overwrite source"):
+            _preflight_destinations(
+                [source], None, "same", 8,
+                recursive_root=None, compare=False, save_session=None,
+            )
+
+    def test_preflight_rejects_existing_hardlink_destination(self, tmp_path):
+        source = tmp_path / "source.jpg"
+        source.write_bytes(b"source bytes")
+        output = tmp_path / "output"
+        output.mkdir()
+        destination = output / "source.jpg"
+        try:
+            destination.hardlink_to(source)
+        except (AttributeError, NotImplementedError, OSError):
+            pytest.skip("hard links are unavailable on this filesystem")
+
+        with pytest.raises(ValueError, match="alias"):
+            _preflight_destinations(
+                [source], output, "jpg", 8,
+                recursive_root=None, compare=False, save_session=None,
+            )
+
+    def test_recursive_preflight_rejects_nested_output_tree(self, tmp_path):
+        input_root = tmp_path / "input"
+        input_root.mkdir()
+        source = input_root / "source.jpg"
+        source.touch()
+
+        with pytest.raises(ValueError, match="outside input tree"):
+            _preflight_destinations(
+                [source], input_root / "exports", "jpg", 8,
+                recursive_root=input_root, compare=False, save_session=None,
+            )
 
 
 class TestImreadExif:

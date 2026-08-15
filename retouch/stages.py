@@ -51,6 +51,7 @@ class PipelineState:
         acc_skin_hair: Accumulated skin+hair mask.
         acc_lips: Accumulated lips mask.
         acc_sharpen: Accumulated sharpen mask.
+        acc_hair_only: Hair-only mask for background matte operations.
         faces: List of detected FaceData objects.
         face_contexts: List of FaceContext objects (cached).
         qa: List of QAWarning objects (filled in QA stage).
@@ -72,6 +73,7 @@ class PipelineState:
     acc_skin_hair: Optional[np.ndarray] = None
     acc_lips: Optional[np.ndarray] = None
     acc_sharpen: Optional[np.ndarray] = None
+    acc_hair_only: Optional[np.ndarray] = None
     faces: List[Any] = field(default_factory=list)
     face_contexts: Optional[List[Any]] = None
     qa: List[Any] = field(default_factory=list)

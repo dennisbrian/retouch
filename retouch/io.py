@@ -380,7 +380,9 @@ def _color_context_for_source(icc_profile: Optional[bytes]) -> ColorContext:
         return ColorContext.from_embedded_profile(
             bytes(icc_profile),
             working_profile,
-            conversion_applied=False,
+            conversion_applied=bool(
+                working_profile is not None and bytes(icc_profile) != working_profile
+            ),
             source_profile_name=_icc_description(bytes(icc_profile)),
         )
     return ColorContext.assumed_srgb_context(working_profile)
@@ -850,6 +852,22 @@ def read_icc_profile(path: Union[str, Path]) -> Optional[bytes]:
     if not icc:
         return None
     return bytes(icc)
+
+
+def color_context_for_path(path: Union[str, Path]) -> ColorContext:
+    """Return the ingest/delivery color contract for *path* without decoding it.
+
+    ``imread_exif`` already converts tagged non-RAW pixels into the Retouch
+    sRGB working space, but callers that use the legacy array-only API still
+    need the matching context at export time. This helper reads only the
+    source ICC metadata (or records the RAW decoder's sRGB contract), so those
+    callers cannot accidentally reattach the source profile to working-space
+    pixels.
+    """
+    source = Path(path)
+    if source.suffix.lower() in RAW_EXTENSIONS:
+        return ColorContext.raw_srgb_context(get_working_srgb_icc())
+    return _color_context_for_source(read_icc_profile(source))
 
 
 def image_has_icc(path: Union[str, Path]) -> bool:

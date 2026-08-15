@@ -92,7 +92,7 @@ class BackgroundReplaceStage(_EngineStage):
 
     def _call(self, state: PipelineState) -> np.ndarray:
         return self._engine._stage_background(
-            state.img, state.ctx, state.person_mask
+            state.img, state.ctx, state.person_mask, state.acc_hair_only
         )
 
 

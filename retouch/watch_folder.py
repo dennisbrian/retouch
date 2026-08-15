@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import shutil
 import tempfile
 from datetime import datetime, timezone
 from dataclasses import asdict, dataclass, field
@@ -21,6 +22,21 @@ from .io import EXT_MAP, IMAGE_EXTENSIONS
 
 
 WATCH_JOB_STATES = {"queued", "processing", "done", "failed", "cancelled"}
+
+
+class StateLoadError(ValueError):
+    """A durable watch state file exists but cannot be trusted."""
+
+
+def _quarantine_malformed_state(path: Path) -> Optional[Path]:
+    """Preserve a malformed state file beside itself for human recovery."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    quarantine = path.with_name(f"{path.name}.corrupt-{stamp}")
+    try:
+        shutil.copy2(path, quarantine)
+    except OSError:
+        return None
+    return quarantine
 
 
 class PermanentWatchJobError(RuntimeError):
@@ -113,6 +129,10 @@ class WatchRecord:
     asset_instance_id: Optional[str] = None
     job_ids: Dict[str, str] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if self.status not in {"pending", "queued", "processing", "done", "failed"}:
+            raise ValueError(f"unknown watch record status: {self.status!r}")
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
@@ -132,15 +152,39 @@ class WatchFolderState:
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "WatchFolderState":
+        if not isinstance(payload, Mapping):
+            raise ValueError("watch state must be a JSON object")
+        version = payload.get("version", 1)
+        if isinstance(version, bool) or not isinstance(version, int) or version < 1 or version > cls.version:
+            raise ValueError(f"unsupported watch state version: {version!r}")
+        if "records" not in payload:
+            raise ValueError("watch state must contain records")
+        record_values = payload["records"]
+        # Version 1 predated durable WatchJob objects. Migrate its record-only
+        # state in memory; the next atomic save writes the current v2 shape.
+        if version == 1:
+            job_values = {}
+        elif "jobs" not in payload:
+            raise ValueError("watch state v2 must contain jobs")
+        else:
+            job_values = payload["jobs"]
+        if not isinstance(record_values, Mapping) or not isinstance(job_values, Mapping):
+            raise ValueError("watch state records and jobs must be JSON objects")
         records = {
             str(path): WatchRecord(**dict(value))
-            for path, value in (payload.get("records") or {}).items()
+            for path, value in record_values.items()
+            if isinstance(value, Mapping)
         }
+        if len(records) != len(record_values):
+            raise ValueError("watch state record entries must be JSON objects")
         jobs = {
             str(job_id): WatchJob.from_dict(value)
-            for job_id, value in (payload.get("jobs") or {}).items()
+            for job_id, value in job_values.items()
+            if isinstance(value, Mapping)
         }
-        return cls(version=int(payload.get("version", 1)), records=records, jobs=jobs)
+        if len(jobs) != len(job_values):
+            raise ValueError("watch state job entries must be JSON objects")
+        return cls(version=cls.version, records=records, jobs=jobs)
 
 
 class WatchFolder:
@@ -161,10 +205,23 @@ class WatchFolder:
         self.state = self._load_state()
 
     def _load_state(self) -> WatchFolderState:
+        if not self.state_path.exists():
+            return WatchFolderState()
         try:
             return WatchFolderState.from_dict(json.loads(self.state_path.read_text(encoding="utf-8")))
-        except (FileNotFoundError, OSError, ValueError, TypeError, json.JSONDecodeError):
+        except FileNotFoundError:
+            # The file may have been removed between exists() and read().
             return WatchFolderState()
+        except OSError as exc:
+            raise StateLoadError(
+                f"Could not read watch-folder state {self.state_path}: {exc}"
+            ) from exc
+        except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+            quarantine = _quarantine_malformed_state(self.state_path)
+            detail = f"; preserved copy: {quarantine}" if quarantine else "; original preserved"
+            raise StateLoadError(
+                f"Malformed watch-folder state {self.state_path}{detail}: {exc}"
+            ) from exc
 
     def save(self) -> None:
         """Persist state atomically so interruption cannot corrupt the queue."""
@@ -223,13 +280,28 @@ class WatchFolder:
         self.save()
         return ready
 
-    def _default_output_path(self, source: Path, output_root: Path, kind: str, settings: Mapping[str, Any]) -> Path:
+    def _default_output_path(
+        self,
+        source: Path,
+        output_root: Path,
+        kind: str,
+        settings: Mapping[str, Any],
+        *,
+        content_id: str,
+        contract_fingerprint: str,
+    ) -> Path:
         try:
             relative = source.resolve().relative_to(self.input_dir.resolve())
         except ValueError:
             relative = Path(source.name)
         extension = EXT_MAP.get(str(settings.get("export_fmt", "JPEG")), ".jpg")
-        return output_root / kind / relative.parent / f"{relative.stem}_retouched{extension}"
+        source_ext = relative.suffix.lower().lstrip(".") or "image"
+        identity = (content_id or "unknown")[:8]
+        contract = (contract_fingerprint or "unknown")[:8]
+        return (
+            output_root / kind / relative.parent
+            / f"{relative.stem}_{source_ext}_{identity}_{contract}_retouched{extension}"
+        )
 
     def queue_jobs(
         self,
@@ -255,6 +327,14 @@ class WatchFolder:
             pass
         else:
             raise ValueError("job output root must be outside the watched folder")
+        normalized_settings = json.loads(json.dumps(dict(settings), sort_keys=True, default=str))
+        settings_fingerprint = _hash_payload(normalized_settings)
+        pipeline_value = str(pipeline_fingerprint)
+        contract_fingerprint = _hash_payload({
+            "kind": kind,
+            "settings_fingerprint": settings_fingerprint,
+            "pipeline_fingerprint": pipeline_value,
+        })
         ready = self.scan_once()
         ready_paths = {record.path for record in ready}
         # A preview may already be done while a final job is still absent.
@@ -277,17 +357,41 @@ class WatchFolder:
                 continue
             job_id = record.job_ids.get(kind)
             job = self.state.jobs.get(job_id) if job_id else None
+            source = Path(record.path).resolve()
+            try:
+                content_id = _file_sha256(source)
+            except OSError:
+                continue
+            desired_output = (
+                Path(output_path_resolver(source, kind, normalized_settings))
+                if output_path_resolver
+                else self._default_output_path(
+                    source,
+                    output_base,
+                    kind,
+                    normalized_settings,
+                    content_id=content_id,
+                    contract_fingerprint=contract_fingerprint,
+                )
+            )
+            contract_changed = bool(
+                job is not None
+                and (
+                    job.settings_fingerprint != settings_fingerprint
+                    or job.pipeline_fingerprint != pipeline_value
+                    or Path(job.output_path).expanduser().resolve() != desired_output.expanduser().resolve()
+                )
+            )
             needs_job = (
                 job is None
                 or job.status == "failed"
                 or (job.status == "done" and not self._output_matches(job))
+                or contract_changed
             )
             if needs_job:
                 ready.append(record)
         if limit is not None:
             ready = ready[:limit]
-        normalized_settings = json.loads(json.dumps(dict(settings), sort_keys=True, default=str))
-        settings_fingerprint = _hash_payload(normalized_settings)
         queued: List[WatchJob] = []
         for record in ready:
             source = Path(record.path).resolve()
@@ -297,16 +401,35 @@ class WatchFolder:
                 if asset_instance_resolver is not None
                 else content_id
             )
-            output_path = Path(output_path_resolver(source, kind, normalized_settings)) if output_path_resolver else self._default_output_path(source, output_base, kind, normalized_settings)
+            output_path = (
+                Path(output_path_resolver(source, kind, normalized_settings))
+                if output_path_resolver
+                else self._default_output_path(
+                    source,
+                    output_base,
+                    kind,
+                    normalized_settings,
+                    content_id=content_id,
+                    contract_fingerprint=contract_fingerprint,
+                )
+            )
             logical_payload = {
                 "source_content_id": content_id,
                 "asset_instance_id": asset_instance_id,
                 "kind": kind,
                 "settings_fingerprint": settings_fingerprint,
-                "pipeline_fingerprint": str(pipeline_fingerprint),
+                "pipeline_fingerprint": pipeline_value,
                 "output_path": str(output_path),
             }
             job_id = "watch-job-" + _hash_payload(logical_payload)[:24]
+            previous_job_id = record.job_ids.get(kind)
+            if previous_job_id and previous_job_id != job_id:
+                previous_job = self.state.jobs.get(previous_job_id)
+                if previous_job is not None and previous_job.status == "queued":
+                    previous_job.status = "cancelled"
+                    previous_job.error_code = "superseded"
+                    previous_job.error = "superseded by a newer processing contract"
+                    previous_job.completed_at = _now()
             existing = self.state.jobs.get(job_id)
             if existing is not None:
                 if existing.status == "done" and self._output_matches(existing):
@@ -340,7 +463,7 @@ class WatchFolder:
                     kind=kind,
                     settings=normalized_settings,
                     settings_fingerprint=settings_fingerprint,
-                    pipeline_fingerprint=str(pipeline_fingerprint),
+                    pipeline_fingerprint=pipeline_value,
                     output_path=str(output_path),
                 )
                 self.state.jobs[job.job_id] = job
@@ -395,13 +518,19 @@ class WatchFolder:
         processor: Callable[[WatchJob], Optional[Union[str, Path]]],
         *,
         limit: Optional[int] = None,
+        kind: Optional[str] = None,
         verifier: Optional[Callable[[WatchJob, Path], None]] = None,
     ) -> List[WatchJob]:
-        """Run queued jobs and mark done only after output hash verification."""
+        """Run queued jobs for one pass and verify each recorded output."""
         if limit is not None and limit < 0:
             raise ValueError("limit must be non-negative")
+        if kind is not None and kind not in {"preview", "final"}:
+            raise ValueError("kind must be preview or final")
         self.recover_stale_jobs()
-        jobs = [job for job in self.state.jobs.values() if job.status == "queued"]
+        jobs = [
+            job for job in self.state.jobs.values()
+            if job.status == "queued" and (kind is None or job.kind == kind)
+        ]
         jobs.sort(key=lambda job: (job.queued_at, job.job_id))
         if limit is not None:
             jobs = jobs[:limit]

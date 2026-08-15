@@ -12,6 +12,7 @@ from PIL import Image
 from retouch.color_context import SOURCE_ASSUMED_SRGB, SOURCE_EMBEDDED_ICC
 from retouch.io import (
     _HAS_IMAGECMS,
+    color_context_for_path,
     convert_image_colorspace,
     get_working_srgb_icc,
     imread_exif,
@@ -100,6 +101,17 @@ def test_untagged_input_is_explicitly_assumed_srgb(tmp_path: Path) -> None:
     prepared, output_profile = prepare_color_managed_export(loaded_bgr, context)
     np.testing.assert_array_equal(prepared, loaded_bgr)
     assert output_profile == context.working_profile
+
+
+def test_legacy_array_exporters_can_recover_the_ingest_context(tmp_path: Path) -> None:
+    source_path = tmp_path / "untagged-source.png"
+    Image.fromarray(_synth_patch(), mode="RGB").save(source_path)
+
+    context = color_context_for_path(source_path)
+
+    assert context.source_kind == SOURCE_ASSUMED_SRGB
+    assert context.source_profile is None
+    assert context.working_profile == get_working_srgb_icc()
 
 
 def test_export_uses_working_profile_by_default_and_restores_source_only_explicitly(

@@ -15,6 +15,36 @@ import numpy as np
 
 
 VALID_ACTIONS = {"apply", "dampen", "skip", "review"}
+SAFE_AUTO_POLICY_VERSION = "safe-auto-v2"
+MEASURED_CONFIDENCE_SOURCES = {"retinaface"}
+
+
+def confidence_evidence(value: Any, source: Any) -> dict[str, Any]:
+    """Normalize detector confidence without treating compatibility values as evidence.
+
+    MediaPipe landmark APIs used by this project do not always expose a face
+    presence score. Their compatibility value of ``1.0`` must therefore never
+    enter the automatic-apply band.
+    """
+
+    source_name = str(source or "unknown")
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        numeric = 0.0
+    if not np.isfinite(numeric):
+        numeric = 0.0
+    numeric = float(np.clip(numeric, 0.0, 1.0))
+    measured = source_name in MEASURED_CONFIDENCE_SOURCES
+    return {
+        "reported_confidence": numeric,
+        "confidence_source": source_name,
+        "confidence_measured": measured,
+        # Unmeasured presence remains review-only. It is not zero because the
+        # landmarks may still support an explicit user-requested edit.
+        "safe_auto_confidence": numeric if measured else 0.50,
+        "policy_version": SAFE_AUTO_POLICY_VERSION,
+    }
 
 
 @dataclass(frozen=True)

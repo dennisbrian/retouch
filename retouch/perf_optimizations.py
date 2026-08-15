@@ -28,7 +28,7 @@ import onnxruntime as ort
 from .frequency import FrequencySeparator
 from .freckle import FreckleRemover
 from .lighting import LightDirection
-from .safe_auto import apply_decision, decide, decide_mask_stage
+from .safe_auto import confidence_evidence, decide, decide_mask_stage
 
 
 def _build_smooth_mask(
@@ -266,10 +266,10 @@ def _process_face_core(
     float throughout the skin operation chain to eliminate quantization noise.
     Single uint8 conversion at the end.
     """
-    # Keep a pristine ROI so the Safe Auto decision can discard or dampen the
-    # complete automatic face edit when detection/segmentation evidence is
-    # uncertain. Manual Advanced Retouch edits do not enter this function.
-    source_canvas = canvas.copy()
+    # Every operation below is parameter-driven by a selected recipe, explicit
+    # controls, or per-face overrides. Safe Auto may observe their evidence,
+    # but it must not erase/dampen these user-requested pixels. A future
+    # inferred automatic delta must carry its own baseline and decision.
     safe_auto_decisions: list[Dict[str, Any]] = []
 
     skin = processors['skin']
@@ -1045,7 +1045,11 @@ def _process_face_core(
         # pixel in the ROI. Normalise against a conservative expected face
         # area so a valid portrait mask can reach the apply band.
         mask_coverage = float(np.clip(skin_area / 0.18, 0.0, 1.0))
-        face_confidence = float(np.clip(getattr(shifted_face, "confidence", 1.0), 0.0, 1.0))
+        face_evidence = confidence_evidence(
+            getattr(shifted_face, "confidence", 1.0),
+            getattr(shifted_face, "confidence_source", "unknown"),
+        )
+        face_confidence = float(face_evidence["safe_auto_confidence"])
         decision = decide_mask_stage(
             "facial_automatic_edits",
             mask_coverage=mask_coverage,
@@ -1054,12 +1058,22 @@ def _process_face_core(
         )
         decision_evidence = dict(decision.evidence)
         decision_evidence.update({
-            "automatic_stages": [
+            "automatic_stages": [],
+            "parameter_driven_stages": [
                 "skin_smoothing", "blemish_removal", "under_eye_repair",
                 "eye_enhancement", "teeth_whitening", "lip_enhancement",
                 "makeup_and_hair",
             ],
             "roi_shape": [int(roi_h), int(roi_w)],
+            "detector_confidence": face_evidence,
+            "parameter_provenance": dict(
+                getattr(ctx, "_parameter_provenance", {}) or {}
+            ),
+            "enforcement": {
+                "target": "automatic_delta_only",
+                "automatic_delta_present": False,
+                "parameter_driven_pixels_preserved": True,
+            },
         })
         # Rebuild the immutable decision with the expanded evidence.
         decision = decide(
@@ -1071,7 +1085,9 @@ def _process_face_core(
             dampen_at=0.65,
             review_at=0.40,
         )
-        canvas = apply_decision(source_canvas, canvas, decision)
+        # No inferred automatic delta exists in this pipeline boundary. The
+        # decision is evidence for review/calibration; parameter-driven pixels
+        # remain exactly as rendered regardless of apply/review/skip.
         safe_auto_decisions.append(decision.to_dict())
 
     return _FaceResult(
@@ -1149,6 +1165,7 @@ def _process_single_face_worker(payload: tuple) -> Dict[str, Any]:
         shifted_landmarks,
         ied,
         face_confidence,
+        face_confidence_source,
         ctx,
         roi_box,
         roi_person_mask,
@@ -1165,6 +1182,7 @@ def _process_single_face_worker(payload: tuple) -> Dict[str, Any]:
         landmarks=shifted_landmarks,
         ied=ied,
         confidence=face_confidence,
+        confidence_source=face_confidence_source,
     )
     roi_x1, roi_y1 = roi_box[0], roi_box[1]
 

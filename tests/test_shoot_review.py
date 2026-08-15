@@ -6,11 +6,13 @@ import shutil
 from pathlib import Path
 
 from PIL import Image
+import pytest
 
 from retouch.shoot_intelligence import BurstGroup, CullingCandidate, inspect_asset
 from retouch.shoot_review import (
     FaceQualityEvidence,
     ShootReviewManifest,
+    StateLoadError,
     asset_id_for,
     build_review_manifest,
 )
@@ -126,6 +128,20 @@ def test_custom_manifest_path_keeps_selected_shoot_root(tmp_path: Path):
 
     assert manifest.project_root == str(tmp_path.resolve())
     assert json.loads(manifest_path.read_text(encoding="utf-8"))["project_root"] == str(tmp_path.resolve())
+
+
+def test_malformed_manifest_is_preserved_and_fails_closed(tmp_path: Path):
+    manifest_path = tmp_path / "review.json"
+    original = "{ not valid json"
+    manifest_path.write_text(original, encoding="utf-8")
+
+    with pytest.raises(StateLoadError, match="Malformed shoot review state"):
+        ShootReviewManifest.load(manifest_path)
+
+    assert manifest_path.read_text(encoding="utf-8") == original
+    quarantined = list(tmp_path.glob("review.json.corrupt-*"))
+    assert len(quarantined) == 1
+    assert quarantined[0].read_text(encoding="utf-8") == original
 
 
 def test_identical_copy_is_a_distinct_asset_instance(tmp_path: Path):

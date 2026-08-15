@@ -76,8 +76,7 @@ def test_gui_watch_job_contract_verifies_preview_and_final_separately(monkeypatc
     class FakeBatchProcessor:
         def process_folder(self, input_dir, output_dir, only_files, **kwargs):
             path = Path(only_files[0])
-            relative = path.resolve().relative_to(Path(input_dir).resolve())
-            output = Path(output_dir) / relative.parent / f"{relative.stem}_retouched.jpg"
+            output = Path(kwargs["output_path_overrides"][path])
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_bytes(b"verified " + str(kwargs["export_res"]).encode("utf-8"))
             return [str(output)], None, None, "processed one file"
@@ -108,6 +107,59 @@ def test_gui_watch_job_contract_verifies_preview_and_final_separately(monkeypatc
     assert {job["kind"] for job in payload["jobs"].values()} == {"preview", "final"}
     manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert {job_kind for asset in manifest_payload["assets"] for job_kind in asset["job_provenance"]} == {"preview", "final"}
+
+
+def test_gui_watch_pass_processes_only_selected_kind_from_recorded_job(monkeypatch, tmp_path: Path):
+    import json
+    import gui
+    from retouch.watch_folder import WatchFolder
+
+    source = tmp_path / "capture.jpg"
+    Image.new("RGB", (16, 16), (100, 100, 100)).save(source)
+    state = tmp_path / "watch.json"
+    output = tmp_path.parent / (tmp_path.name + "-watch-output")
+
+    queued_watcher = WatchFolder(tmp_path, state_path=state)
+    queued_watcher.queue_jobs(
+        kind="preview",
+        output_root=output,
+        settings={"recipe": "natural", "export_fmt": "JPEG", "export_res": "720px"},
+        pipeline_fingerprint="test-v1",
+    )
+    preview_jobs = queued_watcher.queue_jobs(
+        kind="preview",
+        output_root=output,
+        settings={"recipe": "natural", "export_fmt": "JPEG", "export_res": "720px"},
+        pipeline_fingerprint="test-v1",
+    )
+    assert len(preview_jobs) == 1
+
+    calls = []
+
+    class FakeBatchProcessor:
+        def process_folder(self, input_dir, output_dir, only_files, **kwargs):
+            calls.append((kwargs["export_res"], kwargs["export_quality"], kwargs["style_name_or_recipe"]))
+            path = Path(only_files[0])
+            result = Path(kwargs["output_path_overrides"][path])
+            result.parent.mkdir(parents=True, exist_ok=True)
+            result.write_bytes(b"final output")
+            return [str(result)], None, None, "processed one file"
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(gui, "BatchProcessor", FakeBatchProcessor)
+    manifest = tmp_path / ".retouch-shoot-review.json"
+    status = gui.on_watch_folder_process(
+        str(tmp_path), str(state), 1, str(output), "final", "classic_chrome", str(manifest)
+    )
+
+    assert "1 final succeeded" in status
+    assert calls == [("Original", 95, "classic_chrome")]
+    payload = json.loads(state.read_text(encoding="utf-8"))
+    jobs_by_kind = {job["kind"]: job for job in payload["jobs"].values()}
+    assert jobs_by_kind["preview"]["status"] == "queued"
+    assert jobs_by_kind["final"]["status"] == "done"
 
 
 def test_gui_face_quality_scan_is_opt_in_and_persists_evidence(monkeypatch, tmp_path: Path):

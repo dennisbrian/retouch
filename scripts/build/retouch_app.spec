@@ -21,6 +21,7 @@ a = Analysis(
         (str(ROOT / "retouch"), "retouch"),
         (str(ROOT / "models"), "models"),
         (str(ROOT / "presets"), "presets"),
+        (str(ROOT / "luts"), "luts"),
     ],
     hiddenimports=[],
     hookspath=[],

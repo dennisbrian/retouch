@@ -13,6 +13,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import tempfile
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
@@ -26,6 +27,21 @@ from .shoot_intelligence import BurstGroup, CullingCandidate, ShootAsset
 DECISIONS = {"select", "reject", "hold"}
 DECISION_ORIGINS = {"automatic", "human"}
 EYES_OPEN_VALUES = {"yes", "no", "uncertain"}
+
+
+class StateLoadError(ValueError):
+    """A durable review state file exists but cannot be trusted."""
+
+
+def _quarantine_malformed_state(path: Path) -> Optional[Path]:
+    """Preserve a malformed state file beside itself for human recovery."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    quarantine = path.with_name(f"{path.name}.corrupt-{stamp}")
+    try:
+        shutil.copy2(path, quarantine)
+    except OSError:
+        return None
+    return quarantine
 
 
 def _now() -> str:
@@ -383,12 +399,29 @@ class ShootReviewManifest:
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "ShootReviewManifest":
+        if not isinstance(payload, Mapping):
+            raise ValueError("shoot review state must be a JSON object")
+        if payload.get("schema") != "retouch.shoot_review":
+            raise ValueError("unsupported or missing shoot review schema")
+        schema_version = payload.get("schema_version")
+        if (
+            isinstance(schema_version, bool)
+            or not isinstance(schema_version, int)
+            or schema_version < 1
+            or schema_version > cls.schema_version
+        ):
+            raise ValueError(f"unsupported shoot review schema version: {schema_version!r}")
+        asset_values = payload.get("assets", [])
+        if not isinstance(asset_values, list):
+            raise ValueError("shoot review assets must be a JSON array")
         manifest = cls(
             str(payload.get("project_root", ".")),
             created=str(payload.get("created", _now())),
             updated=str(payload.get("updated", _now())),
         )
-        for item in payload.get("assets", []):
+        for item in asset_values:
+            if not isinstance(item, Mapping):
+                raise ValueError("shoot review asset entries must be JSON objects")
             asset = ReviewAsset.from_dict(item)
             manifest.assets[asset.asset_id] = asset
         return manifest
@@ -400,10 +433,23 @@ class ShootReviewManifest:
     @classmethod
     def load(cls, path: Union[str, Path]) -> "ShootReviewManifest":
         target = Path(path).expanduser()
+        if not target.exists():
+            return cls(target.parent)
         try:
             return cls.from_json(target.read_text(encoding="utf-8"))
-        except (FileNotFoundError, OSError, ValueError, TypeError, json.JSONDecodeError):
+        except FileNotFoundError:
+            # The file may have been removed between exists() and read().
             return cls(target.parent)
+        except OSError as exc:
+            raise StateLoadError(
+                f"Could not read shoot review state {target}: {exc}"
+            ) from exc
+        except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+            quarantine = _quarantine_malformed_state(target)
+            detail = f"; preserved copy: {quarantine}" if quarantine else "; original preserved"
+            raise StateLoadError(
+                f"Malformed shoot review state {target}{detail}: {exc}"
+            ) from exc
 
     def save(self, path: Optional[Union[str, Path]] = None) -> Path:
         target = Path(path).expanduser() if path else self.default_path(self.project_root)

@@ -23,7 +23,9 @@ from retouch.io import (
     EXT_MAP,
     EXPORT_RES_MAP,
     RAW_EXTENSIONS,
+    color_context_for_path,
     encode_write_params,
+    get_working_srgb_icc,
     imread_engine,
     imread_engine_with_context,
     imread_exif,
@@ -39,7 +41,7 @@ from retouch.recipes import CURATED_RECIPE_NAMES, RECIPE_UI_CHOICES, RECIPES
 from retouch.params import recipe_to_params, PROCESSING_PARAMS, param_names, gui_values_to_engine_kwargs
 from retouch.grading import list_available_presets
 from retouch.style_library import list_styles, save_style_profile, learn_dataset_style
-from retouch.batch_processor import BatchProcessor
+from retouch.batch_processor import BatchProcessor, validate_batch_roots
 from retouch.style import StyleProfile
 from retouch.look_extractor import LookExtractor
 from retouch.recipe_cookbook import search_recipes, list_recipes, list_categories
@@ -86,6 +88,19 @@ from retouch.advanced_retouch import (
     replay_advanced_edits,
 )
 from retouch.advanced_history import AdvancedHistory
+from retouch.advanced_contract import (
+    BASE_KIND_PROCESSED,
+    BASE_KIND_SOURCE,
+    AdvancedContractError,
+    build_base_contract,
+    build_session_payload as build_advanced_session_payload,
+    compare_base_contracts,
+    delivery_decision as advanced_delivery_decision,
+    parse_session_payload as parse_advanced_session_payload,
+    pixel_sha256 as advanced_pixel_sha256,
+    replay_result_matches,
+    source_file_matches,
+)
 from retouch.gui_preview_cache import (
     GuiPreviewCache,
     make_preview_cache_key,
@@ -861,6 +876,10 @@ def on_process_folder(input_dir, output_dir, style_type, custom_style_name, reci
                       prg=gr.Progress()):
     if not input_dir or not output_dir:
         return None, None, "Error: Both Input and Output directories must be specified."
+    try:
+        validate_batch_roots(input_dir, output_dir)
+    except (OSError, ValueError) as exc:
+        return None, None, f"Error: {exc}"
 
     gr.Info("Batch processing started...")
     processor = BatchProcessor()
@@ -1111,6 +1130,9 @@ def save_session_handler(*args):
 
     process_args = args[:len(PROCESS_INPUT_KEYS)]
     advanced_edits = args[len(PROCESS_INPUT_KEYS)] if len(args) > len(PROCESS_INPUT_KEYS) else []
+    advanced_base = args[len(PROCESS_INPUT_KEYS) + 1] if len(args) > len(PROCESS_INPUT_KEYS) + 1 else None
+    advanced_history = args[len(PROCESS_INPUT_KEYS) + 2] if len(args) > len(PROCESS_INPUT_KEYS) + 2 else None
+    advanced_current = args[len(PROCESS_INPUT_KEYS) + 3] if len(args) > len(PROCESS_INPUT_KEYS) + 3 else None
     params = dict(zip(PROCESS_INPUT_KEYS, process_args))
     img_paths = params.get("img_paths")
     image_path = None
@@ -1122,10 +1144,18 @@ def save_session_handler(*args):
 
     recipe = params.get("recipe", "natural")
     session = create_session_from_params(params, recipe=recipe, image_path=image_path)
-    session.advanced_retouch = {
-        "version": 1,
-        "edits": list(advanced_edits or []),
-    }
+    if advanced_edits or advanced_base is not None:
+        try:
+            session.advanced_retouch = build_advanced_session_payload(
+                list(advanced_edits or []),
+                advanced_base,
+                history_state=advanced_history,
+                result_rgb=advanced_current,
+            )
+        except AdvancedContractError as exc:
+            _logger.warning("Advanced Retouch session save refused: %s", exc)
+            gr.Warning(f"Session was not saved: {exc}")
+            return gr.update(value=None, visible=False)
 
     tmpdir = tempfile.mkdtemp()
     filepath = os.path.join(tmpdir, f"{recipe or 'session'}.session.json")
@@ -1165,7 +1195,7 @@ def load_session_handler(session_file, *current_args):
     return tuple(result)
 
 
-def load_advanced_session_handler(session_file, source_rgb):
+def load_advanced_session_handler(session_file, source_rgb, base_contract=None):
     """Restore serialized Advanced Retouch edits when a source is available."""
     from retouch.session import Session
 
@@ -1185,7 +1215,21 @@ def load_advanced_session_handler(session_file, source_rgb):
     try:
         path = session_file.name if hasattr(session_file, "name") else str(session_file)
         session = Session.from_file(path)
-        advanced = session.advanced_retouch or {}
+        raw_advanced = session.advanced_retouch or {}
+        if not raw_advanced:
+            return (
+                source_rgb,
+                [],
+                source_rgb,
+                source_rgb,
+                None,
+                before_after(source_rgb, source_rgb) if source_rgb is not None else None,
+                AdvancedHistory().to_state(),
+                [],
+                None,
+                "Session contains no Advanced Retouch edits.",
+            )
+        advanced = parse_advanced_session_payload(raw_advanced)
         edits = list(advanced.get("edits") or [])
     except Exception as exc:
         _logger.warning("Failed to load Advanced Retouch session data: %s", exc)
@@ -1202,10 +1246,24 @@ def load_advanced_session_handler(session_file, source_rgb):
             f"Advanced Retouch session data unavailable: {exc}",
         )
 
-    if source_rgb is None:
+    if advanced.get("legacy_unverified"):
         return (
             source_rgb,
-            edits,
+            advanced,
+            source_rgb,
+            source_rgb,
+            None,
+            before_after(source_rgb, source_rgb) if source_rgb is not None else None,
+            AdvancedHistory().to_state(),
+            [],
+            None,
+            f"Loaded {len(edits)} legacy Advanced Retouch edit(s) as pending. "
+            "Legacy sessions have no base hash; use Bind legacy session edits to apply them explicitly.",
+        )
+    if source_rgb is None or base_contract is None:
+        return (
+            source_rgb,
+            advanced,
             source_rgb,
             None,
             None,
@@ -1213,10 +1271,32 @@ def load_advanced_session_handler(session_file, source_rgb):
             _advanced_history_from_edits(edits).to_state(),
             edits,
             None,
-            f"Loaded {len(edits)} Advanced Retouch edit(s). Load the source image to replay them.",
+            f"Loaded {len(edits)} Advanced Retouch edit(s) as pending. "
+            "Load the exact recorded base to verify and replay them.",
+        )
+    comparison = compare_base_contracts(advanced.get("base"), base_contract)
+    if not comparison["matches"]:
+        return (
+            source_rgb,
+            advanced,
+            source_rgb,
+            source_rgb,
+            None,
+            before_after(source_rgb, source_rgb),
+            AdvancedHistory().to_state(),
+            [],
+            None,
+            "Advanced Retouch session base mismatch; edits remain pending ({}).".format(
+                ", ".join(comparison["reasons"])
+            ),
         )
     try:
         current = _replay_advanced_state(source_rgb, edits)
+        replay_check = replay_result_matches(advanced, current)
+        if not replay_check["matches"]:
+            raise AdvancedContractError(
+                "replay result mismatch: %s" % ", ".join(replay_check["reasons"])
+            )
         return (
             source_rgb,
             [],
@@ -1227,13 +1307,13 @@ def load_advanced_session_handler(session_file, source_rgb):
             _advanced_history_from_edits(edits).to_state(),
             edits,
             None,
-            f"Replayed {len(edits)} Advanced Retouch edit(s).",
+            f"Verified and replayed {len(edits)} Advanced Retouch edit(s) on the recorded base.",
         )
     except Exception as exc:
         _logger.warning("Failed to replay Advanced Retouch session data: %s", exc)
         return (
             source_rgb,
-            edits,
+            advanced,
             source_rgb,
             source_rgb,
             None,
@@ -1241,7 +1321,7 @@ def load_advanced_session_handler(session_file, source_rgb):
             _advanced_history_from_edits(edits).to_state(),
             [],
             None,
-            f"Could not replay Advanced Retouch edits: {exc}",
+            f"Could not verify Advanced Retouch replay; edits remain pending: {exc}",
         )
 
 
@@ -1348,12 +1428,25 @@ def save_snapshot_handler(name, *args, snapshots=None):
 
     process_args = args[:len(PROCESS_INPUT_KEYS)]
     advanced_edits = args[len(PROCESS_INPUT_KEYS)] if len(args) > len(PROCESS_INPUT_KEYS) else []
-    if snapshots is None and len(args) > len(PROCESS_INPUT_KEYS) + 1:
-        snapshots = args[len(PROCESS_INPUT_KEYS) + 1]
+    advanced_base = args[len(PROCESS_INPUT_KEYS) + 1] if len(args) > len(PROCESS_INPUT_KEYS) + 1 else None
+    advanced_history = args[len(PROCESS_INPUT_KEYS) + 2] if len(args) > len(PROCESS_INPUT_KEYS) + 2 else None
+    advanced_current = args[len(PROCESS_INPUT_KEYS) + 3] if len(args) > len(PROCESS_INPUT_KEYS) + 3 else None
+    if snapshots is None and len(args) > len(PROCESS_INPUT_KEYS) + 4:
+        snapshots = args[len(PROCESS_INPUT_KEYS) + 4]
     params = dict(zip(PROCESS_INPUT_KEYS, process_args))
     recipe = params.get("recipe", "natural")
     session = Session(recipe=recipe, params=params)
-    session.advanced_retouch = {"version": 1, "edits": list(advanced_edits or [])}
+    if advanced_edits or advanced_base is not None:
+        try:
+            session.advanced_retouch = build_advanced_session_payload(
+                list(advanced_edits or []),
+                advanced_base,
+                history_state=advanced_history,
+                result_rgb=advanced_current,
+            )
+        except AdvancedContractError as exc:
+            gr.Warning(f"Snapshot was not saved: {exc}")
+            return gr.update(), snapshots or {}
     snap = Snapshot(name=name.strip(), session=session)
 
     if snapshots is None:
@@ -2241,26 +2334,43 @@ def on_watch_folder_process(input_dir, state_path, limit=None, output_dir=None,
                 kind=selected_kind,
                 output_root=output_root,
                 settings=settings,
-                pipeline_fingerprint="retouch-batch-v2",
+                pipeline_fingerprint=f"retouch-{__version__}-batch-v3",
                 asset_instance_resolver=asset_instance_resolver,
                 limit=int(limit) if limit is not None else None,
             )
 
             def process_watch_job(job):
+                job_settings = dict(job.settings)
+                source_path = Path(job.source_path).resolve()
+                try:
+                    relative_source = source_path.relative_to(input_root)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"watch job source is outside the watched folder: {source_path}"
+                    ) from exc
+
+                # BatchProcessor preserves the input-relative directory below
+                # its output root. Derive that root from the durable output
+                # contract instead of the current UI selection.
+                job_output = Path(job.output_path).resolve()
+                batch_output_root = job_output.parent
+                for _ in relative_source.parent.parts:
+                    batch_output_root = batch_output_root.parent
                 processor = BatchProcessor()
                 try:
                     processed, _, _, log = processor.process_folder(
                         input_dir=input_root,
-                        output_dir=output_root / selected_kind,
-                        style_name_or_recipe=settings["recipe"],
-                        export_fmt=settings["export_fmt"],
-                        export_quality=settings["export_quality"],
-                        export_res=settings["export_res"],
+                        output_dir=batch_output_root,
+                        style_name_or_recipe=str(job_settings.get("recipe", "natural")),
+                        export_fmt=str(job_settings.get("export_fmt", "JPEG")),
+                        export_quality=int(job_settings.get("export_quality", 95)),
+                        export_res=str(job_settings.get("export_res", "Original")),
                         auto_group=False,
                         generate_sheet=False,
                         export_zip=False,
                         num_workers=1,
-                        only_files=[Path(job.source_path)],
+                        only_files=[source_path],
+                        output_path_overrides={source_path: job_output},
                     )
                     if len(processed) != 1:
                         raise RuntimeError(
@@ -2270,7 +2380,11 @@ def on_watch_folder_process(input_dir, state_path, limit=None, output_dir=None,
                 finally:
                     processor.close()
 
-            watcher.run_queued(process_watch_job)
+            watcher.run_queued(
+                process_watch_job,
+                kind=selected_kind,
+                limit=int(limit) if limit is not None else None,
+            )
             job_ids = {
                 record.job_ids.get(selected_kind)
                 for record in watcher.state.records.values()
@@ -2630,24 +2744,115 @@ def _advanced_empty_state(source_rgb=None, status=""):
         None,
         status,
         [],
+        None,
     )
 
 
-def _advanced_load_rgb_source(source_rgb, pending_edits=None, status_prefix="Loaded source image"):
+def _advanced_load_rgb_source(
+    source_rgb,
+    pending_edits=None,
+    status_prefix="Loaded source image",
+    *,
+    base_kind=BASE_KIND_SOURCE,
+    source_path=None,
+    render_evidence=None,
+    explicit_legacy_replay=False,
+):
     """Initialize the Advanced Retouch state from an already-decoded RGB image."""
     if source_rgb is None:
         return _advanced_empty_state(None, "Process an image or upload one to begin Advanced Retouch.")
     source = np.ascontiguousarray(source_rgb).copy()
-    edits = list(pending_edits or [])
-    needs_face_models = any(
-        str(edit.get("mode", "Adjust")) == "Reshape"
-        or str(edit.get("semantic", "None")) != "None"
-        for edit in edits
+    base_contract = build_base_contract(
+        source,
+        kind=base_kind,
+        source_path=source_path,
+        render_evidence=render_evidence,
     )
-    current = _replay_advanced_state(source, edits) if edits else source.copy()
+    pending_payload = None
+    if isinstance(pending_edits, dict) and pending_edits:
+        pending_payload = parse_advanced_session_payload(pending_edits)
+    elif isinstance(pending_edits, list) and pending_edits:
+        pending_payload = parse_advanced_session_payload({"version": 1, "edits": pending_edits})
+
+    edits = list(pending_payload.get("edits") or []) if pending_payload else []
+    if pending_payload and pending_payload.get("legacy_unverified") and not explicit_legacy_replay:
+        return (
+            source,
+            source.copy(),
+            source.copy(),
+            None,
+            before_after(source, source),
+            AdvancedHistory().to_state(),
+            [],
+            None,
+            f"{status_prefix}. {len(edits)} legacy edit(s) remain pending because their base cannot be verified; "
+            "use Bind legacy session edits to apply them explicitly.",
+            pending_payload,
+            base_contract,
+        )
+    if pending_payload and not pending_payload.get("legacy_unverified"):
+        comparison = compare_base_contracts(pending_payload.get("base"), base_contract)
+        if not comparison["matches"]:
+            return (
+                source,
+                source.copy(),
+                source.copy(),
+                None,
+                before_after(source, source),
+                AdvancedHistory().to_state(),
+                [],
+                None,
+                "{}; saved edits remain pending because the base differs ({}).".format(
+                    status_prefix, ", ".join(comparison["reasons"])
+                ),
+                pending_payload,
+                base_contract,
+            )
+    try:
+        current = _replay_advanced_state(source, edits) if edits else source.copy()
+        if pending_payload and not pending_payload.get("legacy_unverified"):
+            replay_check = replay_result_matches(pending_payload, current)
+            if not replay_check["matches"]:
+                raise AdvancedContractError(
+                    "replay result mismatch: %s" % ", ".join(replay_check["reasons"])
+                )
+    except Exception as exc:
+        return (
+            source,
+            source.copy(),
+            source.copy(),
+            None,
+            before_after(source, source),
+            AdvancedHistory().to_state(),
+            [],
+            None,
+            f"{status_prefix}; saved edits remain pending because replay could not be verified: {exc}",
+            pending_payload or [],
+            base_contract,
+        )
     history = _advanced_history_from_edits(edits)
-    status = f"{status_prefix}{f' and replayed {len(edits)} saved edit(s)' if edits else ''}."
-    return source, current, current, None, before_after(source, current), history.to_state(), history.current_edit_log(), None, status, []
+    detail = base_contract.get("render", {}).get("effective_detail")
+    if base_kind == BASE_KIND_PROCESSED and detail != "native":
+        delivery_status = " This is proxy/unverified detail; delivery export is blocked until a verified Full Quality render is used."
+    elif base_kind == BASE_KIND_PROCESSED:
+        delivery_status = " Native Full Quality render evidence verified."
+    else:
+        delivery_status = " Native uploaded-source evidence recorded."
+    replay_status = f" and replayed {len(edits)} edit(s)" if edits else ""
+    status = f"{status_prefix}{replay_status}.{delivery_status}"
+    return (
+        source,
+        current,
+        current,
+        None,
+        before_after(source, current),
+        history.to_state(),
+        history.current_edit_log(),
+        None,
+        status,
+        [],
+        base_contract,
+    )
 
 
 def on_advanced_source_change(img_paths, pending_edits=None):
@@ -2656,19 +2861,91 @@ def on_advanced_source_change(img_paths, pending_edits=None):
     if not path:
         return _advanced_empty_state(None, "Upload an image to begin Advanced Retouch.")
     try:
-        image_bgr = imread_engine(path)
+        # Advanced Retouch edits the same display-referred sRGB pixels as the
+        # main GUI. Keep tagged source pixels on that managed ingest path so
+        # the source ICC is not merely copied onto converted pixels later.
+        image_bgr, _color_context = imread_engine_with_context(path)
         if image_bgr.dtype != np.uint8:
             image_bgr = np.clip(image_bgr, 0, 255).astype(np.uint8)
         source = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-        return _advanced_load_rgb_source(source, pending_edits, "Loaded uploaded source image")
+        return _advanced_load_rgb_source(
+            source,
+            pending_edits,
+            "Loaded uploaded source image",
+            base_kind=BASE_KIND_SOURCE,
+            source_path=path,
+        )
     except Exception as exc:
         _logger.warning("Advanced Retouch source load failed: %s", exc)
         return _advanced_empty_state(None, f"Could not load image: {exc}")
 
 
-def on_advanced_processed_result(processed_rgb, pending_edits=None):
+def on_advanced_processed_result(processed_rgb, pending_edits=None, preview_cache=None, current_edits=None):
     """Switch the Advanced Retouch workspace to the latest recipe result."""
-    return _advanced_load_rgb_source(processed_rgb, pending_edits, "Loaded processed recipe result")
+    evidence = (
+        preview_cache.latest_render_evidence
+        if isinstance(preview_cache, GuiPreviewCache)
+        else preview_cache if isinstance(preview_cache, dict) else {}
+    )
+    explicit_rebase = not pending_edits and bool(current_edits)
+    replay_payload = pending_edits or list(current_edits or [])
+    return _advanced_load_rgb_source(
+        processed_rgb,
+        replay_payload,
+        "Loaded processed recipe result",
+        base_kind=BASE_KIND_PROCESSED,
+        source_path=evidence.get("source_path") if isinstance(evidence, dict) else None,
+        render_evidence=evidence,
+        explicit_legacy_replay=explicit_rebase,
+    )
+
+
+def advanced_bind_legacy_handler(source_rgb, pending_payload, base_contract):
+    """Explicitly bind a legacy edit-only session to the visible base."""
+    if source_rgb is None or base_contract is None:
+        return (
+            source_rgb,
+            source_rgb,
+            before_after(source_rgb, source_rgb) if source_rgb is not None else None,
+            AdvancedHistory().to_state(),
+            [],
+            pending_payload,
+            "Load a source before binding legacy Advanced Retouch edits.",
+        )
+    try:
+        parsed = parse_advanced_session_payload(pending_payload or {})
+        if not parsed.get("legacy_unverified"):
+            return (
+                source_rgb,
+                source_rgb,
+                before_after(source_rgb, source_rgb),
+                AdvancedHistory().to_state(),
+                [],
+                pending_payload,
+                "No legacy Advanced Retouch edits are pending.",
+            )
+        edits = list(parsed.get("edits") or [])
+        current = _replay_advanced_state(source_rgb, edits)
+        history = _advanced_history_from_edits(edits)
+        return (
+            current,
+            current,
+            before_after(source_rgb, current),
+            history.to_state(),
+            history.current_edit_log(),
+            [],
+            f"Explicitly bound and replayed {len(edits)} legacy edit(s). Save the session to upgrade it to v2 evidence.",
+        )
+    except Exception as exc:
+        return (
+            source_rgb,
+            source_rgb,
+            before_after(source_rgb, source_rgb),
+            AdvancedHistory().to_state(),
+            [],
+            pending_payload,
+            f"Legacy Advanced Retouch edits were not applied: {exc}",
+        )
 
 
 def on_advanced_face_choices(img_paths):
@@ -2753,6 +3030,7 @@ def advanced_apply_handler(
             remove_engine=remove_engine,
         )
         compact_history = _advanced_history_object(history, edit_log)
+        previous_history_state = compact_history.to_state()
         history_outcome = compact_history.append(
             result.edit,
             preview=_advanced_preview_image(result.image_rgb),
@@ -2767,6 +3045,18 @@ def advanced_apply_handler(
                 None,
                 before_after(source_rgb, current_rgb) if source_rgb is not None else None,
                 f"Advanced Retouch history rejected the edit: {history_outcome.message}",
+            )
+        if compact_history.history_truncated:
+            return (
+                gr.update(),
+                current_rgb,
+                previous_history_state,
+                list(edit_log or []),
+                None,
+                None,
+                before_after(source_rgb, current_rgb) if source_rgb is not None else None,
+                "Advanced Retouch edit was not applied because it would cross the replay-safe history boundary. "
+                "Save/export the canvas or reset the workspace before continuing.",
             )
         new_history = compact_history.to_state()
         new_log = compact_history.current_edit_log()
@@ -2810,7 +3100,7 @@ def advanced_redo_handler(current_rgb, source_rgb, history, edit_log=None):
 
 
 def advanced_reset_handler(source_rgb):
-    return _advanced_empty_state(source_rgb, "Advanced Retouch edits reset.")[1:-1]
+    return _advanced_empty_state(source_rgb, "Advanced Retouch edits reset.")[1:9]
 
 
 def advanced_overlay_handler(current_rgb, mask, visible, opacity):
@@ -2828,7 +3118,7 @@ def advanced_clear_mask_handler(editor_value, current_rgb, source_rgb):
     return cleared_editor, None, current_rgb, before_after(source_rgb, current_rgb), "Cleared Advanced Retouch mask."
 
 
-def advanced_save_snapshot_handler(name, current_rgb, edit_log, snapshots):
+def advanced_save_snapshot_handler(name, current_rgb, edit_log, snapshots, base_contract=None):
     if not name or not str(name).strip():
         return gr.update(), snapshots or {}, "Enter a snapshot name."
     if current_rgb is None:
@@ -2838,6 +3128,13 @@ def advanced_save_snapshot_handler(name, current_rgb, edit_log, snapshots):
     snapshots[key] = {
         "preview": _advanced_preview_payload(current_rgb),
         "edits": list(edit_log or []),
+        "edits_sha256": canonical_sha256(list(edit_log or [])),
+        "result_sha256": advanced_pixel_sha256(current_rgb),
+        "base_contract_sha256": (
+            base_contract.get("contract_sha256")
+            if isinstance(base_contract, dict)
+            else None
+        ),
         "preview_resolution": ADVANCED_PREVIEW_MAX_DIM,
     }
     while len(snapshots) > ADVANCED_SNAPSHOT_MAX_COUNT:
@@ -2858,30 +3155,61 @@ def advanced_compare_snapshot_handler(name, current_rgb, snapshots):
     return before_after(snapshot_image, _advanced_preview_image(current_rgb)), f"Comparing current edit with snapshot '{name}'."
 
 
-def advanced_export_handler(current_rgb, export_fmt, source_paths=None):
-    """Export the full-resolution canvas with source ICC/EXIF metadata."""
+def advanced_export_handler(current_rgb, export_fmt, source_paths=None, base_contract=None):
+    """Export the full-resolution canvas with context-aware metadata."""
     if current_rgb is None:
         return gr.update(visible=False), "Load an image first."
+    delivery = advanced_delivery_decision(base_contract)
+    if not delivery["allowed"]:
+        return (
+            gr.update(value=None, visible=False),
+            "Advanced Retouch export blocked: {} ({}). Use an uploaded source or rerun Export Full Quality, "
+            "then choose Edit processed result.".format(delivery["reason"], delivery["detail"]),
+        )
     fmt = str(export_fmt or "PNG").upper()
     ext = {"JPEG": ".jpg", "PNG": ".png", "PNG-16": ".png", "TIFF-16": ".tiff", "WEBP": ".webp"}.get(fmt, ".png")
     output_dir = tempfile.mkdtemp(prefix="retouch_advanced_export_")
     output_path = os.path.join(output_dir, f"advanced_retouch{ext}")
     bgr = cv2.cvtColor(np.asarray(current_rgb).astype(np.uint8), cv2.COLOR_RGB2BGR)
     source_path = _resolve_image_path(source_paths)
-    icc = read_icc_profile(source_path) if source_path else None
-    exif = read_exif_bytes(source_path) if source_path else None
-    c2pa_manifest = read_c2pa_manifest(source_path) if source_path else None
-    if fmt in {"PNG-16", "TIFF-16"}:
-        write_image_with_icc(output_path, bgr, icc_profile=icc, exif=exif, c2pa_manifest=c2pa_manifest, bit_depth=16, quality=95)
-    else:
-        write_image_with_icc(
-            output_path, bgr, icc_profile=icc, exif=exif, c2pa_manifest=c2pa_manifest,
-            bit_depth=8, quality=95, float_range="byte",
-        )
+    trusted_source_path = (
+        source_path
+        if source_path and source_file_matches(base_contract, source_path)
+        else None
+    )
+    exif = read_exif_bytes(trusted_source_path) if trusted_source_path else None
+    source_had_c2pa = bool(read_c2pa_manifest(trusted_source_path)) if trusted_source_path else False
+    color_context = (
+        color_context_for_path(trusted_source_path)
+        if trusted_source_path
+        else ColorContext.assumed_srgb_context(get_working_srgb_icc())
+    )
+    write_image_with_color_context(
+        output_path,
+        bgr,
+        color_context,
+        exif=exif,
+        # Copying the source assertion after changing pixels would not create a
+        # valid derived-work claim. Keep it out until a signing path exists.
+        c2pa_manifest=None,
+        bit_depth=16 if fmt in {"PNG-16", "TIFF-16"} else 8,
+        quality=95,
+        float_range="byte",
+    )
     if not os.path.isfile(output_path) or os.path.getsize(output_path) <= 0:
         return gr.update(visible=False), "Advanced Retouch export failed."
-    metadata = " with source ICC/EXIF" if source_path else ""
-    return gr.update(value=output_path, visible=True), f"Exported full-resolution Advanced Retouch canvas as {fmt}{metadata}."
+    metadata = " with verified-source ICC/EXIF" if trusted_source_path else " with working-sRGB color metadata"
+    precision = "; 16-bit container from an effective 8-bit Advanced canvas" if fmt in {"PNG-16", "TIFF-16"} else ""
+    provenance = "; source C2PA was intentionally not copied after pixel edits" if source_had_c2pa else ""
+    source_warning = (
+        "; source metadata was not reused because file identity did not match the recorded base"
+        if source_path and not trusted_source_path
+        else ""
+    )
+    return (
+        gr.update(value=output_path, visible=True),
+        f"Exported verified-native Advanced Retouch canvas as {fmt}{metadata}{precision}{provenance}{source_warning}.",
+    )
 
 
 def on_extract_look(look_ref_file, img_input):
@@ -4033,6 +4361,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 "Edit processed result",
                                 variant="secondary",
                             )
+                            advanced_bind_legacy_btn = gr.Button(
+                                "Bind legacy session edits",
+                                variant="secondary",
+                                size="sm",
+                            )
                             gr.Markdown("Uses the latest recipe output as the Advanced Retouch source.")
                             advanced_editor = gr.ImageEditor(
                                 label="Brush mask canvas",
@@ -4131,6 +4464,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             _advanced_mask_state = gr.State(value=None)
                             _advanced_snapshots_state = gr.State(value={})
                             _advanced_pending_session_state = gr.State(value=[])
+                            _advanced_base_contract_state = gr.State(value=None)
                         # Hidden state variables for newly-added parameters (skin_hue_unify, skin_chroma_even)
                         # These maintain alignment with PROCESS_INPUT_KEYS but don't have visible UI yet.
                         _skin_hue_unify_state = gr.State(value=0)
@@ -5202,7 +5536,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
             _advanced_source_state, _advanced_current_state, advanced_editor,
             advanced_mask_overlay, advanced_before_after, _advanced_history_state,
             _advanced_edit_log_state, _advanced_mask_state, advanced_status,
-            _advanced_pending_session_state,
+            _advanced_pending_session_state, _advanced_base_contract_state,
         ],
         show_progress="minimal",
         concurrency_limit=1,
@@ -5210,16 +5544,34 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     )
     advanced_edit_processed_btn.click(
         fn=on_advanced_processed_result,
-        inputs=[_processed_result_state, _advanced_pending_session_state],
+        inputs=[
+            _processed_result_state, _advanced_pending_session_state,
+            _preview_cache_state, _advanced_edit_log_state,
+        ],
         outputs=[
             _advanced_source_state, _advanced_current_state, advanced_editor,
             advanced_mask_overlay, advanced_before_after, _advanced_history_state,
             _advanced_edit_log_state, _advanced_mask_state, advanced_status,
-            _advanced_pending_session_state,
+            _advanced_pending_session_state, _advanced_base_contract_state,
         ],
         show_progress="minimal",
         concurrency_limit=1,
         concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
+    )
+    advanced_bind_legacy_btn.click(
+        fn=advanced_bind_legacy_handler,
+        inputs=[
+            _advanced_source_state, _advanced_pending_session_state,
+            _advanced_base_contract_state,
+        ],
+        outputs=[
+            _advanced_current_state, advanced_editor, advanced_before_after,
+            _advanced_history_state, _advanced_edit_log_state,
+            _advanced_pending_session_state, advanced_status,
+        ],
+        concurrency_limit=1,
+        concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
+        show_progress="minimal",
     )
     advanced_face_detect_btn.click(
         fn=on_advanced_face_choices,
@@ -5294,7 +5646,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     )
     advanced_save_snapshot_btn.click(
         fn=advanced_save_snapshot_handler,
-        inputs=[advanced_snapshot_name, _advanced_current_state, _advanced_edit_log_state, _advanced_snapshots_state],
+        inputs=[
+            advanced_snapshot_name, _advanced_current_state,
+            _advanced_edit_log_state, _advanced_snapshots_state,
+            _advanced_base_contract_state,
+        ],
         outputs=[advanced_snapshot_dropdown, _advanced_snapshots_state, advanced_status],
     )
     advanced_compare_snapshot_btn.click(
@@ -5304,7 +5660,10 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     )
     advanced_export_btn.click(
         fn=advanced_export_handler,
-        inputs=[_advanced_current_state, advanced_export_fmt, img_input],
+        inputs=[
+            _advanced_current_state, advanced_export_fmt, img_input,
+            _advanced_base_contract_state,
+        ],
         outputs=[advanced_export_file, advanced_status],
         concurrency_limit=1,
         concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
@@ -5929,7 +6288,10 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     # F2: Session wiring
     save_session_btn.click(
         fn=save_session_handler,
-        inputs=_process_inputs + [_advanced_edit_log_state],
+        inputs=_process_inputs + [
+            _advanced_edit_log_state, _advanced_base_contract_state,
+            _advanced_history_state, _advanced_current_state,
+        ],
         outputs=[session_download],
     )
 
@@ -5955,7 +6317,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
 
     load_session_file.change(
         fn=load_advanced_session_handler,
-        inputs=[load_session_file, _advanced_source_state],
+        inputs=[load_session_file, _advanced_source_state, _advanced_base_contract_state],
         outputs=[
             _advanced_source_state, _advanced_pending_session_state, _advanced_current_state,
             advanced_editor, advanced_mask_overlay, advanced_before_after,
@@ -5999,7 +6361,10 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
 
     save_snapshot_btn.click(
         fn=save_snapshot_handler,
-        inputs=[snapshot_name] + _process_inputs + [_advanced_edit_log_state] + [_snapshot_state],
+        inputs=[snapshot_name] + _process_inputs + [
+            _advanced_edit_log_state, _advanced_base_contract_state,
+            _advanced_history_state, _advanced_current_state, _snapshot_state,
+        ],
         outputs=[snapshot_dropdown, _snapshot_state],
     )
 

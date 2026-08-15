@@ -87,6 +87,23 @@ class TestBasicProcessing:
         out_files = [p for p in output_dir.iterdir() if not p.name.startswith(".")]
         assert len(out_files) >= 3
 
+    def test_same_format_without_output_refuses_source_overwrite(self, tmp_path):
+        input_path = tmp_path / "input.jpg"
+        _write_synthetic_image(input_path)
+        before = input_path.read_bytes()
+
+        rc, out, err = _run_cli(
+            str(input_path),
+            "--max-dim", "200",
+            "--no-compare",
+            "--force",
+            "--workers", "1",
+        )
+
+        assert rc == 1
+        assert "Output preflight failed" in out
+        assert input_path.read_bytes() == before
+
     def test_recursive_flag_picks_subdirs(self, tmp_path):
         """The -r flag should make the CLI recurse into subdirectories."""
         input_dir = tmp_path / "root"
@@ -108,6 +125,14 @@ class TestBasicProcessing:
             "--workers", "1",
         )
         assert rc == 0, f"CLI failed: {err}"
+        assert {
+            p.relative_to(output_dir).as_posix()
+            for p in output_dir.rglob("*")
+            if p.is_file()
+        } == {
+            "top.jpg",
+            "sub/nested.jpg",
+        }
 
 
 # ---------------------------------------------------------------------------

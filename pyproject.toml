@@ -48,11 +48,12 @@ raw = ["rawpy>=0.19.0"]
 capture = ["lensfunpy>=1.6.0"]
 
 [tool.setuptools.packages.find]
-include = ["retouch*", "models", "presets"]
+include = ["retouch*", "models", "presets", "luts"]
 
 [tool.setuptools.package-data]
 models = ["manifest.json"]
 presets = ["*.json"]
+luts = ["*.cube", "ACQUISITION.md"]
 
 [tool.pytest.ini_options]
 timeout = 120

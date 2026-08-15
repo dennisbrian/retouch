@@ -14,6 +14,13 @@ from retouch.advanced_retouch import (
     mask_overlay,
     replay_advanced_edits,
 )
+from retouch.advanced_contract import (
+    BASE_KIND_PROCESSED,
+    BASE_KIND_SOURCE,
+    build_base_contract,
+    build_session_payload,
+)
+from retouch.advanced_history import AdvancedHistory
 from retouch.session import Session
 
 
@@ -173,10 +180,41 @@ def test_gui_advanced_snapshots_compare_and_export(tmp_path, monkeypatch):
     export_dir = tmp_path / "advanced-export"
     export_dir.mkdir()
     monkeypatch.setattr(gui.tempfile, "mkdtemp", lambda prefix: str(export_dir))
-    exported, export_status = gui.advanced_export_handler(edited, "PNG")
+    base_contract = build_base_contract(image, kind=BASE_KIND_SOURCE)
+    exported, export_status = gui.advanced_export_handler(
+        edited, "PNG", None, base_contract,
+    )
     assert exported["visible"] is True
     assert Path(exported["value"]).is_file()
     assert "Exported" in export_status
+
+
+def test_gui_advanced_export_uses_source_color_context(tmp_path, monkeypatch):
+    import gui
+
+    image = np.full((24, 32, 3), 150, dtype=np.uint8)
+    source = tmp_path / "source.png"
+    cv2.imwrite(str(source), cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+    export_dir = tmp_path / "advanced-export"
+    export_dir.mkdir()
+    monkeypatch.setattr(gui.tempfile, "mkdtemp", lambda prefix: str(export_dir))
+    captured = {}
+
+    def fake_write(path, pixels, context, **kwargs):
+        captured["context"] = context
+        Path(path).write_bytes(b"verified advanced export")
+
+    monkeypatch.setattr(gui, "write_image_with_color_context", fake_write)
+    base_contract = build_base_contract(
+        image, kind=BASE_KIND_SOURCE, source_path=source,
+    )
+    exported, status = gui.advanced_export_handler(
+        image, "PNG", [str(source)], base_contract,
+    )
+
+    assert exported["visible"] is True
+    assert captured["context"].source_kind == "assumed-srgb"
+    assert "verified-source ICC/EXIF" in status
 
 
 def test_gui_source_declares_advanced_editor_and_visible_reshape_controls():
@@ -278,6 +316,120 @@ def test_processed_recipe_result_can_become_advanced_source():
     assert np.array_equal(loaded[0], processed)
     assert np.array_equal(loaded[1], processed)
     assert "processed recipe result" in loaded[8].lower()
+    assert loaded[10]["render"]["effective_detail"] == "unverified"
+
+
+def test_preview_derived_advanced_export_is_blocked_before_writer(tmp_path, monkeypatch):
+    import gui
+
+    image = np.full((24, 32, 3), 177, dtype=np.uint8)
+    preview_base = build_base_contract(
+        image,
+        kind=BASE_KIND_PROCESSED,
+        render_evidence={
+            "render_mode": "render_preview",
+            "render_revision": 2,
+            "settings_sha256": "b" * 64,
+            "native": {"width": 32, "height": 24},
+            "output": {"width": 32, "height": 24},
+        },
+    )
+    monkeypatch.setattr(
+        gui,
+        "write_image_with_color_context",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("writer must not run")),
+    )
+
+    exported, status = gui.advanced_export_handler(image, "PNG", None, preview_base)
+
+    assert exported["visible"] is False
+    assert "blocked" in status.lower()
+
+
+def test_full_quality_processed_result_records_native_delivery_evidence():
+    import gui
+
+    processed = np.full((24, 32, 3), 177, dtype=np.uint8)
+    evidence = {
+        "render_mode": "export_full_quality",
+        "render_revision": 3,
+        "settings_sha256": "c" * 64,
+        "native": {"width": 32, "height": 24},
+        "output": {"width": 32, "height": 24},
+    }
+
+    loaded = gui.on_advanced_processed_result(processed, [], evidence, [])
+
+    assert loaded[10]["render"]["effective_detail"] == "native"
+    assert loaded[10]["render"]["delivery_eligible"] is True
+    assert "verified" in loaded[8].lower()
+
+
+def test_v2_advanced_session_refuses_same_size_wrong_base(tmp_path):
+    import gui
+
+    expected_source = np.full((24, 32, 3), 80, dtype=np.uint8)
+    active_source = np.full((24, 32, 3), 81, dtype=np.uint8)
+    expected_base = build_base_contract(expected_source, kind=BASE_KIND_SOURCE)
+    active_base = build_base_contract(active_source, kind=BASE_KIND_SOURCE)
+    payload = build_session_payload(
+        [],
+        expected_base,
+        history_state={"base_cursor": 0, "cursor": 0},
+        result_rgb=expected_source,
+    )
+    session_path = tmp_path / "advanced-v2.session.json"
+    Session(advanced_retouch=payload).to_file(str(session_path))
+
+    loaded = gui.load_advanced_session_handler(str(session_path), active_source, active_base)
+
+    assert np.array_equal(loaded[2], active_source)
+    assert loaded[1]["version"] == 2
+    assert "base mismatch" in loaded[9].lower()
+
+
+def test_legacy_advanced_session_requires_explicit_binding(tmp_path):
+    import gui
+
+    source, editor = _canvas()
+    edit = apply_advanced_edit(
+        source, editor, "Adjust", "warmth", 40,
+        "None", "All faces", {}, None, None,
+    ).edit
+    session_path = tmp_path / "legacy.session.json"
+    Session(advanced_retouch={"version": 1, "edits": [edit]}).to_file(str(session_path))
+    base = build_base_contract(source, kind=BASE_KIND_SOURCE)
+
+    loaded = gui.load_advanced_session_handler(str(session_path), source, base)
+    assert np.array_equal(loaded[2], source)
+    assert "legacy" in loaded[9].lower()
+
+    bound = gui.advanced_bind_legacy_handler(source, loaded[1], base)
+    assert not np.array_equal(bound[0], source)
+    assert bound[5] == []
+    assert "explicitly bound" in bound[6].lower()
+
+
+def test_advanced_edit_rejects_history_truncation():
+    import gui
+
+    image, editor = _canvas()
+    first = apply_advanced_edit(
+        image, editor, "Adjust", "warmth", 20,
+        "None", "All faces", {}, None, None,
+    )
+    history = AdvancedHistory(max_entries=1)
+    assert history.append(first.edit).changed
+
+    applied = gui.advanced_apply_handler(
+        editor, first.image_rgb, image, history.to_state(), [first.edit],
+        "Adjust", "warmth", 40, "None", "All faces", "telea",
+        "Auto (LaMa if installed)", True, 42,
+        0, 0, 0, 0, 0, 0, 0, 0, 0,
+    )
+
+    assert np.array_equal(applied[1], first.image_rgb)
+    assert "replay-safe history boundary" in applied[7]
 
 
 def test_clear_mask_preserves_pixels_and_removes_selection():

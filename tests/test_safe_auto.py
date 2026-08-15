@@ -4,7 +4,13 @@ import numpy as np
 import pytest
 
 from retouch.engine import ProcessingContext, ProcessingResult, RetouchEngine
-from retouch.safe_auto import apply_decision, decide, decide_mask_stage, record_decision
+from retouch.safe_auto import (
+    apply_decision,
+    confidence_evidence,
+    decide,
+    decide_mask_stage,
+    record_decision,
+)
 
 
 def test_safe_auto_actions_follow_confidence_bands():
@@ -26,6 +32,20 @@ def test_occlusion_forces_conservative_action_and_records_evidence():
     assert decision.action == "skip"
     assert decision.reason == "occluded region"
     assert decision.evidence["occluded"] is True
+
+
+def test_unavailable_detector_confidence_never_enters_auto_apply_band():
+    evidence = confidence_evidence(1.0, "mediapipe_presence_unavailable")
+    decision = decide_mask_stage(
+        "face",
+        mask_coverage=1.0,
+        landmark_stability=evidence["safe_auto_confidence"],
+        model_confidence=evidence["safe_auto_confidence"],
+    )
+
+    assert evidence["confidence_measured"] is False
+    assert evidence["reported_confidence"] == 1.0
+    assert decision.action == "review"
 
 
 def test_safe_auto_skip_is_byte_identical():

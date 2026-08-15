@@ -116,11 +116,20 @@ def resolve_face_context(base: Any, raw: Optional[Mapping[str, Any]]) -> Any:
             if hasattr(face_full, name)
         }
         patch.update(explicit)
-        return dataclasses.replace(base, **patch)
+        resolved = dataclasses.replace(base, **patch)
+        provenance = dict(getattr(base, "_parameter_provenance", {}) or {})
+        provenance["per_face_recipe"] = str(recipe_name)
+        provenance["per_face_explicit_overrides"] = sorted(str(name) for name in explicit)
+        resolved._parameter_provenance = provenance
+        return resolved
 
     if not explicit:
         return base
-    return dataclasses.replace(base, **explicit)
+    resolved = dataclasses.replace(base, **explicit)
+    provenance = dict(getattr(base, "_parameter_provenance", {}) or {})
+    provenance["per_face_explicit_overrides"] = sorted(str(name) for name in explicit)
+    resolved._parameter_provenance = provenance
+    return resolved
 
 
 def suggest_face_recipe(

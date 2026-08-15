@@ -23,15 +23,15 @@ from retouch.io import (
     IMAGE_EXTENSIONS,
     RAW_EXTENSIONS,
     _resolve_safe_path,
-    encode_write_params,
-    imread_engine,
+    color_context_for_path,
+    imread_engine_with_context,
     imread_exif,
     make_comparison,
     output_format,
     read_exif_bytes,
     read_c2pa_manifest,
-    read_icc_profile,
     resize_for_processing,
+    write_image_with_color_context,
 )
 from retouch.recipes import CURATED_RECIPE_NAMES, RECIPES
 from retouch.params import PROCESSING_PARAMS, recipe_to_params
@@ -198,17 +198,18 @@ def _process_single(args):
     (img_path, output_dir, params, format_arg, quality, force, copy_exif_flag,
      max_dim, compare_flag, global_only, bit_depth, fail_on_qa, save_session,
      smart, linear_raw, raw_exposure, raw_contrast, raf_decoder,
-     raf2jpeg_path, raf2jpeg_quality, fuji_match_strength, optical_correction) = args
+     raf2jpeg_path, raf2jpeg_quality, fuji_match_strength, optical_correction,
+     input_root) = args
     try:
         fmt = output_format(img_path, format_arg)
-        stem = img_path.stem
-        
         # For 16-bit, force PNG or TIFF
         if bit_depth == 16 and fmt not in ("png", "tif", "tiff"):
             fmt = "png"
-        
-        out_path = (output_dir / f"{stem}.{fmt}") if output_dir else \
-            img_path.with_suffix(f".{fmt}")
+
+        out_path = _destination_for_image(
+            img_path, output_dir, fmt, input_root=input_root,
+        )
+        _assert_safe_destination(img_path, out_path)
 
         if out_path.exists() and not force:
             return (img_path.name, "skipped")
@@ -217,9 +218,10 @@ def _process_single(args):
             img_bgr = _linear_raw_to_engine_bgr(
                 img_path, exposure=raw_exposure, contrast=raw_contrast,
             )
+            color_context = color_context_for_path(img_path)
         else:
             correction_status = {}
-            img_bgr = imread_engine(
+            img_bgr, color_context = imread_engine_with_context(
                 img_path,
                 raw_decoder=raf_decoder,
                 raf2jpeg_path=raf2jpeg_path,
@@ -283,17 +285,15 @@ def _process_single(args):
             result = cv2.resize(result, (orig_shape[1], orig_shape[0]),
                                 interpolation=cv2.INTER_LINEAR)
 
-        # Use write_image_with_icc for 16-bit support. EXIF is embedded at
-        # write time so the ICC profile, bit depth, and quality survive (the
-        # old copy_exif re-save re-encoded the destination and dropped them).
-        from retouch.io import write_image_with_icc
-        icc_profile = read_icc_profile(img_path) if copy_exif_flag else None
+        # Embed the context-selected ICC at write time so the working profile,
+        # bit depth, quality, and metadata survive the delivery boundary.
         exif_bytes = read_exif_bytes(img_path) if copy_exif_flag else None
         c2pa_manifest = read_c2pa_manifest(img_path) if copy_exif_flag else None
-        write_image_with_icc(
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        write_image_with_color_context(
             str(out_path),
             result,
-            icc_profile=icc_profile,
+            color_context,
             bit_depth=bit_depth,
             quality=quality,
             exif=exif_bytes,
@@ -301,8 +301,8 @@ def _process_single(args):
         )
 
         if compare_flag:
-            compare_path = (output_dir / f"{stem}_compare.{fmt}") if output_dir else \
-                img_path.parent / f"{stem}_compare.{fmt}"
+            compare_path = out_path.with_name(f"{out_path.stem}_compare{out_path.suffix}")
+            _assert_safe_destination(img_path, compare_path)
             make_comparison(original_full, result, compare_path, fmt, quality)
 
         if save_session is not None:
@@ -396,6 +396,125 @@ def find_images(input_path: str, recursive: bool) -> list[Path]:
         if f.suffix.lower() in IMAGE_EXTENSIONS:
             files.append(f)
     return sorted(files)
+
+
+def _destination_for_image(
+    image_path: Path,
+    output_dir: Optional[Path],
+    fmt: str,
+    *,
+    input_root: Optional[Path] = None,
+) -> Path:
+    """Build one deterministic destination without flattening recursive input."""
+    if output_dir is None:
+        return image_path.with_suffix(f".{fmt}")
+    if input_root is not None:
+        try:
+            relative = image_path.resolve().relative_to(Path(input_root).resolve())
+        except ValueError as exc:
+            raise ValueError(
+                f"Input {image_path} is outside recursive input root {input_root}"
+            ) from exc
+    else:
+        relative = Path(image_path.name)
+    return output_dir / relative.parent / f"{relative.stem}.{fmt}"
+
+
+def _path_key(path: Path) -> str:
+    """Return a collision-safe key, including macOS case-insensitive paths."""
+    resolved = str(Path(path).expanduser().resolve(strict=False))
+    normalized = os.path.normcase(resolved)
+    # ``posixpath.normcase`` is a no-op even on the default case-insensitive
+    # macOS filesystem, so fold there explicitly. Linux remains case-sensitive.
+    return normalized.casefold() if sys.platform == "darwin" else normalized
+
+
+def _assert_safe_destination(source: Path, destination: Path) -> None:
+    if _path_key(source) == _path_key(destination):
+        raise ValueError(
+            f"Refusing to overwrite source image {source} with its own output"
+        )
+    if source.exists() and destination.exists():
+        try:
+            aliases_source = os.path.samefile(str(source), str(destination))
+        except OSError:
+            aliases_source = False
+        if aliases_source:
+            raise ValueError(
+                f"Refusing to overwrite source image {source} through filesystem alias {destination}"
+            )
+
+
+def _preflight_destinations(
+    files: list[Path],
+    output_dir: Optional[Path],
+    format_arg: str,
+    bit_depth: int,
+    *,
+    recursive_root: Optional[Path],
+    compare: bool,
+    save_session: Any,
+) -> None:
+    """Reject source overwrites and any duplicate artifact before processing."""
+    if output_dir is not None and recursive_root is not None:
+        output_resolved = Path(output_dir).expanduser().resolve(strict=False)
+        input_resolved = Path(recursive_root).expanduser().resolve(strict=False)
+        try:
+            output_resolved.relative_to(input_resolved)
+        except ValueError:
+            pass
+        else:
+            raise ValueError(
+                f"Recursive output directory {output_resolved} must be outside input tree {input_resolved}"
+            )
+    source_keys = {_path_key(path): path for path in files}
+    destinations: Dict[str, Path] = {}
+    for image_path in files:
+        fmt = output_format(image_path, format_arg)
+        if bit_depth == 16 and fmt not in ("png", "tif", "tiff"):
+            fmt = "png"
+        output_path = _destination_for_image(
+            image_path, output_dir, fmt, input_root=recursive_root,
+        )
+        artifacts = [output_path]
+        if compare:
+            artifacts.append(
+                output_path.with_name(
+                    f"{output_path.stem}_compare{output_path.suffix}"
+                )
+            )
+        if save_session is True:
+            artifacts.append(output_path.with_suffix(".session.json"))
+        elif save_session not in (None, False):
+            artifacts.append(_resolve_safe_path(str(save_session), base_dir=None))
+
+        for destination in artifacts:
+            _assert_safe_destination(image_path, destination)
+            if destination.exists():
+                for source_path in files:
+                    try:
+                        aliases_input = os.path.samefile(
+                            str(source_path), str(destination)
+                        )
+                    except OSError:
+                        aliases_input = False
+                    if aliases_input:
+                        raise ValueError(
+                            f"Destination {destination} aliases input {source_path}"
+                        )
+            key = _path_key(destination)
+            if key in source_keys:
+                raise ValueError(
+                    f"Destination {destination} would overwrite input "
+                    f"{source_keys[key]}"
+                )
+            previous = destinations.get(key)
+            if previous is not None:
+                raise ValueError(
+                    f"Duplicate output destination {destination} for "
+                    f"multiple input images (already claimed by {previous})"
+                )
+            destinations[key] = image_path
 
 
 def _add_processing_arg(parser, spec):
@@ -782,7 +901,25 @@ def main() -> None:
 
     params = _finalize_params(params)
 
-    output_dir = Path(args.output) if args.output else None
+    output_dir = Path(args.output).expanduser().resolve() if args.output else None
+    recursive_root = (
+        input_path.expanduser().resolve()
+        if input_path.is_dir() and args.recursive
+        else None
+    )
+    try:
+        _preflight_destinations(
+            files,
+            output_dir,
+            args.format,
+            args.bit_depth,
+            recursive_root=recursive_root,
+            compare=args.compare,
+            save_session=args.save_session,
+        )
+    except (OSError, ValueError) as exc:
+        print(f"✖ Output preflight failed: {exc}")
+        sys.exit(1)
     if output_dir:
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -796,12 +933,13 @@ def main() -> None:
              args.bit_depth, args.fail_on_qa, args.save_session, args.smart,
              args.linear_raw, args.raw_exposure, args.raw_contrast,
              args.raf_decoder, args.raf2jpeg_path, args.raf2jpeg_quality,
-             args.fuji_match_strength, args.optical_correction)
+             args.fuji_match_strength, args.optical_correction,
+             recursive_root)
             for f in files
         ]
         with ProcessPoolExecutor(
             max_workers=args.workers,
-            initializer=_init_worker,
+            initializer=None if args.global_only else _init_worker,
         ) as pool:
             futures = {pool.submit(_process_single, a): a[0] for a in pool_args}
             for future in tqdm(as_completed(futures), total=len(files),
@@ -823,13 +961,14 @@ def main() -> None:
                         img_bgr = _linear_raw_to_engine_bgr(
                             f, exposure=args.raw_exposure, contrast=args.raw_contrast,
                         )
+                        color_context = color_context_for_path(f)
                     except Exception as e:
                         failed += 1
                         tqdm.write(f"  ✖ {f.name}: linear-raw {e}")
                         continue
                 else:
                     correction_status = {}
-                    img_bgr = imread_engine(
+                    img_bgr, color_context = imread_engine_with_context(
                         f,
                         raw_decoder=args.raf_decoder,
                         raf2jpeg_path=args.raf2jpeg_path,
@@ -852,8 +991,10 @@ def main() -> None:
                 # For 16-bit, force PNG or TIFF
                 if args.bit_depth == 16 and fmt not in ("png", "tif", "tiff"):
                     fmt = "png"
-                out_path = output_dir / f"{f.stem}.{fmt}" if output_dir else \
-                    f.with_suffix(f".{fmt}")
+                out_path = _destination_for_image(
+                    f, output_dir, fmt, input_root=recursive_root,
+                )
+                _assert_safe_destination(f, out_path)
 
                 if out_path.exists() and not args.force:
                     skipped += 1
@@ -898,17 +1039,27 @@ def main() -> None:
                     result = cv2.resize(result, (orig_shape[1], orig_shape[0]),
                                         interpolation=cv2.INTER_LINEAR)
                 
-                # Use write_image_with_icc for 16-bit support; embed EXIF at
-                # write time so ICC/bit-depth/quality survive.
-                from retouch.io import write_image_with_icc, read_icc_profile, read_exif_bytes
-                icc_profile = read_icc_profile(f) if not args.no_exif else None
+                # Embed the working-space ICC selected by ColorContext. The
+                # source ICC is never reattached to already-converted pixels.
+                from retouch.io import read_exif_bytes
                 exif_bytes = read_exif_bytes(f) if not args.no_exif else None
                 c2pa_manifest = read_c2pa_manifest(f) if not args.no_exif else None
-                write_image_with_icc(str(out_path), result, icc_profile=icc_profile, bit_depth=args.bit_depth, quality=args.quality, exif=exif_bytes, c2pa_manifest=c2pa_manifest)
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                write_image_with_color_context(
+                    str(out_path),
+                    result,
+                    color_context,
+                    bit_depth=args.bit_depth,
+                    quality=args.quality,
+                    exif=exif_bytes,
+                    c2pa_manifest=c2pa_manifest,
+                )
 
                 if args.compare:
-                    compare_path = (output_dir / f"{f.stem}_compare.{fmt}") if output_dir else \
-                        f.parent / f"{f.stem}_compare.{fmt}"
+                    compare_path = out_path.with_name(
+                        f"{out_path.stem}_compare{out_path.suffix}"
+                    )
+                    _assert_safe_destination(f, compare_path)
                     make_comparison(original_full, result, compare_path, fmt, args.quality)
 
                 if args.save_session is not None:

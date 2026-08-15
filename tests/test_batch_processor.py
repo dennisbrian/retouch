@@ -13,6 +13,8 @@ from retouch.batch_processor import (
     _compute_queue_depth,
     _estimate_image_working_bytes,
     _run_async_batch_queue,
+    plan_batch_outputs,
+    validate_batch_roots,
 )
 
 
@@ -82,6 +84,99 @@ def test_recursive_outputs_preserve_relative_directories(monkeypatch, tmp_path):
         "card-a/IMG_0001_retouched.jpg",
         "card-b/IMG_0001_retouched.jpg",
     }
+
+
+def test_batch_plan_disambiguates_same_stem_different_source_formats(tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    jpeg = input_dir / "photo.jpg"
+    png = input_dir / "photo.png"
+    jpeg.touch()
+    png.touch()
+
+    plan = plan_batch_outputs([jpeg, png], input_dir, output_dir, "JPEG")
+
+    destinations = {path.name for path in plan.values()}
+    assert destinations == {"photo_jpg_retouched.jpg", "photo_png_retouched.jpg"}
+
+
+@pytest.mark.parametrize("relative_output", (".", "exports", "exports/final"))
+def test_batch_rejects_output_inside_input_tree(tmp_path, relative_output):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    output_dir = input_dir / relative_output
+
+    with pytest.raises(ValueError, match="outside the input tree"):
+        validate_batch_roots(input_dir, output_dir)
+
+
+def test_batch_export_passes_color_context_to_writer(monkeypatch, tmp_path):
+    in_dir, out_dir = _make_input_dir(tmp_path, names=("source.jpg",))
+    engine = MagicMock()
+    engine.process.return_value = _fake_result()
+    processor = BatchProcessor(engine)
+    monkeypatch.setattr(
+        "retouch.batch_processor.analyze_and_group",
+        lambda paths, cache, eng: {"Group": paths},
+    )
+    monkeypatch.setattr(
+        "retouch.batch_processor.imread_exif",
+        lambda path: np.zeros((64, 64, 3), dtype=np.uint8),
+    )
+    captured = {}
+
+    def fake_write(path, image, *args, **kwargs):
+        captured["color_context"] = kwargs.get("color_context")
+        Path(path).write_bytes(b"verified test output")
+
+    monkeypatch.setattr("retouch.io.write_image_with_icc", fake_write)
+    processor.process_folder(in_dir, out_dir, generate_sheet=False, num_workers=1)
+
+    assert captured["color_context"].source_kind == "assumed-srgb"
+
+
+def test_owned_batch_uses_worker_local_engines(monkeypatch, tmp_path):
+    import threading
+
+    class FakeEngine:
+        instances = []
+
+        def __init__(self):
+            self.identity = object()
+            self.process = MagicMock(return_value=_fake_result())
+            self.detector = MagicMock()
+            self.detector.detect.return_value = []
+            self.__class__.instances.append(self)
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("retouch.engine.RetouchEngine", FakeEngine)
+    in_dir, out_dir = _make_input_dir(tmp_path, names=("a.jpg", "b.jpg"))
+    monkeypatch.setattr(
+        "retouch.batch_processor.analyze_and_group",
+        lambda paths, cache, eng: {"Group": paths},
+    )
+    barrier = threading.Barrier(2)
+    seen = []
+
+    def fake_process(self, file_path, *args, **kwargs):
+        seen.append(kwargs["engine"])
+        barrier.wait(timeout=5)
+        return out_dir / f"{file_path.stem}_retouched.jpg"
+
+    monkeypatch.setattr(BatchProcessor, "_process_single_file", fake_process)
+    processor = BatchProcessor()
+    try:
+        processed, _, _, _ = processor.process_folder(
+            in_dir, out_dir, generate_sheet=False, num_workers=2,
+        )
+    finally:
+        processor.close()
+
+    assert len(processed) == 2
+    assert len({id(engine) for engine in seen}) == 2
 
 
 def test_batch_log_reports_partial_failure_truthfully(monkeypatch, tmp_path):

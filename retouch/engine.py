@@ -915,7 +915,7 @@ def build_context(
     # Resolve once so worker paths and H4 receive the same immutable policy.
     mark_policy = resolve_mark_policy(spec_kwargs.pop("mark_policy", None))
 
-    return ProcessingContext(
+    context = ProcessingContext(
         # Recipe-derived fields (data-driven) — the bulk of the context.
         **spec_kwargs,
         # Caller-only fields (no recipe source)
@@ -946,6 +946,15 @@ def build_context(
         # Final fixed values
         active_recipe=active_recipe,
     )
+    context._parameter_provenance = {
+        "recipe": active_recipe,
+        "explicit_overrides": sorted(
+            str(name) for name, value in overrides.items()
+            if value is not None
+        ),
+        "contract": "recipe_and_explicit_values_are_user_requested",
+    }
+    return context
 
 
 # ---------------------------------------------------------------------------
@@ -969,6 +978,7 @@ class _CoreResult:
     acc_sharpen: Optional[np.ndarray]
     faces: list
     person_mask: Optional[np.ndarray]
+    acc_hair_only: Optional[np.ndarray] = None
     no_face: bool = False
     face_contexts: Optional[List["FaceContext"]] = None
     qa: List[QAWarning] = field(default_factory=list)
@@ -1956,6 +1966,7 @@ class RetouchEngine:
                 acc_sharpen=core.acc_sharpen,
                 faces=core.faces,
                 person_mask=core.person_mask,
+                acc_hair_only=core.acc_hair_only,
                 no_face=True,
                 face_contexts=core.face_contexts,
                 qa=core.qa,
@@ -1973,6 +1984,7 @@ class RetouchEngine:
             acc_sharpen=core.acc_sharpen,
             faces=core.faces,
             person_mask=core.person_mask,
+            acc_hair_only=core.acc_hair_only,
             face_contexts=core.face_contexts,
         )
 
@@ -2110,7 +2122,14 @@ class RetouchEngine:
         )
         timings["per_face"] = (time.perf_counter() - t2) * 1000
 
-        result_native, acc_skin, acc_skin_hair, acc_lips, acc_sharpen = self._composite_faces(
+        (
+            result_native,
+            acc_skin,
+            acc_skin_hair,
+            acc_lips,
+            acc_sharpen,
+            acc_hair_only,
+        ) = self._composite_faces(
             result_native, face_results, h_img, w_img,
         )
 
@@ -2122,6 +2141,7 @@ class RetouchEngine:
             acc_sharpen=acc_sharpen,
             faces=faces_native,
             person_mask=person_mask_native,
+            acc_hair_only=acc_hair_only,
             no_face=False,
             face_contexts=built_contexts,
             qa=[],
@@ -2139,6 +2159,7 @@ class RetouchEngine:
             acc_sharpen=core.acc_sharpen,
             faces=core.faces,
             person_mask=core.person_mask,
+            acc_hair_only=core.acc_hair_only,
             face_contexts=core.face_contexts,
         )
 
@@ -2172,7 +2193,13 @@ class RetouchEngine:
                 up_person = guided_filter(up_person.astype(np.float32), radius=4, eps=1e-3, guide=guide_gray)
             core.person_mask = up_person
 
-        for attr in ("acc_skin", "acc_skin_hair", "acc_lips", "acc_sharpen"):
+        for attr in (
+            "acc_skin",
+            "acc_skin_hair",
+            "acc_lips",
+            "acc_sharpen",
+            "acc_hair_only",
+        ):
             m = getattr(core, attr)
             if m is not None:
                 up_m = cv2.resize(
@@ -2306,7 +2333,14 @@ class RetouchEngine:
         timings["per_face"] = (time.perf_counter() - t2) * 1000
 
         # Composite per-face canvases back (or use single result directly)
-        result, acc_skin, acc_skin_hair, acc_lips, acc_sharpen = self._composite_faces(
+        (
+            result,
+            acc_skin,
+            acc_skin_hair,
+            acc_lips,
+            acc_sharpen,
+            acc_hair_only,
+        ) = self._composite_faces(
             result, face_results, h_img, w_img
         )
 
@@ -2319,6 +2353,7 @@ class RetouchEngine:
             acc_sharpen=acc_sharpen,
             faces=faces,
             person_mask=person_mask,
+            acc_hair_only=acc_hair_only,
             no_face=False,
             face_contexts=final_contexts,
             qa=[],
@@ -2337,6 +2372,7 @@ class RetouchEngine:
         faces: list,
         person_mask: Optional[np.ndarray],
         face_contexts: Optional[List["FaceContext"]],
+        acc_hair_only: Optional[np.ndarray] = None,
     ) -> _CoreResult:
         """F8.1: Stages 3+ (global tonal, grading, sharpen/finish).
 
@@ -2391,6 +2427,7 @@ class RetouchEngine:
                 acc_skin_hair=acc_skin_hair,
                 acc_lips=acc_lips,
                 acc_sharpen=acc_sharpen,
+                acc_hair_only=acc_hair_only,
                 faces=faces,
                 style_ref=style_ref,
             )
@@ -2419,7 +2456,9 @@ class RetouchEngine:
             # (wires the 7 historically-dead anime_crystal_void keys)
             # ------------------------------------------------------------------
             t_bg = time.perf_counter()
-            result = self._stage_background(result, ctx, person_mask)
+            result = self._stage_background(
+                result, ctx, person_mask, hair_mask=acc_hair_only,
+            )
             timings["background"] = (time.perf_counter() - t_bg) * 1000
 
             # ------------------------------------------------------------------
@@ -2556,6 +2595,7 @@ class RetouchEngine:
             acc_sharpen=acc_sharpen,
             faces=faces,
             person_mask=person_mask,
+            acc_hair_only=acc_hair_only,
             no_face=len(faces) == 0,
             face_contexts=face_contexts,
             qa=qa_warnings,
@@ -2687,6 +2727,7 @@ class RetouchEngine:
                 acc_sharpen=np.zeros((h_img, w_img), dtype=np.float32),
                 faces=core.faces,
                 person_mask=core.person_mask,
+                acc_hair_only=core.acc_hair_only,
                 no_face=True,
                 face_contexts=core.face_contexts,
                 qa=core.qa,
@@ -2702,6 +2743,7 @@ class RetouchEngine:
             acc_sharpen=core.acc_sharpen,
             faces=core.faces,
             person_mask=core.person_mask,
+            acc_hair_only=core.acc_hair_only,
             face_contexts=core.face_contexts,
         )
 
@@ -2759,6 +2801,7 @@ class RetouchEngine:
                     faces=re_core.faces,
                     person_mask=re_core.person_mask,
                     face_contexts=re_core.face_contexts,
+                    acc_hair_only=re_core.acc_hair_only,
                 )
                 best_core = re_core
 
@@ -3221,6 +3264,7 @@ class RetouchEngine:
                     prepared_faces[i]['shifted_landmarks'],
                     ieds[i],
                     faces[i].confidence,
+                    getattr(faces[i], "confidence_source", "unknown"),
                     _slim_ctx(self._ctx_for_face(ctx, i)),
                     prepared_faces[i]['roi_box'],
                     prepared_faces[i]['roi_person_mask'],
@@ -3371,15 +3415,21 @@ class RetouchEngine:
         face_results: List[_FaceResult],
         h_img: int,
         w_img: int,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Merge cropped per-face canvases and masks back into a single full-resolution output image."""
+    ) -> Tuple[
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+    ]:
+        """Merge face canvases and request-local masks into one output image."""
         acc_skin = np.zeros((h_img, w_img), dtype=np.float32)
         acc_skin_hair = np.zeros((h_img, w_img), dtype=np.float32)
         acc_lips = np.zeros((h_img, w_img), dtype=np.float32)
         acc_sharpen = np.zeros((h_img, w_img), dtype=np.float32)
-        # Hair alone (no skin/neck), stashed on the instance rather than added
-        # to the return tuple so the 5-tuple contract and its callers stay put.
-        # Consumed by _stage_background for Z3 wisp recovery.
+        # Hair alone (no skin/neck), retained in the per-request core state and
+        # consumed by _stage_background for Z3 wisp recovery.
         acc_hair_only = np.zeros((h_img, w_img), dtype=np.float32)
 
         result = base.copy()
@@ -3412,8 +3462,7 @@ class RetouchEngine:
             acc_lips[y1:y2, x1:x2] = np.maximum(acc_lips[y1:y2, x1:x2], fr.lips_mask)
             acc_sharpen[y1:y2, x1:x2] = np.maximum(acc_sharpen[y1:y2, x1:x2], fr.sharpen_mask)
 
-        self._acc_hair_only = acc_hair_only
-        return result, acc_skin, acc_skin_hair, acc_lips, acc_sharpen
+        return result, acc_skin, acc_skin_hair, acc_lips, acc_sharpen, acc_hair_only
 
     def _stage_subject_separation(
         self,
@@ -3522,6 +3571,7 @@ class RetouchEngine:
         img: np.ndarray,
         ctx: ProcessingContext,
         person_mask: Optional[np.ndarray],
+        hair_mask: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """T1: Background replace & scene relight.
 
@@ -3567,7 +3617,6 @@ class RetouchEngine:
         # computes the same mask, but that stage runs *after* this one, so it
         # cannot be reused; solve it here and only when a matte op is active,
         # keeping the BiSeNet pass off the early-out and lens_blur-only paths.
-        hair_mask: Optional[np.ndarray] = None
         matte_active = (
             ctx.background_blur > 0
             or ctx.background_desaturation > 0
@@ -3586,7 +3635,6 @@ class RetouchEngine:
             # foreground — unknown islands the solver correctly returns 0 for.
             # The face-crop label scores 0.5058 on the wig vs 0.0022 on
             # background and its added pixels are 100 % foreground-connected.
-            hair_mask = getattr(self, "_acc_hair_only", None)
             if hair_mask is not None:
                 if hair_mask.shape != img_255.shape[:2]:
                     # Face compositing may have run at a different resolution
