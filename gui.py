@@ -6,6 +6,7 @@ import logging
 import sys
 import os
 import shutil
+import subprocess
 import time
 import tempfile
 import threading
@@ -15,6 +16,29 @@ from pathlib import Path
 import cv2
 import numpy as np
 import gradio as gr
+
+# Some FileData-bearing components (image/file uploaders) resolve their
+# pydantic JSON schema's `additionalProperties` to a bare `bool` rather than
+# a dict on newer huggingface-hub/pydantic combinations. gradio_client's
+# schema walker assumes a dict and crashes with
+# "TypeError: argument of type 'bool' is not iterable" on every page load
+# (GET /), which gradio's own launch() self-check then reports as
+# "localhost is not accessible". Patch defensively at import time so a
+# fresh `pip install` of gradio_client (which lacks this guard) doesn't
+# resurrect the crash; no-ops once upstream ships the same guard.
+try:
+    import gradio_client.utils as _gc_utils
+
+    _orig_json_schema_to_python_type = _gc_utils._json_schema_to_python_type
+
+    def _patched_json_schema_to_python_type(schema, defs):
+        if isinstance(schema, bool):
+            return "Any"
+        return _orig_json_schema_to_python_type(schema, defs)
+
+    _gc_utils._json_schema_to_python_type = _patched_json_schema_to_python_type
+except Exception:
+    pass
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from retouch import RetouchEngine, __version__
@@ -3295,6 +3319,30 @@ def on_browse_category(category):
     return on_search_recipes("", category)
 
 
+def pick_folder_dialog(current_value=None):
+    """Open a native macOS folder-picker and return the chosen absolute path.
+
+    No-ops (keeps the existing textbox value) on cancel or on non-macOS
+    platforms, since there is no cross-platform native dialog available
+    from a server-side Gradio callback.
+    """
+    if sys.platform != "darwin":
+        _logger.info("Folder picker is only available on macOS; leave path as-is.")
+        return gr.update()
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", "POSIX path of (choose folder)"],
+            capture_output=True, text=True, timeout=120,
+        )
+        if result.returncode != 0:
+            return gr.update()  # user canceled
+        path = result.stdout.strip()
+        return gr.update(value=path) if path else gr.update()
+    except Exception as e:
+        _logger.warning("Folder picker failed: %s", e)
+        return gr.update()
+
+
 def on_reload_luts():
     """Clear LUT discovery and live render caches."""
     try:
@@ -4879,13 +4927,52 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         with gr.Tab("Batch Library Ingestion"):
             with gr.Row():
                 with gr.Column(scale=1):
-                    folder_in = gr.Textbox(label="Input Folder Path", placeholder="/path/to/photos", info="Absolute path to directory containing raw/jpeg source photos.")
-                    folder_out = gr.Textbox(label="Output Folder Path", placeholder="/path/to/exports", info="Absolute path where processed results will be written.")
-                    
+                    with gr.Row():
+                        folder_in = gr.Textbox(label="Input Folder Path", placeholder="/path/to/photos", info="Absolute path to directory containing raw/jpeg source photos.", scale=4)
+                        folder_in_browse = gr.Button("📂 Browse", scale=1, min_width=90)
+                    with gr.Row():
+                        folder_out = gr.Textbox(label="Output Folder Path", placeholder="/path/to/exports", info="Absolute path where processed results will be written.", scale=4)
+                        folder_out_browse = gr.Button("📂 Browse", scale=1, min_width=90)
+
+                    folder_in_browse.click(fn=pick_folder_dialog, inputs=[folder_in], outputs=[folder_in])
+                    folder_out_browse.click(fn=pick_folder_dialog, inputs=[folder_out], outputs=[folder_out])
+
                     with gr.Group():
                         gr.Markdown("### Style Mode")
                         batch_style_type = gr.Radio(choices=["Use Standard Recipe", "Use Custom Style"], value="Use Standard Recipe", label="Style Mode", info="Choose whether to apply a built-in recipe preset or a custom learned style profile.")
                         batch_recipe = gr.Dropdown(choices=RECIPE_UI_CHOICES, value="natural", label="Standard Recipe", info="Recommended recipes are correction-first; scene / creative recipes are conditional.")
+
+                        with gr.Accordion("📖 Recipe Cookbook", open=False):
+                            with gr.Row():
+                                batch_cookbook_category = gr.Dropdown(
+                                    label="Category",
+                                    choices=["All"] + list_categories(),
+                                    value="All",
+                                    interactive=True,
+                                    scale=1,
+                                )
+                                batch_cookbook_search = gr.Textbox(
+                                    label="Search",
+                                    placeholder="e.g. cosplay, portrait, fuji",
+                                    scale=2,
+                                )
+                            with gr.Row():
+                                batch_cookbook_search_btn = gr.Button(
+                                    "Search / Browse", variant="secondary", size="sm",
+                                    elem_classes=["secondary-btn"],
+                                )
+                            batch_cookbook_dropdown = gr.Dropdown(
+                                label="Cookbook Recipe",
+                                choices=[],
+                                interactive=True,
+                                value=None,
+                                allow_custom_value=False,
+                                info="Browse by category or search, then select to load into Standard Recipe",
+                            )
+                            batch_cookbook_status = gr.Markdown(
+                                "Open accordion → pick category or search → select recipe."
+                            )
+
                         batch_custom_style = gr.Dropdown(choices=custom_style_choices, value=None, label="Custom Style Profile", interactive=True, visible=False, info="Select a custom style profile from your library.")
                     
                     with gr.Group():
@@ -5685,6 +5772,23 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         fn=on_select_cookbook,
         inputs=[cookbook_dropdown],
         outputs=[recipe, cookbook_status],
+    )
+
+    # Batch tab Recipe Cookbook wiring (same T4 handlers, targets batch_recipe)
+    batch_cookbook_search_btn.click(
+        fn=on_search_recipes,
+        inputs=[batch_cookbook_search, batch_cookbook_category],
+        outputs=[batch_cookbook_dropdown, batch_cookbook_status],
+    )
+    batch_cookbook_category.change(
+        fn=on_browse_category,
+        inputs=[batch_cookbook_category],
+        outputs=[batch_cookbook_dropdown, batch_cookbook_status],
+    )
+    batch_cookbook_dropdown.change(
+        fn=on_select_cookbook,
+        inputs=[batch_cookbook_dropdown],
+        outputs=[batch_recipe, batch_cookbook_status],
     )
 
     # LUT hot-reload wiring

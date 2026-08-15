@@ -20,6 +20,7 @@ scripts/build/*
 *.spec
 !scripts/build/retouch_app.spec
 .pytest_cache/
+.venv/
 .venv-face-aware/
 .quadcodeai/
 cc.json
