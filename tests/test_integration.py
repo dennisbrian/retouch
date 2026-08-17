@@ -383,6 +383,36 @@ class TestProxyPipeline:
             f"1024-px input — proxy should be skipped when max(h,w) <= 2048."
         )
 
+    def test_proxy_upscale_includes_acc_hair_only(self):
+        """96bbcfa: acc_hair_only must upscale alongside the other
+        accumulator masks so draft-mode runs hand the background stage a
+        native-resolution hair mask."""
+        from retouch.engine import _CoreResult
+
+        small = np.ones((64, 64), dtype=np.float32)
+        core = _CoreResult(
+            result=np.full((64, 64, 3), 100, dtype=np.uint8),
+            acc_skin=small.copy(),
+            acc_skin_hair=small.copy(),
+            acc_lips=small.copy(),
+            acc_sharpen=small.copy(),
+            faces=[],
+            person_mask=small.copy(),
+            acc_hair_only=np.zeros((64, 64), dtype=np.float32),
+        )
+        core.acc_hair_only[10:20, 10:20] = 1.0
+
+        up = RetouchEngine._upscale_core_result(core, 256, 256)
+
+        assert up.acc_hair_only is not None
+        assert up.acc_hair_only.shape == (256, 256), (
+            "acc_hair_only must be upscaled to native dimensions"
+        )
+        assert up.acc_hair_only.dtype == np.float32
+        # Strand block maps to a 4x larger block; center point stays ~1.0.
+        assert up.acc_hair_only[60, 60] > 0.9
+        assert up.acc_hair_only[5, 5] == 0.0
+
 
 # ---------------------------------------------------------------------------
 # Multi-face processing — the parallel / threaded per-face path

@@ -820,6 +820,53 @@ class TestProcessFaceCore:
         assert evidence["detector_confidence"]["confidence_measured"] is False
         assert evidence["enforcement"]["parameter_driven_pixels_preserved"] is True
 
+    def test_safe_auto_skip_and_dampen_preserve_parameter_driven_face_render(self):
+        """skip (confidence 0.0) and dampen (confidence 0.70) decisions are
+        evidence-only: rendered pixels must be byte-identical to an un-gated
+        run, never reverted or half-blended toward the pre-edit source."""
+        import dataclasses
+
+        from retouch.perf_optimizations import _process_face_core
+
+        roi = 128
+        canvas = np.full((roi, roi, 3), 120, dtype=np.uint8)
+        regions = _build_synthetic_regions(roi, roi, skin_value=0.5)
+        person_mask = np.ones((roi, roi), dtype=np.float32)
+        processors = self._make_processors()
+
+        for confidence, expected_action in ((0.0, "skip"), (0.70, "dampen")):
+            face = _build_synthetic_face(ied=24.0, size=80)
+            face.confidence = confidence
+            face.confidence_source = "retinaface"
+            safe_ctx = self._all_zero_ctx()
+            safe_ctx.whiten = 35.0
+            safe_ctx._parameter_provenance = {
+                "recipe": "natural",
+                "explicit_overrides": ["whiten"],
+            }
+            unsafe_ctx = dataclasses.replace(safe_ctx, safe_auto=False)
+
+            safe = _process_face_core(
+                canvas, regions, face, safe_ctx,
+                0, 0, roi, roi, person_mask, processors,
+            )
+            ungated = _process_face_core(
+                canvas, regions, face, unsafe_ctx,
+                0, 0, roi, roi, person_mask, processors,
+            )
+
+            assert safe.safe_auto_decisions[-1]["action"] == expected_action
+            assert (
+                safe.safe_auto_decisions[-1]["evidence"]["enforcement"][
+                    "parameter_driven_pixels_preserved"
+                ]
+                is True
+            )
+            np.testing.assert_array_equal(safe.canvas, ungated.canvas)
+            # The edit must actually differ from the pre-edit source, otherwise
+            # "preserved" would be vacuous.
+            assert not np.array_equal(safe.canvas, canvas)
+
     def test_function_is_module_level_and_picklable(self):
         """_process_face_core must live at module scope (not as a method on
         a class holding non-picklable ONNX sessions) so workers can call

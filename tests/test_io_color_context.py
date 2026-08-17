@@ -114,6 +114,48 @@ def test_legacy_array_exporters_can_recover_the_ingest_context(tmp_path: Path) -
     assert context.working_profile == get_working_srgb_icc()
 
 
+def test_untagged_ingest_is_byte_identical_to_plain_read(tmp_path: Path) -> None:
+    """Untagged pixels must traverse the exact legacy path: byte-identical read."""
+    source_rgb = _synth_patch()
+    source_path = tmp_path / "untagged-legacy.png"
+    Image.fromarray(source_rgb, mode="RGB").save(source_path)
+
+    loaded_bgr, context = imread_exif_with_context(source_path)
+
+    assert context.assumed_srgb is True
+    assert context.conversion_applied is False
+    with Image.open(source_path) as plain:
+        np.testing.assert_array_equal(
+            loaded_bgr,
+            cv2.cvtColor(np.array(plain.convert("RGB")), cv2.COLOR_RGB2BGR),
+        )
+        np.testing.assert_array_equal(imread_exif(source_path), loaded_bgr)
+
+
+def test_tagged_ingest_shifts_pixels_that_differ_between_profiles(tmp_path: Path) -> None:
+    """Ingest must transform pixels, not merely flag conversion_applied.
+
+    Pure red is gamut-stable under Adobe RGB -> sRGB, but the mid-saturation
+    blue patch [64, 128, 192] has its red channel pulled hard toward zero.
+    """
+    adobe_icc = _adobe_rgb_icc()
+    source_rgb = _synth_patch()
+    source_path = tmp_path / "adobe-shift.png"
+    Image.fromarray(source_rgb, mode="RGB").save(source_path, icc_profile=adobe_icc)
+
+    loaded_bgr, context = imread_exif_with_context(source_path)
+    naive_bgr = cv2.cvtColor(source_rgb, cv2.COLOR_RGB2BGR)
+
+    assert context.conversion_applied is True
+    # Patch column 2 (BGR): raw-tagged red channel is 64; converted must drop
+    # far below it, proving a real transform rather than a pass-through flag.
+    assert int(loaded_bgr[0, 2, 2]) < 20
+    assert int(loaded_bgr[0, 2, 2]) < int(naive_bgr[0, 2, 2]) - 40
+    # Green mid value survives approximately (128 -> ~129).
+    assert abs(int(loaded_bgr[0, 2, 1]) - 128) <= 2
+    np.testing.assert_array_equal(loaded_bgr, imread_exif(source_path))
+
+
 def test_export_uses_working_profile_by_default_and_restores_source_only_explicitly(
     tmp_path: Path,
 ) -> None:

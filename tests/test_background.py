@@ -379,3 +379,67 @@ class TestEngineWiring:
         out = engine._stage_background(img.copy(), ctx, pm)
         # Background corner should differ (blurred).
         assert not np.array_equal(out[5, 5], img[5, 5])
+
+    # --- hair_mask plumbing (96bbcfa: acc_hair_only wired to matte ops) ---
+
+    def test_stage_background_hair_mask_used_over_parser_fallback(self) -> None:
+        """Non-None hair_mask must reach the replacer, parser never called."""
+        from retouch.engine import RetouchEngine
+        img, pm = _make_subject_bg_image()
+        ctx = ProcessingContext()
+        ctx.background_desaturation = 60.0
+        engine = RetouchEngine.__new__(RetouchEngine)
+        engine._background_replacer = BackgroundReplacer()
+        calls = []
+
+        class SpyParser:
+            def parse_hair_full_image(self, im):
+                calls.append(im.shape)
+                return np.ones(im.shape[:2], dtype=np.float32)
+
+        engine._parser = SpyParser()
+        hair = np.zeros(img.shape[:2], dtype=np.float32)
+        hair[40:56, 40:56] = 1.0  # hair strand region inside subject
+        engine._stage_background(img.copy(), ctx, pm, hair_mask=hair.copy())
+        assert calls == [], "parser fallback must not run when hair_mask given"
+
+    def test_stage_background_hair_mask_resized_to_image(self) -> None:
+        """Proxy-resolution hair_mask is resized to img shape before use."""
+        from retouch.engine import RetouchEngine
+        img, pm = _make_subject_bg_image()
+        ctx = ProcessingContext()
+        ctx.background_desaturation = 60.0
+        engine = RetouchEngine.__new__(RetouchEngine)
+        engine._background_replacer = BackgroundReplacer()
+        received = []
+
+        real_grade = engine._background_replacer.grade_background
+
+        def spy_grade(im, mask, params, hair_mask=None):
+            received.append(None if hair_mask is None else hair_mask.shape)
+            return real_grade(im, mask, params, hair_mask=hair_mask)
+
+        engine._background_replacer.grade_background = spy_grade
+        small = np.ones((64, 64), dtype=np.float32)  # half-res proxy mask
+        engine._stage_background(img.copy(), ctx, pm, hair_mask=small)
+        assert received == [img.shape[:2]], "hair_mask must be resized to img shape"
+
+    def test_stage_background_empty_hair_mask_falls_back_to_parser(self) -> None:
+        """All-zero hair_mask is discarded and the parser fallback runs."""
+        from retouch.engine import RetouchEngine
+        img, pm = _make_subject_bg_image()
+        ctx = ProcessingContext()
+        ctx.background_desaturation = 60.0
+        engine = RetouchEngine.__new__(RetouchEngine)
+        engine._background_replacer = BackgroundReplacer()
+        calls = []
+
+        class SpyParser:
+            def parse_hair_full_image(self, im):
+                calls.append(im.shape)
+                return np.zeros(im.shape[:2], dtype=np.float32)
+
+        engine._parser = SpyParser()
+        empty = np.zeros(img.shape[:2], dtype=np.float32)
+        engine._stage_background(img.copy(), ctx, pm, hair_mask=empty)
+        assert calls == [img.shape], "parser fallback must run for empty hair_mask"
