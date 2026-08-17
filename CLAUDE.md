@@ -127,7 +127,6 @@ prefer `--max-dim 2048` or `quality="draft"` for multi-recipe sweeps.
 
 ### Known Limitations
 - Remaining ~4% undetected faces: extreme profiles, heavy occlusion, tiny faces in distance shots
-- LUT hot-reload (daemon thread watcher) exists but not wired into GUI/CLI yet
 
 ### Verification & Honesty
 - Never simulate or describe pipeline/engine output in prose — actually invoke `RetouchEngine`/CLI/GUI and show genuine results. If you can't run it (no test image, no GPU, etc.), say so explicitly instead of narrating a plausible-looking result.
@@ -145,8 +144,9 @@ prefer `--max-dim 2048` or `quality="draft"` for multi-recipe sweeps.
 - ✅ 2026-07-13 `skin.locus` recipe override wiring; test hang was a MediaPipe teardown deadlock (bare `RetouchEngine()`, not init abort) — `36cb93a`
 - ✅ 2026-07-13 `_process_inputs` argument-order footgun — name-keyed dict + import-time drift guard, see [Architecture Decisions](#single-source-of-truth-retouchparamspy) — `f0b656b`, `da1f8cb`
 - ✅ 2026-07-13 `_recipe_outputs` mirror-image footgun (same fix pattern; closed a live 107-vs-111 value drift) — see [Architecture Decisions](#single-source-of-truth-retouchparamspy)
-- MINOR, deferred: LUT hot-reload daemon (`lut.py::watch_luts_dir`) exists but not wired into GUI/CLI
+- ✅ 2026-07-21 LUT hot-reload wired: GUI watcher (gui.py) + CLI `--reload-luts` flag — `7c8d607`
 - MINOR, deferred: 10 `reset_*` handlers in gui.py remain hand-ordered positional pairs (latent, low-risk)
+- ✅ 2026-08-11 redundant `ci.yml` workflow removed — `7b97df9`
 - ✅ 2026-07-14 `tests/test_cosplay_moat.py` bare-`RetouchEngine()` → module `engine` fixture (same teardown pattern as skin_locus)
 - ✅ 2026-07-14 `test_ext_map_keys_match_radio_choices` — expect `PNG-16` (map already had it; test was stale)
 

@@ -53,11 +53,11 @@ def test_qa_detectors_imported_in_engine():
 
 
 def test_qa_detectors_called_in_pipeline():
-    """Engine should call qa_detectors.run_all (F11 consolidated call)."""
+    """Engine should delegate QA to qa_detectors.run_qa (F11, which calls run_all)."""
     with open("retouch/engine.py") as f:
         source = f.read()
-    assert "qa_detectors.run_all" in source, \
-        "engine.py should call qa_detectors.run_all"
+    assert "qa_detectors.run_qa" in source, \
+        "engine.py should call qa_detectors.run_qa"
 
 
 def test_qa_pipeline_exception_is_a_warning(monkeypatch):

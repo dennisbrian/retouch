@@ -91,8 +91,8 @@ def test_golden_output_stable(engine, synthetic_img, recipe_name, request):
 
     If this test fails after a P3 migration commit, the refactor changed
     pipeline behavior — investigate before updating snapshots.
-    To update snapshots after an intentional output change, delete
-    golden_pipeline_snapshots.json and re-run.
+    To update snapshots after an intentional output change, re-run with
+    --update-snapshot.
     """
     snapshots = _load_snapshots()
 
@@ -105,6 +105,11 @@ def test_golden_output_stable(engine, synthetic_img, recipe_name, request):
 
     actual_hash = _hash_result(result)
 
+    if request.config.getoption("--update-snapshot"):
+        snapshots[recipe_name] = actual_hash
+        _save_snapshots(snapshots)
+        pytest.skip(f"Snapshot updated for {recipe_name}: {actual_hash}")
+
     if recipe_name not in snapshots:
         snapshots[recipe_name] = actual_hash
         _save_snapshots(snapshots)
@@ -114,7 +119,7 @@ def test_golden_output_stable(engine, synthetic_img, recipe_name, request):
     assert actual_hash == expected_hash, (
         f"Golden output changed for recipe '{recipe_name}': "
         f"expected {expected_hash}, got {actual_hash}. "
-        f"If this is intentional, delete golden_pipeline_snapshots.json and re-run."
+        f"If this is intentional, re-run with --update-snapshot."
     )
 
 

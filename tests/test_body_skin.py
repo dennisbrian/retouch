@@ -26,12 +26,10 @@ from retouch.utils import normalize_mask, squeeze_mask
 class TestBodySkinMaskConstruction:
     """Tests for body_skin mask construction logic."""
 
-    def test_all_params_zero_returns_unchanged(self):
+    def test_all_params_zero_returns_unchanged(self, natural_image):
         """When all body_skin params are zero, output must be identical to input."""
         engine = RetouchEngine()
-        # Create a realistic portrait image (will be downscaled by engine)
-        img = cv2.imread("test_output/DSCF8007.jpg")
-        assert img is not None, "Test image DSCF8007.jpg not found"
+        img = natural_image
 
         result = engine.process(
             img,
@@ -280,11 +278,10 @@ class TestBodySkinProcessing:
         assert abs(clamped_a_diff) <= 6.0, f"a delta should be clamped to ±6, got {clamped_a_diff}"
         assert abs(clamped_b_diff) <= 6.0, f"b delta should be clamped to ±6, got {clamped_b_diff}"
 
-    def test_body_smooth_gate_independent(self):
+    def test_body_smooth_gate_independent(self, natural_image):
         """Verify body_smooth param gates smoothing independently."""
         engine = RetouchEngine()
-        img = cv2.imread("test_output/DSCF8007.jpg")
-        assert img is not None
+        img = natural_image
 
         # Test with only body_smooth enabled
         result_smooth = engine.process(
@@ -317,11 +314,10 @@ class TestBodySkinProcessing:
         max_diff = np.max(diff)
         assert max_diff > 0.5, "body_smooth should produce visible difference"
 
-    def test_body_whiten_gate_independent(self):
+    def test_body_whiten_gate_independent(self, natural_image):
         """Verify body_whiten param gates whitening independently."""
         engine = RetouchEngine()
-        img = cv2.imread("test_output/DSCF8007.jpg")
-        assert img is not None
+        img = natural_image
 
         result_whiten = engine.process(
             img.copy(),
@@ -352,7 +348,7 @@ class TestBodySkinProcessing:
         max_diff = np.max(diff)
         assert max_diff > 0.5, "body_whiten should produce visible difference"
 
-    def test_body_blemish_gate_independent_of_smooth(self):
+    def test_body_blemish_gate_independent_of_smooth(self, natural_image):
         """Regression test: blemish removal must run whenever the body-skin stage
         is active (any of the 4 params nonzero), NOT only when body_smooth > 0.
 
@@ -372,8 +368,7 @@ class TestBodySkinProcessing:
         """
         from retouch import engine as engine_module
 
-        img = cv2.imread("test_output/DSCF8007.jpg")
-        assert img is not None
+        img = natural_image
 
         call_count = {"n": 0}
         original_remove = engine_module.BlemishRemover.remove
@@ -421,11 +416,10 @@ class TestBodySkinProcessing:
 class TestBodySkinE2E:
     """End-to-end integration tests."""
 
-    def test_process_with_all_body_params_nonzero(self):
+    def test_process_with_all_body_params_nonzero(self, natural_image):
         """Full pipeline must not crash with all body_skin params set."""
         engine = RetouchEngine()
-        img = cv2.imread("test_output/DSCF8007.jpg")
-        assert img is not None, "Test image not found"
+        img = natural_image
 
         # Test the exact scenario from task spec
         result = engine.process(
@@ -444,11 +438,10 @@ class TestBodySkinE2E:
         assert result.dtype == np.uint8, "Output should be uint8"
         assert result.max() <= 255 and result.min() >= 0, "Output should be valid BGR"
 
-    def test_body_params_with_different_recipes(self):
+    def test_body_params_with_different_recipes(self, natural_image):
         """Body params should work with different recipes."""
         engine = RetouchEngine()
-        img = cv2.imread("test_output/DSCF8007.jpg")
-        assert img is not None
+        img = natural_image
 
         for recipe in ["natural", "cosplay", "soft"]:
             result = engine.process(
@@ -484,11 +477,10 @@ class TestBodySkinE2E:
 class TestBodySkinMaskMetrics:
     """Tests to measure and validate body_skin mask properties."""
 
-    def test_body_skin_mask_is_normalized(self):
+    def test_body_skin_mask_is_normalized(self, natural_image):
         """Body skin mask should be in [0, 1] range."""
         engine = RetouchEngine()
-        img = cv2.imread("test_output/DSCF8007.jpg")
-        assert img is not None
+        img = natural_image
 
         result = engine.process(img, recipe="natural", body_smooth=50.0, fast=True)
 

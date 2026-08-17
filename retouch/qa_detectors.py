@@ -1279,3 +1279,99 @@ def run_all(
                 "perceived_retouching", exc
             )
     return result
+
+
+def run_qa(
+    result: np.ndarray,
+    person_mask: Optional[np.ndarray],
+    reference_img_bgr: Optional[np.ndarray] = None,
+    face_skin_mask: Optional[np.ndarray] = None,
+    mark_policy: Optional[Mapping[str, Any]] = None,
+    warp_field: Optional[np.ndarray] = None,
+) -> List["QAWarning"]:
+    """Run the QA detector pipeline on a processed uint8 BGR image.
+
+    Pure orchestration over :func:`run_all` plus the face-anchored body
+    mask (harmony) and the threshold/message maps. Returns a list of
+    :class:`QAWarning` (only flagged detectors). A failure of the QA
+    pipeline itself surfaces as a single fail-closed ``qa_pipeline``
+    warning.
+    """
+    from .harmony import build_face_anchored_body_mask
+
+    if person_mask is None or not np.any(person_mask > 0.3):
+        return []
+    qa_warnings: List[QAWarning] = []
+    try:
+        body_skin_mask = None
+        if face_skin_mask is not None and reference_img_bgr is not None:
+            body_skin_mask = build_face_anchored_body_mask(
+                reference_img_bgr, face_skin_mask, person_mask,
+            )
+        qa_raw = run_all(
+            result,
+            skin_mask=person_mask,
+            reference_img_bgr=reference_img_bgr,
+            img_before=reference_img_bgr,
+            person_mask=person_mask,
+            face_skin_mask=face_skin_mask,
+            body_skin_mask=body_skin_mask,
+            mark_policy=mark_policy,
+            warp_field=warp_field,
+        )
+
+    except Exception as e:
+        logger.warning("QA pipeline failed: %s", e, exc_info=True)
+        return [QAWarning(
+            detector="qa_pipeline",
+            score=1.0,
+            flagged=True,
+            threshold=0.0,
+            message="QA pipeline failed; output could not be validated",
+            details={
+                "available": False,
+                "error": f"{type(e).__name__}: {e}",
+            },
+        )]
+    for detector_name, det_result in qa_raw.items():
+        if not det_result.get("flagged", False):
+            continue
+        unavailable = det_result.get("available") is False
+        if unavailable:
+            msg = (
+                f"QA detector {detector_name} failed; "
+                "output could not be validated"
+            )
+        else:
+            msg = {
+                "banding": "Banding visible in smooth gradient regions",
+                "clipping": "Highlight/shadow clipping detected",
+                "plastic_skin": "Skin texture loss detected — may appear plastic",
+                "halo": "Edge overshoot halos detected from sharpening",
+                "seam": "Seam visible at subject boundary",
+                "color_drift": "Skin hue shift detected — color grade drifted beyond budget",
+                "pore_spectrum": "Skin pore-spectrum loss detected — may appear plastic",
+                "asymmetry": "Asymmetric over-smoothing detected — one face zone over-retouched",
+                "skin_score": "Skin quality score low — plastic/over-evolved appearance",
+            }.get(detector_name, f"{detector_name} artifact detected")
+        _qa_thresholds = {
+            "banding": BANDING_THRESHOLD,
+            "clipping": CLIPPING_THRESHOLD,
+            "plastic_skin": PLASTIC_SKIN_THRESHOLD,
+            "halo": HALO_THRESHOLD,
+            "seam": SEAM_THRESHOLD,
+            "color_drift": COLOR_DRIFT_THRESHOLD,
+            "pore_spectrum": PORE_SPECTRUM_THRESHOLD,
+            "asymmetry": ASYMMETRY_THRESHOLD,
+            # skin_score is informational (soft); no hard gate threshold.
+        }
+        qa_warnings.append(QAWarning(
+            detector=detector_name,
+            score=det_result.get("score", 0.0),
+            flagged=True,
+            threshold=_qa_thresholds.get(detector_name, 0.0),
+            message=msg,
+            details={k: v for k, v in det_result.items()
+                     if k not in ("score", "flagged")},
+        ))
+    return qa_warnings

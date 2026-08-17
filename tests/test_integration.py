@@ -209,13 +209,8 @@ class TestWithRealImage:
     """
 
     @pytest.fixture
-    def real_face(self, natural_image_path):
-        if natural_image_path is None:
-            pytest.skip("No real face image found (test_output/ is empty)")
-        img = cv2.imread(natural_image_path)
-        if img is None:
-            pytest.skip(f"Could not read image: {natural_image_path}")
-        return img
+    def real_face(self, natural_image):
+        return natural_image
 
     def test_detects_face(self, engine, real_face):
         """Verify that at least one face is detected in the real image."""

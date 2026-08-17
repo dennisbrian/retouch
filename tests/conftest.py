@@ -8,6 +8,15 @@ import cv2
 import pytest
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--update-snapshot",
+        action="store_true",
+        default=False,
+        help="Golden tests overwrite stored hashes instead of asserting",
+    )
+
+
 def _check_cv2():
     """Skip if cv2 not available."""
     if cv2 is None:
@@ -146,13 +155,16 @@ def engine():
         yield eng
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def natural_image_path():
     """Path to a real human face image for integration tests.
 
     Returns None if no suitable image is found (tests should skip).
     Prefers the repository's known clear single-portrait reference, then
     falls back to the first JPEG from ``test_output/``.
+
+    Session-scoped (pure filesystem lookup) so ``natural_image`` can
+    depend on it without re-reading the image per test.
     """
     reference = Path("test_output/DSCF8007.jpg")
     if reference.exists():
@@ -166,3 +178,23 @@ def natural_image_path():
     if candidates:
         return str(candidates[0])
     return None
+
+
+@pytest.fixture(scope="session")
+def natural_image(natural_image_path):
+    """Real face image downscaled to ≤2048px on the long side.
+
+    Full-res 24MP input into quality="full" takes minutes; tests use
+    this fixture to stay well under the pytest timeout. Skips when no
+    readable real image is available.
+    """
+    _check_cv2()
+    if natural_image_path is None:
+        pytest.skip("No real face image found (test_output/ is empty)")
+    img = cv2.imread(natural_image_path)
+    if img is None:
+        pytest.skip(f"Could not read image: {natural_image_path}")
+    from retouch.io import resize_for_processing
+
+    img, _scale = resize_for_processing(img, 2048)
+    return img

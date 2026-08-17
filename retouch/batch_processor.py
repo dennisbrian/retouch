@@ -719,6 +719,14 @@ class BatchProcessor:
             status_msg += f"  - {grp_name}: {len(paths)} files\n"
 
         # 4. Process images
+        # Long-lived batch: drop any LUTs cached by the shared engine so
+        # .cube files edited since the last batch are picked up.
+        invalidate = getattr(self.engine, "invalidate_lut_cache", None)
+        if callable(invalidate):
+            try:
+                invalidate()
+            except Exception:
+                logger.warning("LUT cache invalidation failed", exc_info=True)
         from .style import StyleApplier
         applier = StyleApplier(self.engine)
 

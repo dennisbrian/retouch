@@ -119,7 +119,6 @@ from .relight import Relighter
 from .enhance import AIEnhancer
 from .recipes import RECIPES
 from .recipe_loader import load_user_recipes
-from .harmony import build_face_anchored_body_mask
 from .style import StyleProfile
 from .style_transfer import subject_aware_transfer
 from .utils import correct_exposure, apply_global_bloom, apply_skin_diffusion, vibrance as _vibrance_fn, squeeze_mask, feather_mask, guided_filter, normalize_mask, blend_masked, bgr_f32_to_lab_f32, lab_f32_to_bgr_f32
@@ -2409,128 +2408,28 @@ class RetouchEngine:
         h_img, w_img = result.shape[:2]
 
         # ------------------------------------------------------------------
-        # P3: Stage registry path (byte-identical alternative to the
-        # hardcoded stage calls below). Toggle via use_registry to A/B test.
-        # Once verified byte-identical via golden harness, this becomes
-        # the default and the hardcoded path is removed.
+        # P3: Stage registry path. The pre-registry hardcoded else-branch
+        # (A/B residue, unreachable since the registry became the default)
+        # was removed; every stage now runs via _global_registry.
         # ------------------------------------------------------------------
-        use_registry = getattr(self, "_use_global_registry", True)
-        if use_registry:
-            from .stages import PipelineState as _PS
-            state = _PS(
-                img=result,
-                ctx=ctx,
-                h_img=h_img,
-                w_img=w_img,
-                person_mask=person_mask,
-                acc_skin=acc_skin,
-                acc_skin_hair=acc_skin_hair,
-                acc_lips=acc_lips,
-                acc_sharpen=acc_sharpen,
-                acc_hair_only=acc_hair_only,
-                faces=faces,
-                style_ref=style_ref,
-            )
-            state = self._global_registry.run(state)
-            result = state.img
-            timings.update(state.timings)
-        else:
-            # ------------------------------------------------------------------
-            # Stage 3 — Subject-background separation (now in float)
-            # ------------------------------------------------------------------
-            t_subj = time.perf_counter()
-            if ctx.subject_separation > 0:
-                result = self._stage_subject_separation(result, person_mask, ctx)
-            timings["subject_separation"] = (time.perf_counter() - t_subj) * 1000
-
-            # ------------------------------------------------------------------
-            # Stage 3.1 — C5: Skin-anchored background harmonization
-            # ------------------------------------------------------------------
-            t_harm = time.perf_counter()
-            if ctx.background_harmonize > 0:
-                result = self._stage_harmonize(result, ctx, acc_skin, person_mask)
-            timings["background_harmonize"] = (time.perf_counter() - t_harm) * 1000
-
-            # ------------------------------------------------------------------
-            # Stage 3.2 — T1: Background replace & scene relight
-            # (wires the 7 historically-dead anime_crystal_void keys)
-            # ------------------------------------------------------------------
-            t_bg = time.perf_counter()
-            result = self._stage_background(
-                result, ctx, person_mask, hair_mask=acc_hair_only,
-            )
-            timings["background"] = (time.perf_counter() - t_bg) * 1000
-
-            # ------------------------------------------------------------------
-            # Stage 3.5 — Body skin retouch (now in float)
-            # ------------------------------------------------------------------
-            t_body = time.perf_counter()
-            result = self._stage_body_skin(result, ctx, person_mask, acc_skin, acc_skin_hair, acc_lips, faces, h_img, w_img)
-            timings["body_skin"] = (time.perf_counter() - t_body) * 1000
-
-            # ------------------------------------------------------------------
-            # Stage 3.6 — A3: Cosplay skin moat (wig-lace, stockings, consistency)
-            # ------------------------------------------------------------------
-            t_cosplay = time.perf_counter()
-            result = self._stage_cosplay_moat(result, ctx, acc_skin_hair, person_mask)
-            timings["cosplay_moat"] = (time.perf_counter() - t_cosplay) * 1000
-
-            # ------------------------------------------------------------------
-            # Stage 3.7 — AB3: Flyaway Hair Cleanup
-            # ------------------------------------------------------------------
-            if getattr(ctx, "flyaway_cleanup", 0.0) > 0:
-                from .hair import cleanup_flyaway_strands
-                is_fl = result.dtype == np.float32
-                u8_canvas = np.clip(result * 255.0, 0, 255).astype(np.uint8) if is_fl else result
-                u8_out = cleanup_flyaway_strands(
-                    u8_canvas,
-                    hair_mask=acc_skin_hair if 'acc_skin_hair' in locals() else None,
-                    face_mask=acc_skin,
-                    strength=float(ctx.flyaway_cleanup) / 100.0,
-                )
-                result = u8_out.astype(np.float32) / 255.0 if is_fl else u8_out
-
-            # ------------------------------------------------------------------
-            # Stage 4 — Global tonal adjustments (now in float)
-            # ------------------------------------------------------------------
-
-            t3 = time.perf_counter()
-            result = self._stage_global(result, ctx)
-            timings["global"] = (time.perf_counter() - t3) * 1000
-
-            # ------------------------------------------------------------------
-            # Stage 5 — Colour grading (now in float)
-            # ------------------------------------------------------------------
-            t4 = time.perf_counter()
-            result = self._stage_grade(
-                result, ctx, acc_skin, acc_lips, person_mask,
-                style_ref=style_ref, faces=faces,
-            )
-            timings["grading"] = (time.perf_counter() - t4) * 1000
-
-            # ------------------------------------------------------------------
-            # Stage 5.5 — F3: Local adjustments (after grade, before finish)
-            # ------------------------------------------------------------------
-            t_local = time.perf_counter()
-            local_adjs = getattr(ctx, "_local_adjustments", None)
-            if local_adjs:
-                sem_masks = {"skin": acc_skin, "person": person_mask} if acc_skin is not None else None
-                result = self._stage_local_adjustments(result, ctx, local_adjustments=local_adjs, semantic_masks=sem_masks)
-            timings["local_adjustments"] = (time.perf_counter() - t_local) * 1000
-
-            # ------------------------------------------------------------------
-            # Stage 6 — Selective sharpening + impact finish (now in float)
-            # ------------------------------------------------------------------
-            t5 = time.perf_counter()
-            result = self._stage_finish(result, ctx, acc_sharpen, faces=faces, person_mask=person_mask)
-            timings["finish"] = (time.perf_counter() - t5) * 1000
-
-            # ------------------------------------------------------------------
-            # Stage 7 — T3: Body reshape (now in float, native resolution)
-            # ------------------------------------------------------------------
-            t6 = time.perf_counter()
-            result = self._stage_body_reshape(result, ctx, person_mask=person_mask)
-            timings["body_reshape"] = (time.perf_counter() - t6) * 1000
+        from .stages import PipelineState as _PS
+        state = _PS(
+            img=result,
+            ctx=ctx,
+            h_img=h_img,
+            w_img=w_img,
+            person_mask=person_mask,
+            acc_skin=acc_skin,
+            acc_skin_hair=acc_skin_hair,
+            acc_lips=acc_lips,
+            acc_sharpen=acc_sharpen,
+            acc_hair_only=acc_hair_only,
+            faces=faces,
+            style_ref=style_ref,
+        )
+        state = self._global_registry.run(state)
+        result = state.img
+        timings.update(state.timings)
 
         # ------------------------------------------------------------------
         # Stage 7.5 — Background cleanup (dust/specks/creases via inpaint)
@@ -2612,87 +2511,18 @@ class RetouchEngine:
     ) -> List[QAWarning]:
         """Run QA detectors on a processed uint8 BGR image.
 
-        Returns a list of :class:`QAWarning` (only flagged detectors).
-        Encapsulated as a helper so :meth:`_run_core_pipeline` can re-run
-        QA after a back-off iteration without re-entering
-        :meth:`_run_global_phases`.
+        Thin wrapper over :func:`retouch.qa_detectors.run_qa`; kept as a
+        method so :meth:`_run_core_pipeline` can re-run QA after a
+        back-off iteration without re-entering :meth:`_run_global_phases`.
         """
-        if person_mask is None or not np.any(person_mask > 0.3):
-            return []
-        qa_warnings: List[QAWarning] = []
-        try:
-            body_skin_mask = None
-            if face_skin_mask is not None and reference_img_bgr is not None:
-                body_skin_mask = build_face_anchored_body_mask(
-                    reference_img_bgr, face_skin_mask, person_mask,
-                )
-            qa_raw = qa_detectors.run_all(
-                result,
-                skin_mask=person_mask,
-                reference_img_bgr=reference_img_bgr,
-                img_before=reference_img_bgr,
-                person_mask=person_mask,
-                face_skin_mask=face_skin_mask,
-                body_skin_mask=body_skin_mask,
-                mark_policy=mark_policy,
-                warp_field=warp_field,
-            )
-
-        except Exception as e:
-            logger.warning("QA pipeline failed: %s", e, exc_info=True)
-            return [QAWarning(
-                detector="qa_pipeline",
-                score=1.0,
-                flagged=True,
-                threshold=0.0,
-                message="QA pipeline failed; output could not be validated",
-                details={
-                    "available": False,
-                    "error": f"{type(e).__name__}: {e}",
-                },
-            )]
-        for detector_name, det_result in qa_raw.items():
-            if not det_result.get("flagged", False):
-                continue
-            unavailable = det_result.get("available") is False
-            if unavailable:
-                msg = (
-                    f"QA detector {detector_name} failed; "
-                    "output could not be validated"
-                )
-            else:
-                msg = {
-                    "banding": "Banding visible in smooth gradient regions",
-                    "clipping": "Highlight/shadow clipping detected",
-                    "plastic_skin": "Skin texture loss detected — may appear plastic",
-                    "halo": "Edge overshoot halos detected from sharpening",
-                    "seam": "Seam visible at subject boundary",
-                    "color_drift": "Skin hue shift detected — color grade drifted beyond budget",
-                    "pore_spectrum": "Skin pore-spectrum loss detected — may appear plastic",
-                    "asymmetry": "Asymmetric over-smoothing detected — one face zone over-retouched",
-                    "skin_score": "Skin quality score low — plastic/over-evolved appearance",
-                }.get(detector_name, f"{detector_name} artifact detected")
-            _qa_thresholds = {
-                "banding": qa_detectors.BANDING_THRESHOLD,
-                "clipping": qa_detectors.CLIPPING_THRESHOLD,
-                "plastic_skin": qa_detectors.PLASTIC_SKIN_THRESHOLD,
-                "halo": qa_detectors.HALO_THRESHOLD,
-                "seam": qa_detectors.SEAM_THRESHOLD,
-                "color_drift": qa_detectors.COLOR_DRIFT_THRESHOLD,
-                "pore_spectrum": qa_detectors.PORE_SPECTRUM_THRESHOLD,
-                "asymmetry": qa_detectors.ASYMMETRY_THRESHOLD,
-                # skin_score is informational (soft); no hard gate threshold.
-            }
-            qa_warnings.append(QAWarning(
-                detector=detector_name,
-                score=det_result.get("score", 0.0),
-                flagged=True,
-                threshold=_qa_thresholds.get(detector_name, 0.0),
-                message=msg,
-                details={k: v for k, v in det_result.items()
-                         if k not in ("score", "flagged")},
-            ))
-        return qa_warnings
+        return qa_detectors.run_qa(
+            result,
+            person_mask,
+            reference_img_bgr=reference_img_bgr,
+            face_skin_mask=face_skin_mask,
+            mark_policy=mark_policy,
+            warp_field=warp_field,
+        )
 
     def _run_core_pipeline(
         self,

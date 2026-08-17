@@ -21,7 +21,6 @@ Tests verify:
 """
 
 import tempfile
-from pathlib import Path
 from types import SimpleNamespace
 
 import cv2
@@ -483,14 +482,9 @@ class TestShootConsistencyLock:
 class TestCosplayMoatIntegration:
     """Integration tests with RetouchEngine (module-scoped fixture = clean teardown)."""
 
-    @pytest.mark.skipif(
-        not Path("test_output/DSCF8007.jpg").exists(),
-        reason="Test image not available",
-    )
-    def test_engine_process_with_wig_lace_blend(self, engine):
+    def test_engine_process_with_wig_lace_blend(self, engine, natural_image):
         """Engine.process() should accept and apply cosplay_wig_lace_blend."""
-        img = cv2.imread("test_output/DSCF8007.jpg")
-        assert img is not None
+        img = natural_image
 
         result = engine.process(
             img,
@@ -503,14 +497,9 @@ class TestCosplayMoatIntegration:
         assert result.shape == img.shape
         assert result.dtype == np.uint8
 
-    @pytest.mark.skipif(
-        not Path("test_output/DSCF8007.jpg").exists(),
-        reason="Test image not available",
-    )
-    def test_engine_process_with_stockings_smooth(self, engine):
+    def test_engine_process_with_stockings_smooth(self, engine, natural_image):
         """Engine.process() should accept and apply cosplay_stockings_smooth."""
-        img = cv2.imread("test_output/DSCF8007.jpg")
-        assert img is not None
+        img = natural_image
 
         result = engine.process(
             img,
@@ -523,14 +512,9 @@ class TestCosplayMoatIntegration:
         assert result.shape == img.shape
         assert result.dtype == np.uint8
 
-    @pytest.mark.skipif(
-        not Path("test_output/DSCF8007.jpg").exists(),
-        reason="Test image not available",
-    )
-    def test_engine_process_with_consistency_lock(self, engine):
+    def test_engine_process_with_consistency_lock(self, engine, natural_image):
         """Engine.process() should accept and apply cosplay_consistency_strength."""
-        img = cv2.imread("test_output/DSCF8007.jpg")
-        assert img is not None
+        img = natural_image
 
         result = engine.process(
             img,
@@ -543,14 +527,9 @@ class TestCosplayMoatIntegration:
         assert result.shape == img.shape
         assert result.dtype == np.uint8
 
-    @pytest.mark.skipif(
-        not Path("test_output/DSCF8007.jpg").exists(),
-        reason="Test image not available",
-    )
-    def test_engine_process_with_all_cosplay_params(self, engine):
+    def test_engine_process_with_all_cosplay_params(self, engine, natural_image):
         """Engine.process() should handle all three cosplay params together."""
-        img = cv2.imread("test_output/DSCF8007.jpg")
-        assert img is not None
+        img = natural_image
 
         result = engine.process(
             img,
@@ -565,14 +544,9 @@ class TestCosplayMoatIntegration:
         assert result.shape == img.shape
         assert result.dtype == np.uint8
 
-    @pytest.mark.skipif(
-        not Path("test_output/DSCF8007.jpg").exists(),
-        reason="Test image not available",
-    )
-    def test_engine_process_cosplay_params_zero_minimal_diff(self, engine):
+    def test_engine_process_cosplay_params_zero_minimal_diff(self, engine, natural_image):
         """With zero cosplay params, output should be nearly identical to baseline."""
-        img = cv2.imread("test_output/DSCF8007.jpg")
-        assert img is not None
+        img = natural_image
 
         result_baseline = engine.process(
             img,
