@@ -93,12 +93,10 @@ def build_face_anchored_body_mask(
     n_labels, labels = cv2.connectedComponents((candidate > 0.3).astype(np.uint8))
     if n_labels > 1:
         reach_sel = reachable > 0.1
-        kept = np.zeros_like(candidate)
-        for label_id in range(1, n_labels):
-            comp = labels == label_id
-            if np.count_nonzero(comp & reach_sel) > 10:
-                kept[comp] = candidate[comp]
-        candidate = kept
+        overlap = np.bincount(
+            labels[reach_sel & (labels > 0)], minlength=n_labels)
+        kept_ids = np.nonzero(overlap > 10)[0]
+        candidate = (candidate * np.isin(labels, kept_ids)).astype(np.float32)
     candidate = cv2.morphologyEx(candidate, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     candidate = cv2.GaussianBlur(candidate, (0, 0), 2.0)
     return (candidate * (1.0 - face_exclusion.astype(np.float32))).astype(np.float32)
