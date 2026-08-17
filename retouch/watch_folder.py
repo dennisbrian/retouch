@@ -60,6 +60,14 @@ def _hash_payload(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def _is_under(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
 @dataclass
 class WatchJob:
     """Durable work item; ``done`` is valid only after output verification."""
@@ -73,6 +81,7 @@ class WatchJob:
     settings_fingerprint: str
     pipeline_fingerprint: str
     output_path: str
+    output_root: str = ""
     status: str = "queued"
     attempts: int = 0
     error_code: Optional[str] = None
@@ -105,6 +114,7 @@ class WatchJob:
             settings_fingerprint=str(payload.get("settings_fingerprint", "")),
             pipeline_fingerprint=str(payload.get("pipeline_fingerprint", "")),
             output_path=str(payload["output_path"]),
+            output_root=str(payload.get("output_root", "")),
             status=str(payload.get("status", "queued")),
             attempts=int(payload.get("attempts", 0)),
             error_code=payload.get("error_code"),
@@ -208,7 +218,9 @@ class WatchFolder:
         if not self.state_path.exists():
             return WatchFolderState()
         try:
-            return WatchFolderState.from_dict(json.loads(self.state_path.read_text(encoding="utf-8")))
+            state = WatchFolderState.from_dict(json.loads(self.state_path.read_text(encoding="utf-8")))
+            self._validate_state_paths(state)
+            return state
         except FileNotFoundError:
             # The file may have been removed between exists() and read().
             return WatchFolderState()
@@ -222,6 +234,30 @@ class WatchFolder:
             raise StateLoadError(
                 f"Malformed watch-folder state {self.state_path}{detail}: {exc}"
             ) from exc
+
+    def _validate_state_paths(self, state: WatchFolderState) -> None:
+        for record in state.records.values():
+            self._validated_source(record)
+        for job in state.jobs.values():
+            self._validated_job_output(job)
+
+    def _validated_source(self, record: WatchRecord) -> Path:
+        source = Path(record.path).expanduser().resolve()
+        if not _is_under(source, self.input_dir):
+            raise StateLoadError(
+                f"watch state record path escapes the watched folder: {record.path}"
+            )
+        return source
+
+    @staticmethod
+    def _validated_job_output(job: WatchJob) -> Path:
+        output = Path(job.output_path).expanduser().resolve()
+        root = Path(job.output_root).expanduser().resolve() if job.output_root else None
+        if root is None or not _is_under(output, root):
+            raise StateLoadError(
+                f"watch job output path escapes its output root: {job.output_path}"
+            )
+        return output
 
     def save(self) -> None:
         """Persist state atomically so interruption cannot corrupt the queue."""
@@ -357,7 +393,7 @@ class WatchFolder:
                 continue
             job_id = record.job_ids.get(kind)
             job = self.state.jobs.get(job_id) if job_id else None
-            source = Path(record.path).resolve()
+            source = self._validated_source(record)
             try:
                 content_id = _file_sha256(source)
             except OSError:
@@ -374,6 +410,8 @@ class WatchFolder:
                     contract_fingerprint=contract_fingerprint,
                 )
             )
+            if output_path_resolver and not _is_under(desired_output.expanduser().resolve(), output_base):
+                raise ValueError("output_path_resolver result must stay under the output root")
             contract_changed = bool(
                 job is not None
                 and (
@@ -394,7 +432,7 @@ class WatchFolder:
             ready = ready[:limit]
         queued: List[WatchJob] = []
         for record in ready:
-            source = Path(record.path).resolve()
+            source = self._validated_source(record)
             content_id = _file_sha256(source)
             asset_instance_id = (
                 asset_instance_resolver(source, content_id)
@@ -413,6 +451,8 @@ class WatchFolder:
                     contract_fingerprint=contract_fingerprint,
                 )
             )
+            if output_path_resolver and not _is_under(output_path.expanduser().resolve(), output_base):
+                raise ValueError("output_path_resolver result must stay under the output root")
             logical_payload = {
                 "source_content_id": content_id,
                 "asset_instance_id": asset_instance_id,
@@ -465,6 +505,7 @@ class WatchFolder:
                     settings_fingerprint=settings_fingerprint,
                     pipeline_fingerprint=pipeline_value,
                     output_path=str(output_path),
+                    output_root=str(output_base),
                 )
                 self.state.jobs[job.job_id] = job
             record.status = "queued"
@@ -536,6 +577,7 @@ class WatchFolder:
             jobs = jobs[:limit]
         completed: List[WatchJob] = []
         for job in jobs:
+            self._validated_job_output(job)
             job.status = "processing"
             job.attempts += 1
             job.started_at = _now()
@@ -606,12 +648,13 @@ class WatchFolder:
             ready = ready[:limit]
         completed: List[WatchRecord] = []
         for record in ready:
+            source = self._validated_source(record)
             record.status = "processing"
             record.attempts += 1
             record.error = None
             self.save()
             try:
-                processor(Path(record.path))
+                processor(source)
             except Exception as exc:  # callback errors are queue state, not watcher crashes
                 record.status = "failed"
                 record.error = f"{type(exc).__name__}: {exc}"

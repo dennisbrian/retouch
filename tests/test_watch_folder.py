@@ -309,3 +309,114 @@ def test_permanent_watch_job_failure_requires_explicit_retry(tmp_path: Path):
     assert watcher.queue_jobs(**kwargs) == []
     explicit = watcher.queue_jobs(**kwargs, retry_failed=True)
     assert len(explicit) == 1
+
+
+def test_state_record_path_outside_input_dir_fails_closed(tmp_path: Path):
+    outside = tmp_path.parent / (tmp_path.name + "-outside") / "evil.jpg"
+    state_path = tmp_path / "watch.json"
+    payload = {
+        "version": 2,
+        "records": {
+            str(outside.resolve()): {
+                "path": str(outside.resolve()),
+                "signature": "1:1",
+                "status": "pending",
+            }
+        },
+        "jobs": {},
+    }
+    original = json.dumps(payload)
+    state_path.write_text(original, encoding="utf-8")
+
+    with pytest.raises(StateLoadError, match="escapes the watched folder"):
+        WatchFolder(tmp_path, state_path=state_path)
+
+    assert state_path.read_text(encoding="utf-8") == original
+    quarantined = list(tmp_path.glob("watch.json.corrupt-*"))
+    assert len(quarantined) == 1
+    assert quarantined[0].read_text(encoding="utf-8") == original
+
+
+def test_state_job_output_path_outside_root_fails_closed(tmp_path: Path):
+    source = tmp_path / "portrait.jpg"
+    _write_image(source)
+    output_root = tmp_path.parent / (tmp_path.name + "-deliveries")
+    outside = tmp_path.parent / (tmp_path.name + "-evil") / "stolen.jpg"
+    job = {
+        "job_id": "watch-job-tampered",
+        "source_path": str(source.resolve()),
+        "content_id": "abc",
+        "asset_instance_id": "abc",
+        "kind": "preview",
+        "settings": {},
+        "settings_fingerprint": "f",
+        "pipeline_fingerprint": "p",
+        "output_path": str(outside),
+        "output_root": str(output_root),
+        "status": "queued",
+    }
+    state_path = tmp_path / "watch.json"
+    state_path.write_text(
+        json.dumps({"version": 2, "records": {}, "jobs": {job["job_id"]: job}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(StateLoadError, match="escapes its output root"):
+        WatchFolder(tmp_path, state_path=state_path)
+
+    assert not outside.exists()
+    assert len(list(tmp_path.glob("watch.json.corrupt-*"))) == 1
+
+
+def test_run_queued_rejects_tampered_job_output_without_processing(tmp_path: Path):
+    source = tmp_path / "portrait.jpg"
+    _write_image(source)
+    watcher = WatchFolder(tmp_path, state_path=tmp_path / "watch.json")
+    kwargs = {
+        "kind": "preview", "output_root": tmp_path.parent / (tmp_path.name + "-out"),
+        "settings": {"recipe": "natural"}, "pipeline_fingerprint": "test-v1",
+    }
+    watcher.queue_jobs(**kwargs)
+    job = watcher.queue_jobs(**kwargs)[0]
+    outside = tmp_path.parent / (tmp_path.name + "-evil") / "stolen.jpg"
+
+    def evil_writer(_job):
+        outside.parent.mkdir(parents=True, exist_ok=True)
+        outside.write_bytes(b"stolen")
+        return outside
+
+    job.output_path = str(outside)
+    with pytest.raises(StateLoadError, match="escapes its output root"):
+        watcher.run_queued(evil_writer)
+    assert not outside.exists()
+
+    job.output_path = str(tmp_path.parent / (tmp_path.name + "-out") / "preview" / "ok.jpg")
+    job.output_root = ""
+    with pytest.raises(StateLoadError, match="escapes its output root"):
+        watcher.run_queued(evil_writer)
+
+
+def test_state_with_contained_paths_round_trips(tmp_path: Path):
+    source = tmp_path / "portrait.jpg"
+    _write_image(source)
+    state_path = tmp_path / "watch.json"
+    watcher = WatchFolder(tmp_path, state_path=state_path)
+    output = tmp_path.parent / (tmp_path.name + "-deliveries")
+    kwargs = {
+        "kind": "preview", "output_root": output,
+        "settings": {"recipe": "natural", "export_fmt": "JPEG"},
+        "pipeline_fingerprint": "test-v1",
+    }
+    watcher.queue_jobs(**kwargs)
+    job = watcher.queue_jobs(**kwargs)[0]
+
+    def write_output(job):
+        Path(job.output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(job.output_path).write_bytes(b"preview bytes")
+        return Path(job.output_path)
+
+    watcher.run_queued(write_output)
+
+    restored = WatchFolder(tmp_path, state_path=state_path)
+    assert restored.state.jobs[job.job_id].status == "done"
+    assert restored.queue_jobs(**kwargs) == []
