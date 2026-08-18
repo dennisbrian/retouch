@@ -344,7 +344,7 @@ class TestFaceDetectorInit:
         ):
             detector = FaceDetector()
             try:
-                assert detector.max_faces == 10
+                assert detector.max_faces == 25
                 assert detector.min_confidence == 0.4
                 assert detector._landmarker is not None
                 assert detector._segmenter is not None
@@ -386,7 +386,7 @@ class TestFaceDetectorInit:
         ):
             detector = FaceDetector(refine_landmarks=False)
             try:
-                assert detector.max_faces == 10
+                assert detector.max_faces == 25
             finally:
                 detector.close()
 
@@ -402,7 +402,7 @@ class TestFaceDetectorInit:
                 # min_confidence). Inspect positional args.
                 args, kwargs = mock_create.call_args
                 # delegate is positional arg index 2
-                assert args[3] == 10
+                assert args[3] == 25
                 assert args[4] == 0.4
             finally:
                 detector.close()

@@ -1052,7 +1052,7 @@ class TestUnifyHueLineToneInvariance:
         deep = np.tile(np.array(self.DEEP_BGR, np.uint8), (64, 64, 1))
         # Push hue off the deep locus target (58 deg): cool the tone.
         deep[:, :, 0] = np.clip(deep[:, :, 0].astype(int) + 18, 0, 255)
-        locus = {"h_target": 58.0, "C_target": 0.125}  # SKIN_LOCI["deep"]
+        locus = {"h_target": 58.0, "C_target": 0.055}  # SKIN_LOCI["deep"]
         out = proc.unify_hue_line(deep, mask, hue_strength=100, chroma_strength=0, locus=locus)
 
         def circ_dist(h, target):
@@ -1068,7 +1068,7 @@ class TestUnifyHueLineToneInvariance:
         mask = np.ones((64, 64), dtype=np.float32)
         light = np.tile(np.array(self.LIGHT_BGR, np.uint8), (64, 64, 1))
         light[:, :, 0] = np.clip(light[:, :, 0].astype(int) + 15, 0, 255)
-        locus = {"h_target": 45.0, "C_target": 0.085}  # SKIN_LOCI["fair"]
+        locus = {"h_target": 45.0, "C_target": 0.058}  # SKIN_LOCI["fair"]
         out = proc.unify_hue_line(light, mask, hue_strength=100, chroma_strength=0, locus=locus)
 
         def circ_dist(h, target):
@@ -1087,7 +1087,7 @@ class TestUnifyHueLineToneInvariance:
         mask = np.ones((64, 64), dtype=np.float32)
         img = np.tile(np.array((45, 60, 92), np.uint8), (64, 64, 1))  # skin L~0.39
         img[0:16, 0:16] = np.tile(np.array((12, 16, 26), np.uint8), (16, 16, 1))  # hair L~0.19
-        locus = {"h_target": 58.0, "C_target": 0.125}
+        locus = {"h_target": 58.0, "C_target": 0.055}
         out = proc.unify_hue_line(img, mask, hue_strength=100, chroma_strength=0, locus=locus)
         h_in = self._oklch_hue(img)
         h_out = self._oklch_hue(out)

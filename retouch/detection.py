@@ -87,6 +87,22 @@ class _LandmarkCompat:
         self.landmark = landmark_list
 
 
+def _iou(a: Tuple[int, int, int, int], b: Tuple[int, int, int, int]) -> float:
+    """Intersection-over-union for (x, y, w, h) boxes."""
+    ax1, ay1 = a[0], a[1]
+    ax2, ay2 = a[0] + a[2], a[1] + a[3]
+    bx1, by1 = b[0], b[1]
+    bx2, by2 = b[0] + b[2], b[1] + b[3]
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    iw, ih = max(ix2 - ix1, 0), max(iy2 - iy1, 0)
+    inter = iw * ih
+    if inter == 0:
+        return 0.0
+    union = a[2] * a[3] + b[2] * b[3] - inter
+    return inter / max(union, 1)
+
+
 def _detach_landmarks(landmark_list: Any) -> List[_Landmark]:
     """Copy MediaPipe landmarks into Retouch-owned plain dataclasses.
 
@@ -119,7 +135,7 @@ class FaceDetector:
 
     def __init__(
         self,
-        max_faces: int = 10,
+        max_faces: int = 25,
         min_confidence: float = 0.4,
         refine_landmarks: bool = True,
         allow_unavailable: bool = False,
@@ -332,6 +348,15 @@ class FaceDetector:
                     confidence=1.0,
                     confidence_source="mediapipe_presence_unavailable",
                 ))
+            if not faces:
+                # Tiling fallback: FaceMesh's internal detector samples a
+                # fixed 128x128 crop, so mid-size faces (~250 px) inside a
+                # 2048-px proxy can fall below its detectability scale.
+                # A 3x3/25% tile pass gives each region ~3x more pixels to
+                # the internal detector. Measured +25-36 ms, gated to the
+                # zero-face case so working images pay nothing. Recovers
+                # documented misses (DSCF4454-class, TODO_WEEK_2026_07_20).
+                faces = self._detect_tiled_legacy(img_bgr, w, h)
             return faces
 
         # 1. RetinaFace (pip) for bounding-box detection
@@ -633,3 +658,54 @@ class FaceDetector:
                 z=lm.z,
             ))
         return remapped
+
+    def _detect_tiled_legacy(
+        self, img_bgr: np.ndarray, w: int, h: int
+    ) -> List[FaceData]:
+        """3x3/25%-overlap tile pass over the legacy FaceMesh detector.
+
+        Only invoked when the full-frame pass found zero faces. A face
+        found in multiple tiles is collapsed by IoU>0.5 dedup (adjacent
+        tiles re-find the same face at slightly different offsets; the
+        10-px bucket key used elsewhere cannot collapse them).
+        """
+        if self._legacy_mesh is None or w < 320 or h < 320:
+            return []
+        tile = max(w, h) // 3
+        step = int(tile * 0.75)
+        candidates: List[FaceData] = []
+        for oy in range(0, max(h - tile, 1), step):
+            for ox in range(0, max(w - tile, 1), step):
+                x2, y2 = min(ox + tile, w), min(oy + tile, h)
+                if x2 - ox < 160 or y2 - oy < 160:
+                    continue
+                crop = img_bgr[oy:y2, ox:x2]
+                result = self._legacy_mesh.process(
+                    cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+                )
+                for landmarks in (
+                    getattr(result, "multi_face_landmarks", None) or []
+                ):
+                    cw, ch = x2 - ox, y2 - oy
+                    remapped = self._remap_landmarks(
+                        landmarks.landmark, ox, oy, cw, ch, w, h
+                    )
+                    compat = _LandmarkCompat(remapped)
+                    candidates.append(FaceData(
+                        landmarks=compat,
+                        bbox=self._bbox_from_landmarks(compat, w, h),
+                        ied=inter_eye_distance(compat, w, h),
+                        confidence=1.0,
+                        confidence_source="mediapipe_presence_unavailable",
+                    ))
+        # IoU>0.5 dedup, keep first (higher-tile-priority) detection.
+        kept: List[FaceData] = []
+        for cand in candidates:
+            dup = False
+            for k in kept:
+                if _iou(cand.bbox, k.bbox) > 0.5:
+                    dup = True
+                    break
+            if not dup:
+                kept.append(cand)
+        return kept

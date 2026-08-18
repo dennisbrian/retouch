@@ -1373,8 +1373,16 @@ class SkinProcessor:
         delta_h_clipped = np.clip(delta_h, -8.0, 8.0)
         h_new = (h + delta_h_clipped * (hue_strength / 100.0) * eligible) % 360.0
 
-        # Chroma pull: toward target, clipped to ±0.04
-        delta_C = np.clip(C_target - C, -0.04, 0.04)
+        # Chroma pull: toward the subject's OWN median chroma (variance
+        # compression — "chroma_even"), clamped so the result never
+        # overshoots past the locus C_target. Pulling toward a fixed locus
+        # target RAISES low-chroma skin and lowers high-chroma skin by
+        # different amounts (the chroma-eligibility gate damps them
+        # unevenly), which can widen variance instead of evening it; the
+        # median-anchored pull is variance-reducing by construction.
+        C_med = float(np.median(C[skin_idx])) if np.any(skin_idx) else C_target
+        C_anchor = min(C_med, C_target)
+        delta_C = np.clip(C_anchor - C, -0.04, 0.04)
         C_new = C + delta_C * (chroma_strength / 100.0) * eligible
 
         # Reconstruct OKLCh

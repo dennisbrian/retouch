@@ -4486,20 +4486,25 @@ class RetouchEngine:
             else:
                 result = apply_split_toning(result, strength=float(ctx.split_toning) / 100.0)
 
-        # K3: Gamut-Aware Soft-Knee Chroma Compression
-        from .color_science import bgr_to_oklab, oklab_to_oklch, compress_chroma_gamut, oklch_to_oklab, oklab_to_bgr
-        if is_float:
-            res_u8 = np.clip(result * 255.0, 0, 255).astype(np.uint8)
-            lab = bgr_to_oklab(res_u8)
-            oklch = oklab_to_oklch(lab)
-            oklch_comp = compress_chroma_gamut(oklch)
-            res_u8 = oklab_to_bgr(oklch_to_oklab(oklch_comp))
-            result = res_u8.astype(np.float32) / 255.0
-        else:
-            lab = bgr_to_oklab(result)
-            oklch = oklab_to_oklch(lab)
-            oklch_comp = compress_chroma_gamut(oklch)
-            result = oklab_to_bgr(oklch_to_oklab(oklch_comp))
+        # K3: Gamut-Aware Soft-Knee Chroma Compression.
+        # ctx.gamut_compress (default True, ParamSpec/CLI/GUI-plumbed since
+        # K3 landed) must actually gate this site — it previously ran
+        # unconditionally, making the flag a lie for the finish stage.
+        # Default behavior is byte-identical to the unconditional run.
+        if getattr(ctx, "gamut_compress", True):
+            from .color_science import bgr_to_oklab, oklab_to_oklch, compress_chroma_gamut, oklch_to_oklab, oklab_to_bgr
+            if is_float:
+                res_u8 = np.clip(result * 255.0, 0, 255).astype(np.uint8)
+                lab = bgr_to_oklab(res_u8)
+                oklch = oklab_to_oklch(lab)
+                oklch_comp = compress_chroma_gamut(oklch)
+                res_u8 = oklab_to_bgr(oklch_to_oklab(oklch_comp))
+                result = res_u8.astype(np.float32) / 255.0
+            else:
+                lab = bgr_to_oklab(result)
+                oklch = oklab_to_oklch(lab)
+                oklch_comp = compress_chroma_gamut(oklch)
+                result = oklab_to_bgr(oklch_to_oklab(oklch_comp))
 
         return result
 

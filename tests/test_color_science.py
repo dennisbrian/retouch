@@ -232,7 +232,7 @@ class TestMeasureSkinState:
         mask = np.zeros((64, 64), dtype=np.float32)
         state = measure_skin_state(img, mask, thresh=0.3)
         assert np.isclose(state.L_mean, 0.5, atol=0.1)
-        assert np.isclose(state.C_mean, 0.085, atol=0.01)
+        assert np.isclose(state.C_mean, 0.05, atol=0.01)
 
     def test_mask_threshold(self):
         """Mask threshold should exclude sub-threshold pixels."""
@@ -318,17 +318,17 @@ class TestSkinLociData:
         assert "h_target" in SKIN_LOCI["fair"]
         assert "C_target" in SKIN_LOCI["fair"]
         assert SKIN_LOCI["fair"]["h_target"] == 45.0
-        assert np.isclose(SKIN_LOCI["fair"]["C_target"], 0.085, atol=0.001)
+        assert np.isclose(SKIN_LOCI["fair"]["C_target"], 0.058, atol=0.001)
 
     def test_loci_tan_values(self):
         """Tan skin locus should have expected targets."""
         assert SKIN_LOCI["tan"]["h_target"] == 52.0
-        assert np.isclose(SKIN_LOCI["tan"]["C_target"], 0.105, atol=0.001)
+        assert np.isclose(SKIN_LOCI["tan"]["C_target"], 0.068, atol=0.001)
 
     def test_loci_deep_values(self):
         """Deep skin locus should have expected targets."""
         assert SKIN_LOCI["deep"]["h_target"] == 58.0
-        assert np.isclose(SKIN_LOCI["deep"]["C_target"], 0.125, atol=0.001)
+        assert np.isclose(SKIN_LOCI["deep"]["C_target"], 0.055, atol=0.001)
 
 
 class TestUnifyHueLineIntegration:
@@ -381,20 +381,24 @@ class TestUnifyHueLineIntegration:
 
     def test_patchy_skin_hue_std_decreases(self, skin_proc):
         """Patchy skin (two hue clusters) should have hue std decrease."""
-        # Create patchy skin with two distinct hue clusters
+        # Create patchy skin with two distinct hue clusters at REALISTIC
+        # chroma (~0.05, measured real-skin median). The previous synthetic
+        # (C ~= 0.12) sat inside the makeup-exclusion chroma gate
+        # (1 - smoothstep(0, 0.18, C)), which damps the pull unevenly by
+        # construction — that zone is excluded from unify by design.
         img = np.zeros((128, 128, 3), dtype=np.uint8)
 
-        # Left half: warm hue (orange-ish)
+        # Left half: warm hue, slightly less chroma
         oklab_warm = np.zeros((128, 64, 3), dtype=np.float32)
         oklab_warm[..., 0] = 0.65  # L
-        oklab_warm[..., 1] = 0.08  # a (warm)
-        oklab_warm[..., 2] = 0.10  # b (warm)
+        oklab_warm[..., 1] = 0.030  # a (warm)
+        oklab_warm[..., 2] = 0.040  # b (warm)
 
-        # Right half: cooler hue (yellow-ish)
+        # Right half: cooler hue, slightly more chroma
         oklab_cool = np.zeros((128, 64, 3), dtype=np.float32)
         oklab_cool[..., 0] = 0.65  # L
-        oklab_cool[..., 1] = 0.10  # a (cooler)
-        oklab_cool[..., 2] = 0.05  # b (cooler)
+        oklab_cool[..., 1] = 0.045  # a (cooler)
+        oklab_cool[..., 2] = 0.030  # b (cooler)
 
         oklab_patchy = np.concatenate([oklab_warm, oklab_cool], axis=1)
         img_left = oklab_to_bgr(oklab_patchy[:, :64, :])

@@ -492,7 +492,7 @@ def measure_skin_state(
 
     if not np.any(skin_idx):
         # No skin; return neutral state
-        return SkinState(L_mean=0.5, C_mean=0.085, C_std=0.0, h_mean=50.0)
+        return SkinState(L_mean=0.5, C_mean=0.05, C_std=0.0, h_mean=50.0)
 
     L_skin = oklch[..., 0][skin_idx]
     C_skin = oklch[..., 1][skin_idx]
@@ -513,21 +513,27 @@ def measure_skin_state(
 
 # Preferred skin-color loci per tone class (from literature on preferred reproduction)
 SKIN_LOCI: Dict[str, Dict[str, float]] = {
+    # C_targets measured post-OKLab-matrix-fix on real portraits (DSCF
+    # corpus: skin C median 0.0435-0.0490) plus swatch headroom (~+15%).
+    # The previous 0.085/0.105/0.125 seeds were literature guesses that
+    # predate the matrix fix; 0.125 also sat OUTSIDE the sRGB gamut at the
+    # deep locus operating point (C_max ~= 0.12 at L=0.50, h=58), so the
+    # chroma pull could never reach it and clipped into hue shift instead.
     "fair": {
         "L_min": 0.72,
         "h_target": 45.0,
-        "C_target": 0.085,
+        "C_target": 0.058,
     },
     "tan": {
         "L_min": 0.55,
         "L_max": 0.72,
         "h_target": 52.0,
-        "C_target": 0.105,
+        "C_target": 0.068,
     },
     "deep": {
         "L_max": 0.55,
         "h_target": 58.0,
-        "C_target": 0.125,
+        "C_target": 0.055,
     },
 }
 
@@ -688,12 +694,15 @@ def apply_subtractive_saturation(img_bgr: np.ndarray, amount: float) -> np.ndarr
     bgr = oklab_to_bgr(oklch_to_oklab(oklch_new), float32_out=True)  # [0, 255] float
 
     # Near-neutral pixels have numerically unstable hue and carry a small
-    # achromatic residual (uint8 grays land at C up to ~0.046 in OKLCh purely
+    # achromatic residual (uint8 grays land at C up to ~0.004 in OKLCh purely
     # from quantization). Blend the transform back toward the source over a
-    # soft chroma ramp so true grays / near-neutral skin stay put while
-    # genuinely coloured pixels (C > ~0.09) are fully transformed. This keeps
-    # neutrals a fixed point without freezing low-chroma real colours.
-    C_LO, C_HI = 0.05, 0.09
+    # soft chroma ramp so true grays stay put while genuinely coloured
+    # pixels (real skin C ~= 0.043-0.049 measured) are fully transformed.
+    # NOTE: the previous 0.05/0.09 ramp was authored while the OKLab M1
+    # matrix bug inflated near-neutral phantom chroma to ~0.046 — with the
+    # corrected matrix it zeroed the weight on real skin (C 0.049 -> w=0),
+    # silently skipping K9 for every portrait.
+    C_LO, C_HI = 0.008, 0.04
     w = np.clip((C - C_LO) / (C_HI - C_LO), 0.0, 1.0)[..., None]
     if is_float:
         src = np.clip(img_bgr, 0.0, 1.0).astype(np.float32) * 255.0

@@ -102,12 +102,19 @@ def _hsv_u8_conv_to_bgr_f(hsv: np.ndarray) -> np.ndarray:
 
 def apply_split_toning(
     img_bgr: np.ndarray,
-    shadow_hue: float = 210.0,
-    highlight_hue: float = 35.0,
+    shadow_hue: float = 200.0,
+    highlight_hue: float = 68.0,
     balance: float = 0.5,
     strength: float = 0.5,
-) -> np.ndarray:
+):
     """Apply OKLCh dual-tone split toning for shadows and highlights.
+
+    Default hues restore the original warm-peach/teal look as it RENDERED
+    when the anchors were authored: the OKLCh hue constants were tuned
+    while the OKLab M1 matrix bug rotated hues ~25-45 deg (skin-family
+    colors), so literal 35 deg then painted peach-gold. With the corrected
+    matrix, literal 35 deg paints dusty rose; 68 deg reproduces the
+    authored warm-gold highlight, 200 deg the authored teal shadow.
 
     Args:
         img_bgr: (H, W, 3) uint8 or float32 BGR image.
