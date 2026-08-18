@@ -22,6 +22,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -220,6 +221,10 @@ class JobStore:
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
 
     def _path_for(self, job_id: str) -> Path:
+        # job_id reaches path joins from persisted rows/dataframes; restrict
+        # to a safe charset so "../" ids cannot escape the jobs dir.
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", job_id or ""):
+            raise ValueError(f"invalid job id: {job_id!r}")
         return self.jobs_dir / f"{job_id}.json"
 
     def save(self, job: Job) -> None:

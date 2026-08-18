@@ -1010,6 +1010,10 @@ def load_session_handler(session_file, *current_args):
         if key in session.params:
             val = session.params[key]
             if val is not None:
+                # Session files are shared between users: never let a loaded
+                # JSON steer reads/writes at local paths (img_paths etc.).
+                if "path" in key:
+                    continue
                 if i < len(result):
                     result[i] = val
     return tuple(result)
@@ -1761,7 +1765,14 @@ def process_image(
                 )
             )
         else:
-            zip_path = os.path.join(tempfile.gettempdir(), f"retouch_export_{zip_stamp}.zip")
+            # Legacy fallback: mkstemp (O_EXCL) — a predictable stamped name
+            # in the shared tmpdir is a symlink-clobber race on multi-user
+            # hosts.
+            fd, zip_tmp = tempfile.mkstemp(
+                prefix=f"retouch_export_{zip_stamp}_", suffix=".zip"
+            )
+            os.close(fd)
+            zip_path = zip_tmp
         with zipfile.ZipFile(zip_path, 'w') as zipf:
             for exp_path in exported_paths:
                 zipf.write(exp_path, arcname=os.path.basename(exp_path))

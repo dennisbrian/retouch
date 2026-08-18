@@ -1316,6 +1316,19 @@ class RetouchEngine:
         use the result directly as an ndarray (legacy-compatible).
         """
         timings: Dict[str, float] = {}
+        if (
+            not isinstance(img_bgr, np.ndarray)
+            or img_bgr.ndim != 3
+            or img_bgr.shape[2] != 3
+            or min(img_bgr.shape[:2]) == 0
+            or img_bgr.size == 0
+        ):
+            raise ValueError(
+                "process() requires a non-empty HxWx3 BGR ndarray, got "
+                f"shape={getattr(img_bgr, 'shape', None)} "
+                f"dtype={getattr(img_bgr, 'dtype', None)}"
+            )
+        # NB: ndarray subclasses (ProcessingResult) pass isinstance unchanged.
         source_dtype = np.dtype(img_bgr.dtype)
 
         # ------------------------------------------------------------------

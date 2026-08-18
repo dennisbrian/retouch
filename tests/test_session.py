@@ -777,3 +777,33 @@ class TestComputeImageHash:
         # We verify the safe contract: empty string returns None via OSError.
         result = compute_image_hash("")
         assert result is None
+
+
+class TestLoadSessionHandlerPathStripping:
+    """Session JSONs are shared between users: loaded params must never
+    steer the GUI at local paths (img_paths etc.) — only value params."""
+
+    def test_path_keys_stripped_from_loaded_params(self, tmp_path: Path) -> None:
+        import json as _json
+        from gui import load_session_handler, PROCESS_INPUT_KEYS
+
+        # Build a session file with a path key plus a benign value param.
+        idx_recipe = PROCESS_INPUT_KEYS.index("recipe")
+        idx_img = PROCESS_INPUT_KEYS.index("img_paths")
+        payload = {
+            "recipe": "natural",
+            "params": {
+                "img_paths": ["/etc/passwd"],
+                "recipe": "cosplay",
+            },
+            "created_at": "2026-08-18T00:00:00",
+        }
+        session_file = tmp_path / "evil.session.json"
+        session_file.write_text(_json.dumps(payload))
+
+        current = tuple(None for _ in PROCESS_INPUT_KEYS)
+        result = load_session_handler(str(session_file), *current)
+
+        # Path key untouched (stays None), value param applied.
+        assert result[idx_img] is None
+        assert result[idx_recipe] == "cosplay"

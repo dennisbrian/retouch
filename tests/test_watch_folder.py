@@ -417,10 +417,21 @@ def test_run_queued_rejects_tampered_job_output_without_processing(tmp_path: Pat
         watcher.run_queued(evil_writer)
     assert not outside.exists()
 
+    # A job whose persisted output_root is blank but whose output path sits
+    # under the RUNTIME root (pinned by queue_jobs) is now valid — the
+    # state-file root no longer self-attests. It must process normally:
+    # no StateLoadError, output verified, job completes.
     job.output_path = str(tmp_path.parent / (tmp_path.name + "-out") / "preview" / "ok.jpg")
     job.output_root = ""
-    with pytest.raises(StateLoadError, match="escapes its output root"):
-        watcher.run_queued(evil_writer)
+
+    def good_writer(j):
+        out = Path(j.output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"ok")
+        return out
+
+    watcher.run_queued(good_writer)
+    assert Path(job.output_path).exists()
 
 
 def test_state_with_contained_paths_round_trips(tmp_path: Path):

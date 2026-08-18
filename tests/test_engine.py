@@ -498,6 +498,41 @@ class TestNoFaceFallbackFloatNative:
         assert delta_f32 <= delta_u8
 
 
+class TestProcessInputGuard:
+    """process() entry guard: reject malformed input before dtype coercion."""
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            pytest.param(None, id="none"),
+            pytest.param("path.jpg", id="string"),
+            pytest.param(np.zeros((10, 10), dtype=np.uint8), id="2-dim"),
+            pytest.param(np.zeros((0, 0, 3), dtype=np.uint8), id="empty-0-0-3"),
+            pytest.param(np.zeros((10, 0, 3), dtype=np.uint8), id="empty-10-0-3"),
+            pytest.param(np.zeros((10, 10, 4), dtype=np.uint8), id="4-channels"),
+            pytest.param(np.zeros((10, 10, 3, 1), dtype=np.uint8), id="4-dim"),
+        ],
+    )
+    def test_invalid_input_raises(self, engine, bad):
+        with pytest.raises(ValueError, match="HxWx3 BGR ndarray"):
+            engine.process(bad)
+
+    def test_valid_uint8_passes_guard(self, engine):
+        """Guard must not fire on valid input; tiny no-face image is fine —
+        the engine returns a ProcessingResult (no-face fallback path)."""
+        img = np.zeros((8, 8, 3), dtype=np.uint8)
+        res = engine.process(img)
+        assert res.shape == (8, 8, 3)
+
+    def test_processing_result_subclass_passes_guard(self, engine):
+        """ProcessingResult IS an ndarray subclass — isinstance guard must
+        not reject it."""
+        img = ProcessingResult(image=np.zeros((8, 8, 3), dtype=np.uint8))
+        assert isinstance(img, np.ndarray)
+        res = engine.process(img)
+        assert res.shape == (8, 8, 3)
+
+
 # ---------------------------------------------------------------------------
 # _upscale_core_result — unit tests for the proxy down/up-scaling helper
 # ---------------------------------------------------------------------------

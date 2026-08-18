@@ -102,7 +102,7 @@ def build_nafnet_model():
 def load_checkpoint(model, pth_path):
     """Load checkpoint into model. Handle 'params' key wrapper."""
     print(f"Loading checkpoint from {pth_path}")
-    ckpt = torch.load(pth_path, map_location='cpu')
+    ckpt = torch.load(pth_path, map_location='cpu', weights_only=True)
 
     # Handle 'params' key wrapper (common in some checkpoints)
     if isinstance(ckpt, dict) and 'params' in ckpt:

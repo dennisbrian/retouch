@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
+from types import SimpleNamespace
 os.environ["TF_USE_LEGACY_KERAS"] = "1"
 from typing import Any, List, Optional, Tuple
 
@@ -455,10 +456,35 @@ class FaceDetector:
                 img_down = cv2.resize(img_rgb, (w_down, h_down), interpolation=cv2.INTER_AREA)
                 mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_down)
                 result = self._landmarker.detect(mp_image)
-                # If downscaling finds no faces, fallback to full resolution as safety guard
-                if not result.face_landmarks:
+                # Always follow the 1024 pass with a full-resolution pass:
+                # zero finds → the old safety guard; ≥1 find → catches small
+                # faces beside a big one that 1024 misses. Results merge via
+                # (x, y)-bucket dedup below. Skip only for oversized frames
+                # (>4096) where a native scan is prohibitive and the engine's
+                # proxy path has already bounded detection inputs.
+                if max(h, w) <= 4096:
                     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
-                    result = self._landmarker.detect(mp_image)
+                    full_result = self._landmarker.detect(mp_image)
+                    if full_result.face_landmarks:
+                        # Merge full-res landmarks over downscaled results; a
+                        # matched pair is near-duplicate, keep both passes'
+                        # detections and let the (x, y)-bucket dedup below
+                        # collapse them.
+                        seen = set()
+                        for lm_list in result.face_landmarks:
+                            compat = _LandmarkCompat(lm_list)
+                            bb = self._bbox_from_landmarks(compat, w, h)
+                            seen.add((round(bb[0] / 10) * 10, round(bb[1] / 10) * 10))
+                        merged = list(result.face_landmarks)
+                        for lm_list in full_result.face_landmarks:
+                            compat = _LandmarkCompat(lm_list)
+                            bb = self._bbox_from_landmarks(compat, w, h)
+                            key = (round(bb[0] / 10) * 10, round(bb[1] / 10) * 10)
+                            if key not in seen:
+                                seen.add(key)
+                                merged.append(lm_list)
+                        merged_ns = SimpleNamespace(face_landmarks=merged)
+                        result = merged_ns
             else:
                 mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
                 result = self._landmarker.detect(mp_image)

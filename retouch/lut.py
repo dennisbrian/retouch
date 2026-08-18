@@ -218,6 +218,13 @@ def load_cube(path: Union[str, Path]) -> CubeLUT:
                     ) from exc
                 if parsed < 2:
                     raise ValueError(f"LUT_3D_SIZE must be >= 2; got {parsed}")
+                if parsed > 256:
+                    # Parity with load_3dl's cap: a "legit" 512^3 cube is a
+                    # ~3.2 GB allocation (table + astype copy) — reject before
+                    # allocating instead of OOM-ing the render process.
+                    raise ValueError(
+                        f"LUT_3D_SIZE must be <= 256; got {parsed}"
+                    )
                 size = parsed
                 continue
             parts = line.split()

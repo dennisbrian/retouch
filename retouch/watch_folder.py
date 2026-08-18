@@ -304,6 +304,9 @@ class WatchFolder:
             raise NotADirectoryError(str(self.input_dir))
         self.recursive = bool(recursive)
         self.state_path = Path(state_path).expanduser() if state_path else self.input_dir / ".retouch-watch.json"
+        # Output root pinned at runtime (set by queue_jobs); state-file
+        # output_root values are only trusted before the first queue pass.
+        self._pinned_output_root: Optional[Path] = None
         self.state = self._load_state()
         # Snapshot of the last on-disk state this process loaded/saved; the
         # three-way merge base that lets save() keep concurrent peer updates.
@@ -350,10 +353,22 @@ class WatchFolder:
             )
         return source
 
-    @staticmethod
-    def _validated_job_output(job: WatchJob) -> Path:
+    def _validated_job_output(self, job: WatchJob) -> Path:
         output = Path(job.output_path).expanduser().resolve()
-        root = Path(job.output_root).expanduser().resolve() if job.output_root else None
+        # The persisted output_root self-attests; a hand-edited state file
+        # could raise both fields to cover an arbitrary write target. When
+        # this instance has seen a runtime output root (queue_jobs), pin the
+        # check to that value; fall back to the job's recorded root only for
+        # legacy state loaded before any queueing.
+        root: Optional[Path]
+        if self._pinned_output_root is not None:
+            root = self._pinned_output_root
+        else:
+            root = (
+                Path(job.output_root).expanduser().resolve()
+                if job.output_root
+                else None
+            )
         if root is None or not _is_under(output, root):
             raise StateLoadError(
                 f"watch job output path escapes its output root: {job.output_path}"
@@ -475,6 +490,9 @@ class WatchFolder:
         if limit is not None and limit < 0:
             raise ValueError("limit must be non-negative")
         output_base = Path(output_root).expanduser().resolve()
+        # Pin the runtime output root: every later state reload validates
+        # persisted job outputs against THIS value, not a state-file claim.
+        self._pinned_output_root = output_base
         try:
             output_base.relative_to(self.input_dir.resolve())
         except ValueError:
