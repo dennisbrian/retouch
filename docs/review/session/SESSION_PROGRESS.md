@@ -1,9 +1,11 @@
 # Session Progress Report
 
-> **Latest session:** See `docs/review/session/SESSION_PROGRESS_2026-07-02.md` for the most recent work
-> (Photoshop-Parity Roadmap + F1 float32 pipeline + F4 spot heal + F6 look-from-reference).
+> **Latest session:** See `docs/review/session/SESSION_PROGRESS_2026-08-19.md` for the most recent work
+> (OKlab matrix fix, detection recall fixes, security hardening, tone-invariance sweep, GUI split).
 >
 > **Previous sessions:**
+> - `docs/review/session/SESSION_PROGRESS_2026-08-15.md` — Advanced Retouch provenance/delivery contract, Safe Auto confidence fix
+> - `docs/review/session/SESSION_PROGRESS_2026-07-02.md` — Photoshop-Parity Roadmap + F1 float32 pipeline + F4 spot heal + F6 look-from-reference
 > - `docs/review/session/SESSION_PROGRESS_2026-07-01.md` — Audit close-out, Pre-Phase 0, Phase 1.a-d pipeline
 > - `docs/review/session/SESSION_PROGRESS_2026-06-24.md` — Stage A/B anime skin primitives
 > - `docs/review/session/SESSION_PROGRESS_2026-06-23.md` — Frequency separation + skin processor
