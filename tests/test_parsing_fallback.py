@@ -637,3 +637,117 @@ class TestBiSenetSkinClippedToLandmarkOval:
         # Overall coverage should stay substantial — clipping only removes
         # the true boundary/background, not the bulk of a real face.
         assert result.skin.mean() > 0.15
+
+
+# ---------------------------------------------------------------------------
+# Output-layout / NaN guards (_sanitize_bisenet_logits) — a model swap or
+# re-export returning NHWC, wrong class count, or NaN logits must fall back
+# or produce finite masks, never silent garbage.
+# ---------------------------------------------------------------------------
+
+
+class TestBiSeNetOutputGuards:
+    def _parser_with_session(self, run_return_value=None, side_effect=None):
+        mock_sess = MagicMock()
+        if side_effect is not None:
+            mock_sess.run.side_effect = side_effect
+        else:
+            mock_sess.run.return_value = run_return_value
+        parser = FaceParser()
+        parser._sess = mock_sess
+        return parser
+
+    def test_nhwc_output_falls_back_to_landmarks(self):
+        # NHWC (1, 512, 512, 19) — right elements, wrong layout. Pre-guard,
+        # argmax(axis=0) over 512 channels produced silent garbage.
+        logits = np.zeros((1, 512, 512, 19), dtype=np.float32)
+        logits[0, :, :, 1] = 10.0  # skin channel in NHWC layout
+        parser = self._parser_with_session([logits])
+
+        img = np.full((200, 200, 3), 128, dtype=np.uint8)
+        landmarks = _make_random_landmarks()
+
+        result = parser.parse(landmarks, img, (50, 50, 100, 100), None, 50.0)
+        # No crash; landmark fallback produced valid masks.
+        assert isinstance(result, FaceRegions)
+        assert result.skin is not None
+        assert result.skin.max() >= 0.01
+        assert np.isfinite(result.skin).all()
+
+    def test_wrong_class_count_raises_in_parse_but_falls_back(self):
+        logits = np.zeros((1, 17, 512, 512), dtype=np.float32)
+        logits[:, 1, :, :] = 10.0
+        parser = self._parser_with_session([logits])
+
+        img = np.full((200, 200, 3), 128, dtype=np.uint8)
+        landmarks = _make_random_landmarks()
+
+        result = parser.parse(landmarks, img, (50, 50, 100, 100), None, 50.0)
+        assert isinstance(result, FaceRegions)
+        assert result.skin is not None
+
+    def test_hair_full_image_17_channel_returns_none(self):
+        # exp_logits[17] indexing used to sit outside the try block →
+        # IndexError propagated up through _stage_body_skin → batch crash.
+        logits = np.zeros((1, 17, 512, 512), dtype=np.float32)
+        logits[:, 1, :, :] = 5.0
+        parser = self._parser_with_session([logits])
+
+        hair = parser.parse_hair_full_image(np.full((80, 120, 3), 128, dtype=np.uint8))
+        assert hair is None
+
+    def test_hair_full_image_nhwc_returns_none(self):
+        logits = np.zeros((1, 512, 512, 19), dtype=np.float32)
+        parser = self._parser_with_session([logits])
+
+        hair = parser.parse_hair_full_image(np.full((80, 120, 3), 128, dtype=np.uint8))
+        assert hair is None
+
+    def test_nan_logits_parse_produces_finite_masks(self):
+        logits = _make_fake_logits()
+        logits[:, 1, 100:200, 100:200] = np.nan
+        parser = self._parser_with_session([logits])
+
+        img = np.full((200, 200, 3), 128, dtype=np.uint8)
+        landmarks = _make_random_landmarks()
+
+        result = parser.parse(landmarks, img, (50, 50, 100, 100), None, 50.0)
+        assert result.skin is not None
+        assert np.isfinite(result.skin).all()
+        assert result.skin.dtype == np.float32
+
+    def test_nan_logits_hair_full_image_produces_finite_mask(self):
+        logits = np.full((1, 19, 512, 512), -20.0, dtype=np.float32)
+        logits[:, 1, :, :] = 5.0
+        logits[:, 17, :, :] = 4.8
+        logits[:, 17, 0:100, :] = np.nan
+        parser = self._parser_with_session([logits])
+
+        hair = parser.parse_hair_full_image(np.full((80, 120, 3), 128, dtype=np.uint8))
+        assert hair is not None
+        assert np.isfinite(hair).all()
+        assert hair.min() >= 0.0 and hair.max() <= 1.0
+
+    def test_valid_logits_still_pass_through(self):
+        # Guard must not break the happy path: CHW (1, 19, 512, 512).
+        logits = _make_fake_logits()
+        parser = self._parser_with_session([logits])
+
+        img = np.full((200, 200, 3), 128, dtype=np.uint8)
+        landmarks = _make_random_landmarks()
+
+        result = parser.parse(landmarks, img, (50, 50, 100, 100), None, 50.0)
+        assert result.skin.max() > 0.5
+
+    def test_parse_batch_nhwc_falls_back_per_face(self):
+        logits = np.zeros((1, 512, 512, 19), dtype=np.float32)
+        parser = self._parser_with_session([logits])
+
+        img = np.full((200, 200, 3), 128, dtype=np.uint8)
+        landmarks = _make_random_landmarks()
+
+        results = parser.parse_batch([img], [landmarks], [(50, 50, 100, 100)], [None], [50.0])
+        assert len(results) == 1
+        assert isinstance(results[0], FaceRegions)
+        assert results[0].skin is not None
+        assert np.isfinite(results[0].skin).all()

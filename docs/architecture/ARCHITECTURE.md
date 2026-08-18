@@ -193,7 +193,8 @@ float32 `[0,1]` variants of the uint8 tonal operators.
 ## 4. Module map
 
 All pipeline-stage modules live in `retouch/`. Entry points (`gui.py`,
-`cli.py`) are thin per `AGENTS.md`.
+`gui_advanced.py`, `gui_shoot.py`, `gui_batch.py`, `cli.py`) are thin
+per `AGENTS.md`.
 
 ### Engine & orchestration
 
@@ -245,6 +246,9 @@ All pipeline-stage modules live in `retouch/`. Entry points (`gui.py`,
 | Module | Role |
 |--------|------|
 | `style.py` / `style_library.py` / `style_transfer.py` | `StyleProfile` learning, dataset style extraction, subject-aware color transfer. |
+| `advanced_contract.py` | Provenance/delivery truth contracts for Advanced Retouch output. |
+| `shoot_review.py` + `watch_folder.py` | Shoot/review workflow + watch-folder state machine. |
+| `harmony.py` | Face-anchored body mask (tone harmony between face and body). |
 | `io.py` | `imread_exif`, export resolution/format maps. |
 | `model_fetch.py` | ONNX/TFLite model download. |
 | `regions.py` | Region-mask geometry helpers. |

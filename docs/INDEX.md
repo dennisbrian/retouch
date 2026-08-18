@@ -8,7 +8,6 @@
 - `RECIPE_GUIDE.md` — Creating custom presets
 - `GUI.md` — Gradio UI layout & components
 - `BATCH_GUIDE.md` — Batch processing via CLI
-- `RECIPE_SWEEP.md` — Single-photo recipe sweeps and folder visual QA
 - `PERFORMANCE_TUNING.md` — Optimization tips
 - `COLOR_DELIVERY_TRUTH.md` — Working-space, precision, preview, and export contracts
 - `TROUBLESHOOTING.md` — Common issues & fixes
@@ -23,6 +22,7 @@
 
 ## Film / color (`docs/`)
 - `FUJI_SIMS_GUIDE.md` — Fuji film simulation recipes
+- `RECIPE_SWEEP.md` — Single-photo recipe sweeps and folder visual QA
 
 ## Plans (`docs/plans/`)
 - `MASTER_PLAN.md` — Overall roadmap

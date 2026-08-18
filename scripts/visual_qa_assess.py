@@ -79,14 +79,14 @@ def main():
     from retouch.parsing import FaceParser
     parser = FaceParser()
     # need a face bbox + landmarks: reuse engine internals lightly
-    from retouch.detection import RetinaFaceDetector
-    det = RetinaFaceDetector()
+    from retouch.detection import FaceDetector
+    det = FaceDetector()
     faces = det.detect(img)
     if faces:
         f = faces[0]
         # landmarks via mediapipe through engine? use parser with dummy landmarks not possible.
         # Instead place vessels near eye using retinaface bbox eyes approx.
-        x, y, fw, fh = f["box"]
+        x, y, fw, fh = f.bbox
         eye_y = int(y + fh*0.42)
         eye_lx = int(x + fw*0.35)
         eye_rx = int(x + fw*0.65)

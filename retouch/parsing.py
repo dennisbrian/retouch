@@ -28,6 +28,31 @@ logger = logging.getLogger(__name__)
 # One-shot flag so the guided-filter fallback notice doesn't repeat per mask/face.
 _GUIDED_FALLBACK_WARNED = False
 
+# BiSeNet contract: 19-class CHW logits at fixed 512x512 spatial resolution.
+_BISENET_CLASSES = 19
+_BISENET_SPATIAL = (512, 512)
+
+
+def _sanitize_bisenet_logits(logits: np.ndarray, source: str) -> np.ndarray:
+    """Validate BiSeNet output layout and scrub NaNs.
+
+    A model swap/re-export returning NHWC layout or a different class
+    count would otherwise argmax/softmax over the wrong axis and silently
+    corrupt every mask. Raises ValueError so callers take their existing
+    fallback paths instead. NaNs are replaced with -1e4 (argmax then picks
+    a valid class; softmax saturates safely).
+    """
+    if logits.ndim == 4:
+        ok = logits.shape[1] >= _BISENET_CLASSES and logits.shape[2:] == _BISENET_SPATIAL
+    else:
+        ok = logits.ndim == 3 and logits.shape[0] >= _BISENET_CLASSES and logits.shape[1:] == _BISENET_SPATIAL
+    if not ok:
+        raise ValueError(
+            f"{source}: unexpected BiSeNet logits shape {logits.shape}; "
+            f"expected CHW (>= {_BISENET_CLASSES}, {_BISENET_SPATIAL[0]}, {_BISENET_SPATIAL[1]})"
+        )
+    return np.nan_to_num(logits.astype(np.float32, copy=False), nan=-1e4)
+
 
 def _masks_from_label_map(
     full_label_map: np.ndarray,
@@ -315,7 +340,7 @@ class FaceParser:
 
                     # Run inference
                     outs = self._sess.run(None, {'input': crop_input})
-                    logits = outs[0][0]  # shape (19, 512, 512)
+                    logits = _sanitize_bisenet_logits(outs[0][0], "parse")  # (19, 512, 512)
                     pred_crop = np.argmax(logits, axis=0).astype(np.uint8)
 
                     # Resize back to crop size
@@ -396,10 +421,10 @@ class FaceParser:
 
         try:
             outs = self._sess.run(None, {"input": img_input})
+            logits = _sanitize_bisenet_logits(outs[0][0], "parse_hair_full_image")
         except Exception:
             return None
 
-        logits = outs[0][0].astype(np.float32)
         # Stable softmax.  The full-frame model is deliberately a weak,
         # coarse cue; retaining probability lets downstream masking reduce
         # its influence where the hair class is uncertain.
@@ -508,7 +533,7 @@ class FaceParser:
 
                 try:
                     outs = self._sess.run(None, {'input': sub_batch})
-                    logits = outs[0] # shape (B, 19, 512, 512)
+                    logits = _sanitize_bisenet_logits(outs[0], "parse_batch")  # (B, 19, 512, 512)
                     for b in range(len(sub_inputs)):
                         logits_list.append(logits[b])
                 except Exception as e:
@@ -520,12 +545,14 @@ class FaceParser:
                     for b_in in sub_inputs:
                         single_batch = b_in[np.newaxis, :, :, :]
                         outs_single = self._sess.run(None, {'input': single_batch})
-                        logits_list.append(outs_single[0][0])
+                        logits_list.append(
+                            _sanitize_bisenet_logits(outs_single[0][0], "parse_batch(single)")
+                        )
 
             # 3. Postprocess and paste back in order (preserves input index positioning)
             for idx_valid, idx_face in enumerate(valid_indices):
                 cx1, cy1, cx2, cy2, cw, ch, h_img, w_img = crop_coords[idx_valid]
-                logits = logits_list[idx_valid]
+                logits = _sanitize_bisenet_logits(logits_list[idx_valid], "parse_batch(post)")
 
                 pred_crop = np.argmax(logits, axis=0).astype(np.uint8)
                 pred_crop_resized = cv2.resize(pred_crop, (cw, ch), interpolation=cv2.INTER_NEAREST)

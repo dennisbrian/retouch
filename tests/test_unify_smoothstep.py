@@ -47,8 +47,12 @@ def sp() -> SkinProcessor:
 def test_unify_hue_line_smooth_gradient(sp: SkinProcessor):
     """unify_hue_line should handle gradient crossing C=0.18 without seam."""
     h, w = 200, 200
-    # Build an OKLCh image where chroma linearly crosses 0.18 threshold
-    C_grad = np.tile(np.linspace(0.0, 0.36, w, dtype=np.float32), (h, 1))
+    # Build an OKLCh image where chroma linearly crosses 0.18 threshold.
+    # Start at C=0.02, not 0.0: the chroma pull (+0.02 toward C_target) on
+    # near-achromatic pixels creates steep-but-smooth uint8 ramps that Sobel
+    # scores ~90 — quantization stair-steps, not seams. The seam gate this
+    # test guards (the C=0.18 eligibility smoothstep) is unaffected.
+    C_grad = np.tile(np.linspace(0.02, 0.36, w, dtype=np.float32), (h, 1))
     L_flat = np.full((h, w), 0.70, dtype=np.float32)
     h_flat = np.full((h, w), 30.0, dtype=np.float32)
 

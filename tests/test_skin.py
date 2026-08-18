@@ -416,6 +416,57 @@ class TestSpecularBloom:
         assert np.all(result == dark)
 
 
+class TestSpecularBloomToneInvariance:
+    """apply_specular_bloom's highlight gate must anchor to the subject's own
+    skin baseline (median LAB L over the mask, +15/+55 ramp -- same
+    margin-above-baseline design as specular.py::extract_specular), not a
+    fixed L>220: on dark skin (base L 60-90, sheen tops out ~130-170) the
+    absolute gate never fired, making the dewy bloom a light-skin-only
+    effect (same absolute-threshold bug class as the whiten() fix above)."""
+
+    @staticmethod
+    def _lab_bgr(l_base, a_base, b_base, sheen_l, h=64, w=64, seed=3):
+        """Dark skin (LAB L=l_base) with a genuine desaturated sheen patch
+        (L=sheen_l) -- sheen margin is (sheen_l - l_base)."""
+        rng = np.random.RandomState(seed)
+        lab = np.zeros((h, w, 3), dtype=np.uint8)
+        lab[:, :, 0] = np.clip(l_base + rng.normal(0, 2, (h, w)), 0, 255)
+        lab[:, :, 1] = a_base
+        lab[:, :, 2] = b_base
+        lab[24:40, 24:40, 0] = np.clip(sheen_l + rng.normal(0, 2, (16, 16)), 0, 255)
+        lab[24:40, 24:40, 1] = 128  # sheen is desaturated
+        lab[24:40, 24:40, 2] = 128
+        return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+    def test_dark_skin_sheen_now_blooms(self, proc):
+        """Fitzpatrick VI base (LAB L~60) + sheen at +60 (L~120): genuine
+        specular margin, far below the old fixed 220 gate -- was a no-op
+        pre-fix, must now bloom."""
+        img = self._lab_bgr(60, 135, 140, sheen_l=120)
+        mask = np.ones((64, 64), dtype=np.float32)
+        out = proc.apply_specular_bloom(img, mask, strength=50)
+        assert not np.array_equal(out, img), "dark-skin sheen must bloom post-fix"
+        sheen_out = cv2.cvtColor(out, cv2.COLOR_BGR2LAB).astype(np.float32)
+        assert sheen_out[24:40, 24:40, 0].mean() > 120.0
+
+    def test_light_skin_behavior_unchanged(self, proc):
+        """Light skin whose sheen sits above the old absolute gate (L 235 over
+        baseline ~215): still blooms, roughly the same patch."""
+        img = self._lab_bgr(215, 135, 140, sheen_l=235)
+        mask = np.ones((64, 64), dtype=np.float32)
+        out = proc.apply_specular_bloom(img, mask, strength=50)
+        assert not np.array_equal(out, img)
+
+    def test_no_margin_still_noop(self, proc):
+        """Flat dark skin (zero margin above its own baseline) stays a no-op
+        at every tone: baseline anchoring must not bloom plain diffuse skin."""
+        for l_base in (30, 90, 180):
+            img = self._lab_bgr(l_base, 135, 140, sheen_l=l_base)
+            mask = np.ones((64, 64), dtype=np.float32)
+            out = proc.apply_specular_bloom(img, mask, strength=50)
+            assert np.array_equal(out, img), f"flat L={l_base} skin must not bloom"
+
+
 class TestHighlightProtection:
     def test_dark_pixels_protected(self, proc):
         lab = np.zeros((10, 10, 3), dtype=np.float32)
@@ -978,6 +1029,78 @@ class TestUnifyTone:
         assert result.shape == img.shape
 
 
+class TestUnifyHueLineToneInvariance:
+    """unify_hue_line's dark-feature floor must anchor to the subject's own
+    skin-median OKLCh L (margin-below-baseline ramp), not the fixed
+    0.25-0.50 ramp: Fitzpatrick VI skin sits at OKLab L ~= 0.35-0.50, right
+    inside that ramp, so deep skin was partially/fully excluded from hue/
+    chroma unification (same absolute-threshold bug class as the whiten()
+    fix -- see TestWhitenToneInvariance)."""
+
+    DEEP_BGR = (18, 26, 42)    # OKLab L ~0.236
+    LIGHT_BGR = (189, 208, 244)  # OKLab L ~0.883
+
+    @staticmethod
+    def _oklch_hue(img):
+        return oklab_to_oklch(bgr_to_oklab(img))[..., 2]
+
+    def test_deep_skin_now_eligible(self, proc):
+        """Deep-tone face with hue off-target: pre-fix the fixed 0.25-0.50
+        ramp zeroed eligibility (L~0.24-0.30 -> gate ~0), so unify was a
+        no-op; post-fix the skin-median-relative floor keeps it eligible."""
+        mask = np.ones((64, 64), dtype=np.float32)
+        deep = np.tile(np.array(self.DEEP_BGR, np.uint8), (64, 64, 1))
+        # Push hue off the deep locus target (58 deg): cool the tone.
+        deep[:, :, 0] = np.clip(deep[:, :, 0].astype(int) + 18, 0, 255)
+        locus = {"h_target": 58.0, "C_target": 0.125}  # SKIN_LOCI["deep"]
+        out = proc.unify_hue_line(deep, mask, hue_strength=100, chroma_strength=0, locus=locus)
+
+        def circ_dist(h, target):
+            return abs((h - target + 180.0) % 360.0 - 180.0)
+
+        d_in = circ_dist(self._oklch_hue(deep)[mask > 0.3].mean(), 58.0)
+        d_out = circ_dist(self._oklch_hue(out)[mask > 0.3].mean(), 58.0)
+        assert d_out < d_in, "deep skin must move toward the locus"
+
+    def test_light_skin_eligibility_unchanged(self, proc):
+        """Light skin (L~0.88, well above both old 0.50 edge and any relative
+        floor) stays fully eligible: hue moves toward the fair locus target."""
+        mask = np.ones((64, 64), dtype=np.float32)
+        light = np.tile(np.array(self.LIGHT_BGR, np.uint8), (64, 64, 1))
+        light[:, :, 0] = np.clip(light[:, :, 0].astype(int) + 15, 0, 255)
+        locus = {"h_target": 45.0, "C_target": 0.085}  # SKIN_LOCI["fair"]
+        out = proc.unify_hue_line(light, mask, hue_strength=100, chroma_strength=0, locus=locus)
+
+        def circ_dist(h, target):
+            return abs((h - target + 180.0) % 360.0 - 180.0)
+
+        d_in = circ_dist(self._oklch_hue(light)[mask > 0.3].mean(), 45.0)
+        d_out = circ_dist(self._oklch_hue(out)[mask > 0.3].mean(), 45.0)
+        assert d_out < d_in, "light skin must still move toward the locus"
+
+    def test_hair_still_protected_relative_to_median(self, proc):
+        """The floor exists to keep hair/shadow out. Pixels 0.20+ below the
+        skin median stay excluded even when the whole face is deep-toned
+        (pre-fix intent) -- the relative gate keeps that protection. Hue
+        shift (not raw BGR delta) is asserted because near-black pixels
+        roundtrip through OKLab with ±1 uint8 rounding noise."""
+        mask = np.ones((64, 64), dtype=np.float32)
+        img = np.tile(np.array((45, 60, 92), np.uint8), (64, 64, 1))  # skin L~0.39
+        img[0:16, 0:16] = np.tile(np.array((12, 16, 26), np.uint8), (16, 16, 1))  # hair L~0.19
+        locus = {"h_target": 58.0, "C_target": 0.125}
+        out = proc.unify_hue_line(img, mask, hue_strength=100, chroma_strength=0, locus=locus)
+        h_in = self._oklch_hue(img)
+        h_out = self._oklch_hue(out)
+
+        def circ_d(a, b):
+            return abs((a - b + 180.0) % 360.0 - 180.0)
+
+        # Skin block hue moves toward 58; hair block hue is held (eligible~0).
+        skin_shift = circ_d(h_in[32, 32], 58.0) - circ_d(h_out[32, 32], 58.0)
+        hair_shift = circ_d(h_in[0, 0], 58.0) - circ_d(h_out[0, 0], 58.0)
+        assert skin_shift > hair_shift + 2.0, (skin_shift, hair_shift)
+
+
 class TestSmoothUndereyeShadow:
     """Tests for SkinProcessor.smooth_undereye_shadow."""
 
@@ -987,8 +1110,9 @@ class TestSmoothUndereyeShadow:
 
         ``shadow_specs``: list of (rows_slice, cols_slice, shadow_l, noise_std)
         painted as textured under-eye shadows (L kept in the realistic 40-120
-        range so the ``L>40`` blemish guard never clips them). ``extra_blocks``:
-        list of (rows_slice, cols_slice, bgr) painted as plain blocks.
+        range so shadows stay well inside the zone-median-relative gate).
+        ``extra_blocks``: list of (rows_slice, cols_slice, bgr) painted as
+        plain blocks.
         """
         h = w = 120
         rng = np.random.default_rng(7)
@@ -997,7 +1121,7 @@ class TestSmoothUndereyeShadow:
         lab[:, :, 1] = 128
         lab[:, :, 2] = 128
         for (rs, cs, sl, ns) in shadow_specs:
-            sl_arr = np.clip(sl + rng.normal(0.0, ns, (rs.stop - rs.start, cs.stop - cs.start)), 50, 120)
+            sl_arr = np.clip(sl + rng.normal(0.0, ns, (rs.stop - rs.start, cs.stop - cs.start)), 2, 200)
             lab[rs, cs, 0] = sl_arr.astype(np.uint8)
         img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
         if extra_blocks:
@@ -1052,11 +1176,13 @@ class TestSmoothUndereyeShadow:
         # Mask covers cols 40:80; the LEFT half is a high-contrast dark shadow
         # (bright skin on the right pulls the within-mask median up so the whole
         # shadow qualifies), giving the guided filter strong texture to smooth.
+        # Noise center L~85 sits comfortably inside the zone-median-relative
+        # shadow window (median~124, so [64, 109]).
         lab = np.zeros((h, w, 3), dtype=np.uint8)
         lab[:, :, 0] = 137
         lab[:, :, 1] = 128
         lab[:, :, 2] = 128
-        noisy = np.clip(70 + rng.normal(0.0, 18.0, (40, 20)), 50, 120).astype(np.uint8)
+        noisy = np.clip(85 + rng.normal(0.0, 18.0, (40, 20)), 55, 110).astype(np.uint8)
         lab[40:80, 40:60, 0] = noisy
         img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
         mask = np.zeros((h, w), dtype=np.float32)
@@ -1128,7 +1254,9 @@ class TestSmoothUndereyeShadow:
         ue_mask = (((xx - 60) ** 2 / 30 ** 2 + (yy - 140) ** 2 / 18 ** 2) <= 1.0).astype(np.float32)
         skin = np.ones((H, W), np.float32)
         cy, cx = 140, 60  # small dark patch inside the mask -> coverage ~0.2
-        img[cy - 8:cy + 8, cx - 10:cx + 10] = (95, 75, 65)
+        # Patch L~135 vs zone median ~176: delta ~41, inside the
+        # zone-median-relative shadow window [median-60, median-15].
+        img[cy - 8:cy + 8, cx - 10:cx + 10] = (150, 128, 112)
 
         out_high = proc.smooth_undereye_shadow(
             img, under_eye_masks=[ue_mask], skin_mask=skin, strength=1.0, feather_radius=3
@@ -1140,6 +1268,45 @@ class TestSmoothUndereyeShadow:
         d_low = int(np.abs(out_low.astype(int) - img.astype(int)).sum())
         assert d_high > 0, "high strength should treat a mild dark circle"
         assert d_low == 0, "low strength should skip (coverage below the gate)"
+
+    def test_deep_skin_dark_circle_detected(self, proc):
+        """Fairness regression: on deep skin (zone LAB L ~35, dark circle
+        L ~18) the old absolute ``L > 40`` floor excluded the ENTIRE zone,
+        so dark circles on the darkest tones were never treated. The
+        margin-below-zone-median gate must fire: pixels 17+ units below the
+        zone median qualify at any absolute L."""
+        # Zone: mostly L=35 deep skin, dark-circle patch at L=18 (delta 17).
+        img = self._build_lab_image(
+            skin_l=35,
+            shadow_specs=[(slice(56, 70), slice(40, 70), 18.0, 2.0)],
+        )
+        ue_mask = np.zeros((120, 120), dtype=np.float32)
+        ue_mask[40:70, 40:70] = 1.0
+        out = proc.smooth_undereye_shadow(
+            img, under_eye_masks=[ue_mask], skin_mask=np.ones((120, 120), np.float32),
+            strength=1.0, feather_radius=3,
+        )
+        # Pre-fix: shadow mask empty (L 18 < 40 floor) -> coverage 0 -> skip
+        # -> byte-identical output. Post-fix the circle is smoothed.
+        assert not np.array_equal(out, img), "deep-skin dark circle must be treated"
+
+    def test_shadow_gate_is_relative_not_absolute(self, proc):
+        """Same relative geometry at light and dark absolute levels must both
+        fire: a circle 30 L-units below the zone median heals at L~137 (light)
+        and L~35 (dark) alike; noise-only zones with no deep pixels stay
+        untouched."""
+        for skin_l in (137, 35):
+            img = self._build_lab_image(
+                skin_l=skin_l,
+                shadow_specs=[(slice(50, 66), slice(45, 75), float(skin_l - 30), 3.0)],
+            )
+            ue_mask = np.zeros((120, 120), dtype=np.float32)
+            ue_mask[40:70, 40:70] = 1.0
+            out = proc.smooth_undereye_shadow(
+                img, under_eye_masks=[ue_mask], skin_mask=np.ones((120, 120), np.float32),
+                strength=1.0, feather_radius=3,
+            )
+            assert not np.array_equal(out, img), f"skin_l={skin_l}: relative circle must be treated"
 
 
 class _FakeWrinkleRegions:

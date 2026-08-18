@@ -16,7 +16,7 @@ This is a **production-grade image processing engine** that applies professional
 - Color grading + Fuji film simulation presets
 - Virtual studio relighting + advanced lens effects
 
-**~51k LOC (retouch/*.py + gui.py + cli.py), 86 modules in retouch/, 4,125 tests collected (pytest --collect-only, 2026-07-26).**
+**~71k LOC (retouch/*.py + gui.py/gui_advanced.py/gui_shoot.py/gui_batch.py + cli.py), 112 modules in retouch/, 4,490 tests collected (pytest --collect-only, 2026-08-18).**
 
 ---
 
@@ -122,7 +122,7 @@ prefer `--max-dim 2048` or `quality="draft"` for multi-recipe sweeps.
 
 ### Audit Status
 - **Security:** No hardcoded secrets, API keys, or absolute paths
-- **Performance:** Benchmarked at 702ms per-face (400×400), 6.9ms for no-face global-only
+- **Performance:** Benchmarked at 702ms per-face (400×400, detection mocked, 2026-06-23 benchmark), 4.7ms for no-face global-only (400×400, legacy median, 2026-08-18)
 - **Process:** Weekly syntax checks, monthly algorithmic re-audit (`docs/review/AUDIT_REPORT.md` — last cycle 2026-07-06; report's own §0 flags its Cycle 3 verdict as superseded by `docs/review/TEST_REPORT_2026-07-04.md`, so read past the executive summary before citing it as current status)
 
 ### Known Limitations

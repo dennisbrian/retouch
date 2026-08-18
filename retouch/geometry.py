@@ -36,6 +36,15 @@ _MAX_RADIUS_FRAC = 0.5
 # Number of radial translation warps used to compose a scale warp (§2.3).
 _SCALE_RING_N = 8
 
+# Yaw gate (profile-view guard). MediaPipe jaw-landmark reliability degrades
+# on yawed faces, so warps keyed on 234/454/152 mis-scale lopsidedly. Warp
+# strength ramps smoothly 1.0 -> 0.0 between these yaw_ratio values (same
+# ratio formula as skin.py's neck gate). skin.py hard-gates at 1.3 because
+# that marks neck-depth-plane onset; slimming still tolerates mild yaw, so
+# the ramp starts at 1.3 and zeroes at 1.6 (strong three-quarter view).
+_YAW_DAMPEN_START = 1.3
+_YAW_DAMPEN_END = 1.6
+
 # Landmark index for the nose-bridge center, used as the facial vertical mirror
 # axis for bilateral symmetry (§6.3).
 _NOSE_BRIDGE_CENTER_IDX = 168
@@ -165,6 +174,16 @@ class FaceReshaper:
 
             if fw > max_face_width:
                 max_face_width = fw
+
+            # Yaw gate: dampen jaw-keyed warps on yawed faces (see
+            # _YAW_DAMPEN_START comment). Frontal faces get factor 1.0 →
+            # byte-identical warps.
+            yaw_damp = self._yaw_dampen_factor(landmarks)
+            slimming_val *= yaw_damp
+            reshape_vals["jaw_width"] *= yaw_damp
+            reshape_vals["chin_length"] *= yaw_damp
+            side_vals["jaw_width_l"] *= yaw_damp
+            side_vals["jaw_width_r"] *= yaw_damp
 
             warps.extend(self._slimming_warps(landmarks, fw, slimming_val, h, w))
 
@@ -710,6 +729,24 @@ class FaceReshaper:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _yaw_dampen_factor(landmarks: Any) -> float:
+        """Smoothstep 1.0 → 0.0 warp-strength factor vs. face yaw.
+
+        yaw_ratio = max/min of the nose-tip (6) → left/right-ear (234/454)
+        x-distances — same formula as skin.py's neck gate. 1.0 for frontal
+        faces (ratio ≤ 1.3), 0.0 for strong profiles (ratio ≥ 1.6).
+        """
+        d_left = abs(landmarks[6].x - landmarks[234].x)
+        d_right = abs(landmarks[454].x - landmarks[6].x)
+        yaw_ratio = max(d_left, d_right) / (min(d_left, d_right) + 1e-5)
+        if yaw_ratio <= _YAW_DAMPEN_START:
+            return 1.0
+        if yaw_ratio >= _YAW_DAMPEN_END:
+            return 0.0
+        t = (yaw_ratio - _YAW_DAMPEN_START) / (_YAW_DAMPEN_END - _YAW_DAMPEN_START)
+        return float(t * t * (3.0 - 2.0 * t))
 
     @staticmethod
     def _face_width(landmarks: Any, w: int) -> float:

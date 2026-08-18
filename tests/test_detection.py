@@ -911,3 +911,205 @@ class TestDelegateSelection:
         monkeypatch.setenv("RETUCH_GPU", value)
 
         assert FaceDetector._resolve_delegate(self._Base) is self._Base.Delegate.GPU
+
+
+# ---------------------------------------------------------------------------
+# RetinaFace integration behaviors (F1/F2/F4/F8 regression tests)
+# ---------------------------------------------------------------------------
+
+
+def _fake_retinaface(resp):
+    """sys.modules entry mimicking the real package: `retinaface.RetinaFace`
+    is a submodule, so `from retinaface import RetinaFace` yields it and
+    `RetinaFace.detect_faces(img, threshold=...)` hits the mock."""
+    module = MagicMock()
+    module.RetinaFace.detect_faces.return_value = resp
+    # `from retinaface import RetinaFace` must return the submodule mock,
+    # not trigger __getattr__ on the package mock's attribute.
+    module.RetinaFace = module.RetinaFace
+    return module
+
+
+def _bare_detector(landmarker=None):
+    """Build a FaceDetector without __init__ (no MediaPipe runtime needed)."""
+    detector = FaceDetector.__new__(FaceDetector)
+    detector.max_faces = 10
+    detector.min_confidence = 0.4
+    detector.available = True
+    detector.backend_name = "mediapipe_tasks"
+    detector.unavailable_reason = None
+    detector._legacy_mesh = None
+    detector._legacy_segmenter = None
+    detector._landmarker = landmarker if landmarker is not None else MagicMock()
+    detector._segmenter = None
+    return detector
+
+
+class TestRetinaFacePassthrough:
+    """F1/F2: detect() must forward the engine threshold and hand the BGR
+    image to ``RetinaFace.detect_faces`` (the pip package's preprocess
+    expects BGR — it reverses channels internally)."""
+
+    def test_threshold_passed_to_retinaface(self):
+        detector = _bare_detector()
+        rf_module = MagicMock()
+        rf_module.RetinaFace.detect_faces.return_value = {}
+        try:
+            with patch.dict(sys.modules, {"retinaface": rf_module}):
+                detector.detect(np.zeros((100, 100, 3), dtype=np.uint8))
+        finally:
+            detector.close()
+
+        detect_faces = rf_module.RetinaFace.detect_faces
+        assert detect_faces.call_count == 1
+        kwargs = detect_faces.call_args.kwargs
+        assert "threshold" in kwargs
+        assert kwargs["threshold"] == pytest.approx(detector.min_confidence)
+
+    def test_bgr_image_passed_to_retinaface(self):
+        # Channel evidence: build an image whose R and B channels differ,
+        # then assert the array handed to RetinaFace equals the BGR input
+        # (not the RGB conversion).
+        detector = _bare_detector()
+        img = np.zeros((40, 60, 3), dtype=np.uint8)
+        img[:, :, 0] = 255  # B channel (BGR)
+        rf_module = MagicMock()
+        rf_module.RetinaFace.detect_faces.return_value = {}
+        try:
+            with patch.dict(sys.modules, {"retinaface": rf_module}):
+                detector.detect(img)
+        finally:
+            detector.close()
+
+        passed = rf_module.RetinaFace.detect_faces.call_args.args[0]
+        assert isinstance(passed, np.ndarray)
+        assert np.array_equal(passed, img)
+
+
+class TestDetectDedupKey:
+    """F8: dedup keys must include both x and y buckets — two faces at the
+    same x but different y must both survive the MediaPipe fallback merge."""
+
+    def test_same_x_different_y_both_kept(self):
+        # Two stacked faces: identical x spread, y separated by 0.4.
+        # Pre-fix, both dedup to the same x-bucket and one is dropped.
+        img = np.zeros((200, 200, 3), dtype=np.uint8)
+        top = _build_mock_landmarks(eye_sep=0.1)
+        bottom = _build_mock_landmarks(eye_sep=0.1)
+        for lm in bottom:
+            lm.y = min(0.99, lm.y + 0.4)
+
+        detector = _bare_detector()
+        detector._landmarker.detect.return_value = MagicMock(
+            face_landmarks=[top, bottom])
+        try:
+            with patch.dict(sys.modules, {"retinaface": None}):
+                faces = detector.detect(img)
+        finally:
+            detector.close()
+
+        assert len(faces) == 2
+        ys = sorted(f.bbox[1] for f in faces)
+        assert ys[1] - ys[0] >= 40  # ~0.4 * 200 px separation retained
+
+    def test_same_position_deduped(self):
+        # Identical position still collapses (dedup itself still works).
+        img = np.zeros((200, 200, 3), dtype=np.uint8)
+        lm_a = _build_mock_landmarks(eye_sep=0.1)
+        lm_b = _build_mock_landmarks(eye_sep=0.1)
+
+        detector = _bare_detector()
+        detector._landmarker.detect.return_value = MagicMock(
+            face_landmarks=[lm_a, lm_b])
+        try:
+            with patch.dict(sys.modules, {"retinaface": None}):
+                faces = detector.detect(img)
+        finally:
+            detector.close()
+
+        assert len(faces) == 1
+
+
+class TestSmallCropUpscaleRetry:
+    """F4: crops below ~256px are upscaled before the landmarker runs and
+    landmarks map back to full-image coordinates."""
+
+    def _make_landmarker(self, crop_shape_check, landmark_xy):
+        mock_landmarker = MagicMock()
+        result = MagicMock()
+
+        def fake_detect(mp_image):
+            data = mp_image.numpy_view().copy()
+            crop_shape_check(data)
+            # 478 landmarks all at the same (x, y) inside this crop, shaped
+            # so inter_eye_distance() can read iris indices.
+            lms = _build_mock_landmarks(eye_sep=0.0)
+            for lm in lms:
+                lm.x, lm.y = landmark_xy
+            result.face_landmarks = [lms]
+            return result
+
+        mock_landmarker.detect.side_effect = fake_detect
+        return mock_landmarker
+
+    def test_tiny_crop_upscaled_before_detect(self):
+        seen = []
+
+        def check(data):
+            seen.append(data.shape)
+
+        # Synthetic landmarks: centre of whatever crop is passed in.
+        mock_landmarker = self._make_landmarker(check, (0.5, 0.5))
+        detector = _bare_detector(mock_landmarker)
+
+        # 100x120 face box in a 300x300 image -> padded crop stays < 256.
+        resp = {"face_1": {"facial_area": [10, 10, 110, 130], "score": 0.8}}
+        img = np.zeros((300, 300, 3), dtype=np.uint8)
+        try:
+            with patch.dict(sys.modules, {"retinaface": _fake_retinaface(resp)}):
+                faces = detector.detect(img)
+        finally:
+            detector.close()
+
+        assert len(faces) == 1
+        # Every crop handed to the landmarker was upscaled: padded crop is
+        # 140x166 (box 100x120, pad 0.3, clamped at image edge), so the
+        # upscaled crop is 280x332 — >= 256 on the long side.
+        assert seen, "landmarker never invoked"
+        assert all(max(s[0], s[1]) >= 256 for s in seen), seen
+
+        # Landmark at crop centre remaps back to crop centre in full image:
+        # crop spans (0,0)-(140,166) -> centre (70, 83) on the 300x300 frame.
+        fd = faces[0]
+        lm = fd.landmarks.landmark[0]
+        assert lm.x == pytest.approx(70.0 / 300, abs=1e-6)
+        assert lm.y == pytest.approx(83.0 / 300, abs=1e-6)
+        # RetinaFace box is reported unmodified.
+        assert fd.bbox == (10, 10, 100, 120)
+        assert fd.confidence == pytest.approx(0.8)
+        assert fd.confidence_source == "retinaface"
+
+    def test_large_crop_not_resized(self):
+        seen = []
+
+        def check(data):
+            seen.append(data.shape)
+
+        mock_landmarker = self._make_landmarker(check, (0.5, 0.5))
+        detector = _bare_detector(mock_landmarker)
+
+        # 400x400 face box -> padded crop 400+2*70=540 (clamped pad at
+        # image edge), already >= 256.
+        resp = {"face_1": {"facial_area": [40, 40, 440, 440], "score": 0.9}}
+        img = np.zeros((600, 600, 3), dtype=np.uint8)
+        try:
+            with patch.dict(sys.modules, {"retinaface": _fake_retinaface(resp)}):
+                faces = detector.detect(img)
+        finally:
+            detector.close()
+
+        assert len(faces) == 1
+        assert seen and seen[0][:2] == (540, 540), seen
+        # No upscaling: crop passed at native padded size.
+        lm = faces[0].landmarks.landmark[0]
+        assert lm.x == pytest.approx((0.5 * 540 + 0) / 600, abs=1e-6)

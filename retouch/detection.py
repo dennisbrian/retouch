@@ -33,6 +33,14 @@ _SELFIE_SEGMENTER_MODEL = os.path.join(_MODELS_DIR, "selfie_segmenter.tflite")
 # wider pads are retried only when it returns no landmarks.
 _CROP_PAD_FRACTIONS = (0.3, 0.6, 1.0)
 
+# Small-crop upscale retry (F4): MediaPipe's landmarker fails once a crop
+# falls below ~256px, so tiny crops are upscaled ×2 (capped at 1024) before
+# the landmarker runs. Landmarks come back normalized [0,1], which is
+# scale-invariant under the resize, so the remap still uses the original
+# (pre-upscale) crop dims — no fold-back needed.
+_MIN_CROP_DIM = 256
+_MAX_CROP_DIM = 1024
+
 
 @dataclasses.dataclass
 class _Landmark:
@@ -326,9 +334,17 @@ class FaceDetector:
             return faces
 
         # 1. RetinaFace (pip) for bounding-box detection
+        # FIX F1: pass engine min_confidence — pip default threshold is 0.9,
+        # which silently drops occluded/downcast faces scoring 0.4-0.89.
+        # FIX F2: pass BGR — retinaface 0.0.18's preprocess.get_image
+        # documents ndarray input as BGR and preprocess_image reverses
+        # channels internally (`img[:, :, 2 - i]`); handing it RGB fed the
+        # model swapped channels and degraded scores.
         try:
             from retinaface import RetinaFace
-            resp = RetinaFace.detect_faces(img_rgb)
+            resp = RetinaFace.detect_faces(
+                img_bgr, threshold=self.min_confidence
+            )
         except ImportError:
             resp = None
         except Exception as exc:
@@ -386,6 +402,24 @@ class FaceDetector:
                         continue
 
                     crop_rgb = img_rgb[cy1:cy2, cx1:cx2]
+
+                    # MediaPipe's landmarker fails on crops below ~256px;
+                    # upscale small crops ×2 (cap 1024) before detection and
+                    # fold the scale back into the remap.
+                    landmark_scale = 1.0
+                    if cw < _MIN_CROP_DIM or ch < _MIN_CROP_DIM:
+                        landmark_scale = min(
+                            2.0,
+                            _MAX_CROP_DIM / float(max(cw, ch)),
+                        )
+                        if landmark_scale > 1.0:
+                            crop_rgb = cv2.resize(
+                                crop_rgb,
+                                (int(round(cw * landmark_scale)),
+                                 int(round(ch * landmark_scale))),
+                                interpolation=cv2.INTER_LINEAR,
+                            )
+
                     mp_crop = mp.Image(
                         image_format=mp.ImageFormat.SRGB, data=crop_rgb.copy()
                     )
@@ -393,7 +427,9 @@ class FaceDetector:
 
                     if crop_result.face_landmarks:
                         lm_list = crop_result.face_landmarks[0]
-                        remapped = self._remap_landmarks(lm_list, cx1, cy1, cw, ch, w, h)
+                        remapped = self._remap_landmarks(
+                            lm_list, cx1, cy1, cw, ch, w, h,
+                        )
                         compat = _LandmarkCompat(remapped)
                         ied = inter_eye_distance(compat, w, h)
                         faces.append(FaceData(
@@ -430,12 +466,14 @@ class FaceDetector:
             if result.face_landmarks:
                 existing = set()
                 for f in faces:
-                    existing.add(round(f.bbox[0] / 10) * 10)
+                    existing.add((round(f.bbox[0] / 10) * 10, round(f.bbox[1] / 10) * 10))
                 for lm_list in result.face_landmarks:
                     compat = _LandmarkCompat(lm_list)
                     bbox = self._bbox_from_landmarks(compat, w, h)
-                    # Deduplicate against faces already found via RetinaFace crop
-                    key = round(bbox[0] / 10) * 10
+                    # Deduplicate against faces already found via RetinaFace crop.
+                    # Key on both x and y buckets: x-only collides for faces
+                    # sharing an x column (stacked faces in portrait shots).
+                    key = (round(bbox[0] / 10) * 10, round(bbox[1] / 10) * 10)
                     if key in existing:
                         continue
                     existing.add(key)

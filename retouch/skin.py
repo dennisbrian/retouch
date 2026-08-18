@@ -355,8 +355,13 @@ class SkinProcessor:
 
             # Local median computed only over the under-eye zone (robust baseline).
             local_median = float(np.median(L[zone]))
+            # Shadow gate is margin-below-baseline only. The old absolute
+            # L>40 floor clipped genuine dark-circle shadows on deep skin
+            # (whole-zone L can sit below 40); the L<200 ceiling excluded
+            # nothing real. A soft floor at median-60 keeps stray black
+            # (nostril shadow spill) out without tone bias.
             shadow = (
-                (L < local_median - 15.0) & (L > 40.0) & (L < 200.0) & zone
+                (L < local_median - 15.0) & (L > local_median - 60.0) & zone
             ).astype(np.float32)
 
             # Morphological open strips sub-3x3 noise from the shadow map.
@@ -901,7 +906,12 @@ class SkinProcessor:
         strength: int = 40,
         tone: str = "rosy",
     ) -> np.ndarray:
-        """Generates a soft pink/lavender or neutral halo around skin highlights where L > 220.
+        """Generates a soft pink/lavender or neutral halo around skin highlights.
+
+        Highlights are detected as a margin above the subject's own skin
+        baseline (median LAB L over the mask, +15/+55 ramp — same
+        margin-above-baseline design as specular.py::extract_specular), so
+        genuine sheen blooms at every skin tone, not just light skin.
 
         Args:
             img_bgr: (H, W, 3) uint8 BGR image.
@@ -922,7 +932,14 @@ class SkinProcessor:
             lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
         l_chan = lab[:, :, 0]
 
-        highlight_mask = np.clip((l_chan - 220.0) / 20.0, 0.0, 1.0) * (skin_mask > 0.1).astype(np.float32)
+        # Highlight gate anchored to this face's own skin baseline (median
+        # LAB L over the skin mask), mirroring specular.py::extract_specular
+        # margins: a genuine sheen is +15..+55 above baseline. A fixed
+        # L>220 gate only fired on light skin (dark-skin sheen tops out
+        # ~130-170), making the dewy bloom a light-skin-only effect.
+        skin_sel = l_chan[skin_mask > 0.5]
+        baseline = float(np.median(skin_sel)) if skin_sel.size else 128.0
+        highlight_mask = np.clip((l_chan - baseline - 15.0) / 40.0, 0.0, 1.0) * (skin_mask > 0.1).astype(np.float32)
 
         if highlight_mask.max() < 0.01:
             return img_bgr
@@ -1282,7 +1299,10 @@ class SkinProcessor:
 
         Rotates hue toward a target (up to ±8°) and compresses chroma variance
         (up to ±0.04) while leaving luminance untouched. Protects high-chroma
-        regions (makeup/tattoo), dark features (hair/shadow), and specular highlights.
+        regions (makeup/tattoo), dark features (hair/shadow), and specular
+        highlights. The dark-feature floor is a margin below the subject's own
+        skin-median OKLCh L (not a fixed absolute level), so deep skin tones
+        (Fitzpatrick V-VI) stay eligible for unification.
 
         Supports both uint8 and float32 input. If input is float32 [0, 255], output is float32.
         If input is uint8, output is uint8.
@@ -1333,11 +1353,19 @@ class SkinProcessor:
         h = oklch[..., 2]
 
         # Eligibility mask: exclude high chroma (makeup/tattoo), very dark (hair/shadow), specular
+        # L floor is anchored to this face's own skin median: a fixed
+        # 0.25-0.50 OKLCh ramp sat right on Fitzpatrick VI skin (OKLab L
+        # ~= 0.35-0.50), partially/fully excluding deep tones from unify.
+        # The margin-below-baseline ramp keeps the same hair/shadow
+        # protection at every tone (same absolute-threshold bug class as
+        # whiten()'s fix, see skin.py Sec-17-style note above).
+        skin_idx = skin_mask > 0.3
+        L_med = float(np.median(L[skin_idx])) if np.any(skin_idx) else 0.5
         eligible = np.ones(img_bgr.shape[:2], dtype=np.float32)
         # Smoothstep gates instead of hard binary (prevents contour seams)
         eligible *= (1.0 - _smoothstep(0.0, 0.18, C))  # 1->0 as C goes 0->0.18 (high-chroma = ineligible)
-        eligible *= _smoothstep(0.25, 0.50, L)       # 0->1 as L goes 0.25->0.50
-        eligible *= (1.0 - _smoothstep(0.90, 0.95, L))  # 1->0 as L goes 0.90->0.95
+        eligible *= _smoothstep(L_med - 0.20, L_med - 0.08, L)  # 0->1 over [median-0.20, median-0.08]
+        eligible *= (1.0 - _smoothstep(0.90, 0.95, L))  # 1->0 as L goes 0.90->0.95 (physical white)
         eligible *= skin_mask  # Within skin mask
 
         # Hue rotation: shortest arc to target, clipped to ±8°

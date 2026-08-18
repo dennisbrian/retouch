@@ -37,9 +37,9 @@ class TestBgrToOklab:
         oklab = bgr_to_oklab(img)
         a = oklab[..., 1]
         b = oklab[..., 2]
-        # White is achromatic (a=b=0)
-        assert np.abs(a).max() < 0.03, f"a for white should be ≈0, got {np.abs(a).max()}"
-        assert np.abs(b).max() < 0.05, f"b for white should be ≈0, got {np.abs(b).max()}"
+        # White is achromatic (a=b=0) to float32 roundoff scale
+        assert np.abs(a).max() < 1e-3, f"a for white should be ≈0, got {np.abs(a).max()}"
+        assert np.abs(b).max() < 1e-3, f"b for white should be ≈0, got {np.abs(b).max()}"
 
     def test_black_pure(self):
         """Pure black should map to L≈0.0, C≈0."""
@@ -58,9 +58,9 @@ class TestBgrToOklab:
         oklab = bgr_to_oklab(img)
         a = oklab[..., 1]
         b = oklab[..., 2]
-        # Gray is achromatic, so a and b should be very small
-        assert np.abs(a).max() < 0.02, f"a max {np.abs(a).max()} should be near zero"
-        assert np.abs(b).max() < 0.03, f"b max {np.abs(b).max()} should be near zero"
+        # Gray is achromatic to float32 roundoff scale
+        assert np.abs(a).max() < 1e-3, f"a max {np.abs(a).max()} should be near zero"
+        assert np.abs(b).max() < 1e-3, f"b max {np.abs(b).max()} should be near zero"
 
     def test_output_shape_and_dtype(self):
         """Output should be (H, W, 3) float32."""
@@ -77,6 +77,48 @@ class TestBgrToOklab:
         assert (oklab[..., 0] >= 0.0).all() and (oklab[..., 0] <= 1.1).all(), "L out of range"
         assert (oklab[..., 1] >= -0.5).all() and (oklab[..., 1] <= 0.5).all(), "a out of range"
         assert (oklab[..., 2] >= -0.5).all() and (oklab[..., 2] <= 0.5).all(), "b out of range"
+
+
+class TestOklabAnchors:
+    """Regression anchors against Ottosson's reference Oklab values.
+
+    Guards the M1 matrix (linear sRGB -> LMS) against transcription drift:
+    a corrupted M1 row rotates hues and injects chroma into neutrals.
+    Reference values computed with the exact Ottosson M1/M2 from oklab.com.
+    """
+
+    def _oklch_of(self, r, g, b):
+        img = np.full((4, 4, 3), (b, g, r), dtype=np.uint8)
+        return oklab_to_oklch(bgr_to_oklab(img))[0, 0]
+
+    def test_pure_red_hue_anchor(self):
+        """Pure red sRGB primary must land at h≈29.2° (Ottosson reference)."""
+        _, _, h = self._oklch_of(255, 0, 0)
+        assert h == pytest.approx(29.2, abs=0.5), f"red hue {h}° should be ≈29.2°"
+
+    def test_pure_blue_ab_anchor(self):
+        """Pure blue sRGB primary must land at a≈-0.0325, b≈-0.3115."""
+        img = np.full((4, 4, 3), (255, 0, 0), dtype=np.uint8)  # BGR blue
+        oklab = bgr_to_oklab(img)[0, 0]
+        assert oklab[1] == pytest.approx(-0.0325, abs=1e-3), f"blue a {oklab[1]}"
+        assert oklab[2] == pytest.approx(-0.3115, abs=1e-3), f"blue b {oklab[2]}"
+
+    def test_white_achromatic_exact(self):
+        """White must have |a|, |b| < 1e-3 (float32 roundoff scale)."""
+        img = np.full((4, 4, 3), 255, dtype=np.uint8)
+        oklab = bgr_to_oklab(img)
+        assert np.abs(oklab[..., 1]).max() < 1e-3
+        assert np.abs(oklab[..., 2]).max() < 1e-3
+
+    def test_skin_swatch_fair_hue_anchor(self):
+        """Fair skin swatch RGB(241,184,166) must land at h≈38.2°."""
+        _, _, h = self._oklch_of(241, 184, 166)
+        assert h == pytest.approx(38.2, abs=1.0), f"fair swatch hue {h}° should be ≈38.2°"
+
+    def test_skin_swatch_deep_hue_anchor(self):
+        """Deep skin swatch RGB(92,60,44) must land at h≈47.3°."""
+        _, _, h = self._oklch_of(92, 60, 44)
+        assert h == pytest.approx(47.3, abs=1.0), f"deep swatch hue {h}° should be ≈47.3°"
 
 
 class TestOklabToBgr:
