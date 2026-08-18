@@ -1,6 +1,8 @@
 """Watch-folder stability and retry tests."""
 
 import json
+import multiprocessing
+import time
 from pathlib import Path
 
 from PIL import Image
@@ -13,9 +15,34 @@ from retouch.watch_folder import (
     WatchFolder,
 )
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None
+
 
 def _write_image(path: Path, value: int = 100) -> None:
     Image.new("RGB", (8, 8), (value, value, value)).save(path)
+
+
+def _wait_for(path: Path, timeout: float = 30.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not path.exists():
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"peer never signalled via {path}")
+        time.sleep(0.05)
+
+
+def _concurrent_writer(input_dir: str, state_path: str, image_name: str, ready: str, peer_ready: str) -> None:
+    """Load shared state, wait until the peer also loaded, then record one file and save."""
+    from retouch.watch_folder import WatchFolder, WatchRecord
+
+    watcher = WatchFolder(input_dir, state_path=state_path)
+    Path(ready).write_text("ready", encoding="utf-8")
+    _wait_for(Path(peer_ready))
+    record_path = str((Path(input_dir) / image_name).resolve())
+    watcher.state.records[record_path] = WatchRecord(path=record_path, signature="1:1")
+    watcher.save()
 
 
 def test_watch_folder_requires_two_stable_scans(tmp_path: Path):
@@ -420,3 +447,82 @@ def test_state_with_contained_paths_round_trips(tmp_path: Path):
     restored = WatchFolder(tmp_path, state_path=state_path)
     assert restored.state.jobs[job.job_id].status == "done"
     assert restored.queue_jobs(**kwargs) == []
+
+
+def test_concurrent_watchers_keep_both_updates(tmp_path: Path):
+    """Two processes on one state file must not lose each other's records."""
+    state = tmp_path / "watch.json"
+    ready_a = tmp_path.parent / (tmp_path.name + "-a.ready")
+    ready_b = tmp_path.parent / (tmp_path.name + "-b.ready")
+    ctx = multiprocessing.get_context("spawn")
+    proc_a = ctx.Process(target=_concurrent_writer, args=(str(tmp_path), str(state), "a.jpg", str(ready_a), str(ready_b)))
+    proc_b = ctx.Process(target=_concurrent_writer, args=(str(tmp_path), str(state), "b.jpg", str(ready_b), str(ready_a)))
+    proc_a.start()
+    proc_b.start()
+    proc_a.join(timeout=60)
+    proc_b.join(timeout=60)
+    assert proc_a.exitcode == 0, "writer A crashed"
+    assert proc_b.exitcode == 0, "writer B crashed"
+
+    final = WatchFolder(tmp_path, state_path=state)
+    paths = set(final.state.records)
+    assert str((tmp_path / "a.jpg").resolve()) in paths
+    assert str((tmp_path / "b.jpg").resolve()) in paths
+
+
+def test_state_lock_released_after_save(tmp_path: Path):
+    """Another process must acquire the lock immediately after save() returns."""
+    source = tmp_path / "portrait.jpg"
+    _write_image(source)
+    watcher = WatchFolder(tmp_path, state_path=tmp_path / "watch.json")
+    watcher.scan_once()
+    watcher.scan_once()
+    lock_path = tmp_path / "watch.json.lock"
+    assert lock_path.exists(), "save must leave the lock file beside the state"
+    with open(lock_path, "a") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def test_state_lock_blocks_concurrent_save(tmp_path: Path):
+    """A second writer must block (not interleave) while the first holds the lock."""
+    from retouch.watch_folder import _state_file_lock
+
+    source = tmp_path / "portrait.jpg"
+    _write_image(source)
+    watcher = WatchFolder(tmp_path, state_path=tmp_path / "watch.json")
+    with _state_file_lock(watcher.state_path):
+        lock_path = watcher.state_path.with_name(watcher.state_path.name + ".lock")
+        with open(lock_path, "a") as handle:
+            with pytest.raises(OSError):
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    # Released after the context exits: a non-blocking acquire now succeeds.
+    with open(lock_path, "a") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def test_state_lock_not_held_during_processing(tmp_path: Path):
+    """The processor callback runs outside the lock (long jobs don't block peers)."""
+    from retouch.watch_folder import _state_file_lock
+
+    source = tmp_path / "portrait.jpg"
+    _write_image(source)
+    watcher = WatchFolder(tmp_path, state_path=tmp_path / "watch.json")
+    kwargs = {
+        "kind": "preview", "output_root": tmp_path.parent / (tmp_path.name + "-out"),
+        "settings": {"recipe": "natural"}, "pipeline_fingerprint": "test-v1",
+    }
+    watcher.queue_jobs(**kwargs)
+    watcher.queue_jobs(**kwargs)
+
+    def slow_writer(job):
+        Path(job.output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(job.output_path).write_bytes(b"preview")
+        lock_path = watcher.state_path.with_name(watcher.state_path.name + ".lock")
+        with open(lock_path, "a") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return Path(job.output_path)
+
+    assert watcher.run_queued(slow_writer)[0].status == "done"

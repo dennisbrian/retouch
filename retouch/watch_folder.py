@@ -13,10 +13,16 @@ import hashlib
 import os
 import shutil
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Union
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Union
+
+try:  # POSIX advisory locking; on Windows the lock degrades to a no-op
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None
 
 from .io import EXT_MAP, IMAGE_EXTENSIONS
 
@@ -58,6 +64,92 @@ def _file_sha256(path: Path) -> str:
 def _hash_payload(payload: Mapping[str, Any]) -> str:
     encoded = json.dumps(dict(payload), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+@contextmanager
+def _state_file_lock(state_path: Path) -> Iterator[None]:
+    """Advisory inter-process lock held only across a state load→modify→save.
+
+    flock is released automatically when the process dies, so there are no
+    stale lock files to clean up. No-op where fcntl is unavailable (Windows).
+    """
+    if fcntl is None:  # pragma: no cover - Windows
+        yield
+        return
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = state_path.with_name(state_path.name + ".lock")
+    # Keep the handle open for the lifetime of the lock; closing it (or process
+    # death) releases the flock.
+    handle = open(lock_path, "a")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
+_STATUS_RANK = {"pending": 0, "queued": 1, "processing": 2, "done": 3, "failed": 3}
+_RECORD_FIELDS = ("signature", "status", "attempts", "error", "content_id", "asset_instance_id")
+
+
+def _merge_record(local: WatchRecord, incoming: WatchRecord, base: Optional[WatchRecord]) -> None:
+    """Three-way merge one record; conflicts favor progress (rank, max attempts)."""
+    for field_name in _RECORD_FIELDS:
+        local_value = getattr(local, field_name)
+        incoming_value = getattr(incoming, field_name)
+        base_value = getattr(base, field_name) if base is not None else None
+        if local_value == base_value or incoming_value == base_value:
+            if local_value == base_value:
+                setattr(local, field_name, incoming_value)
+            continue
+        # Both sides changed this field since base.
+        if field_name == "attempts":
+            setattr(local, field_name, max(local_value, incoming_value))
+        elif field_name == "status":
+            if _STATUS_RANK.get(incoming_value, 0) > _STATUS_RANK.get(local_value, 0):
+                setattr(local, field_name, incoming_value)
+    for job_kind, job_id in incoming.job_ids.items():
+        local.job_ids.setdefault(job_kind, job_id)
+
+
+def _merge_job(local: WatchJob, incoming: WatchJob, base: Optional[WatchJob]) -> None:
+    """Three-way merge one job; on conflict the local transition wins."""
+    local_dict = local.to_dict()
+    incoming_dict = incoming.to_dict()
+    base_dict = base.to_dict() if base is not None else None
+    for field_name, incoming_value in incoming_dict.items():
+        if field_name not in local_dict:
+            continue
+        local_value = local_dict[field_name]
+        base_value = base_dict.get(field_name) if base_dict is not None else None
+        if local_value == base_value:
+            setattr(local, field_name, incoming_value)
+    if local.attempts < incoming.attempts:
+        local.attempts = incoming.attempts
+
+
+def _merge_states(base: WatchFolderState, local: WatchFolderState, incoming: WatchFolderState) -> None:
+    """Fold peer updates (``incoming`` = current disk) into ``local`` using ``base``.
+
+    Entries added by only one side since ``base`` are kept, so concurrent
+    writers no longer lose each other's entries; fields changed on both
+    sides resolve per-field instead of last-writer-wins.
+    """
+    for path, incoming_record in incoming.records.items():
+        local_record = local.records.get(path)
+        if local_record is None:
+            local.records[path] = incoming_record
+        else:
+            _merge_record(local_record, incoming_record, base.records.get(path))
+    for job_id, incoming_job in incoming.jobs.items():
+        local_job = local.jobs.get(job_id)
+        if local_job is None:
+            local.jobs[job_id] = incoming_job
+        else:
+            _merge_job(local_job, incoming_job, base.jobs.get(job_id))
 
 
 def _is_under(path: Path, root: Path) -> bool:
@@ -213,6 +305,15 @@ class WatchFolder:
         self.recursive = bool(recursive)
         self.state_path = Path(state_path).expanduser() if state_path else self.input_dir / ".retouch-watch.json"
         self.state = self._load_state()
+        # Snapshot of the last on-disk state this process loaded/saved; the
+        # three-way merge base that lets save() keep concurrent peer updates.
+        self._base_state = self._clone_state(self.state)
+
+    def _clone_state(self, state: WatchFolderState) -> WatchFolderState:
+        return WatchFolderState(
+            records={path: WatchRecord(**record.to_dict()) for path, record in state.records.items()},
+            jobs={job_id: WatchJob.from_dict(job.to_dict()) for job_id, job in state.jobs.items()},
+        )
 
     def _load_state(self) -> WatchFolderState:
         if not self.state_path.exists():
@@ -260,19 +361,36 @@ class WatchFolder:
         return output
 
     def save(self) -> None:
-        """Persist state atomically so interruption cannot corrupt the queue."""
-        self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        fd, temp_name = tempfile.mkstemp(prefix=".retouch-watch-", suffix=".tmp", dir=str(self.state_path.parent))
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(self.state.to_dict(), handle, indent=2, sort_keys=True)
-            os.replace(temp_name, self.state_path)
-        except OSError:
+        """Persist state atomically under an advisory inter-process lock.
+
+        The lock is held only for the disk read-merge-write (never during
+        image processing); concurrent writers merge instead of clobbering.
+        """
+        with _state_file_lock(self.state_path):
+            if self.state_path.exists():
+                try:
+                    incoming = WatchFolderState.from_dict(
+                        json.loads(self.state_path.read_text(encoding="utf-8"))
+                    )
+                    self._validate_state_paths(incoming)
+                    _merge_states(self._base_state, self.state, incoming)
+                except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+                    # Unreadable/invalid peer writes must not lose local work;
+                    # fall through and overwrite atomically.
+                    pass
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            fd, temp_name = tempfile.mkstemp(prefix=".retouch-watch-", suffix=".tmp", dir=str(self.state_path.parent))
             try:
-                os.remove(temp_name)
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    json.dump(self.state.to_dict(), handle, indent=2, sort_keys=True)
+                os.replace(temp_name, self.state_path)
             except OSError:
-                pass
-            raise
+                try:
+                    os.remove(temp_name)
+                except OSError:
+                    pass
+                raise
+            self._base_state = self._clone_state(self.state)
 
     def _paths(self) -> Iterable[Path]:
         iterator = self.input_dir.rglob("*") if self.recursive else self.input_dir.iterdir()

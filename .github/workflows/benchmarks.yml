@@ -28,6 +28,7 @@ jobs:
           cache-dependency-path: |
             requirements/base.txt
             requirements/dev.txt
+            requirements/gui.txt
 
       - name: Install system dependencies
         run: |
