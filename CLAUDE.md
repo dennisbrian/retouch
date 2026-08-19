@@ -16,7 +16,7 @@ This is a **production-grade image processing engine** that applies professional
 - Color grading + Fuji film simulation presets
 - Virtual studio relighting + advanced lens effects
 
-**~71k LOC (retouch/*.py + gui.py/gui_advanced.py/gui_shoot.py/gui_batch.py + cli.py), 112 modules in retouch/, 4,490 tests collected (pytest --collect-only, 2026-08-18).**
+**~71k LOC (retouch/*.py + gui.py/gui_advanced.py/gui_shoot.py/gui_batch.py + cli.py), 112 modules in retouch/, 4,535 tests collected (pytest --collect-only, 2026-08-19).**
 
 ---
 
@@ -149,6 +149,7 @@ prefer `--max-dim 2048` or `quality="draft"` for multi-recipe sweeps.
 - ✅ 2026-08-11 redundant `ci.yml` workflow removed — `7b97df9`
 - ✅ 2026-07-14 `tests/test_cosplay_moat.py` bare-`RetouchEngine()` → module `engine` fixture (same teardown pattern as skin_locus)
 - ✅ 2026-07-14 `test_ext_map_keys_match_radio_choices` — expect `PNG-16` (map already had it; test was stale)
+- ✅ 2026-08-19 golden-v2 face-path harness: `test_golden_pipeline.py`'s synthetic image has no detectable face (0 faces → `_no_face_fallback`), so its `natural` snapshot was byte-identical to raw input — the entire per-face pipeline was untested. `tests/test_golden_pipeline_face.py` + `tests/golden_face_fixture.py` inject a real `FaceContext` (frozen real anatomical landmarks, ONNX-free `_landmark_fallback_only` regions) via `face_contexts=`, exercising skin/eye/lip ops for real. Mutation-verified: perturbing `SKIN_LOCI`/`equalize` strength moves the recipe hashes.
 
 ---
 
