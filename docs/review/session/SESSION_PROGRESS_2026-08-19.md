@@ -89,8 +89,45 @@ This was a review/reporting session, not an implementation session — no code c
 
 ---
 
+## Afternoon session — detection recall & precision study (same day, after `60166c6`)
+
+Executive summary of the follow-up research tranche (full detail in
+`docs/plans/RESEARCH_DETECTION_RECALL_2026_08_19.md`; scripts in
+`scripts/qa/detection_recall_*.py`, artifacts in
+`test_output/detection_recall_study/`):
+
+- **Subject recall re-measured on the 83-image DSCF corpus: 98.8%** (82/83,
+  engine path = legacy FaceMesh @ 2048 proxy). The "~4%" CLAUDE.md figure was
+  stale for subjects. Dual-scale detect (2048 ∪ 1024) reaches 100% on this
+  corpus.
+- **The one miss (DSCF4598) is FP-suppression**: an anime-poster
+  false-positive counts as the face, so the zero-face-gated tiled fallback
+  never fires; the real subject gets no face work (mean |Δ| 1.60 vs 4.31 for
+  detected subjects in the same shoot, measured with real `RetouchEngine`
+  runs at `cosplay` strength).
+- **Precision is the real convention-corpus problem**: 18/100 S1 detections
+  are MediaPipe fires on anime posters (Laplacian-var forensics: real faces
+  p10=499 vs poster FPs p90=256 — zero overlap on this corpus; 10-frame
+  geometry lock confirms same-poster re-detection). Engine-verified harm at
+  `cosplay`: poster scenery receives visible face work (p99 |Δ|=29, max=91).
+- **RetinaFace is not in `requirements/base.txt`** — the `cc61e67` F1/F2
+  fixes are inert in the pinned `.venv` (opportunistic import falls back to
+  MediaPipe-only silently). Production detection IS MediaPipe-only; the
+  Tasks-path architecture never executes on the supported runtime.
+- CLAUDE.md "Known Limitations" rewritten with the measured figures.
+- No engine code changed (research session); `tests/test_detection.py` 80
+  passed; all 9 study scripts compile.
+
+---
+
 ## Next session
 
-- Consider re-measuring the "~4% undetected faces" CLAUDE.md figure now that the two detection-recall bugs (dead confidence threshold, RGB/BGR swap, always-run full-res retry) are fixed — the actual miss rate may have moved.
-- `docs/review/session/SESSION_PROGRESS_2026-08-15.md` was untracked/uncommitted at the start of this session; committing it (and this file) would close that gap.
+- Detection follow-ups ranked in the research doc: dual-scale detect union
+  (+1 recall, cheap); widen tiled-fallback gate from "zero faces" to "no
+  confirmed face"; poster-FP veto needs validation on non-convention
+  portraits before it's a spec (soft-focus/makeup faces could sit low);
+  decide RetinaFace's production status (requirements vs documented
+  MediaPipe-only).
+- The 08-15 report commit gap is now closed (`7893319`); commit this
+  session's research scripts + doc.
 - No other open threads flagged in the commit messages themselves.

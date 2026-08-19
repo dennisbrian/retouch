@@ -126,7 +126,7 @@ prefer `--max-dim 2048` or `quality="draft"` for multi-recipe sweeps.
 - **Process:** Weekly syntax checks, monthly algorithmic re-audit (`docs/review/AUDIT_REPORT.md` — last cycle 2026-07-06; report's own §0 flags its Cycle 3 verdict as superseded by `docs/review/TEST_REPORT_2026-07-04.md`, so read past the executive summary before citing it as current status)
 
 ### Known Limitations
-- Remaining ~4% undetected faces: extreme profiles, heavy occlusion, tiny faces in distance shots
+- Detection on real corpora (2026-08-19 study, `docs/plans/RESEARCH_DETECTION_RECALL_2026_08_19.md`): subject-face miss rate ~1.2% on the 83-image DSCF convention corpus (1 miss: DSCF4598, poster-FP suppressed the tiled fallback); background/crowd-face recall 27–35% (out of scope for portrait retouch). Separately, MediaPipe fires on anime posters/banners (~18 FP detections/83 images) which receive per-face work at strong recipes — precision, not recall, is the open convention-corpus problem. RetinaFace is NOT in requirements: the `cc61e67` F1/F2 fixes are inert in the pinned runtime; production detection is MediaPipe-only.
 
 ### Verification & Honesty
 - Never simulate or describe pipeline/engine output in prose — actually invoke `RetouchEngine`/CLI/GUI and show genuine results. If you can't run it (no test image, no GPU, etc.), say so explicitly instead of narrating a plausible-looking result.
