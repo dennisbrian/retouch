@@ -115,19 +115,38 @@ Executive summary of the follow-up research tranche (full detail in
   MediaPipe-only silently). Production detection IS MediaPipe-only; the
   Tasks-path architecture never executes on the supported runtime.
 - CLAUDE.md "Known Limitations" rewritten with the measured figures.
-- No engine code changed (research session); `tests/test_detection.py` 80
+- No engine code changed at study time; `tests/test_detection.py` 80
   passed; all 9 study scripts compile.
+
+### Follow-up #1 implemented same day: dual-scale person-gated detect augment
+
+The research doc's top follow-up was implemented after two pre-checks
+reshaped the design: a naive 2048∪1024 union imports 5 new poster FPs
+(including DSCF4454's "recovered face", a poster all along — tex 65.5), so
+the landed version gates 1024-pass additions on the engine's own
+person-segmenter mask (measured poles: posters 0.000 vs subjects 1.000
+coverage). `retouch/detection.py::_dual_scale_augment_legacy` + 8 unit
+tests (`tests/test_detection_dual_scale.py`). Verified on the full corpus:
+83/83 subject recall (was 82/83), exactly 1 new detection (the DSCF4598
+subject, RF-confirmed), zero new FPs, median detect 22 ms. DSCF4598 subject
+now receives face work (1.60 → 3.36 mean |Δ| at cosplay strength). Full
+suite: 4,532 passed, 11 skipped, 0 failed. The 18 pre-existing poster FPs
+are deliberately untouched (follow-up #3, needs non-convention validation
+first).
 
 ---
 
 ## Next session
 
-- Detection follow-ups ranked in the research doc: dual-scale detect union
-  (+1 recall, cheap); widen tiled-fallback gate from "zero faces" to "no
-  confirmed face"; poster-FP veto needs validation on non-convention
-  portraits before it's a spec (soft-focus/makeup faces could sit low);
-  decide RetinaFace's production status (requirements vs documented
-  MediaPipe-only).
-- The 08-15 report commit gap is now closed (`7893319`); commit this
-  session's research scripts + doc.
+- **Poster-FP veto (follow-up #3)** is the remaining detection thread: needs
+  validation on non-convention portraits (soft-focus / heavy-makeup /
+  beauty-filtered faces could sit below the tex<350 threshold) before any
+  ship decision. The 18 pre-existing FPs still receive per-face work at
+  strong recipes.
+- Decide RetinaFace's production status (follow-up #4): requirements entry
+  vs documented MediaPipe-only.
+- Dual-scale augment is legacy-path only; if the Tasks backend is ever
+  certified for production, port the person-gated augment there too.
+- The 08-15 report commit gap is closed (`7893319`); research session
+  committed (`8342dbb`); this session's implementation commit follows.
 - No other open threads flagged in the commit messages themselves.

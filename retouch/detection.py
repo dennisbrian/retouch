@@ -357,6 +357,19 @@ class FaceDetector:
                 # zero-face case so working images pay nothing. Recovers
                 # documented misses (DSCF4454-class, TODO_WEEK_2026_07_20).
                 faces = self._detect_tiled_legacy(img_bgr, w, h)
+            else:
+                # Dual-scale augmentation: FaceMesh detectability is
+                # scale-dependent, and the scale it misses at differs per
+                # face. A second pass at 1024 recovers subjects the 2048
+                # pass drops (measured: DSCF4598 — 98.8% -> 100% subject
+                # recall on the 83-image DSCF corpus, +~10 ms). Additions
+                # are person-mask gated so the 1024 pass does NOT import
+                # the anime-poster false positives it also finds (measured
+                # poles: posters person-coverage 0.000 vs subjects 1.000;
+                # see docs/plans/RESEARCH_DETECTION_RECALL_2026_08_19.md).
+                faces = faces + self._dual_scale_augment_legacy(
+                    img_bgr, w, h, faces
+                )
             return faces
 
         # 1. RetinaFace (pip) for bounding-box detection
@@ -709,3 +722,88 @@ class FaceDetector:
             if not dup:
                 kept.append(cand)
         return kept
+
+    # Dual-scale augmentation target resolution. Faces below this proxy size
+    # are the ones the 2048 pass can drop while still finding other faces
+    # (DSCF4598-class misses); faces above it are reliably found at 2048 and
+    # re-detecting them at 1024 would only cost time.
+    _DUAL_SCALE_MAX_DIM = 1024
+    # A dual-scale addition must have this much person-mask coverage over its
+    # central region. Measured poles on the DSCF corpus: anime-poster FPs
+    # 0.000 vs subjects 1.000 (RESEARCH_DETECTION_RECALL_2026_08_19.md);
+    # 0.5 splits them with margin in both directions.
+    _PERSON_GATE_COVERAGE = 0.5
+
+    def _dual_scale_augment_legacy(
+        self,
+        img_bgr: np.ndarray,
+        w: int,
+        h: int,
+        existing: List["FaceData"],
+    ) -> List[FaceData]:
+        """Second FaceMesh pass at 1024px, adding faces the main pass missed.
+
+        Runs only on images large enough that scale is a plausible failure
+        axis (> _DUAL_SCALE_MAX_DIM). Each 1024-pass detection is:
+          1. deduped against the main pass (IoU > 0.5 → same face, keep the
+             main pass's higher-resolution landmarks), and
+          2. gated on person-mask coverage (>= 0.5 of the box's central
+             region) so poster/banner false positives the 1024 pass also
+             finds are not imported (measured: posters 0.000 coverage vs
+             subjects 1.000 on the DSCF convention corpus).
+
+        Returns ONLY the additions; callers append them to the main result.
+        """
+        if self._legacy_mesh is None:
+            return []
+        if max(w, h) <= self._DUAL_SCALE_MAX_DIM:
+            return []
+
+        scale = self._DUAL_SCALE_MAX_DIM / float(max(w, h))
+        dw, dh = int(w * scale), int(h * scale)
+        small = cv2.resize(img_bgr, (dw, dh), interpolation=cv2.INTER_AREA)
+        result = self._legacy_mesh.process(
+            cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+        )
+        candidates = []
+        for landmarks in getattr(result, "multi_face_landmarks", None) or []:
+            # Landmarks are normalized [0, 1] — same object geometry applies
+            # at either scale; only bbox/ied (pixel units) need rescaling.
+            compat = _LandmarkCompat(_detach_landmarks(landmarks.landmark))
+            bbox = self._bbox_from_landmarks(compat, w, h)
+            candidates.append(FaceData(
+                landmarks=compat,
+                bbox=bbox,
+                ied=inter_eye_distance(compat, w, h),
+                confidence=1.0,
+                confidence_source="mediapipe_presence_unavailable",
+            ))
+        if not candidates:
+            return []
+
+        # Person gate (central 40% of each candidate box).
+        try:
+            mask = self.segment_person(img_bgr)
+        except Exception:
+            # Segmenter unavailable: this augmentation is a recall nicety,
+            # not a correctness requirement — decline to add anything rather
+            # than risk importing ungated FPs.
+            return []
+        additions: List[FaceData] = []
+        for cand in candidates:
+            if any(_iou(cand.bbox, f.bbox) > 0.5 for f in existing):
+                continue
+            if any(_iou(cand.bbox, a.bbox) > 0.5 for a in additions):
+                continue
+            x, y, bw, bh = cand.bbox
+            dx, dy = int(bw * 0.2), int(bh * 0.2)
+            x1, y1 = max(0, x + dx), max(0, y + dy)
+            x2, y2 = min(w, x + bw - dx), min(h, y + bh - dy)
+            if x2 <= x1 or y2 <= y1:
+                continue
+            region = mask[y1:y2, x1:x2]
+            if region.size == 0:
+                continue
+            if float((region > 0.5).mean()) >= self._PERSON_GATE_COVERAGE:
+                additions.append(cand)
+        return additions

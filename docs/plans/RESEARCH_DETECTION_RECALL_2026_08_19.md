@@ -145,6 +145,10 @@ raises `ImportError` and silently degrades to MediaPipe-only. Therefore:
 
 ## Recommended follow-ups (design candidates — NOT implemented)
 
+> **UPDATE, same day (post-study):** follow-up #1 was implemented and landed
+> after this section was written — see "Follow-up #1 outcome" at the bottom.
+> Items below retain their original research framing.
+
 Ranked by expected value / risk:
 
 1. **Dual-scale detect union (S1 ∪ S3)** — +1 subject recall here (the only
@@ -183,3 +187,52 @@ Ranked by expected value / risk:
 - The engine-harm measurements are at 2048-capped input; at full native
   resolution the same detections apply (detection runs at the proxy either
   way) but deltas would scale with the per-face stages' native-res work.
+
+---
+
+## Follow-up #1 outcome — dual-scale detect union (implemented same day)
+
+Design refined from the research candidate after two pre-implementation
+measurements changed it materially:
+
+1. **Naive S1∪S3 union rejected.** The 1024 pass adds 6 boxes to the union;
+   only 2 are real (DSCF4598's subject + one blurry background face) — the
+   other 5 are MORE poster FPs, including DSCF4454's "recovered second
+   face" from the `1f3318e` commit message, which this study's texture
+   forensics show was a poster all along (tex=65.5 vs real-face p10=499).
+2. **Person-gate added instead.** The engine's own selfie-segmenter mask
+   separates the poles perfectly on this corpus: poster additions
+   person-coverage 0.000 vs RF-confirmed subjects 1.000 (n=8 controls all
+   1.000). Gate: central-40% coverage >= 0.5.
+
+Implementation (`retouch/detection.py::_dual_scale_augment_legacy`):
+- Runs only when the main 2048-scale legacy pass found >= 1 face AND
+  max(w, h) > 1024 (scale is only a plausible failure axis for large
+  inputs; zero-face images keep the existing tiled fallback).
+- Second FaceMesh pass at 1024px; additions must pass IoU>0.5 dedup vs the
+  main pass (main pass's higher-res landmarks win overlaps) AND the person
+  gate. Segmenter failure => add nothing (recall nicety must not trade
+  precision).
+- `confidence_source` stays `mediapipe_presence_unavailable` (same model,
+  same provenance class; `face_quality.py`'s measured-confidence set is
+  untouched).
+
+Verified end-to-end (scripts committed: `detection_recall_s3_additions.py`,
+`detection_recall_persongate.py`, `detection_recall_verify_change.py`,
+`detection_recall_engine_after.py`):
+
+| Check | Result |
+|---|---|
+| Subject recall, engine path @2048 | **83/83 = 100%** (was 82/83) |
+| New detections vs pre-change | **1** — DSCF4598 subject, RF-confirmed |
+| RF-unconfirmed detections | 18 before = 18 after (zero new FPs) |
+| Median detect() at proxy | 22 ms (p90 30 ms) |
+| DSCF4598 subject face work (cosplay) | mean |Δ| 1.60 → **3.36** (detected-class ~4.3) |
+| tests/test_detection.py + new dual-scale tests | 88 passed |
+| Full suite | **4,532 passed, 11 skipped, 0 failed** |
+
+The 18 pre-existing poster FPs are unchanged by design — that is follow-up
+#3 (poster-FP veto), still gated on non-convention validation (soft-focus /
+heavy-makeup faces could sit below the texture threshold; the person gate
+cannot remove them because MediaPipe fires on posters the segmenter
+sometimes includes in-frame).
