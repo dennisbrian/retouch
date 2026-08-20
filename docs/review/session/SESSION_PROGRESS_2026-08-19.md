@@ -136,17 +136,47 @@ first).
 
 ---
 
+## Evening session — poster-FP veto validation + RetinaFace dead-end proof
+
+Follow-ups #3/#4 from the detection study, closed with measurements
+(`docs/plans/RESEARCH_POSTERFP_VETO_2026_08_19.md`):
+
+- **Safe partial veto validated (not implemented):** joint rule
+  (person-coverage<0.5) OR (coverage<0.9 AND texture<80) kills 14/18 poster
+  FPs with 0/82 real-face collateral, stable across threshold plateau
+  T=50–350. Texture-only veto proven UNSAFE (real-face Lap-var floor is
+  1.0 under blur σ=4, 9.1 under makeup smoothing — below poster baselines).
+  Chromophore skinlike-fraction rejected (overlaps real faces both
+  directions; 3 real faces sit at ≤0.05). 4 on-person poster FPs are
+  unvetoable by any measured feature. Awaiting owner sign-off + group-shot
+  re-validation (single-subject corpus showed real-face coverage ≡ 1.000;
+  occluded group-shot faces will sit lower).
+- **RetinaFace structurally dead in pinned runtime:** `pip --dry-run
+  retina-face==0.0.18` resolves to protobuf 6.33.6 + TF 2.20 + keras 3.10
+  + numpy 2 + cv2 5 — violating every core pin (pb<4, mp==0.10.5, numpy<2,
+  cv2<4.12). System-python cross-check confirms it only works where
+  protobuf 6 already broke the mp pin. Recommended: document
+  MediaPipe-only; F1/F2 remain documented-not-live. dist-name footgun
+  recorded: package is `retina-face`, import `retinaface`, and bare
+  `retinaface` on PyPI is a different abandoned series.
+- 5 evidence scripts committed (`scripts/qa/posterfp_*.py`); CLAUDE.md
+  limitations updated.
+
+---
+
 ## Next session
 
-- **Poster-FP veto (follow-up #3)** is the remaining detection thread: needs
-  validation on non-convention portraits (soft-focus / heavy-makeup /
-  beauty-filtered faces could sit below the tex<350 threshold) before any
-  ship decision. The 18 pre-existing FPs still receive per-face work at
-  strong recipes.
-- Decide RetinaFace's production status (follow-up #4): requirements entry
-  vs documented MediaPipe-only.
+- **Poster-FP veto decision:** owner call on whether 14/18 (zero collateral,
+  documented residual 4) is worth shipping now, or wait for a parsing-level
+  signal (BiSeNet skin-mask plausibility per detected face, available
+  downstream where a poster would fail face-region parsing anyway). If
+  shipping: needs group-shot re-validation first — the "real-face coverage
+  ≡ 1.000" property is single-subject framing; occluded group-shot faces
+  will sit lower.
+- RetinaFace path stays documented-not-live; do not re-attempt as a quick
+  dependency addition.
 - Dual-scale augment is legacy-path only; if the Tasks backend is ever
   certified for production, port the person-gated augment there too.
 - The 08-15 report commit gap is closed (`7893319`); research session
-  committed (`8342dbb`); this session's implementation commit follows.
+  committed (`8342dbb`); dual-scale implementation committed (`8811320`).
 - No other open threads flagged in the commit messages themselves.
