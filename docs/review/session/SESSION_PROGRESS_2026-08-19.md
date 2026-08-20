@@ -180,3 +180,56 @@ Follow-ups #3/#4 from the detection study, closed with measurements
 - The 08-15 report commit gap is closed (`7893319`); research session
   committed (`8342dbb`); dual-scale implementation committed (`8811320`).
 - No other open threads flagged in the commit messages themselves.
+
+---
+
+## Session close — 2026-08-19 (end of day)
+
+**Session shape:** began as a 9-commit review/reporting session (morning,
+no code changed); pivoted into a three-part detection research +
+implementation arc through the afternoon/evening (3 new commits, all
+shipped). The morning review surfaced the "next session" item — re-measure
+the ~4% undetected-faces claim — and the rest of the day answered it and
+followed the threads it opened.
+
+**Final state this branch (`feat/color-science-k9-fix-and-frontier`):**
+
+| Commit | Type | What |
+|---|---|---|
+| `8342dbb` | research | Recall/precision study on 83-image DSCF corpus — flipped the naive "51% recall" to 98.8% subject recall (tiled-pass FPs were corrupting GT); exposed the 18 poster FPs; proved RetinaFace inert in the pinned env |
+| `8811320` | feat | Dual-scale person-gated detect augment — 100% subject recall, 0 new FPs, +22 ms median. Design pivoted twice during pre-checks (naive union rejected for importing 5 new poster FPs incl. DSCF4454's "recovered face"; person gate added) |
+| `034102f` | research | Poster-FP veto validation: joint person+texture rule kills 14/18 with 0 collateral; texture-only veto proven unsafe (real-face floor 1.0 under blur); RetinaFace structurally dead (forces protobuf 6/TF 2.20/numpy 2/cv2 5) |
+
+**Tests:** full suite re-run after `8811320` — **4,532 passed, 11 skipped,
+0 failed** (was 4,535 collected at `60166c6`; +8 new dual-scale tests,
+−11 net collection delta from the detection change). The research-only
+`8342dbb`/`034102f` commits didn't touch engine code.
+
+**Research documentation produced:**
+- `docs/plans/RESEARCH_DETECTION_RECALL_2026_08_19.md` — corpus, method,
+  recall/precision numbers, follow-up candidates
+- `docs/plans/RESEARCH_POSTERFP_VETO_2026_08_19.md` — three-discriminator
+  veto validation + RetinaFace dead-end proof
+- 14 evidence scripts in `scripts/qa/` (`detection_recall_*.py`,
+  `posterfp_*.py`) — all committed, all compile, none ship as product code
+
+**What is DONE (not pending):**
+- Subject-face recall: 100% on the DSCF corpus (was 82/83; the miss is
+  fixed and the fix is shipped).
+- The ~4% CLAUDE.md limitation figure: replaced with measured,
+  stratified numbers (subject vs background, with the precision problem
+  named separately).
+- RetinaFace production status: resolved (structurally unsupportable;
+  F1/F2 are documented-not-live, not a "fix it later" item).
+
+**What is OPEN (awaiting owner, in priority order):**
+1. Poster-FP veto ship decision (14/18, zero collateral, documented
+   residual 4; needs group-shot re-validation before any ship).
+2. The 4 unvetoable on-person poster FPs (accept as residual vs pursue a
+   parsing-level signal at the BiSeNet stage).
+3. Tasks-backend port of the dual-scale augment (only relevant if that
+   backend is ever certified — blocked by RetinaFace dependency death).
+
+**Branch pushed to origin** (`8811320..034102f` added on top of the
+morning's already-pushed `60166c6`). Nothing uncommitted in the working
+tree.
