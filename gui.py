@@ -219,6 +219,10 @@ import gui_advanced
 
 gui_advanced.get_engine = get_engine
 
+# Smart Color card handlers (T2a — Color card only, no engine/model
+# dependency, no get_engine wiring needed).
+import gui_smart
+
 
 # Shoot Intelligence / Watch Folder / Review / Profiles / Look Board handlers
 # live in gui_shoot and resolve patchable shared names (FaceDetector,
@@ -1874,7 +1878,7 @@ def reset_relighting(recipe_name):
 
 def reset_eyes_lips(recipe_name):
     d = recipe_defaults(recipe_name)
-    return d["eye_enhance"], d["catchlight"], d["dark_circles"], d["undereye_darken_removal"], d["undereye_puffiness_reduction"], d["eye_sclera_brighten"], d["eye_iris_saturate"], d["eye_iris_hue_shift"], d["eye_iris_brightness"], d["teeth_whiten"], d["lip_enhance"], d["lip_tint"], d["lip_finish"], d["blush"], d["nose_blush"], d["under_eye_blush"]
+    return d["eye_enhance"], d["catchlight"], d["dark_circles"], d["undereye_darken_removal"], d["undereye_puffiness_reduction"], d["eye_sclera_brighten"], d["eye_iris_saturate"], d["eye_iris_hue_shift"], d["eye_iris_brightness"], d["teeth_whiten"], d["lip_enhance"], d["lip_tint"], d["lip_finish"], d["blush"], d["nose_blush"], d["under_eye_blush"], d["eye_gate"]
 
 def reset_face_reshaping(recipe_name):
     d = recipe_defaults(recipe_name)
@@ -3482,6 +3486,20 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                 # Column 3: Adjustment Panel (Right)
                 with gr.Column(scale=3, elem_classes=["develop-panel"]):
                     with gr.Group():
+                        smart_mode_switch = gr.Radio(
+                            choices=["Classic", "Smart Color (preview)"],
+                            value="Classic",
+                            label="Editing mode",
+                            info="Smart Color (preview) is a thin, reviewable control surface over the same Classic sliders below — it does not add a second processing engine.",
+                        )
+                        with gr.Group(visible=False) as smart_color_group:
+                            gr.Markdown("### 🎨 Smart Color")
+                            gr.Markdown("Preview — Color card only; Face/Auto Polish/Background/Clean not yet available. See `retouch/smart_intents.py` for the underlying contract.")
+                            smart_amount = gr.Slider(-1.0, 1.0, 0.0, step=0.05, label="Amount", info="Vibrance + saturation, protecting skin tones less than Classic Vibrance alone")
+                            smart_warmth = gr.Slider(-1.0, 1.0, 0.0, step=0.05, label="Warmth", info="White balance temperature + tint")
+                            smart_contrast_macro = gr.Slider(-1.0, 1.0, 0.0, step=0.05, label="Contrast", info="Contrast + highlight/shadow rolloff")
+
+                    with gr.Group():
                         gr.Markdown("### ⚙️ Develop Adjustments")
                         
                         with gr.Accordion("✨ Skin Smoothing & Texture", open=True):
@@ -3586,6 +3604,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             with gr.Row():
                                 nose_blush = gr.Checkbox(label="Nose Blush", value=False, info="Add cosmetic pink tone to nose tip")
                                 under_eye_blush = gr.Checkbox(label="Under-Eye Blush", value=False, info="Apply soft under-eye blush for a fresh/cosplay look")
+                                eye_gate = gr.Checkbox(label="Eye Occlusion Gate", value=True, info="Skip enhancing eyes detected as closed/occluded (prevents painting an iris onto hair or a closed lid)")
 
                         with gr.Accordion("🧬 Face Reshaping", open=False):
                             reset_face_reshaping_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
@@ -4230,6 +4249,34 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         _reset_mutation_events.append(event)
         return event
 
+    # Smart mode switch: purely additive visibility toggle, no changes to
+    # any Classic component's identity/callbacks (T2a).
+    smart_mode_switch.change(
+        fn=gui_smart.on_smart_mode_toggle,
+        inputs=[smart_mode_switch],
+        outputs=[smart_color_group],
+        queue=False,
+        show_progress="hidden",
+    )
+
+    _smart_color_outputs = [
+        vibrance, saturation, white_balance_kelvin, white_balance_tint,
+        contrast, highlights, shadows,
+    ]
+    _smart_color_inputs = [
+        smart_amount, smart_warmth, smart_contrast_macro,
+        vibrance, saturation, white_balance_kelvin, white_balance_tint,
+        contrast, highlights, shadows,
+    ]
+    for _smart_slider in (smart_amount, smart_warmth, smart_contrast_macro):
+        _mutation_events.append(_smart_slider.change(
+            fn=gui_smart.apply_color_macros,
+            inputs=_smart_color_inputs,
+            outputs=_smart_color_outputs,
+            queue=False,
+            show_progress="hidden",
+        ))
+
     _mutation_events.append(recipe.change(
         fn=on_recipe_change,
         inputs=[recipe],
@@ -4297,7 +4344,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     _track_reset_event(reset_eyes_lips_btn.click(
         fn=reset_eyes_lips,
         inputs=[recipe],
-        outputs=[eye_enhance, catchlight, dark_circles, undereye_darken_removal, undereye_puffiness_reduction, eye_sclera_brighten, eye_iris_saturate, eye_iris_hue_shift, eye_iris_brightness, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, nose_blush, under_eye_blush],
+        outputs=[eye_enhance, catchlight, dark_circles, undereye_darken_removal, undereye_puffiness_reduction, eye_sclera_brighten, eye_iris_saturate, eye_iris_hue_shift, eye_iris_brightness, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, nose_blush, under_eye_blush, eye_gate],
         queue=False,
         show_progress="hidden",
     ))
@@ -4809,6 +4856,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "undereye_puffiness_reduction": undereye_puffiness_reduction,
         "eye_sclera_brighten": eye_sclera_brighten,
         "eye_sclera_vessel_remove": _eye_sclera_vessel_remove_state,
+        "eye_gate": eye_gate,
         "backdrop_cleanup": _backdrop_cleanup_state,
         "fabric_wrinkle_smooth": _fabric_wrinkle_smooth_state,
         "eye_iris_saturate": eye_iris_saturate,

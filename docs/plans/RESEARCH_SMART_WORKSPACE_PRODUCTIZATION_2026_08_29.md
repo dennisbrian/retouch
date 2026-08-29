@@ -1016,7 +1016,12 @@ Deferred. The core Smart shell, lifecycle, truth labels, and safety are reusable
 
 These decisions must be closed during T0:
 
-1. Which exact existing parameters and targets belong to each initial macro?
+1. ~~Which exact existing parameters and targets belong to each initial macro?~~ **Closed
+   2026-08-30** for the Color card (Amount/Warmth/Contrast) — reviewed and shipped in
+   `retouch/smart_intents.py`'s `COLOR_INTENT`. Review caught a sign inversion in the original
+   Contrast macro (highlights/shadows were flipped, producing a flattening move instead of a
+   contrast increase at `amount=+1`); fixed and verified against `retouch/engine.py::_adjust_tonal`'s
+   sign convention. Still open for any future Face/Auto Polish/Background macros.
 2. Should Auto Polish begin with one reviewed profile or a small intent set such as Natural, Polished, Cosplay, and Editorial?
 3. Which capability combinations make Hair eligible to appear as a contextual card?
 4. What is the approved uncertainty policy for the active eye-visibility and parser evidence?
