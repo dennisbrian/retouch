@@ -236,14 +236,15 @@ of edit intensities, not one reference behavior.
 
 ## 6. Possible follow-ups (not started, no owner assigned)
 
-- If competitive parity on body/shoulder reshape becomes a goal: this is new pipeline scope
-  (torso/shoulder liquify keyed off segmentation class) beyond the current face-only reshape stage
-  — likely belongs in `docs/plans/RESEARCH_SMART_WORKSPACE_PRODUCTIZATION_2026_08_29.md`'s
-  backlog rather than as a standalone item, given that doc already ranks P0–P3 productization
-  work. [Owner call, not made here.] Cross-check that doc's priority list before scheduling
-  anything from this pilot — per its own rule to cut P2/P3 before touching safety/lifecycle/
-  compatibility gates, a new "match competitor body reshape" item would need to be graded against
-  that rubric, not treated as automatically in-scope.
+- Competitive parity on body/shoulder reshape is new pipeline scope (torso/shoulder liquify keyed
+  off segmentation class) beyond the current face-only reshape stage. It is NOT an open backlog
+  slot: `RESEARCH_SMART_WORKSPACE_PRODUCTIZATION_2026_08_29.md` §1.2 rank 15 explicitly Parks
+  "automatic body shaping" and §23 lists it as a non-goal, both requiring "a separate proposal
+  before implementation." That doc's §27 is now that proposal — it documents why this is Parked
+  (identity-risk asymmetry vs. the existing gated face-Shape control, no body-landmark capability
+  in this engine today, and this research's own §5 finding that even Meitu applies body reshape
+  inconsistently) and what un-parking would require. Read §27 before treating this finding as
+  actionable scope.
 - A non-rigid registration (TPS or dense optical flow fit on skin/costume, not just the 7 face
   landmarks) would let reshape magnitude be measured directly instead of inferred from a residual
   MAE increase — the natural next step if body-reshape parity becomes a real workstream.
