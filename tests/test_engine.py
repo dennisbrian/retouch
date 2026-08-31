@@ -817,6 +817,130 @@ class TestProcessFaceCore:
         assert fr.canvas.shape == canvas.shape
         assert fr.skin_mask.max() == 0.0  # zero skin ⇒ zero acc_skin
 
+    @pytest.mark.parametrize("control", ["catchlight", "corneal_shading"])
+    def test_independent_eye_control_activates_eye_stage(self, control):
+        """Catchlight/corneal controls must not depend on Eye Enhance."""
+        from unittest.mock import Mock
+
+        from retouch.perf_optimizations import _process_face_core
+
+        roi = 64
+        canvas = np.full((roi, roi, 3), 128, dtype=np.uint8)
+        regions = _build_synthetic_regions(roi, roi, skin_value=0.0)
+        ctx = self._all_zero_ctx()
+        ctx.eye_gate = False
+        setattr(ctx, control, 60.0)
+        processors = self._make_processors()
+        processors["eyes"].enhance = Mock(side_effect=lambda image, *args, **kwargs: image)
+
+        _process_face_core(
+            canvas,
+            regions,
+            _build_synthetic_face(ied=30.0, size=roi),
+            ctx,
+            0,
+            0,
+            roi,
+            roi,
+            np.ones((roi, roi), dtype=np.float32),
+            processors,
+        )
+
+        processors["eyes"].enhance.assert_called_once()
+
+    def test_occluded_eye_is_removed_from_sharpen_mask(self):
+        """The per-face gate must cover consumers after ``eyes.enhance`` too.
+
+        A hair-overlap gate suppresses the right eye while leaving the left
+        eye visible.  The interior of the occluded eye must therefore not
+        receive the weight-1.0 eye sharpening contribution.
+        """
+        from retouch.perf_optimizations import _process_face_core
+
+        # Use a native-support iris (r > 20 px) so this test isolates the
+        # binary occlusion gate. Tiny irises are intentionally damped by the
+        # separate eye-artifact guard and are covered in its own test module.
+        roi = 128
+        canvas = np.full((roi, roi, 3), 128, dtype=np.uint8)
+        regions = _build_synthetic_regions(roi, roi, skin_value=0.0)
+
+        left_eye = np.zeros((roi, roi), dtype=np.float32)
+        right_eye = np.zeros((roi, roi), dtype=np.float32)
+        left_iris = np.zeros((roi, roi), dtype=np.float32)
+        right_iris = np.zeros((roi, roi), dtype=np.float32)
+        left_eye[24:88, 8:64] = 1.0
+        right_eye[24:88, 72:128] = 1.0
+        left_iris[36:76, 16:56] = 1.0
+        right_iris[36:76, 80:120] = 1.0
+        regions.left_eye = left_eye
+        regions.right_eye = right_eye
+        regions.left_iris = left_iris
+        regions.right_iris = right_iris
+        regions.hair[24:88, 72:128] = 1.0
+
+        # The generic synthetic face has arbitrary landmark coordinates. Give
+        # both eyes an explicitly open EAR shape so this test isolates the
+        # hair-overlap path instead of accidentally gating both eyes on EAR.
+        from retouch.eye_visibility import _EAR_INDICES
+
+        face = _build_synthetic_face(ied=30.0, size=roi)
+        open_eye_points = {
+            "left": ((0.18, 0.45), (0.38, 0.45), (0.23, 0.35),
+                     (0.30, 0.35), (0.23, 0.55), (0.30, 0.55)),
+            "right": ((0.82, 0.45), (0.62, 0.45), (0.77, 0.35),
+                      (0.70, 0.35), (0.77, 0.55), (0.70, 0.55)),
+        }
+        for side, points in open_eye_points.items():
+            for index, (x, y) in zip(_EAR_INDICES[side], points):
+                face.landmarks.landmark[index].x = x
+                face.landmarks.landmark[index].y = y
+
+        fr = _process_face_core(
+            canvas,
+            regions,
+            face,
+            self._all_zero_ctx(),
+            0,
+            0,
+            roi,
+            roi,
+            np.ones((roi, roi), dtype=np.float32),
+            self._make_processors(),
+        )
+
+        # Use an interior pixel so the separate hair-edge contribution cannot
+        # make this assertion pass accidentally.
+        assert fr.sharpen_mask[56, 100] == 0.0
+        assert fr.sharpen_mask[56, 36] == pytest.approx(1.0)
+
+    def test_small_iris_dampens_eye_sharpen_mask(self):
+        """Native-resolution support must limit the final eye sharpen too."""
+        from retouch.perf_optimizations import _process_face_core
+
+        roi = 64
+        canvas = np.full((roi, roi, 3), 128, dtype=np.uint8)
+        regions = _build_synthetic_regions(roi, roi, skin_value=0.0)
+        regions.left_eye[16:40, 8:32] = 1.0
+        regions.left_iris[20:36, 12:28] = 1.0
+
+        ctx = self._all_zero_ctx()
+        # Isolate the source-support guard from binary occlusion decisions.
+        ctx.eye_gate = False
+        fr = _process_face_core(
+            canvas,
+            regions,
+            _build_synthetic_face(ied=30.0, size=roi),
+            ctx,
+            0,
+            0,
+            roi,
+            roi,
+            np.ones((roi, roi), dtype=np.float32),
+            self._make_processors(),
+        )
+
+        assert 0.0 < fr.sharpen_mask[28, 18] < 0.2
+
     def test_safe_auto_review_preserves_parameter_driven_face_render(self):
         """Unavailable detector confidence may request review, but must not
         erase a recipe/explicit face edit that is not an inferred auto delta."""

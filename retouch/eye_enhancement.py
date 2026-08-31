@@ -10,7 +10,7 @@ Three independent sub-modules:
 
 from __future__ import annotations
 
-from typing import Any, Optional, Tuple
+from typing import Any, Mapping, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -18,6 +18,8 @@ import numpy as np
 from .utils import (
     feather_mask,
 )
+from .eye_visibility import gate_occluded_eye_regions
+from .eye_artifact_safety import resolve_eye_scale
 
 
 def bgr_to_lab_f32(img: np.ndarray) -> np.ndarray:
@@ -225,6 +227,7 @@ class EyeEnhancer:
         iris_saturate: float = 0.0,
         iris_hue_shift: float = 0.0,
         iris_brightness: float = 0.0,
+        eye_scales: Optional[Mapping[str, Mapping[str, Any]]] = None,
     ) -> np.ndarray:
         """Run full eye enhancement pipeline.
 
@@ -235,6 +238,9 @@ class EyeEnhancer:
             iris_saturate: 0–100 iris saturation boost.
             iris_hue_shift: -30 to +30 degrees hue shift (for contact lens effects).
             iris_brightness: 0–100 iris brightness boost.
+            eye_scales: Optional source-adaptive per-eye strength evidence from
+                the full face pipeline. Direct callers may omit it to retain
+                the standalone enhancer's historical behaviour.
 
         Returns:
             (H, W, 3) result matching input dtype.
@@ -244,6 +250,13 @@ class EyeEnhancer:
         iris_sat_s = iris_saturate / 100.0
         iris_bright_s = iris_brightness / 100.0
 
+        # Keep the v0 eye controls aligned with the legacy eye stage: a
+        # landmark-only iris under hair/wig is not safe to retouch.  Idempotent
+        # re-application of the _process_face_core gate; protects direct callers.
+        regions = gate_occluded_eye_regions(regions, img_bgr=img_bgr)
+
+        left_scale = resolve_eye_scale(eye_scales, "left")
+        right_scale = resolve_eye_scale(eye_scales, "right")
         result = img_bgr.copy()
 
         # Sclera brightening per eye
@@ -251,13 +264,19 @@ class EyeEnhancer:
             if (regions.left_eye is not None and regions.left_eye.max() > 0.01
                 and regions.left_iris is not None and regions.left_iris.max() > 0.01):
                 result = self.sclera_brightener.brighten(
-                    result, regions.left_eye, regions.left_iris, sclera_s
+                    result,
+                    regions.left_eye,
+                    regions.left_iris,
+                    sclera_s * left_scale,
                 )
 
             if (regions.right_eye is not None and regions.right_eye.max() > 0.01
                 and regions.right_iris is not None and regions.right_iris.max() > 0.01):
                 result = self.sclera_brightener.brighten(
-                    result, regions.right_eye, regions.right_iris, sclera_s
+                    result,
+                    regions.right_eye,
+                    regions.right_iris,
+                    sclera_s * right_scale,
                 )
 
         # Iris enhancement per eye
@@ -265,17 +284,17 @@ class EyeEnhancer:
             if regions.left_iris is not None and regions.left_iris.max() > 0.01:
                 result = self.iris_enhancer.enhance(
                     result, regions.left_iris,
-                    saturate_strength=iris_sat_s,
-                    hue_shift=iris_hue_shift,
-                    brightness_strength=iris_bright_s,
+                    saturate_strength=iris_sat_s * left_scale,
+                    hue_shift=iris_hue_shift * left_scale,
+                    brightness_strength=iris_bright_s * left_scale,
                 )
 
             if regions.right_iris is not None and regions.right_iris.max() > 0.01:
                 result = self.iris_enhancer.enhance(
                     result, regions.right_iris,
-                    saturate_strength=iris_sat_s,
-                    hue_shift=iris_hue_shift,
-                    brightness_strength=iris_bright_s,
+                    saturate_strength=iris_sat_s * right_scale,
+                    hue_shift=iris_hue_shift * right_scale,
+                    brightness_strength=iris_bright_s * right_scale,
                 )
 
         return result

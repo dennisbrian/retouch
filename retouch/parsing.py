@@ -18,8 +18,6 @@ import logging
 import numpy as np
 import os
 import onnxruntime as ort
-from .perf_optimizations import build_ort_providers
-
 from .model_fetch import model_status
 from .utils import create_polygon_mask, feather_mask, get_points, normalize_mask
 
@@ -80,12 +78,23 @@ def _masks_from_label_map(
     """
     bisenet_masks = {}
 
-    # Generate binary masks for required classes
+    # BiSeNet is trained on CelebAMask-HQ, which labels eyes/eyebrows in
+    # *subject-anatomical* convention: class 4 = the subject's left eye,
+    # which appears on the camera's RIGHT (higher x in a frontal crop).  The
+    # rest of this codebase (MediaPipe landmark clusters LEFT_EYE/RIGHT_EYE
+    # below, and the regions.left_*/right_* fields consumers read) uses
+    # camera-viewer convention: left = camera-left = lower x.  Swap the
+    # BiSeNet eye/eyebrow classes here so the region fields describe the same
+    # physical eye as the landmark-derived iris masks.  Without this swap
+    # `left_sclera = clip(left_eye - left_iris)` subtracts two disjoint eyes
+    # and is a total no-op (see docs/review/REVIEW_EYE_VISIBILITY_GATE_2026_08_26.md §P0/P1).
+    # The synthetic feather tests place label 4 at camera-left, which happens
+    # to match the post-swap 'right_eye' key assignment, so they stay green.
     bisenet_masks['skin'] = (full_label_map == 1).astype(np.float32)
-    bisenet_masks['left_eyebrow'] = (full_label_map == 2).astype(np.float32)
-    bisenet_masks['right_eyebrow'] = (full_label_map == 3).astype(np.float32)
-    bisenet_masks['left_eye'] = (full_label_map == 4).astype(np.float32)
-    bisenet_masks['right_eye'] = (full_label_map == 5).astype(np.float32)
+    bisenet_masks['right_eyebrow'] = (full_label_map == 2).astype(np.float32)
+    bisenet_masks['left_eyebrow'] = (full_label_map == 3).astype(np.float32)
+    bisenet_masks['right_eye'] = (full_label_map == 4).astype(np.float32)
+    bisenet_masks['left_eye'] = (full_label_map == 5).astype(np.float32)
     bisenet_masks['mouth_interior'] = (full_label_map == 11).astype(np.float32)
     bisenet_masks['lips'] = ((full_label_map == 12) | (full_label_map == 13)).astype(np.float32)
     bisenet_masks['neck'] = (full_label_map == 14).astype(np.float32)
@@ -156,6 +165,14 @@ FACE_OVAL = [
     172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109,
 ]
 
+# MediaPipe face-mesh eye/eyebrow contours, in **camera-viewer** convention:
+# LEFT_EYE / LEFT_IRIS describe the eye on the camera's left (lower x in a
+# frontal crop).  This matches the regions.left_*/right_* field convention
+# consumed downstream, but is the OPPOSITE of the subject-anatomical
+# convention used by BiSeNet (CelebAMask-HQ) and by face_quality.py's
+# LEFT_EYE_INDICES.  The BiSeNet label→key swap in _masks_from_label_map
+# reconciles the two so regions.left_iris and regions.left_eye describe the
+# same physical eye.  See docs/review/REVIEW_EYE_VISIBILITY_GATE_2026_08_26.md §P1.
 LEFT_EYE = [
     33, 246, 161, 160, 159, 158, 157, 173, 133, 155, 154, 153,
     145, 144, 163, 7,
@@ -246,6 +263,9 @@ class FaceRegions:
         "nasolabial_l", "nasolabial_r",
         "crows_feet_l", "crows_feet_r",
         "cloth",
+        # Cached once per face so downstream eye consumers reuse the same
+        # visibility decision instead of recomputing EAR/contrast.
+        "_eye_gate_cache",
     ]
 
     def __init__(self) -> None:
@@ -273,9 +293,12 @@ class FaceParser:
 
         if self._model_path and os.path.exists(self._model_path):
             try:
-                # Auto-discover execution providers in order of preference
-                providers = build_ort_providers()
-                
+                # BiSeNet exposes dynamic batch/output shapes and currently
+                # fails CoreML MLProgram compilation on the supported macOS
+                # runtime. Keep this parser deterministic on CPU while other
+                # ONNX models remain eligible for hardware acceleration.
+                providers = ["CPUExecutionProvider"]
+
                 self._sess = ort.InferenceSession(self._model_path, providers=providers)
                 logger.info("ONNX Runtime initialized with active providers: %s", self._sess.get_providers())
             except Exception as e:

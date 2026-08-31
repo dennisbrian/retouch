@@ -285,6 +285,7 @@ class ProcessingContext:
     micro_grain: float = 0.0
     split_toning: float = 0.0
     catchlight_synthetic: bool = False
+    eye_gate: bool = True
 
     reshape_jaw_width_l: float = 0.0
     reshape_jaw_width_r: float = 0.0

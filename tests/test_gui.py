@@ -62,7 +62,7 @@ EXPECTED_RECIPE_KEYS = [
     "catchlight", "chromatic_aberration", "clarity", "clarity_split_neg", "clarity_split_pos",
     "color_grade", "color_transfer_intensity", "contrast", "cosplay_consistency_strength", "cosplay_stockings_smooth",
     "cosplay_wig_lace_blend", "cyan_midtone_grade", "dark_circles", "dodge_burn", "equalize",
-    "eye_enhance", "eye_iris_brightness", "eye_iris_hue_shift", "eye_iris_saturate", "eye_sclera_brighten",
+    "eye_enhance", "eye_gate", "eye_iris_brightness", "eye_iris_hue_shift", "eye_iris_saturate", "eye_sclera_brighten",
     "eye_sclera_vessel_remove", "fabric_wrinkle_smooth", "face_exposure", "fade_toe", "film_crosstalk_cy_mg",
     "film_crosstalk_cy_ye", "film_crosstalk_mg_ye", "film_enable", "film_gamma", "film_midpoint",
     "film_highlight_purity", "film_shoulder_b", "film_shoulder_g", "film_shoulder_r", "film_skew", "film_strength",
@@ -105,7 +105,7 @@ for color in ["red", "green", "blue"]:
     EXPECTED_RECIPE_KEYS.extend([f"calibration_{color}_hue", f"calibration_{color}_sat", f"calibration_{color}_lum"])
 EXPECTED_RECIPE_KEYS.append("lens_blur")
 
-EXPECTED_RECIPE_KEY_COUNT = 251
+EXPECTED_RECIPE_KEY_COUNT = 252
 # Self-updating: the recipe/smart-style slider tuple length is the contract
 # defined by RECIPE_OUTPUT_KEYS, so this constant can never go stale.
 EXPECTED_UI_OUTPUT_COUNT = len(gui.RECIPE_OUTPUT_KEYS)
@@ -840,10 +840,10 @@ class TestResetFunctions:
         assert isinstance(result, tuple)
         assert len(result) == 3
 
-    def test_reset_eyes_lips_returns_sixteen_values(self):
+    def test_reset_eyes_lips_returns_seventeen_values(self):
         result = gui.reset_eyes_lips("natural")
         assert isinstance(result, tuple)
-        assert len(result) == 16
+        assert len(result) == 17
 
     def test_reset_face_reshaping_returns_slimming_int(self):
         result = gui.reset_face_reshaping("natural")

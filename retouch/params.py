@@ -958,6 +958,14 @@ _FACE_FEATURE_PARAMS = [
         max_val=100,
     ),
     ParamSpec(
+        name="eye_gate",
+        cli_flag="eye-gate",
+        cli_type=bool,
+        default=True,
+        recipe_key="eyes.gate",
+        conversion="bool_flag",
+    ),
+    ParamSpec(
         name="backdrop_cleanup",
         cli_flag="backdrop-cleanup",
         cli_type=int,

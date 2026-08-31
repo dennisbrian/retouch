@@ -29,6 +29,8 @@ from .frequency import FrequencySeparator
 from .freckle import FreckleRemover
 from .lighting import LightDirection
 from .safe_auto import confidence_evidence, decide, decide_mask_stage
+from .eye_visibility import gate_occluded_eye_regions
+from .eye_artifact_safety import assess_eye_artifact_scales, resolve_eye_scale
 
 
 def _build_smooth_mask(
@@ -271,6 +273,27 @@ def _process_face_core(
     # but it must not erase/dampen these user-requested pixels. A future
     # inferred automatic delta must carry its own baseline and decision.
     safe_auto_decisions: list[Dict[str, Any]] = []
+
+    # Gate once at the per-face pipeline boundary so every downstream
+    # consumer—including the selective-sharpening mask built near the end—
+    # sees the same per-eye visibility decision.  The enhancer call sites
+    # retain their idempotent guard for direct callers of those classes.
+    # EAR requires landmarks + image dims; contrast requires the ROI canvas.
+    # Both degrade gracefully (fail-open) when unavailable.  ParamSpec
+    # ``eye_gate`` (default on) lets a user disable the guard entirely.
+    if getattr(ctx, "eye_gate", True):
+        regions = gate_occluded_eye_regions(
+            regions,
+            landmarks=getattr(shifted_face, "landmarks", None),
+            img_bgr=canvas,
+        )
+
+    # The visibility gate answers whether an eye may be edited at all.  This
+    # second guard answers how strongly the overlapping legacy/v0 eye stacks
+    # can be rendered at the source's native support.  Small irises and
+    # already-saturated eye colour smoothly back off; ordinary close portraits
+    # retain scale 1.0.  Compute once before either eye stack changes pixels.
+    eye_artifact_scales = assess_eye_artifact_scales(canvas, regions)
 
     skin = processors['skin']
     relighter = processors['relighter']
@@ -784,12 +807,18 @@ def _process_face_core(
         )
 
     # ---- Eye enhancement ----
-    if ctx.eye_enhance > 0 or ctx.eye_sclera_vessel_remove > 0 or getattr(ctx, "corneal_shading", 0.0) > 0:
+    if (ctx.eye_enhance > 0 or ctx.catchlight > 0
+            or ctx.eye_sclera_vessel_remove > 0
+            or getattr(ctx, "corneal_shading", 0.0) > 0):
         canvas = _tr('eyes.enhance', canvas)
         canvas = eyes.enhance(canvas, regions, ctx.eye_enhance,
                               catchlight_strength=ctx.catchlight if ctx.catchlight > 0 else None,
                               vessel_strength=ctx.eye_sclera_vessel_remove,
-                              corneal_strength=int(getattr(ctx, "corneal_shading", 0.0)))
+                              corneal_strength=int(getattr(ctx, "corneal_shading", 0.0)),
+                              eye_scales=eye_artifact_scales,
+                              synthetic_catchlight=bool(
+                                  getattr(ctx, "catchlight_synthetic", False)
+                              ))
 
     # ---- Eye Enhancement v0 (sclera brightening + iris saturation/hue/brightness) ----
     eye_v0_active = (ctx.eye_sclera_brighten > 0 or ctx.eye_iris_saturate > 0 or
@@ -805,6 +834,7 @@ def _process_face_core(
             iris_saturate=ctx.eye_iris_saturate,
             iris_hue_shift=ctx.eye_iris_hue_shift,
             iris_brightness=ctx.eye_iris_brightness,
+            eye_scales=eye_artifact_scales,
         )
         canvas = canvas_uint8.astype(np.float32)
 
@@ -1007,8 +1037,23 @@ def _process_face_core(
 
     # ---- Build sharpening mask ----
     acc_sharpen = np.zeros((roi_h, roi_w), dtype=np.float32)
-    eye_sharpen = _accum(np.zeros((roi_h, roi_w), np.float32), regions.left_eye)
-    eye_sharpen = _accum(eye_sharpen, regions.right_eye)
+    left_eye_sharpen = None
+    if regions.left_eye is not None:
+        left_eye_sharpen = (
+            _norm_mask(regions.left_eye)
+            * resolve_eye_scale(eye_artifact_scales, "left")
+        )
+    right_eye_sharpen = None
+    if regions.right_eye is not None:
+        right_eye_sharpen = (
+            _norm_mask(regions.right_eye)
+            * resolve_eye_scale(eye_artifact_scales, "right")
+        )
+    eye_sharpen = _accum(
+        np.zeros((roi_h, roi_w), np.float32),
+        left_eye_sharpen,
+    )
+    eye_sharpen = _accum(eye_sharpen, right_eye_sharpen)
 
     other_sharpen = _accum(np.zeros((roi_h, roi_w), np.float32), regions.left_eyebrow)
     other_sharpen = _accum(other_sharpen, regions.right_eyebrow)

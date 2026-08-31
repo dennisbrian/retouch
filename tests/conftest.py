@@ -17,6 +17,35 @@ def pytest_addoption(parser):
     )
 
 
+# ---------------------------------------------------------------------------
+# Eye-visibility gate mutation harness
+# ---------------------------------------------------------------------------
+# Run normally:            .venv/bin/python -m pytest tests/test_eye_visibility.py -q
+# Run with gate disabled:  GATE_MUTATE=1 .venv/bin/python -m pytest tests/test_eye_visibility.py -q
+# Under GATE_MUTATE the gate is replaced by identity in every namespace that
+# binds the symbol, so a test that still passes proves it never depended on
+# the gate (the non-vacuity property the review §B3 demanded).
+@pytest.fixture(autouse=True)
+def _maybe_mutate_gate(monkeypatch):
+    if os.environ.get("GATE_MUTATE") != "1":
+        return
+    import retouch.eye_enhancement
+    import retouch.eye_visibility
+    import retouch.eyes
+    import retouch.perf_optimizations
+
+    def _identity(regions, landmarks=None, img_bgr=None, width=None, height=None):
+        return regions
+
+    for module in (
+        retouch.eye_visibility,
+        retouch.eyes,
+        retouch.eye_enhancement,
+        retouch.perf_optimizations,
+    ):
+        monkeypatch.setattr(module, "gate_occluded_eye_regions", _identity)
+
+
 def _check_cv2():
     """Skip if cv2 not available."""
     if cv2 is None:

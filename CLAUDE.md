@@ -3,7 +3,7 @@
 **Project:** Professional automated face retouching pipeline  
 **Repository:** https://github.com/dennisbrian/retouch  
 **Status:** Mature (v2.0.0 — Fuji-quality color recipe system)  
-**Last Updated:** 2026-07-22
+**Last Updated:** 2026-08-26
 
 ---
 
@@ -115,7 +115,7 @@ prefer `--max-dim 2048` or `quality="draft"` for multi-recipe sweeps.
 ## Testing & Quality
 
 ### Test Coverage
-- **4,125 tests collected** (`pytest --collect-only`, 2026-07-26) — full-suite pass/fail baseline not re-run at this count
+- **4,555 tests collected** (`pytest --collect-only`, 2026-08-26) — full-suite pass/fail baseline not re-run at this count
 - **89% coverage** on core modules (per `pytest --cov`; last measured 2026-07-01)
 - **Unit + integration tests** for every public API
 - **Deep algorithmic verification** (monotonicity checks, round-trip stability, etc.)
@@ -150,6 +150,10 @@ prefer `--max-dim 2048` or `quality="draft"` for multi-recipe sweeps.
 - ✅ 2026-07-14 `tests/test_cosplay_moat.py` bare-`RetouchEngine()` → module `engine` fixture (same teardown pattern as skin_locus)
 - ✅ 2026-07-14 `test_ext_map_keys_match_radio_choices` — expect `PNG-16` (map already had it; test was stale)
 - ✅ 2026-08-19 golden-v2 face-path harness: `test_golden_pipeline.py`'s synthetic image has no detectable face (0 faces → `_no_face_fallback`), so its `natural` snapshot was byte-identical to raw input — the entire per-face pipeline was untested. `tests/test_golden_pipeline_face.py` + `tests/golden_face_fixture.py` inject a real `FaceContext` (frozen real anatomical landmarks, ONNX-free `_landmark_fallback_only` regions) via `face_contexts=`, exercising skin/eye/lip ops for real. Mutation-verified: perturbing `SKIN_LOCI`/`equalize` strength moves the recipe hashes.
+- ✅ 2026-08-26 P0/P1 eye handedness fix: BiSeNet (CelebAMask-HQ subject-anatomical labels 4/5 + 2/3) vs parsing.py's camera-viewer convention were opposite, so `left_sclera = clip(left_eye - left_iris)` subtracted two disjoint eyes — a total no-op, and sclera brightening painted the *other* eye's iris. Swap applied in `_masks_from_label_map` (single translation point; both `parse()` and `parse_batch()`); verified empirically on real BiSeNet output (DSCF4463/4503/4550: `array_equal(left_sclera, left_eye)` → False, same-side iris-inside-sclera ~0.75-0.92). Golden face hashes intentionally changed (per-eye catchlight fix below) — snapshots updated. Full detail: `docs/review/REVIEW_EYE_VISIBILITY_GATE_2026_08_26.md` §P0/P1.
+- ✅ 2026-08-26 per-eye `_enhance_catchlights` (B6 latent bug): pooling both irises into one mask coupled the eyes — gating one side shifted the pooled centroid, resurfacing a synthetic catchlight on the *visible* eye the pre-change code never drew (with two eyes present the pooled centroid lands *between* the irises and `*iris_mask` annihilates it — the synthetic fallback was effectively dead code for two-eye faces). Now called once per iris.
+- ✅ 2026-08-26 eye-visibility gate shipped (EAR-primary + tone-adaptive contrast secondary): `retouch/eye_visibility.py` gates per-eye enhancement when the eyelid is closed or the iris-vs-sclera contrast collapses (only when BiSeNet eye mask ≥ 100 px — class-5 collapse on ~65% of real portraits is model fragility, NOT occlusion, and fails open). Gate hoisted into `_process_face_core` so the weight-1.0 sharpen mask sees gated regions too (B5). Memoized on `FaceRegions._eye_gate_cache` (§4 perf). ParamSpec `eye_gate` (default on) + GUI checkbox + log line on every gating decision. Mutation-tested (GATE_MUTATE=1 → 2 integration tests fail): `tests/test_eye_visibility.py` + harness in `tests/conftest.py`. **Initial thresholds (EAR < 0.12 / contrast < 0.45) were later found miscalibrated — see 2026-08-31 entry below for the corrected values; do not use this entry's original numbers.**
+- ✅ 2026-08-31 eye-gate threshold recalibration: the 2026-08-26 gate's shipped thresholds failed their own acceptance criterion — `docs/plans/RESEARCH_EYE_OCCLUSION_RESULTS_2026_08_31.md` (83-image DSCF corpus, 166 eyes, both BiSeNet and landmark-fallback arms) found `_MIN_EAR=0.12` missed 16/19 (84%) genuinely closed eyes because it was calibrated against a mislabeled anchor (DSCF4454-R recorded as "plainly open" at EAR 0.136 is actually closed at 300px). True measured floor: occluded EAR range 0.101–0.283, visible floor 0.194. Shipped `_MIN_EAR=0.285` / `_MIN_CONTRAST=0.55` (exhaustive grid search over both arms, re-verified directly against the study's raw `sweep_full.json`/`labels.json` rather than trusting the doc's rounded `0.28` recommendation, which sat *below* the measured occluded ceiling and would have missed DSCF4454-L) — 0/38 occluded eyes missed, 13/244 visible eyes false-gated (5.3%) on the corpus; also verified the golden-face fixture's frozen open-eye landmarks (EAR 0.288) clear the new threshold so `test_golden_pipeline_face.py` still exercises eye ops. Verified on real renders (DSCF4576, DSCF6961, DSCF4612, DSCF4454) with the gate forced on/off. Still provisional: hard-case sourcing (hair/wig/sunglasses — corpus has zero), Fitzpatrick IV-VI stratum, and a second labeler pass remain open per that doc's §6.
 
 ---
 

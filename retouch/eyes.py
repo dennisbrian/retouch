@@ -8,7 +8,7 @@ Three independent sub-modules:
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 import cv2
 import numpy as np
@@ -18,6 +18,8 @@ from .utils import (
     bgr_f32_to_lab_f32,
     lab_f32_to_bgr_f32,
 )
+from .eye_visibility import gate_occluded_eye_regions
+from .eye_artifact_safety import resolve_eye_scale
 
 
 def _to_lab(img: np.ndarray, is_float: bool) -> np.ndarray:
@@ -59,6 +61,8 @@ class EyeEnhancer:
         catchlight_strength: Optional[int] = None,
         vessel_strength: Optional[int] = None,
         corneal_strength: int = 0,
+        eye_scales: Optional[Mapping[str, Mapping[str, Any]]] = None,
+        synthetic_catchlight: bool = False,
     ) -> np.ndarray:
         """Run the full eye enhancement pipeline.
 
@@ -70,57 +74,135 @@ class EyeEnhancer:
                 falls back to ``strength`` (backward compatible).
             corneal_strength: 0–100 corneal curvature shading intensity
                 (AA5). 0 disables; off by default.
+            eye_scales: Optional source-adaptive per-eye strength evidence.
+                Omitted by direct callers for backward compatibility; the
+                full face pipeline supplies it before either eye stack runs.
+            synthetic_catchlight: Whether a missing source catchlight may be
+                synthesized. False by default so ordinary retouching only
+                amplifies catchlights that were actually photographed.
 
         Returns:
             (H, W, 3) result matching input dtype.
         """
-        if strength <= 0 and (vessel_strength is None or vessel_strength <= 0):
+        catchlight_s = (
+            catchlight_strength
+            if catchlight_strength is not None
+            else strength
+        )
+        vessel_s = vessel_strength if vessel_strength is not None else strength
+        cosmetic_active = (
+            strength > 0
+            or catchlight_s > 0
+            or corneal_strength > 0
+        )
+        if not cosmetic_active and vessel_s <= 0:
             return img_bgr
+
+        # Landmark iris masks can survive a hair/wig occlusion. Gate only the
+        # unreliable eye on a shallow regions copy so visible eyes keep their
+        # normal enhancement and callers retain the original masks. The gate
+        # is normally already applied upstream in _process_face_core; this
+        # re-application is idempotent (zeroed masks gate no further) and
+        # protects direct callers of this class. Sclera-vessel removal is an
+        # independent eye-whites operation, so a vessel-only request must not
+        # be turned into a no-op by an iris visibility decision.
+        if cosmetic_active:
+            regions = gate_occluded_eye_regions(regions, img_bgr=img_bgr)
 
         is_float = img_bgr.dtype == np.float32
 
         s = strength / 100.0
+        left_scale = resolve_eye_scale(eye_scales, "left")
+        right_scale = resolve_eye_scale(eye_scales, "right")
         result = img_bgr.copy()
 
-        # Eye whites — combine both eyes
-        whites_mask_l = getattr(regions, "left_sclera", None)
-        if whites_mask_l is None:
-            whites_mask_l = np.clip(regions.left_eye - regions.left_iris, 0, 1)
-        whites_mask_r = getattr(regions, "right_sclera", None)
-        if whites_mask_r is None:
-            whites_mask_r = np.clip(regions.right_eye - regions.right_iris, 0, 1)
-        whites_mask = np.clip(whites_mask_l + whites_mask_r, 0, 1)
-        result = self._enhance_whites(result, whites_mask, s)
+        # Eye whites and vessel removal need sclera masks; independent
+        # catchlight/corneal requests do not. Keep this work lazy so those
+        # controls remain isolated from unrelated sclera-mask construction.
+        if strength > 0 or vessel_s > 0:
+            whites_mask_l = getattr(regions, "left_sclera", None)
+            if whites_mask_l is None:
+                whites_mask_l = np.clip(
+                    regions.left_eye - regions.left_iris,
+                    0,
+                    1,
+                )
+            whites_mask_r = getattr(regions, "right_sclera", None)
+            if whites_mask_r is None:
+                whites_mask_r = np.clip(
+                    regions.right_eye - regions.right_iris,
+                    0,
+                    1,
+                )
+            whites_mask = np.clip(whites_mask_l + whites_mask_r, 0, 1)
 
-        # Sclera vessel removal — iris-safe, runs only inside whites_mask
-        v_s = vessel_strength if vessel_strength is not None else strength
-        if v_s > 0:
-            result = self._remove_sclera_vessels(result, whites_mask, v_s)
+            if strength > 0:
+                whites_enhance_mask = np.clip(
+                    whites_mask_l * left_scale + whites_mask_r * right_scale,
+                    0,
+                    1,
+                )
+                result = self._enhance_whites(result, whites_enhance_mask, s)
+
+            # Sclera vessel removal is iris-safe and independent of cosmetic
+            # eye visibility, so its mask deliberately stays unscaled.
+            if vessel_s > 0:
+                result = self._remove_sclera_vessels(
+                    result,
+                    whites_mask,
+                    vessel_s,
+                )
 
         # Iris — sculpt each eye separately
-        if regions.left_iris is not None and regions.left_iris.max() > 0.01:
-            result = self._sculpt_iris(result, regions.left_iris, s)
-        if regions.right_iris is not None and regions.right_iris.max() > 0.01:
-            result = self._sculpt_iris(result, regions.right_iris, s)
+        if strength > 0:
+            if regions.left_iris is not None and regions.left_iris.max() > 0.01:
+                result = self._sculpt_iris(result, regions.left_iris, s * left_scale)
+            if regions.right_iris is not None and regions.right_iris.max() > 0.01:
+                result = self._sculpt_iris(result, regions.right_iris, s * right_scale)
 
         # Corneal curvature — 3D spherical specular shading per eye (AA5),
         # opt-in via corneal_shading; off by default so existing recipes are unchanged
         if corneal_strength > 0:
-            for eye_m in (regions.left_iris, regions.right_iris):
-                result = apply_corneal_curvature_shading(result, eye_m, corneal_strength / 100.0)
+            for eye_m, scale in (
+                (regions.left_iris, left_scale),
+                (regions.right_iris, right_scale),
+            ):
+                result = apply_corneal_curvature_shading(
+                    result,
+                    eye_m,
+                    corneal_strength / 100.0 * scale,
+                )
 
-        # Catchlights — detect and amplify existing highlights or synthesize fallback
-        iris_mask = np.clip(regions.left_iris + regions.right_iris, 0, 1)
-        cl_s = catchlight_strength if catchlight_strength is not None else strength
-        result = self._enhance_catchlights(result, iris_mask, cl_s / 100.0, synthetic_fallback=True)
+        # Catchlights — detect and amplify existing highlights. Synthesis is
+        # opt-in only. Run per-eye: pooling both irises into one mask couples
+        # the eyes, so gating one side shifts the pooled centroid and can
+        # manufacture a highlight on the other eye.
+        if catchlight_s > 0:
+            for iris_m, scale in (
+                (regions.left_iris, left_scale),
+                (regions.right_iris, right_scale),
+            ):
+                if iris_m is None or float(iris_m.max()) < 0.01:
+                    continue
+                result = self._enhance_catchlights(
+                    result,
+                    iris_m,
+                    catchlight_s / 100.0 * scale,
+                    synthetic_fallback=synthetic_catchlight,
+                )
 
 
         # Specular catchlight boost — small +10% on detected iris specular pixels
         if catchlight_strength and catchlight_strength > 0:
             s_spec = catchlight_strength / 100.0
             boost = 0.10 * s_spec
-            for iris_m in (regions.left_iris, regions.right_iris):
+            for iris_m, scale in (
+                (regions.left_iris, left_scale),
+                (regions.right_iris, right_scale),
+            ):
                 if iris_m is None or iris_m.max() < 0.01:
+                    continue
+                if scale <= 0.0:
                     continue
                 lab = _to_lab(result, is_float)
                 l_chan = lab[:, :, 0]
@@ -130,7 +212,10 @@ class EyeEnhancer:
                 h, w = l_chan.shape
                 k = max(3, int(min(h, w) * 0.005)) | 1
                 specular = cv2.GaussianBlur(specular, (k, k), 0)
-                lab[:, :, 0] = np.minimum(l_chan + 255.0 * boost * specular, 255.0)
+                lab[:, :, 0] = np.minimum(
+                    l_chan + 255.0 * boost * scale * specular,
+                    255.0,
+                )
                 result = _from_lab(lab, is_float)
 
         return result
@@ -482,4 +567,3 @@ def apply_corneal_curvature_shading(
     if is_float:
         return out.astype(np.float32)
     return out
-
