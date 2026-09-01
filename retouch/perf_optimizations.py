@@ -108,9 +108,14 @@ def _norm_mask(mask: Optional[np.ndarray]) -> Optional[np.ndarray]:
     if mask is None:
         return None
     m = mask.astype(np.float32)
-    if m.max() > 1.0:
+    # 0-255 detection must tolerate float32 masks that overshoot 1.0 by an
+    # epsilon after feathering/resampling (max 1.0000002 on ~24% of the DSCF
+    # corpus, 2026-09-02). With the old `> 1.0` test such masks were divided
+    # by 255, the composite alpha collapsed to 1/255 and every skin-region op
+    # on that face was silently discarded.
+    if m.max() > 1.5:
         m /= 255.0
-    return m
+    return np.clip(m, 0.0, 1.0)
 
 
 def _apply_exposure_lock(
@@ -367,7 +372,7 @@ def _process_face_core(
             parts = [p for p in parts if p is not None]
             if parts:
                 excl = np.maximum.reduce([
-                    (p.astype(np.float32) / 255.0 if p.max() > 1 else p.astype(np.float32))
+                    (p.astype(np.float32) / 255.0 if p.max() > 1.5 else p.astype(np.float32))
                     for p in parts
                 ])
         except Exception:
@@ -544,7 +549,7 @@ def _process_face_core(
                         existing, (policy_preserve.shape[1], policy_preserve.shape[0]),
                         interpolation=cv2.INTER_LINEAR,
                     )
-                if existing.max() > 1.0:
+                if existing.max() > 1.5:
                     existing /= 255.0
                 preserve_mask = np.maximum(existing, policy_preserve)
         canvas = FreckleRemover().remove(

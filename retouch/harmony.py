@@ -32,7 +32,7 @@ def _mask(mask: Optional[np.ndarray], shape: tuple[int, int]) -> Optional[np.nda
     if out.shape != shape:
         out = cv2.resize(out.astype(np.float32), (shape[1], shape[0]), interpolation=cv2.INTER_LINEAR)
     out = out.astype(np.float32)
-    if out.max() > 1.0:
+    if out.max() > 1.5:
         out /= 255.0
     return np.clip(out, 0.0, 1.0)
 

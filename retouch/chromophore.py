@@ -132,7 +132,7 @@ def reconstruct_from_chromophores(
             per_px = resid.mean(axis=-1)
             if skin_mask is not None:
                 m = skin_mask.astype(np.float32)
-                if m.max() > 1.0:
+                if m.max() > 1.5:
                     m = m / 255.0
                 sel = per_px[m > 0.5]
                 c_val = float(np.median(sel)) if sel.size else 0.0

@@ -41,7 +41,7 @@ def _prep_mask(mask: Optional[np.ndarray], h: int, w: int) -> Optional[np.ndarra
     if m.shape[:2] != (h, w):
         m = cv2.resize(m.astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR)
     m = m.astype(np.float32)
-    if m.max() > 1.0:
+    if m.max() > 1.5:
         m = m / 255.0
     return np.clip(m, 0.0, 1.0)
 

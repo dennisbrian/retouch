@@ -171,7 +171,7 @@ class BackgroundReplacer:
 
         pm = person_mask.astype(np.float32, copy=False)
         pm = squeeze_mask(pm)
-        if pm.max() > 1.0:
+        if pm.max() > 1.5:
             pm = pm / 255.0
         pm = normalize_mask(pm)
         if pm is None:

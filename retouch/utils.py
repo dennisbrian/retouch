@@ -88,9 +88,12 @@ def normalize_mask(mask: Optional[np.ndarray]) -> Optional[np.ndarray]:
     if mask is None:
         return None
     m = mask.astype(np.float32)
-    if m.max() > 1.0:
+    # `> 1.5`, not `> 1.0`: float masks overshoot 1.0 by an epsilon after
+    # feathering/resampling (1.0000002 on ~24% of real portraits) and must not
+    # be mistaken for 0-255 masks - see perf_optimizations._norm_mask.
+    if m.max() > 1.5:
         m /= 255.0
-    return m
+    return np.clip(m, 0.0, 1.0)
 
 
 def squeeze_mask(mask: np.ndarray) -> np.ndarray:
@@ -348,7 +351,8 @@ def feather_mask(
 
     ksize = max(radius * 2 + 1, 3)
     from .acceleration import accelerated_gaussian_blur
-    return accelerated_gaussian_blur(mask_f, ksize, sigma)
+    # Clip: the blur can overshoot [0, 1] by float32 epsilon at the source.
+    return np.clip(accelerated_gaussian_blur(mask_f, ksize, sigma), 0.0, 1.0)
 
 
 

@@ -114,7 +114,7 @@ def _aa6_mask(mask: Optional[np.ndarray], shape: tuple[int, int]) -> np.ndarray:
     if mask.shape != shape:
         raise ValueError("AA6 masks must match the image dimensions")
     mask_f = mask.astype(np.float32, copy=False)
-    if mask_f.max() > 1.0:
+    if mask_f.max() > 1.5:
         mask_f = mask_f / 255.0
     return mask_f > 0.5
 
@@ -259,7 +259,7 @@ def detect_banding(
     # Restrict to provided mask if given
     if mask is not None:
         mask_f = mask.astype(np.float32)
-        if mask_f.max() > 1.0:
+        if mask_f.max() > 1.5:
             mask_f /= 255.0
         smooth_mask = smooth_mask & (mask_f > 0.5)
 
@@ -333,7 +333,7 @@ def detect_clipping(
     # Apply mask if given
     if mask is not None:
         mask_f = mask.astype(np.float32)
-        if mask_f.max() > 1.0:
+        if mask_f.max() > 1.5:
             mask_f /= 255.0
         clipped_any = clipped_any & (mask_f > 0.5)
 
@@ -420,7 +420,7 @@ def detect_plastic_skin(
     # Apply mask if given
     if mask is not None:
         mask_f = mask.astype(np.float32)
-        if mask_f.max() > 1.0:
+        if mask_f.max() > 1.5:
             mask_f /= 255.0
 
         # Restrict calculation to masked region
@@ -453,7 +453,7 @@ def detect_plastic_skin(
 
         if mask is not None:
             mask_f = mask.astype(np.float32)
-            if mask_f.max() > 1.0:
+            if mask_f.max() > 1.5:
                 mask_f /= 255.0
 
             L_ref_masked = L_ref[mask_f > 0.5]
@@ -559,7 +559,7 @@ def detect_halo(
 
     if mask is not None:
         mask_f = mask.astype(np.float32)
-        if mask_f.max() > 1.0:
+        if mask_f.max() > 1.5:
             mask_f /= 255.0
         baseline_masked = baseline_vals[mask_f[edge_band > 0].astype(bool)] if edge_band[mask_f > 0.5].sum() > 0 else np.array([], dtype=np.float32)
         forward_masked = forward_vals[mask_f[forward_band > 0].astype(bool)] if forward_band[mask_f > 0.5].sum() > 0 else np.array([], dtype=np.float32)
@@ -609,7 +609,7 @@ def detect_seam(
     grad_mag = np.sqrt(grad_x**2 + grad_y**2)
     if person_mask is not None:
         mask_f = person_mask.astype(np.float32)
-        if mask_f.max() > 1.0:
+        if mask_f.max() > 1.5:
             mask_f /= 255.0
         boundary = (cv2.dilate((mask_f > 0.5).astype(np.uint8), np.ones((5, 5), np.uint8)) ^
                     cv2.erode((mask_f > 0.5).astype(np.uint8), np.ones((5, 5), np.uint8)))
@@ -777,7 +777,7 @@ def detect_color_drift(
 
     if skin_mask is not None:
         mask_f = skin_mask.astype(np.float32)
-        if mask_f.max() > 1.0:
+        if mask_f.max() > 1.5:
             mask_f /= 255.0
         region = mask_f > 0.5
     else:
@@ -991,7 +991,7 @@ def detect_over_retouch_asymmetry(
         zones = {name: (m.astype(np.float32)) for name, m in zone_masks.items()}
     elif skin_mask is not None:
         sm = skin_mask.astype(np.float32)
-        if sm.max() > 1.0:
+        if sm.max() > 1.5:
             sm /= 255.0
         sm = sm > 0.5
         if not np.any(sm):
@@ -1023,7 +1023,7 @@ def detect_over_retouch_asymmetry(
     zone_energies: Dict[str, float] = {}
     for name, m in zones.items():
         m = m.astype(np.float32)
-        if m.max() > 1.0:
+        if m.max() > 1.5:
             m /= 255.0
         idx = m > 0.5
         if idx.sum() < 4:
@@ -1096,7 +1096,7 @@ def gui_skin_score(
     lab = _bgr_to_lab(u)
     if skin_mask is not None:
         sm = skin_mask.astype(np.float32)
-        if sm.max() > 1.0:
+        if sm.max() > 1.5:
             sm /= 255.0
         region = sm > 0.5
     else:

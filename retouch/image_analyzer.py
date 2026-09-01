@@ -107,7 +107,7 @@ def _normalize_mask(mask: Optional[np.ndarray], ref_shape: Tuple[int, int]) -> O
     if mask is None:
         return None
     m = mask.astype(np.float32)
-    if m.max() > 1.0:
+    if m.max() > 1.5:
         m = m / 255.0
     if m.shape != ref_shape:
         m = cv2.resize(m, (ref_shape[1], ref_shape[0]), interpolation=cv2.INTER_AREA)
