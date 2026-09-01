@@ -407,6 +407,7 @@ Passing an explicit value override to these parameters takes precedence over the
 *   **`undereye_puffiness_reduction`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `undereye.puffiness_reduction`): Adjusts the undereye puffiness reduction parameter.
 *   **`eye_sclera_brighten`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `eye.sclera_brighten`): Adjusts the eye sclera brighten parameter.
 *   **`eye_sclera_vessel_remove`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `eyes.sclera_vessel_remove`): Adjusts the eye sclera vessel remove parameter.
+*   **`eye_gate`** (Type: `bool`, Default: `True`, Recipe key: `eyes.gate`): Per-eye occlusion gate — skip enhancing eyes detected as closed/occluded (prevents painting an iris onto hair or a closed lid).
 *   **`eye_iris_saturate`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `eye.iris_saturate`): Adjusts the eye iris saturate parameter.
 *   **`eye_iris_hue_shift`** (Type: `int`, Default: `0`, Range: `-30` to `30`, Recipe key: `eye.iris_hue_shift`): Adjusts the eye iris hue shift parameter.
 *   **`eye_iris_brightness`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `eye.iris_brightness`): Adjusts the eye iris brightness parameter.

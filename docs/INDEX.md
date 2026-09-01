@@ -26,6 +26,21 @@
 
 ## Plans (`docs/plans/`)
 - `MASTER_PLAN.md` — Overall roadmap
+- `PLAN_FACE_RETOUCH_QUALITY_CEILING_IMPLEMENTATION_2026_09_01.md` — Final
+  documentation-only Phase 0–7 implementation roadmap with finite core milestones,
+  46 review units, dependencies, proposed file ownership, owner gates, corpus/model/
+  standards workstreams, tests, evidence, rollout, rollback, and exact completion
+  boundaries
+- `RESEARCH_FACE_RETOUCH_QUALITY_CEILING_2026_09_01.md` — Two-pass current-tree,
+  primary-source face-retouch quality-ceiling research; defines the Photographic
+  Truth Core, Bounded Learned Assist, separate Generative Studio, facial-appearance
+  evidence levels, occlusion/material ownership, calibrated abstention, competitor
+  and standards research, corpus/mutation gates, phased engineering, and explicit
+  authorization/completion boundaries
+- `PLAN_AMGDAY32026_FULL_V2_ENGINEERING_2026_09_01.md` — Documentation-only full_v2
+  engineering specification covering exact-support mouth operations, deterministic
+  colour delivery, complete QA evidence, atomic/resumable batching, calibrated
+  tongue-safe masks, tests, rollback, and explicit authorization/completion gates
 - `PLAN_NEXT_FEATURE_IMPROVEMENTS_2026_08_12.md` — Productization-first next-feature plan
 - `RESEARCH_SMART_WORKSPACE_PRODUCTIZATION_2026_08_29.md` — Priority-ranked Smart/Classic workspace plan covering intent contracts, contextual editing, render lifecycle, safety, delivery, and staged implementation gates
 - `RESEARCH_NEXT_FEATURE_FRONTIER_2026_08_12.md` — Post-Advanced-Retouch workflow and quality frontier research
@@ -48,6 +63,10 @@
 
 ## Review & QA (`docs/review/`)
 - `AUDIT_REPORT.md` — Security & coverage audit
+- `REVIEW_AMGDAY32026_RETOUCH_BATCH_2026_09_01.md` — Documentation-only visual,
+  delivery, and deep-research closeout for the 22-photo Desktop batch; records measured
+  full/draft behaviour, colour/export and QA gaps, tongue-mask corpus evidence, and the
+  prioritized implementation/completion contract
 - `CORE_RECIPE_CERTIFICATION_2026_08_12.md` — 12-recipe automatic and human review gate
 - `METAMORPHIC_ROBUSTNESS_LAB.md` — Cross-cutting input-variant robustness gate and Advanced Retouch evidence runner
 - `REVIEW_EYE_VISIBILITY_GATE_2026_08_26.md` — 15-agent review of the eye-occlusion gate + BiSeNet CPU pin; found P0 sclera no-op / P1 handedness swap (both now fixed), 78% corpus over-gating by mask-area signals (gate rewritten to EAR+contrast), vacuous tests (replaced with mutation-tested suite)

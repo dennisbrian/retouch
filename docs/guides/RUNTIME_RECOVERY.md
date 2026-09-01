@@ -1,6 +1,7 @@
 # Runtime recovery and Python 3.12 migration
 
 **Audit date:** 2026-08-15
+**Last verified:** 2026-08-31 on macOS 26.5 arm64
 
 **Scope:** dependency declarations, isolated-environment recovery, and the
 separate migration track. This guide does not change application Python
@@ -12,17 +13,60 @@ Retouch has two deliberately separate runtime tracks:
 
 | Track | Interpreter | Dependency source | Face backend | Status |
 |---|---|---|---|---|
-| Legacy recovery | CPython 3.9.6 for the immediate recovery target | `pyproject.toml` + locked `uv.lock` | MediaPipe 0.10.5 legacy CPU `mp.solutions.face_mesh` | The current application track; must be installed in isolation |
+| Legacy recovery | CPython 3.11 (3.9 is not installable — see [Onnxruntime wheel gap](#onnxruntime-wheel-gap-and-the-311-recovery-track) below) | `pyproject.toml` + locked `uv.lock` | MediaPipe 0.10.5 legacy CPU `mp.solutions.face_mesh` | The current application track; must be installed in isolation |
 | Python 3.12 migration | CPython 3.12 | `requirements-py312-migration.txt`, then a separately generated migration lock | MediaPipe Tasks `mp.tasks.vision.FaceLandmarker` | Candidate only; the current application modules are not certified against it |
 
 The repository does not currently carry a Python patch-version declaration.
-The 3.9.6 choice above is the exact recovery interpreter for the known
-working direction, not a claim that every Python 3.9 patch release is
-equivalent.
+The 3.11 choice above is the only installable recovery interpreter for the
+legacy lock on the verified platforms (macOS arm64, 2026-08-31), not a claim
+that every Python 3.11 patch release is equivalent.
 
 Do not use the Python 3.12 candidate file with `uv sync`. The project lock is
 the legacy lock and intentionally remains unchanged until the Tasks/API port
 has its own verified resolution and acceptance evidence.
+
+### Onnxruntime wheel gap and the 3.11 recovery track
+
+The original recovery target was CPython 3.9.6, matching the project's
+`requires-python = ">=3.9"`. That path is **not installable** with the current
+`uv.lock`:
+
+- The lock maps `onnxruntime==1.20.1` to `python_full_version < '3.10'`, but
+  onnxruntime 1.20.1 publishes only `cp310`/`cp311`/`cp312`/`cp313` wheels —
+  there is no `cp39` wheel for any platform. `uv sync --locked` hard-fails on
+  CPython 3.9 with: *"onnxruntime (v1.20.1) only has wheels with the following
+  Python implementation tags: cp310, cp311, cp312, cp313"*.
+- The same gap affects the 3.10 branch: `onnxruntime==1.24.3` is mapped to
+  `python_full_version == '3.10.*'` but ships only `cp311`+ wheels.
+
+The only onnxruntime pin in the lock that resolves is `1.26.0` (mapped to
+`python_full_version >= '3.11'`). On CPython 3.11 the lock still preserves
+every other legacy contract pin exactly — `mediapipe==0.10.5`,
+`protobuf==3.20.3`, `opencv-contrib-python==4.11.0.86`, `numpy==1.26.4` —
+so 3.11 is the recovery interpreter. This is not a re-resolution: the lock is
+used unchanged with `--locked`. The single documented deviation is onnxruntime
+itself (`1.26.0` instead of the un-installable `1.20.1`), which still
+satisfies the declared `onnxruntime>=1.16.0` constraint.
+
+Verified on 2026-08-31: `uv sync --locked --extra gui --extra dev` on
+CPython 3.11.15 resolves 147 packages, the dependency gate passes, the runtime
+doctor reports `mode: face-aware` / `backend: mediapipe_legacy`, the detector
+probe initializes, and a real portrait render produces `global_only: false`,
+`face_aware_run: true`, `automatic_pass: true`.
+
+### MediaPipe 0.10.5 universal2 wheel and `pip check`
+
+The `mediapipe==0.10.5` wheel tagged `cp311-cp311-macosx_13_0_x86_64` is a
+universal2 build: its native libraries (`_framework_bindings…so`,
+`_pywrap_*.so`) are fat `x86_64 arm64` binaries verified with `lipo`. On an
+arm64 Mac the WHEEL metadata's `Tag` line advertises only `x86_64`, so
+`pip check` reports *"mediapipe 0.10.5 is not supported on this platform"*.
+
+This is a false alarm. The runtime imports cleanly, `FaceMesh` instantiates,
+the XNNPACK delegate starts, and the portrait probe returns 478 landmarks. The
+runtime doctor propagates the cosmetic failure as `pip_check: error /
+pip_check_failed`; treat it as expected on this interpreter and rely on the
+detector probe and the face-aware render as the real capability gates.
 
 ## Runtime Doctor
 
@@ -58,9 +102,10 @@ mediapipe==0.10.5
 protobuf>=3.20,<4
 opencv-contrib-python>=4.8.0,<4.12
 numpy>=1.24.0,<2
+onnxruntime>=1.16.0
 ```
 
-For the Python 3.9 resolution recorded in `uv.lock`, the relevant resolved
+For the Python 3.11 resolution recorded in `uv.lock`, the relevant resolved
 versions are:
 
 ```text
@@ -68,14 +113,17 @@ mediapipe              0.10.5
 protobuf               3.20.3
 opencv-contrib-python  4.11.0.86
 numpy                  1.26.4
-onnxruntime            1.20.1
-gradio                 4.44.1  # GUI/dev extra
+onnxruntime            1.26.0   # lock's >=3.11 pin (1.20.1 has no cp39 wheel)
+gradio                 4.44.1   # GUI/dev extra
 ```
 
-The lock contains MediaPipe 0.10.5 wheels for CPython 3.9, 3.10, and 3.11,
-but no CPython 3.12 wheel. Therefore `requires-python = ">=3.9"` in the
-project metadata must not be read as proof that the legacy lock installs on
-Python 3.12. Python 3.12 belongs to the migration track below.
+The lock contains MediaPipe 0.10.5 wheels for CPython 3.9, 3.10, and 3.11.
+The 3.9 and 3.10 wheels cannot be installed because their onnxruntime
+counterparts (1.20.1 and 1.24.3 respectively) have no cp39/cp310 wheels — see
+[Onnxruntime wheel gap](#onnxruntime-wheel-gap-and-the-311-recovery-track)
+above. The 3.11 resolution is the installable legacy track and preserves all
+four legacy contract pins; onnxruntime moves to 1.26.0 within the declared
+`>=1.16.0` range. Python 3.12 still belongs to the migration track below.
 
 ### Isolated recovery commands
 
@@ -88,7 +136,7 @@ runtime.
 cd /Applications/htdocs/retouch
 
 export RETOUCH_RECOVERY_ROOT=/private/tmp/retouch-runtime-recovery
-export LEGACY_ENV="$RETOUCH_RECOVERY_ROOT/venv-legacy"
+export LEGACY_ENV="$RETOUCH_RECOVERY_ROOT/venv-legacy-py311"
 export PYTHONNOUSERSITE=1
 export PYTHONPYCACHEPREFIX="$RETOUCH_RECOVERY_ROOT/pycache"
 export UV_CACHE_DIR="$RETOUCH_RECOVERY_ROOT/uv-cache"
@@ -98,15 +146,18 @@ export RETOUCH_CACHE_DIR="$RETOUCH_RECOVERY_ROOT/retouch-cache"
 mkdir -p "$RETOUCH_RECOVERY_ROOT" "$PYTHONPYCACHEPREFIX" "$UV_CACHE_DIR" \
   "$XDG_CACHE_HOME" "$MPLCONFIGDIR" "$RETOUCH_CACHE_DIR"
 
-# Downloads CPython 3.9.6 only when it is not already managed by uv.
-uv python install 3.9.6
-uv venv --python 3.9.6 "$LEGACY_ENV"
+# CPython 3.11 is the only interpreter on which the legacy lock installs
+# (see the onnxruntime wheel gap above). Downloads it only when absent.
+uv python install 3.11
+uv venv --python 3.11 "$LEGACY_ENV"
 
 # --locked is required: do not re-resolve the legacy project during recovery.
 UV_PROJECT_ENVIRONMENT="$LEGACY_ENV" uv sync --locked --extra gui --extra dev
 
 # Use the environment's interpreter explicitly; do not fall through to a
-# globally installed `python3` or user-site package set.
+# globally installed `python3` or user-site package set. uv venvs do not
+# contain pip, so seed it to make the doctor's pip check meaningful.
+uv pip install --python "$LEGACY_ENV/bin/python" pip
 PYTHONNOUSERSITE=1 "$LEGACY_ENV/bin/python" -s -m pip check
 ```
 
@@ -151,12 +202,23 @@ if not Version(metadata.version("protobuf")) < Version("4"):
 if not Version(metadata.version("numpy")) < Version("2"):
     raise SystemExit("NumPy is outside the legacy <2 contract")
 
-print("legacy dependency gate: pass")
+# onnxruntime: the lock's 1.20.1 pin (Python <3.10) has no cp39 wheel and is
+# not installable; the 3.11 track resolves 1.26.0. Both satisfy the declared
+# onnxruntime>=1.16.0, so the gate enforces the declared floor, not a pin.
+ort = metadata.version("onnxruntime")
+if Version(ort) < Version("1.16.0"):
+    raise SystemExit(f"onnxruntime {ort} is below the declared >=1.16.0 floor")
+
+print("legacy dependency gate: pass (onnxruntime", ort + ")")
 PY
 ```
 
-`pip check` must pass in this isolated environment. A passing check in the
-global interpreter is not sufficient.
+`pip check` in this environment reports *"mediapipe 0.10.5 is not supported on
+this platform"* because of the universal2 wheel's x86_64-only WHEEL tag — see
+[MediaPipe 0.10.5 universal2 wheel and `pip check`](#mediapipe-0105-universal2-wheel-and-pip-check).
+That single line is expected on arm64; the detector probe and face-aware
+render below are the authoritative capability gates. `pip check` must report
+nothing beyond that known cosmetic line.
 
 ### Face-aware and render acceptance
 
@@ -251,6 +313,8 @@ uv pip compile requirements-py312-migration.txt \
   --output-file "$MIGRATION_LOCK"
 uv pip sync --python "$MIGRATION_ENV/bin/python" "$MIGRATION_LOCK"
 
+# uv-managed venvs do not include pip; seed it so pip check can run.
+uv pip install --python "$MIGRATION_ENV/bin/python" pip
 PYTHONNOUSERSITE=1 "$MIGRATION_ENV/bin/python" -s -m pip check
 PYTHONNOUSERSITE=1 "$MIGRATION_ENV/bin/python" -s - <<'PY'
 import mediapipe as mp
@@ -292,22 +356,45 @@ Verified in the repository on the audit date:
 
 - `pyproject.toml` declares the legacy MediaPipe/protobuf/OpenCV/NumPy
   bounds above.
-- `uv.lock` resolves the legacy Python 3.9 package set above and has no
-  MediaPipe 0.10.5 CPython 3.12 wheel entry.
+- `uv.lock` resolves the legacy package set above and has no MediaPipe 0.10.5
+  CPython 3.12 wheel entry.
 - The build wrapper prefers `uv sync --locked --extra desktop`.
 - No tracked `requirements*.txt` files existed before this migration input;
   older docs and the build fallback still reference untracked
   `requirements/...` paths.
 
+Verified in an isolated environment on 2026-08-31 (macOS 26.5 arm64,
+CPython 3.11.15), using `uv sync --locked` with the lock unmodified:
+
+- The dependency gate passes: `mediapipe 0.10.5`, `protobuf 3.20.3`,
+  `opencv-contrib-python 4.11.0.86`, `numpy 1.26.4`, `onnxruntime 1.26.0`,
+  and exactly one OpenCV distribution.
+- The runtime doctor reports `mode: face-aware` with
+  `backend: mediapipe_legacy`; `--probe-detector` returns
+  `detector_initialized` with `probe_state: initialized`.
+- `scripts/qa/face_aware_runtime_probe.py` on a real portrait returns
+  `status: pass`, `backend: legacy_cpu`, and 478 landmarks.
+- `scripts/qa/advanced_retouch_visual_qa.py` completes with
+  `passed: true` and `global_only: false`, and its manifest carries
+  `face_aware_run: true` and `automatic_pass: true` alongside a non-empty
+  output directory and contact sheet.
+- `pip check` reports only the known MediaPipe universal2 wheel-tag line and
+  nothing else.
+
 Not verified by this documentation slice:
 
-- A clean-install download of either environment, because that requires
-  reachable package/model indexes and platform-specific wheels.
+- Linux or Windows recovery, or any Intel-x86_64 macOS recovery run.
+- The CPython 3.9 and 3.10 lock branches on any platform: they cannot be
+  installed while `onnxruntime` 1.20.1/1.24.3 lack cp39/cp310 wheels.
 - `FaceDetector.available=True`, a real portrait render, or a
   `global_only: false` manifest in the current contaminated interpreter.
 - Native MediaPipe Tasks startup on macOS, Gradio 5 API compatibility, ONNX
-  provider correctness, or human visual review.
+  provider correctness, or human visual review. Active ONNX provider use is
+  still unproven: the doctor reports `active_provider_verified: false` on the
+  static provider list alone.
 - Distribution of models whose manifest entries have no controlled URL.
+- Reproducibility after a reboot: the recovery root used for verification
+  lives under `/private/tmp`, which is not durable storage.
 
 For the migration design, the authoritative references are the [MediaPipe
 Face Landmarker Python guide](https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker/python),

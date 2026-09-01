@@ -79,6 +79,7 @@ These keys are defined inside nested dictionary blocks inside a recipe.
 | `eyes` | `catchlight` | 0 to 100 | `5` | `catchlight` |
 | `eyes` | `dark_circles` | 0 to 100 | `0` | `dark_circles` |
 | `eyes` | `sclera_vessel_remove` | 0 to 100 | `0` | `eye_sclera_vessel_remove` |
+| `eyes` | `gate` | bool | `true` | `eye_gate` |
 | `eyes` | `undereye_shadow_strength` | 0.0 to 1.0 | `0.0` | `undereye_shadow_strength` |
 | `eyes` | `whites` | 0 to 100 | `5` | `eye_enhance` |
 | `eyes` | `whites` | 0 to 100 | `5` | `teeth_whiten` |
