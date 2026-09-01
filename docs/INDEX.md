@@ -26,6 +26,10 @@
 
 ## Plans (`docs/plans/`)
 - `MASTER_PLAN.md` — Overall roadmap
+- `RESEARCH_YAW_GATE_CALIBRATION_2026_09_02.md` — Corpus calibration of the
+  nose-bridge/temple yaw gate (band 1.3→1.6 / 1.5→1.7 → 2.5→4.0, shipped `9c26493`)
+  plus the composite-mask epsilon bug it uncovered (skin ops discarded on 24% of
+  portraits, shipped `f69ab1e`); harnesses `scripts/qa/yaw_gate_sweep.py` / `_render.py`
 - `PLAN_FACE_RETOUCH_QUALITY_CEILING_IMPLEMENTATION_2026_09_01.md` — Final
   documentation-only Phase 0–7 implementation roadmap with finite core milestones,
   46 review units, dependencies, proposed file ownership, owner gates, corpus/model/
