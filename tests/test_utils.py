@@ -8,6 +8,7 @@ from retouch.detection import _Landmark, _LandmarkCompat
 from retouch.utils import (
     feather_mask,
     blend_masked,
+    restore_outside_support,
     create_polygon_mask,
     get_points,
     inter_eye_distance,
@@ -91,6 +92,51 @@ class TestBlendMasked:
         result = blend_masked(orig, proc, mask)
         assert np.all(result == 255)
 
+
+class TestRestoreOutsideSupport:
+    @pytest.mark.parametrize("dtype", [np.uint8, np.float32])
+    def test_restores_exact_zero_without_eroding_feather_tails(self, dtype):
+        source = np.arange(6 * 8 * 3, dtype=np.uint8).reshape(6, 8, 3)
+        if dtype == np.float32:
+            source = source.astype(np.float32)
+        processed = np.clip(source.astype(np.float32) + 7.0, 0, 255).astype(dtype)
+        support = np.zeros((6, 8), dtype=np.float32)
+        support[2:4, 2:6] = 1.0
+        support[1, 3] = np.nextafter(np.float32(0.0), np.float32(1.0))
+
+        result = restore_outside_support(source, processed, support)
+
+        np.testing.assert_array_equal(result[support == 0], source[support == 0])
+        np.testing.assert_array_equal(result[support != 0], processed[support != 0])
+        assert result.dtype == source.dtype
+
+    def test_rejects_shape_and_dtype_mismatches(self):
+        source = np.zeros((4, 5, 3), dtype=np.uint8)
+
+        with pytest.raises(ValueError, match="processed shape"):
+            restore_outside_support(
+                source, np.zeros((4, 4, 3), dtype=np.uint8), np.ones((4, 5))
+            )
+        with pytest.raises(ValueError, match="processed dtype"):
+            restore_outside_support(
+                source, source.astype(np.float32), np.ones((4, 5))
+            )
+        with pytest.raises(ValueError, match="support shape"):
+            restore_outside_support(source, source, np.ones((4, 5, 1)))
+
+    def test_rejects_new_nonfinite_inside_support_only(self):
+        source = np.zeros((4, 5, 3), dtype=np.float32)
+        processed = source.copy()
+        support = np.zeros((4, 5), dtype=np.float32)
+        processed[0, 0] = np.nan
+
+        # A bad intermediate outside support is discarded before validation.
+        restored = restore_outside_support(source, processed, support)
+        assert np.isfinite(restored).all()
+
+        support[0, 0] = 1.0
+        with pytest.raises(ValueError, match="introduced non-finite"):
+            restore_outside_support(source, processed, support)
 
 class TestCreatePolygonMask:
     def test_basic_polygon(self):
@@ -437,4 +483,3 @@ class TestRemovePurpleFringing:
         img = np.full((64, 64, 3), [200, 40, 200], dtype=np.uint8)  # Uniform purple
         out = remove_purple_fringing(img, strength=1.0)
         assert np.all(out == img)
-

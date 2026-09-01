@@ -47,6 +47,48 @@ class TestEnhance:
         result = enhancer.enhance(img, regions, strength=80)
         assert not np.allclose(result, img)
 
+    @staticmethod
+    def _independent_control_fixture():
+        image = np.full((64, 64, 3), 100, dtype=np.uint8)
+        r = MockFaceRegions()
+        r.left_eye = np.zeros((64, 64), dtype=np.float32)
+        r.right_eye = np.zeros((64, 64), dtype=np.float32)
+        r.left_iris = np.zeros((64, 64), dtype=np.float32)
+        r.right_iris = np.zeros((64, 64), dtype=np.float32)
+        r.left_eye[14:50, 14:50] = 1.0
+        r.left_iris[20:44, 20:44] = 1.0
+        image[14:50, 14:50] = 180
+        image[20:44, 20:44] = 60
+        image[24:27, 24:27] = 240
+        return image, r
+
+    def test_catchlight_runs_when_base_eye_enhance_is_zero(self, enhancer):
+        image, regions = self._independent_control_fixture()
+
+        result = enhancer.enhance(
+            image,
+            regions,
+            strength=0,
+            catchlight_strength=100,
+        )
+
+        assert not np.array_equal(result, image)
+        assert float(result[24:27, 24:27].mean()) > float(
+            image[24:27, 24:27].mean()
+        )
+
+    def test_corneal_shading_runs_when_base_eye_enhance_is_zero(self, enhancer):
+        image, regions = self._independent_control_fixture()
+
+        result = enhancer.enhance(
+            image,
+            regions,
+            strength=0,
+            corneal_strength=100,
+        )
+
+        assert not np.array_equal(result, image)
+
 
 class TestEnhanceWhites:
     def test_none_mask(self, enhancer, img):
@@ -430,6 +472,5 @@ class TestLimbalRingCapAndGate:
         drop_past_cap = l_mid - l_high
         assert drop_to_cap > 10.0, f"Expected strong initial darkening up to cap, got drop={drop_to_cap:.2f}"
         assert drop_past_cap < 3.5, f"Expected limbal darkening to saturate past cap, got additional drop={drop_past_cap:.2f}"
-
 
 

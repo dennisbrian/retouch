@@ -202,6 +202,14 @@ class TestFaceParserInit:
             parser = FaceParser()
         assert parser._sess is not None
 
+    def test_bisenet_session_is_pinned_to_cpu(self):
+        with patch("os.path.exists", return_value=True), \
+             patch("retouch.parsing.ort.InferenceSession") as mock_sess_cls:
+            mock_sess_cls.return_value = MagicMock(name="fake_ort_session")
+            FaceParser()
+
+        assert mock_sess_cls.call_args.kwargs["providers"] == ["CPUExecutionProvider"]
+
 
 # ---------------------------------------------------------------------------
 # FaceParser.parse()  — ONNX path with a mock session

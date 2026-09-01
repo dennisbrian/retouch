@@ -228,6 +228,28 @@ class TestLipsEnhanceFloat32:
         out_f = lip_enhancer.enhance(f255_img, None, strength=50)
         _assert_dtype_pair(out_u8, out_f)
 
+    @pytest.mark.parametrize("dtype", [np.uint8, np.float32])
+    def test_full_enhance_is_exact_outside_lip_support(
+        self,
+        lip_enhancer: LipEnhancer,
+        u8_img: np.ndarray,
+        lip_mask: np.ndarray,
+        dtype,
+    ) -> None:
+        source = u8_img if dtype == np.uint8 else u8_img.astype(np.float32)
+
+        result = lip_enhancer.enhance(
+            source,
+            lip_mask,
+            strength=70,
+            tint="rose",
+            finish="gloss",
+        )
+
+        outside = lip_mask == 0
+        np.testing.assert_array_equal(result[outside], source[outside])
+        assert np.any(result[~outside] != source[~outside])
+
 
 # ===========================================================================
 # hair.HairEnhancer.enhance

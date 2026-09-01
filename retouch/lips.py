@@ -15,6 +15,7 @@ import numpy as np
 from .utils import (
     blend_masked,
     estimate_face_width,
+    restore_outside_support,
     vibrance as vibrance_fn,
     bgr_f32_to_lab_f32,
     lab_f32_to_bgr_f32,
@@ -166,13 +167,17 @@ class LipEnhancer:
 
         # Feather slightly
         specular_mask = cv2.GaussianBlur(specular_mask, (3, 3), 0)
+        # Gaussian support may expand beyond the semantic lip mask. Re-clip
+        # after feathering so the final operation support remains permitted.
+        specular_mask = specular_mask * lip_mask
 
         # Boost highlights using the safe soft-clipping lift
         # Increased lift factor from 0.25 to 0.45 to make specular highlights pop strongly
         l_boost = (255.0 - l_chan) * specular_mask * 0.45 * strength
         lab[:, :, 0] = np.clip(l_chan + l_boost, 0, 255)
 
-        return _from_lab(lab, is_float)
+        processed = _from_lab(lab, is_float)
+        return restore_outside_support(img_bgr, processed, specular_mask)
 
     def _extract_texture(
         self,
@@ -217,10 +222,14 @@ class LipEnhancer:
         Returns:
             (H, W, 3) BGR image, same dtype as input.
         """
+        if opacity <= 0:
+            return img_bgr
+
         is_float = img_bgr.dtype == np.float32
         lab = _to_lab(img_bgr, is_float)
         lab[:, :, 0] = np.clip(lab[:, :, 0] + texture * opacity, 0, 255)
-        return _from_lab(lab, is_float)
+        processed = _from_lab(lab, is_float)
+        return restore_outside_support(img_bgr, processed, mask)
 
     def _smooth(
         self,

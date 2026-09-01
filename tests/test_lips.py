@@ -204,12 +204,51 @@ class TestReapplyTexture:
     def test_opacity_zero(self, enhancer, lip_img, lip_mask):
         texture = np.random.rand(64, 64).astype(np.float32) * 30
         result = enhancer._reapply_texture(lip_img, texture, lip_mask, face_width=500, opacity=0)
-        assert np.allclose(result, lip_img, atol=1)
+        np.testing.assert_array_equal(result, lip_img)
 
     def test_with_texture(self, enhancer, lip_img, lip_mask):
         texture = np.random.rand(64, 64).astype(np.float32) * 20
         result = enhancer._reapply_texture(lip_img, texture, lip_mask, face_width=500, opacity=0.5)
         assert result.shape == (64, 64, 3)
+
+    @pytest.mark.parametrize("dtype", [np.uint8, np.float32])
+    def test_exact_outside_support(self, enhancer, lip_mask, dtype):
+        rng = np.random.default_rng(20260901)
+        source_u8 = rng.integers(20, 236, size=(64, 64, 3), dtype=np.uint8)
+        source = source_u8 if dtype == np.uint8 else source_u8.astype(np.float32)
+        texture = rng.normal(0.0, 8.0, size=(64, 64)).astype(np.float32)
+
+        result = enhancer._reapply_texture(
+            source, texture, lip_mask, face_width=500, opacity=0.75
+        )
+
+        outside = lip_mask == 0
+        np.testing.assert_array_equal(result[outside], source[outside])
+        assert np.any(result[~outside] != source[~outside])
+        assert result.dtype == source.dtype
+        assert np.isfinite(result).all()
+
+
+class TestLipGlossContainment:
+    @pytest.mark.parametrize("dtype", [np.uint8, np.float32])
+    def test_blur_cannot_cross_permitted_lip_support(self, enhancer, dtype):
+        rng = np.random.default_rng(20260902)
+        source_u8 = rng.integers(35, 105, size=(64, 64, 3), dtype=np.uint8)
+        mask = np.zeros((64, 64), dtype=np.float32)
+        mask[22:42, 18:46] = 1.0
+
+        # Put a compact highlight against the permitted support boundary so
+        # the gloss Gaussian blur would otherwise spill onto the canvas.
+        source_u8[27:35, 18:23] = 235
+        source = source_u8 if dtype == np.uint8 else source_u8.astype(np.float32)
+
+        result = enhancer._add_lip_gloss(source, mask, strength=1.0)
+
+        outside = mask == 0
+        np.testing.assert_array_equal(result[outside], source[outside])
+        assert np.any(result[~outside] != source[~outside])
+        assert result.dtype == source.dtype
+        assert np.isfinite(result).all()
 
 
 class TestSmooth:

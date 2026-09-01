@@ -110,6 +110,68 @@ def squeeze_mask(mask: np.ndarray) -> np.ndarray:
     return mask
 
 
+def restore_outside_support(
+    original: np.ndarray,
+    processed: np.ndarray,
+    support: np.ndarray,
+) -> np.ndarray:
+    """Restore source pixels exactly where an operation has zero support.
+
+    This is a mechanical containment helper only. It deliberately does not
+    normalize, blur, threshold, or otherwise reinterpret ``support``; callers
+    remain responsible for defining their final effective operation support.
+
+    Args:
+        original: Source image before the local operation.
+        processed: Result after the local operation.
+        support: Two-dimensional final support. Exact zero means the operation
+            has no authority to change that pixel.
+
+    Returns:
+        A copy of ``processed`` with source pixels restored outside support.
+
+    Raises:
+        TypeError: If image inputs are not NumPy arrays.
+        ValueError: If shapes/dtypes do not match, support is invalid, or the
+            operation introduced a non-finite value inside support.
+    """
+    if not isinstance(original, np.ndarray) or not isinstance(processed, np.ndarray):
+        raise TypeError("original and processed must be NumPy arrays")
+    if original.shape != processed.shape:
+        raise ValueError(
+            f"processed shape {processed.shape} does not match original {original.shape}"
+        )
+    if original.dtype != processed.dtype:
+        raise ValueError(
+            f"processed dtype {processed.dtype} does not match original {original.dtype}"
+        )
+    if original.ndim < 2:
+        raise ValueError(f"images must have at least two dimensions, got {original.shape}")
+
+    support_array = np.asarray(support)
+    if support_array.ndim != 2 or support_array.shape != original.shape[:2]:
+        raise ValueError(
+            f"support shape {support_array.shape} does not match image spatial shape "
+            f"{original.shape[:2]}"
+        )
+    if not (
+        np.issubdtype(support_array.dtype, np.number)
+        or np.issubdtype(support_array.dtype, np.bool_)
+    ):
+        raise ValueError(f"support must be numeric or boolean, got {support_array.dtype}")
+    if not np.isfinite(support_array).all():
+        raise ValueError("support contains non-finite values")
+
+    result = processed.copy()
+    outside = support_array == 0
+    result[outside] = original[outside]
+
+    newly_nonfinite = ~np.isfinite(result) & np.isfinite(original)
+    if newly_nonfinite.any():
+        raise ValueError("processed image introduced non-finite values inside support")
+    return result
+
+
 def estimate_face_width(
     skin_mask: Optional[np.ndarray] = None,
     lip_mask: Optional[np.ndarray] = None,

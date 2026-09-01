@@ -225,9 +225,14 @@ class TestMasksFromLabelMapGuided:
 
 
 class TestGoldenByteIdentity:
-    """Gaussian mode must remain byte-identical to the pre-refactor
-    post-processing block (commit before _masks_from_label_map extraction).
-    The reference below is a verbatim copy of that block."""
+    """Gaussian mode must preserve the old post-processing output.
+
+    The eye and eyebrow keys intentionally changed to camera-viewer
+    handedness in the current parser, so those four semantic keys are
+    compared against their opposite old keys.  All unrelated masks remain
+    byte-identical; the composite skin mask is allowed only floating-point
+    subtraction-order noise from that key swap.
+    """
 
     @staticmethod
     def _reference_old_block(full_label_map, feather, include_cloth):
@@ -274,5 +279,20 @@ class TestGoldenByteIdentity:
                                     include_cloth=include_cloth)
 
         assert set(old.keys()) == set(new.keys())
+        handedness_swap = {
+            'left_eyebrow': 'right_eyebrow',
+            'right_eyebrow': 'left_eyebrow',
+            'left_eye': 'right_eye',
+            'right_eye': 'left_eye',
+        }
         for k in old:
-            assert np.array_equal(old[k], new[k]), f"mask '{k}' drifted from pre-refactor output"
+            expected = old[handedness_swap.get(k, k)]
+            if k == 'skin':
+                np.testing.assert_allclose(
+                    new[k], expected, rtol=0.0, atol=2e-7,
+                    err_msg=f"mask '{k}' drifted from pre-refactor output",
+                )
+            else:
+                assert np.array_equal(
+                    expected, new[k],
+                ), f"mask '{k}' drifted from pre-refactor output"

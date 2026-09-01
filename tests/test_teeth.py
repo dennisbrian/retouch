@@ -89,6 +89,40 @@ class TestWhiten:
         assert result[32, 32] > 0.1, "bright tooth patch must be detected"
         assert result[2, 2] < 0.1, "dark mouth void must be rejected"
 
+    @pytest.mark.parametrize("dtype", [np.uint8, np.float32])
+    @pytest.mark.parametrize("at_frame_edge", [False, True])
+    def test_exact_outside_detected_teeth_support(
+        self, whitener, monkeypatch, dtype, at_frame_edge
+    ):
+        rng = np.random.default_rng(20260903)
+        source_u8 = rng.integers(20, 236, size=(64, 64, 3), dtype=np.uint8)
+        source = source_u8 if dtype == np.uint8 else source_u8.astype(np.float32)
+        mouth_mask = np.zeros((64, 64), dtype=np.float32)
+        teeth_support = np.zeros((64, 64), dtype=np.float32)
+
+        if at_frame_edge:
+            mouth_mask[0:16, 0:24] = 1.0
+            teeth_support[0:8, 0:12] = 1.0
+            teeth_support[8:10, 0:12] = 0.25
+        else:
+            mouth_mask[22:42, 18:46] = 1.0
+            teeth_support[27:35, 25:39] = 1.0
+            teeth_support[25:27, 25:39] = 0.25
+
+        monkeypatch.setattr(
+            whitener,
+            "_detect_teeth",
+            lambda _image, _mouth: teeth_support.copy(),
+        )
+
+        result = whitener.whiten(source, mouth_mask, strength=80)
+
+        outside = teeth_support == 0
+        np.testing.assert_array_equal(result[outside], source[outside])
+        assert np.any(result[~outside] != source[~outside])
+        assert result.dtype == source.dtype
+        assert np.isfinite(result).all()
+
 
 class TestDetectTeeth:
     def test_small_mouth_returns_empty(self, whitener, img):

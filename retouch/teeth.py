@@ -11,7 +11,13 @@ from typing import Optional
 import cv2
 import numpy as np
 
-from .utils import blend_masked, feather_mask, bgr_f32_to_lab_f32, lab_f32_to_bgr_f32
+from .utils import (
+    blend_masked,
+    feather_mask,
+    restore_outside_support,
+    bgr_f32_to_lab_f32,
+    lab_f32_to_bgr_f32,
+)
 
 # WID (Whiteness Index for Dentistry, Perez et al. 2017) — CIELAB-based linear
 # form: WID = 0.511*L* - 2.324*a* - 1.100*b*. Perceptibility threshold
@@ -121,7 +127,8 @@ class TeethWhitener:
         red_excess = np.clip(lab[:, :, 1] - 128, 0, 20)
         lab[:, :, 1] = np.clip(lab[:, :, 1] - m * red_excess * 0.3, 0, 255)
 
-        return _from_lab(lab, is_float)
+        processed = _from_lab(lab, is_float)
+        return restore_outside_support(img_bgr, processed, m)
 
     def _detect_teeth(self, img_bgr: np.ndarray, mouth_mask: np.ndarray) -> np.ndarray:
         """Detect teeth pixels within mouth interior.
