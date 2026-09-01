@@ -52,8 +52,9 @@ class MockLandmarksList:
             # Shift one temple to create asymmetry for profile faces
             # For profile: right temple moves toward nose, left stays same
             # This creates ratio = max(d_left, d_right) / min(d_left, d_right)
-            shift = 0.2 * (yaw_ratio - 1.0) / 2.0  # shift amount for one side
-            self.landmark[454].x -= shift  # Right temple moves left (profile right)
+            # d_left stays 0.2; d_right = 0.2 / yaw_ratio -> exact ratio.
+            # (The old 0.1*(r-1) shift gave ratio 2/(3-r): 1.6 -> 1.43, 1.8 -> 1.67.)
+            self.landmark[454].x = 0.5 + 0.2 / yaw_ratio
 
         # Add some depth variation (z) for face mesh
         for i, lm in enumerate(self.landmark):
@@ -139,8 +140,9 @@ def test_sculpt_yaw_gating_extreme_profile():
     """Test that extreme yaw (profile face) heavily attenuates sculpting.
 
     Yaw guard should strongly fade sculpting strength for profile faces
-    (temple ratio > 1.7). At ratio=1.8, yaw_factor ≈ 0.17, so effect should be ~17%.
+    (temple ratio above utils.YAW_GATE_END -> yaw_factor 0).
     """
+    from retouch.utils import YAW_GATE_END
     relighter = Relighter()
 
     # Create a textured canvas to measure effect
@@ -150,8 +152,8 @@ def test_sculpt_yaw_gating_extreme_profile():
 
     mask = np.ones((400, 300), dtype=np.float32)
 
-    # Extreme yaw: ratio = 1.8 > 1.7, should heavily attenuate (yaw_factor ≈ 0.17)
-    landmarks_extreme = MockLandmarksList(yaw_ratio=1.8)
+    # Extreme yaw: beyond the band end -> fully attenuated
+    landmarks_extreme = MockLandmarksList(yaw_ratio=YAW_GATE_END + 0.5)
 
     result = relighter.sculpt(
         canvas, landmarks_extreme, mask, face_width=100.0, strength=100.0
@@ -167,7 +169,8 @@ def test_sculpt_yaw_gating_extreme_profile():
 
 
 def test_sculpt_yaw_gating_partial_profile():
-    """Test that partial yaw (1.6 ratio) partially attenuates sculpting."""
+    """Test that partial yaw (band midpoint) partially attenuates sculpting."""
+    from retouch.utils import YAW_GATE_START, YAW_GATE_END
     relighter = Relighter()
 
     # Create a textured canvas to see the difference
@@ -177,8 +180,8 @@ def test_sculpt_yaw_gating_partial_profile():
     # Frontal face
     landmarks_frontal = MockLandmarksList(yaw_ratio=1.0)
 
-    # Partial profile: ratio = 1.6, yaw_factor = 0.5
-    landmarks_partial = MockLandmarksList(yaw_ratio=1.6)
+    # Partial profile: band midpoint, yaw_factor = 0.5
+    landmarks_partial = MockLandmarksList(yaw_ratio=(YAW_GATE_START + YAW_GATE_END) / 2)
 
     result_frontal = relighter.sculpt(
         canvas, landmarks_frontal, mask, face_width=100.0, strength=100.0

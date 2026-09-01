@@ -7,7 +7,7 @@ from typing import Any, Optional, Tuple
 import cv2
 import numpy as np
 
-from .utils import bgr_f32_to_lab_f32, lab_f32_to_bgr_f32
+from .utils import bgr_f32_to_lab_f32, lab_f32_to_bgr_f32, yaw_gate_factor, yaw_ratio
 
 
 class Relighter:
@@ -392,11 +392,8 @@ class Relighter:
 
         # Temple-Calibrated Yaw Guard (applies to both engines)
         # lm[6] is nose bridge midpoint, lm[234] is left temple, lm[454] is right temple
-        d_left = abs(lm[6].x - lm[234].x)
-        d_right = abs(lm[454].x - lm[6].x)
-        ratio = max(d_left, d_right) / (min(d_left, d_right) + 1e-5)
-        # Attenuate strength linearly as ratio ranges from 1.5 to 1.7
-        yaw_factor = 1.0 - np.clip((ratio - 1.5) / 0.2, 0.0, 1.0)
+        # Shared corpus-calibrated band (utils.YAW_GATE_START -> END smoothstep).
+        yaw_factor = yaw_gate_factor(yaw_ratio(landmarks))
 
         effective_strength = strength * yaw_factor
         if effective_strength <= 0.0:
@@ -457,7 +454,7 @@ class Relighter:
 
         Notes:
             - Early return if strength <= 0, skin_mask is None, or skin_mask is nearly empty.
-            - Yaw guard attenuates strength for profile faces (temple ratio 1.5→1.7 fade).
+            - Yaw guard attenuates strength for profile faces (shared utils.YAW_GATE band).
             - Strength scaling: effective correction is (strength / 100) * 0.35 to keep sculpting subtle.
             - Target shading uses Lambertian model: S_target = 0.55 + 0.45 * max(N·L, 0).
             - Auto light direction estimated from blurred L-channel gradient direction.
@@ -471,11 +468,8 @@ class Relighter:
 
         # Temple-Calibrated Yaw Guard (identical to relight)
         # lm[6] is nose bridge midpoint, lm[234] is left temple, lm[454] is right temple
-        d_left = abs(lm[6].x - lm[234].x)
-        d_right = abs(lm[454].x - lm[6].x)
-        ratio = max(d_left, d_right) / (min(d_left, d_right) + 1e-5)
-        # Attenuate strength linearly as ratio ranges from 1.5 to 1.7
-        yaw_factor = 1.0 - np.clip((ratio - 1.5) / 0.2, 0.0, 1.0)
+        # Shared corpus-calibrated band (utils.YAW_GATE_START -> END smoothstep).
+        yaw_factor = yaw_gate_factor(yaw_ratio(landmarks))
 
         effective_strength = strength * yaw_factor
         if effective_strength <= 0.0:

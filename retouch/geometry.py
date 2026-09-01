@@ -21,7 +21,15 @@ from .parsing import (
     RIGHT_EYE,
     RIGHT_IRIS,
 )
-from .utils import create_polygon_mask, feather_mask, get_points
+from .utils import (
+    YAW_GATE_END,
+    YAW_GATE_START,
+    create_polygon_mask,
+    feather_mask,
+    get_points,
+    yaw_gate_factor,
+    yaw_ratio,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +46,12 @@ _SCALE_RING_N = 8
 
 # Yaw gate (profile-view guard). MediaPipe jaw-landmark reliability degrades
 # on yawed faces, so warps keyed on 234/454/152 mis-scale lopsidedly. Warp
-# strength ramps smoothly 1.0 -> 0.0 between these yaw_ratio values (same
-# ratio formula as skin.py's neck gate). skin.py hard-gates at 1.3 because
-# that marks neck-depth-plane onset; slimming still tolerates mild yaw, so
-# the ramp starts at 1.3 and zeroes at 1.6 (strong three-quarter view).
-_YAW_DAMPEN_START = 1.3
-_YAW_DAMPEN_END = 1.6
+# strength ramps smoothly 1.0 -> 0.0 between these yaw_ratio values. Band is
+# owned by utils.YAW_GATE_START/END (2026-09-02 corpus calibration, see the
+# comment there); skin.py's neck gate still hard-gates at 1.3 and was NOT
+# recalibrated by that study.
+_YAW_DAMPEN_START = YAW_GATE_START
+_YAW_DAMPEN_END = YAW_GATE_END
 
 # Landmark index for the nose-bridge center, used as the facial vertical mirror
 # axis for bilateral symmetry (§6.3).
@@ -736,17 +744,9 @@ class FaceReshaper:
 
         yaw_ratio = max/min of the nose-tip (6) → left/right-ear (234/454)
         x-distances — same formula as skin.py's neck gate. 1.0 for frontal
-        faces (ratio ≤ 1.3), 0.0 for strong profiles (ratio ≥ 1.6).
+        faces (ratio ≤ YAW_GATE_START), 0.0 for strong profiles (≥ YAW_GATE_END).
         """
-        d_left = abs(landmarks[6].x - landmarks[234].x)
-        d_right = abs(landmarks[454].x - landmarks[6].x)
-        yaw_ratio = max(d_left, d_right) / (min(d_left, d_right) + 1e-5)
-        if yaw_ratio <= _YAW_DAMPEN_START:
-            return 1.0
-        if yaw_ratio >= _YAW_DAMPEN_END:
-            return 0.0
-        t = (yaw_ratio - _YAW_DAMPEN_START) / (_YAW_DAMPEN_END - _YAW_DAMPEN_START)
-        return float(t * t * (3.0 - 2.0 * t))
+        return yaw_gate_factor(yaw_ratio(landmarks), _YAW_DAMPEN_START, _YAW_DAMPEN_END)
 
     @staticmethod
     def _face_width(landmarks: Any, w: int) -> float:

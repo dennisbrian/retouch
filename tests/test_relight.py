@@ -59,19 +59,20 @@ def test_relighter_yaw_guard_attenuation():
     canvas = np.full((100, 100, 3), 128, dtype=np.uint8)
     mask = np.ones((100, 100), dtype=np.float32)
 
-    # 1. Symmetric face: no attenuation (ratio = 1.0 < 1.5)
+    from retouch.utils import YAW_GATE_START, YAW_GATE_END
+    # 1. Symmetric face: no attenuation (ratio = 1.0 < YAW_GATE_START)
     landmarks_sym = MockLandmarksList(yaw_ratio=1.0)
     out_sym = relighter.relight(canvas, landmarks_sym, mask, face_width=100.0, strength=100.0, engine="v2")
     # Check that image changes (relighting applied)
     assert not np.array_equal(out_sym, canvas)
 
-    # 2. Extreme yaw: fully attenuated (ratio = 1.8 > 1.7 -> strength becomes 0)
-    landmarks_yaw_extreme = MockLandmarksList(yaw_ratio=1.8)
+    # 2. Extreme yaw: fully attenuated (ratio > YAW_GATE_END -> strength becomes 0)
+    landmarks_yaw_extreme = MockLandmarksList(yaw_ratio=YAW_GATE_END + 0.5)
     out_yaw_extreme = relighter.relight(canvas, landmarks_yaw_extreme, mask, face_width=100.0, strength=100.0, engine="v2")
     assert np.array_equal(out_yaw_extreme, canvas)
 
-    # 3. Partial yaw: partially attenuated (ratio = 1.6, yaw_factor = 0.5)
-    landmarks_yaw_part = MockLandmarksList(yaw_ratio=1.6)
+    # 3. Partial yaw: partially attenuated (band midpoint, yaw_factor = 0.5)
+    landmarks_yaw_part = MockLandmarksList(yaw_ratio=(YAW_GATE_START + YAW_GATE_END) / 2)
     out_yaw_part = relighter.relight(canvas, landmarks_yaw_part, mask, face_width=100.0, strength=100.0, engine="v2")
     assert not np.array_equal(out_yaw_part, canvas)
     assert not np.array_equal(out_yaw_part, out_sym)

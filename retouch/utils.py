@@ -172,6 +172,37 @@ def restore_outside_support(
     return result
 
 
+# --- Yaw gate (shared by geometry slimming/jaw/chin, relight, sculpt) ---------
+# yaw_ratio = max/min of the nose-bridge (lm 6) -> temple (lm 234 / 454)
+# x-distances. Calibrated 2026-09-02 on the 83-image DSCF corpus
+# (docs/plans/RESEARCH_YAW_GATE_CALIBRATION_2026_09_02.md): the ratio tracks
+# MediaPipe-depth yaw with Spearman 0.92, but the previous bands (geometry
+# 1.3->1.6, relight/sculpt 1.5->1.7) mapped to only ~2-10 degrees of head
+# turn and zeroed slimming on 58/83 ordinary portraits. Slimming at strength
+# 70 with the gate bypassed rendered artifact-free through ratio ~4.0
+# (~25 degrees), so the ramp now runs 2.5 -> 4.0.
+YAW_GATE_START = 2.5
+YAW_GATE_END = 4.0
+
+
+def yaw_ratio(landmarks) -> float:
+    """Nose-bridge/temple x-asymmetry ratio (>= 1.0; 1.0 = frontal)."""
+    lm = landmarks.landmark if hasattr(landmarks, "landmark") else landmarks
+    d_left = abs(lm[6].x - lm[234].x)
+    d_right = abs(lm[454].x - lm[6].x)
+    return max(d_left, d_right) / (min(d_left, d_right) + 1e-5)
+
+
+def yaw_gate_factor(ratio: float, start: float = YAW_GATE_START, end: float = YAW_GATE_END) -> float:
+    """Smoothstep 1.0 -> 0.0 strength factor as ``ratio`` runs start -> end."""
+    if ratio <= start:
+        return 1.0
+    if ratio >= end:
+        return 0.0
+    t = (ratio - start) / (end - start)
+    return float(t * t * (3.0 - 2.0 * t))
+
+
 def estimate_face_width(
     skin_mask: Optional[np.ndarray] = None,
     lip_mask: Optional[np.ndarray] = None,
