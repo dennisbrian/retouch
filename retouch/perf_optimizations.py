@@ -779,12 +779,15 @@ def _process_face_core(
     # ---- Under-eye repair ----
     if ctx.dark_circles > 0 or ctx.undereye_darken_removal > 0 or ctx.undereye_puffiness_reduction > 0:
         canvas = _tr('undereye.repair', canvas)
-        # Legacy interface for backward compatibility
-        if ctx.dark_circles > 0:
-            canvas = undereye.repair(canvas, regions, ctx.dark_circles)
-        # New advanced processing pipeline
-        if ctx.undereye_darken_removal > 0 or ctx.undereye_puffiness_reduction > 0:
-            s_darken = ctx.undereye_darken_removal / 100.0
+        # `dark_circles` (legacy, eyes.dark_circles) and `undereye_darken_removal`
+        # (undereye.darken_removal) drive the SAME UndereyeProcessor darken pass on
+        # the same masks. Applying both sequentially double-brightened the under-eye
+        # in every recipe that set both keys (27/128 as of the 2026-08-31 per-op
+        # audit, incl. the clear-family flagships). Alias them: one pass at the
+        # stronger of the two -- max, not sum -- so neither key can stack on the other.
+        darken_pct = max(ctx.dark_circles, ctx.undereye_darken_removal)
+        if darken_pct > 0 or ctx.undereye_puffiness_reduction > 0:
+            s_darken = darken_pct / 100.0
             s_puffiness = ctx.undereye_puffiness_reduction / 100.0
             for mask in (regions.left_under_eye, regions.right_under_eye):
                 if mask is not None and mask.max() > 0.01:
