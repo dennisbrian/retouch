@@ -31,6 +31,8 @@ from .lighting import LightDirection
 from .safe_auto import confidence_evidence, decide, decide_mask_stage
 from .eye_visibility import gate_occluded_eye_regions
 from .eye_artifact_safety import assess_eye_artifact_scales, resolve_eye_scale
+from . import parsing as _parsing
+from .utils import get_points, create_polygon_mask
 
 
 def _build_smooth_mask(
@@ -794,12 +796,23 @@ def _process_face_core(
         if darken_pct > 0 or ctx.undereye_puffiness_reduction > 0:
             s_darken = darken_pct / 100.0
             s_puffiness = ctx.undereye_puffiness_reduction / 100.0
-            for mask in (regions.left_under_eye, regions.right_under_eye):
+            # v2 (2026-09-02): the processor builds its own support from the
+            # landmark polygon; it needs the IED for resolution-invariant radii
+            # and the landmark eye contour (not the BiSeNet eye mask, which
+            # collapses on ~65% of portraits) to keep lashes/liner out.
+            _ue_h, _ue_w = canvas.shape[:2]
+            for mask, eye_idx in ((regions.left_under_eye, _parsing.LEFT_EYE),
+                                  (regions.right_under_eye, _parsing.RIGHT_EYE)):
                 if mask is not None and mask.max() > 0.01:
+                    eye_pts = get_points(shifted_face.landmarks, eye_idx, _ue_w, _ue_h)
+                    eye_hull = create_polygon_mask(eye_pts, (_ue_h, _ue_w), feather_radius=0)
                     canvas = undereye._processor.process(
                         canvas, mask,
                         darken_removal_strength=s_darken,
-                        puffiness_reduction_strength=s_puffiness
+                        puffiness_reduction_strength=s_puffiness,
+                        ied=float(shifted_face.ied),
+                        exclude=eye_hull,
+                        skin=regions.skin,
                     )
 
     # ---- Neck harmonisation ----

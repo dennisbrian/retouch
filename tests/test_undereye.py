@@ -437,3 +437,124 @@ class TestEdgeCases:
         result = processor.process(img, mask, darken_removal_strength=0.5)
         # Should handle gracefully without crashing
         assert result.dtype == np.uint8
+
+
+# ---- v2 (2026-09-02) — support geometry, lash exclusion, tone invariance ----
+
+
+def _v2_scene(scale=1.0, ied=100):
+    """Uniform skin with a blurred dark blob under a fake eye opening.
+
+    Returns (img_uint8, under_eye_polygon_mask, eye_hull, shadow_core_mask).
+    """
+    rng = np.random.default_rng(0)
+    base = np.array([150, 170, 200], np.float32) * scale
+    img = np.clip(base + rng.normal(0, 3, (300, 300, 1)), 0, 255)
+    eye = np.zeros((300, 300), np.float32)
+    cv2.ellipse(eye, (150, 100), (28, 12), 0, 0, 360, 1, -1)
+    ue = np.zeros((300, 300), np.float32)
+    cv2.ellipse(ue, (150, 115), (30, 10), 0, 0, 360, 1, -1)  # top edge = lash line
+    shadow = np.zeros((300, 300), np.float32)
+    cv2.ellipse(shadow, (150, 132), (28, 12), 0, 0, 360, 1, -1)
+    shadow = cv2.GaussianBlur(shadow, (0, 0), 5)
+    img = np.clip(img * (1.0 - 0.25 * shadow[..., None]), 0, 255).astype(np.uint8)
+    return img, ue, eye, shadow > 0.8
+
+
+def _L(img):
+    return cv2.cvtColor(img, cv2.COLOR_BGR2LAB)[:, :, 0].astype(np.float32)
+
+
+class TestUndereyeV2:
+    def test_dilate_down_only_extends_downward(self):
+        from retouch.undereye import _dilate_down
+        m = np.zeros((40, 40), np.uint8)
+        m[10:15, 10:30] = 1
+        d = _dilate_down(m, 5, 2)
+        rows = np.nonzero(d.any(1))[0]
+        cols = np.nonzero(d.any(0))[0]
+        assert (rows.min(), rows.max()) == (10, 19)      # 5 px down, none up
+        assert (cols.min(), cols.max()) == (8, 31)       # 2 px sideways
+
+    def test_support_excludes_eye_and_lash_margin(self):
+        from retouch.undereye import build_undereye_support
+        img, ue, eye, _ = _v2_scene()
+        sup, ring, valid = build_undereye_support(ue, 100.0, exclude=eye)
+        assert float((sup * eye).max()) == 0.0
+        lash = cv2.dilate((eye > 0.5).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+        assert float(sup[lash].max()) < 0.5   # feathered, but never full weight on lashes
+        assert ring.sum() > 200 and not (ring & (eye > 0.5)).any()
+        # no hard step anywhere (the first v2 draft cut the lash margin after
+        # feathering and left a 0.76 step against the lash band, DSCF4576)
+        gy = np.abs(np.diff(sup, axis=0)).max()
+        gx = np.abs(np.diff(sup, axis=1)).max()
+        assert max(gy, gx) < 0.3
+
+    def test_lift_lands_on_shadow_not_lashes_and_preserves_texture(self, processor):
+        img, ue, eye, core = _v2_scene()
+        out = processor.process(img, ue, darken_removal_strength=1.0, ied=100.0, exclude=eye)
+        L0, L1 = _L(img), _L(out)
+        assert (L1[core] - L0[core]).mean() > 15.0          # shadow lifted
+        assert np.array_equal(out[eye > 0.5], img[eye > 0.5])  # eye bit-exact
+        hp0 = L0 - cv2.GaussianBlur(L0, (0, 0), 3)
+        hp1 = L1 - cv2.GaussianBlur(L1, (0, 0), 3)
+        assert abs(hp1[core].std() - hp0[core].std()) < 1.0   # texture kept
+
+    def test_outside_support_bit_exact_uint8_and_float32(self, processor):
+        img, ue, eye, _ = _v2_scene()
+        sup = processor.last_support(ue, 100.0, exclude=eye)
+        out = processor.process(img, ue, darken_removal_strength=0.7, ied=100.0, exclude=eye)
+        assert out.dtype == np.uint8
+        assert np.array_equal(out[sup == 0], img[sup == 0])
+        imgf = img.astype(np.float32)
+        outf = processor.process(imgf, ue, darken_removal_strength=0.7, ied=100.0, exclude=eye)
+        assert outf.dtype == np.float32
+        assert np.array_equal(outf[sup == 0], imgf[sup == 0])
+        assert (outf != imgf).any()
+
+    def test_strength_is_monotonic(self, processor):
+        img, ue, eye, core = _v2_scene()
+        L0 = _L(img)
+        lifts = []
+        for s in (0.2, 0.5, 0.8):
+            out = processor.process(img, ue, darken_removal_strength=s, ied=100.0, exclude=eye)
+            lifts.append((_L(out)[core] - L0[core]).mean())
+        assert lifts[0] > 1.0 and lifts[0] < lifts[1] < lifts[2]
+
+    def test_tone_invariance_relative_threshold(self, processor):
+        """The same relative shadow on a darker complexion must still fire
+        (the v1 absolute 15-L threshold did not)."""
+        lifts = {}
+        for scale in (1.0, 0.45):
+            img, ue, eye, core = _v2_scene(scale=scale)
+            out = processor.process(img, ue, darken_removal_strength=1.0, ied=100.0, exclude=eye)
+            lifts[scale] = (_L(out)[core] - _L(img)[core]).mean() / max(_L(img)[core].mean(), 1)
+        # relative lift within 35% of each other across a ~2.2x luminance change
+        assert lifts[0.45] > 0.05
+        assert abs(lifts[0.45] - lifts[1.0]) / lifts[1.0] < 0.35
+
+    def test_no_shadow_means_no_change(self, processor):
+        rng = np.random.default_rng(1)
+        img = np.clip(np.array([150, 170, 200], np.float32) + rng.normal(0, 3, (300, 300, 1)), 0, 255).astype(np.uint8)
+        _, ue, eye, _ = _v2_scene()
+        out = processor.process(img, ue, darken_removal_strength=1.0, ied=100.0, exclude=eye)
+        assert np.abs(_L(out) - _L(img)).max() <= 1.0
+
+    def test_no_exclude_fallback_keeps_thin_polygon(self, processor):
+        """Without an eye contour the lash shave must not erase a ~0.12-IED
+        tall polygon (the real landmark polygon height)."""
+        from retouch.undereye import build_undereye_support
+        ue = np.zeros((300, 300), np.float32)
+        ue[100:112, 100:180] = 1.0   # 12 px tall at IED 100
+        sup, ring, valid = build_undereye_support(ue, 100.0)
+        assert (sup > 0.5).sum() > 500
+        assert ring.sum() > 100
+
+    def test_legacy_brighten_single_cap(self, remover):
+        """max_lift is the only cap: darkness 20 at strength 1 lifts by 20."""
+        lab = np.full((32, 32, 3), 128.0, np.float32)
+        lab[8:24, 8:24, 0] = 100.0
+        mask = np.zeros((32, 32), np.float32)
+        mask[8:24, 8:24] = 1.0
+        out = remover.brighten_dark_circles(lab.copy(), mask, 120.0, strength=1.0, max_lift=30.0)
+        assert abs(out[16, 16, 0] - 120.0) < 1e-4

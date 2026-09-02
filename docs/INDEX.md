@@ -26,6 +26,12 @@
 
 ## Plans (`docs/plans/`)
 - `MASTER_PLAN.md` — Overall roadmap
+- `RESEARCH_DARK_CIRCLE_OP_2026_09_02.md` — The `dark_circles` / `undereye.darken_removal`
+  op was inert on every face (detector locked onto the lash line, lift double-capped);
+  v2 redesign (tear-trough support, eye/lash exclusion, relative low-pass darkness,
+  texture-preserving lift) calibrated on 146 corpus eyes and verified through the real
+  dispatch; harnesses `scripts/qa/dark_circle_op_study.py` / `_summarize.py` /
+  `dark_circle_engine_check.py`. Makeup-vs-shadow and darker-skin caveats.
 - `RESEARCH_POST_EPSILON_FACEOP_REAUDIT_2026_09_02.md` — 83-face re-audit of the
   skin-composite ops after the mask-epsilon fix (`f69ab1e`): affected faces now match
   controls at the default recipe (no over-strength), the shared yaw ramp was found

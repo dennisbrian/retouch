@@ -2,6 +2,22 @@
 
 Targeted darkness/shadow reduction under the eyes via LAB L-channel selective
 brightening, with optional chroma desaturation for puffiness reduction.
+
+2026-09-02 (v2, ``UndereyeProcessor.process``): the original detector kept the
+darkest connected component of the landmark under-eye polygon that sat more
+than an absolute 15 L below its surround. On real portraits that component is
+the lower lash line / eye corner (the polygon's top edge *is* the lash
+contour), so the lift landed on lashes and liner while genuine tear-trough
+shadow was untouched; and the lift was capped twice (clip to ``max_lift`` and
+a second ``max_lift / 100`` factor), so strength 100 could move at most 9 L.
+See ``docs/plans/RESEARCH_DARK_CIRCLE_OP_2026_09_02.md``.
+
+The v2 path builds its own support (polygon extended downward into the
+tear trough, eye contour + lash margin excluded), measures darkness on a
+masked low-pass of L relative to a cheek ring median (a *fraction* of the
+face's own reference, per the tone-invariance rule), and lifts only the
+low-frequency component so skin texture is preserved. ``strength`` is the
+fraction of the shadow removed (1.0 = flattened to the cheek reference).
 """
 
 from __future__ import annotations
@@ -13,7 +29,10 @@ import numpy as np
 
 from .parsing import FaceRegions
 from .chromophore import decompose_chromophores, reconstruct_from_chromophores
-from .utils import blend_masked, normalize_mask, feather_mask as _feather_mask, bgr_f32_to_lab_f32, lab_f32_to_bgr_f32
+from .utils import (
+    blend_masked, normalize_mask, feather_mask as _feather_mask,
+    bgr_f32_to_lab_f32, lab_f32_to_bgr_f32, restore_outside_support,
+)
 
 
 def _to_lab(img_bgr: np.ndarray, is_float: bool) -> np.ndarray:
@@ -31,8 +50,179 @@ def _from_lab(lab: np.ndarray, is_float: bool) -> np.ndarray:
     return cv2.cvtColor(clipped.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
 
+# --- v2 geometry / signal helpers ------------------------------------------
+# All radii are fractions of the inter-eye distance (IED) so behaviour is
+# resolution-invariant. Calibrated on the 83-face DSCF corpus (2026-09-02).
+_UE_EXTEND_DOWN = 0.28     # extend the landmark polygon downward into the tear trough
+_UE_EXTEND_SIDE = 0.06     # ... with only this much sideways reach (temple / nose bridge)
+_UE_TAPER_FLOOR = 0.35     # lift weight at the bottom of the extension (1.0 at the lid)
+_UE_LASH_MARGIN = 0.08     # exclusion margin around the eye contour (lashes, liner)
+_UE_FEATHER = 0.06         # support feather radius
+_UE_RING_OUTER = 0.10      # cheek reference ring width beyond the support
+_UE_RING_GAP = 0.02        # gap between support and ring
+_UE_EYE_RING_EXCL = 0.12   # keep the ring this far from the eye contour
+_UE_LOWPASS_SIGMA = 0.04   # low-pass sigma for the shadow estimate
+_UE_REL_T0 = 0.04          # relative darkness where the weight starts rising
+_UE_REL_T1 = 0.12          # relative darkness where the weight saturates
+_UE_MAX_LIFT = 30.0        # absolute L cap on the lift (single cap)
+_UE_MAX_AB = 8.0           # absolute a/b cap on the chroma pull
+_UE_AB_FACTOR = 0.75       # fraction of the a/b gap to close (concealer warmth)
+# Under-eye polygon area / IED^2, corpus median: used to recover IED when the
+# caller cannot supply it (legacy `repair` interface).
+_UE_AREA_PER_IED2 = 0.02
+
+
+def _ellipse(r: int) -> np.ndarray:
+    r = max(int(r), 1)
+    return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
+
+
+def _smoothstep(x: np.ndarray, e0: float, e1: float) -> np.ndarray:
+    t = np.clip((x - e0) / max(e1 - e0, 1e-6), 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
+def _dilate_down(hard: np.ndarray, r: int, r_side: Optional[int] = None) -> np.ndarray:
+    """Dilate a binary mask downward by ``r`` px with ``r_side`` sideways reach.
+
+    Uses the upper half of an ellipse anchored at its bottom row, so a pixel
+    at row y is set when any source pixel in rows y-r..y (within the ellipse)
+    is set. Roughly-upright faces only; feathering absorbs small roll.
+    """
+    r = max(int(r), 1)
+    rs = r if r_side is None else max(int(r_side), 1)
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * rs + 1, 2 * r + 1))[: r + 1, :]
+    return cv2.dilate(hard, k, anchor=(rs, r))
+
+
+def estimate_ied_from_mask(mask: np.ndarray) -> float:
+    """Recover an IED estimate from a landmark under-eye mask's area."""
+    area = float((mask > 0.5).sum())
+    return max(float(np.sqrt(area / _UE_AREA_PER_IED2)), 20.0)
+
+
+def build_undereye_support(
+    mask: np.ndarray,
+    ied: float,
+    exclude: Optional[np.ndarray] = None,
+    skin: Optional[np.ndarray] = None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Build the v2 (support, ring, valid) triple for one eye.
+
+    Args:
+        mask: landmark under-eye polygon mask (feathered or hard, 0-1 or 0-255).
+        ied: inter-eye distance in px.
+        exclude: eye-opening mask (landmark contour or BiSeNet). Dilated by the
+            lash margin and removed from the support and the ring. When None,
+            the support is eroded by the lash margin from its own top edge.
+        skin: optional skin mask; the ring is intersected with it.
+
+    Returns:
+        support (float32 0-1, feathered, exactly 0 outside), ring (bool),
+        valid (bool: pixels the low-pass estimate may sample from).
+    """
+    m = normalize_mask(mask)
+    assert m is not None
+    hard = (m > 0.5).astype(np.uint8)
+    if not hard.any():
+        z = np.zeros(m.shape, np.float32)
+        return z, np.zeros(m.shape, bool), np.ones(m.shape, bool)
+
+    lash_r = max(int(ied * _UE_LASH_MARGIN), 1)
+    poly = hard.copy()
+    ext_px = max(int(ied * _UE_EXTEND_DOWN), 1)
+    hard = _dilate_down(hard, ext_px, max(int(ied * _UE_EXTEND_SIDE), 1))
+
+    if exclude is not None:
+        ex = (normalize_mask(exclude) > 0.3).astype(np.uint8)
+        ex_lash = cv2.dilate(ex, _ellipse(lash_r))
+        ex_ring = cv2.dilate(ex, _ellipse(max(int(ied * _UE_EYE_RING_EXCL), 1)))
+    else:
+        # No eye contour: the polygon's top edge is the lash line, so shave the
+        # lash margin off the top rows of the polygon instead.
+        # (Only the top ``lash_r`` rows of the polygon - the polygon is just
+        # ~0.12 IED tall, so a further dilation would erase it.)
+        top = (m > 0.5).astype(np.uint8)
+        shifted = np.zeros_like(top)
+        shifted[lash_r:] = top[:-lash_r]
+        ex_lash = top & (1 - shifted)
+        ex_ring = cv2.dilate(ex_lash, _ellipse(max(int(ied * _UE_EYE_RING_EXCL), 1)))
+    hard[ex_lash > 0] = 0
+
+    feather_r = max(int(ied * _UE_FEATHER), 2)
+    support = _feather_mask(hard.astype(np.float32), radius=feather_r)
+    support = np.clip(support, 0.0, 1.0).astype(np.float32)
+    # keep the eye itself and everything beyond the feathered halo exactly 0;
+    # the lash margin is removed with a *feathered* edge (a hard cut here left
+    # a visible step where the lift met the un-lifted lash band, DSCF4576).
+    halo = cv2.dilate(hard, _ellipse(feather_r * 3))
+    support[halo == 0] = 0.0
+    ex_soft = _feather_mask(ex_lash.astype(np.float32), radius=feather_r)
+    support *= np.clip(1.0 - ex_soft, 0.0, 1.0).astype(np.float32)
+    if exclude is not None:
+        support[ex > 0] = 0.0
+    # Taper with distance below the landmark polygon: dark circles are darkest
+    # at the lid and fade into the cheek; contour makeup / hair shadow lower
+    # down should not be flattened at full weight.
+    dist = cv2.distanceTransform((1 - poly).astype(np.uint8), cv2.DIST_L2, 3)
+    taper = 1.0 - (1.0 - _UE_TAPER_FLOOR) * np.clip(dist / float(ext_px), 0.0, 1.0)
+    support *= taper.astype(np.float32)
+    if skin is not None:
+        sk = normalize_mask(skin)
+        if sk is not None and sk.max() > 0.01:
+            # keep the op on skin (hair / brows / background at the temple)
+            support *= sk
+
+    outer = cv2.dilate(hard, _ellipse(max(int(ied * (_UE_RING_OUTER + _UE_RING_GAP)), 2)))
+    inner = cv2.dilate(hard, _ellipse(max(int(ied * _UE_RING_GAP), 1)))
+    ring = (outer > 0) & (inner == 0) & (ex_ring == 0)
+    if skin is not None:
+        sk = normalize_mask(skin)
+        if sk is not None and sk.max() > 0.01:
+            ring &= sk > 0.5
+    # The low-pass shadow estimate may sample everything but the lash margin
+    # (the wider ``ex_ring`` exclusion is for the reference ring only;
+    # using it here starved the estimate right under the lid).
+    valid = ex_lash == 0
+    return support, ring, valid
+
+
 class UndereyeAnalyzer:
     """Detect dark-circle regions via LAB L-channel analysis."""
+
+    def analyze(
+        self,
+        lab: np.ndarray,
+        support: np.ndarray,
+        ring: np.ndarray,
+        valid: np.ndarray,
+        ied: float,
+    ) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
+        """v2 shadow estimate.
+
+        Returns ``(weight, lab_lp, ref)``: a 0-1 weight map (relative darkness
+        of the masked low-pass L versus the ring median, smoothstepped between
+        ``_UE_REL_T0`` and ``_UE_REL_T1``), the masked low-pass LAB, and the
+        ring reference ``[L, a, b]`` (None when no usable reference exists).
+        """
+        sigma = max(float(ied) * _UE_LOWPASS_SIGMA, 1.0)
+        v = valid.astype(np.float32)
+        den = cv2.GaussianBlur(v, (0, 0), sigma)
+        lab_lp = np.empty_like(lab)
+        for c in range(3):
+            num = cv2.GaussianBlur(lab[:, :, c] * v, (0, 0), sigma)
+            lab_lp[:, :, c] = num / np.maximum(den, 1e-3)
+        lab_lp[den < 1e-3] = lab[den < 1e-3]
+
+        samples = lab_lp[ring]
+        if samples.shape[0] < 50:
+            samples = lab_lp[support > 0.5]
+            if samples.shape[0] < 50:
+                return np.zeros(support.shape, np.float32), lab_lp, None
+        ref = np.median(samples, axis=0).astype(np.float32)
+        rel = (ref[0] - lab_lp[:, :, 0]) / max(float(ref[0]), 1.0)
+        weight = _smoothstep(rel, _UE_REL_T0, _UE_REL_T1).astype(np.float32)
+        return weight, lab_lp, ref
 
     def detect_dark_circles(
         self,
@@ -115,8 +305,11 @@ class UndereyeRemover:
         L = lab[:, :, 0].copy()
         darkness = np.clip(local_median_l - L, 0.0, max_lift)
 
-        # Selective brightening: only brighten pixels darker than median
-        l_lift = darkness * dark_circle_mask * strength * (max_lift / 100.0)
+        # Selective brightening: only brighten pixels darker than median.
+        # ``max_lift`` is the single cap (the clip above); the pre-2026-09-02
+        # code multiplied by ``max_lift / 100`` as well, which limited the lift
+        # to 9 L at strength 1.0.
+        l_lift = darkness * dark_circle_mask * strength
         lab[:, :, 0] = np.clip(L + l_lift, 0.0, 255.0)
 
         return lab
@@ -197,56 +390,87 @@ class UndereyeProcessor:
         mask: np.ndarray,
         darken_removal_strength: float = 0.0,
         puffiness_reduction_strength: float = 0.0,
+        ied: Optional[float] = None,
+        exclude: Optional[np.ndarray] = None,
+        skin: Optional[np.ndarray] = None,
     ) -> np.ndarray:
-        """Process under-eye region with selective brightening and optional chroma reduction.
+        """Process one under-eye region (v2): low-frequency shadow lift +
+        optional chroma reduction.
 
         Supports both uint8 and float32 input. Output dtype matches input dtype.
+        Pixels outside the final support are returned bit-exact (the LAB
+        roundtrip is confined to a ROI and restored outside support).
 
         Args:
             img_bgr: (H, W, 3) uint8 or float32 BGR image.
-            mask: (H, W) under-eye region mask [0, 1].
-            darken_removal_strength: 0–1 darkness removal strength.
-            puffiness_reduction_strength: 0–1 chroma desaturation strength.
+            mask: (H, W) landmark under-eye polygon mask.
+            darken_removal_strength: 0-1 fraction of the shadow to remove.
+            puffiness_reduction_strength: 0-1 chroma desaturation strength.
+            ied: inter-eye distance in px (estimated from ``mask`` when None).
+            exclude: eye-opening mask (landmark contour preferred); lashes and
+                the eye are kept out of the support.
+            skin: optional skin mask restricting the cheek reference ring.
 
         Returns:
             (H, W, 3) BGR image, same dtype as input.
         """
-        if (darken_removal_strength <= 0 and puffiness_reduction_strength <= 0) or mask.max() < 0.01:
+        if (darken_removal_strength <= 0 and puffiness_reduction_strength <= 0) or mask is None or mask.max() < 0.01:
             return img_bgr
+
+        if ied is None:
+            ied = estimate_ied_from_mask(normalize_mask(mask))
+        ied = float(ied)
+
+        support, ring, valid = build_undereye_support(mask, ied, exclude=exclude, skin=skin)
+        if support.max() < 0.01:
+            return img_bgr
+
+        # ROI: support + ring + low-pass reach
+        ys, xs = np.nonzero((support > 0) | ring)
+        pad = int(ied * (_UE_LOWPASS_SIGMA * 3 + _UE_RING_OUTER)) + 2
+        h, w = support.shape
+        y0, y1 = max(int(ys.min()) - pad, 0), min(int(ys.max()) + pad + 1, h)
+        x0, x1 = max(int(xs.min()) - pad, 0), min(int(xs.max()) + pad + 1, w)
 
         is_float = img_bgr.dtype == np.float32
-
-        # Convert to LAB
-        lab = _to_lab(img_bgr, is_float)
-
-        # Detect dark circles
-        dark_circle_mask, local_median_l = self.analyzer.detect_dark_circles(lab, mask, threshold_offset=15.0)
-
-        if np.isnan(local_median_l):
+        roi = img_bgr[y0:y1, x0:x1]
+        roi_f = roi.astype(np.float32)
+        lab = bgr_f32_to_lab_f32(roi_f)
+        sup = support[y0:y1, x0:x1]
+        weight, lab_lp, ref = self.analyzer.analyze(lab, sup, ring[y0:y1, x0:x1], valid[y0:y1, x0:x1], ied)
+        if ref is None:
             return img_bgr
+        eff = weight * sup
 
-        # Feather detection mask for smooth edges
-        dark_circle_mask_feathered = self.remover.feather_edges(dark_circle_mask, feather_radius=5)
-
-        # Apply selective L-brightening
         if darken_removal_strength > 0:
-            lab = self.remover.brighten_dark_circles(
-                lab, dark_circle_mask_feathered, local_median_l,
-                strength=darken_removal_strength, max_lift=30.0
-            )
+            s = float(np.clip(darken_removal_strength, 0.0, 1.0))
+            d_l = np.clip((ref[0] - lab_lp[:, :, 0]) * s * eff, 0.0, _UE_MAX_LIFT)
+            d_a = np.clip((ref[1] - lab_lp[:, :, 1]) * s * eff * _UE_AB_FACTOR, -_UE_MAX_AB, _UE_MAX_AB)
+            d_b = np.clip((ref[2] - lab_lp[:, :, 2]) * s * eff * _UE_AB_FACTOR, -_UE_MAX_AB, _UE_MAX_AB)
+            lab[:, :, 0] = np.clip(lab[:, :, 0] + d_l, 0.0, 255.0)
+            lab[:, :, 1] = np.clip(lab[:, :, 1] + d_a, 0.0, 255.0)
+            lab[:, :, 2] = np.clip(lab[:, :, 2] + d_b, 0.0, 255.0)
 
-        # Apply chroma reduction (puffiness)
         if puffiness_reduction_strength > 0:
             lab = self.remover.reduce_puffiness_chroma(
-                lab, dark_circle_mask_feathered,
-                strength=puffiness_reduction_strength, chroma_reduction=0.7
+                lab, eff, strength=puffiness_reduction_strength, chroma_reduction=0.7
             )
 
-        # Convert back to BGR
-        result = _from_lab(lab, is_float)
+        out_roi = lab_f32_to_bgr_f32(np.clip(lab, 0.0, 255.0))
+        if not is_float:
+            out_roi = np.clip(np.rint(out_roi), 0, 255).astype(np.uint8)
+        out_roi = restore_outside_support(roi, out_roi, sup)
+        result = img_bgr.copy()
+        result[y0:y1, x0:x1] = out_roi
+        return result
 
-        # Blend within the mask to avoid hard edges
-        return blend_masked(img_bgr, result, mask)
+    def last_support(self, mask: np.ndarray, ied: Optional[float] = None,
+                     exclude: Optional[np.ndarray] = None,
+                     skin: Optional[np.ndarray] = None) -> np.ndarray:
+        """Return the v2 effective support for ``mask`` (diagnostics / QA)."""
+        if ied is None:
+            ied = estimate_ied_from_mask(normalize_mask(mask))
+        return build_undereye_support(mask, float(ied), exclude=exclude, skin=skin)[0]
 
     def attenuate_hemoglobin(
         self,
@@ -349,8 +573,9 @@ class UnderEyeRepairer:
         s = strength / 100.0
         result = img_bgr.copy()
 
-        for mask in (regions.left_under_eye, regions.right_under_eye):
+        for mask, eye in ((regions.left_under_eye, getattr(regions, "left_eye", None)),
+                          (regions.right_under_eye, getattr(regions, "right_eye", None))):
             if mask is not None and mask.max() > 0.01:
-                result = self._processor.process(result, mask, darken_removal_strength=s)
+                result = self._processor.process(result, mask, darken_removal_strength=s, exclude=eye)
 
         return result

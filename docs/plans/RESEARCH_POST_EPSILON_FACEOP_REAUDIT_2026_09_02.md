@@ -279,7 +279,7 @@ threshold as a fraction of the surround median. Any change must be re-verified o
 - **Neck chroma band** needs a darker-skin sample before it is more than provisional;
   the residual collar-edge line on 4560 suggests feathering the neck support wider than
   `0.03·face_w` once the band is settled.
-- **Dark-circle op** — proposal in §6, not applied.
+- **Dark-circle op** — ✅ resolved by the v2 redesign, `RESEARCH_DARK_CIRCLE_OP_2026_09_02.md` (supersedes the §6 proposal).
 - Re-verify the 2026-08-31 finding-6 text (DSCF8007 / plastic-skin backoff) is not cited
   elsewhere as evidence that the backoff nullifies skin ops.
 - `yaw_gate_study/sweep.json` mid-band `damp_*` columns are inverted (§4); regenerate if
