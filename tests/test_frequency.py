@@ -508,3 +508,47 @@ class TestAnisotropicSmoothing:
                                face_width=120.0, smooth_engine="guided")
         default = sep.combine(layers, skin_mask=mask, smooth_strength=0.5, face_width=120.0)
         assert np.array_equal(explicit, default)
+
+
+class TestMidReductionClamp:
+    """An out-of-range mid_reduction (e.g. a caller passing the 0-100
+    percent scale instead of the 0-1 fraction combine() expects) must not
+    corrupt the render — reproduced on a real portrait: mid_reduction=100.0
+    drove `mid` deeply negative, and the guided-filter smoothing pass
+    amplified that into severe per-pixel color/clipping corruption."""
+
+    def test_out_of_range_high_clamps_to_one(self):
+        img = np.random.randint(60, 200, (120, 120, 3), dtype=np.uint8)
+        sep = FrequencySeparator()
+        layers = sep.separate(img, face_width=120.0)
+        mask = np.ones((120, 120), dtype=np.float32)
+        out_100 = sep.combine(layers, skin_mask=mask, smooth_strength=0.3,
+                              mid_reduction=100.0, face_width=120.0)
+        out_1 = sep.combine(layers, skin_mask=mask, smooth_strength=0.3,
+                            mid_reduction=1.0, face_width=120.0)
+        assert np.array_equal(out_100, out_1)
+
+    def test_out_of_range_negative_clamps_to_zero(self):
+        img = np.random.randint(60, 200, (120, 120, 3), dtype=np.uint8)
+        sep = FrequencySeparator()
+        layers = sep.separate(img, face_width=120.0)
+        mask = np.ones((120, 120), dtype=np.float32)
+        out_neg = sep.combine(layers, skin_mask=mask, smooth_strength=0.3,
+                              mid_reduction=-5.0, face_width=120.0)
+        out_0 = sep.combine(layers, skin_mask=mask, smooth_strength=0.3,
+                            mid_reduction=0.0, face_width=120.0)
+        assert np.array_equal(out_neg, out_0)
+
+    def test_in_range_value_unaffected_by_clamp(self):
+        """The clamp must be a strict no-op for valid [0, 1] values."""
+        img = np.random.randint(60, 200, (120, 120, 3), dtype=np.uint8)
+        sep = FrequencySeparator()
+        layers = sep.separate(img, face_width=120.0)
+        mask = np.ones((120, 120), dtype=np.float32)
+        out = sep.combine(layers, skin_mask=mask, smooth_strength=0.3,
+                          mid_reduction=0.35, face_width=120.0)
+        assert out.shape == (120, 120, 3)
+        assert out.dtype == np.uint8
+        # No wild corruption: output should stay within a sane range of the
+        # input, not saturate to pure black/white speckle.
+        assert out.std() < img.astype(np.float32).std() + 20

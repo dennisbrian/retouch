@@ -665,6 +665,14 @@ class FrequencySeparator:
         m_raw = m_raw[y1:y2, x1:x2]
 
         texture_opacity = max(0.0, min(1.0, texture_opacity))
+        # Defense-in-depth: ParamSpec declares [0.0, 1.0] but that's GUI/CLI
+        # metadata only, not enforced at this boundary. An out-of-range value
+        # (e.g. a caller passing the 0-100 CLI/percent scale instead of the
+        # 0-1 fraction this function expects) drives `mid` deeply negative,
+        # which the guided-filter smoothing pass below amplifies into a
+        # severe per-pixel color/clipping corruption on the composited face
+        # — reproduced with mid_reduction=100.0 on a real render.
+        mid_reduction = max(0.0, min(1.0, mid_reduction))
 
         if face_width:
             feather_r = max(DEFAULT_FEATHER_MIN, int(face_width * DEFAULT_FEATHER_FACTOR) | 1)
