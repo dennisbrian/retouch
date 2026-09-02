@@ -26,6 +26,12 @@
 
 ## Plans (`docs/plans/`)
 - `MASTER_PLAN.md` — Overall roadmap
+- `RESEARCH_POST_EPSILON_FACEOP_REAUDIT_2026_09_02.md` — 83-face re-audit of the
+  skin-composite ops after the mask-epsilon fix (`f69ab1e`): affected faces now match
+  controls at the default recipe (no over-strength), the shared yaw ramp was found
+  inverted (relight/sculpt ~0 at ratio 2.51, ~full at 3.99) and the neck "depth gate"
+  was zeroing neck harmonisation on every frontal face; both fixed. Also under-eye
+  detector fire-rate and neck-op fabric/hand patches.
 - `RESEARCH_YAW_GATE_CALIBRATION_2026_09_02.md` — Corpus calibration of the
   nose-bridge/temple yaw gate (band 1.3→1.6 / 1.5→1.7 → 2.5→4.0, shipped `9c26493`)
   plus the composite-mask epsilon bug it uncovered (skin ops discarded on 24% of
