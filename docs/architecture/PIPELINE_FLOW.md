@@ -82,3 +82,100 @@ flowchart TD
 - The `★` block (`restore_micro_texture`) is the new work added in commit `5ea7ca0`. The user-pasted runtime error from this morning's `dev.sh` session is a separate bug that was fixed in `92300b1` (defensive value coercion in `process_image`).
 - Everything in `xiaohongshu`, `xhs_ultrasoft`, and the new `xhs_soft_glow` recipes now flows end-to-end through the diagram. The `relight` resolver fix in `engine.py` ensures recipe values actually reach the engine (the prior hard-coded path was silently dropping them).
 - The flow is vertical (top-down) to fit Markdown rendering on GitHub.
+
+## Behavioural map (2026-09-02, read from the code)
+
+The Mermaid diagram above is the 2026-06-23 view. This section is the flow as it
+actually executes today, derived from `engine.py` (`process` →
+`_run_core_pipeline` → `_process_with_proxy` / `_run_global_phases`),
+`stage_wrappers.build_global_registry` (global stage order) and
+`perf_optimizations._process_face_core` (per-face op order, from its `_tr()`
+trace labels). Re-derive it from those three places when it drifts.
+
+```
+                         RetouchEngine.process(img, recipe=..., **overrides, face_contexts=None)
+                         ───────────────────────────────────────────────────────────────────────
+                         recipe (params.resolve_recipe, 'extends' merged)
+                              + caller overrides (non-None wins)
+                              └─> build_context() ──> ProcessingContext   (data-driven from PROCESSING_PARAMS)
+
+ ┌───────────────────────────────────────────────────────────────────────────────────────────────┐
+ │  _run_core_pipeline                                                                           │
+ │                                                                                               │
+ │  ┌─ _process_with_proxy ────────────────────────────────────────────────────────────────────┐ │
+ │  │  max side > 2048 ?  ──yes──> proxy = resize(2048)         no ──> proxy = native          │ │
+ │  │                                                                                          │ │
+ │  │  STAGE 0  Detection & segmentation      (ALWAYS on the proxy)                            │ │
+ │  │     MediaPipe detect (dual-scale, escalating crop pad) ─> faces + 478 landmarks + IED    │ │
+ │  │     segment_person ─> person mask                                                        │ │
+ │  │     [face_contexts supplied?  ─> skip all of this, reuse cached FaceContext]             │ │
+ │  │                                                                                          │ │
+ │  │     0 faces ─────────────────────────────> _no_face_fallback (global stages only) ──┐    │ │
+ │  │                                                                                     │    │ │
+ │  │  quality="full" (default): landmarks scaled back to NATIVE, everything below runs   │    │ │
+ │  │  at native res.   quality="draft": run below on the proxy, upscale + reinject.      │    │ │
+ │  │                                                                                     │    │ │
+ │  │  STAGE 1  _stage_reshape      liquid warp: slimming / jaw / chin  (yaw-gated 2.5→4.0)    │ │
+ │  │                                                                                          │ │
+ │  │  STAGE 2  _stage_per_face     per face (ThreadPool ≤4, or ProcessPool for multi-face)    │ │
+ │  │     ┌────────────────────────────────────────────────────────────────────────────────┐   │ │
+ │  │     │ crop ROI around face  ─> FaceParser.parse()                                     │   │ │
+ │  │     │     BiSeNet ONNX (skin/hair/lips/eyes/brows/neck) + landmark polygons           │   │ │
+ │  │     │     ─> FaceRegions   (falls back to _landmark_fallback_only without ONNX)       │   │ │
+ │  │     │ gate_occluded_eye_regions  (EAR < 0.285 / contrast < 0.55 -> eye ops off)        │   │ │
+ │  │     │                                                                                 │   │ │
+ │  │     │ _process_face_core(canvas float32, regions, ctx, processors):                   │   │ │
+ │  │     │   frequency separation  (low = tone, high = pores)                              │   │ │
+ │  │     │   SKIN   smooth ▸ albedo_even ▸ flatten ▸ restore_micro_texture ▸ micro D&B      │   │ │
+ │  │     │          ▸ redness/hb_even ▸ vein ▸ equalize ▸ hue/tone unify ▸ whiten           │   │ │
+ │  │     │          ▸ shine_removal ▸ specular ▸ relight ▸ sculpt ▸ SSS ▸ quantize ▸ bloom  │   │ │
+ │  │     │   REPAIR blemish.remove ▸ undereye.repair (v2) ▸ harmonize_neck                 │   │ │
+ │  │     │   FEATURES eyes (iris/whites/catchlight per eye) ▸ teeth ▸ lips                  │   │ │
+ │  │     │   MAKEUP blush ▸ eyeshadow ▸ eyeliner ▸ contour ▸ brows ▸ ombre lips             │   │ │
+ │  │     │   HAIR   flyaways ▸ deglare ▸ ring ▸ enhance                                     │   │ │
+ │  │     │   LOCAL  dodge_burn ▸ shadow_lift ▸ wrinkle_soften ▸ texture_transplant ▸ clarity│   │ │
+ │  │     │   every op: masked by its region, LAB roundtrips contained to ROI                 │   │ │
+ │  │     └────────────────────────────────────────────────────────────────────────────────┘   │ │
+ │  │     _composite_faces  ─> face crops alpha-composited back (skin+hair+neck alpha,         │ │
+ │  │                          normaliser > 1.5 rule)                        ─> FaceContexts    │ │
+ │  └──────────────────────────────────────────────────────────────────────────────────────────┘ │
+ │                                                                                    │          │
+ │  _run_global_phases  (StageRegistry, in this order)  <─────────────────────────────┘          │
+ │     STAGE 4  SubjectSeparation ▸ BackgroundHarmonize ▸ BackgroundReplace                      │
+ │     STAGE 4b BodySkin ▸ CosplayMoat                                                          │
+ │     STAGE 3  Global tonal   (contrast / brightness / curves / auto-exposure)                  │
+ │     STAGE 5  Grade          (presets, LUTs, split-tone, Fuji foundation, color harmony)       │
+ │              LocalAdjustments                                                                 │
+ │     STAGE 6  Finish         (selective sharpen, glow, grain, halation, CA)                    │
+ │              BodyReshape                                                                      │
+ │     7.5 backdrop cleanup ▸ 7.6 fabric wrinkles ▸ _run_qa ▸ neural boosters (SR: model-less)  │
+ └───────────────────────────────────────────────────────────────────────────────────────────────┘
+                                          │
+                                          v
+                    ProcessingResult (ndarray + metadata, .face_contexts for reuse)
+```
+
+Behaviour that matters in practice:
+
+- **Two resolutions, one truth.** Detection always happens at 2048 px. In the
+  default `full` quality every per-face op then runs at native resolution, which
+  is why a 24 MP file takes 25+ minutes while `--max-dim 2048` takes ~5 s.
+  `draft` does the face work on the proxy and reinjects detail.
+- **FaceContext is the cache key.** Passing `face_contexts=` skips Stage 0 and
+  parsing entirely. The GUI sliders and every corpus harness rely on this; it is
+  also how engine-level A/B checks keep detection identical between arms.
+- **Everything is region-masked.** Each per-face op receives its `FaceRegions`
+  mask, so an op that "does nothing" is nearly always a mask problem, not a
+  strength problem. The composite-mask epsilon bug (`f69ab1e`), the neck depth
+  gate (`fb2474e`) and the under-eye polygon (`c89e65f`) were all mask-geometry
+  defects that presented as strength defects.
+- **Gates sit in front of op groups.** The yaw ratio gates reshape, relight and
+  sculpt (`utils.YAW_GATE_START/END`). The eye-visibility gate removes closed or
+  occluded eyes from every eye op and the sharpen mask. The skin mask bounds the
+  under-eye support.
+- **Global stages never see faces.** After compositing, the registry stages
+  operate on the whole frame with only the person mask. Face damage can only
+  originate in Stage 1 or 2, which is where face-quality QA keeps finding things.
+- **Recipes only set what they name.** `natural` sets no under-eye key, so an op
+  can be perfectly wired and still never run for the default recipe. Check
+  `params.resolve_recipe(name)` before concluding an op is broken.

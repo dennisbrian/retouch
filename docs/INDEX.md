@@ -18,7 +18,7 @@
 ## Architecture (`docs/architecture/`)
 - `ARCHITECTURE.md` — Pipeline design & modules
 - `API.md` — Python API reference
-- `PIPELINE_FLOW.md` — Data flow diagram
+- `PIPELINE_FLOW.md` — Data flow diagram (2026-06-23 Mermaid) + code-derived behavioural map of stage/op order (2026-09-02)
 
 ## Film / color (`docs/`)
 - `FUJI_SIMS_GUIDE.md` — Fuji film simulation recipes
