@@ -48,7 +48,7 @@ def ratio(lm, mid, l, r):
 def smoothstep_damp(rv, a=_YAW_DAMPEN_START, b=_YAW_DAMPEN_END):
     if rv <= a: return 1.0
     if rv >= b: return 0.0
-    t = (rv - a) / (b - a); return t * t * (3 - 2 * t)
+    t = (rv - a) / (b - a); return 1.0 - t * t * (3 - 2 * t)  # 1 -> 0 (was inverted before 2026-09-02)
 
 
 def z_yaw_deg(lm, l, r, w, h):

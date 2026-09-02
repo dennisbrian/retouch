@@ -483,3 +483,34 @@ class TestRemovePurpleFringing:
         img = np.full((64, 64, 3), [200, 40, 200], dtype=np.uint8)  # Uniform purple
         out = remove_purple_fringing(img, strength=1.0)
         assert np.all(out == img)
+
+
+class TestYawGateFactor:
+    """The shared yaw gate must ramp 1 -> 0 monotonically across the band.
+
+    Before 2026-09-02 the body returned the raw smoothstep (0 -> 1), so a face
+    just past YAW_GATE_START got ~0 strength and one just under YAW_GATE_END got
+    ~1 before the hard cut; the band-midpoint checks in test_relight/test_sculpt
+    cannot see that (smoothstep(0.5) == 0.5 either way)."""
+
+    def test_endpoints(self):
+        from retouch.utils import YAW_GATE_END, YAW_GATE_START, yaw_gate_factor
+        assert yaw_gate_factor(1.0) == 1.0
+        assert yaw_gate_factor(YAW_GATE_START) == 1.0
+        assert yaw_gate_factor(YAW_GATE_END) == 0.0
+        assert yaw_gate_factor(YAW_GATE_END + 5.0) == 0.0
+
+    def test_monotone_non_increasing_and_orientation(self):
+        from retouch.utils import YAW_GATE_END, YAW_GATE_START, yaw_gate_factor
+        xs = np.linspace(YAW_GATE_START - 0.5, YAW_GATE_END + 0.5, 200)
+        ys = [yaw_gate_factor(float(x)) for x in xs]
+        assert all(b <= a + 1e-12 for a, b in zip(ys, ys[1:]))
+        near_start = yaw_gate_factor(YAW_GATE_START + 0.01 * (YAW_GATE_END - YAW_GATE_START))
+        near_end = yaw_gate_factor(YAW_GATE_END - 0.01 * (YAW_GATE_END - YAW_GATE_START))
+        assert near_start > 0.99
+        assert near_end < 0.01
+
+    def test_custom_band(self):
+        from retouch.utils import yaw_gate_factor
+        assert yaw_gate_factor(1.5, start=1.0, end=2.0) == pytest.approx(0.5)
+        assert yaw_gate_factor(1.1, start=1.0, end=2.0) > yaw_gate_factor(1.9, start=1.0, end=2.0)

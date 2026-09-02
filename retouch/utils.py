@@ -197,13 +197,21 @@ def yaw_ratio(landmarks) -> float:
 
 
 def yaw_gate_factor(ratio: float, start: float = YAW_GATE_START, end: float = YAW_GATE_END) -> float:
-    """Smoothstep 1.0 -> 0.0 strength factor as ``ratio`` runs start -> end."""
+    """Smoothstep 1.0 -> 0.0 strength factor as ``ratio`` runs start -> end.
+
+    Monotone non-increasing in ``ratio``. The pre-2026-09-02 body returned the
+    raw smoothstep ``t*t*(3-2t)`` (0 -> 1), i.e. the ramp was inverted: a face
+    one hundredth past ``start`` got ~0 strength and one just under ``end`` got
+    ~1 before the hard cut to 0. Measured on the DSCF corpus: relight/sculpt at
+    ratio 2.51 rendered 0 changed pixels while ratio 3.37 rendered 58% strength
+    (docs/plans/RESEARCH_POST_EPSILON_FACEOP_REAUDIT_2026_09_02.md).
+    """
     if ratio <= start:
         return 1.0
     if ratio >= end:
         return 0.0
     t = (ratio - start) / (end - start)
-    return float(t * t * (3.0 - 2.0 * t))
+    return float(1.0 - t * t * (3.0 - 2.0 * t))
 
 
 def estimate_face_width(
