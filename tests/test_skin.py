@@ -364,15 +364,14 @@ class TestHarmonizeNeck:
         result = proc.harmonize_neck(img, FakeLandmarks(), pm, np.zeros((64, 64)))
         assert np.all(result == img)
 
-    def test_depth_gating_applied_when_low_yaw(self, proc):
+    @staticmethod
+    def _frontal_landmarks(yaw_ratio=1.0):
         class MockLandmark:
             def __init__(self, x, y, z=0.0):
-                self.x = x
-                self.y = y
-                self.z = z
-                
+                self.x, self.y, self.z = x, y, z
+
         class MockLandmarksList:
-            def __init__(self, yaw_ratio=1.0):
+            def __init__(self):
                 self.landmark = [MockLandmark(0.5, 0.5, 0.0) for _ in range(468)]
                 self.landmark[6].x = 0.5
                 self.landmark[234].x = 0.3
@@ -380,25 +379,55 @@ class TestHarmonizeNeck:
                 self.landmark[33].x = 0.4
                 self.landmark[263].x = 0.6
                 self.landmark[152].y = 0.7
-                
                 if yaw_ratio != 1.0:
-                    shift = 0.2 * (yaw_ratio - 1.0) / (yaw_ratio + 1.0)
-                    self.landmark[6].x = 0.5 + shift
+                    # d_left / d_right = yaw_ratio with d_left + d_right = 0.4
+                    d_right = 0.4 / (1.0 + yaw_ratio)
+                    self.landmark[6].x = 0.7 - d_right
 
+        return MockLandmarksList()
+
+    @staticmethod
+    def _face_neck_scene():
+        """Grey face patch (L~137) over a darker grey neck patch (L~97), same chroma."""
         img = np.full((100, 100, 3), 128, dtype=np.uint8)
+        img[75:90, 30:70] = 90
         face_skin = np.zeros((100, 100), dtype=np.float32)
         face_skin[40:60, 40:60] = 1.0
-        
         neck_mask = np.zeros((100, 100), dtype=np.float32)
         neck_mask[75:90, 30:70] = 1.0
-        
         person_mask = np.ones((100, 100), dtype=np.uint8) * 255
-        
-        lms_low = MockLandmarksList(yaw_ratio=1.0)
-        lms_low.landmark[152].z = 10.0
-        
-        result_gated = proc.harmonize_neck(img, lms_low, person_mask, face_skin, neck_mask, strength=100)
-        assert np.allclose(result_gated, img)
+        return img, face_skin, neck_mask, person_mask
+
+    @pytest.mark.parametrize("yaw_ratio", [1.0, 1.2, 2.0])
+    def test_frontal_and_turned_faces_both_harmonize_neck(self, proc, yaw_ratio):
+        """Regression for the 2026-09-02 finding: the old 'depth gate' (ratio <= 1.3)
+        measured vertical distance below the eye line, not depth, and removed 100%
+        of the neck mask on every frontal face. The op must brighten a darker neck
+        regardless of the yaw ratio."""
+        img, face_skin, neck_mask, person_mask = self._face_neck_scene()
+        out = proc.harmonize_neck(img, self._frontal_landmarks(yaw_ratio), person_mask,
+                                  face_skin, neck_mask, strength=100)
+        neck_before = img[78:87, 35:65].astype(np.float32).mean()
+        neck_after = out[78:87, 35:65].astype(np.float32).mean()
+        assert neck_after > neck_before + 5.0, (yaw_ratio, neck_before, neck_after)
+
+    def test_harmonize_neck_contained_to_neck_support(self, proc):
+        """Pixels with zero neck support (face, background) are byte-identical
+        to the input despite the whole-canvas LAB roundtrip."""
+        img, face_skin, neck_mask, person_mask = self._face_neck_scene()
+        out = proc.harmonize_neck(img, self._frontal_landmarks(), person_mask,
+                                  face_skin, neck_mask, strength=100)
+        assert np.array_equal(out[:60], img[:60])        # face + above
+        assert np.array_equal(out[:, :10], img[:, :10])  # far left background
+
+    def test_harmonize_neck_skips_non_skin_chroma(self, proc):
+        """A saturated blue 'collar' inside the neck mask must not be shifted
+        toward the face tone (DSCF4560 hard-patch regression)."""
+        img, face_skin, neck_mask, person_mask = self._face_neck_scene()
+        img[75:90, 30:70] = (200, 60, 20)  # BGR: strong blue, far from grey skin chroma
+        out = proc.harmonize_neck(img, self._frontal_landmarks(), person_mask,
+                                  face_skin, neck_mask, strength=100)
+        assert np.array_equal(out, img)
 
 
 class TestSpecularBloom:

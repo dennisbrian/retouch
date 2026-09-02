@@ -18,6 +18,7 @@ import numpy as np
 from .utils import (
     blend_masked,
     normalize_mask,
+    restore_outside_support,
     squeeze_mask,
     guided_filter,
     apply_u8_op_float,
@@ -822,8 +823,27 @@ class SkinProcessor:
         face_w = max(xs) - min(xs)
         face_h = max(ys) - min(ys)
 
+        # Chroma gate shared by both mask sources: keep the correction on pixels
+        # whose a/b sit near the face's skin chroma. BiSeNet's neck label and the
+        # person-mask rectangle both admit collars, fabric and hands; without
+        # this gate the uniform L/a/b shift below painted a hard bright patch on
+        # a white collar (DSCF4560) and on fabric under the chin (corpus sweep,
+        # docs/plans/RESEARCH_POST_EPSILON_FACEOP_REAUDIT_2026_09_02.md).
+        dist_ab = np.sqrt((lab[:, :, 1] - face_median_a) ** 2 + (lab[:, :, 2] - face_median_b) ** 2)
+        face_std_a = np.std(lab[:, :, 1][face_skin_indices])
+        face_std_b = np.std(lab[:, :, 2][face_skin_indices])
+        # Band width: real neck skin sat within ~5 a/b units of the face median
+        # on the 2026-09-02 anchors (DSCF4568/4575: 2.2/4.5) while the collar
+        # (DSCF4560, 14.4) and hand (DSCF4463, 12.2) that the old
+        # max(12, 2*(std_a+std_b)) ~18 band admitted sit well outside 10.
+        # Provisional; calibrated on four pale-skin anchors only.
+        ab_threshold = max(10.0, (face_std_a + face_std_b) * 1.25)
+        skin_match = (dist_ab < ab_threshold).astype(np.float32)
+        # Erode the face skin mask to create a smoother boundary exclusion
+        face_skin_eroded = cv2.erode(face_skin_mask.astype(np.float32, copy=False), np.ones((5, 5), np.uint8))
+
         if neck_mask is not None and neck_mask.max() > 0.01:
-            neck_mask_final = neck_mask.copy()
+            neck_src = normalize_mask(squeeze_mask(neck_mask))
         else:
             chin_y = int(face_landmarks.landmark[self.MEDIAPIPE_CHIN_IDX].y * h_img)
             chin_x = int(face_landmarks.landmark[self.MEDIAPIPE_CHIN_IDX].x * w_img)
@@ -839,39 +859,22 @@ class SkinProcessor:
             pm = normalize_mask(person_mask)
             pm = squeeze_mask(pm)
 
-            neck_mask_est = np.zeros((h_img, w_img), dtype=np.float32)
-            neck_mask_est[neck_y1:neck_y2, neck_x1:neck_x2] = pm[neck_y1:neck_y2, neck_x1:neck_x2]
+            neck_src = np.zeros((h_img, w_img), dtype=np.float32)
+            neck_src[neck_y1:neck_y2, neck_x1:neck_x2] = pm[neck_y1:neck_y2, neck_x1:neck_x2]
 
-            dist_ab = np.sqrt((lab[:, :, 1] - face_median_a) ** 2 + (lab[:, :, 2] - face_median_b) ** 2)
-            face_std_a = np.std(lab[:, :, 1][face_skin_indices])
-            face_std_b = np.std(lab[:, :, 2][face_skin_indices])
-            ab_threshold = max(12.0, (face_std_a + face_std_b) * 2.0)
-            skin_match = (dist_ab < ab_threshold).astype(np.float32)
-            
-            # Fix #5: Erode face skin mask to create a smoother boundary exclusion
-            face_skin_eroded = cv2.erode(face_skin_mask, np.ones((5, 5), np.uint8))
-            neck_mask_final = np.clip(neck_mask_est * skin_match - face_skin_eroded, 0, 1)
+        neck_mask_final = np.clip(neck_src * skin_match - face_skin_eroded, 0, 1)
 
-        lm = face_landmarks.landmark
-        d_left = abs(lm[6].x - lm[234].x)
-        d_right = abs(lm[454].x - lm[6].x)
-        yaw_ratio = max(d_left, d_right) / (min(d_left, d_right) + 1e-5)
-
-        if yaw_ratio <= 1.3:
-            p1 = np.array([lm[33].x * w_img, lm[33].y * h_img, lm[33].z * face_w])
-            p2 = np.array([lm[263].x * w_img, lm[263].y * h_img, lm[263].z * face_w])
-            p3 = np.array([lm[6].x * w_img, lm[6].y * h_img, lm[6].z * face_w])
-            
-            n = np.cross(p2 - p1, p3 - p1)
-            n = n / (np.linalg.norm(n) + 1e-5)
-            
-            # Approximate plane distance in screen-space (XY only) to avoid geometric flaws of substitute Z
-            Y, X = np.ogrid[:h_img, :w_img]
-            dist_to_plane = np.abs(n[0] * (X - p1[0]) + n[1] * (Y - p1[1]))
-            
-            threshold = face_w * 0.15
-            depth_gate = (dist_to_plane < threshold).astype(np.float32)
-            neck_mask_final *= depth_gate
+        # No yaw / "depth" gate here. The previous block (frontal faces only,
+        # nose-bridge/temple ratio <= 1.3) built a plane through the outer eye
+        # corners and the nose bridge with z scaled by face width, then kept
+        # pixels within 0.15*face_w of that plane measured in XY only. Because
+        # the nose bridge sits well below the eye line in y but only a few px
+        # behind it in the scaled z, the plane normal tilts into the image and
+        # the "distance" is ~0.45x the vertical distance below the eyes: every
+        # neck pixel failed. Measured 2026-09-02: 15/15 frontal corpus faces lost
+        # 100% of the neck mask (the op was a guaranteed no-op), while turned
+        # faces skipped the gate entirely. The neck source mask + chroma gate
+        # above already bound the edit to skin.
 
         if neck_mask_final.max() < 0.01:
             return img_bgr
@@ -896,8 +899,12 @@ class SkinProcessor:
         lab[:, :, 2] = np.clip(lab[:, :, 2] + neck_mask_final * b_diff, 0, 255)
 
         if is_float:
-            return lab_f32_to_bgr_f32(np.clip(lab, 0, 255))
-        return cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+            result = lab_f32_to_bgr_f32(np.clip(lab, 0, 255))
+        else:
+            result = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+        # The LAB roundtrip above touched the whole canvas; the op only has
+        # authority inside the (blurred) neck support.
+        return restore_outside_support(img_bgr, result, neck_mask_final)
 
     def apply_specular_bloom(
         self,
