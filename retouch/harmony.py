@@ -102,10 +102,36 @@ def build_face_anchored_body_mask(
     return (candidate * (1.0 - face_exclusion.astype(np.float32))).astype(np.float32)
 
 
+def _crop_to_mask(img_bgr: np.ndarray, mask: np.ndarray, pad: int) -> tuple[np.ndarray, np.ndarray]:
+    """Crop ``img_bgr``/``mask`` to the mask's bbox, padded by ``pad`` px.
+
+    ``_highband_energy`` only ever reads the result at ``mask > 0.5``, but
+    ran its per-pixel work (Gaussian blur, cvtColor) over the full native
+    canvas — on a 26 MP frame with a face/body mask covering a small
+    fraction, that's wasted work scaling with total image pixels instead of
+    mask pixels. The padding absorbs the blur kernel's support radius so
+    cropped values match the full-frame computation (border replication vs.
+    true neighbours is negligible at >=3*sigma from any kept pixel).
+
+    Not used for ``_specular_energy``: ``extract_specular``'s feather sigma
+    is derived from ``min(img.shape[:2])`` (the *whole frame*, not a
+    mask-relative scale), so cropping first silently shrinks that sigma and
+    changes the measured value (verified: 5.954 full-frame vs 5.756 cropped
+    on a real render, a value ``extract_specular`` doesn't expose a way to
+    override).
+    """
+    ys, xs = np.nonzero(mask > 0.5)
+    h, w = mask.shape[:2]
+    y0, y1 = max(int(ys.min()) - pad, 0), min(int(ys.max()) + pad + 1, h)
+    x0, x1 = max(int(xs.min()) - pad, 0), min(int(xs.max()) + pad + 1, w)
+    return img_bgr[y0:y1, x0:x1], mask[y0:y1, x0:x1]
+
+
 def _highband_energy(img_bgr: np.ndarray, mask: np.ndarray, sigma: float) -> float:
-    gray = cv2.cvtColor(np.clip(img_bgr, 0, 255).astype(np.uint8), cv2.COLOR_BGR2GRAY).astype(np.float32)
+    crop_img, crop_mask = _crop_to_mask(img_bgr, mask, pad=int(sigma * 3) + 2)
+    gray = cv2.cvtColor(np.clip(crop_img, 0, 255).astype(np.uint8), cv2.COLOR_BGR2GRAY).astype(np.float32)
     high = gray - cv2.GaussianBlur(gray, (0, 0), sigmaX=sigma)
-    values = high[mask > 0.5]
+    values = high[crop_mask > 0.5]
     if values.size < _MIN_REGION_PIXELS:
         return float("nan")
     median = np.median(values)
