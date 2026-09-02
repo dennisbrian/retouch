@@ -36,6 +36,24 @@ _OKLAB_M1_INV = np.linalg.inv(_OKLAB_M1)
 _OKLAB_M2_INV = np.linalg.inv(_OKLAB_M2)
 
 
+def _build_srgb_eotf_lut() -> np.ndarray:
+    """256-entry sRGB EOTF LUT, indexed by raw uint8 value.
+
+    Computed with the identical float32 expression used by the elementwise
+    path, so ``linear_from_u8_lut[u8]`` is bit-exact with the ``np.where``
+    formula applied to ``u8 / 255.0``.
+    """
+    levels = np.arange(256, dtype=np.float32) / np.float32(255.0)
+    return np.where(
+        levels <= 0.04045,
+        levels / np.float32(12.92),
+        np.power((levels + np.float32(0.055)) / np.float32(1.055), np.float32(2.4)),
+    ).astype(np.float32)
+
+
+_SRGB_EOTF_LUT = _build_srgb_eotf_lut()
+
+
 def bgr_to_oklab(img_bgr: np.ndarray) -> np.ndarray:
     """Convert BGR to float32 Oklab color space.
 
@@ -55,16 +73,17 @@ def bgr_to_oklab(img_bgr: np.ndarray) -> np.ndarray:
     is_float = img_bgr.dtype == np.float32
     if is_float:
         img_rgb = np.clip(img_bgr[..., ::-1], 0.0, 255.0).astype(np.float32) * (1.0 / 255.0)
+        # sRGB EOTF (inverse companding)
+        img_linear = np.where(
+            img_rgb <= 0.04045,
+            img_rgb / 12.92,
+            np.power((img_rgb + 0.055) / 1.055, 2.4),
+        )
     else:
-        # BGR -> RGB and normalize to [0, 1]
-        img_rgb = img_bgr[..., ::-1].astype(np.float32) / 255.0
-
-    # sRGB EOTF (inverse companding)
-    img_linear = np.where(
-        img_rgb <= 0.04045,
-        img_rgb / 12.92,
-        np.power((img_rgb + 0.055) / 1.055, 2.4),
-    )
+        # uint8 input: only 256 distinct values, so the EOTF is a table
+        # lookup (bit-exact with the elementwise formula above).
+        img_rgb_u8 = img_bgr[..., ::-1]
+        img_linear = _SRGB_EOTF_LUT[img_rgb_u8]
 
     # Linear RGB -> LMS (via M1)
     lms = np.dot(img_linear, _OKLAB_M1.T)
@@ -95,7 +114,9 @@ def oklab_to_bgr(oklab: np.ndarray, float32_out: bool = False) -> np.ndarray:
     # Oklab -> cbrt(LMS) (via M2_inv)
     lms_cbrt = np.dot(oklab, _OKLAB_M2_INV.T)
 
-    # Cube (inverse of cbrt)
+    # Cube (inverse of cbrt). Kept as np.power (not x*x*x) for bit-exactness
+    # with the legacy output — this is the final pixel-value cube, called
+    # once per image, so the multiply's speed win isn't worth losing that.
     lms = np.power(lms_cbrt, 3.0)
 
     # LMS -> linear RGB (via M1_inv)
@@ -247,14 +268,17 @@ def find_gamut_intersection_srgb(
     low = np.zeros_like(L_val)
     high = np.full_like(L_val, 0.4, dtype=np.float32)
 
+    # oklab_mid = [L, mid*a1, mid*b1] is linear in `mid`, so
+    # lms_cbrt = oklab_mid @ M2_inv.T = base + mid * direction, where `base`
+    # and `direction` depend only on (L, h) and are hoisted out of the loop.
+    # This drops the per-iteration np.stack + first np.dot (6x -> 1x each).
+    base = L_val[..., None] * _OKLAB_M2_INV[:, 0]
+    direction = a1[..., None] * _OKLAB_M2_INV[:, 1] + b1[..., None] * _OKLAB_M2_INV[:, 2]
+
     for _ in range(6):
         mid = 0.5 * (low + high)
-        a_mid = mid * a1
-        b_mid = mid * b1
-
-        oklab_mid = np.stack([L_val, a_mid, b_mid], axis=-1)
-        lms_cbrt = np.dot(oklab_mid, _OKLAB_M2_INV.T)
-        lms = np.power(lms_cbrt, 3.0)
+        lms_cbrt = base + mid[..., None] * direction
+        lms = lms_cbrt * lms_cbrt * lms_cbrt
         rgb_linear = np.dot(lms, _OKLAB_M1_INV.T)
 
         in_gamut = (rgb_linear >= 0.0).all(axis=-1) & (rgb_linear <= 1.0).all(axis=-1)
