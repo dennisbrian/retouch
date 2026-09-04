@@ -18,6 +18,13 @@ system interpreter where `FaceDetector.available == False`.
 Meitu app (`IMG_20260829_213523.jpg`, `IMG_20260829_213448.jpg`).
 **Branch:** `feat/color-science-k9-fix-and-frontier`
 
+**2026-09-04 follow-up:** `RESEARCH_MEITU_RETOUCH_BAKEOFF_2026_09_04.md`
+recovers the preserved five pairs, adds current Retouch `natural` and
+`convention_clear_v1` candidates, replaces the vanished `/tmp` analysis with
+`scripts/qa/competitor_pair_bakeoff.py`, records export/version confounds, and provides
+randomized owner-review sheets. This document remains the historical Meitu-only study;
+use the follow-up for the current same-source comparison.
+
 ---
 
 ## 0. What this is
@@ -56,9 +63,12 @@ metric-only, unrendered claims.
 
 ## 1. Face region — consistent across both pairs
 
-- **Global brighten + desaturate.** 2362: luma −14.8, sat −16.7. 2365 face luma is flat (+0.9)
-  but sat still drops −14.4 — the desaturation is the more load-bearing move than the brighten;
-  2362's face was likely underexposed relative to 2365 and got compensated harder.
+- **2026-09-04 sign/read correction — darken + desaturate on 2362, roughly flat
+  luma + desaturate on 2365.** This bullet originally called the 2362 change a
+  “brighten” despite recording luma −14.8. The current symmetric appearance rerun and
+  direct comparison sheet in `RESEARCH_MEITU_RETOUCH_BAKEOFF_2026_09_04.md` both support
+  a darker 2362 Meitu face, not a brighter one. The desaturation conclusion still stands
+  on both pairs and is the more consistent operation.
 - **Skin micro-texture removed.** Visible in the 2362 face diff panel: pore-level and fine hair
   detail (baby hairs at the hairline, skin grain) collapses in the diff to a flat warm cast, while
   the two facial moles are preserved sharply — Meitu's skin-smoothing appears mole/landmark-aware

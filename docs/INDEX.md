@@ -66,6 +66,10 @@
 - `RESEARCH_DETECTION_RECALL_2026_08_19.md` — Detection recall/precision on the 83-image DSCF corpus; subject 98.8% (→100% via `8811320`); 18 poster-FP exposure; RetinaFace inert in pinned env
 - `RESEARCH_POSTERFP_VETO_2026_08_19.md` — Three-discriminator veto validation (joint person+texture rule kills 14/18 FPs, 0 collateral); texture-only veto proven unsafe; RetinaFace dependency dead-end proof
 - `RESEARCH_EYE_OCCLUSION_2026_08_26.md` — Per-eye occlusion gate calibration protocol (EAR primary, tone-adaptive contrast secondary, hair tertiary); stratified BiSeNet-available/unavailable arms; Fitzpatrick I-III/IV-VI split; cost asymmetry (false gate mild / missed gate catastrophic)
+- `RESEARCH_MEITU_RETOUCH_BAKEOFF_2026_09_04.md` — Reproducible same-source
+  five-pair Meitu-app vs current `natural` / `convention_clear_v1` bake-off;
+  face-aware manifests, registered metrics, export confounds, current competitor and
+  preference research, and randomized owner-review sheets
 - `RESEARCH_MEITU_COMPETITOR_QA_2026_08_29.md` — 5-pair diff study of Meitu-app output vs. DSCF source (izunako cosplay shoots, kimono + bunny costume); landmark-registered reruns show edit intensity varies substantially per-shot (heavy smoothing+reshape on one shoot, light touch/no-reshape on another) — likely manual per-shot tuning, not a fixed filter; retracts an earlier unregistered-crop "costume clarity boost" claim; observational pilot, no thresholds/owner set
 - `PLAN_*.md` — Tier-based initiatives
 - `PHOTOSHOP_PARITY_ROADMAP.md` — Feature parity goals
