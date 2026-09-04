@@ -3110,12 +3110,34 @@ RECIPES["meitu_porcelain_v1"] = {
     # rosy is force-zeroed because the engine quirk lets rosy silently win
     # over porcelain if both keys are present (inherited from
     # porcelain_unified_v1 via convention_clear_v1's ancestry).
+    # face_exposure is deliberately NOT used to carry the luma lift. It is
+    # masked to `regions.skin`, which is BiSeNet label 1 only — CelebAMask-HQ
+    # labels the nose as its own class (10), so regions.skin has a
+    # nose-shaped hole (measured on DSCF2306: nose-polygon skin coverage
+    # 0.001-0.28 vs 0.90 on the cheek; label 10 appears only in `face_oval`,
+    # never in `skin`, see parsing.py::_masks_from_label_map). At
+    # face_exposure=0.30 (recipe_pct -> +30 L flat) the cheeks/forehead rose
+    # ~30 L while the nose stayed put, leaving the nose stranded 24.9 L below
+    # the surrounding cheeks (source +2.7, Meitu +0.9). That step — not
+    # contrast compression, and not clipping (0.01% of face pixels reach
+    # L>=250) — is the "flat/plastic nose" artifact. It is also
+    # resolution-dependent: the same op is inert at --max-dim 2048, so it
+    # cannot be tuned reliably by value alone.
+    #
+    # The lift is carried by the global `brightness` knob instead, which has
+    # no face mask and therefore no nose hole. Meitu's own lift is roughly
+    # half global anyway (full-frame +3.65 vs face +4.78), so a global knob
+    # matches the target's shape better than a face-only op. Measured on
+    # DSCF2306 at full res (brightness=8 vs Meitu target):
+    #   face dL +4.34 (target +4.78) | full dL +4.61 (target +3.65)
+    #   face dSat -7.49 (target -9.07) | cheek-minus-nose step -1.9 (target +0.9)
     "extends": "convention_clear_v1",
     "skin": {
         "rosy": 0.0,
         "porcelain": 0.55,
-        "face_exposure": 0.30,
+        "face_exposure": 0.0,
     },
+    "brightness": 8.0,
     "hsl_sat_global": -10,
     "saturation_mode": "subtractive",
     "frequency": {"mid_reduction": 0.20},
