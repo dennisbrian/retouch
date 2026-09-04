@@ -1,0 +1,49 @@
+{
+  "live": [
+    "clarity",
+    "smooth",
+    "saturation",
+    "texture_opacity",
+    "contrast",
+    "face_exposure",
+    "skin_hue_unify",
+    "sculpt",
+    "sharpen"
+  ],
+  "inert": [
+    "relight",
+    "shine_removal",
+    "vibrance",
+    "blemish",
+    "eye_enhance",
+    "lip_enhance",
+    "whiten",
+    "dark_circles",
+    "skin_unify",
+    "skin_unify_hue",
+    "glow"
+  ],
+  "raw": {
+    "clarity": 2.077907221464117,
+    "smooth": 0.9408304310338975,
+    "saturation": 0.9170485481713816,
+    "texture_opacity": 0.6067638852115115,
+    "contrast": 0.3388222434944363,
+    "face_exposure": 0.3283332314982654,
+    "skin_hue_unify": 0.2510505984507491,
+    "sculpt": 0.12460199460953042,
+    "sharpen": 0.07637630094299273,
+    "relight": 0.035065208388493994,
+    "shine_removal": 0.01847288132141184,
+    "vibrance": 0.014986727496147238,
+    "blemish": 0.009840662063721597,
+    "eye_enhance": 0.005950562469025166,
+    "lip_enhance": 0.005437992627141082,
+    "whiten": 0.0018907377611220863,
+    "dark_circles": 0.0012933053626346766,
+    "skin_unify": 0.0,
+    "skin_unify_hue": 0.0,
+    "glow": 0.0
+  },
+  "skin_mask_coverage": 0.11910526111510024
+}

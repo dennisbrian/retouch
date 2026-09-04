@@ -1,0 +1,42 @@
+[
+  {
+    "id": "M1_oklab_m1_subtle",
+    "file": "retouch/color_science.py",
+    "rationale": "OKLab M1 linear-RGB->LMS row0 +0.002 (0.5%) - live color matrix",
+    "expectation": "probe: is a small live-matrix error caught?",
+    "base_harness": "SURVIVED",
+    "face_harness": "KILLED",
+    "base_tail": "5 passed, 14 warnings in 0.80s",
+    "face_tail": "3 failed, 5 passed, 14 warnings in 1.70s"
+  },
+  {
+    "id": "M2_oklab_m1_gross",
+    "file": "retouch/color_science.py",
+    "rationale": "OKLab M1 row1 green -0.10 (15% gross error) - live color matrix",
+    "expectation": "probe: is a GROSS live-matrix error caught?",
+    "base_harness": "SURVIVED",
+    "face_harness": "KILLED",
+    "base_tail": "5 passed, 14 warnings in 0.71s",
+    "face_tail": "3 failed, 5 passed, 14 warnings in 1.66s"
+  },
+  {
+    "id": "M3_landmark_scaling",
+    "file": "tests/golden_face_fixture.py",
+    "rationale": "inter-eye distance scaling inflated 15% - drives region mask sizing",
+    "expectation": "face harness should KILL; base harness unaffected",
+    "base_harness": "SURVIVED",
+    "face_harness": "KILLED",
+    "base_tail": "5 passed, 14 warnings in 0.69s",
+    "face_tail": "3 failed, 5 passed, 14 warnings in 1.64s"
+  },
+  {
+    "id": "M4_deadcode_srgb_xyz",
+    "file": "retouch/color_space.py",
+    "rationale": "sRGB->XYZ luminance row -0.10; feeds bgr_to_prophoto, which has NO callers",
+    "expectation": "expected SURVIVE - documents dead code, not a fixture gap",
+    "base_harness": "SURVIVED",
+    "face_harness": "SURVIVED",
+    "base_tail": "5 passed, 14 warnings in 0.66s",
+    "face_tail": "8 passed, 14 warnings in 1.60s"
+  }
+]

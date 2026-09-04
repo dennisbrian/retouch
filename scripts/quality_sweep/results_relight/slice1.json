@@ -1,0 +1,194 @@
+{
+  "slice": 1,
+  "num_slices": 4,
+  "recipe": "natural",
+  "corpus": "/Users/dennis/Library/CloudStorage/GoogleDrive-alexanderlooi88@gmail.com/My Drive/Photography/Remielle/Photos/Total",
+  "downscale": 0.25,
+  "n_images": 12,
+  "golden_gate": {
+    "base": {
+      "natural": {
+        "expected": "f5e23f232162160b",
+        "got": "f5e23f232162160b",
+        "match": true
+      },
+      "outdoor_harsh_sun_v1": {
+        "expected": "d488dd3cd55ba052",
+        "got": "d488dd3cd55ba052",
+        "match": true
+      },
+      "porcelain_unified_v1": {
+        "expected": "6fa5b84540b22f57",
+        "got": "6fa5b84540b22f57",
+        "match": true
+      }
+    },
+    "face": {
+      "natural": {
+        "expected": "77440b800440cae7",
+        "got": "77440b800440cae7",
+        "match": true
+      },
+      "outdoor_harsh_sun_v1": {
+        "expected": "439305ee3c6aedab",
+        "got": "439305ee3c6aedab",
+        "match": true
+      },
+      "porcelain_unified_v1": {
+        "expected": "6283ad2db51ac10f",
+        "got": "6283ad2db51ac10f",
+        "match": true
+      }
+    },
+    "ok": true
+  },
+  "baseline_runtime_s_mean": 1.4238,
+  "n_configs_total": 36,
+  "n_configs_this_slice": 9,
+  "results": [
+    {
+      "config_id": "relight=0.0|relight_azimuth=0.0|relight_elevation=45.0",
+      "params": {
+        "relight": 0.0,
+        "relight_azimuth": 0.0,
+        "relight_elevation": 45.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 1.0,
+      "delta_e_face_vs_baseline": 0.0,
+      "runtime_s_mean": 1.3774,
+      "runtime_s_total": 16.5288
+    },
+    {
+      "config_id": "relight=0.0|relight_azimuth=90.0|relight_elevation=80.0",
+      "params": {
+        "relight": 0.0,
+        "relight_azimuth": 90.0,
+        "relight_elevation": 80.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 1.0,
+      "delta_e_face_vs_baseline": 0.0,
+      "runtime_s_mean": 1.3521,
+      "runtime_s_total": 16.2253
+    },
+    {
+      "config_id": "relight=0.0|relight_azimuth=270.0|relight_elevation=10.0",
+      "params": {
+        "relight": 0.0,
+        "relight_azimuth": 270.0,
+        "relight_elevation": 10.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 1.0,
+      "delta_e_face_vs_baseline": 0.0,
+      "runtime_s_mean": 1.3483,
+      "runtime_s_total": 16.1801
+    },
+    {
+      "config_id": "relight=0.5|relight_azimuth=0.0|relight_elevation=45.0",
+      "params": {
+        "relight": 0.5,
+        "relight_azimuth": 0.0,
+        "relight_elevation": 45.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.99981,
+      "delta_e_face_vs_baseline": 0.0528,
+      "runtime_s_mean": 1.3763,
+      "runtime_s_total": 16.5159
+    },
+    {
+      "config_id": "relight=0.5|relight_azimuth=90.0|relight_elevation=80.0",
+      "params": {
+        "relight": 0.5,
+        "relight_azimuth": 90.0,
+        "relight_elevation": 80.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.999728,
+      "delta_e_face_vs_baseline": 0.0774,
+      "runtime_s_mean": 1.3581,
+      "runtime_s_total": 16.2974
+    },
+    {
+      "config_id": "relight=0.5|relight_azimuth=270.0|relight_elevation=10.0",
+      "params": {
+        "relight": 0.5,
+        "relight_azimuth": 270.0,
+        "relight_elevation": 10.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.999717,
+      "delta_e_face_vs_baseline": 0.0762,
+      "runtime_s_mean": 1.3816,
+      "runtime_s_total": 16.5797
+    },
+    {
+      "config_id": "relight=1.0|relight_azimuth=0.0|relight_elevation=45.0",
+      "params": {
+        "relight": 1.0,
+        "relight_azimuth": 0.0,
+        "relight_elevation": 45.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.999637,
+      "delta_e_face_vs_baseline": 0.1008,
+      "runtime_s_mean": 1.3624,
+      "runtime_s_total": 16.3491
+    },
+    {
+      "config_id": "relight=1.0|relight_azimuth=90.0|relight_elevation=80.0",
+      "params": {
+        "relight": 1.0,
+        "relight_azimuth": 90.0,
+        "relight_elevation": 80.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.999478,
+      "delta_e_face_vs_baseline": 0.1449,
+      "runtime_s_mean": 1.3301,
+      "runtime_s_total": 15.9613
+    },
+    {
+      "config_id": "relight=1.0|relight_azimuth=270.0|relight_elevation=10.0",
+      "params": {
+        "relight": 1.0,
+        "relight_azimuth": 270.0,
+        "relight_elevation": 10.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.999469,
+      "delta_e_face_vs_baseline": 0.1417,
+      "runtime_s_mean": 1.3387,
+      "runtime_s_total": 16.0647
+    }
+  ]
+}

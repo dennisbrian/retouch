@@ -1,0 +1,9 @@
+{
+  "clarity": [0.0, 0.3, 0.6],
+  "smooth": [0.2, 0.45, 0.7],
+  "texture_opacity": [0.6, 1.0],
+  "face_exposure": [0.0, 0.25],
+  "relight": [0.0, 0.5],
+  "relight_azimuth": [90.0],
+  "relight_elevation": [10.0, 45.0]
+}
