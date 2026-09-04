@@ -3089,6 +3089,38 @@ RECIPES["convention_clear_v1"] = {
     "sharpen": 12.0,
 }
 
+RECIPES["meitu_porcelain_v1"] = {
+    # Named candidate for owners who prefer the Meitu-style desaturated/
+    # brightened "porcelain" direction over natural's source-authoritative
+    # default (docs/plans/RESEARCH_MEITU_RETOUCH_BAKEOFF_2026_09_04.md #8:
+    # do not retune natural/convention_clear_v1 from this, ship a separate
+    # named candidate instead).
+    #
+    # Calibrated against DSCF2306 (the "bunny" case, matched by headdress/
+    # bow against the doc's face_detail_comparison.jpg — NOT DSCF2362, which
+    # is the set's outlier on every axis and has a confounded 43%-resolution
+    # Meitu export). DSCF2306 Meitu face delta: luma +6.7 L, saturation -9.0,
+    # HF ratio 0.95 (mild softening, not heavy plastic-skin); full-frame
+    # saturation delta was only -2.8, i.e. the desaturation is face-weighted,
+    # not uniform. There is no existing face-scoped directional-desaturation
+    # ParamSpec, so the face-weighted pull mostly comes from the skin-scoped
+    # whiten_tone=porcelain shift (skin.porcelain, engine-verified live path:
+    # engine.py build_context's whiten/whiten_tone quirk rows), with a mild
+    # global hsl_sat_global standing in for the small full-frame component.
+    # rosy is force-zeroed because the engine quirk lets rosy silently win
+    # over porcelain if both keys are present (inherited from
+    # porcelain_unified_v1 via convention_clear_v1's ancestry).
+    "extends": "convention_clear_v1",
+    "skin": {
+        "rosy": 0.0,
+        "porcelain": 0.55,
+        "face_exposure": 0.30,
+    },
+    "hsl_sat_global": -10,
+    "saturation_mode": "subtractive",
+    "frequency": {"mid_reduction": 0.20},
+}
+
 
 # ---------------------------------------------------------------------------
 # Recipe-reachability follow-up (2026-07-11 audit): the 2026-07-10 wiring-debt
@@ -3615,6 +3647,7 @@ CURATED_RECIPE_NAMES: List[str] = [
     "game_character_v3",
     "convention_repair_v1",
     "convention_clear_v1",
+    "meitu_porcelain_v1",
     "con_fluorescent_v1",
     "con_mixed_temp_v1",
     "con_crowd_bg_v1",
