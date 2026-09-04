@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: I001, UP045
 """Compare one source image with competitor and Retouch outputs.
 
 The utility is deliberately product-neutral.  It registers every edited image
@@ -16,8 +17,9 @@ import json
 import math
 import random
 import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Optional
 
 import cv2
 import numpy as np
@@ -27,7 +29,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from retouch.detection import FaceData, FaceDetector  # noqa: E402
+from retouch.detection import FaceData, FaceDetector
 
 
 ANCHOR_INDICES = (33, 133, 263, 362, 1, 61, 291)
@@ -35,10 +37,12 @@ LABEL_HEIGHT = 42
 
 
 def _safe_name(value: str) -> str:
-    return "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in value)
+    return "".join(
+        char if char.isalnum() or char in {"-", "_"} else "_" for char in value
+    )
 
 
-def _parse_candidate(value: str) -> Tuple[str, Path]:
+def _parse_candidate(value: str) -> tuple[str, Path]:
     if "=" not in value:
         raise argparse.ArgumentTypeError("candidate must use NAME=PATH")
     name, raw_path = value.split("=", 1)
@@ -48,7 +52,7 @@ def _parse_candidate(value: str) -> Tuple[str, Path]:
     return name, Path(raw_path).expanduser().resolve()
 
 
-def _read_image(path: Path, max_dim: int) -> Tuple[np.ndarray, Dict[str, Any]]:
+def _read_image(path: Path, max_dim: int) -> tuple[np.ndarray, dict[str, Any]]:
     image = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if image is None:
         raise ValueError(f"could not read image: {path}")
@@ -57,7 +61,7 @@ def _read_image(path: Path, max_dim: int) -> Tuple[np.ndarray, Dict[str, Any]]:
     if scale < 1.0:
         image = cv2.resize(
             image,
-            (int(round(original_width * scale)), int(round(original_height * scale))),
+            (round(original_width * scale), round(original_height * scale)),
             interpolation=cv2.INTER_AREA,
         )
     return image, {
@@ -71,7 +75,7 @@ def _read_image(path: Path, max_dim: int) -> Tuple[np.ndarray, Dict[str, Any]]:
     }
 
 
-def _read_metadata(path: Path) -> Dict[str, Any]:
+def _read_metadata(path: Path) -> dict[str, Any]:
     try:
         with Image.open(path) as image:
             exif = image.getexif()
@@ -92,7 +96,7 @@ def _read_metadata(path: Path) -> Dict[str, Any]:
         return {"metadata_error": f"{type(exc).__name__}: {exc}"}
 
 
-def _largest_face(detector: FaceDetector, image: np.ndarray) -> Tuple[FaceData, int]:
+def _largest_face(detector: FaceDetector, image: np.ndarray) -> tuple[FaceData, int]:
     faces = detector.detect(image)
     if not faces:
         raise ValueError("no face detected")
@@ -102,7 +106,10 @@ def _largest_face(detector: FaceDetector, image: np.ndarray) -> Tuple[FaceData, 
 
 def _landmark_points(face: FaceData, width: int, height: int) -> np.ndarray:
     return np.asarray(
-        [(landmark.x * width, landmark.y * height) for landmark in face.landmarks.landmark],
+        [
+            (landmark.x * width, landmark.y * height)
+            for landmark in face.landmarks.landmark
+        ],
         dtype=np.float32,
     )
 
@@ -112,11 +119,13 @@ def _transform_points(points: np.ndarray, matrix: np.ndarray) -> np.ndarray:
     return homogeneous @ matrix.T
 
 
-def _expanded_face_mask(shape: Sequence[int], face: FaceData, padding: float = 0.35) -> np.ndarray:
+def _expanded_face_mask(
+    shape: Sequence[int], face: FaceData, padding: float = 0.35
+) -> np.ndarray:
     height, width = int(shape[0]), int(shape[1])
     x, y, box_width, box_height = face.bbox
-    pad_x = int(round(box_width * padding))
-    pad_y = int(round(box_height * padding))
+    pad_x = round(box_width * padding)
+    pad_y = round(box_height * padding)
     x1, y1 = max(0, x - pad_x), max(0, y - pad_y)
     x2, y2 = min(width, x + box_width + pad_x), min(height, y + box_height + pad_y)
     mask = np.zeros((height, width), dtype=np.uint8)
@@ -129,7 +138,7 @@ def _fit_to_source(
     source_face: FaceData,
     edited_image: np.ndarray,
     edited_face: FaceData,
-) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
     source_height, source_width = source_image.shape[:2]
     edited_height, edited_width = edited_image.shape[:2]
     source_points = _landmark_points(source_face, source_width, source_height)
@@ -170,23 +179,31 @@ def _fit_to_source(
     residuals = np.linalg.norm(aligned_points - source_points, axis=1)
     source_ied = max(float(source_face.ied), 1.0)
     anchor_residuals = residuals[list(ANCHOR_INDICES)]
-    return warped, valid, {
-        "matrix_edited_to_source": matrix.round(8).tolist(),
-        "anchor_inliers": int(np.count_nonzero(inliers)) if inliers is not None else None,
-        "anchor_count": len(ANCHOR_INDICES),
-        "anchor_reprojection_mean_px": float(np.mean(anchor_residuals)),
-        "all_landmarks_median_px": float(np.median(residuals)),
-        "all_landmarks_p95_px": float(np.percentile(residuals, 95)),
-        "all_landmarks_median_ied": float(np.median(residuals) / source_ied),
-        "all_landmarks_p95_ied": float(np.percentile(residuals, 95) / source_ied),
-        "interpretation": (
-            "Residual landmark displacement after a global similarity fit. It can reflect "
-            "non-rigid face changes or landmark-detector drift; it is not an identity score."
-        ),
-    }
+    return (
+        warped,
+        valid,
+        {
+            "matrix_edited_to_source": matrix.round(8).tolist(),
+            "anchor_inliers": int(np.count_nonzero(inliers))
+            if inliers is not None
+            else None,
+            "anchor_count": len(ANCHOR_INDICES),
+            "anchor_reprojection_mean_px": float(np.mean(anchor_residuals)),
+            "all_landmarks_median_px": float(np.median(residuals)),
+            "all_landmarks_p95_px": float(np.percentile(residuals, 95)),
+            "all_landmarks_median_ied": float(np.median(residuals) / source_ied),
+            "all_landmarks_p95_ied": float(np.percentile(residuals, 95) / source_ied),
+            "interpretation": (
+                "Residual landmark displacement after a global similarity fit. It can reflect "
+                "non-rigid face changes or landmark-detector drift; it is not an identity score."
+            ),
+        },
+    )
 
 
-def _metric_row(source: np.ndarray, edited: np.ndarray, mask: np.ndarray) -> Dict[str, Any]:
+def _metric_row(
+    source: np.ndarray, edited: np.ndarray, mask: np.ndarray
+) -> dict[str, Any]:
     selected = mask > 0
     if not np.any(selected):
         raise ValueError("metric mask is empty")
@@ -202,7 +219,9 @@ def _metric_row(source: np.ndarray, edited: np.ndarray, mask: np.ndarray) -> Dic
     return {
         "pixel_count": int(np.count_nonzero(selected)),
         "lab8_mae": [float(value) for value in lab_mae],
-        "psnr_db": 99.0 if mse <= 0.0 else float(20.0 * math.log10(255.0 / math.sqrt(mse))),
+        "psnr_db": 99.0
+        if mse <= 0.0
+        else float(20.0 * math.log10(255.0 / math.sqrt(mse))),
         "fraction_pixels_abs_delta_gt8": float(np.mean(abs_max[selected] > 8.0)),
     }
 
@@ -211,7 +230,7 @@ def _resize_long_edge(image: np.ndarray, long_edge: int) -> np.ndarray:
     scale = float(long_edge) / max(image.shape[:2])
     return cv2.resize(
         image,
-        (max(1, int(round(image.shape[1] * scale))), max(1, int(round(image.shape[0] * scale)))),
+        (max(1, round(image.shape[1] * scale)), max(1, round(image.shape[0] * scale))),
         interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC,
     )
 
@@ -227,7 +246,7 @@ def _appearance_view(image: np.ndarray, face: Optional[FaceData]) -> np.ndarray:
     return cv2.resize(crop, (512, 512), interpolation=cv2.INTER_AREA)
 
 
-def _appearance_summary(image: np.ndarray) -> Dict[str, float]:
+def _appearance_summary(image: np.ndarray) -> dict[str, float]:
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV).astype(np.float32)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32)
@@ -239,18 +258,22 @@ def _appearance_summary(image: np.ndarray) -> Dict[str, float]:
     }
 
 
-def _appearance_change(source: np.ndarray, edited: np.ndarray) -> Dict[str, Any]:
+def _appearance_change(source: np.ndarray, edited: np.ndarray) -> dict[str, Any]:
     source_summary = _appearance_summary(source)
     edited_summary = _appearance_summary(edited)
     source_hf = source_summary["hf_std"]
     edited_hf = edited_summary["hf_std"]
-    hf_ratio = 1.0 if max(source_hf, edited_hf) < 1e-6 else edited_hf / max(source_hf, 1e-6)
+    hf_ratio = (
+        1.0 if max(source_hf, edited_hf) < 1e-6 else edited_hf / max(source_hf, 1e-6)
+    )
     return {
         "source": source_summary,
         "edited": edited_summary,
-        "lab8_luma_delta": edited_summary["lab8_luma_mean"] - source_summary["lab8_luma_mean"],
+        "lab8_luma_delta": edited_summary["lab8_luma_mean"]
+        - source_summary["lab8_luma_mean"],
         "hsv8_saturation_delta": (
-            edited_summary["hsv8_saturation_mean"] - source_summary["hsv8_saturation_mean"]
+            edited_summary["hsv8_saturation_mean"]
+            - source_summary["hsv8_saturation_mean"]
         ),
         "hf_std_ratio": hf_ratio,
         "method": (
@@ -287,13 +310,13 @@ def _fit_panel(image: np.ndarray, width: int, height: int) -> np.ndarray:
     scale = min(width / image.shape[1], height / image.shape[0])
     resized = cv2.resize(
         image,
-        (max(1, int(round(image.shape[1] * scale))), max(1, int(round(image.shape[0] * scale)))),
+        (max(1, round(image.shape[1] * scale)), max(1, round(image.shape[0] * scale))),
         interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC,
     )
     canvas = np.full((height, width, 3), 22, dtype=np.uint8)
     x = (width - resized.shape[1]) // 2
     y = (height - resized.shape[0]) // 2
-    canvas[y:y + resized.shape[0], x:x + resized.shape[1]] = resized
+    canvas[y : y + resized.shape[0], x : x + resized.shape[1]] = resized
     return canvas
 
 
@@ -301,7 +324,7 @@ def _face_crop(image: np.ndarray, mask: np.ndarray) -> np.ndarray:
     ys, xs = np.where(mask > 0)
     if not len(xs):
         return image
-    return image[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    return image[ys.min() : ys.max() + 1, xs.min() : xs.max() + 1]
 
 
 def _write_visuals(
@@ -309,7 +332,7 @@ def _write_visuals(
     source: np.ndarray,
     face_mask: np.ndarray,
     aligned: Mapping[str, np.ndarray],
-) -> Dict[str, str]:
+) -> dict[str, str]:
     names = ["source", *aligned.keys()]
     images = [source, *aligned.values()]
     full_panels = [
@@ -319,25 +342,32 @@ def _write_visuals(
     full_sheet = np.hstack(full_panels)
     full_path = output_dir / "full_comparison.jpg"
     if not cv2.imwrite(str(full_path), full_sheet, [cv2.IMWRITE_JPEG_QUALITY, 94]):
-        raise IOError(f"failed to write {full_path}")
+        raise OSError(f"failed to write {full_path}")
 
     source_crop = _face_crop(source, face_mask)
-    detail_rows: List[np.ndarray] = []
+    detail_rows: list[np.ndarray] = []
     for name, image in aligned.items():
         edited_crop = _face_crop(image, face_mask)
         difference = cv2.absdiff(source_crop, edited_crop)
-        difference = np.clip(difference.astype(np.float32) * 4.0, 0, 255).astype(np.uint8)
-        row = np.hstack([
-            _label_panel(_fit_panel(source_crop, 420, 420), "source face"),
-            _label_panel(_fit_panel(edited_crop, 420, 420), f"{name} face"),
-            _label_panel(_fit_panel(difference, 420, 420), f"{name} abs diff x4"),
-        ])
+        difference = np.clip(difference.astype(np.float32) * 4.0, 0, 255).astype(
+            np.uint8
+        )
+        row = np.hstack(
+            [
+                _label_panel(_fit_panel(source_crop, 420, 420), "source face"),
+                _label_panel(_fit_panel(edited_crop, 420, 420), f"{name} face"),
+                _label_panel(_fit_panel(difference, 420, 420), f"{name} abs diff x4"),
+            ]
+        )
         detail_rows.append(row)
     detail_sheet = np.vstack(detail_rows)
     detail_path = output_dir / "face_detail_comparison.jpg"
     if not cv2.imwrite(str(detail_path), detail_sheet, [cv2.IMWRITE_JPEG_QUALITY, 94]):
-        raise IOError(f"failed to write {detail_path}")
-    return {"full_comparison": str(full_path), "face_detail_comparison": str(detail_path)}
+        raise OSError(f"failed to write {detail_path}")
+    return {
+        "full_comparison": str(full_path),
+        "face_detail_comparison": str(detail_path),
+    }
 
 
 def _write_blinded_visuals(
@@ -347,19 +377,23 @@ def _write_blinded_visuals(
     aligned: Mapping[str, np.ndarray],
     seed: str,
     source_hash: str,
-) -> Tuple[Dict[str, str], Dict[str, str]]:
+) -> tuple[dict[str, str], dict[str, str]]:
     order = list(aligned.items())
     random.Random(f"{seed}:{source_hash}").shuffle(order)
-    labelled = [(chr(ord("A") + index), name, image) for index, (name, image) in enumerate(order)]
+    labelled = [
+        (chr(ord("A") + index), name, image)
+        for index, (name, image) in enumerate(order)
+    ]
 
     full_panels = [_label_panel(_fit_panel(source, 420, 630), "reference source")]
     full_panels.extend(
-        _label_panel(_fit_panel(image, 420, 630), label)
-        for label, _, image in labelled
+        _label_panel(_fit_panel(image, 420, 630), label) for label, _, image in labelled
     )
     full_path = output_dir / "blinded_full_review.jpg"
-    if not cv2.imwrite(str(full_path), np.hstack(full_panels), [cv2.IMWRITE_JPEG_QUALITY, 94]):
-        raise IOError(f"failed to write {full_path}")
+    if not cv2.imwrite(
+        str(full_path), np.hstack(full_panels), [cv2.IMWRITE_JPEG_QUALITY, 94]
+    ):
+        raise OSError(f"failed to write {full_path}")
 
     source_crop = _face_crop(source, face_mask)
     face_panels = [_label_panel(_fit_panel(source_crop, 420, 420), "reference source")]
@@ -368,8 +402,10 @@ def _write_blinded_visuals(
         for label, _, image in labelled
     )
     face_path = output_dir / "blinded_face_review.jpg"
-    if not cv2.imwrite(str(face_path), np.hstack(face_panels), [cv2.IMWRITE_JPEG_QUALITY, 94]):
-        raise IOError(f"failed to write {face_path}")
+    if not cv2.imwrite(
+        str(face_path), np.hstack(face_panels), [cv2.IMWRITE_JPEG_QUALITY, 94]
+    ):
+        raise OSError(f"failed to write {face_path}")
 
     key = {label: name for label, name, _ in labelled}
     key_path = output_dir / "blinded_key.json"
@@ -398,7 +434,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-dim", type=int, default=1600)
     parser.add_argument(
         "--blind-seed",
-        help="Also write randomized A/B/C full and face review sheets plus a separate key.",
+        help="Also write randomized labelled full/face review sheets plus a separate key.",
     )
     return parser
 
@@ -418,8 +454,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             raise FileNotFoundError(path)
 
     source, source_record = _read_image(source_path, args.max_dim)
-    records: List[Dict[str, Any]] = []
-    aligned_images: Dict[str, np.ndarray] = {}
+    records: list[dict[str, Any]] = []
+    aligned_images: dict[str, np.ndarray] = {}
 
     with FaceDetector(allow_unavailable=False) as detector:
         source_face, source_face_count = _largest_face(detector, source)
@@ -438,21 +474,27 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             full_mask = np.where(valid > 0, 255, 0).astype(np.uint8)
             registered_face_mask = cv2.bitwise_and(face_mask, full_mask)
             aligned_images[name] = aligned
-            records.append({
-                "name": name,
-                "metadata": metadata,
-                "detected_face_count": edited_face_count,
-                "selected_face_bbox": list(edited_face.bbox),
-                "registration": registration,
-                "appearance": {
-                    "full": _appearance_change(source_full_view, _appearance_view(edited, None)),
-                    "face": _appearance_change(source_face_view, _appearance_view(edited, edited_face)),
-                },
-                "metrics": {
-                    "full": _metric_row(source, aligned, full_mask),
-                    "face": _metric_row(source, aligned, registered_face_mask),
-                },
-            })
+            records.append(
+                {
+                    "name": name,
+                    "metadata": metadata,
+                    "detected_face_count": edited_face_count,
+                    "selected_face_bbox": list(edited_face.bbox),
+                    "registration": registration,
+                    "appearance": {
+                        "full": _appearance_change(
+                            source_full_view, _appearance_view(edited, None)
+                        ),
+                        "face": _appearance_change(
+                            source_face_view, _appearance_view(edited, edited_face)
+                        ),
+                    },
+                    "metrics": {
+                        "full": _metric_row(source, aligned, full_mask),
+                        "face": _metric_row(source, aligned, registered_face_mask),
+                    },
+                }
+            )
 
     visuals = _write_visuals(output_dir, source, face_mask, aligned_images)
     blinded_key = None
@@ -484,23 +526,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "visuals": visuals,
     }
     if blinded_key is not None:
+        label_text = "/".join(blinded_key)
         report["blinded_review"] = {
             "seed": args.blind_seed,
             "labels": list(blinded_key),
             "key_file": visuals["blinded_key"],
             "instructions": (
-                "Review without opening the key. Rank A/B/C separately for intended correction, "
-                "identity, texture, feature realism, and overall preference."
+                f"Review without opening the key. Rank {label_text} separately for intended "
+                "correction, identity, texture, feature realism, and overall preference."
             ),
         }
     report_path = output_dir / "metrics.json"
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
-    print(json.dumps({
-        "status": "done",
-        "output": str(output_dir),
-        "metrics": str(report_path),
-        "visuals": visuals,
-    }, indent=2))
+    print(
+        json.dumps(
+            {
+                "status": "done",
+                "output": str(output_dir),
+                "metrics": str(report_path),
+                "visuals": visuals,
+            },
+            indent=2,
+        )
+    )
     return 0
 
 

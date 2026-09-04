@@ -1,10 +1,10 @@
 # Research — Meitu vs Retouch same-source bake-off
 
 **Date:** 2026-09-04
-**Status:** Five-pair pilot rerun completed; visual and metric evidence produced. This is
-not a powered preference study, not a full-resolution delivery test, and not a
-MeituYunxiu professional-product comparison.
-**Build under test:** Retouch `fb6ba5ee185a` on
+**Status:** Five-pair, four-way pilot rerun completed; visual and metric evidence
+produced. This is not a powered preference study, not a full-resolution delivery test,
+and not a MeituYunxiu professional-product comparison.
+**Build under test:** Retouch `00714476740f` on
 `feat/color-science-k9-fix-and-frontier`; Meitu export metadata `Software=Meitu 121708`.
 **Predecessor:** `RESEARCH_MEITU_COMPETITOR_QA_2026_08_29.md`.
 
@@ -18,7 +18,9 @@ used to compare each source against:
 
 1. the preserved Meitu export;
 2. current Retouch `natural`;
-3. current Retouch `convention_clear_v1`.
+3. current Retouch `convention_clear_v1`;
+4. current Retouch `meitu_porcelain_v1`, the named competitor-direction candidate added
+   after the first three-way analysis.
 
 The main result is not “Meitu is stronger” or “Retouch wins.” The products make
 materially different choices:
@@ -30,16 +32,21 @@ materially different choices:
 - Meitu reduced face-crop HSV saturation in all five cases, median **−9.0** levels;
 - `natural` was nearly neutral to mildly positive, median **+0.7**;
 - `convention_clear_v1` increased face saturation in all five, median **+4.0**.
+- `meitu_porcelain_v1` moved toward the tested competitor direction: median face
+  saturation **−7.0**, luma **+4.2**, and face-change footprint **39.1%**.
 
 So the current gap is primarily **aesthetic direction and edit intensity**, not proof of
 a missing smoothing algorithm. Meitu's tested direction is more porcelain/desaturated
 and sometimes more structurally edited. Retouch is more source-authoritative and more
 color-preserving, while the convention recipe deliberately strengthens eyes/skin color.
-Only a blinded preference review can say which result the owner actually prefers.
+The named candidate closes much of the bunny trio's color-direction gap without copying
+Meitu's broader edit footprint or landmark movement. It cannot reproduce the inconsistent
+kimono behavior, especially `DSCF2362`, where Meitu darkened rather than brightened the
+face. Only a blinded preference review can say which result the owner actually prefers.
 
 ## 2. What was run
 
-The two Retouch recipes were genuinely face-aware:
+All three Retouch recipes were genuinely face-aware:
 
 - `.venv` Python;
 - MediaPipe `0.10.5`, legacy CPU backend;
@@ -56,9 +63,10 @@ The 2048 px boundary makes this a practical visual bake-off, not native-resoluti
 certification. The recipe-sweep JPEG path also does not exercise the production
 ICC/Exif-preserving delivery path.
 
-Observed Retouch render time at 2048 px was 6.9–20.1 s for `natural` and 12.5–34.6 s
-for `convention_clear_v1`. Meitu operator time and cloud/local state were not recorded,
-so no throughput comparison is valid.
+Observed per-recipe Retouch processing time in the final same-process rerun at 2048 px
+was 2.7–4.6 s for `natural`, 4.6–9.4 s for `convention_clear_v1`, and 5.0–9.9 s for
+`meitu_porcelain_v1`. These exclude process startup. Meitu operator time and cloud/local
+state were not recorded, so no throughput comparison is valid.
 
 ## 3. Measured comparison
 
@@ -76,6 +84,24 @@ detector drift and must not be called an identity or reshape score.
 | DSCF2308 | bunny | −6.6 | 68.8% | 22.0% | 39.7% | 8.5% IED | 2.8% IED |
 | DSCF2310 | bunny | −0.3 | 58.8% | 21.0% | 18.5% | 7.4% IED | 5.5% IED |
 | **Median** | — | **−9.0** | **68.8%** | **22.0%** | **36.7%** | **8.5% IED** | **2.8% IED** |
+
+The current competitor-direction candidate was then rendered and measured from the same
+commit as the two baselines:
+
+| Case | `meitu_porcelain_v1` face luma Δ | Face sat Δ | Face change | Landmark p95 |
+|---|---:|---:|---:|---:|
+| DSCF2362 | +4.2 | −7.0 | 39.1% | 2.4% IED |
+| DSCF2365 | +3.8 | −7.8 | 50.9% | 3.4% IED |
+| DSCF2306 | +5.0 | −6.7 | 39.0% | 2.3% IED |
+| DSCF2308 | +4.6 | −7.6 | 50.0% | 3.2% IED |
+| DSCF2310 | +3.4 | −6.4 | 30.6% | 3.9% IED |
+| **Median** | **+4.2** | **−7.0** | **39.1%** | **3.2% IED** |
+
+On the three bunny frames, its face-luma change is within 1.7–3.3 levels of the preserved
+Meitu exports and its saturation direction is within 1.0–6.1 levels. Its median landmark
+residual remains much lower than Meitu's 8.5% IED. This is evidence that the candidate
+approximates the tested color style while remaining structurally more conservative; it is
+not evidence that it is preferable.
 
 Meitu's face-luma change ranged from **−11.7 to +6.7** Lab8 L levels. This confirms the
 old study's conclusion that there is no single fixed “Meitu brighten” behavior. The
@@ -111,13 +137,16 @@ preservation.
   structure differences. No convincing body reshape is visible in this trio.
 - `natural` is consistently the least invasive candidate. `convention_clear_v1` adds a
   clearer eye/under-eye and color treatment without approaching the kimono Meitu look.
+- `meitu_porcelain_v1` visibly supplies the intended brighter, less-saturated porcelain
+  direction. In this 2048/1600 px review it does not show the nose-hole artifact that led
+  to the current brightness-routing fix, but native-zoom owner review is still required.
 
 Across all five 1600 px review sheets, no critical eye, mouth, or face-boundary artifact
-was found in the two Retouch candidates. This is a visual pilot boundary, not native-zoom
-human certification.
+was found in the three Retouch candidates. This is a visual pilot boundary, not
+native-zoom human certification.
 
-All ten Retouch outputs raised the same automatic warnings: banding, plastic skin, seam,
-color drift, and asymmetry; one convention output also raised harmony. Because the
+All fifteen Retouch outputs raised the same automatic warnings: banding, plastic skin,
+seam, color drift, and asymmetry; one convention output also raised harmony. Because the
 warnings do not discriminate between visually mild and stronger candidates on this set,
 they are calibration evidence, not a valid winner signal. The competitor images were not
 run through an equivalent mask-aware warning path, so comparing warning counts would
@@ -195,7 +224,7 @@ and generate candidates, not to train or ship a generative structural editor.
 
 ### P0 — owner blind ranking now
 
-Review each source plus A/B/C without opening `blinded_key.json`. Rank A/B/C separately
+Review each source plus A/B/C/D without opening `blinded_key.json`. Rank A/B/C/D separately
 at normal view and face view, then note any defect by the six dimensions above.
 
 | Case | Full review | Face review |
@@ -206,7 +235,7 @@ at normal view and face view, then note any defect by the six dimensions above.
 | DSCF2308 | `test_output/competitive/meitu_reaudit_20260904/DSCF2308/blinded_full_review.jpg` | `test_output/competitive/meitu_reaudit_20260904/DSCF2308/blinded_face_review.jpg` |
 | DSCF2310 | `test_output/competitive/meitu_reaudit_20260904/DSCF2310/blinded_full_review.jpg` | `test_output/competitive/meitu_reaudit_20260904/DSCF2310/blinded_face_review.jpg` |
 
-A useful reply format is: `2362: B > C > A; B best overall, C best texture; A changes
+A useful reply format is: `2362: B > D > C > A; B best overall, D best texture; A changes
 identity`. The key should be opened only after all five rankings are frozen.
 
 ### P1 — controlled consumer rerun
@@ -239,9 +268,8 @@ those results with this consumer-app pilot.
 ## 8. Product decision boundary
 
 - Do not retune `natural` or `convention_clear_v1` from these metrics alone.
-- If the owner consistently prefers the Meitu-like candidate, add a separate named
-  porcelain/desaturated candidate; do not silently change the source-authoritative
-  defaults.
+- Keep the new `meitu_porcelain_v1` as an explicit experimental candidate until the owner
+  completes the blind ranking; do not silently change the source-authoritative defaults.
 - Prioritize poster-face rejection/manual subject correction before claiming unattended
   event reliability on scenes like DSCF2362/2365.
 - Keep automatic body reshape parked until a controlled preference result and background-
