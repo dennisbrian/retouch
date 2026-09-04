@@ -85,6 +85,7 @@ _DESCRIPTIONS: Dict[str, str] = {
     "porcelain_unified_v1": "C1 hue-unified porcelain skin — flagship base.",
     "cosplay_sculpt_v1": "C2 structural sculpt over unified porcelain skin.",
     "convention_repair_v1": "Convention-hall shine removal + venue cast fix.",
+    "meitu_porcelain_v1": "Experimental Meitu-inspired porcelain: desaturated face direction with conservative geometry.",
     "milk_skin_v1": "Korean milk-skin: high L, low chroma variance, water glow.",
     "float32_beauty_v1": "Float32 fidelity showcase — smooth tonal beauty.",
     "float32_cinema_v1": "Float32 cinematic finish — fade toe, split tone, grain.",

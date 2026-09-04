@@ -3718,6 +3718,11 @@ RECOMMENDED_RECIPE_NAMES: List[str] = [
     "matsuri_glow_v1",
 ]
 
+# Research-calibrated candidates that need owner comparison before they can be
+# considered for a default recommendation. Keep these separate from the
+# correction-first list so the UI communicates the review boundary clearly.
+EXPERIMENTAL_RECIPE_NAMES = ("meitu_porcelain_v1",)
+
 CONDITIONAL_RECIPE_NAMES: List[str] = [
     name for name in CURATED_RECIPE_NAMES if name not in RECOMMENDED_RECIPE_NAMES
 ]
@@ -3727,7 +3732,11 @@ CONDITIONAL_RECIPE_NAMES: List[str] = [
 RECIPE_UI_CHOICES: List[tuple] = [
     (f"{name}  [Recommended]", name) for name in RECOMMENDED_RECIPE_NAMES
 ] + [
-    (f"{name}  [Scene / creative]", name) for name in CONDITIONAL_RECIPE_NAMES
+    (
+        f"{name}  [{'Experimental / compare first' if name in EXPERIMENTAL_RECIPE_NAMES else 'Scene / creative'}]",
+        name,
+    )
+    for name in CONDITIONAL_RECIPE_NAMES
 ]
 
 
