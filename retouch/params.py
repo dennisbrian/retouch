@@ -343,7 +343,7 @@ _SKIN_PARAMS = [
         cli_flag="mark-policy",
         cli_type=str,
         default="legacy",
-        recipe_key=None,
+        recipe_key="mark_policy",
         conversion="dropdown",
         choices=("legacy", "protect_identity", "preserve_all"),
     ),

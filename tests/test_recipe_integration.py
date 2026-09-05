@@ -158,7 +158,7 @@ class TestRecipeDefaults:
 
     def test_curated_catalog_is_partitioned_by_safety(self):
         """A curated recipe is either correction-first or explicitly conditional."""
-        assert len(CURATED_RECIPE_NAMES) == 51
+        assert len(CURATED_RECIPE_NAMES) == 57
         assert set(RECOMMENDED_RECIPE_NAMES).isdisjoint(CONDITIONAL_RECIPE_NAMES)
         assert set(CURATED_RECIPE_NAMES) == (
             set(RECOMMENDED_RECIPE_NAMES) | set(CONDITIONAL_RECIPE_NAMES)

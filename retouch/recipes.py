@@ -2268,6 +2268,18 @@ RECIPES["wedding_timeless_v1"] = {
     "sharpen": 8.0,
 }
 
+RECIPES["wedding_timeless_protected_v1"] = {
+    # wedding_timeless_v1 + mark_policy="protect_identity". Weddings are
+    # the highest-stakes case for accidentally smoothing away a client's
+    # real beauty marks/scars. smooth_engine is inherited as "guided" here
+    # (natural_polish_v1's default, not overridden), so this is one of the
+    # two variants in this batch where the tested base-smoothing mark
+    # protection (retouch/frequency.py) also applies, not just the 9
+    # evening-ops layer.
+    "extends": "wedding_timeless_v1",
+    "mark_policy": "protect_identity",
+}
+
 RECIPES["high_energy_glow_v1"] = {
     # Flagship #15 (Phase 3-6): Vibrant, energetic social media aesthetic.
     # Maximum makeup impact (bold eyeshadow + eyeliner), high hair luminosity (40%),
@@ -2547,6 +2559,15 @@ RECIPES["tired_eye_rescue_v1"] = {
     "hair": {"shine": 0.0},
 }
 
+RECIPES["tired_eye_rescue_protected_v1"] = {
+    # tired_eye_rescue_v1 + mark_policy="protect_identity". smooth_engine
+    # is "anisotropic" (inherited), so — same caveat as
+    # cosplay_clear_protected_v1 — the base smoothing pass is not
+    # mark-protected, only the 9 evening-ops layer + blemish removal.
+    "extends": "tired_eye_rescue_v1",
+    "mark_policy": "protect_identity",
+}
+
 RECIPES["aniso_pore_real_v1"] = {
     # Hero: anisotropic (grain-following) smoothing + region-aware modulation
     # for maximum pore-realism. Where clear_skin_v1 is balanced, this leans on
@@ -2607,6 +2628,17 @@ RECIPES["cosplay_clear_v1"] = {
     },
     "texture": {"opacity": 0.90},
     "sharpen": 14.0,
+}
+
+RECIPES["cosplay_clear_protected_v1"] = {
+    # cosplay_clear_v1 + mark_policy="protect_identity". Preserves moles/
+    # scars/drawn-makeup marks (e.g. eyeliner wings) in the 9 mark_policy-
+    # aware skin-evening ops + blemish removal. smooth_engine here is
+    # "anisotropic" (inherited), so the base frequency-separation smoothing
+    # pass itself is NOT mark-protected (that protection is guided-engine
+    # only, see retouch/frequency.py) — only the evening-ops layer is.
+    "extends": "cosplay_clear_v1",
+    "mark_policy": "protect_identity",
 }
 
 RECIPES["studio_porcelain_clear_v1"] = {
@@ -3100,6 +3132,28 @@ RECIPES["convention_clear_v1"] = {
     },
     "texture": {"opacity": 1.00},
     "sharpen": 12.0,
+}
+
+RECIPES["natural_polish_protected_v1"] = {
+    # natural_polish_v1 + mark_policy="protect_identity". smooth_engine is
+    # inherited as "guided" (natural's default, not overridden), so this is
+    # one of the two variants in this batch (with wedding_timeless_protected_v1)
+    # where the tested base-smoothing mark protection (retouch/frequency.py)
+    # applies in addition to the 9 evening-ops layer + blemish removal.
+    "extends": "natural_polish_v1",
+    "mark_policy": "protect_identity",
+}
+
+RECIPES["convention_clear_protected_v1"] = {
+    # convention_clear_v1 + mark_policy="protect_identity" wired through
+    # (retouch/marks.py). Moles/scars/drawn-makeup marks (e.g. cosplay
+    # eyeliner wings, stage makeup) are preserved instead of being smoothed
+    # away by frequency-separation skin ops; freckles are gently attenuated
+    # (not removed); acne_blemish is still removed. mark_policy has
+    # recipe_key=None by default (params.py) specifically so existing
+    # recipes stay byte-identical — this is the first recipe to opt in.
+    "extends": "convention_clear_v1",
+    "mark_policy": "protect_identity",
 }
 
 RECIPES["meitu_porcelain_v1"] = {
@@ -3655,9 +3709,11 @@ CURATED_RECIPE_NAMES: List[str] = [
     "female",
     "senior",
     "natural_polish_v1",
+    "natural_polish_protected_v1",
     "clear_skin_v1",
     "freckle_free_v1",
     "tired_eye_rescue_v1",
+    "tired_eye_rescue_protected_v1",
     "aniso_pore_real_v1",
     "studio_porcelain_clear_v1",
     "beauty_editorial_clear_v1",
@@ -3666,12 +3722,14 @@ CURATED_RECIPE_NAMES: List[str] = [
     "mole_safe_portrait_v1",
     "vascular_refine_v1",
     "wedding_timeless_v1",
+    "wedding_timeless_protected_v1",
     "aaa_photoreal_v1",
     "aaa_photoreal_v2",
     "body_match_v1",
     "jp_transparent_v1",
     # Cosplay and convention
     "cosplay_clear_v1",
+    "cosplay_clear_protected_v1",
     "cosplay_portrait_polish_v1",
     "cosplay_flash_rescue_v1",
     "cosplay_powder_v1",
@@ -3682,6 +3740,7 @@ CURATED_RECIPE_NAMES: List[str] = [
     "game_character_v3",
     "convention_repair_v1",
     "convention_clear_v1",
+    "convention_clear_protected_v1",
     "meitu_porcelain_v1",
     "con_fluorescent_v1",
     "con_mixed_temp_v1",
@@ -3697,6 +3756,7 @@ CURATED_RECIPE_NAMES: List[str] = [
     # Apex flagships
     "apex_cosplay_v1",
     "apex_editorial_v1",
+    "apex_editorial_protected_v1",
     "apex_cinema_v1",
     "cosplay_character_showcase_v1",
     # Proven restrained finish looks
@@ -3885,6 +3945,18 @@ RECIPES["apex_editorial_v1"] = {
     "texture": {"opacity": 0.96},
     "sharpen": 8.0,
     "slimming": 0.0,
+}
+
+RECIPES["apex_editorial_protected_v1"] = {
+    # apex_editorial_v1 + mark_policy="protect_identity". This base already
+    # sets skin.mole_protect=0.90 (the older, narrower mechanism: freckle/
+    # blemish removal only, simple threshold mask). mark_policy is broader
+    # (class-aware mole/scar/drawn-makeup/freckle handling across the 9
+    # evening ops) and independent — the two protections stack, they don't
+    # conflict. smooth_engine is "anisotropic" (inherited), so base
+    # smoothing itself is still evening-ops-only, not mark-protected.
+    "extends": "apex_editorial_v1",
+    "mark_policy": "protect_identity",
 }
 
 RECIPES["apex_cinema_v1"] = {
