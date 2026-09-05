@@ -314,6 +314,34 @@ desired, expose it separately as a creative chroma roll-off. W3C Color 4 makes
 the same important distinction: preserve out-of-gamut intermediate values,
 then map when the destination cannot represent them [S2].
 
+**Status (2026-09-05): fixed.** `engine.py::_stage_finish()`'s second gamut
+call site is removed rather than swapped to the correct mapper. Reproduced
+the exact finding above (`[255,0,0]` -> `[228,49,0]` via `compress_chroma_gamut`,
+vs `[254,0,0]` via `gamut_compress`), then verified the removed call site was
+itself always a guaranteed no-op once fixed: every operation upstream of
+`_stage_finish` (selective sharpening, impact finish, purple-fringing removal)
+already clips to `[0,1]`/uint8 before returning, so nothing out-of-gamut ever
+reaches this stage. Spied on `_apply_gamut_compress` across natural/cosplay/
+porcelain/outdoor-harsh-sun recipes and a forced +100 global-saturation push:
+zero pixels changed on any of them, in both `grade()`'s call and the
+now-removed second one. `grading.ColorGrader.grade()`'s internal
+`_apply_gamut_compress()` call (using `gamut_compress()` +
+`find_gamut_intersection()`) is now the single gamut-mapping site, positioned
+before quantization, satisfying this gate. `ctx.gamut_compress` remains live
+(`settings["gamut_compress"] = ctx.gamut_compress`, two sites in `engine.py`
+feeding `grade()`) — removing the second call site did not orphan the param.
+Visual check on the cosplay corpus (`test_output/DSCF4576.jpg`,
+`cosplay_heroic_amber_v1`): the broken mapper visibly duller/muddier on the
+saturated blue wig and skirt versus the fix's cleaner, more vibrant blue.
+Golden face snapshots updated (`tests/golden_pipeline_face_snapshots.json`);
+the non-face golden snapshot is untouched (that fixture's no-face fallback
+path never reached either gamut call site, before or after). Regression:
+`tests/test_color_science_k3k9.py::test_k3_finish_stage_no_longer_calls_any_gamut_mapper`,
+`::test_gamut_compress_preserves_pure_primary_unlike_compress_chroma_gamut`,
+`::test_ctx_gamut_compress_still_reaches_grade_after_stage_finish_removal`.
+`compress_chroma_gamut()` is left in place with no remaining callers, per
+CS-06's separate deprecation-marking scope — not deleted here.
+
 ### CS-06 — wide-gamut helpers are not color-space conversions
 
 **Priority:** P1 API truth; low immediate runtime exposure  

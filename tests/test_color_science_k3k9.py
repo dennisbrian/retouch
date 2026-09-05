@@ -11,6 +11,7 @@ import pytest
 from retouch.color_science import (
     apply_subtractive_saturation,
     bgr_to_oklab,
+    compress_chroma_gamut,
     gamut_compress,
     oklab_to_bgr,
     oklab_to_oklch,
@@ -202,3 +203,68 @@ def test_k9_no_green_cast():
             apply_subtractive_saturation(im, 0.6)))[..., 2]
         dh = float(np.mean(_hue_diff_deg(base_h, out_h)))
         assert dh < 3.0, f"hue slid {dh} deg on {name} (cast)"
+
+
+def test_k3_finish_stage_no_longer_calls_any_gamut_mapper():
+    """CS-05 regression: _stage_finish's second gamut-mapping call site was
+    removed, not swapped, because everything upstream of it (selective
+    sharpening, impact finish, purple-fringing removal) already clips to
+    [0,1]/uint8 -- so a mapper there is a guaranteed no-op (verified
+    empirically: zero pixels changed across natural/cosplay/porcelain/
+    outdoor-harsh-sun recipes and a forced +100 global saturation push).
+    The retired compress_chroma_gamut it used to call had an 85% knee that
+    rolled off valid, already-in-gamut colors near the boundary on every
+    render -- confirmed to mangle a pure BGR blue primary [255,0,0] to
+    [228,49,0] (see test_gamut_compress_preserves_pure_primary below).
+    grading.ColorGrader.grade()'s internal _apply_gamut_compress call is now
+    the single gamut-mapping site, ahead of quantization, per CS-05's gate.
+    Reading engine.py's source (rather than only calling the public API) is
+    deliberate: a regression here is silent unless specifically checked for.
+    """
+    import inspect
+    from retouch import engine as engine_mod
+
+    src = inspect.getsource(engine_mod.RetouchEngine._stage_finish)
+    assert "compress_chroma_gamut(" not in src and "import compress_chroma_gamut" not in src, (
+        "_stage_finish must not call the retired 85%-knee compress_chroma_gamut"
+    )
+    assert "_apply_gamut_compress(" not in src, (
+        "_stage_finish must not carry a second, guaranteed-no-op gamut-mapping call site"
+    )
+
+
+def test_gamut_compress_preserves_pure_primary_unlike_compress_chroma_gamut():
+    """Direct reproduction of the CS-05 finding: on a pure BGR blue primary,
+    the old compress_chroma_gamut visibly desaturates an in-gamut color,
+    while gamut_compress (the unified mapper) preserves it."""
+    img = np.array([[[255, 0, 0]]], dtype=np.uint8)  # pure blue, BGR
+    oklch = oklab_to_oklch(bgr_to_oklab(img))
+
+    # knee passed explicitly: this test pins compress_chroma_gamut's
+    # documented default-knee behavior, not whatever its default happens to
+    # be if CS-06 ever retunes/deprecates it (it has no production callers
+    # after this fix).
+    old_out = oklab_to_bgr(oklch_to_oklab(compress_chroma_gamut(oklch, knee=0.85)))[0, 0]
+    new_out = oklab_to_bgr(oklch_to_oklab(gamut_compress(oklch)))[0, 0]
+
+    # The old mapper visibly desaturates (green channel lifts well above 0).
+    assert int(old_out[1]) > 30, "expected old compress_chroma_gamut to desaturate the primary"
+    # The unified mapper preserves it within uint8 round-trip tolerance.
+    assert abs(int(new_out[0]) - 255) <= 2
+    assert int(new_out[1]) <= 2
+    assert int(new_out[2]) <= 2
+
+
+def test_ctx_gamut_compress_still_reaches_grade_after_stage_finish_removal():
+    """ctx.gamut_compress must remain a live ParamSpec: removing the
+    _stage_finish gamut call site must not leave the CLI flag / GUI checkbox
+    controlling nothing. It is routed into settings["gamut_compress"] at two
+    sites in _run_global_phases / _stage_grade, both feeding
+    ColorGrader.grade() -> _apply_gamut_compress."""
+    import inspect
+    from retouch import engine as engine_mod
+
+    src = inspect.getsource(engine_mod)
+    assert src.count('settings["gamut_compress"] = ctx.gamut_compress') >= 1, (
+        "ctx.gamut_compress must still be wired into grade()'s settings dict"
+    )

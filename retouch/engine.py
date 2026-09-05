@@ -4528,26 +4528,23 @@ class RetouchEngine:
             else:
                 result = apply_split_toning(result, strength=float(ctx.split_toning) / 100.0)
 
-        # K3: Gamut-Aware Soft-Knee Chroma Compression.
-        # ctx.gamut_compress (default True, ParamSpec/CLI/GUI-plumbed since
-        # K3 landed) must actually gate this site — it previously ran
-        # unconditionally, making the flag a lie for the finish stage.
-        # Default behavior is byte-identical to the unconditional run.
-        if getattr(ctx, "gamut_compress", True):
-            from .color_science import bgr_to_oklab, oklab_to_oklch, compress_chroma_gamut, oklch_to_oklab, oklab_to_bgr
-            if is_float:
-                res_u8 = np.clip(result * 255.0, 0, 255).astype(np.uint8)
-                lab = bgr_to_oklab(res_u8)
-                oklch = oklab_to_oklch(lab)
-                oklch_comp = compress_chroma_gamut(oklch)
-                res_u8 = oklab_to_bgr(oklch_to_oklab(oklch_comp))
-                result = res_u8.astype(np.float32) / 255.0
-            else:
-                lab = bgr_to_oklab(result)
-                oklch = oklab_to_oklch(lab)
-                oklch_comp = compress_chroma_gamut(oklch)
-                result = oklab_to_bgr(oklch_to_oklab(oklch_comp))
-
+        # K3's gamut mapper used to live here too (a second call site,
+        # gated by the same ctx.gamut_compress flag settings["gamut_compress"]
+        # already routes into grading.ColorGrader.grade()). It called the
+        # retired compress_chroma_gamut, whose 85% knee rolled off valid,
+        # already-in-gamut colors near the boundary on every render —
+        # confirmed on a pure BGR primary [255,0,0], mangled to [228,49,0]
+        # (see docs/plans/RESEARCH_COLOR_SCIENCE_2026_09_04.md CS-05).
+        # Removed rather than swapped to the correct mapper: everything
+        # upstream of this stage (selective sharpening, impact finish,
+        # purple-fringing removal) already clips to [0,1]/uint8 before
+        # returning, so by the time _stage_finish runs there is nothing
+        # out-of-gamut left for a second mapper to do — verified empirically
+        # (spied on grade()'s call across natural/cosplay/porcelain/
+        # outdoor-harsh-sun recipes plus a forced +100 global saturation
+        # push: zero pixels changed in every case). grade()'s call inside
+        # ColorGrader.grade() remains the single gamut-mapping site, ahead
+        # of quantization, per CS-05's gate.
         return result
 
 
