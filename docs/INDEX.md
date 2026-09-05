@@ -33,6 +33,11 @@
 - [Face retouch algorithm research execution plan — 2026-09-05](plans/PLAN_FACE_RETOUCH_ALGORITHM_RESEARCH_EXECUTION_2026_09_05.md)
   — Documentation-first order: mask ownership and boundary evidence, then texture,
   blemish detection/repair, under-eye/material review, and learned assistance
+- [FA-01 protection-consistency and abstention-observability audit — 2026-09-05](plans/RESEARCH_FA01_PROTECTION_AND_ABSTENTION_AUDIT_2026_09_05.md)
+  — Base smoothing unprotected against marks (verified byte-identical render);
+  accessory/facial-hair protection gaps (code-read only, no corpus cases);
+  abstention observability ranked, `yaw_gate_factor`/`assess_eye_artifact_scales`
+  compute reasons that are never logged
 - `RESEARCH_COLOR_SCIENCE_2026_09_04.md` — Current-tree color-science audit and
   engineering contract: SDR sRGB baseline, ICC/RAW/high-bit/alpha findings,
   operation-domain rules, conformance matrix, and staged P3/HDR gates
