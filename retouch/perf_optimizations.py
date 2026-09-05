@@ -32,7 +32,7 @@ from .safe_auto import confidence_evidence, decide, decide_mask_stage
 from .eye_visibility import gate_occluded_eye_regions
 from .eye_artifact_safety import assess_eye_artifact_scales, resolve_eye_scale
 from . import parsing as _parsing
-from .utils import get_points, create_polygon_mask
+from .utils import get_points, create_polygon_mask, feather_mask
 
 
 def _build_smooth_mask(
@@ -358,6 +358,70 @@ def _process_face_core(
     if isinstance(ctx, dict):
         ctx = SimpleNamespace(**ctx)
 
+    # ---- General mark-policy protection for variance-reducing skin ops ----
+    # (FA-01, docs/plans/RESEARCH_FACE_RETOUCH_ALGORITHMS_2026_09_05.md Sec 2.3).
+    # Detected once, on canvas_original (the pristine per-face crop, before any
+    # op runs) rather than re-detecting per op: a mark is a property of the
+    # source photo, and detecting on a canvas nine ops have since mutated would
+    # make "protected" mean a different set of pixels at each stage. Feathered
+    # (unlike compile_mark_policy's hard filled-ellipse footprint) because
+    # these ops evenly re-render the whole skin region around an excluded
+    # island — a hard edge there is a new, self-inflicted boundary artifact,
+    # not protection (verified: a hard-edged hole shows a measurable step vs.
+    # its surroundings after skin.equalize on a synthetic gradient).
+    #
+    # Deliberately NOT applied to global shading/tone ops (whiten, relight,
+    # sculpt, shine_removal, specular_finish/bloom, face_exposure, apply_sss,
+    # quantize_tones, hb_shift): a mark should ride along with a whole-face
+    # brightness/shading change, not be excluded from it — excluding it there
+    # is the artifact, not the protection. See blemish.remove (f3b1008) and
+    # the freckle stage for the two ops where exclusion is instead a heal
+    # skip (no re-render of the surrounding pixels, so no edge is created).
+    #
+    # Note the effect is not "exclude these pixels" alone: most of these ops
+    # (equalize, unify_hue_line, unify_tone, hb_even, redness_even, ...) also
+    # derive a statistical reference — a median/target color, a locus class —
+    # from the same skin_mask argument (e.g. skin.equalize's median_a/median_b
+    # at skin.py:454-455). Shrinking the mask shifts that reference for the
+    # WHOLE face, not just the excluded pixels. That is arguably more correct
+    # (a mole skewing the "typical skin tone" estimate is itself a bug), but
+    # it means a real render diff can be much larger than the protected
+    # footprint alone — verified on DSCF2310 (meitu bake-off corpus):
+    # protect_identity + equalize=90 changes ~45k of ~2.8M pixels, not just
+    # the ~2-6k feathered-footprint pixels.
+    #
+    # Caveat found while verifying the above: on that same face, detect_marks
+    # returned dozens of "mole"/"unknown" records tightly clustered along the
+    # eyeliner (e.g. a 4x26px "mole" that is plainly the eyeliner wing).
+    # protect_identity preserves both classes, so most of what gets protected
+    # on a heavy-eye-makeup portrait is misclassified cosmetics, not real
+    # identity marks. That is a pre-existing FreckleRemover.classify_anomalies
+    # accuracy limitation (report Sec 2.2/4.3, FA-03) that this wiring
+    # surfaces rather than introduces — it already affected the freckle stage
+    # and blemish.remove (f3b1008) before this change.
+    _mark_policy = getattr(ctx, 'mark_policy', None)
+    skin_n_marks_protected = skin_n
+    if _mark_policy is not None and skin_n is not None:
+        from .marks import compile_mark_policy, detect_marks
+
+        _mark_records = detect_marks(
+            np.clip(canvas_original, 0, 255).astype(np.uint8), face_mask=skin_n,
+        )
+        _policy_preserve = compile_mark_policy(
+            _mark_records, canvas.shape, _mark_policy,
+        ).preserve.astype(np.float32) / 255.0
+        _feather_r = max(int(face_width * 0.02), 3)
+        _policy_preserve = feather_mask(_policy_preserve, radius=_feather_r)
+        # Gaussian feathering spreads the mask outward with no knowledge of
+        # the skin boundary, so it must be re-clipped to skin_n AFTER
+        # feathering, not before: regions.skin already excludes eyes/brows
+        # (parsing.py's _masks_from_label_map subtracts them), but a mark
+        # detected near the lash line can still feather into that excluded
+        # territory. Clipping first and feathering second lets the blur
+        # re-grow right back across the boundary it was just clipped to.
+        _policy_preserve = _policy_preserve * skin_n
+        skin_n_marks_protected = np.clip(skin_n - _policy_preserve, 0.0, 1.0)
+
     # ---- P4: Makeup unmix (before albedo_even so paint ≠ blotch) ----
     _mce = float(getattr(ctx, "makeup_coverage_even", 0.0) or 0.0)
     _mcr = float(getattr(ctx, "makeup_cake_reduce", 0.0) or 0.0)
@@ -576,7 +640,7 @@ def _process_face_core(
     # ---- Edge-preserving cel flatten ----
     if ctx.skin_flatten > 0:
         canvas = _tr('flatten', canvas)
-        canvas = skin.flatten(canvas, regions.skin, int(ctx.skin_flatten))
+        canvas = skin.flatten(canvas, skin_n_marks_protected, int(ctx.skin_flatten))
 
     # ---- Adaptive micro-texture restoration ----
     # Re-injects dimensional micro-contrast in cheek / nose / under-eye zones
@@ -595,12 +659,12 @@ def _process_face_core(
     # ---- Micro dodge & burn (blotch evening) ----
     if ctx.micro_dodge_burn > 0:
         canvas = _tr('micro_dodge_burn', canvas)
-        canvas = skin.micro_dodge_burn(canvas, _norm_mask(regions.skin), ctx.micro_dodge_burn, face_width)
+        canvas = skin.micro_dodge_burn(canvas, skin_n_marks_protected, ctx.micro_dodge_burn, face_width)
 
     # ---- Redness evening (color blotch on a/b channels) ----
     if ctx.redness_even > 0:
         canvas = _tr('redness_even', canvas)
-        canvas = skin.redness_even(canvas, _norm_mask(regions.skin), ctx.redness_even, face_width, lips_mask=_norm_mask(regions.lips))
+        canvas = skin.redness_even(canvas, skin_n_marks_protected, ctx.redness_even, face_width, lips_mask=_norm_mask(regions.lips))
 
     # ---- X2: Relative hemoglobin edits in linear optical density ----
     # These are explicitly opt-in.  They use the face's own pigment span and
@@ -618,9 +682,12 @@ def _process_face_core(
         if _skin_mask is not None:
             _dec = decompose_chromophores_v2(canvas, skin_mask=_skin_mask)
             if _hb_even > 0.0:
+                # Variance-reducing (evening) op: mark-policy protected, like
+                # the other 8 ops in this block. hb_shift below is a global
+                # shading op and deliberately uses the unprotected _skin_mask.
                 canvas = _tr('hb_even', canvas)
                 canvas = reduce_hemoglobin_variance(
-                    canvas, min(_hb_even, 1.0), skin_mask=_skin_mask, decomposition=_dec,
+                    canvas, min(_hb_even, 1.0), skin_mask=skin_n_marks_protected, decomposition=_dec,
                 )
                 _dec = decompose_chromophores_v2(
                     canvas, skin_mask=_skin_mask, axes_rgb=_dec.axes_rgb,
@@ -635,27 +702,27 @@ def _process_face_core(
     # ---- R10: Hemoglobin-guided smoothing (edge-preserving freckle-aware smoothing) ----
     if ctx.hemoglobin_smooth > 0:
         canvas = _tr('hemoglobin_smooth', canvas)
-        canvas = skin.apply_hemoglobin_guided_smooth(canvas, regions.skin, ctx.hemoglobin_smooth)
+        canvas = skin.apply_hemoglobin_guided_smooth(canvas, skin_n_marks_protected, ctx.hemoglobin_smooth)
 
     # ---- R10: Vein attenuation (reduce blue-green veins) ----
     if ctx.vein_attenuate > 0:
         canvas = _tr('vein_attenuate', canvas)
-        canvas = skin.apply_vein_attenuate(canvas, regions.skin, ctx.vein_attenuate)
+        canvas = skin.apply_vein_attenuate(canvas, skin_n_marks_protected, ctx.vein_attenuate)
 
     # ---- Skin equalization ----
     if ctx.equalize > 0:
         canvas = _tr('equalize', canvas)
-        canvas = skin.equalize(canvas, regions.skin, ctx.equalize, ref_lab=original_lab)
+        canvas = skin.equalize(canvas, skin_n_marks_protected, ctx.equalize, ref_lab=original_lab)
 
     # ---- Skin hue-line unification (preferred-locus pull) ----
     if ctx.skin_hue_unify > 0 or ctx.skin_chroma_even > 0:
         canvas = _tr('unify_hue_line', canvas)
-        canvas = skin.unify_hue_line(canvas, regions.skin, int(ctx.skin_hue_unify), int(ctx.skin_chroma_even), locus=ctx.skin_locus)
+        canvas = skin.unify_hue_line(canvas, skin_n_marks_protected, int(ctx.skin_hue_unify), int(ctx.skin_chroma_even), locus=ctx.skin_locus)
 
     # ---- Skin hue/chroma unification (anime) ----
     if ctx.skin_unify > 0:
         canvas = _tr('unify_tone', canvas)
-        canvas = skin.unify_tone(canvas, regions.skin, int(ctx.skin_unify), target_hue=ctx.skin_unify_hue)
+        canvas = skin.unify_tone(canvas, skin_n_marks_protected, int(ctx.skin_unify), target_hue=ctx.skin_unify_hue)
 
     # ---- Foundation / whitening ----
     if ctx.whiten != 0:
