@@ -3697,6 +3697,535 @@ RECIPES["cosplay_porcelain_color_demo_v1"] = {
     "slimming": 0.0,
 }
 
+
+# ---------------------------------------------------------------------------
+# 2026-09-06 batch: five recipes grounded in capabilities that shipped in the
+# last ~2 months and had no named recipe reaching for them.
+#
+# Shared background for the two ``preserve_all`` recipes below
+# (heirloom_archive_v1, documentary_preserve_v1):
+#
+#   ``mark_policy`` has recipe_key="mark_policy" and default "legacy"
+#   (params.py) so existing recipes stay byte-identical. Of its three
+#   choices, "preserve_all" (marks.py MARK_POLICY_PRESETS) had NO recipe
+#   consumer before this batch — the 1ecfba0 wiring pass only used
+#   "protect_identity".
+#
+#   WHAT THE DIFFERENCE ACTUALLY IS, verified against the call sites rather
+#   than read off the preset table. compile_mark_policy returns four masks
+#   (preserve / heal / attenuate / enhance), but marks.py's own module
+#   docstring is explicit that the removal and attenuation masks "are
+#   compiled for later consumers but do not add a new destructive path",
+#   and all three live call sites (perf_optimizations.py, at the guided
+#   base-smoothing blend, the evening-ops preserve_mask merge, and the
+#   blemish stage) read ``.preserve`` and nothing else. So the presets'
+#   "attenuate freckle at 40" and "remove acne_blemish" entries are
+#   currently INERT — do not describe them as live behavior.
+#
+#   The real, consumed difference between the two presets is:
+#
+#     min_confidence: 0.6 (protect_identity) -> 0.0 (preserve_all). Every
+#       detection reaches the preserve mask instead of only confident ones.
+#     preserve set: protect_identity preserves 4 classes (mole, scar,
+#       drawn_makeup_mark, unknown); preserve_all preserves all 9, moving
+#       freckle, acne_blemish, stray_hair, sensor_dust and vellus_sheen
+#       from "not protected, so the legacy destructive paths still own
+#       them" into the preserve mask.
+#
+#   That second line is the substantive one for these two recipes: under
+#   protect_identity a freckle or a blemish gets no protection at the
+#   guided smoothing blend and no subtraction from the blemish stage's
+#   skin mask, so the legacy ops are free to erase it. Under preserve_all
+#   it is protected at both. The net effect is the same direction the
+#   preset names imply; it is just delivered entirely through the preserve
+#   mask, not through a policy-driven removal path that does not yet exist.
+#
+#   Both recipes below deliberately leave ``frequency.smooth_engine`` at
+#   natural's "guided" default. Base-smoothing mark protection (c665da1,
+#   frequency.py MARK_PROTECT_FEATHER_FACTOR) is gated to the guided engine
+#   by explicit design — it is unvalidated for bilateral/anisotropic and
+#   must not silently apply there. Overriding to "anisotropic" here would
+#   silently demote the policy to the 9 evening-ops layer only, which is
+#   exactly the caveat wedding_timeless_protected_v1 / cosplay_clear_
+#   protected_v1 call out. Do not "upgrade" the engine on these two.
+#
+#   Both also pin ``frequency.freckle_removal: 0`` explicitly. That is the
+#   separate legacy destructive freckle path; "zero mark removal" is not a
+#   true claim without it, regardless of mark_policy.
+
+RECIPES["heirloom_archive_v1"] = {
+    # Print/archival-grade delivery. The recipe to reach for on 16-bit
+    # RAW -> TIFF studio workflows now that f3bcff9 made that round-trip
+    # honest: RAW ingest decodes linearly and applies the IEC sRGB transfer
+    # explicitly (a real ~13-16 8-bit-code tonal shift through shadow/
+    # midtone, not a metadata relabel), non-RGB-class ICC profiles transform
+    # from their native mode instead of being destructively pre-converted,
+    # 16-bit PNG / RGB16+gray TIFF decode their true samples with the
+    # downgrade recorded on ColorContext, float32 TIFF is rejected loudly
+    # instead of clipping [0.1,0.5,0.9,1.0] to [0,0,0,1], and linear TIFF
+    # export no longer double-encodes. Before that commit an archival claim
+    # on this pipeline was not defensible; it now is.
+    #
+    # preserve_all, not protect_identity: archival intent is ZERO mark
+    # removal, not identity-protected removal. Per the batch header, the
+    # live mechanism is the preserve mask, so the concrete consequence is
+    # that under protect_identity a freckle or an acne blemish would be
+    # left unprotected at the guided smoothing blend and unsubtracted from
+    # the blemish stage's skin mask — i.e. the legacy destructive paths stay
+    # free to erase it — while preserve_all protects both. min_confidence
+    # also drops 0.6 -> 0.0, so a faint mark the detector is unsure about is
+    # protected rather than surrendered.
+    #
+    # An archival master is a document; a spot that was on the subject's
+    # face on the day of the sitting stays on the face. Consumers who want
+    # the spot gone can grade a derivative from this master, which is the
+    # whole point of delivering one.
+    #
+    # Built on natural (not natural_polish_v1): natural_polish_v1's
+    # nose_smooth/shine_removal/dark_circles are a "just better" look, and
+    # this recipe is not chasing a look. Everything below natural's own
+    # defaults is a deliberate reduction toward fidelity.
+    "extends": "natural",
+    "frequency": {
+        # 0.18, well under natural's 0.30 and natural_polish_v1's 0.25 (the
+        # existing floor among the restrained recipes). Non-zero rather than
+        # 0.0 on purpose: the guided pass at this strength is what carries
+        # the mark-protection blend-alpha shrink, and it also gives the
+        # sensor-noise floor of a pushed high-ISO studio frame somewhere to
+        # go. Zero smoothing would make the mark policy inert on the base
+        # pass and buy nothing in exchange.
+        "smooth": 0.18,
+        "nose_smooth": 0.16,
+        # See batch header: the legacy destructive freckle path, off.
+        "freckle_removal": 0,
+        # smooth_engine intentionally NOT set -> inherits natural's "guided".
+    },
+    "skin": {
+        # equalize/rosy pulled to near-zero from natural's 0.20/0.10. Both
+        # repaint tone; an archival master should carry the tone the sitting
+        # actually had. 0.04 equalize is left in as a hemoglobin-blotch
+        # floor, not a tone unify.
+        "equalize": 0.04,
+        "rosy": 0.0,
+        # The older, narrower mole mechanism (threshold mask over the
+        # freckle/blemish path). It predates mark_policy and is independent
+        # of it — the two stack rather than conflict, same as
+        # apex_editorial_protected_v1 documents. At archival intent there is
+        # no reason not to run both at their top settings.
+        "mole_protect": 0.95,
+        # Shine removal kept low: specular highlights are scene information.
+        "shine_removal": 0.12,
+    },
+    # Eye/lip/hair enhancement all zeroed. natural sets 0.05 across the
+    # board; even 0.05 iris saturation and 0.05 lip gloss are edits to the
+    # record, and sclera brightening on an archival scan is indefensible.
+    "eyes": {
+        "whites": 0.0,
+        "teeth_whiten": 0.0,
+        "iris": 0.0,
+        "catchlight": 0.0,
+        "dark_circles": 0.0,
+    },
+    "lips": {"tint": None, "gloss": 0.0},
+    "hair": {"shine": 0.0},
+    "mark_policy": "preserve_all",
+    # Full texture, no synthetic finish layers, no geometry. slimming/sculpt/
+    # relight are all reshaping or re-lighting of the subject; an archival
+    # master does neither, so the yaw-gate recalibration (9c26493/ce56ba2)
+    # is deliberately irrelevant here — the gate has nothing to gate.
+    "texture": {"opacity": 1.00},
+    "bloom": {"opacity": 0.0},
+    "slimming": 0.0,
+    "dodge_burn": {"amount": 0.0},
+    "color_harmony": {"preset": "natural", "amount": 0.0},
+    # Light capture sharpening only, below natural_polish_v1's 12.0. Rides
+    # the lash/brow-weighted acc_sharpen mask; enough to counter the AA
+    # filter on a demosaiced RAW without becoming a look.
+    "sharpen": 6.0,
+    # gamut_compress is the ParamSpec default (True) and is left alone.
+    # bcf07db removed the second, unconditional _stage_finish mapper (whose
+    # 85% knee rolled off already-in-gamut colors: BGR blue [255,0,0] came
+    # out [228,49,0]); the surviving grading.py gamut_compress() path is the
+    # correct pre-quantization one. There is no archival-specific knob to
+    # set — the fix was a removal, not a new parameter.
+}
+
+RECIPES["documentary_preserve_v1"] = {
+    # Journalistic / ID-style portraits: press portraits, editorial
+    # reportage, staff directories, credential photos. The brief is "this is
+    # what this person looks like", so identity marks are load-bearing
+    # content, but unlike heirloom_archive_v1 this is a delivered photograph
+    # rather than a preservation master — basic tonal cleanup (blotch
+    # evening, shine control, mild noise handling) is expected and welcome.
+    #
+    # Differs from the existing *_protected_v1 family in kind, not degree.
+    # Those use protect_identity, whose preserve mask covers only mole,
+    # scar, drawn_makeup_mark and unknown — freckles and acne blemishes are
+    # left out of it, so the legacy freckle/blemish paths still own those
+    # pixels and can erase them. For a documentary frame that is an edit to
+    # the subject's face: a freckled subject who reads half as freckled has
+    # been changed, and a blemish removed from an ID portrait is a
+    # retouched ID portrait. preserve_all puts all nine classes into the
+    # preserve mask and drops min_confidence 0.6 -> 0.0, so marginal
+    # detections are protected rather than surrendered to the legacy path.
+    #
+    # See the batch header for why this is stated in terms of the preserve
+    # mask: the presets' attenuate/remove actions are compiled but have no
+    # consumer yet, so they must not be cited as live behavior.
+    #
+    # Built on natural rather than natural_polish_v1 for the same
+    # smooth_engine reason as above (natural_polish_v1 does not override it
+    # either, but building on natural keeps the inheritance chain short and
+    # the intent auditable at a glance).
+    "extends": "natural",
+    "frequency": {
+        # Light-to-moderate: 0.28, just under natural's 0.30 and clearly
+        # under portrait's 0.45. This is NOT a beautification recipe — the
+        # smoothing budget exists to handle high-ISO press-room noise and
+        # uneven hemoglobin, not to resurface skin. Kept above
+        # heirloom_archive_v1's 0.18 because a delivered frame can afford
+        # visible cleanup where a preservation master cannot.
+        "smooth": 0.28,
+        "nose_smooth": 0.24,
+        "regional_modulation": 0.35,
+        "freckle_removal": 0,
+        # smooth_engine intentionally NOT set -> "guided", so the c665da1
+        # base-smoothing protection actually applies. See batch header.
+    },
+    "skin": {
+        # Tonal cleanup is the point, so these sit near natural's own
+        # values rather than being suppressed as in heirloom_archive_v1.
+        "equalize": 0.14,
+        "rosy": 0.05,
+        # hb_even evens hemoglobin variation without repainting tone — the
+        # right primitive when the constraint is "clean up the lighting, not
+        # the person". Modest 0.18; cosplay_flash_rescue_v1 runs 0.30.
+        "hb_even": 0.18,
+        "hue_unify": 0.12,
+        "chroma_even": 0.10,
+        "whiten_hue_stable": 1,
+        # Press/venue lighting is the usual culprit for hotspot shine.
+        "shine_removal": 0.28,
+        "specular_finish": "matte",
+        "specular_finish_strength": 0.12,
+        "mole_protect": 0.90,
+    },
+    # Eye work held to the absolute minimum that still counters flash
+    # flatness. Deliberately no sclera_brighten / iris_saturate: whitened
+    # eyes and pumped irises are the exact tells that make a documentary
+    # portrait look retouched.
+    "eyes": {
+        "whites": 0.04,
+        "teeth_whiten": 0.0,
+        "iris": 0.04,
+        "catchlight": 0.06,
+        # Small, honest under-eye lift. The v2 op (c89e65f) is now real
+        # rather than inert, so even 0.10 does measurable work; anything
+        # higher would start erasing a genuine tired look, which for this
+        # brief is content.
+        "dark_circles": 0.10,
+    },
+    "lips": {"tint": None, "gloss": 0.0},
+    "hair": {"shine": 0.05},
+    "mark_policy": "preserve_all",
+    # No geometry, no reshaping: slimming/sculpt/relight all restructure the
+    # subject. Explicitly zeroed rather than left to inheritance so the
+    # "no reshaping" contract is visible in the recipe itself.
+    "slimming": 0.0,
+    "texture": {"opacity": 1.00},
+    "bloom": {"opacity": 0.0},
+    "dodge_burn": {"amount": 0.0},
+    "color_harmony": {"preset": "natural", "amount": 0.0},
+    "sharpen": 10.0,
+}
+
+RECIPES["tired_eye_rescue_v2"] = {
+    # Tier above tired_eye_rescue_v1 for subjects WITHOUT under-eye contour
+    # makeup: exhaustion/jet-lag/night-shift portraits, late-day corporate
+    # sessions, post-event editorial.
+    #
+    # PROVENANCE — read before changing the numbers. It would be wrong to
+    # describe v1's 0.35 as "timid because the op was inert when it was
+    # calibrated". The opposite is true: the v2 op shipped 2026-09-02
+    # (c89e65f) and v1's cap was set AFTERWARDS, on 2026-09-05, as an
+    # explicit owner decision that pulled darken_removal DOWN from 0.60 to
+    # 0.35. So 0.35 is a deliberate ceiling, not a stale one.
+    #
+    # What that ceiling actually bounds is the subject population, not the
+    # op. The cap's own rationale (see tired_eye_rescue_v1 above and
+    # docs/plans/RESEARCH_DARK_CIRCLE_OP_2026_09_02.md §7) cites cosplay
+    # anchors DSCF7204/6963/4463 — the v2 detector's relative low-pass
+    # darkness measure cannot distinguish a genuine dark circle from
+    # intentional cosplay under-eye contour / aegyo-sal makeup, and at 0.6
+    # it visibly softened that makeup. A colour-based makeup-vs-shadow gate
+    # was considered there and deliberately rejected: it would misfire on
+    # genuinely pigmented dark circles on Fitzpatrick IV-VI skin, which the
+    # current corpus cannot validate.
+    #
+    # This recipe therefore raises the number by narrowing the subject
+    # contract instead of by claiming the op got better:
+    #   - 0.40 is ALREADY LIVE and unchallenged in five non-cosplay recipes
+    #     in this file (see the studio/outdoor entries around lines 2854,
+    #     2888, 2922, 3021, 3055), so it is precedented, not novel.
+    #   - It stays under the 0.45 aegyo-sal misread threshold documented in
+    #     CLAUDE.md's dark-circle entry. Approaching it, but under it.
+    #   - It is NOT a general upgrade to tired_eye_rescue_v1, which keeps
+    #     0.35 precisely because cosplay subjects are in its intended
+    #     population. Do not merge the two.
+    #
+    # CAVEAT INHERITED FROM THE OP, UNRESOLVED: the corpus behind the v2
+    # calibration contains no Fitzpatrick IV-VI sample. On darker skin the
+    # relative-darkness detector is untested at any strength, and this
+    # recipe runs it harder than any other. Treat 0.40 as provisional there.
+    #
+    # DISPATCH NOTE: eyes.dark_circles and undereye.darken_removal are
+    # aliased at dispatch and combined with MAX, not sum (e73d3ba, which
+    # fixed a double-apply across 27 recipes). Effective strength is
+    # max(0.28, 0.40) = 0.40 — the two values below are not additive. They
+    # are raised together only so the recipe reads coherently under either
+    # key; the 0.28 does no independent work.
+    "extends": "tired_eye_rescue_v1",
+    "eyes": {
+        "dark_circles": 0.28,
+        # Shadow lift pushed from v1's 0.7 to 0.85. This is the separate
+        # strength-aware shadow primitive, not the aliased darkness op, and
+        # it carries none of the makeup-misread risk above.
+        "undereye_shadow_strength": 0.85,
+        "catchlight": 0.18,
+        "whites": 0.18,
+        "iris": 0.14,
+    },
+    "undereye": {
+        "darken_removal": 0.40,
+        # Puffiness raised modestly from 0.50. It is a geometry/shading op
+        # on the lower-lid bag, independent of the darkness detector, and
+        # 0.60 is the practical limit before the lid contour flattens.
+        "puffiness_reduction": 0.60,
+    },
+    # Nested dicts deep-merge (params.py::_deep_merge), so the keys not
+    # restated here — frequency.*, skin.*, eye.*, texture, sharpen — are
+    # inherited from tired_eye_rescue_v1 unchanged. Notably that includes
+    # smooth_engine="anisotropic": this recipe sets no mark_policy, so the
+    # guided-only base-smoothing protection is not in play and the engine
+    # choice costs nothing here. If a *_protected_v2 variant is ever added
+    # on top of this, that inherited "anisotropic" becomes the same caveat
+    # tired_eye_rescue_protected_v1 already documents.
+}
+
+RECIPES["cinema_grade_v1"] = {
+    # Moodier, desaturated-highlight cinematic grade. Same primitive family
+    # as creative_grade_v1 (hsl_*_global + subtractive saturation +
+    # halation + grain + LUT) pulled considerably harder, and unlike
+    # apex_cinema_v1 it is a GRADE, not a full face-retouch stack — built on
+    # natural with the face ops left at their restrained defaults so the
+    # look lives entirely in the color stages.
+    #
+    # subtractive saturation is safe to lean on post-bcf07db. The
+    # subtractive path was rewritten to be OKLCh hue-locked (its earlier
+    # per-channel density anchor slid hue and produced green skin/background
+    # casts), and bcf07db then removed the duplicate unconditional gamut
+    # mapper in _stage_finish whose 85% knee rolled off already-in-gamut
+    # colors on every render that reached it — a pure BGR blue [255,0,0]
+    # came out [228,49,0] through that path versus [254,0,0] through
+    # grading.py's correct pre-quantization gamut_compress(). A saturated
+    # cinematic grade is exactly the workload that hit that knee hardest, so
+    # this recipe was not safely shippable before that fix.
+    #
+    # Numbers stated relative to creative_grade_v1 (hsl 14 / -12 / +6,
+    # halation 0.25, grain 0.05, lut "kodak"):
+    "extends": "natural",
+    # +9 vs creative_grade_v1's +14. The teal-shadow / warm-highlight
+    # cinema signature is carried by the split-tone pair below, so a large
+    # global hue rotation would fight it and drag skin toward orange.
+    "hsl_hue_global": 9,
+    # -26, roughly 2.2x creative_grade_v1's -12. This is the headline of the
+    # look and the reason "moodier" is not just "darker". Paired with
+    # skin_protect below so the pull lands on wardrobe/set/background rather
+    # than draining the face to grey — the failure mode apex_cinema_v1
+    # documents for the Eterna base.
+    "hsl_sat_global": -26,
+    # -4 vs creative_grade_v1's +6. Sign flipped deliberately: a lifted
+    # global luminance reads as "bright film emulation", a slightly dropped
+    # one plus the fade_toe below reads as projected cinema.
+    "hsl_lum_global": -4,
+    "saturation_mode": "subtractive",
+    # gamut_compress left at its ParamSpec default (True) — grading.py's
+    # gamut_compress()/find_gamut_intersection() pair is the single correct
+    # mapper after bcf07db. Restated as an explicit key rather than left
+    # implicit because a heavily-graded recipe is where turning it off would
+    # be most tempting and most wrong.
+    "gamut_compress": True,
+    # Skin held out of the grade at 0.65, above apex_cinema_v1's 0.60,
+    # because this recipe's saturation pull is deeper than that one's.
+    "skin_protect": 0.65,
+    # Split-tone: teal shadows / warm highlights, the classic cinema pair.
+    # Hues match apex_cinema_v1 (210 / 42, already validated on real
+    # renders); saturations are a touch higher (12/10 vs 10/8) since the
+    # heavier global desaturation leaves more room before it reads as a
+    # colored cast rather than a grade.
+    "shadow_hue": 210.0,
+    "shadow_sat": 12.0,
+    "highlight_hue": 42.0,
+    "highlight_sat": 10.0,
+    "midtone_sat": 0.0,
+    # Vibrance restores a little chroma where it is scarce, so the grade
+    # desaturates the loud things without flattening subtle ones.
+    "vibrance": 12.0,
+    "contrast": -3.0,
+    # 0.32 vs creative_grade_v1's 0.25. Practical-light bleed is a large
+    # part of the cinematic read; kept below apex_cinema_v1's 0.18-plus-
+    # bloom-plus-lens-blur combination since this recipe has no lens blur.
+    "halation": 0.32,
+    # 0.07 vs creative_grade_v1's 0.05, staying inside that recipe's own
+    # documented "keep <= 0.1" note for the engine-scale grain parameter
+    # (sigma = 255 * strength).
+    "grain": 0.07,
+    # Projected-print signature: lifted toe, slight highlight drift.
+    "finish": {"fade_toe": 0.10, "highlight_drift": 0.14},
+    "highlight_rolloff": 0.50,
+    "bloom": {"opacity": 0.05, "threshold": 200.0},
+    "vignette": 10.0,
+    # "kodak" ships in luts/ — a bare LUT name resolves against
+    # luts/<name>.cube and raises FileNotFoundError for unknown names, so
+    # this reuses creative_grade_v1's verified choice rather than naming a
+    # LUT that may not be present in a given checkout.
+    "lut": "kodak",
+    "texture": {"opacity": 0.95},
+    "sharpen": 8.0,
+    "slimming": 0.0,
+}
+
+RECIPES["studio_headshot_protected_v1"] = {
+    # Corporate / professional headshots: LinkedIn, staff directories, law
+    # and consulting firm bios, conference speaker pages. This fills a real
+    # gap — every existing *_protected_v1 is wedding, cosplay, convention or
+    # editorial themed, and none of them target the plain business headshot,
+    # which is the single highest-volume paid portrait category.
+    #
+    # protect_identity rather than preserve_all: this brief is the opposite
+    # of documentary_preserve_v1's. A corporate sitter expects the transient
+    # stuff gone (a blemish from that morning) and the permanent stuff kept
+    # (a mole, a scar). protect_identity delivers exactly that split via its
+    # preserve mask — mole/scar/drawn_makeup_mark/unknown are protected at
+    # min_confidence 0.6, while freckle and acne_blemish are deliberately
+    # left OUT of the mask so the existing blemish/freckle stages remain
+    # free to treat them.
+    #
+    # Note on how that works: the preset also carries "attenuate freckle at
+    # 40" and "remove acne_blemish" entries, but those masks are compiled
+    # and never read — all three call sites consume ``.preserve`` only (see
+    # the batch header above and marks.py's module docstring). So the
+    # removal here is done by the legacy ops at their own strengths, not by
+    # the policy. The policy's contribution is purely the protection of the
+    # classes it does list.
+    #
+    # smooth_engine is left at natural_polish_v1's inherited "guided"
+    # default, NOT overridden to anisotropic. That puts this recipe in the
+    # same small group as wedding_timeless_protected_v1 and
+    # natural_polish_protected_v1 where the tested base-smoothing mark
+    # protection (c665da1, frequency.py) applies in addition to the nine
+    # evening ops — the correct choice when a client will look for their own
+    # mole in the delivered file.
+    "extends": "natural_polish_v1",
+    "frequency": {
+        # 0.32, modestly above natural_polish_v1's 0.25. Corporate clients
+        # want visibly clean skin; they do not want plastic. Held well under
+        # portrait's 0.45.
+        "smooth": 0.32,
+        "nose_smooth": 0.28,
+        "mid_reduction": 0.22,
+        "regional_modulation": 0.55,
+        # Legacy destructive freckle path off. NOT because mark_policy
+        # "owns" freckles — under protect_identity freckles are outside the
+        # preserve mask and the policy's attenuate action has no consumer,
+        # so nothing would stop this path. That is precisely the reason to
+        # zero it explicitly: it is the only thing standing between a
+        # freckled corporate sitter and having their freckles removed
+        # wholesale, which is not what a headshot client asked for.
+        # Blemishes are still handled by the blemish stage, which is the
+        # transient-vs-permanent split this recipe actually wants.
+        "freckle_removal": 0,
+    },
+    "skin": {
+        "equalize": 0.12,
+        "hue_unify": 0.22,
+        "chroma_even": 0.18,
+        "whiten_hue_stable": 1,
+        "hb_even": 0.18,
+        # Bald heads, foreheads and noses under a two-softbox corporate
+        # setup are the reliable hotspot sources.
+        "shine_removal": 0.34,
+        "specular_finish": "matte",
+        "specular_finish_strength": 0.16,
+        "mole_protect": 0.85,
+        # --- Yaw-gated ops: deliberately NON-ZERO. ---
+        # Most corporate headshots are shot at a 3/4 angle, and until very
+        # recently that was a reason to zero these. Two bugs made off-axis
+        # faces unsafe: 9c26493 found the nose-bridge/temple ratio bands
+        # (1.3->1.6 and 1.5->1.7) mapped to only ~2-10 degrees of head turn
+        # and zeroed slimming on 58 of 83 corpus faces, and ce56ba2 found
+        # the shared ramp helper (utils.yaw_gate_factor) returned the raw
+        # smoothstep instead of 1-smoothstep, so relight/sculpt/slimming got
+        # ~0 strength just past YAW_GATE_START and near-full just under
+        # YAW_GATE_END — precisely inverted. Both are fixed, the band is now
+        # the shared YAW_GATE_START/END = 2.5 -> 4.0, and the ramp is
+        # monotonic (tests/test_utils.py::TestYawGateFactor). Setting these
+        # to 0 "for safety on 3/4 shots" is now cargo-culting a fixed bug.
+        # Values stay conservative in absolute terms — the gate is trusted
+        # to attenuate correctly off-axis, not to rescue an over-strong
+        # setting.
+        "sculpt": 0.14,
+        "relight": 0.10,
+        "micro_db": 0.12,
+        "wrinkle_soften": 0.10,
+    },
+    "eyes": {
+        "whites": 0.12,
+        "teeth_whiten": 0.15,
+        "iris": 0.14,
+        "catchlight": 0.14,
+        # Moderate-high under-eye correction. Corporate headshots are the
+        # canonical "shot at the end of a long conference day" case, and the
+        # v2 op (c89e65f) is what makes this worth setting at all — before
+        # it, 55 of 128 recipes set this key and NONE of them did anything
+        # (the v1 detector selected the lower lash line, delivering 0.03 L
+        # of lift to under-eye skin at strength 100).
+        "dark_circles": 0.24,
+        "undereye_shadow_strength": 0.55,
+    },
+    "undereye": {
+        # 0.32, under both tired_eye_rescue_v1's 0.35 owner cap and the
+        # 0.45 aegyo-sal misread threshold. Aliased with eyes.dark_circles
+        # via MAX not sum (e73d3ba), so effective strength is 0.32.
+        # Business sitters occasionally wear under-eye concealer/contour,
+        # which the v2 detector cannot distinguish from a genuine circle —
+        # staying under the cap rather than at tired_eye_rescue_v2's 0.40 is
+        # the deliberate trade for that population. The no-Fitzpatrick-IV-VI
+        # -sample caveat on the v2 calibration corpus applies here too.
+        "darken_removal": 0.32,
+        "puffiness_reduction": 0.35,
+    },
+    "eye": {"sclera_brighten": 0.14, "iris_saturate": 0.20, "iris_brightness": 0.16},
+    "lips": {"tint": None, "gloss": 0.06},
+    "hair": {"shine": 0.10, "remove_flyaways": 30},
+    "mark_policy": "protect_identity",
+    # Slimming left non-zero for the same yaw-gate reason as sculpt/relight
+    # above, but small. NOTE THE SCALE: slimming's ParamSpec is gui_direct on
+    # a 0-100 range (params.py), NOT the 0-1 recipe_direct scale used by
+    # skin.sculpt / skin.relight in this same recipe. The only other
+    # non-zero values in this file are 30.0 and 50.0; 8.0 is deliberately
+    # well below both, because a business headshot that visibly reshapes the
+    # client's jaw is a complaint. At 8 this softens the masseter edge rather
+    # than reshaping it. Writing 0.08 here would round to a silent no-op.
+    "slimming": 8.0,
+    "dodge_burn": {"amount": 0.10},
+    "color_harmony": {"preset": "natural", "amount": 0.30},
+    "bloom": {"opacity": 0.02, "threshold": 215.0},
+    "highlight_rolloff": 0.30,
+    "texture": {"opacity": 0.96},
+    "sharpen": 12.0,
+}
+
 # The consumer-facing catalog is deliberately curated. ``RECIPES`` retains
 # older experiments and specialist looks for backwards-compatible projects.
 # A curated name only means it has a maintained QA path; it does *not* mean a
@@ -3714,6 +4243,10 @@ CURATED_RECIPE_NAMES: List[str] = [
     "freckle_free_v1",
     "tired_eye_rescue_v1",
     "tired_eye_rescue_protected_v1",
+    "tired_eye_rescue_v2",
+    "documentary_preserve_v1",
+    "heirloom_archive_v1",
+    "studio_headshot_protected_v1",
     "aniso_pore_real_v1",
     "studio_porcelain_clear_v1",
     "beauty_editorial_clear_v1",
@@ -3758,6 +4291,7 @@ CURATED_RECIPE_NAMES: List[str] = [
     "apex_editorial_v1",
     "apex_editorial_protected_v1",
     "apex_cinema_v1",
+    "cinema_grade_v1",
     "cosplay_character_showcase_v1",
     # Proven restrained finish looks
     "reala_ace",
@@ -3782,6 +4316,15 @@ RECOMMENDED_RECIPE_NAMES: List[str] = [
     "vascular_refine_v1",
     "aniso_pore_real_v1",
     "tired_eye_rescue_v1",
+    # NOTE: the 2026-09-06 batch's three mark_policy recipes
+    # (heirloom_archive_v1, documentary_preserve_v1,
+    # studio_headshot_protected_v1) are deliberately NOT listed here. Every
+    # existing *_protected_v1 variant sits in CONDITIONAL while its
+    # unprotected parent is recommended, and mark_policy recipes have been
+    # kept off the default recommendation surface since 1ecfba0 wired them.
+    # The two preserve_all recipes are the first consumers of that preset at
+    # all, so recommending them by default would put a never-exercised code
+    # path in front of every user. They are curated, not recommended.
     "wedding_timeless_v1",
     "cosplay_clear_v1",
     "cosplay_portrait_polish_v1",
@@ -3794,7 +4337,31 @@ RECOMMENDED_RECIPE_NAMES: List[str] = [
 # Research-calibrated candidates that need owner comparison before they can be
 # considered for a default recommendation. Keep these separate from the
 # correction-first list so the UI communicates the review boundary clearly.
-EXPERIMENTAL_RECIPE_NAMES = ("meitu_porcelain_v1",)
+EXPERIMENTAL_RECIPE_NAMES = (
+    "meitu_porcelain_v1",
+    # tired_eye_rescue_v2 exceeds the owner-set 0.35 darken_removal cap on
+    # tired_eye_rescue_v1 by narrowing the subject contract (no under-eye
+    # contour makeup) rather than by any change to the op. That trade wants
+    # an owner comparison against v1 before it could be recommended, and the
+    # no-Fitzpatrick-IV-VI-sample caveat on the v2 dark-circle calibration
+    # corpus bites hardest at this recipe's strength.
+    "tired_eye_rescue_v2",
+    # cinema_grade_v1 is a creative grade, not a correction — it is
+    # experimental in the "compare before you ship it" sense rather than the
+    # "unvalidated calibration" sense.
+    "cinema_grade_v1",
+    # First two consumers of mark_policy="preserve_all". The preset has
+    # shipped in params.py/marks.py since the mark-policy work but had no
+    # recipe exercising it before this batch, so its behavior on real
+    # corpora is unmeasured — in particular min_confidence=0.0 admits every
+    # detection to the preserve mask, and the FA-03 work established that
+    # the mark classifier still misreads eyeliner as a mole on some faces
+    # (710cb5b fixed the tie-break case, not the classifier). Owner
+    # comparison against the protect_identity variants should come before
+    # either of these is presented as a default.
+    "heirloom_archive_v1",
+    "documentary_preserve_v1",
+)
 
 CONDITIONAL_RECIPE_NAMES: List[str] = [
     name for name in CURATED_RECIPE_NAMES if name not in RECOMMENDED_RECIPE_NAMES

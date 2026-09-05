@@ -158,7 +158,10 @@ class TestRecipeDefaults:
 
     def test_curated_catalog_is_partitioned_by_safety(self):
         """A curated recipe is either correction-first or explicitly conditional."""
-        assert len(CURATED_RECIPE_NAMES) == 57
+        # 57 -> 62: 2026-09-06 batch added heirloom_archive_v1,
+        # documentary_preserve_v1, tired_eye_rescue_v2, cinema_grade_v1 and
+        # studio_headshot_protected_v1 to the curated catalog.
+        assert len(CURATED_RECIPE_NAMES) == 62
         assert set(RECOMMENDED_RECIPE_NAMES).isdisjoint(CONDITIONAL_RECIPE_NAMES)
         assert set(CURATED_RECIPE_NAMES) == (
             set(RECOMMENDED_RECIPE_NAMES) | set(CONDITIONAL_RECIPE_NAMES)
