@@ -775,6 +775,24 @@ def _process_face_core(
             mole_norm = mole_mask.astype(np.float32) / 255.0
             blemish_skin_mask = np.clip(regions.skin - mole_norm, 0.0, 1.0)
 
+    # ---- General mark-policy protection (FA-01: blemish previously never
+    # received this — only the freckle stage did). Opt-in only:
+    # mark_policy=None (the "legacy" default) must stay byte-identical, so
+    # detection only runs when a caller actually set a policy. Detected
+    # fresh here rather than reusing the freckle stage's records, since 17+
+    # ops have mutated canvas since that stage ran.
+    _mark_policy = getattr(ctx, 'mark_policy', None)
+    if ctx.blemish > 0 and _mark_policy is not None:
+        from .marks import compile_mark_policy, detect_marks
+
+        records = detect_marks(
+            np.clip(canvas, 0, 255).astype(np.uint8), face_mask=skin_n,
+        )
+        policy_preserve = compile_mark_policy(
+            records, canvas.shape, _mark_policy,
+        ).preserve.astype(np.float32) / 255.0
+        blemish_skin_mask = np.clip(blemish_skin_mask - policy_preserve, 0.0, 1.0)
+
     # ---- Blemish removal ----
     if ctx.blemish > 0:
         canvas = _tr('blemish.remove', canvas)
