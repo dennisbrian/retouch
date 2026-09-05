@@ -246,26 +246,74 @@ cleanly. Named as a limitation, not chased further: the mechanism-level
 argument (the residual carries no provenance) holds regardless of whether
 one particular radius happens to separate on one particular crop.
 
-## 6. Recommendation
+## 6. Option 1 (unconditional `detect_marks`) investigated and rejected
 
-No mark-independent fix survives measurement (§5). The only two
-mechanisms that can close the `mark_policy=None` default-path exposure
-measured in §3 are:
+The owner selected "run `detect_marks` unconditionally" over the opt-in-
+only alternative. Two facts were checked before writing any
+implementation code, per this session's own pattern of verifying before
+building:
 
-- **Run `detect_marks` unconditionally** for this purpose, closing the
-  real gap but breaking the `mark_policy=None` byte-identical contract
-  every FA-01 change to date has preserved, and adding per-face detection
-  cost to every default render (not benchmarked here).
-- **Accept the gap on the default path** and only wire the exclusion for
-  `mark_policy` opt-in users (§4) — small, in-scope, honest about the
-  fact that it does not address the measured +18.5pt exposure, since that
-  exposure is specifically where no mark mask exists to exclude.
+**The byte-identical-contract framing was overstated.** The 4 recipes
+that set `micro_restore` (`xiaohongshu`, `xhs_ultrasoft`, `xhs_soft_glow`,
+`anime_v2`, resolved by line-to-recipe-name mapping in `recipes.py`) do
+not include `natural`, and none are covered by
+`test_golden_pipeline*.py`. Running detection unconditionally on these 4
+recipes' `micro_restore>0` path would not move any golden snapshot.
 
-**This document does not choose between them.** Both are real behavior-
-policy decisions belonging to the owner, not a default this research
-tranche can select. Per the plan and this session's established pattern,
-evidence is produced here; the choice and its implementation are a
-separate, explicitly authorized step.
+**The eyeliner-misclassification confound (first documented in `154d854`
+on this same corpus) is real and lands inside the dimensional zone.**
+Captured the actual `regions` object and pre/post-smoothing canvases from
+a live `engine.process(img, recipe='xiaohongshu')` call on
+`DSCF2310/00_source.jpg` (via a monkeypatched `restore_micro_texture` —
+real production objects, not synthetic stand-ins) and ran `detect_marks`
+against them directly. 55 records total; 8 have centroids inside the
+`nose_bridge ∪ cheek_highlights_l/r ∪ left/right_under_eye ∪ left/
+right_eye ∪ crows_feet_l/r` union. Visualizing those 8
+(`/tmp/fa02_overlapping_marks_vis.png`, `/tmp/fa02_dim_overlay.png`
+during this session) shows the two largest by area (18×12px and 22×13px,
+both classified `mole` at confidence 0.70) are **the eyeliner wings on
+both eyes**, sitting inside `left_under_eye`/`right_under_eye` — the
+genuine freckles in the same list are 3×3 to 5×5px, an order of magnitude
+smaller. `regions.skin`-clipping (the Tier-1 pattern used elsewhere in
+this codebase) reduces the `protect_identity` preserve-mask overlap with
+the dimensional zone from 654px to 389px — a ~40% reduction, not
+elimination, because the under-eye dimensional zone **is** skin; Tier 1
+only excludes the eye proper, not the lash-adjacent skin eyeliner bleeds
+onto. Area, not count, is what would be subtracted from the restoration
+zone, and area here is dominated by misclassified cosmetics, not real
+marks.
+
+**Consequence:** on `xiaohongshu` and `anime_v2` specifically — cosplay/
+heavy-makeup-oriented recipes, the population most exposed to this
+detector's known class-confusion (per `154d854`'s original finding on
+this same corpus) — option 1 would trade a measured +18.5pt defect-
+restoration bug for an unmeasured makeup-suppression regression on
+exactly the images most likely to trigger it. This is not a hypothetical
+edge case; it reproduces on the same real photo already used throughout
+this document.
+
+**Rejected.** Per the plan's own dependency ordering, this is not a
+new problem — it is FA-03's problem ("blemish detection... use manually
+accepted spot masks first," precisely because detector accuracy is the
+upstream unknown FA-02 cannot resolve on its own). Closing the
+`mark_policy=None` default-path exposure measured in §3 requires
+`detect_marks` output, `detect_marks` misclassifies eyeliner as moles on
+the corpus that matters, and no mechanism-level workaround survived
+measurement (§5's mark-independent cap; this section's unconditional
+detection). **FA-02 defers this specific fix to FA-03's detector-accuracy
+work landing first.**
+
+## 6a. Remaining live option: opt-in-only exclusion (§4)
+
+Wiring the exclusion for `mark_policy` opt-in users only (§4) remains
+available and does not carry the eyeliner exposure at the same severity —
+`protect_identity`/`preserve_all` users have already accepted
+`detect_marks`' class-confusion risk elsewhere in the pipeline (evening
+ops, blemish, base smoothing), so extending it to `restore_micro_texture`
+adds no new risk class, only more of an already-accepted one. It remains
+true that this does not address the measured +18.5pt default-path
+exposure (§4). Not implemented here — still the owner's call, now made
+with the eyeliner finding on the table rather than without it.
 
 ## 7. Limitations, stated plainly
 
