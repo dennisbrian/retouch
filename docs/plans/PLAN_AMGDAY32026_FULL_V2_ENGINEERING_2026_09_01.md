@@ -912,3 +912,46 @@ Not completed now:
 - no certification or sealed final evidence.
 
 This document is ready for owner review. Code remains intentionally untouched.
+
+## 18. Status addendum (2026-09-05)
+
+Priority-list verification pass (mouth protection / natural teeth correction)
+confirmed the following already ships, ahead of any Slice F implementation:
+
+- `lips.enhance()` operates strictly on `FaceRegions.lips` (BiSeNet 12/13);
+  `teeth.whiten()` operates strictly on `FaceRegions.mouth_interior` (label
+  11). Dispatch in `perf_optimizations.py` passes these as disjoint masks —
+  lip enhancement cannot reach teeth/mouth-interior pixels by construction.
+  No tongue class or tongue landmark is involved in this separation; it is
+  pure anatomical mask disjointness, already covered by
+  `tests/test_lips.py::TestLipGlossContainment::test_enhance_pipeline_cannot_leak_outside_lip_mask`.
+- `teeth.py::_detect_teeth()`'s existing relative saturation gate
+  (`s_channel < s_median * 1.2`, tone-adaptive, no absolute threshold) is a
+  real, already-shipped, non-neural tongue/gum exclusion: pink/red oral
+  pixels fail the gate because they are far more saturated than teeth.
+  Regression-tested synthetically:
+  `tests/test_teeth.py::TestDetectTeeth::test_tongue_and_gums_excluded_from_teeth_mask`.
+- This is not a substitute for Slice F. It is anatomical/photometric
+  containment, not tongue detection — it degrades gracefully rather than
+  detecting tongue as a class. Two limitations found while writing the
+  regression test, worth carrying into Slice F's threshold design:
+  1. **Degenerate near-zero-saturation case**: on a mouth interior whose
+     surround is itself nearly gray, `s_median -> 0`, and the gate
+     `s_channel < s_median * 1.2` collapses toward `< 0` — true for no
+     pixel, so teeth stop being detected too. This fails closed (no damage,
+     just no whitening) rather than leaking onto tongue, but it is the same
+     class of bug as the `max() > 1.0` mask-epsilon issue in CLAUDE.md's
+     Outstanding Fixes: a relative threshold whose reference can collapse
+     near zero. Not fixed here — flagged for whoever picks up Slice F's
+     threshold work.
+  2. **Zero real-corpus exercise**: `FaceRegions.mouth_interior` was `0.0`
+     (mouth closed / not segmented) on all faces checked in the existing
+     83-image DSCF corpus sweeps referenced elsewhere in this repo's history.
+     `teeth.whiten()` is therefore verified only on synthetic fixtures, never
+     on a real open-mouth render, in this pass. Slice F's labeled-corpus
+     requirement (open-mouth, visible-tongue strata) remains the actual
+     blocker, unchanged from §10.4 above.
+
+No engine code changed in this addendum — verification and test-coverage
+only. Slice F (real tongue detection, calibrated thresholds, labeled corpus)
+remains blocked exactly as this plan already states.

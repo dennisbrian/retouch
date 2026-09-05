@@ -250,6 +250,24 @@ class TestLipGlossContainment:
         assert result.dtype == source.dtype
         assert np.isfinite(result).all()
 
+    def test_enhance_pipeline_cannot_leak_outside_lip_mask(self, enhancer):
+        """Priority 5 (mouth protection): the full enhance() pipeline (not
+        just _add_lip_gloss) must not touch pixels outside lip_mask. Each
+        internal stage (vibrance, smoothing, tint, texture reapply) has its
+        own blur/filter radius; a regression in any one of them could spill
+        onto teeth/mouth-interior/skin pixels bordering the lip mask.
+        """
+        rng = np.random.default_rng(20260905)
+        source = rng.integers(30, 220, size=(64, 64, 3), dtype=np.uint8)
+        mask = np.zeros((64, 64), dtype=np.float32)
+        mask[24:40, 20:44] = 1.0
+
+        result = enhancer.enhance(
+            source, mask, strength=100, tint="cosplay", finish="velvet",
+        )
+        outside = mask == 0
+        np.testing.assert_array_equal(result[outside], source[outside])
+
 
 class TestSmooth:
     def test_zero_strength(self, enhancer, img, lip_mask):

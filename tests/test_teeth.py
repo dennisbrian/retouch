@@ -158,3 +158,32 @@ class TestDetectTeeth:
         mask = np.ones((64, 64), dtype=np.float32)
         result = whitener._detect_teeth(img, mask)
         assert result.max() < 0.5
+
+    def test_tongue_and_gums_excluded_from_teeth_mask(self, whitener):
+        """Priority 5 (mouth protection): _detect_teeth's saturation gate
+        must exclude pink/red tongue and gum pixels from the whitening mask
+        even when they sit inside the same mouth-interior ROI as real teeth.
+
+        No neural tongue segmenter or BiSeNet tongue class exists (there is
+        no labeled corpus to build/validate one against -- see
+        docs/plans/PLAN_AMGDAY32026_FULL_V2_ENGINEERING_2026_09_01.md), so
+        this is the actual shipped containment: a relative low-saturation
+        gate (teeth are close to gray; tongue/gums are saturated pink/red).
+        """
+        # Dim, mildly saturated mouth void (real oral-cavity shadow, not a
+        # neutral gray) -- a perfectly desaturated background collapses
+        # s_median to 0 and makes the relative gate degenerate.
+        img = np.full((64, 64, 3), (60, 55, 70), dtype=np.uint8)
+        # Bright, low-saturation "teeth" patch (near-gray, high L).
+        img[8:24, 8:56] = (225, 220, 215)
+        # Saturated pink "tongue" patch (BGR: strong red, weak blue/green).
+        img[40:60, 16:48] = (110, 90, 200)
+        mask = np.ones((64, 64), dtype=np.float32)
+
+        teeth_mask = whitener._detect_teeth(img, mask)
+        assert teeth_mask[16, 32] > 0.3, "the low-saturation bright patch must be detected as teeth"
+        assert teeth_mask[50, 32] < 0.1, "the saturated pink patch (tongue/gums) must be excluded"
+
+        # End to end: whitening must not touch the tongue-colored region.
+        out = whitener.whiten(img, mask, strength=100)
+        np.testing.assert_array_equal(out[40:60, 16:48], img[40:60, 16:48])

@@ -617,7 +617,7 @@ class TestNewFeatureRecipesResolve:
         ("freckle_free_v1", "freckle_removal", 85.0),
         ("freckle_free_v1", "regional_modulation", 0.3),
         ("tired_eye_rescue_v1", "undereye_shadow_strength", 0.7),
-        ("tired_eye_rescue_v1", "undereye_darken_removal", 60.0),
+        ("tired_eye_rescue_v1", "undereye_darken_removal", 35.0),
         ("tired_eye_rescue_v1", "undereye_puffiness_reduction", 50.0),
         ("tired_eye_rescue_v1", "smooth_engine", "anisotropic"),
         ("tired_eye_rescue_v1", "eye_sclera_brighten", 25.0),
@@ -656,7 +656,7 @@ class TestNewFeatureRecipesResolve:
         ("apex_cinema_v1", "halation", 0.18),
         ("studio_porcelain_clear_v1", "smooth_engine", "anisotropic"),
         ("studio_porcelain_clear_v1", "regional_modulation", 0.6),
-        ("studio_porcelain_clear_v1", "undereye_darken_removal", 45.0),
+        ("studio_porcelain_clear_v1", "undereye_darken_removal", 35.0),
         ("studio_porcelain_clear_v1", "eye_sclera_brighten", 30.0),
         ("xhs_clear_glow_v1", "smooth_engine", "anisotropic"),
         ("xhs_clear_glow_v1", "freckle_removal", 50.0),
@@ -692,7 +692,7 @@ class TestNewFeatureRecipesResolve:
         ("outdoor_golden_clear_v1", "freckle_removal", 45.0),
         ("outdoor_golden_clear_v1", "eye_iris_brightness", 25.0),
         ("convention_clear_v1", "smooth_engine", "anisotropic"),
-        ("convention_clear_v1", "undereye_darken_removal", 60.0),
+        ("convention_clear_v1", "undereye_darken_removal", 35.0),
         ("convention_clear_v1", "undereye_puffiness_reduction", 50.0),
     ])
     def test_hero_feature_unlocks(self, name, attr, expected):
