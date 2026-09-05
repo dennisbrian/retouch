@@ -17,13 +17,14 @@ class MockLandmarksList:
 
 
 def _assert_region_attr_equal(a, b, attr):
-    """Compare one FaceRegions attribute: float32 mask, or the
-    parse_confidence dict (observational scalars, not array-like)."""
+    """Compare one FaceRegions attribute: float32 mask, or a dict of
+    observational scalars (parse_confidence, parse_boundary_confidence —
+    not array-like)."""
     if a is None:
         assert b is None
         return
     assert b is not None
-    if attr == "parse_confidence":
+    if isinstance(a, dict):
         assert a.keys() == b.keys()
         for k in a:
             assert a[k] == pytest.approx(b[k], abs=1e-5)
@@ -205,8 +206,9 @@ class TestParseConfidence:
 
     def test_parse_confidence_not_read_by_any_op(self):
         """Guard against scope creep: no retouch module may branch on
-        parse_confidence to change edit strength (observation-only per
-        priority 3 — soft probabilities are not calibrated confidence)."""
+        parse_confidence or parse_boundary_confidence to change edit
+        strength (observation-only per priority 3 — soft probabilities are
+        not calibrated confidence)."""
         import pathlib
         import re
 
@@ -216,9 +218,94 @@ class TestParseConfidence:
             if path.name == "parsing.py":
                 continue
             text = path.read_text()
-            if re.search(r"\bparse_confidence\b", text):
+            if re.search(r"\bparse(_boundary)?_confidence\b", text):
                 hits.append(path.name)
         assert hits == [], (
-            f"parse_confidence must stay observation-only, but is referenced "
-            f"outside parsing.py in: {hits}"
+            f"parse_confidence/parse_boundary_confidence must stay "
+            f"observation-only, but referenced outside parsing.py in: {hits}"
         )
+
+
+class TestParseBoundaryConfidence:
+    """FA-01 diagnostic: boundary-ring margin, distinct from the whole-region
+    average parse_confidence already reports (docs/plans/RESEARCH_FACE_RETOUCH_ALGORITHMS_2026_09_05.md
+    §2.1). Same observation-only contract — covered by
+    test_parse_confidence_not_read_by_any_op above."""
+
+    def test_boundary_confidence_lower_than_interior_average(self):
+        """A region confident in its interior but uncertain right at its
+        true edge should show a lower boundary margin than its own
+        whole-region average — that gap is the point of computing it
+        separately. Needs a genuine internal region edge (a second label
+        winning part of the crop): a single label filling the whole image
+        has no edge for dilate/erode to find."""
+        from retouch.parsing import (
+            _bisenet_boundary_confidence_by_region,
+            _bisenet_confidence_by_region,
+        )
+
+        size = 40
+        logits = np.full((19, size, size), -10.0, dtype=np.float32)
+        # Most of the crop: confident skin.
+        logits[1, :, :] = 10.0
+        # Near one edge, skin's margin over right_eyebrow collapses...
+        logits[1, size - 6:, :] = 0.6
+        logits[2, size - 6:, :] = 0.5
+        # ...and the last couple of rows actually flip to right_eyebrow, so
+        # skin has a true internal boundary inside the crop.
+        logits[1, size - 2:, :] = -10.0
+        logits[2, size - 2:, :] = 10.0
+        pred = np.argmax(logits, axis=0).astype(np.uint8)
+
+        whole = _bisenet_confidence_by_region(logits, pred)
+        boundary = _bisenet_boundary_confidence_by_region(logits, pred, ring_px=2)
+
+        assert "skin" in whole and "skin" in boundary
+        assert boundary["skin"] < whole["skin"]
+
+    def test_boundary_confidence_pools_multi_label_before_ringing(self):
+        """lips = 12 | 13. The seam between the two sub-labels must not be
+        treated as the lips region's outer boundary. Lips sits as a
+        horizontal band between two "background" strips (label 7) so it has
+        a genuine top/bottom edge distinct from the internal 12/13 seam."""
+        from retouch.parsing import _bisenet_boundary_confidence_by_region
+
+        h, w = 20, 20
+        logits = np.full((19, h, w), -10.0, dtype=np.float32)
+        logits[7, :6, :] = 10.0
+        logits[7, 14:, :] = 10.0
+        logits[12, 6:14, :10] = 10.0  # lips left half (label 12)
+        logits[13, 6:14, 10:] = 10.0  # lips right half (label 13)
+        # Low margin only at the true top edge of the lips region.
+        logits[12, 6, :10] = 0.6
+        logits[7, 6, :10] = 0.5
+        pred = np.argmax(logits, axis=0).astype(np.uint8)
+
+        out = _bisenet_boundary_confidence_by_region(logits, pred, ring_px=1)
+        assert "lips" in out
+        # If the 12/13 seam leaked into the ring, the pooled boundary mean
+        # would sit near the confident seam value (~1.0), not be pulled
+        # down by the genuinely low-margin top edge.
+        assert out["lips"] < 0.9
+
+    def test_boundary_confidence_omits_regions_too_thin_for_the_ring(self):
+        """A region entirely consumed by the ring (thin eyebrow/eye slivers
+        at model resolution) must be omitted, not silently fall back to the
+        whole-region average."""
+        from retouch.parsing import _bisenet_boundary_confidence_by_region
+
+        logits = np.full((19, 20, 20), -10.0, dtype=np.float32)
+        # A 1px-wide right_eyebrow line has no interior to erode away.
+        logits[2, 5, :] = 10.0
+        logits[1, :, :] = np.where(logits[1, :, :] > -10.0, logits[1, :, :], 5.0)
+        pred = np.argmax(logits, axis=0).astype(np.uint8)
+
+        out = _bisenet_boundary_confidence_by_region(logits, pred, ring_px=2)
+        assert "right_eyebrow" not in out
+
+    def test_landmark_fallback_sets_empty_boundary_dict(self):
+        parser = FaceParser()
+        landmarks = MockLandmarksList()
+        img = np.zeros((100, 100, 3), dtype=np.uint8)
+        regions = parser._landmark_fallback_only(landmarks, img, None, 40.0)
+        assert regions.parse_boundary_confidence == {}

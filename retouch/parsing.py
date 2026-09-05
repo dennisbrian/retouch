@@ -30,6 +30,15 @@ _GUIDED_FALLBACK_WARNED = False
 _BISENET_CLASSES = 19
 _BISENET_SPATIAL = (512, 512)
 
+# FA-01 diagnostic default (docs/plans/RESEARCH_FACE_RETOUCH_ALGORITHMS_2026_09_05.md
+# §2.1). Checked against 5 real BiSeNet parses (DSCF2306/2308/2310/2362/2365):
+# ring_px=2 already drops right_eyebrow on one of those five (DSCF2362) when
+# the region erodes to nothing (expected per _bisenet_boundary_confidence_by_region's
+# docstring, not a bug); ring_px=3 drops it on more faces. Kept at 2 as the
+# smaller, less lossy choice. Keep in sync with any call site that overrides
+# ring_px.
+_BOUNDARY_RING_PX = 2
+
 
 def _sanitize_bisenet_logits(logits: np.ndarray, source: str) -> np.ndarray:
     """Validate BiSeNet output layout and scrub NaNs.
@@ -102,6 +111,74 @@ def _bisenet_confidence_by_region(
         sel = np.isin(pred_crop, labels)
         if np.any(sel):
             out[region] = float(np.mean(margin[sel]))
+    return out
+
+
+def _log_confidence_evidence(
+    parse_confidence: "dict[str, float]",
+    parse_boundary_confidence: "dict[str, float]",
+    ring_px: int,
+) -> None:
+    """FA-01 diagnostic observation: emit whole-region vs boundary-ring
+    margins side by side so the gap §2.1 describes is actually inspectable,
+    not just computed and discarded. Observational logging only — nothing
+    reads these dicts back to change behavior (see FaceRegions.parse_confidence).
+    """
+    if not parse_confidence and not parse_boundary_confidence:
+        return
+    logger.debug(
+        "FA-01 parse confidence (ring_px=%d): whole=%s boundary=%s",
+        ring_px,
+        {k: round(v, 3) for k, v in parse_confidence.items()},
+        {k: round(v, 3) for k, v in parse_boundary_confidence.items()},
+    )
+
+
+def _bisenet_boundary_confidence_by_region(
+    logits: np.ndarray, pred_crop: np.ndarray, ring_px: int = _BOUNDARY_RING_PX,
+) -> "dict[str, float]":
+    """Same margin signal as _bisenet_confidence_by_region, but averaged only
+    over each region's boundary ring instead of its whole area.
+
+    Diagnostic companion for FA-01 (docs/plans/RESEARCH_FACE_RETOUCH_ALGORITHMS_2026_09_05.md
+    §2.1): a region-wide average can stay high while its edge is uncertain
+    ("a high average can coexist with an uncertain eyelid or hairline").
+    Observational metadata only — same non-consumption contract as
+    parse_confidence; see FaceRegions.parse_boundary_confidence.
+
+    Pools multi-label regions (e.g. lips = 12 | 13) into one binary mask
+    *before* computing the ring, so an internal seam between two sub-labels
+    (upper/lower lip contact line) is never mistaken for the region's outer
+    boundary.
+
+    A region whose mask is smaller than the ring (thin eyebrows/eyes at
+    512x512 can erode to nothing) has no interior to subtract, so the ring
+    equals the full region and the entry is omitted rather than silently
+    degrading to the plain regional average.
+    """
+    logits = logits[:_BISENET_CLASSES]
+    shifted = logits - logits.max(axis=0, keepdims=True)
+    exp = np.exp(shifted)
+    softmax = exp / exp.sum(axis=0, keepdims=True)
+    top2 = np.partition(softmax, -2, axis=0)[-2:]
+    margin = top2[1] - top2[0]
+
+    region_to_labels: "dict[str, list[int]]" = {}
+    for label, region in _CONFIDENCE_LABEL_TO_REGION.items():
+        region_to_labels.setdefault(region, []).append(label)
+
+    kernel = np.ones((ring_px * 2 + 1, ring_px * 2 + 1), dtype=np.uint8)
+    out: "dict[str, float]" = {}
+    for region, labels in region_to_labels.items():
+        binary = np.isin(pred_crop, labels).astype(np.uint8)
+        if not np.any(binary):
+            continue
+        eroded = cv2.erode(binary, kernel)
+        if not np.any(eroded):
+            continue  # no interior left at this ring width; see docstring
+        dilated = cv2.dilate(binary, kernel)
+        ring = (dilated.astype(bool)) & (~eroded.astype(bool))
+        out[region] = float(np.mean(margin[ring]))
     return out
 
 
@@ -326,6 +403,10 @@ class FaceRegions:
         # docs/plans/RESEARCH_COLOR_SCIENCE_2026_09_04.md-style caution and
         # Guo et al. 2017 on neural-network calibration).
         "parse_confidence",
+        # Same contract as parse_confidence, but averaged over each region's
+        # boundary ring only (see _bisenet_boundary_confidence_by_region) —
+        # surfaces edge uncertainty a whole-region average can hide.
+        "parse_boundary_confidence",
     ]
 
     def __init__(self) -> None:
@@ -397,6 +478,7 @@ class FaceParser:
         # ---- Run BiSeNet face parsing ONNX if session exists ----
         bisenet_masks = {}
         parse_confidence: Optional["dict[str, float]"] = None
+        parse_boundary_confidence: Optional["dict[str, float]"] = None
         if self._sess is not None and face_bbox is not None:
             try:
                 x_face, y_face, w_face, h_face = face_bbox
@@ -439,6 +521,8 @@ class FaceParser:
                         full_label_map, img_bgr, feather, mode=mask_feather_mode, include_cloth=True
                     )
                     parse_confidence = _bisenet_confidence_by_region(logits, pred_crop)
+                    parse_boundary_confidence = _bisenet_boundary_confidence_by_region(logits, pred_crop)
+                    _log_confidence_evidence(parse_confidence, parse_boundary_confidence, _BOUNDARY_RING_PX)
             except Exception as e:
                 input_shape = crop_input.shape if 'crop_input' in locals() else None
                 logger.warning(
@@ -459,6 +543,7 @@ class FaceParser:
         regions.hair = bisenet_masks.get('hair')
         regions.cloth = bisenet_masks.get('cloth')
         regions.parse_confidence = parse_confidence
+        regions.parse_boundary_confidence = parse_boundary_confidence
 
         # BiSeNet has no hand/limb class; clip its unconstrained per-pixel
         # skin/face_oval to the landmark face-oval boundary before anything
@@ -644,6 +729,8 @@ class FaceParser:
 
                 pred_crop = np.argmax(logits, axis=0).astype(np.uint8)
                 parse_confidence = _bisenet_confidence_by_region(logits, pred_crop)
+                parse_boundary_confidence = _bisenet_boundary_confidence_by_region(logits, pred_crop)
+                _log_confidence_evidence(parse_confidence, parse_boundary_confidence, _BOUNDARY_RING_PX)
                 pred_crop_resized = cv2.resize(pred_crop, (cw, ch), interpolation=cv2.INTER_NEAREST)
 
                 full_label_map = np.zeros((h_img, w_img), dtype=np.uint8)
@@ -669,6 +756,7 @@ class FaceParser:
                 regions.hair = bisenet_masks.get('hair')
                 regions.cloth = bisenet_masks.get('cloth')
                 regions.parse_confidence = parse_confidence
+                regions.parse_boundary_confidence = parse_boundary_confidence
 
                 # BiSeNet has no hand/limb class; clip its unconstrained
                 # per-pixel skin/face_oval to the landmark face-oval
@@ -759,6 +847,7 @@ class FaceParser:
         # "no model confidence data available", distinct from an attribute
         # that was simply never populated.
         regions.parse_confidence = {}
+        regions.parse_boundary_confidence = {}
 
         regions.face_oval = self._mask(landmarks, FACE_OVAL, w_img, h_img, feather)
         regions.left_eye = self._mask(landmarks, LEFT_EYE, w_img, h_img, feather // 2)

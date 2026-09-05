@@ -26,6 +26,13 @@
 
 ## Plans (`docs/plans/`)
 - `MASTER_PLAN.md` — Overall roadmap
+- [Face retouch algorithm research — 2026-09-05](plans/RESEARCH_FACE_RETOUCH_ALGORITHMS_2026_09_05.md)
+  — Documentation-only current-code review, thirteen classical/learned algorithm
+  comparisons, and seven proposed experiments for masks, blemish repair, texture,
+  under-eyes, tone, and profile/occlusion handling
+- [Face retouch algorithm research execution plan — 2026-09-05](plans/PLAN_FACE_RETOUCH_ALGORITHM_RESEARCH_EXECUTION_2026_09_05.md)
+  — Documentation-first order: mask ownership and boundary evidence, then texture,
+  blemish detection/repair, under-eye/material review, and learned assistance
 - `RESEARCH_COLOR_SCIENCE_2026_09_04.md` — Current-tree color-science audit and
   engineering contract: SDR sRGB baseline, ICC/RAW/high-bit/alpha findings,
   operation-domain rules, conformance matrix, and staged P3/HDR gates
