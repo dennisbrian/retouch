@@ -4076,10 +4076,26 @@ RECIPES["cinema_grade_v1"] = {
     # part of the cinematic read; kept below apex_cinema_v1's 0.18-plus-
     # bloom-plus-lens-blur combination since this recipe has no lens blur.
     "halation": 0.32,
-    # 0.07 vs creative_grade_v1's 0.05, staying inside that recipe's own
-    # documented "keep <= 0.1" note for the engine-scale grain parameter
-    # (sigma = 255 * strength).
-    "grain": 0.07,
+    # CORRECTED 2026-09-06 (was 0.07): flagged by the owner as visibly wrong
+    # on real renders (DSCF2650/2709/2810, Priority for Printing corpus) —
+    # coarse speckle across skin and background, not a fine grain texture,
+    # reading as a flat, washed-out cast. Root-caused by rendering the
+    # ablation (grain vs halation vs hsl/split-tone) at full 6240x4160 res:
+    # zeroing halation left the cast essentially unchanged, zeroing grain
+    # alone removed nearly all of it. _add_grain's sigma = 255 * strength is
+    # 17.85 levels at 0.07 vs 12.75 at creative_grade_v1's own 0.05 — a 40%
+    # jump — and this recipe's much heavier hsl_sat_global (-26 vs -12) and
+    # split-tone make that same absolute noise level read as far louder,
+    # since there is less underlying chroma for the eye to anchor to.
+    # creative_grade_v1's own 0.05 also visibly speckled at full res in this
+    # sweep (see the recipe's "keep <= 0.1" note — that ceiling is looser
+    # than the parameter can actually take on a heavy grade). 0.03 was the
+    # highest value in a 0.03/0.04/0.05 full-res comparison that still read
+    # as fine grain rather than coarse noise. Do not raise this without
+    # re-checking a full-resolution render — the 2048px proxy under-shows
+    # this artifact (grain is generated at w//2 x h//2 and upscaled, so
+    # perceived grain size is resolution-dependent).
+    "grain": 0.03,
     # Projected-print signature: lifted toe, slight highlight drift.
     "finish": {"fade_toe": 0.10, "highlight_drift": 0.14},
     "highlight_rolloff": 0.50,
