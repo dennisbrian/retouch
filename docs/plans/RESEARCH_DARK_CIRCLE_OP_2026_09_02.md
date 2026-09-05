@@ -198,11 +198,14 @@ snapshots unchanged (`natural` sets no under-eye key; the fixture never exercise
 
 ## 7. Limitations and open items
 
-- **Makeup vs shadow** (owner decision): 55 recipes set the op; `tired_eye_rescue_v1`
-  and `convention_clear_v1` at 0.6 and `studio_porcelain_clear_v1` at 0.45 will
-  visibly soften under-eye contour makeup on cosplay subjects. Options: leave (the op
-  finally does what the recipe names promise), or cap those three at ~0.35. Not
-  changed here.
+- **Makeup vs shadow** (owner decision, resolved 2026-09-05): 55 recipes set the op;
+  `tired_eye_rescue_v1` and `convention_clear_v1` at 0.6 and `studio_porcelain_clear_v1`
+  at 0.45 visibly softened under-eye contour makeup on cosplay subjects. Owner chose to
+  cap all three at 0.35 (protects cosplay contour makeup/aegyo-sal over the recipes'
+  full-strength "tired eye rescue" effect). Regression:
+  `tests/test_recipes.py::TestUndereyeMakeupProtectionCap`. The colour-based
+  makeup-vs-shadow gate considered and rejected below remains rejected — the cap is a
+  strength adjustment, not a detection change.
 - **Darker skin**: no Fitzpatrick IV–VI subject in the corpus. The relative band is
   designed for it (and the ×0.55 probe holds), but pigmented brown circles vs warm
   makeup is exactly the case a chroma guard would get wrong — re-verify on real

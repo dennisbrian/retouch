@@ -2524,7 +2524,16 @@ RECIPES["tired_eye_rescue_v1"] = {
         "iris": 0.12,
     },
     "undereye": {
-        "darken_removal": 0.60,
+        # darken_removal capped at 0.35 (was 0.60): the v2 op's relative
+        # low-pass darkness detector cannot distinguish a genuine dark circle
+        # from intentional cosplay under-eye contour makeup / aegyo-sal, and
+        # at 0.6 visibly softens that makeup on cosplay subjects (owner
+        # decision 2026-09-05; see docs/plans/RESEARCH_DARK_CIRCLE_OP_2026_09_02.md
+        # §7, DSCF7204/6963/4463). A colour-based makeup-vs-shadow gate was
+        # deliberately rejected there — it would misfire on genuine
+        # pigmented dark circles on Fitzpatrick IV-VI skin, unvalidated by
+        # the current corpus.
+        "darken_removal": 0.35,
         "puffiness_reduction": 0.50,
     },
     "eye": {
@@ -2621,7 +2630,9 @@ RECIPES["studio_porcelain_clear_v1"] = {
         "iris": 0.15,
     },
     "undereye": {
-        "darken_removal": 0.45,
+        # darken_removal capped at 0.35 (was 0.45): see the cap rationale
+        # and owner decision note in tired_eye_rescue_v1 above.
+        "darken_removal": 0.35,
         "puffiness_reduction": 0.35,
     },
     "eye": {
@@ -3076,7 +3087,9 @@ RECIPES["convention_clear_v1"] = {
         "iris": 0.35,
     },
     "undereye": {
-        "darken_removal": 0.60,
+        # darken_removal capped at 0.35 (was 0.60): see the cap rationale
+        # and owner decision note in tired_eye_rescue_v1 above.
+        "darken_removal": 0.35,
         "puffiness_reduction": 0.50,
     },
     "eye": {

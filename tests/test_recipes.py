@@ -234,3 +234,17 @@ class TestModuleExports:
 
     def test_recipes_not_empty(self):
         assert len(RECIPES) > 0
+
+
+class TestUndereyeMakeupProtectionCap:
+    """2026-09-05 owner decision: cap darken_removal at 0.35 on the three
+    recipes the dark-circle v2 study found visibly soften intentional
+    under-eye contour makeup / aegyo-sal on cosplay subjects (see
+    docs/plans/RESEARCH_DARK_CIRCLE_OP_2026_09_02.md §7)."""
+
+    @pytest.mark.parametrize("recipe_name", [
+        "tired_eye_rescue_v1", "studio_porcelain_clear_v1", "convention_clear_v1",
+    ])
+    def test_darken_removal_capped_at_0_35(self, recipe_name):
+        resolved = resolve_recipe(recipe_name)
+        assert resolved["undereye"]["darken_removal"] == pytest.approx(0.35)
