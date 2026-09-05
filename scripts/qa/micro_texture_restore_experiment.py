@@ -221,6 +221,54 @@ def main():
         json.dump(results, f, indent=2)
 
     print(json.dumps(results, indent=2))
+    check_mark_independent_discriminator()
+
+
+def check_mark_independent_discriminator():
+    """FA-02 Sec 5: can detail = pre_smooth - smoothed's own magnitude/shape
+    distinguish a mark from authentic texture WITHOUT mark detection? Looked
+    promising on the noise-only synthetic canvas (30x magnitude separation)
+    and failed on a real face (top connected high-detail components are
+    the same size/magnitude with or without a mark present) -- rejected,
+    not just untuned: the residual carries no information about *why*
+    smoothing removed a signal, so no threshold on it can reliably tell
+    "mark" from "hair strand/fold shadow" on real skin.
+    """
+    print("\n--- mark-independent discriminator check (FA-02 Sec 5) ---")
+
+    # Synthetic: looks strong (no coherent structure other than the mark).
+    canvas = _add_mark(_textured_canvas(), (128, 128), 8)
+    smoothed = _smooth(canvas, smooth_strength=0.9, mark_protect=None)
+    detail_mag = np.abs(canvas.astype(np.float32) - smoothed.astype(np.float32)).mean(axis=2)
+    mark_sel = np.zeros(canvas.shape[:2], dtype=np.uint8)
+    cv2.circle(mark_sel, (128, 128), 8, 1, -1)
+    other_sel = np.zeros(canvas.shape[:2], dtype=np.uint8)
+    cv2.circle(other_sel, (60, 60), 8, 1, -1)
+    print(f"synthetic mark region:    mean={detail_mag[mark_sel.astype(bool)].mean():.2f}")
+    print(f"synthetic texture region: mean={detail_mag[other_sel.astype(bool)].mean():.2f}")
+
+    # Real face: fails (needs the real DSCF2306 corpus image on disk).
+    real_path = "/private/tmp/retouch-meitu-bakeoff-20260904/DSCF2306/00_source.jpg"
+    if not os.path.exists(real_path):
+        print("(real-face check skipped -- corpus image not found at", real_path, ")")
+        return
+
+    img = cv2.imread(real_path)
+    crop = img[363:363 + 219, 729:729 + 191]
+    mark_center = (int(crop.shape[1] * 0.72), int(crop.shape[0] * 0.62))
+    crop_with_mark = _add_mark(crop, mark_center, 6)
+
+    for label, im in (("clean", crop), ("with_mark", crop_with_mark)):
+        sm = _smooth(im, smooth_strength=0.9, mark_protect=None)
+        dm = np.abs(im.astype(np.float32) - sm.astype(np.float32)).mean(axis=2)
+        thresh = np.percentile(dm, 90)
+        high_mask = (dm > thresh).astype(np.uint8)
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(high_mask, connectivity=8)
+        comps = sorted(
+            ((stats[i, cv2.CC_STAT_AREA], float(dm[labels == i].mean())) for i in range(1, n)),
+            key=lambda x: -x[0],
+        )
+        print(f"real face ({label}): top 5 components (area, mean_mag) = {comps[:5]}")
 
 
 if __name__ == "__main__":

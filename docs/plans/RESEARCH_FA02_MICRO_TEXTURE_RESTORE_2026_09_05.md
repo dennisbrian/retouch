@@ -184,41 +184,98 @@ introduced beyond what the function's existing blend already smooths.
 
 ---
 
-## 4. Recommendation
+## 4. The policy-gated fix does not reach the exposure it was meant to close
 
-**Band-selective exclusion of policy-approved marks from
-`restore_micro_texture`'s dimensional mask is evidence-backed and
-low-risk**, following the same evaluation pattern FA-01's smoothing
-experiment used (`c492291` → `c665da1`):
+The band-selective exclusion described above (subtract the mark's
+protected footprint from `dim_mask` before `restore_micro_texture`'s
+existing `restore_amount * dim_mask_3d` blend) is mechanically sound and
+was validated with no boundary artifact — but checking
+`perf_optimizations.py:361-424` before implementing it surfaced a
+disqualifying fact: **`mark_protect_mask` is `None` unless
+`_mark_policy is not None`.** The +18–19.5 point defect-restoration effect
+measured in §3 occurs specifically under `mark_policy=None` — the shipped
+default for every recipe that sets `micro_restore` — and that is exactly
+the path with no mark mask to subtract. A caller who opts into a mark
+policy already sees the `current`/`defect_excluded` gap at ~0 (§3), so
+wiring the exclusion under the existing opt-in-only contract would close
+a residual that is already negligible, while leaving the real, measured
++18.5pt exposure completely untouched. This was caught before writing any
+implementation code, not after.
 
-- Real, measured defect-restoration effect (+18–19.5 points of contrast
-  recovery on a mark smoothing had just suppressed) on both a synthetic
-  and a real-face scene, discriminated from authentic-texture recovery by
-  measuring energy inside the mark's own footprint specifically, not
-  whole-face energy — directly addressing the plan's stated trap.
-- The proposed fix (subtract the mark's protected footprint from
-  `dim_mask` before the existing `restore_amount * dim_mask_3d` blend) is
-  a **narrower, more targeted change than a new mechanism** — it reuses
-  the same `mark_protect`-style mask FA-01 already produces
-  (`perf_optimizations.py`'s `mark_protect_mask`), no new detection work.
-- One offset-geometry check found no boundary artifact at the exclusion
-  edge — but this is one geometry, not a sweep, and is explicitly named
-  as a limitation below rather than treated as proof of the general case.
-- **Already substantially mitigated when `mark_policy` is active** — the
-  gap is real but its blast radius is smaller than the raw synthetic
-  numbers suggest, since callers who opt into a mark policy already see
-  near-zero difference between `current` and the proposed fix. The
-  exposure is specifically `mark_policy=None`, which is every recipe's
-  current default.
+## 5. Investigated and rejected: a mark-independent restoration cap
 
-**This document does not authorize the fix.** Per the plan and this
-session's own established pattern, evidence and recommendation are
-produced here; implementation is a separate, explicitly authorized step.
+Since the real exposure lives on the no-policy default path, a fix that
+needs no mark detection at all was investigated: cap
+`restore_micro_texture`'s restoration wherever `detail = pre_smooth -
+smoothed` is unusually large and spatially concentrated, reasoning that a
+mark produces a strong, tightly-localized removal while authentic
+pore/skin texture produces a weaker, more diffuse one.
 
-**Limitations, stated plainly:**
+**On the synthetic (noise-only) canvas this looked strong**: mark-region
+`detail` magnitude was ~30x the plain-texture region's (54.59 vs. 1.78 mean
+absolute delta), and thresholding at the 90th percentile isolated a single
+~386px connected component closely matching the mark's own area (a
+radius-8 circle ≈ 201px before feathering).
+
+**On a real face this discriminator fails.** The same measurement on a
+clean DSCF2306 crop (no mark composited) already produces connected
+high-detail components of 495, 455, 453, 366px — as large as, or larger
+than, the mark's own ~490px component when a radius-6 mark *is* present,
+with near-identical component magnitudes in both cases (mark: top
+components 490/455/453/366px at 49.8/49.1/54.1/61.0 mean magnitude;
+clean: 495/455/453/366px at 49.9/49.1/54.1/61.0 — the mark is not even
+distinguishable in the ranked list). Real hair strands and skin-fold
+shadows already produce detail blobs at the same scale and amplitude as
+a small mark. **Rejected**, not just "not yet tuned": this is the same
+class of scene-construction confound as the `_texture_adaptation_factor`
+noise-floor bug caught earlier in this session (a synthetic canvas with
+no coherent structure gave a clean, misleadingly strong separation that
+real skin's own structure does not support) — no threshold on `detail`'s
+magnitude or connected-component size can be expected to reliably
+separate "mark" from "authentic strong texture" on real portraits, because
+`detail` itself carries no information about *why* smoothing removed a
+given signal. Distinguishing "this was a mark" from "this was a hair
+strand or a fold shadow" requires knowing what the pixel *is* — which
+means detection, not a property derivable from the smoothing residual
+alone. This is a structural conclusion about the mechanism, not a
+threshold-tuning failure that a different percentile or feature could fix.
+
+**One geometry only** (one crop, one mark radius/position, one smoothing
+strength) — a larger mark or a flatter-skin crop might separate more
+cleanly. Named as a limitation, not chased further: the mechanism-level
+argument (the residual carries no provenance) holds regardless of whether
+one particular radius happens to separate on one particular crop.
+
+## 6. Recommendation
+
+No mark-independent fix survives measurement (§5). The only two
+mechanisms that can close the `mark_policy=None` default-path exposure
+measured in §3 are:
+
+- **Run `detect_marks` unconditionally** for this purpose, closing the
+  real gap but breaking the `mark_policy=None` byte-identical contract
+  every FA-01 change to date has preserved, and adding per-face detection
+  cost to every default render (not benchmarked here).
+- **Accept the gap on the default path** and only wire the exclusion for
+  `mark_policy` opt-in users (§4) — small, in-scope, honest about the
+  fact that it does not address the measured +18.5pt exposure, since that
+  exposure is specifically where no mark mask exists to exclude.
+
+**This document does not choose between them.** Both are real behavior-
+policy decisions belonging to the owner, not a default this research
+tranche can select. Per the plan and this session's established pattern,
+evidence is produced here; the choice and its implementation are a
+separate, explicitly authorized step.
+
+## 7. Limitations, stated plainly
+
 - One mark shape (circular), 3 radii, one dimensional-zone size (30px
   cheek-highlight circle), one offset distance (22px) — not a sweep over
-  zone size, offset distance, or mark shape.
+  zone size, offset distance, or mark shape. The §5 rejection is one
+  crop/radius/strength for the mark-independent discriminator specifically
+  (see its own caveat) — larger marks or flatter-skin crops were not
+  checked and might separate more cleanly, though the structural argument
+  (no provenance in the residual) does not depend on that.
 - No genuine natural mole in the corpus (CLAUDE.md known limitation,
   same caveat as every FA-01 mark experiment); real-face evidence is
   semi-synthetic (real skin + composited mark).
