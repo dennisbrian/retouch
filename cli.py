@@ -188,8 +188,8 @@ def _linear_raw_to_engine_bgr(path, exposure: float = 0.0, contrast: float = 1.0
     linear_rgb = dev.develop(
         linear_rgb, exposure=exposure, contrast=contrast,
     )
-    # sRGB-ish encode for engine (display-referred); keep float headroom
-    srgb = np.clip(linear_rgb, 0.0, 1.0) ** (1.0 / 2.2)
+    from retouch.white_balance import linear_to_srgb
+    srgb = linear_to_srgb(np.clip(linear_rgb, 0.0, 1.0))
     bgr = (srgb[..., ::-1] * 255.0).astype(np.float32)
     return bgr
 
@@ -968,15 +968,20 @@ def main() -> None:
                         continue
                 else:
                     correction_status = {}
-                    img_bgr, color_context = imread_engine_with_context(
-                        f,
-                        raw_decoder=args.raf_decoder,
-                        raf2jpeg_path=args.raf2jpeg_path,
-                        raf2jpeg_quality=args.raf2jpeg_quality,
-                        fuji_match_strength=args.fuji_match_strength,
-                        optical_correction=args.optical_correction,
-                        correction_status=correction_status,
-                    )
+                    try:
+                        img_bgr, color_context = imread_engine_with_context(
+                            f,
+                            raw_decoder=args.raf_decoder,
+                            raf2jpeg_path=args.raf2jpeg_path,
+                            raf2jpeg_quality=args.raf2jpeg_quality,
+                            fuji_match_strength=args.fuji_match_strength,
+                            optical_correction=args.optical_correction,
+                            correction_status=correction_status,
+                        )
+                    except (OSError, ValueError, RuntimeError) as e:
+                        failed += 1
+                        tqdm.write(f"  ✖ {f.name}: {e}")
+                        continue
                     if args.optical_correction:
                         tqdm.write(
                             f"  ℹ {f.name}: Lensfun "

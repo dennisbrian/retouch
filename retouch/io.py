@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import zlib
 from functools import lru_cache
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -19,6 +20,7 @@ import numpy as np
 from PIL import Image, TiffImagePlugin, TiffTags
 
 from .color_context import ColorContext
+from .white_balance import linear_to_srgb, srgb_to_linear
 
 try:
     from PIL.ExifTags import Base as _ExifBase
@@ -322,11 +324,14 @@ def read_image_16bit(path: Union[str, Path]) -> np.ndarray:
                 no_auto_bright=True,
                 bright=1.0,
                 output_bps=16,
+                gamma=(1, 1),
                 output_color=rawpy.ColorSpace.sRGB,
                 highlight_mode=rawpy.HighlightMode.ReconstructDefault,
             )
-        bgr16 = cv2.cvtColor(rgb16, cv2.COLOR_RGB2BGR)
-        return (bgr16.astype(np.float32) / 257.0).astype(np.float32, copy=False)
+        # Decode linearly, then encode IEC sRGB explicitly. rawpy's default
+        # transfer is BT.709 even when output_color requests sRGB primaries.
+        srgb = linear_to_srgb(rgb16.astype(np.float32) / 65535.0)
+        return np.ascontiguousarray(srgb[..., ::-1] * 255.0, dtype=np.float32)
 
     flag = cv2.IMREAD_UNCHANGED if ext in (".png", ".tif", ".tiff") else cv2.IMREAD_COLOR
     img = cv2.imread(str(safe), flag)
@@ -359,6 +364,96 @@ def get_working_srgb_icc() -> Optional[bytes]:
     except Exception as exc:  # pragma: no cover - depends on Pillow build
         logger.warning("Unable to create the engine sRGB ICC profile: %s", exc)
         return None
+
+
+@lru_cache(maxsize=1)
+def get_linear_srgb_icc() -> bytes:
+    """ICC v4 matrix profile for linear sRGB, derived from LittleCMS sRGB.
+
+    Retain the generated primaries, D50 PCS white and adaptation matrix;
+    replace each TRC with ICC parametricCurveType function 0, gamma 1.
+    Rebuild the tag table to accommodate a truthful profile description.
+    Only our generated profile is parsed here, never untrusted input profiles.
+    """
+    source = get_working_srgb_icc()
+    if source is None:
+        raise RuntimeError("Linear TIFF export requires Pillow ImageCms/LittleCMS")
+    count = struct.unpack_from(">I", source, 128)[0]
+    tags = []
+    name = "Retouch linear sRGB".encode("utf-16-be")
+    description = b"mluc" + bytes(4) + struct.pack(">II2s2sII", 1, 12, b"en", b"US", len(name), 28) + name
+    for i in range(count):
+        signature, offset, size = struct.unpack_from(">4sII", source, 132 + i * 12)
+        payload = source[offset:offset + size]
+        if signature in (b"rTRC", b"gTRC", b"bTRC"):
+            payload = b"para" + bytes(8) + struct.pack(">i", 65536)
+        elif signature == b"desc":
+            payload = description
+        tags.append((signature, payload))
+    header = bytearray(source[:128])
+    header[84:100] = bytes(16)  # Original profile ID no longer describes these bytes.
+    table = bytearray(struct.pack(">I", count))
+    body = bytearray()
+    for signature, payload in tags:
+        offset = 132 + 12 * count + len(body)
+        table.extend(struct.pack(">4sII", signature, offset, len(payload)))
+        body.extend(payload)
+        body.extend(bytes((-len(body)) % 4))
+    struct.pack_into(">I", header, 0, len(header) + len(table) + len(body))
+    return bytes(header + table + body)
+
+
+def _non_raw_8bit_samples(opened: Image.Image, path: Union[str, Path]) -> Tuple[Image.Image, int]:
+    """Scale 16-bit samples before Pillow mode conversion; retain native ICC mode.
+
+    The public non-RAW contract remains uint8. PNG RGB16 needs an unchanged
+    decode because Pillow exposes it as RGB8. TIFF RGB16 is already correctly
+    reduced by Pillow; grayscale TIFF/PNG must be scaled explicitly.
+    """
+    bits = 8
+    if opened.format == "PNG":
+        with open(path, "rb") as stream:
+            header = stream.read(26)
+        if len(header) == 26 and header[24] == 16:
+            bits = 16
+            samples = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+            if samples is None or samples.dtype != np.uint16:
+                raise ValueError("Unable to decode 16-bit PNG without losing sample range")
+            samples = np.rint(samples.astype(np.float32) / 257.0).astype(np.uint8)
+            if samples.ndim == 3:
+                samples = cv2.cvtColor(samples, cv2.COLOR_BGRA2RGBA if samples.shape[2] == 4 else cv2.COLOR_BGR2RGB)
+            scaled = Image.fromarray(samples)
+            scaled.info.update(opened.info)
+            scaled.info["exif"] = opened.getexif().tobytes()
+            return scaled, bits
+    elif opened.format == "TIFF":
+        depths = opened.tag_v2.get(258, (8,))
+        bits = max(depths) if isinstance(depths, tuple) else int(depths)
+        if opened.mode == "F":
+            raise ValueError(
+                "Float TIFF ingest is not supported by the current uint8 "
+                "non-RAW contract; convert to an integer sample format first"
+            )
+        if bits == 16 and opened.mode in ("I", "I;16", "I;16B", "I;16L"):
+            samples = np.asarray(opened, dtype=np.float32)
+            scaled = Image.fromarray(np.rint(samples / 257.0).astype(np.uint8), "L")
+            scaled.info.update(opened.info)
+            # Pillow's TIFF decoder applies orientation when loading samples.
+            exif = opened.getexif()
+            exif[274] = 1
+            scaled.info["exif"] = exif.tobytes()
+            return scaled, bits
+        if bits == 16 and opened.mode in ("RGB", "RGBA"):
+            # Pillow's own libtiff-backed RGB16 decode already reduces to
+            # 8-bit *and* pre-applies orientation, same as the grayscale
+            # I;16 case above. Neutralize the tag so exif_transpose (called
+            # by the caller) does not rotate an already-rotated array again.
+            scaled = opened.copy()
+            exif = opened.getexif()
+            exif[274] = 1
+            scaled.info["exif"] = exif.tobytes()
+            return scaled, bits
+    return opened, bits
 
 
 def _icc_description(icc_profile: bytes) -> Optional[str]:
@@ -397,8 +492,15 @@ def _read_non_raw_with_color_context(
     with Image.open(path) as opened:
         embedded_icc = opened.info.get("icc_profile")
         source_icc = bytes(embedded_icc) if embedded_icc else None
-        pil_img = ImageOps.exif_transpose(opened) or opened
-        pil_img = pil_img.convert("RGB")
+        decoded, source_bits = _non_raw_8bit_samples(opened, path)
+        pil_img = ImageOps.exif_transpose(decoded) or decoded
+
+        # Extract straight alpha before any ICC transform or RGB collapse so
+        # a tagged RGBA image does not lose transparency to the transform's
+        # outputMode="RGB" before the flatten decision below ever sees it.
+        source_alpha = None
+        if pil_img.mode in ("RGBA", "LA", "PA"):
+            source_alpha = np.asarray(pil_img.convert("RGBA"), dtype=np.uint8)[..., 3]
 
         context = _color_context_for_source(source_icc)
         if source_icc:
@@ -410,10 +512,19 @@ def _read_non_raw_with_color_context(
                 )
             if source_icc != working_icc:
                 try:
+                    source_profile = _icc_to_profile(source_icc)
+                    # Palette/gray PNGs can carry an RGB profile. Expand
+                    # their samples for that profile, but never pre-convert
+                    # CMYK/gray/Lab samples carrying their native profile.
+                    if source_profile.profile.xcolor_space.strip() == "RGB":
+                        pil_img = pil_img.convert("RGB")
                     transformed = ImageCms.profileToProfile(
                         pil_img,
-                        _icc_to_profile(source_icc),
+                        source_profile,
                         _icc_to_profile(working_icc),
+                        outputMode="RGB",
+                        renderingIntent=ImageCms.Intent.PERCEPTUAL,
+                        flags=0,
                     )
                 except Exception as exc:
                     raise RuntimeError(
@@ -426,10 +537,49 @@ def _read_non_raw_with_color_context(
                     conversion_applied=True,
                     source_profile_name=context.source_profile_name,
                 )
+                context = replace(
+                    context,
+                    transform_intent="perceptual",
+                    black_point_compensation=False,
+                )
+
+        alpha_mode = None
+        if source_alpha is not None:
+            straight_rgba = np.dstack(
+                (np.asarray(pil_img.convert("RGB"), dtype=np.uint8), source_alpha)
+            )
+            alpha = straight_rgba[..., 3:4].astype(np.float32) / 255.0
+            if np.all(straight_rgba[..., 3] == 255):
+                # Fully opaque: no compositing decision was actually made.
+                pil_img = pil_img.convert("RGB")
+                alpha_mode = "opaque"
+            else:
+                # PNG alpha is a straight (non-premultiplied), non-gamma
+                # linear fraction of opacity. Flatten in linear light against
+                # documented white, per the CS-11 gate, rather than silently
+                # dropping the channel or compositing in encoded sRGB space.
+                linear_rgb = srgb_to_linear(straight_rgba[..., :3].astype(np.float32) / 255.0)
+                linear_flat = linear_rgb * alpha + 1.0 * (1.0 - alpha)
+                flat_srgb = np.rint(linear_to_srgb(linear_flat) * 255.0).astype(np.uint8)
+                pil_img = Image.fromarray(flat_srgb, "RGB")
+                alpha_mode = "flattened-white"
+                logger.warning(
+                    "%s: alpha channel flattened against white in linear light; "
+                    "transparency is not preserved by the current non-RAW contract",
+                    path,
+                )
 
         # Copy before the Pillow image closes. This preserves the historical
         # uint8 BGR non-RAW contract and keeps metadata handling unchanged.
-        rgb = np.array(pil_img, dtype=np.uint8, copy=True)
+        rgb = np.array(pil_img.convert("RGB"), dtype=np.uint8, copy=True)
+        context = replace(
+            context,
+            source_bit_depth=source_bits,
+            working_bit_depth=8,
+            alpha_mode=alpha_mode,
+        )
+        if source_bits > 8:
+            logger.warning("%s: %s-bit input reduced to the current 8-bit non-RAW working contract", path, source_bits)
 
     return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), context
 
@@ -450,21 +600,8 @@ def imread_exif_with_context(
     """
     path = Path(path)
     if path.suffix.lower() in RAW_EXTENSIONS:
-        import rawpy
-
-        with rawpy.imread(str(path)) as raw:
-            # Faithful, neutral RAW development that matches the camera's own
-            # rendition: in-camera white balance, no auto-exposure, and a
-            # standard 1.0 brightness (rawpy's sRGB output is the closest
-            # neutral analogue to the camera JPEG).
-            rgb = raw.postprocess(
-                use_camera_wb=True,
-                no_auto_bright=True,
-                bright=1.0,
-                output_color=rawpy.ColorSpace.sRGB,
-                highlight_mode=rawpy.HighlightMode.ReconstructDefault,
-            )
-        return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), ColorContext.raw_srgb_context(
+        bgr = np.rint(read_image_16bit(path)).clip(0, 255).astype(np.uint8)
+        return bgr, ColorContext.raw_srgb_context(
             get_working_srgb_icc()
         )
     return _read_non_raw_with_color_context(path)
@@ -1039,6 +1176,28 @@ def _write_tiff_16bit(
     interleaved uint16 strip directly, so neither ICC nor EXIF requires an
     8-bit Pillow round-trip.
     """
+    if img_u16.dtype != np.uint16:
+        raise ValueError("16-bit TIFF writer requires uint16 samples")
+    _write_tiff_samples(path, img_u16, icc_profile, exif)
+
+
+def _write_tiff_samples(
+    path: Union[str, Path],
+    img_u16: np.ndarray,
+    icc_profile: Optional[bytes],
+    exif: Optional[bytes] = None,
+    *,
+    compress: bool = False,
+) -> None:
+    """Write BGR(A) uint16 or float32 samples as tagged RGB TIFF strips.
+
+    Float samples use IEEE SampleFormat=3, never OpenCV's implicit LogLuv.
+    Optional compression is lossless Adobe Deflate, supported by libtiff.
+    """
+    if img_u16.dtype not in (np.dtype("uint16"), np.dtype("float32")):
+        raise ValueError("TIFF samples must be uint16 or float32")
+    is_float = img_u16.dtype == np.float32
+    storage_type = "<f4" if is_float else "<u2"
     if img_u16.ndim not in (2, 3) or (img_u16.ndim == 3 and img_u16.shape[2] not in (3, 4)):
         raise ValueError(f"16-bit export: unsupported image shape {img_u16.shape}")
     height, width = img_u16.shape[:2]
@@ -1052,26 +1211,29 @@ def _write_tiff_16bit(
                 (img_u16[..., 2:3], img_u16[..., 1:2], img_u16[..., 0:1], img_u16[..., 3:4]),
                 axis=2,
             )
-        pixels = np.ascontiguousarray(pixels_rgb.astype("<u2", copy=False))
+        pixels = np.ascontiguousarray(pixels_rgb.astype(storage_type, copy=False))
         photometric = 2
     else:
-        pixels = np.ascontiguousarray(img_u16.astype("<u2", copy=False))
+        pixels = np.ascontiguousarray(img_u16.astype(storage_type, copy=False))
         photometric = 1
 
+    payload = pixels.tobytes()
+    if compress:
+        payload = zlib.compress(payload)
     normalised_exif, exif_tags = _normalise_exif_bytes(exif)
     prefix = b"II*\x00\x08\x00\x00\x00"
     ifd = TiffImagePlugin.ImageFileDirectory_v2(prefix)
     _set_tiff_tag(ifd, 256, TiffTags.LONG, width)
     _set_tiff_tag(ifd, 257, TiffTags.LONG, height)
-    _set_tiff_tag(ifd, 258, TiffTags.SHORT, (16,) * samples)
-    _set_tiff_tag(ifd, 259, TiffTags.SHORT, 1)  # no compression
+    _set_tiff_tag(ifd, 258, TiffTags.SHORT, (32 if is_float else 16,) * samples)
+    _set_tiff_tag(ifd, 259, TiffTags.SHORT, 8 if compress else 1)
     _set_tiff_tag(ifd, 262, TiffTags.SHORT, photometric)
     _set_tiff_tag(ifd, 273, TiffTags.LONG, 0)  # Pillow adjusts this past IFD data
     _set_tiff_tag(ifd, 277, TiffTags.SHORT, samples)
     _set_tiff_tag(ifd, 278, TiffTags.LONG, height)
-    _set_tiff_tag(ifd, 279, TiffTags.LONG, len(pixels))
+    _set_tiff_tag(ifd, 279, TiffTags.LONG, len(payload))
     _set_tiff_tag(ifd, 284, TiffTags.SHORT, 1)  # chunky/interleaved
-    _set_tiff_tag(ifd, 339, TiffTags.SHORT, (1,) * samples)  # unsigned integer
+    _set_tiff_tag(ifd, 339, TiffTags.SHORT, (3 if is_float else 1,) * samples)
     if samples == 4:
         _set_tiff_tag(ifd, 338, TiffTags.SHORT, 2)  # unassociated alpha
     if icc_profile:
@@ -1097,7 +1259,7 @@ def _write_tiff_16bit(
         logger.warning("Could not parse EXIF tags for TIFF %s; embedding was not possible", path)
 
     ifd_bytes = ifd.tobytes(8)
-    Path(path).write_bytes(prefix + ifd_bytes + pixels.tobytes())
+    Path(path).write_bytes(prefix + ifd_bytes + payload)
 
 
 def _icc_to_profile(icc_profile: bytes) -> "ImageCms.core.CmsProfile":  # type: ignore[name-defined]
@@ -1276,7 +1438,10 @@ def convert_image_colorspace(
 
     src_profile = _icc_to_profile(src_icc)
     dst_profile = _icc_to_profile(dst_icc)
-    transformed = ImageCms.profileToProfile(pil_img, src_profile, dst_profile)
+    transformed = ImageCms.profileToProfile(
+        pil_img, src_profile, dst_profile, outputMode="RGB",
+        renderingIntent=ImageCms.Intent.PERCEPTUAL, flags=0,
+    )
     out_rgb = np.asarray(transformed)
     out_bgr = cv2.cvtColor(out_rgb, cv2.COLOR_RGB2BGR)
     out = out_bgr.astype(np.float32) / 255.0
@@ -1340,6 +1505,12 @@ def prepare_color_managed_export(
         )
     if source_profile == working_profile:
         return img, target_profile
+
+    if _icc_to_profile(source_profile).profile.xcolor_space.strip() != "RGB":
+        raise RuntimeError(
+            "Source-profile export supports RGB destination profiles only; "
+            "export with the default sRGB profile for CMYK, gray or Lab input"
+        )
 
     converted = convert_image_colorspace(
         _to_unit_bgr_for_color_transform(img, float_range),

@@ -418,7 +418,7 @@ class TestRAWDeveloper:
         reloaded_bgr = reloaded_u16.astype(np.float32) / 65535.0
 
         # Allow ~1 level of quantization error
-        diff = np.abs(reloaded_bgr - linear_rgb_gradient)
+        diff = np.abs(reloaded_bgr[..., ::-1] - linear_rgb_gradient)
         assert np.max(diff) < 2.0 / 65535.0
 
     def test_export_path_as_string(self, developer, tmp_path, linear_rgb_gradient):

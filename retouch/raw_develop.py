@@ -511,30 +511,22 @@ class RAWDeveloper:
             img: (H, W, 3) float32 linear RGB in [0, 1].
             path: Output TIFF path.
             bit_depth: 16 or 32.
-            compress: Use LZW compression.
+            compress: Use lossless Deflate compression.
         """
         try:
-            if bit_depth == 32:
-                # 32-bit float TIFF via cv2 (preserves full precision)
-                # img is already in [0, 1], no scaling needed
-                # Keep BGR order for cv2 (img is already BGR from engine)
-                params = [cv2.IMWRITE_TIFF_COMPRESSION, 5 if compress else 1]
-                ok = cv2.imwrite(str(path), img.astype(np.float32), params)
-                if not ok:
-                    raise RuntimeError(f"cv2.imwrite returned False for {path}")
-                logger.info(f"Exported {bit_depth}-bit float TIFF to {path}")
+            from .io import _write_tiff_samples, get_linear_srgb_icc
 
-            elif bit_depth == 16:
-                # 16-bit uint TIFF via cv2
-                # Convert [0, 1] to [0, 65535], keep BGR order for cv2
-                img_u16 = np.clip(img * 65535.0, 0, 65535).astype(np.uint16)
-                params = [cv2.IMWRITE_TIFF_COMPRESSION, 5 if compress else 1]
-                ok = cv2.imwrite(str(path), img_u16, params)
-                if not ok:
-                    raise RuntimeError(f"cv2.imwrite returned False for {path}")
-                logger.info(f"Exported {bit_depth}-bit TIFF to {path}")
-            else:
+            if bit_depth not in (16, 32):
                 raise ValueError(f"Unsupported bit depth: {bit_depth}")
+            values = np.asarray(img, dtype=np.float32)
+            if values.ndim != 3 or values.shape[2] != 3 or not np.all(np.isfinite(values)):
+                raise ValueError("Linear TIFF export requires finite HxWx3 RGB samples")
+            if np.any(values < 0) or np.any(values > 1):
+                raise ValueError("Linear TIFF samples must be in [0, 1]")
+            bgr = values[..., ::-1]
+            pixels = np.rint(bgr * 65535.0).astype(np.uint16) if bit_depth == 16 else bgr
+            _write_tiff_samples(path, pixels, get_linear_srgb_icc(), compress=compress)
+            logger.info(f"Exported {bit_depth}-bit linear-sRGB TIFF to {path}")
 
         except Exception as e:
             raise RuntimeError(f"Failed to export TIFF: {e}") from e

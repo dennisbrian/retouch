@@ -22,6 +22,12 @@ source pixels + source profile
 - RAW input is recorded as raw-srgb until a RAW-specific scene-referred
   contract is introduced.
 
+`raw-srgb` is currently a provenance label, not an independently certified IEC
+sRGB transfer contract. The main rawpy path requests sRGB output primaries but
+does not yet pin and verify the decoder transfer function. Tagged CMYK/gray,
+high-bit non-RAW, and alpha-bearing inputs also need the conformance work in
+[`RESEARCH_COLOR_SCIENCE_2026_09_04.md`](../plans/RESEARCH_COLOR_SCIENCE_2026_09_04.md).
+
 The default export is the processed working-space sRGB image. The GUI's
 **Preserve source ICC profile on export** option is the explicit opt-in for
 converting the processed pixels back to the source profile. Re-embedding an
@@ -41,6 +47,11 @@ render manifest.
 Consequently, **PNG-16 is currently a 16-bit container carrying processed
 data whose effective levels may be 8-bit**. It must not be advertised as
 true 16-bit processing until float/high-bit output is preserved end to end.
+
+The same caution applies at ingest: the current context-aware non-RAW path is
+uint8 and is not a truthful high-bit decode path. Wide-gamut matrix helpers,
+the current CAM16-named helper, and the standalone PQ functions are research
+utilities rather than certified delivery support.
 
 ## Preview and inspection
 

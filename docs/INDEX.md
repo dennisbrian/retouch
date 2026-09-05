@@ -26,6 +26,9 @@
 
 ## Plans (`docs/plans/`)
 - `MASTER_PLAN.md` — Overall roadmap
+- `RESEARCH_COLOR_SCIENCE_2026_09_04.md` — Current-tree color-science audit and
+  engineering contract: SDR sRGB baseline, ICC/RAW/high-bit/alpha findings,
+  operation-domain rules, conformance matrix, and staged P3/HDR gates
 - `RESEARCH_DARK_CIRCLE_OP_2026_09_02.md` — The `dark_circles` / `undereye.darken_removal`
   op was inert on every face (detector locked onto the lash line, lift double-capped);
   v2 redesign (tear-trough support, eye/lash exclusion, relative low-pass darkness,

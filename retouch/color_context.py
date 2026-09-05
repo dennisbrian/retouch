@@ -57,6 +57,11 @@ class ColorContext:
     source_kind: str = SOURCE_ASSUMED_SRGB
     conversion_applied: bool = False
     source_profile_name: Optional[str] = None
+    source_bit_depth: Optional[int] = None
+    working_bit_depth: Optional[int] = None
+    transform_intent: Optional[str] = None
+    black_point_compensation: Optional[bool] = None
+    alpha_mode: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.working_space != WORKING_SPACE_SRGB:
@@ -125,6 +130,11 @@ class ColorContext:
             "source_profile_name": self.source_profile_name,
             "source_profile_sha256": self.source_profile_sha256,
             "working_profile_sha256": self.working_profile_sha256,
+            "source_bit_depth": self.source_bit_depth,
+            "working_bit_depth": self.working_bit_depth,
+            "transform_intent": self.transform_intent,
+            "black_point_compensation": self.black_point_compensation,
+            "alpha_mode": self.alpha_mode,
         }
 
     @classmethod
