@@ -2,7 +2,10 @@
 
 **Date:** 2026-09-05
 
-**Status:** Audit complete; no code changes in this task. Continues
+**Status:** Audit complete. Two follow-ups landed after the original
+commit (`5bac5ac`): abstention logging (`8a2869e`, §2) and a smoothing-
+protection mechanism experiment (§1.1a) that answers this document's own
+open question with a recommendation but no production change. Continues
 [FA-01](PLAN_FACE_RETOUCH_ALGORITHM_RESEARCH_EXECUTION_2026_09_05.md) after the
 boundary-confidence field (`6b1e72d`) and mark-policy wiring for blemish +
 9 evening ops (`f3b1008`, `154d854`).
@@ -64,6 +67,156 @@ statistical pull) is an open, testable question — not yet tested. This is
 a recommendation for the next authorization decision, not something this
 task decided to implement.
 
+### 1.1a Follow-up experiment: which smoothing-protection mechanism, if any
+
+The open question from §1.1 — whether protecting marks from smoothing is
+safe, and by what mechanism — was investigated with a dedicated experiment:
+`scripts/qa/smoothing_mark_protection_experiment.py`. No production code
+was changed; every mechanism below is implemented locally in the script
+against `retouch.frequency`'s internals (its own copy of `separate()`, its
+own guided-filter variants), never against the shipped
+`FrequencySeparator.combine`.
+
+**Five candidates reduced to three mechanisms, by source-reading.** The
+task named five candidates to compare: no protection, output-mask
+exclusion, feathered/soft attenuation, exclusion from filter statistics,
+and post-smoothing restoration. Reading `frequency.combine` shows three of
+these are the same mechanism:
+
+- `combine()`'s `skin_mask` argument only ever controls the **final blend
+  alpha** — `blend_masked(orig_crop, processed_crop, m_2d)` at the end of
+  the function. It is never passed into the smoothing filter itself.
+- Consequently, "hard output-mask exclusion," "feathered/soft attenuation"
+  (same exclusion, wider Gaussian on the mask before blending), and
+  "post-smoothing restoration of source detail" (arithmetically: blending
+  the *original* crop back in at the mark, after the fact) are one
+  mechanism at different feather widths / timing, not three. This is
+  reported as a finding, not a shortcut.
+- The one mechanistically distinct candidate is **excluding protected
+  pixels from the filter's own reference statistics**: `_guided_smooth` →
+  `utils.guided_filter`'s self-guided branch computes `mean_I =
+  cv2.blur(src)` — a plain box filter over the *entire* crop with no mask
+  parameter at all. A mark's pixel values leak into neighboring pixels'
+  local mean/variance during this box-filter pass regardless of what the
+  caller excludes from the final blend. This confirms criterion 4's
+  premise (contamination is real) but also means the first two candidates
+  cannot address it by construction — only a filter-input change can.
+
+The three arms actually compared:
+
+| Arm | Mechanism |
+|---|---|
+| `baseline` | Current shipped behavior — no exclusion anywhere (the `mark_policy=None`/no-protection case). |
+| `blend_alpha` | Marks excluded from the final blend only, at a swept feather width (0/9/25px) — collapses candidates 2/3/5. |
+| `filter_input` | Marks additionally excluded from the guided filter's own local statistics via normalized convolution (mask-weighted moments — the same technique `retouch/undereye.py`'s analyzer already uses, not a new primitive) — candidate 4, layered on top of the same final-blend exclusion. |
+
+**Scenes.** Two, both with pore-scale texture strong enough to keep
+`_texture_adaptation_factor`'s `adapt` at 1.0 (a first attempt with lighter
+noise silently floored `adapt` to 0.55, meaning the requested "0.9" and
+"0.5" smoothing strengths were actually running at ~0.5 and ~0.28 — a
+scene-construction error caught and fixed before the numbers below).
+
+1. **Synthetic**: flat skin-tone canvas, band-limited noise texture, two
+   marks sized on either side of `k_mid` (`face_width=400` → `k_mid=17px`,
+   `k_low=49px`): a 4px-radius mark (lives mostly in the `high` band) and a
+   15px-radius mark (lives mostly in `low`/`mid`).
+2. **Real face, semi-synthetic mark**: a real corpus photo crop (DSCF2306,
+   genuine skin texture/lighting/sensor noise) with a synthetic 6px-radius
+   mark composited onto clean cheek skin at a **hand-picked coordinate**,
+   away from makeup/eyeliner. `detect_marks` is never called in this arm —
+   ground truth is the chosen coordinate, not a detector output. This
+   avoids the eyeliner-misclassification confound already documented for
+   this corpus family (§1 above) but means the arm tests real skin
+   *statistics* (texture, lighting, noise), not a real mole's morphology —
+   the available corpus has no clearly-visible, unambiguous natural mole to
+   hand-label instead.
+
+Both scenes use `mid_reduction=0.35` (the registered `params.py` default,
+not a guess) and `smooth_engine="guided"` only — `bilateral` and
+`anisotropic` are untested and are a precondition on any future
+implementation, not covered by this result.
+
+**Results, smooth_strength=0.9 (high-strength criterion), mark contrast
+= surrounding-ring level minus mark level, source-relative):**
+
+| Scene / mark | Source (ceiling) | Baseline | `blend_alpha` (f=9) | `filter_input` (f=9) |
+|---|---|---|---|---|
+| Synthetic, small (r=4, high-band) | 83.2 | 37.1 (55% lost) | 69.1 | 69.2 |
+| Synthetic, large (r=15, low/mid-band) | 81.7 | 8.5 (90% lost) | 74.5 | 78.3 |
+| Real face, mark (r=6) | 95.9 | 15.8 (84% lost) | 74.9 | 75.3 |
+
+Baseline destroys the large majority of every mark's contrast at high
+smoothing strength, on both scenes and both frequency bands. Both
+protection mechanisms recover contrast to a similar degree (`filter_input`
+0.1–3.9 points higher than `blend_alpha`, depending on scene/size).
+
+**Halo/contamination signature (criterion 2 and empirical answer to
+criterion 4).** Measured as the maximum deviation, arm minus baseline, in
+a radial profile ring just outside the mark (`outer_delta`; a genuine halo
+shows as a non-monotonic bump here, distinct from the expected big jump
+right at the mark's own edge):
+
+| Scene / mark | `blend_alpha` outer_delta | `filter_input` outer_delta |
+|---|---|---|
+| Synthetic, small | 0.04 | 0.26 |
+| Synthetic, large | 0.35 | 4.17 |
+| Real face | 0.05 | 0.54 |
+
+`blend_alpha` stays near zero in every case. `filter_input` is
+consistently higher — by roughly an order of magnitude on the synthetic
+large mark, more modestly on the other two — confirming the contamination
+`_guided_smooth` reads from an unmasked box filter is real, and that
+*removing* it (by excluding the mark from the filter's own statistics)
+creates its own visible ring artifact, visible directly in a
+diff-against-baseline image (`filter_input` shows a soft grey halo
+extending well past the mark; `blend_alpha`'s diff is a clean, contained
+disk — see `scripts/qa/smoothing_mark_protection_out/_diff_vs_baseline_*.png`).
+
+**Feather-width rule (a parameter finding, not just an observation).**
+Widening the final-blend feather past roughly the mark's own radius
+degrades contrast recovery for `blend_alpha` — because the Gaussian
+feather kernel starts re-including the mark's own pixels into the blend,
+not because of any interaction with the filter:
+
+| Mark radius | Feather 9px | Feather 25px |
+|---|---|---|
+| 4px (synthetic small) | 69.1 | 57.3 (−12) |
+| 6px (real face) | 74.9 | 65.4 (−9.5) |
+| 15px (synthetic large) | 74.5 | 74.9 (≈0) |
+
+Degradation appears exactly when feather width exceeds the mark's own
+radius, and is absent when it doesn't (15px mark, 25px feather). The rule
+for any future implementation is **feather width bounded by mark radius**,
+not a fixed pixel constant.
+
+**Neighboring skin continuity (criterion 3).** The `neighbor_continuity`
+metric (std-dev in a ring well outside the mark, `r ∈
+[radius+15,radius+25]`) was flat to six decimal places across every arm on
+the synthetic large mark (5.686884 baseline = 5.686884 `blend_alpha`),
+but this reflects the probe sitting outside where any halo actually lives
+— it is not itself evidence against a halo. The `outer_delta` metric above
+(sampled from `radius+6` outward) is the instrument that actually detected
+`filter_input`'s contamination signature; read criterion 3 from that
+table, not from `neighbor_continuity`.
+
+**Zero/legacy behavior (criterion 6).** The `baseline` arm is the
+`mark_policy=None` case by construction (empty protect mask); this
+reproduces the byte-identical real-render result already established in
+§1.1 rather than re-deriving it synthetically.
+
+**Recommendation.** If mark protection is extended to base smoothing:
+**blend-alpha exclusion (final-blend mask only), feather width bounded by
+the mark's own radius (0–9px in this experiment's mark-size range), not
+`filter_input`.** `filter_input` (excluding marks from the guided filter's
+own statistics) buys a small, inconsistent contrast improvement (+0.1 to
++3.9 points) at the cost of a consistently worse, sometimes much worse,
+halo signature — a clear rejection on the cost/benefit the task's own
+criteria ask for, not a close call. This recommendation is scene-limited
+(one mark shape, two sizes, one skin tone, `guided` engine only,
+semi-synthetic real-face evidence rather than a genuine natural mole) and
+is a recommendation for the next authorization decision — no production
+code was changed to implement it.
+
 ### 1.2 Protection mechanism inventory (current code)
 
 | Tier | Mechanism | Materials covered | Consistency |
@@ -87,7 +240,13 @@ finding, and it cannot be measured against a real photo here (zero
 accessory/facial-hair cases in the corpus per CLAUDE.md). The one new,
 measured finding is §1.1: stable marks specifically are unprotected
 against the base smoothing stage, which runs before every op that does
-protect them.
+protect them. §1.1a's follow-up experiment answers the open "would
+protecting it be safe" question this note originally left unresolved:
+blend-alpha exclusion (feather ≤ mark radius) recovers 74–78% of the
+mark's source contrast at high smoothing strength with a near-zero halo
+signature, on both a controlled synthetic scene and a real-face
+composite — implementing it is a plausible next tranche, not decided
+here.
 
 ---
 
@@ -133,12 +292,26 @@ boundary-confidence field's observation-only contract (`6b1e72d`).
 - Accessory and facial-hair protection (§1.2, Tiers 3/4) are confirmed
   gaps but unmeasured against a real photo; the corpus has zero such
   cases per CLAUDE.md's known-limitations note.
-- Whether protecting marks from the base smoothing stage is safe (vs.
-  producing a new artifact class the way a naive shading-op exclusion
-  would) is an open, testable question this audit surfaces but does not
-  answer.
+- Whether protecting marks from the base smoothing stage is safe is now
+  answered by experiment (§1.1a): blend-alpha exclusion, feathered ≤ the
+  mark's own radius, recovers most of a mark's contrast with a near-zero
+  halo signature on both a synthetic and a real-face scene.
+  **Implementing this in `frequency.combine`/`perf_optimizations.py`
+  remains a separate, unauthorized next step** — this tranche is
+  evidence and a recommendation, not the change itself, and the result is
+  scene-limited (one mark shape, two sizes, `guided` engine only —
+  `bilateral`/`anisotropic` untested).
 - Abstention observability for `assess_eye_artifact_scales` and
-  `yaw_gate_factor` is a named, scoped-but-unimplemented diagnostic
-  candidate (§2).
+  `yaw_gate_factor` was implemented in a follow-up tranche (`8a2869e`,
+  log-only, golden hashes unchanged) after this document was first
+  committed (`5bac5ac`) — no longer open.
+- Accessory and facial-hair protection (§1.2, Tiers 3/4) remain open:
+  confirmed gaps, unmeasured against a real photo, no cheap fix (needs a
+  parser class BiSeNet doesn't have).
 
-No engine, test, recipe, model, or image changes were made by this task.
+No engine, test, recipe, model, or image changes were made by this task's
+original audit. The §1.1a follow-up added a new scratch script
+(`scripts/qa/smoothing_mark_protection_experiment.py`) that exercises
+copies of `retouch.frequency`'s algorithms for comparison purposes only —
+it does not import or modify `FrequencySeparator`, and no file under
+`retouch/` changed as a result of this experiment.
