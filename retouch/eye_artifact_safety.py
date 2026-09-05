@@ -21,10 +21,13 @@ responsible for fully suppressing closed or occluded eyes.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Mapping, Optional
 
 import cv2
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 # Calibrated against native-resolution parser masks from the FF47 convention
@@ -115,12 +118,21 @@ def assess_eye_artifact_scales(
         iris = _as_mask(getattr(regions, f"{side}_iris", None))
         if iris is None:
             decisions[side] = _neutral_evidence("iris_mask_unavailable")
+            logger.debug(
+                "eye_artifact_scale[%s]: reason=iris_mask_unavailable scale=1.0 (fail-open)",
+                side,
+            )
             continue
 
         support = iris > 0.25
         support_pixels = int(np.count_nonzero(support))
         if support_pixels < 5:
             decisions[side] = _neutral_evidence("iris_support_unavailable")
+            logger.debug(
+                "eye_artifact_scale[%s]: reason=iris_support_unavailable "
+                "support_pixels=%d scale=1.0 (fail-open)",
+                side, support_pixels,
+            )
             continue
 
         radius = float(np.sqrt(support_pixels / np.pi))
@@ -151,6 +163,12 @@ def assess_eye_artifact_scales(
             "saturation_p75": saturation_p75,
             "reason": "+".join(reasons) if reasons else "full_headroom",
         }
+        if scale < 0.999:
+            logger.debug(
+                "eye_artifact_scale[%s]: reason=%s scale=%.3f "
+                "(geometry=%.3f chroma=%.3f iris_radius_px=%.1f)",
+                side, decisions[side]["reason"], scale, geometry, chroma, radius,
+            )
 
     return decisions
 

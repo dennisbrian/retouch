@@ -185,8 +185,16 @@ class FaceReshaper:
 
             # Yaw gate: dampen jaw-keyed warps on yawed faces (see
             # _YAW_DAMPEN_START comment). Frontal faces get factor 1.0 →
-            # byte-identical warps.
+            # byte-identical warps. Logged only when it actually dampens
+            # something -- this ramp shipped inverted once (ce56ba2, fixed
+            # 2026-09-02) with nothing to observe the wrong factor per face;
+            # see docs/plans/RESEARCH_FA01_PROTECTION_AND_ABSTENTION_AUDIT_2026_09_05.md.
             yaw_damp = self._yaw_dampen_factor(landmarks)
+            if yaw_damp < 0.999:
+                logger.debug(
+                    "yaw_dampen: face_width=%.1f factor=%.3f (start=%.2f end=%.2f)",
+                    fw, yaw_damp, _YAW_DAMPEN_START, _YAW_DAMPEN_END,
+                )
             slimming_val *= yaw_damp
             reshape_vals["jaw_width"] *= yaw_damp
             reshape_vals["chin_length"] *= yaw_damp

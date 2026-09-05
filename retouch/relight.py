@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional, Tuple
 
 import cv2
 import numpy as np
 
 from .utils import bgr_f32_to_lab_f32, lab_f32_to_bgr_f32, yaw_gate_factor, yaw_ratio
+
+logger = logging.getLogger(__name__)
 
 
 class Relighter:
@@ -396,6 +399,11 @@ class Relighter:
         yaw_factor = yaw_gate_factor(yaw_ratio(landmarks))
 
         effective_strength = strength * yaw_factor
+        if yaw_factor < 0.999:
+            logger.debug(
+                "relight yaw_gate: requested=%.3f effective=%.3f factor=%.3f",
+                strength, effective_strength, yaw_factor,
+            )
         if effective_strength <= 0.0:
             return canvas
 
@@ -472,6 +480,11 @@ class Relighter:
         yaw_factor = yaw_gate_factor(yaw_ratio(landmarks))
 
         effective_strength = strength * yaw_factor
+        if yaw_factor < 0.999:
+            logger.debug(
+                "sculpt yaw_gate: requested=%.3f effective=%.3f factor=%.3f",
+                strength, effective_strength, yaw_factor,
+            )
         if effective_strength <= 0.0:
             return canvas
 
