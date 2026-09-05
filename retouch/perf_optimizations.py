@@ -401,17 +401,30 @@ def _process_face_core(
     # and blemish.remove (f3b1008) before this change.
     _mark_policy = getattr(ctx, 'mark_policy', None)
     skin_n_marks_protected = skin_n
+    # Raw (unfeathered) binary mark mask, clipped to skin -- passed to
+    # frequency.combine()'s own distance-transform-based per-blob feathering
+    # (FA-01 Sec 1.1a). Kept separate from skin_n_marks_protected's
+    # generic-feather variant below: combine() needs the RAW mask so its own
+    # feather-radius measurement (per-blob inscribed radius, capped below
+    # that radius) isn't corrupted by a mask that's already been feathered
+    # with unrelated logic.
+    mark_protect_mask = None
     if _mark_policy is not None and skin_n is not None:
         from .marks import compile_mark_policy, detect_marks
 
         _mark_records = detect_marks(
             np.clip(canvas_original, 0, 255).astype(np.uint8), face_mask=skin_n,
         )
-        _policy_preserve = compile_mark_policy(
+        _policy_preserve_raw = compile_mark_policy(
             _mark_records, canvas.shape, _mark_policy,
         ).preserve.astype(np.float32) / 255.0
-        _feather_r = max(int(face_width * 0.02), 3)
-        _policy_preserve = feather_mask(_policy_preserve, radius=_feather_r)
+        # Clip to skin before handing to combine(): a mark detected near the
+        # lash line must not protect (or size a feather radius from) pixels
+        # already excluded from skin (parsing.py's _masks_from_label_map
+        # subtracts eyes/brows there).
+        mark_protect_mask = _policy_preserve_raw * skin_n
+
+        _policy_preserve = feather_mask(_policy_preserve_raw, radius=max(int(face_width * 0.02), 3))
         # Gaussian feathering spreads the mask outward with no knowledge of
         # the skin boundary, so it must be re-clipped to skin_n AFTER
         # feathering, not before: regions.skin already excludes eyes/brows
@@ -512,7 +525,11 @@ def _process_face_core(
                 regions=regions,
                 regional_modulation=getattr(ctx, 'regional_modulation', 0.0),
                 smooth_engine=getattr(ctx, 'smooth_engine', 'guided'),
+                mark_protect=mark_protect_mask,
             )
+            # Same mark_protect_mask passed to both nose-split calls: a mark
+            # straddling the nose/face boundary must stay protected on
+            # whichever side of nose_alpha it lands, not just one.
             nose_canvas = frequency.combine(
                 layers,
                 skin_mask=nose_mask * smooth_mask,
@@ -527,6 +544,7 @@ def _process_face_core(
                 regions=regions,
                 regional_modulation=getattr(ctx, 'regional_modulation', 0.0),
                 smooth_engine=getattr(ctx, 'smooth_engine', 'guided'),
+                mark_protect=mark_protect_mask,
             )
             nose_alpha = (nose_mask * smooth_mask)[:, :, np.newaxis]
             canvas = (
@@ -548,6 +566,7 @@ def _process_face_core(
                 regions=regions,
                 regional_modulation=getattr(ctx, 'regional_modulation', 0.0),
                 smooth_engine=getattr(ctx, 'smooth_engine', 'guided'),
+                mark_protect=mark_protect_mask,
             )
     else:
         canvas = frequency.combine(
@@ -564,6 +583,7 @@ def _process_face_core(
             regions=regions,
             regional_modulation=getattr(ctx, 'regional_modulation', 0.0),
             smooth_engine=getattr(ctx, 'smooth_engine', 'guided'),
+            mark_protect=mark_protect_mask,
             )
 
     # ---- Selective under-eye shadow smoothing (S5.5) ----

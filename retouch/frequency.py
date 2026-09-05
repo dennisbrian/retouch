@@ -116,6 +116,66 @@ def _texture_adaptation_factor(
     return min(1.0, max(floor, factor))
 
 
+# --- Mark protection for guided smoothing (FA-01) ---
+# docs/plans/RESEARCH_FA01_PROTECTION_AND_ABSTENTION_AUDIT_2026_09_05.md Sec
+# 1.1/1.1a: base smoothing had zero mark-policy awareness (a mole's contrast
+# was destroyed 55-90% at high smooth_strength before any downstream op could
+# (not) protect it). The validated fix shrinks the FINAL blend alpha (m_2d)
+# at policy-protected mark locations -- it never touches the guided filter's
+# own input statistics (that "filter_input" alternative was measured and
+# rejected: it recovers marginally more contrast but with a 10x larger halo
+# signature). Guided engine only, by explicit gate in combine() -- this is
+# unvalidated for bilateral/anisotropic and must not silently apply there.
+MARK_PROTECT_FEATHER_FACTOR = 0.6  # feather radius as a fraction of each blob's own inscribed radius.
+# The experiment swept feather widths {0, 9, 25}px against mark radii {4, 6,
+# 15}px and found degradation specifically once feather > radius -- it did
+# NOT sweep 0.6 itself. 0.6 is an interpolated choice safely below that
+# measured threshold, not a calibrated value in its own right.
+
+
+def _mark_protect_feather_mask(
+    mark_protect: np.ndarray,
+    shape: Tuple[int, int],
+) -> Optional[np.ndarray]:
+    """Per-blob feathered attenuation mask for policy-protected marks.
+
+    ``mark_protect`` is a binary (0/1 or 0/255) mask of pixels a caller has
+    marked eligible for protection (e.g. compile_mark_policy's preserve
+    mask). Returns a float32 [0, 1] mask, same shape as ``shape``, where 1.0
+    means "fully protect" (exclude from smoothing) and 0.0 means "smooth
+    normally" -- the caller subtracts this from its own blend-alpha mask.
+
+    Feather width is derived per-blob from that blob's own inscribed radius
+    (via a distance transform), not a fixed pixel constant, and capped
+    below the radius -- this is what the FA-01 experiment's feather-width
+    sweep found necessary: a feather wider than a mark's own radius starts
+    re-including the mark's own pixels and measurably degrades contrast
+    recovery. Two overlapping marks merge into one connected blob before
+    the radius is measured, so overlap is handled by construction rather
+    than needing per-mark arbitration.
+
+    Returns None if ``mark_protect`` has no positive pixels (nothing to
+    protect -- caller should skip this path entirely).
+    """
+    binary = (mark_protect > 0.5).astype(np.uint8)
+    if not np.any(binary):
+        return None
+
+    dist = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
+    n_labels, labels = cv2.connectedComponents(binary, connectivity=8)
+
+    out = np.zeros(shape, dtype=np.float32)
+    for label in range(1, n_labels):
+        blob = labels == label
+        blob_radius = float(dist[blob].max())
+        feather_r = max(1, int(round(blob_radius * MARK_PROTECT_FEATHER_FACTOR)) | 1)
+        blob_u8 = blob.astype(np.float32)
+        feathered = cv2.GaussianBlur(blob_u8, (feather_r, feather_r), 0)
+        out = np.maximum(out, feathered)
+
+    return np.clip(out, 0.0, 1.0)
+
+
 # --- Region-aware smoothing strength modulation ---
 # Some face regions naturally carry more (nose bridge wrinkles) or less
 # (cheeks) high-frequency structure. A single global smooth_strength over-
@@ -607,6 +667,7 @@ class FrequencySeparator:
         float32_out: bool = False,
         regions: Optional[Any] = None,
         regional_modulation: float = 0.0,
+        mark_protect: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Re-combine layers after selective processing.
 
@@ -631,6 +692,13 @@ class FrequencySeparator:
                 modulation. Ignored unless ``regional_modulation > 0``.
             regional_modulation: Strength of per-region modulation (0.0 = no-op,
                 byte-identical to pre-feature output). Range 0.0–1.0. Default 0.0.
+            mark_protect: Optional (H, W) binary mask (full-image coordinates,
+                matching ``skin_mask``) of policy-protected mark pixels to
+                exclude from smoothing. Only honored when
+                ``smooth_engine == "guided"`` (FA-01: validated for guided
+                smoothing only; bilateral/anisotropic silently ignore this
+                argument rather than applying an unvalidated protection).
+                None (default) is byte-identical to pre-feature output.
 
         Returns:
             (H, W, 3) uint8 BGR result, or float32 if float32_out=True.
@@ -664,6 +732,24 @@ class FrequencySeparator:
         high = layers.high[y1:y2, x1:x2].copy()
         m_raw = m_raw[y1:y2, x1:x2]
 
+        # Crop mark_protect identically to m_raw -- it arrives in full-image
+        # coordinates. Only meaningful for guided smoothing (see docstring);
+        # gating on smooth_engine here (the requested engine, not whatever
+        # _smooth_anisotropic falls back to internally) keeps the scope
+        # exactly what FA-01 validated.
+        mark_protect_crop = None
+        if mark_protect is not None and smooth_engine == "guided":
+            mark_protect_crop = mark_protect[y1:y2, x1:x2]
+            if not np.any(mark_protect_crop > 0.5):
+                mark_protect_crop = None
+        elif mark_protect is not None and np.any(mark_protect):
+            logger.debug(
+                "frequency.combine: mark_protect supplied but smooth_engine=%r "
+                "(only 'guided' is validated, FA-01) -- ignoring, marks are "
+                "unprotected against this smoothing pass",
+                smooth_engine,
+            )
+
         texture_opacity = max(0.0, min(1.0, texture_opacity))
         # Defense-in-depth: ParamSpec declares [0.0, 1.0] but that's GUI/CLI
         # metadata only, not enforced at this boundary. An out-of-range value
@@ -681,6 +767,19 @@ class FrequencySeparator:
             feather_r = max(DEFAULT_FEATHER_MIN, int(min(h_full, w_full) * FALLBACK_FEATHER_FACTOR) | 1)
 
         m_2d = cv2.GaussianBlur(m_raw, (feather_r, feather_r), 0)
+
+        # Shrink the blend alpha at protected-mark locations BEFORE
+        # _texture_adaptation_factor reads m_2d, matching the validated
+        # experiment (which modified m_raw/m_2d pre-adapt, not post). This
+        # changes only the final compositing alpha -- the guided filter's
+        # own input (low_mid_f32) below is never touched, so it cannot
+        # contaminate the filter's local statistics the way the rejected
+        # "filter_input" alternative did.
+        if mark_protect_crop is not None:
+            protect_alpha = _mark_protect_feather_mask(mark_protect_crop, m_2d.shape)
+            if protect_alpha is not None:
+                m_2d = np.clip(m_2d * (1.0 - protect_alpha), 0.0, 1.0)
+
         m_3d = m_2d[:, :, np.newaxis]
 
         # --- Adaptive texture preservation ---
@@ -871,6 +970,7 @@ def combine(
     smooth_engine: str = "guided",
     regions: Optional[Any] = None,
     regional_modulation: float = 0.0,
+    mark_protect: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Deprecated. Use ``FrequencySeparator().combine()`` instead."""
     return FrequencySeparator().combine(
@@ -886,4 +986,5 @@ def combine(
         smooth_engine=smooth_engine,
         regions=regions,
         regional_modulation=regional_modulation,
+        mark_protect=mark_protect,
     )

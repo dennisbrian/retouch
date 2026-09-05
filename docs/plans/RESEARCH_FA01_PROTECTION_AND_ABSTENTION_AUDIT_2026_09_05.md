@@ -217,6 +217,111 @@ semi-synthetic real-face evidence rather than a genuine natural mole) and
 is a recommendation for the next authorization decision — no production
 code was changed to implement it.
 
+### 1.1b Implementation: guided-smoothing mark protection (shipped)
+
+§1.1a's recommendation is now implemented in production code, scoped
+exactly as validated — **guided smoothing only; bilateral/anisotropic
+remain untested and are explicitly gated off, not silently unprotected by
+omission.**
+
+**Mechanism.** `frequency.combine()` gains an optional `mark_protect: Optional[np.ndarray]`
+parameter (full-image binary mask of policy-protected mark pixels). When
+`smooth_engine == "guided"` and the (cropped) mask has any positive
+pixels, a new helper `_mark_protect_feather_mask()` builds a per-blob
+attenuation mask via `cv2.distanceTransform` + `cv2.connectedComponents`:
+each connected blob's own inscribed radius sets its feather width as
+`MARK_PROTECT_FEATHER_FACTOR (0.6) × radius`, then the blob is Gaussian-
+blurred by that feather and the per-blob results are combined with
+`np.maximum`. This mask is applied by shrinking the **final blend alpha**
+(`m_2d *= (1 - protect_alpha)`) immediately after `m_2d`'s existing
+feathering and before `_texture_adaptation_factor` reads it — the guided
+filter's own input statistics (`mean_I = cv2.blur(src)` etc.) are
+untouched, exactly the "blend-alpha, not filter-input" mechanism §1.1a
+validated. For any other `smooth_engine`, the mask is ignored and a
+`logger.debug` line fires (mirroring the abstention-logging pattern from
+`8a2869e`) so a caller passing `mark_protect` with `bilateral`/
+`anisotropic` can see it was silently discarded rather than assuming
+protection ran. `mark_protect=None` (the default) short-circuits before
+any of this — byte-identical to pre-feature behavior, confirmed by golden
+hash tests.
+
+**Distance-transform choice.** Deriving feather width from each blob's
+own shape (rather than a single global constant, or per-mark metadata
+threaded through from `detect_marks`) falls out naturally: overlapping
+marks merge into one connected component before the radius is measured,
+so two touching marks get one shared, correctly-sized feather instead of
+two conflicting ones — this was a specific open question in the task's
+scope ("overlapping protected marks") and required no special-casing.
+
+**`MARK_PROTECT_FEATHER_FACTOR = 0.6` provenance.** The §1.1a sweep tested
+feather widths {0, 9, 25}px against mark radii {4, 6, 15}px and found
+degradation specifically once feather exceeded the mark's own radius. It
+did not sweep 0.6 directly — 0.6 is an interpolated choice safely below
+that measured threshold, not itself a calibrated value. This is stated in
+the constant's comment in `frequency.py` so a future reader doesn't treat
+it as swept.
+
+**Caller wiring.** `perf_optimizations.py`'s existing mark-policy block
+(the one already producing `skin_n_marks_protected` for the 9 evening
+ops, `154d854`) now also produces a raw, unfeathered, skin-clipped
+`mark_protect_mask` from the same `compile_mark_policy(...).preserve`
+result, and passes it into all four `frequency.combine()` call sites
+(both branches of the nose-split path, its `else`, and the outer
+no-nose-smooth `else`). No new mask/detection work — one `detect_marks`
+call already existed for the evening-ops block; this reuses its output.
+
+**Verification.**
+- New test file `tests/test_frequency_mark_protection.py` (16 tests):
+  contrast retention at 3 radii (4/8/15px, asserts protected retains
+  >70% of source contrast vs. baseline's <50%), near-zero outer halo,
+  feather-bounded-by-radius (asserts protection has decayed to <0.05 by
+  2× the mark's radius, and — for radius ≥6 — has *not* fully decayed at
+  1× the radius, so the test actually discriminates a radius-scaled
+  feather from a fixed-pixel one), a mark straddling a hard skin-mask
+  boundary (asserts pixels outside `skin_mask` are byte-identical in both
+  the protected and unprotected arms, and that pixels inside skin
+  actually differ between the two — otherwise the boundary-clipping
+  assertion alone would pass even if the feature were silently inert
+  near a boundary), two overlapping marks (asserts both centers reach
+  full protection via the merged-blob radius), `mark_policy=None`/
+  `mark_protect=None` golden equivalence (both as an explicit `None` and
+  as an omitted keyword), and an engine-gate check that `bilateral`/
+  `anisotropic` are byte-identical with/without `mark_protect` while
+  `guided` is confirmed to actually differ (so the gate test isn't
+  vacuously passing because the feature does nothing at all).
+- Existing golden hash tests (`test_golden_pipeline.py`,
+  `test_golden_pipeline_face.py`) unchanged — `mark_policy=None` stays
+  byte-identical, confirming no default-path regression.
+- Regression sweep: `test_frequency.py` + `test_frequency_mark_protection.py`
+  + both golden suites + `test_blemish_mark_policy.py` +
+  `test_skin_evening_mark_policy.py` + `test_marks.py` +
+  `test_mark_policy_wiring.py` = 80 passed. Broader whole-suite sweep
+  (`test_recipes.py`, `test_recipe_integration.py` included): 1016
+  passed, 4 skipped.
+- Production reproduction: ran `RetouchEngine.process()` end-to-end
+  (`recipe="natural"`, `smooth=90`, all other skin ops disabled) on the
+  same real-face-plus-composited-mark image from §1.1a's semi-real scene.
+  Source contrast 95.9; `mark_policy=None` (legacy) 22.0 (–77%, matching
+  the research finding's magnitude); `mark_policy="protect_identity"`
+  83.1; `mark_policy="preserve_all"` 83.1 — both policies recover to
+  above the isolated research script's own `blend_alpha` result (74.9),
+  plausibly because production benefits from this change compounding
+  with the already-wired evening-op and blemish protection acting on the
+  same pixels. Confirmed the legacy path is deterministic (two
+  independent `process()` calls with `mark_policy=None` produced
+  bit-identical output) before trusting the delta as real.
+
+**Explicit scope statement (task requirement).** This implementation is
+validated for **guided smoothing only**. `bilateral` and `anisotropic`
+receive no protection — not because they were found safe or unsafe, but
+because they were never tested. The gate keys on the *requested*
+`smooth_engine`; note that `_smooth_anisotropic` internally falls back to
+the guided filter on a `cv2.error`, and in that fallback case protection
+does **not** apply even though a guided filter is what actually runs —
+this is the documented, intentional scope boundary (keyed on what the
+caller asked for, not on what ran after an internal fallback), not an
+oversight.
+
 ### 1.2 Protection mechanism inventory (current code)
 
 | Tier | Mechanism | Materials covered | Consistency |
@@ -292,15 +397,15 @@ boundary-confidence field's observation-only contract (`6b1e72d`).
 - Accessory and facial-hair protection (§1.2, Tiers 3/4) are confirmed
   gaps but unmeasured against a real photo; the corpus has zero such
   cases per CLAUDE.md's known-limitations note.
-- Whether protecting marks from the base smoothing stage is safe is now
-  answered by experiment (§1.1a): blend-alpha exclusion, feathered ≤ the
-  mark's own radius, recovers most of a mark's contrast with a near-zero
-  halo signature on both a synthetic and a real-face scene.
-  **Implementing this in `frequency.combine`/`perf_optimizations.py`
-  remains a separate, unauthorized next step** — this tranche is
-  evidence and a recommendation, not the change itself, and the result is
-  scene-limited (one mark shape, two sizes, `guided` engine only —
-  `bilateral`/`anisotropic` untested).
+- Whether protecting marks from the base smoothing stage is safe was
+  answered by experiment (§1.1a) and is now **implemented** (§1.1b):
+  blend-alpha exclusion, feather bounded by each mark blob's own radius,
+  wired into `frequency.combine()` and `perf_optimizations.py`, verified
+  against both the synthetic/real-face experiment scenes and a live
+  `RetouchEngine.process()` render. **Scope is guided smoothing only —
+  `bilateral`/`anisotropic` are explicitly gated off and remain
+  untested**, not silently unprotected by omission; extending to those
+  engines is a distinct, unauthorized next step.
 - Abstention observability for `assess_eye_artifact_scales` and
   `yaw_gate_factor` was implemented in a follow-up tranche (`8a2869e`,
   log-only, golden hashes unchanged) after this document was first
@@ -314,4 +419,6 @@ original audit. The §1.1a follow-up added a new scratch script
 (`scripts/qa/smoothing_mark_protection_experiment.py`) that exercises
 copies of `retouch.frequency`'s algorithms for comparison purposes only —
 it does not import or modify `FrequencySeparator`, and no file under
-`retouch/` changed as a result of this experiment.
+`retouch/` changed as a result of that experiment. §1.1b is the first
+tranche in this document to change `retouch/` itself: `frequency.py` and
+`perf_optimizations.py`, plus a new `tests/test_frequency_mark_protection.py`.
