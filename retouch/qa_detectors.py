@@ -11,6 +11,13 @@ Each detector returns a dict with:
   - "score": float in [0, 1] (higher = more problematic)
   - "flagged": bool (True if score exceeds threshold)
   - Additional detail keys specific to each detector
+
+:func:`run_qa_with_evidence` additionally classifies every detector into an
+explicit status — QA_STATUS_PASSED / QA_STATUS_FLAGGED / QA_STATUS_UNAVAILABLE
+/ QA_STATUS_NOT_RUN — so a caller can always tell "checked and passed" apart
+from "never checked for this input" instead of inferring it from a missing
+dict key. :func:`run_qa` remains the flagged-only List[QAWarning] view used
+by export gating and QA back-off.
 """
 
 from __future__ import annotations
@@ -62,6 +69,40 @@ def _detector_failure(name: str, exc: Exception) -> Dict[str, Any]:
         "flagged": True,
         "available": False,
         "error": f"{type(exc).__name__}: {exc}",
+    }
+
+
+# Every detector name run_all() may populate. Used to give a "not-run" status
+# to entries the current inputs skipped entirely (e.g. no reference image),
+# so a consumer never has to infer "not checked" from key absence.
+ALL_DETECTOR_NAMES = (
+    "banding", "clipping", "plastic_skin", "halo", "kee_farid", "seam",
+    "color_drift", "pore_spectrum", "asymmetry", "skin_score", "harmony",
+    "perceived_retouching",
+)
+
+# Explicit per-detector status vocabulary. "passed"/"flagged" require the
+# detector to have actually run; "unavailable" means it raised; "not_run"
+# means the pipeline never attempted it for this input (missing mask/
+# reference/person, or the QA stage itself failed before any detector ran).
+QA_STATUS_PASSED = "checked-pass"
+QA_STATUS_FLAGGED = "checked-flagged"
+QA_STATUS_UNAVAILABLE = "unavailable"
+QA_STATUS_NOT_RUN = "not-run"
+
+
+def _qa_status(det_result: Dict[str, Any]) -> str:
+    """Classify one run_all() detector result into the status vocabulary."""
+    if det_result.get("available") is False:
+        return QA_STATUS_UNAVAILABLE
+    return QA_STATUS_FLAGGED if det_result.get("flagged", False) else QA_STATUS_PASSED
+
+
+def not_run_evidence(reason: str) -> Dict[str, Dict[str, Any]]:
+    """Build a complete not-run evidence dict for every known detector."""
+    return {
+        name: {"status": QA_STATUS_NOT_RUN, "score": None, "flagged": False, "reason": reason}
+        for name in ALL_DETECTOR_NAMES
     }
 
 
@@ -1281,35 +1322,73 @@ def run_all(
                 body_mask=body_skin_mask,
                 body_region_weights=body_region_weights,
             )
+            # Informational vector, not a pass/fail gate: score/flagged are
+            # fixed so it never triggers run_qa's flagged-only filter, but
+            # its real geometry/photometry statistics stay in the dict for
+            # complete evidence (see run_qa_with_evidence).
             result["perceived_retouching"]["score"] = 0.0
             result["perceived_retouching"]["flagged"] = False
+            result["perceived_retouching"]["available"] = True
         except Exception as exc:
             result["perceived_retouching"] = _detector_failure(
                 "perceived_retouching", exc
             )
+    else:
+        result["perceived_retouching"] = {
+            "status": QA_STATUS_NOT_RUN, "score": None, "flagged": False,
+            "reason": "no reference image supplied",
+        }
     return result
 
 
-def run_qa(
+_QA_MESSAGES = {
+    "banding": "Banding visible in smooth gradient regions",
+    "clipping": "Highlight/shadow clipping detected",
+    "plastic_skin": "Skin texture loss detected — may appear plastic",
+    "halo": "Edge overshoot halos detected from sharpening",
+    "seam": "Seam visible at subject boundary",
+    "color_drift": "Skin hue shift detected — color grade drifted beyond budget",
+    "pore_spectrum": "Skin pore-spectrum loss detected — may appear plastic",
+    "asymmetry": "Asymmetric over-smoothing detected — one face zone over-retouched",
+    "skin_score": "Skin quality score low — plastic/over-evolved appearance",
+}
+
+_QA_THRESHOLDS_BY_DETECTOR = {
+    "banding": BANDING_THRESHOLD,
+    "clipping": CLIPPING_THRESHOLD,
+    "plastic_skin": PLASTIC_SKIN_THRESHOLD,
+    "halo": HALO_THRESHOLD,
+    "seam": SEAM_THRESHOLD,
+    "color_drift": COLOR_DRIFT_THRESHOLD,
+    "pore_spectrum": PORE_SPECTRUM_THRESHOLD,
+    "asymmetry": ASYMMETRY_THRESHOLD,
+    # skin_score is informational (soft); no hard gate threshold.
+}
+
+
+def run_qa_with_evidence(
     result: np.ndarray,
     person_mask: Optional[np.ndarray],
     reference_img_bgr: Optional[np.ndarray] = None,
     face_skin_mask: Optional[np.ndarray] = None,
     mark_policy: Optional[Mapping[str, Any]] = None,
     warp_field: Optional[np.ndarray] = None,
-) -> List["QAWarning"]:
-    """Run the QA detector pipeline on a processed uint8 BGR image.
+) -> "tuple[List[QAWarning], Dict[str, Dict[str, Any]]]":
+    """Run the QA detector pipeline, returning warnings AND complete evidence.
 
-    Pure orchestration over :func:`run_all` plus the face-anchored body
-    mask (harmony) and the threshold/message maps. Returns a list of
-    :class:`QAWarning` (only flagged detectors). A failure of the QA
-    pipeline itself surfaces as a single fail-closed ``qa_pipeline``
-    warning.
+    ``warnings`` is the flagged-only list (:func:`run_qa`'s contract; used by
+    back-off and export gating, which must only act on hard failures).
+    ``evidence`` is a complete ``{detector_name: {...}}`` map covering every
+    name in :data:`ALL_DETECTOR_NAMES`, so a caller can always distinguish
+    "checked and passed" (``status: checked-pass``) from "never checked"
+    (``status: not-run``) from "checked, detector itself failed" (``status:
+    unavailable``) — never by inferring it from key absence.
     """
     from .harmony import build_face_anchored_body_mask
 
     if person_mask is None or not np.any(person_mask > 0.3):
-        return []
+        return [], not_run_evidence("no person mask covering the frame")
+
     qa_warnings: List[QAWarning] = []
     try:
         body_skin_mask = None
@@ -1328,9 +1407,9 @@ def run_qa(
             mark_policy=mark_policy,
             warp_field=warp_field,
         )
-
     except Exception as e:
         logger.warning("QA pipeline failed: %s", e, exc_info=True)
+        evidence = not_run_evidence(f"QA pipeline failed: {type(e).__name__}: {e}")
         return [QAWarning(
             detector="qa_pipeline",
             score=1.0,
@@ -1341,46 +1420,71 @@ def run_qa(
                 "available": False,
                 "error": f"{type(e).__name__}: {e}",
             },
-        )]
+        )], evidence
+
+    evidence: Dict[str, Dict[str, Any]] = {}
     for detector_name, det_result in qa_raw.items():
+        # run_all() may already have set an explicit not-run status (e.g.
+        # perceived_retouching with no reference image) — respect it rather
+        # than reclassifying a not-run placeholder as "passed".
+        status = det_result.get("status") or _qa_status(det_result)
+        evidence[detector_name] = {**det_result, "status": status}
+        # Warning-surfacing matches run_qa's pre-evidence behavior exactly:
+        # only a detector result with flagged=True becomes a QAWarning. A
+        # detector that self-reports available=False without flagging (e.g.
+        # evaluate_harmony on masks too small to measure) stays silent here,
+        # same as before — it is visible in evidence as status=unavailable,
+        # but does not gate export.
         if not det_result.get("flagged", False):
             continue
-        unavailable = det_result.get("available") is False
-        if unavailable:
+        if det_result.get("available") is False:
             msg = (
                 f"QA detector {detector_name} failed; "
                 "output could not be validated"
             )
         else:
-            msg = {
-                "banding": "Banding visible in smooth gradient regions",
-                "clipping": "Highlight/shadow clipping detected",
-                "plastic_skin": "Skin texture loss detected — may appear plastic",
-                "halo": "Edge overshoot halos detected from sharpening",
-                "seam": "Seam visible at subject boundary",
-                "color_drift": "Skin hue shift detected — color grade drifted beyond budget",
-                "pore_spectrum": "Skin pore-spectrum loss detected — may appear plastic",
-                "asymmetry": "Asymmetric over-smoothing detected — one face zone over-retouched",
-                "skin_score": "Skin quality score low — plastic/over-evolved appearance",
-            }.get(detector_name, f"{detector_name} artifact detected")
-        _qa_thresholds = {
-            "banding": BANDING_THRESHOLD,
-            "clipping": CLIPPING_THRESHOLD,
-            "plastic_skin": PLASTIC_SKIN_THRESHOLD,
-            "halo": HALO_THRESHOLD,
-            "seam": SEAM_THRESHOLD,
-            "color_drift": COLOR_DRIFT_THRESHOLD,
-            "pore_spectrum": PORE_SPECTRUM_THRESHOLD,
-            "asymmetry": ASYMMETRY_THRESHOLD,
-            # skin_score is informational (soft); no hard gate threshold.
-        }
+            msg = _QA_MESSAGES.get(detector_name, f"{detector_name} artifact detected")
         qa_warnings.append(QAWarning(
             detector=detector_name,
             score=det_result.get("score", 0.0),
             flagged=True,
-            threshold=_qa_thresholds.get(detector_name, 0.0),
+            threshold=_QA_THRESHOLDS_BY_DETECTOR.get(detector_name, 0.0),
             message=msg,
             details={k: v for k, v in det_result.items()
                      if k not in ("score", "flagged")},
         ))
-    return qa_warnings
+    # Names run_all() never populated for this input (e.g. perceived_retouching
+    # sets its own not-run entry, but future detectors might not).
+    for name in ALL_DETECTOR_NAMES:
+        evidence.setdefault(name, {
+            "status": QA_STATUS_NOT_RUN, "score": None, "flagged": False,
+            "reason": "detector not attempted for this input",
+        })
+    return qa_warnings, evidence
+
+
+def run_qa(
+    result: np.ndarray,
+    person_mask: Optional[np.ndarray],
+    reference_img_bgr: Optional[np.ndarray] = None,
+    face_skin_mask: Optional[np.ndarray] = None,
+    mark_policy: Optional[Mapping[str, Any]] = None,
+    warp_field: Optional[np.ndarray] = None,
+) -> List["QAWarning"]:
+    """Run the QA detector pipeline on a processed uint8 BGR image.
+
+    Pure orchestration over :func:`run_all` plus the face-anchored body
+    mask (harmony) and the threshold/message maps. Returns a list of
+    :class:`QAWarning` (only flagged detectors). A failure of the QA
+    pipeline itself surfaces as a single fail-closed ``qa_pipeline``
+    warning. See :func:`run_qa_with_evidence` for the complete
+    pass/flagged/unavailable/not-run picture across every detector.
+    """
+    warnings, _evidence = run_qa_with_evidence(
+        result, person_mask,
+        reference_img_bgr=reference_img_bgr,
+        face_skin_mask=face_skin_mask,
+        mark_policy=mark_policy,
+        warp_field=warp_field,
+    )
+    return warnings

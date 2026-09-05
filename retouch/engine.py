@@ -676,6 +676,7 @@ class ProcessingResult(np.ndarray):
         timings: Optional[Dict[str, float]] = None,
         face_contexts: Optional[List["FaceContext"]] = None,
         qa: Optional[List[QAWarning]] = None,
+        qa_evidence: Optional[Dict[str, Dict[str, Any]]] = None,
         face_recipes: Optional[Dict[int, Dict[str, Any]]] = None,
         safe_auto_decisions: Optional[List[Dict[str, Any]]] = None,
         runtime_diagnostics: Optional[Dict[str, Any]] = None,
@@ -693,6 +694,7 @@ class ProcessingResult(np.ndarray):
         obj.timings = timings or {}
         obj.face_contexts = face_contexts
         obj.qa = qa or []
+        obj.qa_evidence = qa_evidence or {}
         obj.face_recipes = face_recipes
         obj.safe_auto_decisions = list(safe_auto_decisions or [])
         obj.runtime_diagnostics = dict(runtime_diagnostics or {})
@@ -715,6 +717,7 @@ class ProcessingResult(np.ndarray):
         self.timings = getattr(obj, "timings", {})
         self.face_contexts = getattr(obj, "face_contexts", None)
         self.qa = getattr(obj, "qa", None) or []
+        self.qa_evidence = getattr(obj, "qa_evidence", None) or {}
         self.face_recipes = getattr(obj, "face_recipes", None)
         self.safe_auto_decisions = getattr(obj, "safe_auto_decisions", [])
         self.runtime_diagnostics = getattr(obj, "runtime_diagnostics", {})
@@ -982,6 +985,7 @@ class _CoreResult:
     no_face: bool = False
     face_contexts: Optional[List["FaceContext"]] = None
     qa: List[QAWarning] = field(default_factory=list)
+    qa_evidence: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -1720,6 +1724,7 @@ class RetouchEngine:
                 timings=timings,
                 face_contexts=built_contexts,
                 qa=core.qa,
+                qa_evidence=core.qa_evidence,
                 safe_auto_decisions=getattr(ctx, "_safe_auto_decisions", []),
                 runtime_diagnostics=getattr(ctx, "_runtime_diagnostics", {}),
                 source_dtype=source_dtype,
@@ -1799,6 +1804,7 @@ class RetouchEngine:
             timings=timings,
             face_contexts=built_contexts,
             qa=core.qa,
+            qa_evidence=core.qa_evidence,
             face_recipes=face_recipes or None,
             safe_auto_decisions=getattr(ctx, "_safe_auto_decisions", []),
             runtime_diagnostics=getattr(ctx, "_runtime_diagnostics", {}),
@@ -1983,6 +1989,7 @@ class RetouchEngine:
                 no_face=True,
                 face_contexts=core.face_contexts,
                 qa=core.qa,
+                qa_evidence=qa_detectors.not_run_evidence("no face detected"),
             )
 
         # Stages 3+: global phases at native resolution (or proxy if no scaling needed)
@@ -2069,6 +2076,7 @@ class RetouchEngine:
                 no_face=True,
                 face_contexts=None,
                 qa=[],
+                qa_evidence=qa_detectors.not_run_evidence("no face detected"),
             )
 
         # ------------------------------------------------------------------
@@ -2320,6 +2328,7 @@ class RetouchEngine:
                 no_face=True,
                 face_contexts=None,
                 qa=[],
+                qa_evidence=qa_detectors.not_run_evidence("no face detected"),
             )
 
         # ------------------------------------------------------------------
@@ -2485,13 +2494,16 @@ class RetouchEngine:
         # ------------------------------------------------------------------
         # QA detectors
         # ------------------------------------------------------------------
-        qa_warnings: List[QAWarning] = self._run_qa(
+        qa_warnings, qa_evidence = self._run_qa_with_evidence(
             result, person_mask, img_bgr,
             face_skin_mask=acc_skin,
             mark_policy=ctx.mark_policy,
             warp_field=getattr(ctx, "_aa6_warp_field", None),
         )
-        ctx._qa_results = {w.detector: w.details for w in qa_warnings}
+        # Complete per-detector evidence (checked-pass / checked-flagged /
+        # unavailable / not-run for every detector), not just the flagged
+        # subset — see qa_detectors.run_qa_with_evidence.
+        ctx._qa_results = qa_evidence
 
         # ------------------------------------------------------------------
         # A4: Neural boosters (PARKED — runs only if enabled, after QA)
@@ -2512,6 +2524,7 @@ class RetouchEngine:
             no_face=len(faces) == 0,
             face_contexts=face_contexts,
             qa=qa_warnings,
+            qa_evidence=qa_evidence,
         )
 
     @staticmethod
@@ -2528,8 +2541,35 @@ class RetouchEngine:
         Thin wrapper over :func:`retouch.qa_detectors.run_qa`; kept as a
         method so :meth:`_run_core_pipeline` can re-run QA after a
         back-off iteration without re-entering :meth:`_run_global_phases`.
+        Returns only the flagged-detector list; see :meth:`_run_qa_with_evidence`
+        for the complete pass/flagged/unavailable/not-run picture.
         """
         return qa_detectors.run_qa(
+            result,
+            person_mask,
+            reference_img_bgr=reference_img_bgr,
+            face_skin_mask=face_skin_mask,
+            mark_policy=mark_policy,
+            warp_field=warp_field,
+        )
+
+    @staticmethod
+    def _run_qa_with_evidence(
+        result: np.ndarray,
+        person_mask: Optional[np.ndarray],
+        reference_img_bgr: Optional[np.ndarray] = None,
+        face_skin_mask: Optional[np.ndarray] = None,
+        mark_policy: Optional[Mapping[str, Any]] = None,
+        warp_field: Optional[np.ndarray] = None,
+    ) -> "tuple[List[QAWarning], Dict[str, Dict[str, Any]]]":
+        """Run QA detectors, returning flagged warnings AND complete evidence.
+
+        Thin wrapper over :func:`retouch.qa_detectors.run_qa_with_evidence`.
+        The evidence dict covers every known detector with an explicit
+        status (checked-pass / checked-flagged / unavailable / not-run) so a
+        caller never has to infer "not checked" from a missing key.
+        """
+        return qa_detectors.run_qa_with_evidence(
             result,
             person_mask,
             reference_img_bgr=reference_img_bgr,
@@ -2575,6 +2615,7 @@ class RetouchEngine:
                 no_face=True,
                 face_contexts=core.face_contexts,
                 qa=core.qa,
+                qa_evidence=qa_detectors.not_run_evidence("no face detected"),
             )
 
         # Stages 3+: global phases (tonal, grading, finish)
