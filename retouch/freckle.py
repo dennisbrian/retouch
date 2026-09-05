@@ -1,9 +1,11 @@
 """Freckle and beauty-mark selective removal.
 
-Classifies facial anomalies (freckle / beauty_mark / blemish / noise) with
-skin-tone-normalized LAB scoring, then removes freckles via inpainting while
-preserving beauty marks. Detection and healing are implemented locally; the
-shared ``inpaint_and_blend`` helper from :mod:`retouch.blemish` does the heal.
+Classifies facial anomalies (freckle / beauty_mark / blemish / noise, or the
+explicit "ambiguous" outcome when competing class scores are tied or nearly
+tied) with skin-tone-normalized LAB scoring, then removes freckles via
+inpainting while preserving beauty marks. Detection and healing are
+implemented locally; the shared ``inpaint_and_blend`` helper from
+:mod:`retouch.blemish` does the heal.
 """
 
 from __future__ import annotations
@@ -20,7 +22,25 @@ from .blemish import inpaint_and_blend
 
 logger = logging.getLogger(__name__)
 
-_CLASS_TYPES = frozenset({"freckle", "beauty_mark", "blemish", "noise"})
+_CLASS_TYPES = frozenset({"freckle", "beauty_mark", "blemish", "noise", "ambiguous"})
+
+# Named, explicit tie-break order -- reproduces max(scores, key=scores.get)'s
+# current behavior (dict literal insertion order: freckle, beauty_mark,
+# blemish, noise) as a testable constant rather than an emergent property of
+# a dict literal, per the requirement to remove dictionary-order dependence.
+_CLASS_PRIORITY = ("freckle", "beauty_mark", "blemish", "noise")
+
+# Minimum score margin between the top two competing classes for a
+# "beauty_mark" (-> mole downstream) win to be treated as decided, rather
+# than an unresolved tie routed to the explicit "ambiguous" outcome. Only
+# beauty_mark ties are affected -- see the comment at the winner-selection
+# site for why freckle/blemish ties are legacy, legitimate behavior, and the
+# DSCF2310 eyeliner failure this fixes
+# (docs/plans/RESEARCH_FA03_MARK_LOCALIZATION_2026_09_05.md): two drawn
+# eyeliner components score beauty_mark=0.70 and blemish=0.70 exactly, a tie
+# that previously resolved to beauty_mark (-> mole) purely because
+# "beauty_mark" is inserted into the scores dict before "blemish".
+_TIE_MARGIN = 0.05
 
 
 @dataclass(frozen=True)
@@ -132,7 +152,9 @@ class FreckleRemover:
         l_median: float,
         l_std: float,
     ) -> Tuple[str, float, str, float, Tuple[float, float], Tuple[int, int, int, int]]:
-        """Score one component into freckle/beauty_mark/blemish/noise.
+        """Score one component into freckle/beauty_mark/blemish/noise, or
+        the explicit "ambiguous" outcome when the top two class scores are
+        within ``_TIE_MARGIN`` of each other.
 
         Returns (classification, confidence, reason, area, centroid, bbox).
         """
@@ -201,9 +223,50 @@ class FreckleRemover:
             scores["noise"] = 0.9
             reasons["noise"].append(f"size={area:.0f}<{self._NOISE_MAX_AREA}")
 
-        best = max(scores, key=scores.get)
-        confidence = float(min(1.0, scores[best]))
-        return best, confidence, " ".join(reasons[best]), area, (0.0, 0.0), (0, 0, 0, 0)
+        # Winner selection. max(scores, key=scores.get) picks whichever key
+        # was inserted first among exact ties -- an artifact of dict
+        # iteration order, not a semantic choice. _CLASS_PRIORITY makes that
+        # same tie-break an explicit, named, testable constant instead of an
+        # emergent property of the literal dict above, so today's behavior
+        # for every score pattern this table can produce except one is
+        # unchanged (freckle/blemish score sums both total exactly 1.00 by
+        # construction -- e.g. area 6-25, a_norm>0.3, chroma>25, high L_std
+        # all firing at once -- and that tie legitimately resolves to
+        # freckle today; nothing here should change it).
+        #
+        # The one case this narrows: whenever the class chosen by that
+        # priority order is "beauty_mark" (-> mole downstream) and a
+        # competing class is within _TIE_MARGIN, the evidence for "this is
+        # specifically a mole" is not actually stronger than the runner-up's
+        # -- e.g. the DSCF2310 eyeliner failure, beauty_mark=0.70 tied with
+        # blemish=0.70 (docs/plans/RESEARCH_FA03_MARK_LOCALIZATION_2026_09_05.md).
+        # That case alone routes to the explicit "ambiguous" outcome rather
+        # than a confident, silently-chosen mole.
+        ranked = sorted(
+            scores.items(), key=lambda kv: (-kv[1], _CLASS_PRIORITY.index(kv[0]))
+        )
+        top_class, top_score = ranked[0]
+        runner_up_score = ranked[1][1] if len(ranked) > 1 else 0.0
+        margin = top_score - runner_up_score
+
+        if top_score <= 0.0:
+            best = "noise"
+            confidence = 0.0
+            reason = "no positive evidence"
+        elif top_class == "beauty_mark" and margin < _TIE_MARGIN:
+            tied = sorted(
+                (k for k, v in ranked if top_score - v < _TIE_MARGIN),
+                key=_CLASS_PRIORITY.index,
+            )
+            best = "ambiguous"
+            confidence = float(min(1.0, top_score))
+            reason = f"tie among {tied} (margin={margin:.2f})"
+        else:
+            best = top_class
+            confidence = float(min(1.0, top_score))
+            reason = " ".join(reasons[best])
+
+        return best, confidence, reason, area, (0.0, 0.0), (0, 0, 0, 0)
 
     def classify_anomalies(
         self,

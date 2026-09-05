@@ -30,6 +30,13 @@ _FRECKLE_CLASS_MAP = {
     "freckle": "freckle",
     "blemish": "acne_blemish",
     "noise": "unknown",
+    # FreckleRemover routes an unresolved tie/near-tie between competing
+    # class scores here (retouch/freckle.py's "ambiguous" outcome) rather
+    # than guessing; "unknown" is the existing MARK_CLASSES member for
+    # "detected, but its type could not be determined" and every named
+    # policy already has a defined action for it (protect_identity and
+    # preserve_all both preserve unknown).
+    "ambiguous": "unknown",
 }
 
 # Named policies are deliberately conservative. They make the class-aware
