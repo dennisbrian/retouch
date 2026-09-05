@@ -52,6 +52,59 @@ def _sanitize_bisenet_logits(logits: np.ndarray, source: str) -> np.ndarray:
     return np.nan_to_num(logits.astype(np.float32, copy=False), nan=-1e4)
 
 
+# CelebAMask-HQ label -> region name, subject-anatomical labels swapped to
+# camera-viewer convention (see the eye-handedness note in
+# _masks_from_label_map). Observation-only companion to that function; keep
+# the label numbers in sync if that mapping ever changes.
+_CONFIDENCE_LABEL_TO_REGION = {
+    1: "skin", 2: "right_eyebrow", 3: "left_eyebrow",
+    4: "right_eye", 5: "left_eye",
+    11: "mouth_interior", 12: "lips", 13: "lips",
+    14: "neck", 17: "hair", 16: "cloth",
+}
+
+
+def _bisenet_confidence_by_region(
+    logits: np.ndarray, pred_crop: np.ndarray,
+) -> "dict[str, float]":
+    """Summarize BiSeNet's per-pixel confidence into one scalar per region.
+
+    Observational metadata only (see FaceRegions.parse_confidence) — not a
+    calibrated error bound, and no op may read this to change edit strength.
+
+    Uses the softmax top1-minus-top2 margin (in probability units) rather
+    than max(softmax): margin answers "how much could this pixel's label
+    have been the runner-up class", which is the boundary-quality question
+    this field exists to surface. Computed once at the native 512x512 crop
+    resolution the model actually predicted at, before any resize/paste/
+    feather blurs the region boundaries.
+    """
+    # Guard against a re-exported model with extra channels: softmax must
+    # normalize only over the 19 classes this mapping understands, or the
+    # margin silently shifts as unmapped channels are folded into the sum.
+    logits = logits[:_BISENET_CLASSES]
+    shifted = logits - logits.max(axis=0, keepdims=True)
+    exp = np.exp(shifted)
+    softmax = exp / exp.sum(axis=0, keepdims=True)
+    top2 = np.partition(softmax, -2, axis=0)[-2:]
+    margin = top2[1] - top2[0]  # top1 - top2, both >= 0
+
+    # Some regions are the union of multiple labels (lips = 12 + 13). Pool
+    # the pixels before averaging so both sub-labels contribute — averaging
+    # each label separately and keeping min()/max() would silently discard
+    # whichever sub-label happened to lose the comparison.
+    region_to_labels: "dict[str, list[int]]" = {}
+    for label, region in _CONFIDENCE_LABEL_TO_REGION.items():
+        region_to_labels.setdefault(region, []).append(label)
+
+    out: "dict[str, float]" = {}
+    for region, labels in region_to_labels.items():
+        sel = np.isin(pred_crop, labels)
+        if np.any(sel):
+            out[region] = float(np.mean(margin[sel]))
+    return out
+
+
 def _masks_from_label_map(
     full_label_map: np.ndarray,
     img_bgr: np.ndarray,
@@ -266,6 +319,13 @@ class FaceRegions:
         # Cached once per face so downstream eye consumers reuse the same
         # visibility decision instead of recomputing EAR/contrast.
         "_eye_gate_cache",
+        # Observational metadata, NOT a mask: per-region BiSeNet confidence
+        # summary (see parse_confidence()). Exposed for inspection/QA only —
+        # no op may use it to gate or scale edit strength (soft-probability
+        # confidence is not a calibrated per-pixel error bound; see
+        # docs/plans/RESEARCH_COLOR_SCIENCE_2026_09_04.md-style caution and
+        # Guo et al. 2017 on neural-network calibration).
+        "parse_confidence",
     ]
 
     def __init__(self) -> None:
@@ -336,6 +396,7 @@ class FaceParser:
 
         # ---- Run BiSeNet face parsing ONNX if session exists ----
         bisenet_masks = {}
+        parse_confidence: Optional["dict[str, float]"] = None
         if self._sess is not None and face_bbox is not None:
             try:
                 x_face, y_face, w_face, h_face = face_bbox
@@ -377,6 +438,7 @@ class FaceParser:
                     bisenet_masks = _masks_from_label_map(
                         full_label_map, img_bgr, feather, mode=mask_feather_mode, include_cloth=True
                     )
+                    parse_confidence = _bisenet_confidence_by_region(logits, pred_crop)
             except Exception as e:
                 input_shape = crop_input.shape if 'crop_input' in locals() else None
                 logger.warning(
@@ -396,6 +458,7 @@ class FaceParser:
         regions.neck = bisenet_masks.get('neck')
         regions.hair = bisenet_masks.get('hair')
         regions.cloth = bisenet_masks.get('cloth')
+        regions.parse_confidence = parse_confidence
 
         # BiSeNet has no hand/limb class; clip its unconstrained per-pixel
         # skin/face_oval to the landmark face-oval boundary before anything
@@ -403,7 +466,9 @@ class FaceParser:
         # _clip_bisenet_skin_to_landmark_oval docstring).
         self._clip_bisenet_skin_to_landmark_oval(regions, landmarks, w_img, h_img, feather)
 
-        # Fallback to landmarks if BiSeNet failed or has empty skin
+        # Fallback to landmarks if BiSeNet failed or has empty skin.
+        # _landmark_fallback_only sets its own parse_confidence={} sentinel
+        # (no BiSeNet involved on that path).
         if regions.skin is None or regions.skin.max() < 0.01:
             regions = self._landmark_fallback_only(landmarks, img_bgr, person_mask, ied)
         else:
@@ -578,6 +643,7 @@ class FaceParser:
                 logits = _sanitize_bisenet_logits(logits_list[idx_valid], "parse_batch(post)")
 
                 pred_crop = np.argmax(logits, axis=0).astype(np.uint8)
+                parse_confidence = _bisenet_confidence_by_region(logits, pred_crop)
                 pred_crop_resized = cv2.resize(pred_crop, (cw, ch), interpolation=cv2.INTER_NEAREST)
 
                 full_label_map = np.zeros((h_img, w_img), dtype=np.uint8)
@@ -602,6 +668,7 @@ class FaceParser:
                 regions.neck = bisenet_masks.get('neck')
                 regions.hair = bisenet_masks.get('hair')
                 regions.cloth = bisenet_masks.get('cloth')
+                regions.parse_confidence = parse_confidence
 
                 # BiSeNet has no hand/limb class; clip its unconstrained
                 # per-pixel skin/face_oval to the landmark face-oval
@@ -611,7 +678,8 @@ class FaceParser:
                     regions, landmarks_compat_list[idx_face], w_img, h_img, feather
                 )
 
-                # Handle fallback if skin is empty
+                # Handle fallback if skin is empty. _landmark_fallback_only
+                # sets its own parse_confidence={} sentinel.
                 if regions.skin is None or regions.skin.max() < 0.01:
                     regions = self._landmark_fallback_only(
                         landmarks_compat_list[idx_face], crop_list[idx_face], person_masks[idx_face], ieds[idx_face]
@@ -687,6 +755,10 @@ class FaceParser:
         h_img, w_img = img_bgr.shape[:2]
         feather = max(int(ied * 0.08), 3)
         regions = FaceRegions()
+        # No BiSeNet inference on this path: empty dict (not None) means
+        # "no model confidence data available", distinct from an attribute
+        # that was simply never populated.
+        regions.parse_confidence = {}
 
         regions.face_oval = self._mask(landmarks, FACE_OVAL, w_img, h_img, feather)
         regions.left_eye = self._mask(landmarks, LEFT_EYE, w_img, h_img, feather // 2)
