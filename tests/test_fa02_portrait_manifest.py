@@ -522,7 +522,8 @@ def test_gate_cli_exits_nonzero_on_violation(workspace, capsys):
 
 
 def test_bridge_runs_no_detector_and_no_pipeline_import():
-    for name in ("fa02_portrait_manifest.py", "fa02_portrait_review.py"):
+    for name in ("fa02_portrait_manifest.py", "fa02_portrait_review.py",
+                 "fa02_annotation_workbench.py", "fa02_readiness_report.py"):
         text = (ROOT / "scripts/qa" / name).read_text()
         for forbidden in ("detect_marks(", "retouch.engine", "retouch.detection",
                           "retouch.parsing", "retouch.freckle", "retouch.marks"):

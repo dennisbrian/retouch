@@ -31,8 +31,10 @@
   comparisons, and seven proposed experiments for masks, blemish repair, texture,
   under-eyes, tone, and profile/occlusion handling
 - [Face retouch algorithm research execution plan — 2026-09-05](plans/PLAN_FACE_RETOUCH_ALGORITHM_RESEARCH_EXECUTION_2026_09_05.md)
-  — Documentation-first order: mask ownership and boundary evidence, then texture,
-  blemish detection/repair, under-eye/material review, and learned assistance
+  — Active phased engineering roadmap: FA-01 support & smoothing mark protection
+  landed/shipped, followed by structured specifications for selective texture
+  restoration (FA-02), 2-factor blemish matrix (FA-03/04), reference/material
+  decomposition (FA-05/06), and bounded learned assistance (FA-07)
 - [FA-01 protection-consistency and abstention-observability audit — 2026-09-05](plans/RESEARCH_FA01_PROTECTION_AND_ABSTENTION_AUDIT_2026_09_05.md)
   — Base smoothing unprotected against marks (verified byte-identical render);
   accessory/facial-hair protection gaps (code-read only, no corpus cases);

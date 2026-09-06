@@ -164,7 +164,8 @@ def _write_corpus_manifest(
         "asset_id": "pilot-fixture-1",
         "path": pilot.name,
         "sha256": hashlib.sha256(pilot.read_bytes()).hexdigest(),
-        "split": "pilot",
+        "split": "dev",
+        "person_id": "fixture-person-1",
         "tags": ["glasses"],
         "strata": {
             "skin_tone": "medium",
@@ -179,7 +180,8 @@ def _write_corpus_manifest(
         "asset_id": case_id,
         "path": source.name,
         "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
-        "split": "holdout",
+        "split": "calibration",
+        "person_ids": ["fixture-person-2", "fixture-person-3"],
         "tags": all_tags,
         "strata": {
             "skin_tone": "deep",
@@ -195,12 +197,12 @@ def _write_corpus_manifest(
     if incomplete:
         # A filename containing every old v1 alias must not supply any of
         # these explicit labels. Keep the second asset so the strict validator
-        # still reports its pilot/holdout contract rather than a legacy alias.
+        # still reports its dev/calibration contract rather than a legacy alias.
         holdout_asset.pop("tags")
         holdout_asset.pop("strata")
         holdout_asset.pop("label_validation")
     payload = {
-        "schema_version": 2,
+        "schema_version": 3,
         "consent_reference": "consent-fixture-1",
         "assets": [pilot_asset, holdout_asset],
     }

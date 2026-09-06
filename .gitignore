@@ -24,3 +24,5 @@ scripts/build/*
 .venv-face-aware/
 .quadcodeai/
 cc.json
+*_out/
+

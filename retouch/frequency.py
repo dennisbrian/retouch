@@ -798,6 +798,8 @@ class FrequencySeparator:
         # interaction makes the output mid band non-monotonic in mid_reduction,
         # so touching it would not reliably preserve texture.)
         adapt = _texture_adaptation_factor(high, m_2d)
+        if os.getenv("TEXTURE_ADAPT_DEBUG"):
+            logger.warning("TEXTURE_ADAPT_DEBUG adapt=%.4f smooth_strength_in=%.4f mid_reduction_in=%.4f texture_opacity_in=%.4f", adapt, smooth_strength, mid_reduction, texture_opacity)
         if adapt < 1.0:
             smooth_strength = smooth_strength * adapt
             # Raise opacity toward 1.0 (keep more of the surviving high band).

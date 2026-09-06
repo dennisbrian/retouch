@@ -401,8 +401,14 @@ def _load_and_validate_corpus_manifest(
         if not tags:
             errors.append(f"asset {asset_id!r} has no validated tags")
         split = str(asset.get("split", asset.get("partition", "")) or "").strip().lower()
-        if split not in {"pilot", "holdout", "calibration", "locked_holdout"}:
-            errors.append(f"asset {asset_id!r} has no valid pilot/holdout split")
+        # Accepts both this script's original pilot/holdout/calibration/
+        # locked_holdout vocabulary and retouch.corpus_manifest v3's
+        # dev/calibration/locked_test (see retouch/corpus_manifest.py) --
+        # this script has its own independent split check, not the module's
+        # ALLOWED_SPLITS, so both naming schemes are kept valid rather than
+        # forcing every caller to migrate at once.
+        if split not in {"pilot", "holdout", "calibration", "locked_holdout", "dev", "locked_test"}:
+            errors.append(f"asset {asset_id!r} has no valid split")
         expected_faces = _asset_expected_faces(asset)
         if expected_faces is None or expected_faces < 0:
             errors.append(f"asset {asset_id!r} must declare expected_face_count")

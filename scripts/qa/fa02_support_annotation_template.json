@@ -45,17 +45,80 @@
   "_reviewer": "Human identifier of whoever actually looked at this patch. REQUIRED when annotation_source is owner_approved.",
   "reviewer": "PLACEHOLDER_reviewer_name",
 
-  "_review_regions": "OPTIONAL small rectangles a reviewer flagged for pore / fine-hair looking. Coordinates are LOCAL TO THE SAVED CROP (not native). IDs must be filesystem-safe. Do not annotate an unresolved source as a recoverable pore.",
+  "_review_regions": "OPTIONAL and ADVISORY ONLY. Small rectangles a reviewer flagged as 'someone should look here'. Its tags are free text and are NOT a semantic label -- a review_region tagged 'pore_review' does NOT assert that pores are present. For an actual labelled claim use the named category lists below. Coordinates are LOCAL TO THE SAVED CROP (not native). IDs must be filesystem-safe.",
   "review_regions": [
+    {
+      "id": "look_here_upper_cheek",
+      "xywh": [64, 64, 128, 128],
+      "tags": ["needs_review", "texture"]
+    }
+  ],
+
+  "_texture_categories": "OPTIONAL semantic ground-truth categories, added 2026-09-06. Each is its own list, same {id, xywh, tags, notes?} shape as review_regions, coordinates LOCAL TO THE SAVED CROP. Unlike review_regions these are ASSERTIONS: putting a rectangle in pore_regions means a human looked at native pixels and says pores are visible there. Nothing in this repository may generate them -- use scripts/qa/fa02_annotation_workbench.py to LOOK, then type the coordinates here by hand. Rules: (a) every list is optional and may be omitted entirely (annotations predating these fields still validate); (b) region ids must be unique across ALL categories including review_regions; (c) if ANY of these lists is non-empty the annotation needs annotation_source in {manual, owner_approved} AND a named reviewer -- provenance is annotation-level, not per-region; (d) protected_identity_marks may not geometrically overlap corrected_defect_regions or noise_regions (contradictory claims about the same pixels); (e) pore_regions and fine_hair_regions MAY overlap each other and anything else -- real cheeks have both. Do not annotate an unresolved source as a recoverable pore; put it in uncertainty_regions instead.",
+
+  "_pore_regions": "Visible, resolvable skin pores. Ground truth for 'did the arm bring texture back'.",
+  "pore_regions": [
     {
       "id": "pore_field_upper_cheek",
       "xywh": [64, 64, 128, 128],
-      "tags": ["pore_review", "texture"]
-    },
+      "tags": ["pore"],
+      "notes": "PLACEHOLDER: e.g. 'clearly resolved pore field, ~40 countable pores at 1:1'"
+    }
+  ],
+
+  "_fine_hair_regions": "Vellus / fine facial hair the reviewer can actually resolve.",
+  "fine_hair_regions": [
     {
       "id": "fine_hair_temple",
       "xywh": [320, 96, 96, 128],
-      "tags": ["fine_hair_review"]
+      "tags": ["fine_hair"],
+      "notes": "PLACEHOLDER: e.g. 'individual vellus hairs visible against skin'"
+    }
+  ],
+
+  "_makeup_edge_regions": "Boundaries of APPLIED makeup (liner, contour, lip edge). A nuisance edge a representation may over-sharpen. Distinct from protected_identity_marks, which is about what must not be altered.",
+  "makeup_edge_regions": [
+    {
+      "id": "liner_edge_outer_corner",
+      "xywh": [16, 16, 64, 40],
+      "tags": ["makeup_edge"]
+    }
+  ],
+
+  "_protected_identity_marks": "Marks a human decided are identity and must NEVER be altered. May not overlap corrected_defect_regions or noise_regions.",
+  "protected_identity_marks": [
+    {
+      "id": "beauty_mark_cheek",
+      "xywh": [200, 300, 24, 24],
+      "tags": ["identity_mark"]
+    }
+  ],
+
+  "_corrected_defect_regions": "Regions where a defect was ALREADY repaired before the S capture. Forbidden territory: a representation must not resurrect what was removed.",
+  "corrected_defect_regions": [
+    {
+      "id": "removed_transient_blemish",
+      "xywh": [420, 400, 32, 32],
+      "tags": ["corrected_defect"]
+    }
+  ],
+
+  "_noise_regions": "Sensor noise / JPEG blocking heavy enough to be the dominant local signal. The nuisance control: a representation that 'restores texture' here is restoring noise.",
+  "noise_regions": [
+    {
+      "id": "shadow_side_noise",
+      "xywh": [16, 400, 96, 96],
+      "tags": ["noise", "compression"]
+    }
+  ],
+
+  "_uncertainty_regions": "The reviewer LOOKED and could not decide. Recorded explicitly, because 'unlabeled' and 'unlabelABLE' are different evidence -- only the first is a coverage gap someone can close by annotating more. Does NOT count as ground truth for readiness.",
+  "uncertainty_regions": [
+    {
+      "id": "ambiguous_jaw_edge",
+      "xywh": [300, 440, 64, 64],
+      "tags": ["ambiguous"],
+      "notes": "PLACEHOLDER: e.g. 'cannot tell pore field from JPEG blocking at this magnification'"
     }
   ],
 

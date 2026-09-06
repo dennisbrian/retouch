@@ -2,8 +2,19 @@
 
 The certification corpus is deliberately represented by explicit metadata.  A
 filename is only a path to an asset; it is never a label.  Each asset must
-carry a content hash, split, controlled tags/strata, and an explicit label
-validation record (or be accepted by the caller's validation callback).
+carry a content hash, split, a mandatory ``person_id``/``person_ids``,
+controlled tags/strata, and an explicit label validation record (or be
+accepted by the caller's validation callback).
+
+Schema v3 replaces v2's ("pilot", "holdout") pair with a three-way governance
+split -- "dev", "calibration", "locked_test" -- for subject-separated
+benchmarking, and enforces that no ``person_id`` crosses splits
+(``person_crosses_split``). This is a stricter, independent guarantee from
+the pre-existing ``group_id``/``group_crosses_split`` check, which governs
+shoots/group portraits (many people, one asset) rather than individuals (one
+person, many assets). No v3 manifest should ever assign real subjects to
+"locked_test" without an explicit, confirmed-untouched person mapping from
+the corpus owner -- this module enforces structure, not that confirmation.
 
 The module has no mandatory image dependency at import time.  When Pillow is
 available, :func:`validate_corpus_manifest` probes decodability and dimensions;
@@ -21,8 +32,26 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 
-CORPUS_MANIFEST_SCHEMA_VERSION = 2
-ALLOWED_SPLITS = ("holdout", "pilot")
+CORPUS_MANIFEST_SCHEMA_VERSION = 3
+
+# v3 replaces the v2 ("pilot", "holdout") pair with a three-way governance
+# split for subject-separated benchmarking:
+#   dev          - open research/tuning material (the default for anything
+#                  already used in any study, render, or QA pass).
+#   calibration  - threshold/parameter tuning on subjects never used in dev.
+#   locked_test  - frozen final-exam material; a subject appearing here must
+#                  never appear in dev or calibration. Never populate this
+#                  split without an explicit, confirmed-untouched person
+#                  mapping from the corpus owner.
+# No v2 manifest exists anywhere in this repo (verified 2026-09-06), so this
+# is a clean break, not a migration -- do not carry both vocabularies.
+ALLOWED_SPLITS = ("dev", "calibration", "locked_test")
+
+# Per-split minimum asset counts. A manifest built incrementally (e.g. all
+# assets still in "dev", calibration/locked_test empty until subjects are
+# confirmed untouched) must still validate -- policy, not a fixed built-in
+# requirement like v2's unconditional pilot_split_required/holdout_split_required.
+DEFAULT_REQUIRED_SPLIT_MINIMUMS: Dict[str, int] = {}
 
 # These values are intentionally product vocabulary rather than filename
 # aliases.  A project may provide a narrower vocabulary in ``vocabulary`` or
@@ -47,6 +76,10 @@ DEFAULT_STRATA_VOCABULARY: Dict[str, Tuple[str, ...]] = {
     "compression": ("clean", "compressed", "noisy", "mixed"),
     "exposure": ("normal", "high_key", "low_key", "mixed"),
     "faces": ("single", "multiple"),
+    # Difficulty of the lighting *for retouching*, independent of "lighting"'s
+    # source/quality type -- a studio shot can still be lighting_difficulty=hard
+    # (e.g. hard shadows from a single key light).
+    "lighting_difficulty": ("easy", "moderate", "hard", "extreme"),
 }
 
 # The four axes below are required for every asset by default.  The remaining
@@ -62,6 +95,7 @@ DEFAULT_TAG_VOCABULARY = (
     "props",
     "marks",
     "makeup",
+    "cosplay",
     "texture",
     "compression",
     "noise",
@@ -470,10 +504,11 @@ def validate_corpus_manifest(
     allowed_tags: Optional[Iterable[str]] = None,
     allowed_strata: Optional[Mapping[str, Iterable[str]]] = None,
     required_strata: Optional[Iterable[str]] = None,
+    required_split_minimums: Optional[Mapping[str, int]] = None,
     asset_validator: Optional[AssetValidator] = None,
     image_probe: Optional[ImageProbe] = None,
 ) -> Dict[str, Any]:
-    """Validate and normalize a v2 corpus manifest.
+    """Validate and normalize a v3 corpus manifest.
 
     ``root`` is the directory against which relative asset paths are resolved.
     If omitted, relative paths are resolved from the current working directory.
@@ -536,6 +571,7 @@ def validate_corpus_manifest(
     seen_actual_hashes: Dict[str, str] = {}
     seen_paths: Dict[str, str] = {}
     group_splits: Dict[str, set[str]] = {}
+    person_splits: Dict[str, set[str]] = {}
 
     for raw_asset in raw_assets:
         if not isinstance(raw_asset, Mapping):
@@ -648,6 +684,57 @@ def validate_corpus_manifest(
         if group_id is not None and split in ALLOWED_SPLITS:
             group_splits.setdefault(group_id, set()).add(split)
 
+        # person_id is orthogonal to group_id: group_id identifies a shoot or
+        # group portrait (many people, one asset); person_id identifies a
+        # real individual (one person, many shoots/assets). Subject-separated
+        # splits are bounded by person_id, not group_id -- a single-face
+        # frontal asset has no group_id but must still declare who is in it.
+        # Mandatory on every asset (unlike group_id, which is conditional).
+        raw_person_ids = raw_asset.get("person_ids")
+        if raw_person_ids is None:
+            single_person_id = _normalise_text(raw_asset.get("person_id"))
+            raw_person_ids = [single_person_id] if single_person_id is not None else None
+        person_ids: List[str] = []
+        if raw_person_ids is None:
+            errors.append(_issue("person_id_required", asset_id=asset_id or None, field="person_id"))
+        elif isinstance(raw_person_ids, (str, bytes)) or not isinstance(raw_person_ids, Iterable):
+            errors.append(_issue("person_id_invalid", asset_id=asset_id or None, field="person_id"))
+        else:
+            for raw_person_id in raw_person_ids:
+                person_id = _normalise_text(raw_person_id)
+                if person_id is None:
+                    errors.append(_issue("person_id_invalid", asset_id=asset_id or None, field="person_id"))
+                elif person_id in person_ids:
+                    errors.append(_issue("duplicate_person_id", asset_id=asset_id or None, field="person_id", value=person_id))
+                else:
+                    person_ids.append(person_id)
+            if not person_ids:
+                errors.append(_issue("person_id_required", asset_id=asset_id or None, field="person_id"))
+        person_ids = sorted(person_ids)
+        if split in ALLOWED_SPLITS:
+            for person_id in person_ids:
+                person_splits.setdefault(person_id, set()).add(split)
+
+        raw_identity_marks = raw_asset.get("identity_marks")
+        identity_marks: Optional[List[str]] = None
+        if raw_identity_marks is not None:
+            if isinstance(raw_identity_marks, (str, bytes)) or not isinstance(raw_identity_marks, Iterable):
+                errors.append(_issue("identity_marks_invalid", asset_id=asset_id or None, field="identity_marks"))
+            else:
+                identity_marks = []
+                for raw_mark in raw_identity_marks:
+                    mark = _normalise_text(raw_mark)
+                    if mark is None:
+                        errors.append(_issue("identity_marks_invalid", asset_id=asset_id or None, field="identity_marks"))
+                    else:
+                        identity_marks.append(mark)
+                identity_marks = sorted(identity_marks)
+
+        asset_consent_reference = _normalise_text(
+            raw_asset.get("consent_reference") or raw_asset.get("consent_ref")
+        )
+        asset_source = _normalise_text(raw_asset.get("source"))
+
         declared_validation = raw_asset.get("label_validation")
         if declared_validation is None:
             declared_validation = raw_asset.get("validation")
@@ -668,6 +755,7 @@ def validate_corpus_manifest(
             "path": canonical_path,
             "sha256": raw_hash,
             "split": split,
+            "person_ids": person_ids,
             "tags": asset_tags,
             "strata": dict(sorted(asset_strata.items())),
             "metadata": metadata,
@@ -676,6 +764,12 @@ def validate_corpus_manifest(
             candidate["group_id"] = group_id
         if group_applicable is not None:
             candidate["group_applicable"] = bool(group_applicable)
+        if identity_marks is not None:
+            candidate["identity_marks"] = identity_marks
+        if asset_consent_reference is not None:
+            candidate["consent_reference"] = asset_consent_reference
+        if asset_source is not None:
+            candidate["source"] = asset_source
 
         validation, validation_errors = _normalise_validation_fields(
             declared_validation,
@@ -693,15 +787,50 @@ def validate_corpus_manifest(
         if len(splits) > 1:
             errors.append(_issue("group_crosses_split", field="group_id", value=group_id))
 
+    # The hard subject-separation guarantee: a person_id appearing in more
+    # than one split means the same real individual is present in, e.g.,
+    # both dev and locked_test -- exactly what a "never seen" final exam
+    # must prevent. This is unconditional (every asset has person_ids),
+    # unlike group_crosses_split which only fires when group_id is set.
+    for person_id, splits in sorted(person_splits.items()):
+        if len(splits) > 1:
+            errors.append(_issue("person_crosses_split", field="person_id", value=person_id))
+
     canonical_assets.sort(key=lambda item: (str(item.get("asset_id", "")), str(item.get("path", ""))))
     split_counts = {split: sum(1 for asset in canonical_assets if asset.get("split") == split) for split in ALLOWED_SPLITS}
-    if split_counts["pilot"] == 0:
-        errors.append(_issue("pilot_split_required", field="assets.split"))
-    if split_counts["holdout"] == 0:
-        errors.append(_issue("holdout_split_required", field="assets.split"))
+
+    # v2 required pilot/holdout to be nonempty unconditionally. v3 does not:
+    # a manifest built incrementally (all assets still in "dev", calibration/
+    # locked_test empty until subjects are confirmed untouched -- the actual
+    # state this module ships in) must still validate. Minimums are a policy
+    # input, like coverage_requirements, defaulting to none required.
+    requested_minimums = required_split_minimums if required_split_minimums is not None else manifest.get(
+        "required_split_minimums", DEFAULT_REQUIRED_SPLIT_MINIMUMS
+    )
+    if not isinstance(requested_minimums, Mapping):
+        errors.append(_issue("required_split_minimums_invalid", field="required_split_minimums"))
+        requested_minimums = {}
+    for raw_split, raw_minimum in requested_minimums.items():
+        split_name = _normalise_label(raw_split)
+        if split_name is None or split_name not in ALLOWED_SPLITS:
+            errors.append(_issue("unknown_split_minimum", field="required_split_minimums", value=raw_split))
+            continue
+        if not isinstance(raw_minimum, int) or isinstance(raw_minimum, bool) or raw_minimum < 0:
+            errors.append(_issue("required_split_minimums_invalid", field=f"required_split_minimums.{split_name}"))
+            continue
+        if split_counts[split_name] < raw_minimum:
+            errors.append(_issue("split_minimum_not_met", field=f"assets.split.{split_name}", value=split_counts[split_name]))
 
     coverage = _coverage_for_assets(canonical_assets)
     errors.extend(_coverage_requirements(manifest.get("coverage_requirements"), coverage, tags, strata_vocabulary))
+    split_coverage = {
+        split: _coverage_for_assets([asset for asset in canonical_assets if asset.get("split") == split])
+        for split in ALLOWED_SPLITS
+    }
+    person_counts_by_split = {
+        split: len({pid for asset in canonical_assets if asset.get("split") == split for pid in asset.get("person_ids", [])})
+        for split in ALLOWED_SPLITS
+    }
 
     canonical_manifest: Dict[str, Any] = {
         "schema_version": CORPUS_MANIFEST_SCHEMA_VERSION,
@@ -732,7 +861,9 @@ def validate_corpus_manifest(
         "consent_reference": consent_reference,
         "asset_count": len(canonical_assets),
         "split_counts": split_counts,
+        "person_counts_by_split": person_counts_by_split,
         "coverage": coverage,
+        "coverage_by_split": split_coverage,
         "assets": canonical_assets,
         "errors": _sort_issues(errors),
         "warnings": _sort_issues(warnings),
@@ -776,6 +907,58 @@ def validate_corpus_coverage(
     }
 
 
+def corpus_split_report(manifest_or_report: Mapping[str, Any]) -> Dict[str, Any]:
+    """Summarize per-split asset/subject counts and coverage for review.
+
+    Accepts either a raw manifest (``{"assets": [...]}``) or a report already
+    returned by :func:`validate_corpus_manifest`. Does not itself validate --
+    call :func:`validate_corpus_manifest` first if the input is untrusted.
+    This is the read-only "show me where we stand" view: how many assets and
+    distinct person_ids are in each split, and what tag/stratum coverage each
+    split has, so an incrementally-built manifest (e.g. everything still in
+    "dev") can be inspected without needing populated calibration/locked_test
+    splits yet.
+    """
+    if "coverage_by_split" in manifest_or_report and "person_counts_by_split" in manifest_or_report:
+        assets = manifest_or_report.get("assets", [])
+        split_counts = manifest_or_report.get("split_counts") or {
+            split: sum(1 for asset in assets if asset.get("split") == split) for split in ALLOWED_SPLITS
+        }
+        return {
+            "split_counts": dict(split_counts),
+            "person_counts_by_split": dict(manifest_or_report["person_counts_by_split"]),
+            "coverage_by_split": dict(manifest_or_report["coverage_by_split"]),
+        }
+
+    raw_assets = manifest_or_report.get("assets", [])
+    assets = [asset for asset in raw_assets if isinstance(asset, Mapping)] if isinstance(raw_assets, Sequence) else []
+    split_counts = {split: 0 for split in ALLOWED_SPLITS}
+    person_counts_by_split = {split: 0 for split in ALLOWED_SPLITS}
+    coverage_by_split: Dict[str, Any] = {}
+    for split in ALLOWED_SPLITS:
+        split_assets = [asset for asset in assets if _normalise_label(asset.get("split")) == split]
+        split_counts[split] = len(split_assets)
+        person_ids: set[str] = set()
+        for asset in split_assets:
+            raw_person_ids = asset.get("person_ids")
+            if raw_person_ids is None:
+                single = asset.get("person_id")
+                raw_person_ids = [single] if single is not None else []
+            if isinstance(raw_person_ids, Iterable) and not isinstance(raw_person_ids, (str, bytes)):
+                for raw_person_id in raw_person_ids:
+                    label = _normalise_text(raw_person_id)
+                    if label is not None:
+                        person_ids.add(label)
+        person_counts_by_split[split] = len(person_ids)
+        coverage_by_split[split] = _coverage_for_assets(split_assets)
+
+    return {
+        "split_counts": split_counts,
+        "person_counts_by_split": person_counts_by_split,
+        "coverage_by_split": coverage_by_split,
+    }
+
+
 def require_valid_corpus_manifest(*args: Any, **kwargs: Any) -> Dict[str, Any]:
     """Return a report or raise :class:`CorpusManifestError` on failure."""
     report = validate_corpus_manifest(*args, **kwargs)
@@ -804,9 +987,11 @@ __all__ = [
     "ALLOWED_SPLITS",
     "CORPUS_MANIFEST_SCHEMA_VERSION",
     "CorpusManifestError",
+    "DEFAULT_REQUIRED_SPLIT_MINIMUMS",
     "DEFAULT_REQUIRED_STRATA",
     "DEFAULT_STRATA_VOCABULARY",
     "DEFAULT_TAG_VOCABULARY",
+    "corpus_split_report",
     "require_valid_corpus_manifest",
     "validate_corpus_coverage",
     "validate_corpus_manifest",
