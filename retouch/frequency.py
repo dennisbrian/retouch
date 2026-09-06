@@ -56,8 +56,31 @@ GAUSSIAN_BLEND_FACTOR = 0.25
 TEXTURE_ENERGY_LOW = 0.5
 TEXTURE_ENERGY_HIGH = 3.0
 # Minimum multiplier applied to smooth/mid levers when texture is maximally
-# flat. Never 0 — we still want gentle smoothing, just far less aggressive.
-TEXTURE_ADAPT_FLOOR = 0.5
+# flat -- i.e. the STRONGEST texture protection this guard can apply (adapt
+# is clamped to [floor, 1.0]; smaller floor = more protection). Never 0 -- we
+# still want gentle smoothing, just far less aggressive.
+#
+# Lowered 0.5 -> 0.25 (2026-09-06): the F8.0 calibration batch's lowest sample
+# was ~1.48 (energy_low=0.5 already gives factor=1.0 at that energy). A
+# 16-photo real cosplay-event corpus (ff47 event, flash/venue lighting + heavy
+# makeup) measures 0.62-1.37 on every detected face -- entirely BELOW that
+# calibration range, so every face in this content class was clamped to the
+# old floor=0.5 rather than getting the fuller protection the smoothstep
+# curve implies at such low energy. HF-energy-retention (robust MAD
+# high-pass inside regions.skin minus lips/eyes/brows/hair, measured
+# pre-global-grade so global clarity/sharpen/contrast can't confound it) on
+# the 3 worst-energy faces in that corpus: floor=0.5 gave 0.72-0.80 retention
+# (this bug report's original complaint -- waxy/synthetic-looking skin);
+# floor=0.25 gives 0.74-0.81, verified visually at 300% crop to read as real
+# recovered pore/skin texture, not reconstructed/synthetic. floor=0.0 (the
+# limit) only reaches 0.77-0.87 -- it does not converge on zeroing
+# smooth_strength/mid_reduction/texture_opacity outright (0.91-0.97 ceiling)
+# because smooth_strength maps to filter sigma through a nonzero additive
+# constant (SIGMA_BASE=20, sigma_s offset=3.0 in _smooth_anisotropic): driving
+# adapt near 0 still leaves a non-negligible sigma, unlike explicitly setting
+# smooth=0 which early-exits the filter entirely. That gap is a separate,
+# documented limitation of this lever, not something floor alone can close.
+TEXTURE_ADAPT_FLOOR = 0.25
 # MAD → std scaling for a normal distribution (1 / 0.6745).
 _MAD_TO_STD = 1.4826
 
@@ -790,16 +813,43 @@ class FrequencySeparator:
         #   (a) smooth_strength — drives the guided-filter eps/radius on low+mid;
         #       this is the dominant texture-killer, so it is scaled directly.
         #   (b) texture_opacity — floored upward so the high band is fully kept.
+        #   (c) mid_reduction — scaled by the same factor (2026-09-06; see below).
         # The response is smooth (no threshold pop), monotonic in energy, and
         # strictly asymmetric: every lever is only ever *reduced* (smoothing
         # never gets stronger than the recipe asks). On normal/high-texture
         # faces adapt == 1.0 → output is byte-for-byte identical to before.
-        # (mid_reduction is intentionally NOT scaled: the guided-filter
-        # interaction makes the output mid band non-monotonic in mid_reduction,
-        # so touching it would not reliably preserve texture.)
+        #
+        # mid_reduction WAS deliberately excluded (comment here previously
+        # claimed "the guided-filter interaction makes the output mid band
+        # non-monotonic in mid_reduction"), but that claim was never backed by
+        # a cited measurement or test. Swept mid_reduction 0.0->1.0 directly
+        # against the same robust HF-energy measure used by this guard, on 3
+        # real faces (smooth_engine="anisotropic", the recipe in question) --
+        # cleanly monotonic on all 3, no bump. mid_reduction is also the
+        # second-largest independent texture-loss lever after smooth_strength
+        # (real corpus faces: zeroing it alone recovered +2.9 to +6.1pp
+        # HF-retention versus the unguarded recipe default), and unlike
+        # smooth_strength/texture_opacity it had no adaptation at all, so a
+        # low-energy face's mid-band blemish/shadow-scale detail was removed
+        # at full recipe strength regardless of how flat the skin already was.
+        # Not re-verified on smooth_engine="bilateral" -- if that path shows
+        # non-monotonic behavior, gate this scaling on smooth_engine rather
+        # than reverting it globally.
         adapt = _texture_adaptation_factor(high, m_2d)
+        if os.getenv("TEXTURE_ADAPT_DEBUG"):
+            sel_dbg = m_2d > 0.5
+            if int(np.count_nonzero(sel_dbg)) >= 16:
+                high_mag_dbg = np.abs(high).mean(axis=2)
+                vals_dbg = high_mag_dbg[sel_dbg]
+                med_dbg = float(np.median(vals_dbg))
+                mad_dbg = float(np.median(np.abs(vals_dbg - med_dbg)))
+                energy_dbg = mad_dbg * _MAD_TO_STD
+            else:
+                energy_dbg = float("nan")
+            logger.warning("TEXTURE_ADAPT_DEBUG adapt=%.4f energy=%.4f smooth_strength_in=%.4f mid_reduction_in=%.4f texture_opacity_in=%.4f", adapt, energy_dbg, smooth_strength, mid_reduction, texture_opacity)
         if adapt < 1.0:
             smooth_strength = smooth_strength * adapt
+            mid_reduction = mid_reduction * adapt
             # Raise opacity toward 1.0 (keep more of the surviving high band).
             texture_opacity = texture_opacity + (1.0 - adapt) * (1.0 - texture_opacity)
             texture_opacity = max(0.0, min(1.0, texture_opacity))
