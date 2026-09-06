@@ -4242,6 +4242,52 @@ RECIPES["studio_headshot_protected_v1"] = {
     "sharpen": 12.0,
 }
 
+RECIPES["fa02_texture_experimental_v1"] = {
+    # RESEARCH-ONLY. Not a claim of quality. This recipe exists solely to
+    # expose fa02_texture_mode for manual testing of the FA-02 production
+    # scaffold (cce14e5) — it is the only way to reach that code path from a
+    # recipe/CLI/GUI invocation, since fa02_texture_mode is deliberately not
+    # set by any other recipe and its ParamSpec default is "legacy".
+    #
+    # Every threshold behind this mode is explicitly PROVISIONAL or
+    # PLACEHOLDER (see retouch/fa02_texture_eligibility.py). The sharpness
+    # floor (highpass_std >= 3.5) is actively CONTRADICTED by its own two
+    # anchors: the one committed patch with a genuine fine-hair label
+    # (DSCF1058) measures 3.12 and FAILS it, while a patch whose own
+    # annotation calls its signal sensor/ISO noise (DSCF1606) measures 3.74
+    # and PASSES it. The noise/compression gate has no calibration at all.
+    # Zero real photos have ever cleared this gate end-to-end; this recipe
+    # has not been visually reviewed on a single eligible face.
+    #
+    # "multiscale", not "dog": DoG is a proven structural no-op below ~500px
+    # face width (both finest sigmas clamp to the same 0.6px floor at the
+    # eligibility gate's own 250px floor, so their difference is identically
+    # zero — see cce14e5's commit message and
+    # fa02_texture_eligibility.collapsed_bands). multiscale's second band
+    # still contributes at 250px, so it is the only mode with any chance of
+    # a non-zero, observable effect near the gate boundary.
+    #
+    # Built on natural (not any correction-first recipe) so multiscale's
+    # effect, if it fires at all, is the only variable — no other skin op
+    # competes for the same micro-contrast. micro_restore is left at its
+    # ParamSpec default of 20; when fa02_texture_mode != "legacy" that value
+    # becomes the FA-02 candidate's strength input instead of the legacy
+    # restore_micro_texture() call (perf_optimizations.py, the two blocks
+    # are mutually exclusive).
+    #
+    # On any face that fails eligibility (the overwhelmingly likely outcome
+    # today), this recipe abstains and behaves identically to natural with
+    # micro_restore=0 — that is the correct, safe behavior, not a bug.
+    #
+    # Do NOT add to CURATED_RECIPE_NAMES/RECOMMENDED_RECIPE_NAMES. Do NOT
+    # remove the EXPERIMENTAL_RECIPE_NAMES entry below without the evidence
+    # chain described in cce14e5's report (~8 annotated real cases, a
+    # candidate beating both A0/A1 baselines under the frozen scoring
+    # contract, recalibrated thresholds, owner visual sign-off).
+    "extends": "natural",
+    "fa02_texture_mode": "multiscale",
+}
+
 # The consumer-facing catalog is deliberately curated. ``RECIPES`` retains
 # older experiments and specialist looks for backwards-compatible projects.
 # A curated name only means it has a maintained QA path; it does *not* mean a
@@ -4263,6 +4309,7 @@ CURATED_RECIPE_NAMES: List[str] = [
     "documentary_preserve_v1",
     "heirloom_archive_v1",
     "studio_headshot_protected_v1",
+    "fa02_texture_experimental_v1",
     "aniso_pore_real_v1",
     "studio_porcelain_clear_v1",
     "beauty_editorial_clear_v1",
@@ -4377,6 +4424,12 @@ EXPERIMENTAL_RECIPE_NAMES = (
     # either of these is presented as a default.
     "heirloom_archive_v1",
     "documentary_preserve_v1",
+    # Exposes fa02_texture_mode (cce14e5) for manual testing only. Every
+    # threshold behind this mode is provisional/uncalibrated and zero real
+    # photos have cleared the eligibility gate end-to-end — see the recipe's
+    # own comment for the full evidence gap. This is the "unvalidated
+    # calibration" sense of experimental, not "compare two good options."
+    "fa02_texture_experimental_v1",
 )
 
 CONDITIONAL_RECIPE_NAMES: List[str] = [
