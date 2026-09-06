@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "asset_id": "priority_printing_DSCF2709",
+  "person_id": "subject_priority_printing_01",
+  "native_dimensions": [
+    4160,
+    6240
+  ],
+  "native_roi_xywh": [
+    1400,
+    1500,
+    512,
+    512
+  ],
+  "native_source_reference": "DSCF2709_native.jpg",
+  "supports": {
+    "allow": {
+      "reference": "hand-painted rectangular exclusions: left-edge hair band (x<90), top-left eyeliner/lash corner (x<220,y<110), bottom-right lip-color corner (x>=300,y>=380); remainder is nose-bridge/cheek skin",
+      "provenance": "owner_approved",
+      "description": "Eligible skin support for the FA-02 texture patch; excludes hair, eyeliner and lip-color intrusions visible in the crop preview"
+    },
+    "corrected": {
+      "reference": "none -- no known corrected defect in this patch",
+      "provenance": "owner_approved",
+      "description": "No correction applied or claimed in this patch; mask is all-zero",
+      "human_reference": "Owner visual review, 2026-09-06 session"
+    },
+    "protected": {
+      "reference": "top-left corner region [0,0,220,110] in crop-local coordinates: drawn eyeliner/lash makeup edge",
+      "provenance": "owner_approved",
+      "description": "Drawn eyeliner mark near the eye corner, protected as an identity/makeup mark that must not be altered by any texture arm"
+    }
+  },
+  "support_acceptance_reference": "Owner visual review and crop/mask approval, 2026-09-06 session, this conversation",
+  "annotation_source": "owner_approved",
+  "reviewer": "dennis",
+  "review_regions": [
+    {
+      "id": "fine_hair_left_edge",
+      "xywh": [
+        0,
+        0,
+        90,
+        512
+      ],
+      "tags": [
+        "fine_hair_review"
+      ]
+    },
+    {
+      "id": "nose_bridge_pore_field",
+      "xywh": [
+        230,
+        130,
+        220,
+        220
+      ],
+      "tags": [
+        "pore_review",
+        "texture"
+      ]
+    }
+  ],
+  "notes": "Second real-portrait FA-02 dev-split pilot case, same subject as DSCF2650 (subject_priority_printing_01). Patch is nose-bridge/cheek skin from DSCF2709 (Priority for Printing shoot, frontal pose, different photo from the first pilot). S produced by the actual RetouchEngine 'natural' recipe at full native resolution, same crop coordinates as X. This patch exercises the 'protected' mask for the first time (drawn eyeliner corner).",
+  "uncertainty": "Eyeliner/lash boundary at top-left was approximated with a rectangular crop, not traced to the exact stroke edge; some adjacent skin may be over-excluded from allow and included in protected as a conservative choice."
+}

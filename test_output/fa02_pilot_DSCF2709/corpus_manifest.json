@@ -1,0 +1,134 @@
+{
+  "assets": [
+    {
+      "asset_id": "priority_printing_DSCF2709",
+      "label_validation": {
+        "method": "owner_manual_review",
+        "reference": "Owner-confirmed dev-split assignment, 2026-09-06 session (second patch, same subject as DSCF2650)",
+        "status": "validated"
+      },
+      "metadata": {
+        "decodable": true,
+        "format": "JPEG",
+        "height": 6240,
+        "mode": "RGB",
+        "probe_status": "ok",
+        "width": 4160
+      },
+      "path": "DSCF2709_native.jpg",
+      "person_ids": [
+        "subject_priority_printing_01"
+      ],
+      "sha256": "444023099a67e7174e71ef2409f13443d7f1b8982ffad95a63f7da0c4b2a4e92",
+      "source": "Priority for Printing shoot",
+      "split": "dev",
+      "strata": {
+        "face_scale": "close",
+        "lighting": "studio",
+        "pose": "frontal",
+        "skin_tone": "light"
+      },
+      "tags": [
+        "cosplay",
+        "makeup"
+      ]
+    }
+  ],
+  "consent_reference": "Own shoot / full usage rights -- Priority for Printing shoot, owner-supplied 2026-09-06",
+  "required_strata": [
+    "face_scale",
+    "lighting",
+    "pose",
+    "skin_tone"
+  ],
+  "schema_version": 3,
+  "vocabulary": {
+    "strata": {
+      "compression": [
+        "clean",
+        "compressed",
+        "mixed",
+        "noisy"
+      ],
+      "exposure": [
+        "high_key",
+        "low_key",
+        "mixed",
+        "normal"
+      ],
+      "face_scale": [
+        "close",
+        "medium",
+        "small"
+      ],
+      "faces": [
+        "multiple",
+        "single"
+      ],
+      "lighting": [
+        "backlit",
+        "daylight",
+        "flash",
+        "high_key",
+        "low_key",
+        "mixed",
+        "overcast",
+        "studio"
+      ],
+      "lighting_difficulty": [
+        "easy",
+        "extreme",
+        "hard",
+        "moderate"
+      ],
+      "occlusion": [
+        "facial_hair",
+        "glasses",
+        "hands",
+        "mixed",
+        "none",
+        "props",
+        "wig"
+      ],
+      "pose": [
+        "frontal",
+        "mixed",
+        "profile",
+        "three_quarter"
+      ],
+      "skin_tone": [
+        "deep",
+        "light",
+        "medium",
+        "tan",
+        "varied",
+        "very_deep",
+        "very_light"
+      ],
+      "texture": [
+        "clean",
+        "marks",
+        "mixed",
+        "textured"
+      ]
+    },
+    "tags": [
+      "compression",
+      "cosplay",
+      "facial_hair",
+      "glasses",
+      "group_portrait",
+      "hands",
+      "high_key",
+      "low_key",
+      "makeup",
+      "marks",
+      "multi_image_shoot",
+      "multiple_faces",
+      "noise",
+      "props",
+      "texture",
+      "wig"
+    ]
+  }
+}

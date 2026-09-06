@@ -1,0 +1,35 @@
+{
+  "valid": true,
+  "violations": [],
+  "corpus_manifest": "/Applications/htdocs/retouch/test_output/fa02_pilot_DSCF2709/corpus_manifest.json",
+  "fa02_manifest": "/Applications/htdocs/retouch/test_output/fa02_pilot_DSCF2709/fa02_manifest.json",
+  "purpose": "development_pilot",
+  "case_count": 1,
+  "arms": [
+    "A0_disabled",
+    "A1_raw",
+    "A2_dog",
+    "A3_multiscale",
+    "A4_orientation",
+    "A5_retouch_frequency"
+  ],
+  "arm_support_uniformity": {
+    "uniform": true,
+    "violations": [],
+    "cases": [
+      {
+        "case_id": "dscf2709_nose_bridge_patch_01",
+        "arms": [
+          "A0_disabled",
+          "A1_raw",
+          "A2_dog",
+          "A3_multiscale",
+          "A4_orientation",
+          "A5_retouch_frequency"
+        ],
+        "shared_support_signature": "627e83c5512e05a7d4c496793a606e92e3e364f847430bcb7927531d5802e22d",
+        "eligible_pixels": 101431
+      }
+    ]
+  }
+}

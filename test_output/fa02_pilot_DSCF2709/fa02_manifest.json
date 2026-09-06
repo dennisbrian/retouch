@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "purpose": "development_pilot",
+  "corpus": "portrait cases sourced from a corpus_manifest v3 registry",
+  "parameter_selection": "a priori research settings; not fitted to these cases",
+  "cases": [
+    {
+      "id": "dscf2709_nose_bridge_patch_01",
+      "kind": "portrait",
+      "split": "dev",
+      "person_ids": [
+        "subject_priority_printing_01"
+      ],
+      "session_id": "priority_printing_shoot_2026",
+      "arrays": "DSCF2709_arrays.npz",
+      "arrays_sha256": "0587efe9c785a93ee8fd8a9df135b5d71c5869d4290b61b661c60ed543971aa2",
+      "inter_eye_distance_px": 310.0,
+      "face_width_px": 1145.0,
+      "crop_xywh": [
+        1400,
+        1500,
+        512,
+        512
+      ],
+      "native_dimensions": [
+        4160,
+        6240
+      ],
+      "owner_mapping_reference": "Owner-confirmed: DSCF2709 depicts subject_priority_printing_01 (same subject as DSCF2650), 2026-09-06 session",
+      "support_acceptance_reference": "Owner visual review and crop/mask approval, 2026-09-06 session, this conversation",
+      "support_status": "externally_accepted",
+      "masks_provenance": "owner_approved",
+      "native_source_reference": "DSCF2709_native.jpg",
+      "source_sha256": "444023099a67e7174e71ef2409f13443d7f1b8982ffad95a63f7da0c4b2a4e92",
+      "smoothing_provenance": "RetouchEngine recipe=natural, full native resolution (quality=full default), CLI cli.py invocation 2026-09-06",
+      "color_profile": "sRGB (JPEG, no embedded ICC profile detected)",
+      "resampled": false,
+      "previously_inspected": false,
+      "rois": [
+        {
+          "id": "fine_hair_left_edge",
+          "xywh": [
+            0,
+            0,
+            90,
+            512
+          ],
+          "tags": [
+            "fine_hair_review"
+          ]
+        },
+        {
+          "id": "nose_bridge_pore_field",
+          "xywh": [
+            230,
+            130,
+            220,
+            220
+          ],
+          "tags": [
+            "pore_review",
+            "texture"
+          ]
+        }
+      ],
+      "pores": [],
+      "profiles": [],
+      "corpus_source": {
+        "manifest_path": "test_output/fa02_pilot_DSCF2709/corpus_manifest.json",
+        "asset_id": "priority_printing_DSCF2709",
+        "asset_sha256": "444023099a67e7174e71ef2409f13443d7f1b8982ffad95a63f7da0c4b2a4e92",
+        "asset_split": "dev",
+        "asset_person_ids": [
+          "subject_priority_printing_01"
+        ],
+        "annotation_person_id": "subject_priority_printing_01"
+      },
+      "annotation": {
+        "schema_version": 1,
+        "asset_id": "priority_printing_DSCF2709",
+        "person_id": "subject_priority_printing_01",
+        "annotation_source": "owner_approved",
+        "reviewer": "dennis",
+        "native_dimensions": [
+          4160,
+          6240
+        ],
+        "native_roi_xywh": [
+          1400,
+          1500,
+          512,
+          512
+        ],
+        "native_source_reference": "DSCF2709_native.jpg",
+        "supports": {
+          "allow": {
+            "reference": "hand-painted rectangular exclusions: left-edge hair band (x<90), top-left eyeliner/lash corner (x<220,y<110), bottom-right lip-color corner (x>=300,y>=380); remainder is nose-bridge/cheek skin",
+            "provenance": "owner_approved"
+          },
+          "corrected": {
+            "reference": "none -- no known corrected defect in this patch",
+            "provenance": "owner_approved",
+            "description": "No correction applied or claimed in this patch; mask is all-zero",
+            "human_reference": "Owner visual review, 2026-09-06 session"
+          },
+          "protected": {
+            "reference": "top-left corner region [0,0,220,110] in crop-local coordinates: drawn eyeliner/lash makeup edge",
+            "provenance": "owner_approved",
+            "description": "Drawn eyeliner mark near the eye corner, protected as an identity/makeup mark that must not be altered by any texture arm"
+          }
+        },
+        "support_acceptance_reference": "Owner visual review and crop/mask approval, 2026-09-06 session, this conversation",
+        "review_regions": [
+          {
+            "id": "fine_hair_left_edge",
+            "xywh": [
+              0,
+              0,
+              90,
+              512
+            ],
+            "tags": [
+              "fine_hair_review"
+            ]
+          },
+          {
+            "id": "nose_bridge_pore_field",
+            "xywh": [
+              230,
+              130,
+              220,
+              220
+            ],
+            "tags": [
+              "pore_review",
+              "texture"
+            ]
+          }
+        ],
+        "notes": "Second real-portrait FA-02 dev-split pilot case, same subject as DSCF2650 (subject_priority_printing_01). Patch is nose-bridge/cheek skin from DSCF2709 (Priority for Printing shoot, frontal pose, different photo from the first pilot). S produced by the actual RetouchEngine 'natural' recipe at full native resolution, same crop coordinates as X. This patch exercises the 'protected' mask for the first time (drawn eyeliner corner).",
+        "uncertainty": "Eyeliner/lash boundary at top-left was approximated with a rectangular crop, not traced to the exact stroke edge; some adjacent skin may be over-excluded from allow and included in protected as a conservative choice."
+      },
+      "reviewer": "dennis"
+    }
+  ]
+}
