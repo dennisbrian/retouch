@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "purpose": "development_pilot",
+  "corpus": "portrait cases sourced from a corpus_manifest v3 registry",
+  "parameter_selection": "a priori research settings; not fitted to these cases",
+  "cases": [
+    {
+      "id": "ff47_DSCF2258_patch_01",
+      "kind": "portrait",
+      "split": "dev",
+      "person_ids": [
+        "subject_ff47_05"
+      ],
+      "session_id": "ff47_event_2026",
+      "arrays": "DSCF2258_arrays.npz",
+      "arrays_sha256": "5d70282f92c0a3d51e675552f3d3246d60f0e48204c81ee1b94ec59eb4ed7295",
+      "inter_eye_distance_px": 300.0,
+      "face_width_px": 1001.0,
+      "crop_xywh": [
+        1440,
+        1560,
+        512,
+        512
+      ],
+      "native_dimensions": [
+        4160,
+        6240
+      ],
+      "owner_mapping_reference": "Owner-confirmed: DSCF2258 depicts subject_ff47_05, 2026-09-06 session",
+      "support_acceptance_reference": "Owner visual review and crop/mask approval, 2026-09-06 session, this conversation",
+      "support_status": "externally_accepted",
+      "masks_provenance": "owner_approved",
+      "native_source_reference": "DSCF2258_native.jpg",
+      "source_sha256": "8d0505008fad53189128729e92e9b8c82c7b1bbccbe79a09dd8f7ad0d0294922",
+      "smoothing_provenance": "RetouchEngine recipe=natural, full native resolution (quality=full default), CLI cli.py invocation 2026-09-06",
+      "color_profile": "sRGB (JPEG, no embedded ICC profile detected)",
+      "resampled": false,
+      "previously_inspected": false,
+      "rois": [],
+      "pores": [],
+      "profiles": [],
+      "corpus_source": {
+        "manifest_path": "test_output/fa02_pilot_DSCF2258/corpus_manifest.json",
+        "asset_id": "ff47_DSCF2258",
+        "asset_sha256": "8d0505008fad53189128729e92e9b8c82c7b1bbccbe79a09dd8f7ad0d0294922",
+        "asset_split": "dev",
+        "asset_person_ids": [
+          "subject_ff47_05"
+        ],
+        "annotation_person_id": "subject_ff47_05"
+      },
+      "annotation": {
+        "schema_version": 1,
+        "asset_id": "ff47_DSCF2258",
+        "person_id": "subject_ff47_05",
+        "annotation_source": "owner_approved",
+        "reviewer": "dennis",
+        "native_dimensions": [
+          4160,
+          6240
+        ],
+        "native_roi_xywh": [
+          1440,
+          1560,
+          512,
+          512
+        ],
+        "native_source_reference": "DSCF2258_native.jpg",
+        "supports": {
+          "allow": {
+            "reference": "hand-painted rectangular exclusions in crop-local coordinates, read off the saved 512x512 crop preview: [0,0,512,95]; [0,0,80,512]; [300,240,212,272]; [120,430,392,82]; [430,95,82,145]; remainder (95830 px) is eligible skin -- the large clean left cheek plus the blush gradient band",
+            "provenance": "owner_approved",
+            "description": "Eligible skin support for the FA-02 texture patch; excludes hair/wig, eye, lip, nose and prop intrusions visible in the crop preview"
+          },
+          "corrected": {
+            "reference": "none -- no known corrected defect in this patch",
+            "provenance": "owner_approved",
+            "description": "No correction applied or claimed in this patch; mask is all-zero",
+            "human_reference": "Owner visual review, 2026-09-06 session (ff47 event batch)"
+          },
+          "protected": {
+            "reference": "none -- no protected identity mark inside this crop; mask is all-zero",
+            "provenance": "owner_approved",
+            "description": "No permanent identity mark falls inside the selected clean-skin ROI, so nothing is held protected here. Applied-makeup edges present in this crop are recorded as makeup_edge_regions, which is a different claim."
+          }
+        },
+        "support_acceptance_reference": "Owner visual review and crop/mask approval, 2026-09-06 session, this conversation",
+        "review_regions": [],
+        "notes": "Fifth ff47-event subject (red cap, largest/closest face in this batch). Carries a soft-gradient blush makeup_edge label, complementing the hard drawn-glyph edges on subjects 02 and 03. This patch is also the batch's negative control for pore labelling: best case scale and lighting, still no resolvable pores.",
+        "uncertainty": "Examined at 8x nearest-neighbour magnification on the NATIVE crop (X, not S). The blush has no sharp boundary, so the labelled rectangle bounds the steepest part of the gradient, not a crisp edge -- a second reviewer could reasonably place it 20-30 px either way.",
+        "pore_regions": [],
+        "fine_hair_regions": [],
+        "makeup_edge_regions": [
+          {
+            "id": "blush_gradient_edge_upper_cheek",
+            "xywh": [
+              300,
+              95,
+              150,
+              110
+            ],
+            "tags": [
+              "blush",
+              "makeup_edge"
+            ],
+            "notes": "Diagonal boundary of applied pink/red blush running from the outer eye corner down the cheekbone. Verified at 8x (tile 330,90,80,80): a broad ~25-40 px chroma gradient with no luminance step -- the soft-edge makeup case, distinct from the hard drawn glyphs on DSCF1423/DSCF1606."
+          }
+        ],
+        "protected_identity_marks": [],
+        "corrected_defect_regions": [],
+        "noise_regions": [],
+        "uncertainty_regions": [
+          {
+            "id": "unresolvable_pore_field_left_cheek",
+            "xywh": [
+              90,
+              190,
+              140,
+              140
+            ],
+            "tags": [
+              "ambiguous",
+              "pore_candidate"
+            ],
+            "notes": "Largest/closest face in the batch (1001 px) and the best-lit skin, so this was the strongest pore candidate examined. At 8x: highpass_std 1.31-1.46, low-amplitude tonal blotching only, no countable pore openings. If any patch in this batch could have carried a pore label it would be this one; it cannot."
+          }
+        ]
+      },
+      "reviewer": "dennis"
+    }
+  ]
+}

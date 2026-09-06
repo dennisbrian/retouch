@@ -1,0 +1,22 @@
+{
+  "python": "3.9.6 (default, May 22 2026, 11:13:45) \n[Clang 21.0.0 (clang-2100.1.1.101)]",
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "numpy": "1.26.4",
+  "opencv": "4.11.0",
+  "opencv_threads": 1,
+  "runner_sha256": "57966ed9b6e4b7453c8247878f5fce7a563862216ef2294e096db87fc4a57b68",
+  "frequency_sha256": "b036229b055ad0010c7c48fb1cb739ac1ec6ac971a810134bb9b3fa8d313c28d",
+  "controls_sha256": "9c3daec411ec0a737d9d0af7c9ce545c95c80254ecac6cf7365add4b280ce657",
+  "manifest_sha256": "f066aae27ac30c2d86a6ba8b5ad2d693712a1c9beea244454231c4d924293af7",
+  "measurement_repeats": 3,
+  "command": [
+    "scripts/qa/fa02_texture_representation_experiment.py",
+    "run",
+    "test_output/fa02_pilot_DSCF2183/fa02_manifest.json",
+    "test_output/fa02_pilot_DSCF2183/config_lock.json",
+    "test_output/fa02_pilot_DSCF2183/run",
+    "--repeats",
+    "3"
+  ],
+  "rendering": "PNG rounded uint8; NPZ float32 authoritative; native dimensions"
+}

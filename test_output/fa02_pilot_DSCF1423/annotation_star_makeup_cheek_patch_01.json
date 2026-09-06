@@ -1,0 +1,91 @@
+{
+  "review_regions": [],
+  "pore_regions": [],
+  "fine_hair_regions": [],
+  "makeup_edge_regions": [
+    {
+      "id": "painted_star_edge_cheek",
+      "xywh": [
+        45,
+        215,
+        130,
+        155
+      ],
+      "tags": [
+        "makeup_edge",
+        "drawn_mark"
+      ],
+      "notes": "Hand-drawn pink/orange five-point star on the cheek. Soft airbrushed stroke edge, ~6-10 px transition; a nuisance edge a texture arm may over-sharpen. Verified at 8x (tile 70,240,90,90)."
+    }
+  ],
+  "protected_identity_marks": [],
+  "corrected_defect_regions": [],
+  "noise_regions": [],
+  "uncertainty_regions": [
+    {
+      "id": "unresolvable_pore_field_right_cheek",
+      "xywh": [
+        300,
+        200,
+        80,
+        120
+      ],
+      "tags": [
+        "ambiguous",
+        "pore_candidate"
+      ],
+      "notes": "Examined at 4x and 8x: highpass_std 1.69-1.88, smooth makeup base. No countable pore openings; not resolvable."
+    },
+    {
+      "id": "lash_mass_not_vellus_hair",
+      "xywh": [
+        20,
+        60,
+        90,
+        90
+      ],
+      "tags": [
+        "ambiguous",
+        "fine_hair_candidate"
+      ],
+      "notes": "highpass_std 3.73 but the structure is a merged eyelash/wig mass, not separable vellus hairs. Deliberately NOT labelled as fine_hair_regions."
+    }
+  ],
+  "notes": "Second ff47-event subject (yellow outfit, blonde bob, closest framing). Carries the corpus's first real makeup_edge_regions label: a hand-drawn cheek star. protected_identity_marks left empty -- the star is APPLIED makeup, not a permanent identity mark, and the schema separates those two claims.",
+  "uncertainty": "Examined at 8x nearest-neighbour magnification on the NATIVE crop (X, not S). Star rectangle bounds the whole painted glyph including interior skin, not just its stroke. Allow excludes the eye/lash band, wig edge, nose and mouth corner by rectangle.",
+  "supports": {
+    "allow": {
+      "reference": "hand-painted rectangular exclusions in crop-local coordinates, read off the saved 512x512 crop preview: [0,0,512,200]; [0,0,70,512]; [360,140,152,372]; [250,340,262,172]; [0,380,140,132]; remainder (62320 px) is eligible skin -- lower-left/centre cheek including the painted star region",
+      "provenance": "owner_approved",
+      "description": "Eligible skin support for the FA-02 texture patch; excludes hair/wig, eye, lip, nose and prop intrusions visible in the crop preview"
+    },
+    "corrected": {
+      "reference": "none -- no known corrected defect in this patch",
+      "provenance": "owner_approved",
+      "description": "No correction applied or claimed in this patch; mask is all-zero",
+      "human_reference": "Owner visual review, 2026-09-06 session (ff47 event batch)"
+    },
+    "protected": {
+      "reference": "none -- no protected identity mark inside this crop; mask is all-zero",
+      "provenance": "owner_approved",
+      "description": "No permanent identity mark falls inside the selected clean-skin ROI, so nothing is held protected here. Applied-makeup edges present in this crop are recorded as makeup_edge_regions, which is a different claim."
+    }
+  },
+  "schema_version": 1,
+  "asset_id": "ff47_DSCF1423",
+  "person_id": "subject_ff47_02",
+  "native_dimensions": [
+    4160,
+    6240
+  ],
+  "native_roi_xywh": [
+    1580,
+    2050,
+    512,
+    512
+  ],
+  "native_source_reference": "DSCF1423_native.jpg",
+  "support_acceptance_reference": "Owner visual review and crop/mask approval, 2026-09-06 session, this conversation",
+  "annotation_source": "owner_approved",
+  "reviewer": "dennis"
+}

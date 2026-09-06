@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "purpose": "development_pilot",
+  "corpus": "portrait cases sourced from a corpus_manifest v3 registry",
+  "parameter_selection": "a priori research settings; not fitted to these cases",
+  "cases": [
+    {
+      "id": "ff47_DSCF2183_patch_01",
+      "kind": "portrait",
+      "split": "dev",
+      "person_ids": [
+        "subject_ff47_04"
+      ],
+      "session_id": "ff47_event_2026",
+      "arrays": "DSCF2183_arrays.npz",
+      "arrays_sha256": "6a9479cf86735af9407abad0ea3351321907c599236e0633135da33f8153b18f",
+      "inter_eye_distance_px": 180.0,
+      "face_width_px": 602.0,
+      "crop_xywh": [
+        1700,
+        1950,
+        512,
+        512
+      ],
+      "native_dimensions": [
+        4160,
+        6240
+      ],
+      "owner_mapping_reference": "Owner-confirmed: DSCF2183 depicts subject_ff47_04, 2026-09-06 session",
+      "support_acceptance_reference": "Owner visual review and crop/mask approval, 2026-09-06 session, this conversation",
+      "support_status": "externally_accepted",
+      "masks_provenance": "owner_approved",
+      "native_source_reference": "DSCF2183_native.jpg",
+      "source_sha256": "ef8ad9977da150ad760530f9a992300a2e123a580b77ef8e491c3c706f90af1e",
+      "smoothing_provenance": "RetouchEngine recipe=natural, full native resolution (quality=full default), CLI cli.py invocation 2026-09-06",
+      "color_profile": "sRGB (JPEG, no embedded ICC profile detected)",
+      "resampled": false,
+      "previously_inspected": false,
+      "rois": [],
+      "pores": [],
+      "profiles": [],
+      "corpus_source": {
+        "manifest_path": "test_output/fa02_pilot_DSCF2183/corpus_manifest.json",
+        "asset_id": "ff47_DSCF2183",
+        "asset_sha256": "ef8ad9977da150ad760530f9a992300a2e123a580b77ef8e491c3c706f90af1e",
+        "asset_split": "dev",
+        "asset_person_ids": [
+          "subject_ff47_04"
+        ],
+        "annotation_person_id": "subject_ff47_04"
+      },
+      "annotation": {
+        "schema_version": 1,
+        "asset_id": "ff47_DSCF2183",
+        "person_id": "subject_ff47_04",
+        "annotation_source": "owner_approved",
+        "reviewer": "dennis",
+        "native_dimensions": [
+          4160,
+          6240
+        ],
+        "native_roi_xywh": [
+          1700,
+          1950,
+          512,
+          512
+        ],
+        "native_source_reference": "DSCF2183_native.jpg",
+        "supports": {
+          "allow": {
+            "reference": "hand-painted rectangular exclusions in crop-local coordinates, read off the saved 512x512 crop preview: [0,0,512,110]; [0,0,200,230]; [250,0,262,512]; [60,340,200,172]; [0,420,512,92]; [0,110,60,402]; remainder (26900 px) is eligible skin -- the mid-left cheek between the eye and the lip line",
+            "provenance": "owner_approved",
+            "description": "Eligible skin support for the FA-02 texture patch; excludes hair/wig, eye, lip, nose and prop intrusions visible in the crop preview"
+          },
+          "corrected": {
+            "reference": "none -- no known corrected defect in this patch",
+            "provenance": "owner_approved",
+            "description": "No correction applied or claimed in this patch; mask is all-zero",
+            "human_reference": "Owner visual review, 2026-09-06 session (ff47 event batch)"
+          },
+          "protected": {
+            "reference": "none -- no protected identity mark inside this crop; mask is all-zero",
+            "provenance": "owner_approved",
+            "description": "No permanent identity mark falls inside the selected clean-skin ROI, so nothing is held protected here. Applied-makeup edges present in this crop are recorded as makeup_edge_regions, which is a different claim."
+          }
+        },
+        "support_acceptance_reference": "Owner visual review and crop/mask approval, 2026-09-06 session, this conversation",
+        "review_regions": [],
+        "notes": "Fourth ff47-event subject (white wig, soft/hazy high-key lighting). Contributes lighting diversity (brightest, lowest-contrast frame in the batch) and an explicitly ZERO-ground-truth patch: recorded so the corpus documents what a soft-light capture cannot support, rather than leaving the gap silent.",
+        "uncertainty": "Examined at 8x nearest-neighbour magnification on the NATIVE crop (X, not S). White wig strands are low-contrast against the pale skin, so the allow-mask exclusions on the right side and bottom are generous and certainly over-exclude some real skin.",
+        "pore_regions": [],
+        "fine_hair_regions": [],
+        "makeup_edge_regions": [],
+        "protected_identity_marks": [],
+        "corrected_defect_regions": [],
+        "noise_regions": [],
+        "uncertainty_regions": [
+          {
+            "id": "hazy_unresolvable_cheek",
+            "xywh": [
+              80,
+              220,
+              130,
+              110
+            ],
+            "tags": [
+              "ambiguous",
+              "pore_candidate",
+              "pose_candidate"
+            ],
+            "notes": "Softest/haziest frame of the batch (diffuse veiling light plus a white wig filling the frame). highpass_std 2.33 at 8x, but the structure is a smooth low-contrast haze with no separable elements -- neither pore openings nor individual hairs are resolvable. Both pore_regions and fine_hair_regions are honestly empty for this patch."
+          }
+        ]
+      },
+      "reviewer": "dennis"
+    }
+  ]
+}
