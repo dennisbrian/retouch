@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "purpose": "development_pilot",
+  "corpus": "portrait cases sourced from a corpus_manifest v3 registry",
+  "parameter_selection": "a priori research settings; not fitted to these cases",
+  "cases": [
+    {
+      "id": "dscf2650_cheek_patch_01",
+      "kind": "portrait",
+      "split": "dev",
+      "person_ids": [
+        "subject_priority_printing_01"
+      ],
+      "session_id": "priority_printing_shoot_2026",
+      "arrays": "DSCF2650_arrays.npz",
+      "arrays_sha256": "868b04d5a019dabe5f548d281fe64ed412d33a08d85350665014af87e54bdf56",
+      "inter_eye_distance_px": 390.0,
+      "face_width_px": 1505.0,
+      "crop_xywh": [
+        2200,
+        2050,
+        512,
+        512
+      ],
+      "native_dimensions": [
+        4160,
+        6240
+      ],
+      "owner_mapping_reference": "Owner-confirmed: DSCF2650 depicts subject_priority_printing_01, 2026-09-06 session",
+      "support_acceptance_reference": "Owner visual review and crop/mask approval, 2026-09-06 session, this conversation",
+      "support_status": "externally_accepted",
+      "masks_provenance": "owner_approved",
+      "native_source_reference": "DSCF2650_native.jpg",
+      "source_sha256": "050066e12e9ef4a5f15889486ec3619b69e7956628c0551e9991ecfc311e5f13",
+      "smoothing_provenance": "RetouchEngine recipe=natural, full native resolution (quality=full default), CLI cli.py invocation 2026-09-06",
+      "color_profile": "sRGB (JPEG, no embedded ICC profile detected)",
+      "resampled": false,
+      "previously_inspected": false,
+      "rois": [
+        {
+          "id": "fine_hair_right_edge",
+          "xywh": [
+            400,
+            0,
+            112,
+            512
+          ],
+          "tags": [
+            "fine_hair_review"
+          ]
+        }
+      ],
+      "pores": [],
+      "profiles": [],
+      "corpus_source": {
+        "manifest_path": "test_output/fa02_pilot_DSCF2650/corpus_manifest.json",
+        "asset_id": "priority_printing_DSCF2650",
+        "asset_sha256": "050066e12e9ef4a5f15889486ec3619b69e7956628c0551e9991ecfc311e5f13",
+        "asset_split": "dev",
+        "asset_person_ids": [
+          "subject_priority_printing_01"
+        ],
+        "annotation_person_id": "subject_priority_printing_01"
+      },
+      "annotation": {
+        "schema_version": 1,
+        "asset_id": "priority_printing_DSCF2650",
+        "person_id": "subject_priority_printing_01",
+        "annotation_source": "owner_approved",
+        "reviewer": "dennis",
+        "native_dimensions": [
+          4160,
+          6240
+        ],
+        "native_roi_xywh": [
+          2200,
+          2050,
+          512,
+          512
+        ],
+        "native_source_reference": "DSCF2650_native.jpg",
+        "supports": {
+          "allow": {
+            "reference": "hand-painted rectangular exclusion: right-edge hair strand band (x>=400) and bottom-left mouth-corner sliver (y>=440,x<140) excluded from eligible skin; rest of 512x512 patch is upper-cheek/temple skin",
+            "provenance": "owner_approved"
+          },
+          "corrected": {
+            "reference": "none -- no known corrected defect in this patch",
+            "provenance": "owner_approved",
+            "description": "No correction applied or claimed in this patch; mask is all-zero",
+            "human_reference": "Owner visual review, 2026-09-06 session"
+          },
+          "protected": {
+            "reference": "none -- no mark/makeup requiring protection in this patch",
+            "provenance": "owner_approved",
+            "description": "No identity mark or makeup edge falls inside this crop; mask is all-zero"
+          }
+        },
+        "support_acceptance_reference": "Owner visual review and crop/mask approval, 2026-09-06 session, this conversation",
+        "review_regions": [
+          {
+            "id": "fine_hair_right_edge",
+            "xywh": [
+              400,
+              0,
+              112,
+              512
+            ],
+            "tags": [
+              "fine_hair_review"
+            ]
+          }
+        ],
+        "notes": "First real-portrait FA-02 dev-split pilot case. Patch is upper-cheek/temple skin, subject's right side of frame, from DSCF2650 (Priority for Printing shoot). S produced by the actual RetouchEngine 'natural' recipe at full native resolution, same crop coordinates as X.",
+        "uncertainty": "Right-edge hair strands may partially overlap the excluded allow-mask band; no attempt made to trace hair boundary precisely, band is a conservative rectangular exclusion."
+      },
+      "reviewer": "dennis"
+    }
+  ]
+}
