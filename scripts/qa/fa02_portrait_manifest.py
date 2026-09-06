@@ -27,7 +27,11 @@ else:
    asserted from thin air.
 2. :func:`validate_support_annotation` validates the new annotation/support
    record -- the acceptance provenance for masks/ROIs/reviewer that
-   corpus_manifest v3 has no concept of.
+   corpus_manifest v3 has no concept of. Since 2026-09-06 it also carries the
+   semantic texture categories in :data:`TEXTURE_REGION_CATEGORIES` (pore,
+   fine-hair, makeup-edge, protected, corrected, noise, uncertainty), which
+   are the human ground truth FA-02 needs and does not yet have. They are all
+   optional, so annotations written before they existed still validate.
 3. :func:`check_promotion_gates` re-checks both systems against each other for
    a whole prospective run, and :func:`main` exposes it as a CLI that exits
    nonzero on any violation (matching ``scripts/qa/corpus_split_report.py``).
@@ -92,6 +96,88 @@ _SAFE_ID_CHARS = set(
 
 ANNOTATION_SCHEMA_VERSION = 1
 
+# ---------------------------------------------------------------------------
+# Semantic texture-annotation categories (added 2026-09-06)
+# ---------------------------------------------------------------------------
+# The original schema had exactly one region list, ``review_regions``, whose
+# only descriptor was a free-text ``tags`` list. Free text is not a label: a
+# reviewer writing ``tags: ["pore_review"]`` is saying "someone should look
+# here", NOT "this rectangle contains pores I have identified". Every one of
+# the four committed real pilot patches uses exactly that advisory form, which
+# is why the FA-02 research question is still unanswered -- there is no
+# ground truth anywhere in the corpus.
+#
+# These named lists are the ground-truth carrier. A rectangle appearing in
+# ``pore_regions`` is a human assertion that pores are visible there. Nothing
+# in this repository may write one: they exist only because a person typed
+# coordinates after looking at native pixels (see
+# ``scripts/qa/fa02_annotation_workbench.py``, which shows and never labels).
+#
+# ALL of them are optional and default to ``[]``. That is deliberate and
+# load-bearing: the four committed annotations (and the four committed FA-02
+# manifests that embed them) declare none of these, and must keep validating
+# byte-for-byte unchanged. This schema EXTENDS, it does not replace.
+TEXTURE_REGION_CATEGORIES = (
+    # Visible skin pores the reviewer can actually resolve in the native crop.
+    "pore_regions",
+    # Vellus/fine facial hair -- the other signal FA-02 is meant to preserve.
+    "fine_hair_regions",
+    # Boundaries of applied makeup (liner, contour, lip edge). Distinct from a
+    # protected mark: a makeup edge is a nuisance edge a representation may
+    # over-sharpen, not necessarily something to hold untouched.
+    "makeup_edge_regions",
+    # Marks a human decided are identity and must never be altered.
+    "protected_identity_marks",
+    # Regions where a defect was already repaired before S was captured.
+    "corrected_defect_regions",
+    # Sensor noise / JPEG blocking heavy enough to be the dominant signal.
+    "noise_regions",
+    # The reviewer looked and could NOT decide. Explicitly recorded rather
+    # than silently omitted, because an unlabeled region and an unlabelABLE
+    # region are different evidence and only one of them is a coverage gap.
+    "uncertainty_regions",
+)
+
+# Categories that carry positive texture ground truth. Used by the readiness
+# report to decide whether human-reviewed texture labels exist at all --
+# uncertainty_regions deliberately does NOT count (recording that you could
+# not tell is honest, but it is not a label).
+GROUND_TRUTH_CATEGORIES = (
+    "pore_regions",
+    "fine_hair_regions",
+)
+
+# Nuisance/control categories: they bound where a representation must behave,
+# rather than asserting recoverable texture.
+CONTROL_CATEGORIES = (
+    "makeup_edge_regions",
+    "protected_identity_marks",
+    "corrected_defect_regions",
+    "noise_regions",
+)
+
+# Pairs of categories that must not geometrically overlap, and why.
+#
+#   protected x corrected -- the FA-02 harness ALREADY refuses overlapping
+#       corrected/protected *masks* (``validate_manifest``: "Corrected and
+#       protected supports must be disjoint"). A region-level annotation that
+#       claims both about the same pixels contradicts the mask-level rule this
+#       annotation is the provenance record for. Extend, do not weaken.
+#   protected x noise -- the owner named this one. "This is an identity mark
+#       I am asserting must survive" and "this is compression garbage" are
+#       incompatible claims about the same pixels; one of them is wrong, and
+#       silently keeping both would let a scoring pass count the same
+#       rectangle as both signal and nuisance.
+#
+# Everything NOT listed here may legitimately overlap and is left alone:
+# pores and fine hair coexist on any real cheek; a makeup edge sits on top of
+# a noisy region; uncertainty overlaps anything by construction (that is what
+# being unsure means). Over-constraining would force reviewers to lie.
+MUTUALLY_EXCLUSIVE_CATEGORIES = (
+    ("protected_identity_marks", "corrected_defect_regions"),
+    ("protected_identity_marks", "noise_regions"),
+)
+
 
 def _text(value, field):
     """Require a non-empty string; raise like the harness does."""
@@ -145,6 +231,131 @@ def _positive_number(value, field):
     if not np.isfinite(value) or value <= 0:
         raise ValueError(f"{field} must be a positive finite number")
     return float(value)
+
+
+def _rectangles_overlap(first, second):
+    """True when two ``[x, y, w, h]`` rectangles share interior area.
+
+    Strict area overlap, not edge contact: two rectangles that merely abut
+    (``[0,0,10,10]`` and ``[10,0,10,10]``) share a boundary line of zero area
+    and are NOT in conflict. A reviewer tiling a cheek into adjacent patches
+    must not be punished for it.
+    """
+    ax, ay, aw, ah = first
+    bx, by, bw, bh = second
+    return ax < bx + bw and bx < ax + aw and ay < by + bh and by < ay + ah
+
+
+def _region_list(value, field):
+    """Validate one list of crop-local annotated regions.
+
+    Same shape as ``review_regions`` on purpose -- ``{id, xywh, tags}`` -- so a
+    reviewer types the same thing regardless of category, and so the existing
+    :func:`_roi` bounds checker is the single implementation of "is this a
+    rectangle". ``notes`` is accepted as optional per-region free text because
+    a category label without a reason ages badly.
+
+    Bounds against the saved crop are NOT checked here: the crop's array shape
+    is not known at annotation-validation time (the annotation is a standalone
+    file). :func:`check_promotion_gates` does that check once the case's NPZ is
+    on hand, exactly as it already does for ``review_regions``.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{field} must be a list when present")
+    normalized = []
+    for index, region in enumerate(value):
+        if not isinstance(region, dict):
+            raise ValueError(f"{field}[{index}] must be an object")
+        tags = region.get("tags", [])
+        if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
+            raise ValueError(f"{field}[{index}].tags must be a list of strings")
+        entry = {
+            "id": _safe_id(region.get("id"), f"{field}[{index}].id"),
+            "xywh": _roi(region.get("xywh"), f"{field}[{index}].xywh"),
+            "tags": sorted(set(tags)),
+        }
+        note = region.get("notes")
+        if note is not None:
+            entry["notes"] = _text(note, f"{field}[{index}].notes")
+        normalized.append(entry)
+    return normalized
+
+
+def _validate_texture_regions(annotation, result):
+    """Validate, normalize and cross-check the semantic category lists.
+
+    Enforces, in order:
+
+    1. Each present list is a well-formed list of in-frame rectangles
+       (:func:`_region_list` -> :func:`_roi`; the same rule the harness uses).
+    2. Region IDs are unique across ALL categories, not merely within one.
+       The readiness report counts these IDs and an owner will reference them
+       by name, so a duplicate is an ambiguous reference, not a harmless one.
+    3. No geometric overlap between the pairs in
+       :data:`MUTUALLY_EXCLUSIVE_CATEGORIES`.
+    4. Provenance: if ANY category is non-empty, the annotation as a whole must
+       carry an accepted source and a named reviewer.
+
+    On (4) -- the provenance question the task asks to decide explicitly: this
+    is **annotation-level, gated on non-emptiness**, reusing the existing
+    ``annotation_source`` + ``reviewer`` fields rather than adding per-region
+    provenance. Rationale: a per-region provenance field would have to be
+    optional to keep the four committed annotations valid, and an optional
+    provenance field is not a gate. Annotation-level is already mandatory,
+    already audited by ``check_promotion_gates``
+    (``owner_approved_without_reviewer``), and matches the physical reality --
+    one person sat down with one patch and typed all of its regions in one
+    sitting. A reviewer who needs to mix provenance within a patch should
+    write two annotation records, which the format already supports.
+    """
+    present = {}
+    for category in TEXTURE_REGION_CATEGORIES:
+        regions = _region_list(annotation.get(category), category)
+        result[category] = regions
+        if regions:
+            present[category] = regions
+
+    # (2) IDs unique across every category, including legacy review_regions --
+    # they all land in the same reporting namespace.
+    seen = {}
+    all_lists = list(present.items()) + [("review_regions", result.get("review_regions") or [])]
+    for category, regions in all_lists:
+        for region in regions:
+            previous = seen.get(region["id"])
+            if previous is not None:
+                raise ValueError(
+                    f"Region id {region['id']!r} is used in both {previous} and "
+                    f"{category}; region ids must be unique across all categories"
+                )
+            seen[region["id"]] = category
+
+    # (3) Semantically contradictory overlaps.
+    for left, right in MUTUALLY_EXCLUSIVE_CATEGORIES:
+        for first in present.get(left, []):
+            for second in present.get(right, []):
+                if _rectangles_overlap(first["xywh"], second["xywh"]):
+                    raise ValueError(
+                        f"Region {first['id']!r} ({left}) overlaps {second['id']!r} "
+                        f"({right}); these categories are mutually exclusive"
+                    )
+
+    # (4) Provenance for the new claims.
+    if present:
+        categories = ", ".join(sorted(present))
+        if annotation.get("annotation_source") not in ACCEPTED_ANNOTATION_SOURCES:
+            raise ValueError(
+                f"Texture regions ({categories}) require an accepted "
+                f"annotation_source ({', '.join(ACCEPTED_ANNOTATION_SOURCES)}); "
+                "a detector-derived or synthetic label is not human ground truth"
+            )
+        if not result.get("reviewer"):
+            raise ValueError(
+                f"Texture regions ({categories}) require a named reviewer; "
+                "an unattributable label is not ground truth"
+            )
+    return result
 
 
 def validate_support_annotation(annotation):
@@ -238,6 +449,14 @@ def validate_support_annotation(annotation):
             normalized["description"] = _text(
                 entry.get("description"), "supports.protected.description"
             )
+        elif key == "allow" and entry.get("description") is not None:
+            # Optional for allow, but do not silently DROP it when supplied:
+            # all four committed real annotations carry one, and this module's
+            # whole purpose is lossless provenance carriage. A normalizer that
+            # rebuilds the record key-by-key discards anything it forgets.
+            normalized["description"] = _text(
+                entry.get("description"), "supports.allow.description"
+            )
         normalized_supports[key] = normalized
     result["supports"] = normalized_supports
 
@@ -271,6 +490,14 @@ def validate_support_annotation(annotation):
         value = annotation.get(optional)
         if value is not None:
             result[optional] = _text(value, optional)
+
+    # Semantic texture categories. Added after the four committed real pilot
+    # patches shipped with review_regions only; all of these default to [] so
+    # those files -- and the FA-02 manifests that embed them -- keep validating
+    # unchanged. Must run AFTER review_regions/reviewer are normalized: the ID
+    # uniqueness check spans both namespaces and the provenance gate reads
+    # result["reviewer"].
+    _validate_texture_regions(annotation, result)
     return result
 
 
@@ -722,6 +949,13 @@ def check_promotion_gates(
         elif provenance not in ACCEPTED_ANNOTATION_SOURCES:
             fail("unaccepted_masks_provenance", case_id=case_id, value=provenance)
 
+        # A supplied external record wins over the copy frozen into the case at
+        # build time. NOTE for the workflow: after adding texture labels to a
+        # standalone annotation_*.json, rebuild the case through
+        # build_portrait_case so the embedded copy carries them too -- the two
+        # can otherwise fork silently. That is deliberately not gated here
+        # (a legitimate build-order artifact is not a provenance violation);
+        # the readiness report surfaces it as a non-blocking observation.
         annotation = annotation_by_case.get(case_id) or case.get("annotation")
         if annotation is None:
             fail("missing_annotation_record", case_id=case_id)
@@ -821,6 +1055,21 @@ def check_promotion_gates(
                 x, y, w, h = region["xywh"]
                 if x + w > width or y + h > height:
                     fail("review_region_outside_crop", case_id=case_id, region_id=region["id"])
+            # The semantic categories live only in the annotation (deliberately
+            # NOT folded into case["rois"]: validate_manifest does not enforce
+            # ROI id uniqueness, so merging would let cross-category collisions
+            # through). Bounds are therefore checked here, where the crop's
+            # real array shape is finally known.
+            for category in TEXTURE_REGION_CATEGORIES:
+                for region in annotation.get(category) or []:
+                    x, y, w, h = region["xywh"]
+                    if x + w > width or y + h > height:
+                        fail(
+                            "texture_region_outside_crop",
+                            case_id=case_id,
+                            category=category,
+                            region_id=region["id"],
+                        )
 
     # Gate 7 -----------------------------------------------------------------
     # The runner computes eligibility once per case and passes the SAME map and
