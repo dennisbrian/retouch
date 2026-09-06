@@ -23,6 +23,10 @@ like a bug. Specifically:
   can never be laundered into "safe".
 * The baseline-beat test reports ``not_computable`` with the reason, never a
   win or a loss, when nothing is scorable.
+* Only THIS ROUND'S frozen candidate arms are put to the baseline-beat test
+  (read from the lock's ``evaluated_candidate_arms``). Arms held in reserve are
+  still listed, with verdict ``reserved_not_evaluated`` and the reason, so an
+  excluded arm is never indistinguishable from an unimplemented one.
 
 Artifact classes matter here and are reported per term. Six of the seven terms
 read ``run/summary.json``, which is COMMITTED. The makeup-edge term reads
@@ -317,19 +321,50 @@ def summarize_disqualifiers(scored_directories):
     }
 
 
-def run_baseline_tests(scored_directories):
-    """Run the margin test for every non-baseline arm across the whole corpus."""
+def run_baseline_tests(scored_directories, candidate_arms=None, reserved_arms=None):
+    """Run the margin test for THIS ROUND'S candidate arms across the corpus.
+
+    ``candidate_arms`` is the frozen candidate set minus the baselines, i.e. the
+    arms a verdict is actually being sought for. It defaults to the module
+    constant but is normally supplied by :func:`build_report` from the LOCK, so
+    the report evaluates what the frozen contract says rather than whatever the
+    harness happens to implement today. That distinction is the whole point of a
+    lock: ``exp.ARMS`` can grow without silently widening this round's decision.
+
+    ``reserved_arms`` are still REPORTED -- with verdict ``reserved_not_evaluated``
+    and the owner instruction as the reason -- rather than omitted. Dropping them
+    silently would leave a reader unable to tell an excluded arm from one that
+    was never implemented.
+    """
+    if candidate_arms is None:
+        candidate_arms = contract.EVALUATED_CANDIDATE_ARMS
+    if reserved_arms is None:
+        reserved_arms = contract.RESERVED_ARMS_PENDING_FAILURE
+
     scores = {}
     for scored in scored_directories:
         for case_id, arms in scored["by_case"].items():
             for arm, entry in arms.items():
                 scores.setdefault(arm, {})[case_id] = entry["aggregate"]["score"]
     baselines = {arm: scores.get(arm, {}) for arm in contract.BASELINE_ARMS}
+
     results = {}
-    for arm in exp.ARMS:
-        if arm in contract.BASELINE_ARMS:
-            continue
+    for arm in candidate_arms:
         results[arm] = contract.compare_against_baselines(scores.get(arm, {}), baselines)
+    for arm in reserved_arms:
+        # Deliberately NOT run through compare_against_baselines: a reserved arm
+        # has no verdict this round, and emitting "not_computable" for it would
+        # conflate "we lack the data" with "we chose not to ask".
+        results[arm] = {
+            "verdict": "reserved_not_evaluated",
+            "reason": (
+                "Excluded from this round's candidate set by the frozen scoring lock. "
+                + contract.RESERVED_ARMS_NOTE
+            ),
+            "comparable_cases": 0,
+            "per_case": [],
+            "evaluated_this_round": False,
+        }
     return results
 
 
@@ -339,9 +374,18 @@ def build_report(lock_path, directories, *, measure_texture=True):
     records = [scan_run_directory(directory) for directory in directories]
     scored = [score_directory(record, measure_texture=measure_texture) for record in records]
 
+    # This round's decision scope comes from the LOCK, falling back to the module
+    # constants for a lock frozen before the candidate set was narrowed.
+    candidate_arms = lock.get("evaluated_candidate_arms")
+    if candidate_arms is None:
+        candidate_arms = list(contract.EVALUATED_CANDIDATE_ARMS)
+    reserved_arms = lock.get("reserved_arms_pending_failure")
+    if reserved_arms is None:
+        reserved_arms = list(contract.RESERVED_ARMS_PENDING_FAILURE)
+
     terms = summarize_terms(scored)
     gates = summarize_disqualifiers(scored)
-    baseline = run_baseline_tests(scored)
+    baseline = run_baseline_tests(scored, candidate_arms, reserved_arms)
 
     case_rows = []
     for record, result in zip(records, scored):
@@ -422,7 +466,12 @@ def build_report(lock_path, directories, *, measure_texture=True):
         "totals": {
             "pilot_directories": len(records),
             "case_count": len(case_rows),
+            # Still all six: the harness is unchanged by the candidate narrowing.
             "arm_count": len(exp.ARMS),
+            "candidate_arms_this_round": list(lock.get("candidate_arms_this_round")
+                                              or contract.FROZEN_CANDIDATE_SET),
+            "evaluated_candidate_arms": list(candidate_arms),
+            "reserved_arms_pending_failure": list(reserved_arms),
             "case_arm_results": sum(len(r["results"]) for r in records),
             "pore_scoring_inputs": total_pore_inputs,
             "profile_scoring_inputs": total_profile_inputs,
@@ -501,9 +550,15 @@ def main(argv=None):
             gate, counts["pass"], counts["fail"], counts["not_applicable"]))
     print("  admissible case/arms:   {0}".format(report["disqualifiers"]["admissible_count"]))
     print("  INADMISSIBLE (no data): {0}".format(report["disqualifiers"]["inadmissible_count"]))
+    print("\ncandidate set (frozen for this round):")
+    print("  baselines:            " + ", ".join(contract.BASELINE_ARMS))
+    print("  evaluated candidates: " + ", ".join(totals["evaluated_candidate_arms"]))
+    print("  RESERVED (not evaluated this round): "
+          + (", ".join(totals["reserved_arms_pending_failure"]) or "none"))
+    print("    " + contract.RESERVED_ARMS_NOTE)
     print("\nbaseline-beat tests:")
     for arm, result in report["baseline_beat_tests"].items():
-        print("  {0:26s} {1:16s} {2}".format(arm, result["verdict"], result["reason"]))
+        print("  {0:22s} {1:22s} {2}".format(arm, result["verdict"], result["reason"]))
     print("\neligibility (abstention contract):")
     print("  eligible:  {0}".format(", ".join(totals["eligible_cases"]) or "NONE"))
     print("  abstaining: {0} case(s)".format(len(totals["abstaining_cases"])))

@@ -507,6 +507,62 @@ def test_scoring_hash_changes_when_any_weight_changes():
         contract.SCORING_RULE)
 
 
+def test_candidate_set_narrowing_did_not_change_the_scoring_rule():
+    """The load-bearing proof that 2026-09-06 was a SCOPE change, not a re-tune.
+
+    The candidate-set narrowing must leave every weight, threshold, term,
+    disqualifier and eligibility rule untouched. That is mechanically checkable:
+    ``scoring_sha256`` is a hash of ``scoring_rule`` alone, and the arm lists are
+    recorded OUTSIDE it, so the hash must still equal the value frozen at
+    652ee53. If this assertion ever fails, someone tuned something while claiming
+    to narrow scope.
+    """
+    frozen_at_652ee53 = "0bbca63e3425bb95d4937aa6af11d1498ed4cdaaed2beb9c6c66b6ba18dea490"
+    assert contract.canonical_scoring_hash(contract.SCORING_RULE) == frozen_at_652ee53
+    lock = contract.build_scoring_lock()
+    assert lock["scoring_sha256"] == frozen_at_652ee53
+    # The arm scope lives at top level, never inside the hashed rule.
+    for key in ("candidate_arms_this_round", "evaluated_candidate_arms",
+                "reserved_arms_pending_failure"):
+        assert key in lock
+        assert key not in lock["scoring_rule"]
+
+
+def test_frozen_candidate_set_is_consistent_with_the_harness():
+    """The four-arm candidate set, its baselines and its reserves must partition ARMS."""
+    assert contract.FROZEN_CANDIDATE_SET == (
+        "A0_disabled", "A1_raw", "A2_dog", "A3_multiscale")
+    # A candidate set naming an arm the harness lacks would be unrunnable.
+    assert set(contract.FROZEN_CANDIDATE_SET).issubset(set(exp.ARMS))
+    # Baselines are inside the frozen set but are not themselves candidates:
+    # a candidate must BEAT them, so testing them would compare A0 to A0.
+    assert set(contract.BASELINE_ARMS).issubset(set(contract.FROZEN_CANDIDATE_SET))
+    assert contract.EVALUATED_CANDIDATE_ARMS == ("A2_dog", "A3_multiscale")
+    # Reserved arms are the exact complement -- derived, so no arm can be lost.
+    assert contract.RESERVED_ARMS_PENDING_FAILURE == (
+        "A4_orientation", "A5_retouch_frequency")
+    assert (set(contract.FROZEN_CANDIDATE_SET) | set(contract.RESERVED_ARMS_PENDING_FAILURE)
+            == set(exp.ARMS))
+    assert not (set(contract.FROZEN_CANDIDATE_SET)
+                & set(contract.RESERVED_ARMS_PENDING_FAILURE))
+    # Reserved means excluded from a DECISION, not deleted: both arms are still
+    # implemented and still run in the harness.
+    for arm in contract.RESERVED_ARMS_PENDING_FAILURE:
+        assert arm in exp.ARMS
+
+
+def test_reserved_arms_are_reported_not_silently_dropped():
+    """A reserved arm gets a distinct verdict, never omission or a fake result."""
+    results = scoring_report.run_baseline_tests([])
+    for arm in contract.RESERVED_ARMS_PENDING_FAILURE:
+        assert arm in results, "a reserved arm must still appear in the report"
+        assert results[arm]["verdict"] == "reserved_not_evaluated"
+        assert results[arm]["evaluated_this_round"] is False
+    for arm in contract.EVALUATED_CANDIDATE_ARMS:
+        # Evaluated arms with no data must still say not_computable, never a win.
+        assert results[arm]["verdict"] == "not_computable"
+
+
 def test_freeze_writes_a_lock_and_refuses_to_overwrite(tmp_path):
     target = tmp_path / "scoring_lock.json"
     lock = contract.freeze_scoring(target)
@@ -514,6 +570,13 @@ def test_freeze_writes_a_lock_and_refuses_to_overwrite(tmp_path):
     assert lock["scoring_sha256"] == contract.canonical_scoring_hash(lock["scoring_rule"])
     assert lock["frozen_at_utc"].endswith("Z")
     assert lock["baseline_arms"] == list(contract.BASELINE_ARMS)
+    # The harness's full arm set is recorded unchanged, alongside the narrower
+    # set this round actually decides on.
+    assert lock["arms"] == list(exp.ARMS)
+    assert lock["candidate_arms_this_round"] == list(contract.FROZEN_CANDIDATE_SET)
+    assert lock["evaluated_candidate_arms"] == list(contract.EVALUATED_CANDIDATE_ARMS)
+    assert lock["reserved_arms_pending_failure"] == list(
+        contract.RESERVED_ARMS_PENDING_FAILURE)
 
     with pytest.raises(ValueError, match="Refusing to overwrite"):
         contract.freeze_scoring(target)
@@ -643,12 +706,32 @@ def test_real_pilot_directories_report_blocked_not_a_baseline_win(tmp_path):
         assert record["computable_case_arm_count"] == 0
         assert record["blocked_case_arm_count"] > 0
 
-    # Nothing is scorable, so no arm may be declared a winner.
+    # Nothing is scorable, so no arm may be declared a winner. The candidate-set
+    # narrowing (2026-09-06) means the two arms this round DECIDES on must report
+    # not_computable, while the reserved arms report that they were not asked --
+    # a distinct verdict, so "excluded by scope" can never be misread as "tested
+    # and inconclusive". Neither verdict may ever be a win.
     assert report["totals"]["scorable_case_arms"] == 0
+    assert report["totals"]["evaluated_candidate_arms"] == ["A2_dog", "A3_multiscale"]
+    assert report["totals"]["reserved_arms_pending_failure"] == [
+        "A4_orientation", "A5_retouch_frequency"]
+    # The harness is untouched by the narrowing: all six arms still ran.
+    assert report["totals"]["arm_count"] == 6
+
     for arm, verdict in report["baseline_beat_tests"].items():
-        assert verdict["verdict"] == "not_computable", (
-            "{0} must not receive a verdict without texture evidence".format(arm))
+        assert verdict["verdict"] != "beats_baselines", (
+            "{0} must never be declared a winner without texture evidence".format(arm))
         assert verdict["comparable_cases"] == 0
+    for arm in report["totals"]["evaluated_candidate_arms"]:
+        assert report["baseline_beat_tests"][arm]["verdict"] == "not_computable", (
+            "{0} is a candidate this round and must report not_computable, not "
+            "a verdict, without texture evidence".format(arm))
+    for arm in report["totals"]["reserved_arms_pending_failure"]:
+        entry = report["baseline_beat_tests"][arm]
+        assert entry["verdict"] == "reserved_not_evaluated"
+        assert entry["evaluated_this_round"] is False
+        # Reported, never silently dropped.
+        assert "reserve" in entry["reason"].lower()
 
     # Safety gates: no arm FAILS, but nothing is disqualified either, and the
     # coverage is thin. Measured on this machine, where the gitignored float

@@ -84,6 +84,61 @@ SCORING_SCHEMA_VERSION = 1
 BASELINE_ARMS = ("A0_disabled", "A1_raw")
 
 # ---------------------------------------------------------------------------
+# THIS ROUND'S FROZEN CANDIDATE SET (a SCOPE decision, not a scoring change)
+# ---------------------------------------------------------------------------
+# Owner instruction, 2026-09-06: "Optimize FA-02 for closure, not further
+# exploration. Freeze the candidate set to disabled/raw-residual/DoG/multiscale
+# [...] Do not add new representations or features unless all current candidates
+# fail."
+#
+# This narrows WHICH arms are DECIDED ON this round. It deliberately does NOT
+# touch the scoring rule: no weight, threshold, term, disqualifier or eligibility
+# rule changes, and SCORING_RULE is byte-identical to the 652ee53 freeze, so
+# ``scoring_sha256`` is unchanged. That is the point -- the pre-registration
+# ordering evidence survives a scope narrowing precisely because the rule these
+# constants live OUTSIDE of was not edited. These lists are recorded at the lock's
+# TOP LEVEL, next to ``arms``/``baseline_arms``, for exactly that reason.
+#
+# The harness is untouched: all six arms in ``exp.ARMS`` still exist, still run,
+# and still appear in every run's summary.json. A4/A5 are excluded from THIS
+# round's decision only, and reversibly -- promoting them back is a one-line edit
+# to this tuple plus a re-freeze.
+FROZEN_CANDIDATE_SET = ("A0_disabled", "A1_raw", "A2_dog", "A3_multiscale")
+
+# The arms actually subjected to the baseline-beat test. A0/A1 are the BASELINES
+# a candidate must beat, so they are in the frozen set but are not themselves
+# candidates -- testing a baseline against itself would compare A0 to A0.
+EVALUATED_CANDIDATE_ARMS = tuple(
+    arm for arm in FROZEN_CANDIDATE_SET if arm not in BASELINE_ARMS)
+
+# Derived from exp.ARMS rather than hardcoded, so this can never silently drift
+# out of step with the harness if an arm is ever added or renamed.
+RESERVED_ARMS_PENDING_FAILURE = tuple(
+    arm for arm in exp.ARMS if arm not in FROZEN_CANDIDATE_SET)
+
+RESERVED_ARMS_NOTE = (
+    "Held in reserve per owner instruction: 2026-09-06, 'do not add new "
+    "representations or features unless all current candidates fail.' These arms "
+    "remain implemented and may be promoted into the candidate set only if A2_dog "
+    "and A3_multiscale both fail the baseline-beat test on real ground truth. Not "
+    "deleted, not excluded from the harness -- excluded from THIS round's decision "
+    "only."
+)
+
+# Fail closed: a frozen candidate set naming an arm the harness does not have
+# would produce a lock that cannot be executed.
+_unknown_candidates = [arm for arm in FROZEN_CANDIDATE_SET if arm not in exp.ARMS]
+if _unknown_candidates:
+    raise ValueError(
+        "FROZEN_CANDIDATE_SET names arm(s) absent from exp.ARMS: "
+        + ", ".join(_unknown_candidates))
+_unknown_baselines = [arm for arm in BASELINE_ARMS if arm not in FROZEN_CANDIDATE_SET]
+if _unknown_baselines:
+    raise ValueError(
+        "Every baseline arm must be inside FROZEN_CANDIDATE_SET; missing: "
+        + ", ".join(_unknown_baselines))
+
+# ---------------------------------------------------------------------------
 # Provenance vocabulary for every numeric constant in this file
 # ---------------------------------------------------------------------------
 # MEASURED    -- a number read off a real measurement recorded in this
@@ -1176,7 +1231,28 @@ def build_scoring_lock(*, declaration="a_priori_pre_registration", references=No
         "development_references": list(references or []),
         "module_sha256": exp.digest(Path(__file__).resolve()),
         "baseline_arms": list(BASELINE_ARMS),
+        # All six arms the harness implements and runs. UNCHANGED by the
+        # candidate-set narrowing: every arm below still exists, still executes,
+        # and still appears in every run's summary.json.
         "arms": list(exp.ARMS),
+        # ---- Scope of THIS round's decision (added 2026-09-06) ----------------
+        # These four fields are the ONLY difference from the 652ee53 lock. They
+        # sit at top level, outside "scoring_rule", so scoring_sha256 is
+        # byte-identical to that lock: the scoring RULE did not change, only the
+        # set of arms it will be applied to for a verdict.
+        "candidate_arms_this_round": list(FROZEN_CANDIDATE_SET),
+        "evaluated_candidate_arms": list(EVALUATED_CANDIDATE_ARMS),
+        "reserved_arms_pending_failure": list(RESERVED_ARMS_PENDING_FAILURE),
+        "candidate_set_note": (
+            "candidate_arms_this_round is the frozen candidate set (owner instruction, "
+            "2026-09-06: freeze the candidate set to disabled/raw-residual/DoG/multiscale). "
+            "evaluated_candidate_arms is that set minus the baselines -- A0_disabled and "
+            "A1_raw are what a candidate must BEAT, so they are not themselves subjected to "
+            "the baseline-beat test. reserved_arms_pending_failure: " + RESERVED_ARMS_NOTE
+            + " This is a SCOPE narrowing, not a recalibration: no weight, threshold, term, "
+            "disqualifier or eligibility rule was touched, and scoring_sha256 is unchanged "
+            "from the lock frozen at 2026-09-06T07:58:33Z (652ee53)."
+        ),
         "note": (
             "A timestamp and a hash audit the RULE; they do not prove no prior exposure "
             "to results. Ordering evidence comes from this lock being referenced by every "
