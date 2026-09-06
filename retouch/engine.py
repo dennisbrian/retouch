@@ -460,6 +460,11 @@ class ProcessingContext:
     safe_auto: bool = True
     _safe_auto_decisions: List[Dict[str, Any]] = field(default_factory=list, repr=False)
     _runtime_diagnostics: Dict[str, Any] = field(default_factory=dict, repr=False)
+    # FA-02 per-face eligibility diagnostics, one dict per detected face,
+    # collected across both the single-face and FaceProcessorPool paths (see
+    # `_collect_fa02_diagnostics` in `_process_faces`). None entries mean
+    # `fa02_texture_mode == "legacy"` for that face (branch never ran).
+    _fa02_diagnostics: List[Optional[Dict[str, Any]]] = field(default_factory=list, repr=False)
 
     # F4: Manual heal marks — list of {"mask_png_b64": str, "method": str}
     heals: Optional[List[Dict[str, Any]]] = None
@@ -684,6 +689,7 @@ class ProcessingResult(np.ndarray):
         face_recipes: Optional[Dict[int, Dict[str, Any]]] = None,
         safe_auto_decisions: Optional[List[Dict[str, Any]]] = None,
         runtime_diagnostics: Optional[Dict[str, Any]] = None,
+        fa02_diagnostics: Optional[List[Optional[Dict[str, Any]]]] = None,
         precision: Optional[ProcessingPrecision] = None,
         source_dtype: Optional[Any] = None,
     ):
@@ -702,6 +708,7 @@ class ProcessingResult(np.ndarray):
         obj.face_recipes = face_recipes
         obj.safe_auto_decisions = list(safe_auto_decisions or [])
         obj.runtime_diagnostics = dict(runtime_diagnostics or {})
+        obj.fa02_diagnostics = list(fa02_diagnostics or [])
         obj.precision = precision or ProcessingPrecision.from_output(
             np.asarray(image), source_dtype=source_dtype
         )
@@ -725,6 +732,7 @@ class ProcessingResult(np.ndarray):
         self.face_recipes = getattr(obj, "face_recipes", None)
         self.safe_auto_decisions = getattr(obj, "safe_auto_decisions", [])
         self.runtime_diagnostics = getattr(obj, "runtime_diagnostics", {})
+        self.fa02_diagnostics = getattr(obj, "fa02_diagnostics", [])
         self.precision = getattr(obj, "precision", None)
         self.precision_metadata = getattr(obj, "precision_metadata", {})
 
@@ -1733,6 +1741,7 @@ class RetouchEngine:
                 qa_evidence=core.qa_evidence,
                 safe_auto_decisions=getattr(ctx, "_safe_auto_decisions", []),
                 runtime_diagnostics=getattr(ctx, "_runtime_diagnostics", {}),
+                fa02_diagnostics=getattr(ctx, "_fa02_diagnostics", []),
                 source_dtype=source_dtype,
             )
 
@@ -1814,6 +1823,7 @@ class RetouchEngine:
             face_recipes=face_recipes or None,
             safe_auto_decisions=getattr(ctx, "_safe_auto_decisions", []),
             runtime_diagnostics=getattr(ctx, "_runtime_diagnostics", {}),
+            fa02_diagnostics=getattr(ctx, "_fa02_diagnostics", []),
             source_dtype=source_dtype,
         )
 
@@ -3129,6 +3139,21 @@ class RetouchEngine:
                 if face_result is not None:
                     decisions.extend(getattr(face_result, "safe_auto_decisions", []) or [])
 
+        def _collect_fa02_diagnostics() -> None:
+            # One entry per face, in detection order, aligned with
+            # `results`/`built_contexts` -- including None for faces where
+            # the FA-02 branch didn't run (mode == "legacy"), so index i here
+            # always corresponds to face i, not just the eligible subset.
+            diags = getattr(ctx, "_fa02_diagnostics", None)
+            if diags is None:
+                diags = []
+                ctx._fa02_diagnostics = diags
+            for face_result in results:
+                diags.append(
+                    getattr(face_result, "fa02_diagnostics", None)
+                    if face_result is not None else None
+                )
+
         if len(faces) == 1:
             results[0] = self._process_one_face(
                 img, faces[0], person_mask, self._ctx_for_face(ctx, 0), h_img, w_img,
@@ -3136,6 +3161,7 @@ class RetouchEngine:
                 light_direction=all_light_directions[0],
             )
             _collect_safe_auto_decisions()
+            _collect_fa02_diagnostics()
             return results, built_contexts  # type: ignore[return-value]
 
         # Multi-face: try ProcessPool (FaceProcessorPool) for true parallelism,
@@ -3189,8 +3215,10 @@ class RetouchEngine:
                         roi_box=pr['roi_box'],
                         hair_only_mask=pr.get('hair_only_mask'),
                         safe_auto_decisions=pr.get('safe_auto_decisions', []),
+                        fa02_diagnostics=pr.get('fa02_diagnostics'),
                     )
             _collect_safe_auto_decisions()
+            _collect_fa02_diagnostics()
             return results, built_contexts  # type: ignore[return-value]
 
         # Fallback: ThreadPoolExecutor (engine instance shared via memory)
@@ -3209,6 +3237,7 @@ class RetouchEngine:
                 idx = future_to_idx[future]
                 results[idx] = future.result()
         _collect_safe_auto_decisions()
+        _collect_fa02_diagnostics()
         return results, built_contexts  # type: ignore[return-value]
 
     def _process_one_face(

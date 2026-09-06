@@ -187,6 +187,11 @@ class _FaceResult:
     # engine._stage_background.
     hair_only_mask: Optional[np.ndarray] = None
     safe_auto_decisions: list[Dict[str, Any]] = field(default_factory=list)
+    # FA-02 per-face eligibility diagnostics (scalars only, no mask arrays --
+    # this crosses the ProcessPoolExecutor spawn boundary via pickling, see
+    # `_process_single_face_worker`'s dict return below). None when
+    # fa02_texture_mode == "legacy" (the FA-02 branch never ran).
+    fa02_diagnostics: Optional[Dict[str, Any]] = None
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -690,6 +695,7 @@ def _process_face_core(
             _fa02_mode,
         )
         _fa02_mode = 'legacy'
+    fa02_diagnostics: Optional[Dict[str, Any]] = None
     if ctx.micro_restore > 0 and _fa02_mode == 'legacy':
         canvas = _tr('restore_micro_texture', canvas)
         canvas = skin.restore_micro_texture(
@@ -805,6 +811,28 @@ def _process_face_core(
             _fa02_outcome = "abstained -- eligible but micro_restore=0 (no-op)"
         else:
             _fa02_outcome = "abstained -- fell back to no-op"
+
+        # Structured, machine-readable counterpart to the log line below.
+        # Scalars only -- no mask arrays -- so this survives the
+        # ProcessPoolExecutor spawn boundary via ordinary pickling (see
+        # `_process_single_face_worker`'s dict return and `_FaceResult`
+        # above). Log lines are lost when a face is processed in a worker
+        # subprocess (spawned processes don't inherit the parent's
+        # `logging.basicConfig`); this field is not.
+        fa02_diagnostics = {
+            "face_width_px": face_width,
+            "roi_box": (roi_x1, roi_y1, roi_x1 + roi_w, roi_y1 + roi_h),
+            "mode": _fa02_mode,
+            "eligible": _fa02_decision["eligible"],
+            "reason": _fa02_decision["reason"],
+            "measured": dict(_fa02_decision["measured"]),
+            "thresholds": dict(_fa02_decision["thresholds"]),
+            "micro_restore": ctx.micro_restore,
+            "sigmas": [round(s, 4) for s in scaled_sigmas(face_width)],
+            "collapsed_bands": list(_fa02_collapsed),
+            "ran": _fa02_outcome,
+        }
+
         logger.info(
             "FA-02 texture: mode=%s eligible=%s reason=%s measured=%s "
             "thresholds=%s micro_restore=%s sigmas=%s collapsed_bands=%s ran=%s "
@@ -1415,6 +1443,7 @@ def _process_face_core(
         sharpen_mask=acc_sharpen,
         roi_box=(roi_x1, roi_y1, roi_x1 + roi_w, roi_y1 + roi_h),
         safe_auto_decisions=safe_auto_decisions,
+        fa02_diagnostics=fa02_diagnostics,
     )
 
 
@@ -1525,6 +1554,7 @@ def _process_single_face_worker(payload: tuple) -> Dict[str, Any]:
         "sharpen_mask": fr.sharpen_mask,
         "roi_box": fr.roi_box,
         "safe_auto_decisions": fr.safe_auto_decisions or [],
+        "fa02_diagnostics": fr.fa02_diagnostics,
     }
 
 
