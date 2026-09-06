@@ -1,0 +1,67 @@
+{
+  "_TEMPLATE": "PLACEHOLDER VALUES ONLY -- NOT REAL DATA. Copy this file, replace every value below with owner-supplied provenance, and validate it with scripts/qa/fa02_portrait_manifest.py::validate_support_annotation. Every person_id here is a fake token; no real subject has been mapped. See docs/plans/EXPERIMENT_FA02_TEXTURE_REPRESENTATIONS_2026_09_06.md for what evidence is and is not currently available.",
+  "schema_version": 1,
+
+  "_asset_id": "Must match an asset_id in the corpus_manifest v3 registry this case is sourced from.",
+  "asset_id": "PLACEHOLDER_asset_0001",
+
+  "_person_id": "Must be one of that corpus asset's person_ids. Fake placeholder below.",
+  "person_id": "test_subject_001",
+
+  "_native_dimensions": "[width, height] of the ORIGINAL native capture, in native pixels. Not the crop.",
+  "native_dimensions": [6240, 4160],
+
+  "_native_roi_xywh": "[x, y, width, height] of this patch in NATIVE coordinates. Validated in-bounds against native_dimensions, and its width/height must equal the saved X/S canvas shape (no resize, no registration drift).",
+  "native_roi_xywh": [2100, 1400, 512, 512],
+
+  "_native_source_reference": "Path (relative to the FA-02 manifest directory) of the native capture the X/S pair was cut from. Checksummed by the harness.",
+  "native_source_reference": "PLACEHOLDER_native_source.tif",
+
+  "_supports": "Acceptance provenance for the three masks that already live in the case NPZ. This record does NOT redefine the masks; it says where they came from and who accepted them. provenance vocabulary: manual | synthetic | detector_derived | owner_approved. Only manual and owner_approved are promotable -- a raw detector output is recordable but is not an externally accepted support.",
+  "supports": {
+    "allow": {
+      "reference": "PLACEHOLDER: eligible-skin support, e.g. reviewer-painted mask file or review ticket ID",
+      "provenance": "manual"
+    },
+    "corrected": {
+      "reference": "PLACEHOLDER: known corrected-defect support reference",
+      "provenance": "manual",
+      "description": "PLACEHOLDER: what was corrected in X and why (e.g. 'retoucher removed a transient blemish at frame left cheek before capture of S')",
+      "human_reference": "PLACEHOLDER: who recorded the correction and where that record lives"
+    },
+    "protected": {
+      "reference": "PLACEHOLDER: protected mark/makeup region reference. NEVER a literal detector output -- a human decides what is protected.",
+      "provenance": "manual",
+      "description": "PLACEHOLDER: what is protected (e.g. 'permanent beauty mark and eyeliner edge, must not be altered')"
+    }
+  },
+
+  "_support_acceptance_reference": "Auditable pointer to the external acceptance of these supports. An assertion with provenance -- it is not automatic proof of human acceptance.",
+  "support_acceptance_reference": "PLACEHOLDER: acceptance record ID / signed review note",
+
+  "_annotation_source": "manual | synthetic | detector_derived | owner_approved. Records where THIS annotation came from.",
+  "annotation_source": "owner_approved",
+
+  "_reviewer": "Human identifier of whoever actually looked at this patch. REQUIRED when annotation_source is owner_approved.",
+  "reviewer": "PLACEHOLDER_reviewer_name",
+
+  "_review_regions": "OPTIONAL small rectangles a reviewer flagged for pore / fine-hair looking. Coordinates are LOCAL TO THE SAVED CROP (not native). IDs must be filesystem-safe. Do not annotate an unresolved source as a recoverable pore.",
+  "review_regions": [
+    {
+      "id": "pore_field_upper_cheek",
+      "xywh": [64, 64, 128, 128],
+      "tags": ["pore_review", "texture"]
+    },
+    {
+      "id": "fine_hair_temple",
+      "xywh": [320, 96, 96, 128],
+      "tags": ["fine_hair_review"]
+    }
+  ],
+
+  "_notes": "OPTIONAL free text.",
+  "notes": "PLACEHOLDER: any context a later reader needs.",
+
+  "_uncertainty": "OPTIONAL free text: what the reviewer was NOT sure about. Explicit observability gaps belong here.",
+  "uncertainty": "PLACEHOLDER: e.g. 'cannot distinguish makeup edge from a real mark at frame right jaw; treated as protected'"
+}
