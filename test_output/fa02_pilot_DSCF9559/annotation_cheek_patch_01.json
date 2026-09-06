@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "asset_id": "nahida_DSCF9559",
+  "person_id": "subject_nahida_01",
+  "native_dimensions": [
+    6240,
+    4160
+  ],
+  "native_roi_xywh": [
+    4050,
+    1000,
+    512,
+    512
+  ],
+  "native_source_reference": "DSCF9559_native.jpg",
+  "supports": {
+    "allow": {
+      "reference": "hand-painted exclusions: right band x>=300 (hair), top band y<140 (eye/eyebrow), bottom-left corner y>=350,x<180 (lip color); remainder is cheek/nose-bridge skin",
+      "provenance": "owner_approved",
+      "description": "Eligible skin support, dim/low-key lighting patch (source luma ~103.3, darkest usable frame in this shoot)"
+    },
+    "corrected": {
+      "reference": "none",
+      "provenance": "owner_approved",
+      "description": "No correction claimed; mask all-zero",
+      "human_reference": "Owner visual review, 2026-09-06"
+    },
+    "protected": {
+      "reference": "none",
+      "provenance": "owner_approved",
+      "description": "No mark/makeup in this patch; mask all-zero"
+    }
+  },
+  "support_acceptance_reference": "Owner visual review and crop/mask approval, 2026-09-06 session, this conversation",
+  "annotation_source": "owner_approved",
+  "reviewer": "dennis",
+  "review_regions": [
+    {
+      "id": "cheek_nose_bridge_pore_field",
+      "xywh": [
+        20,
+        160,
+        260,
+        180
+      ],
+      "tags": [
+        "pore_review",
+        "texture"
+      ]
+    }
+  ],
+  "notes": "Fourth real-portrait FA-02 pilot case, same subject as DSCF6754 (subject_nahida_01), dim/low-key lighting patch -- the low end of this shoot's luma spread (103.3 vs DSCF6754's 161.8), giving the corpus its first real within-person lighting contrast. S produced by RetouchEngine natural recipe, full native resolution, same crop as X.",
+  "uncertainty": "Ambient shadow gradient across the patch is real scene lighting, not noise; low-light grain/compression may be present given the dimmer capture."
+}

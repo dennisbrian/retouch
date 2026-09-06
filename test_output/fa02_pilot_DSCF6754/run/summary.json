@@ -1,0 +1,385 @@
+{
+  "purpose": "development_pilot",
+  "results": [
+    {
+      "eligible_pixels": 74259,
+      "weighted_coverage": 0.2801074981689453,
+      "eligible_fraction_of_allow": 0.671759661311333,
+      "delta_rms": 0.0,
+      "delta_luma_mean": 0.0,
+      "broad_luma_rms": 0.0,
+      "chroma_delta_rms": 0.0,
+      "forbidden_max_abs_delta": null,
+      "clipped_pixel_count": 0,
+      "pore_truth": "external annotations only",
+      "rois": [
+        {
+          "id": "fine_hair_left_band",
+          "tags": [
+            "fine_hair_review"
+          ],
+          "eligible_pixels": 0,
+          "delta_luma_rms": 0.0,
+          "delta_luma_mean": 0.0,
+          "broad_luma_rms": 0.0,
+          "chroma_delta_rms": 0.0,
+          "flat_variance_change_proxy": 0.0
+        }
+      ],
+      "features": [],
+      "profiles": [],
+      "rings": [],
+      "hair_trace_samples": [],
+      "measurement": {
+        "cold_compute_ms": 8.211250000000003,
+        "warm_compute_ms": [
+          2.825833,
+          5.981791999999986,
+          6.976042000000016
+        ],
+        "warm_median_ms": 5.981791999999986,
+        "warm_p95_ms": 6.876617000000013,
+        "ms_per_megapixel": 22.81872558593745,
+        "support_mapping_ms_shared": 2.543958000000013,
+        "pre_compute_peak_rss_mib": 75.78125,
+        "peak_rss_mib": 88.875,
+        "incremental_high_water_mib": 13.09375,
+        "rss_scope": "fresh process; imports+inputs+supports+compute; excludes metrics/output IO"
+      },
+      "arm": "A0_disabled",
+      "case_id": "dscf6754_cheek_patch_01",
+      "geometry": {
+        "sigmas_px": [
+          1.17,
+          2.34,
+          4.68,
+          9.36,
+          18.72
+        ],
+        "tensor_sigma_px": 2.34,
+        "frequency_k_low": 89,
+        "frequency_k_mid": 29,
+        "common_radius_px": 58,
+        "collapsed_bands": [],
+        "face_width_px": 734.0
+      }
+    },
+    {
+      "eligible_pixels": 74259,
+      "weighted_coverage": 0.2801074981689453,
+      "eligible_fraction_of_allow": 0.671759661311333,
+      "delta_rms": 0.2258896615359613,
+      "delta_luma_mean": -0.015599476173520088,
+      "broad_luma_rms": 0.15727522536171645,
+      "chroma_delta_rms": 0.08113408301734203,
+      "forbidden_max_abs_delta": null,
+      "clipped_pixel_count": 0,
+      "pore_truth": "external annotations only",
+      "rois": [
+        {
+          "id": "fine_hair_left_band",
+          "tags": [
+            "fine_hair_review"
+          ],
+          "eligible_pixels": 0,
+          "delta_luma_rms": 0.0,
+          "delta_luma_mean": 0.0,
+          "broad_luma_rms": 0.005582861484313801,
+          "chroma_delta_rms": 0.0,
+          "flat_variance_change_proxy": 0.0
+        }
+      ],
+      "features": [],
+      "profiles": [],
+      "rings": [],
+      "hair_trace_samples": [],
+      "measurement": {
+        "cold_compute_ms": 5.3240829999999795,
+        "warm_compute_ms": [
+          3.30179199999997,
+          4.073082999999977,
+          2.7827500000000005
+        ],
+        "warm_median_ms": 3.30179199999997,
+        "warm_p95_ms": 3.9959538999999764,
+        "ms_per_megapixel": 12.595336914062386,
+        "support_mapping_ms_shared": 2.5523339999999894,
+        "pre_compute_peak_rss_mib": 76.65625,
+        "peak_rss_mib": 88.765625,
+        "incremental_high_water_mib": 12.109375,
+        "rss_scope": "fresh process; imports+inputs+supports+compute; excludes metrics/output IO"
+      },
+      "arm": "A1_raw",
+      "case_id": "dscf6754_cheek_patch_01",
+      "geometry": {
+        "sigmas_px": [
+          1.17,
+          2.34,
+          4.68,
+          9.36,
+          18.72
+        ],
+        "tensor_sigma_px": 2.34,
+        "frequency_k_low": 89,
+        "frequency_k_mid": 29,
+        "common_radius_px": 58,
+        "collapsed_bands": [],
+        "face_width_px": 734.0
+      }
+    },
+    {
+      "eligible_pixels": 74259,
+      "weighted_coverage": 0.2801074981689453,
+      "eligible_fraction_of_allow": 0.671759661311333,
+      "delta_rms": 0.02466135673944606,
+      "delta_luma_mean": -2.1727819330408238e-05,
+      "broad_luma_rms": 0.0009222295870798072,
+      "chroma_delta_rms": 0.01619412548182597,
+      "forbidden_max_abs_delta": null,
+      "clipped_pixel_count": 0,
+      "pore_truth": "external annotations only",
+      "rois": [
+        {
+          "id": "fine_hair_left_band",
+          "tags": [
+            "fine_hair_review"
+          ],
+          "eligible_pixels": 0,
+          "delta_luma_rms": 0.0,
+          "delta_luma_mean": 0.0,
+          "broad_luma_rms": 2.1416646984679718e-05,
+          "chroma_delta_rms": 0.0,
+          "flat_variance_change_proxy": 0.0
+        }
+      ],
+      "features": [],
+      "profiles": [],
+      "rings": [],
+      "hair_trace_samples": [],
+      "measurement": {
+        "cold_compute_ms": 7.646833999999991,
+        "warm_compute_ms": [
+          5.122000000000016,
+          6.356707999999989,
+          5.0277499999999975
+        ],
+        "warm_median_ms": 5.122000000000016,
+        "warm_p95_ms": 6.233237199999992,
+        "ms_per_megapixel": 19.53887939453131,
+        "support_mapping_ms_shared": 1.5454999999999774,
+        "pre_compute_peak_rss_mib": 76.078125,
+        "peak_rss_mib": 91.53125,
+        "incremental_high_water_mib": 15.453125,
+        "rss_scope": "fresh process; imports+inputs+supports+compute; excludes metrics/output IO"
+      },
+      "arm": "A2_dog",
+      "case_id": "dscf6754_cheek_patch_01",
+      "geometry": {
+        "sigmas_px": [
+          1.17,
+          2.34,
+          4.68,
+          9.36,
+          18.72
+        ],
+        "tensor_sigma_px": 2.34,
+        "frequency_k_low": 89,
+        "frequency_k_mid": 29,
+        "common_radius_px": 58,
+        "collapsed_bands": [],
+        "face_width_px": 734.0
+      }
+    },
+    {
+      "eligible_pixels": 74259,
+      "weighted_coverage": 0.2801074981689453,
+      "eligible_fraction_of_allow": 0.671759661311333,
+      "delta_rms": 0.03388083700761525,
+      "delta_luma_mean": -5.011675239074975e-05,
+      "broad_luma_rms": 0.002604273525441284,
+      "chroma_delta_rms": 0.020686621571427793,
+      "forbidden_max_abs_delta": null,
+      "clipped_pixel_count": 0,
+      "pore_truth": "external annotations only",
+      "rois": [
+        {
+          "id": "fine_hair_left_band",
+          "tags": [
+            "fine_hair_review"
+          ],
+          "eligible_pixels": 0,
+          "delta_luma_rms": 0.0,
+          "delta_luma_mean": 0.0,
+          "broad_luma_rms": 4.2873363788786395e-05,
+          "chroma_delta_rms": 0.0,
+          "flat_variance_change_proxy": 0.0
+        }
+      ],
+      "features": [],
+      "profiles": [],
+      "rings": [],
+      "hair_trace_samples": [],
+      "measurement": {
+        "cold_compute_ms": 19.95712500000002,
+        "warm_compute_ms": [
+          7.563374999999983,
+          7.347624999999996,
+          7.593750000000011
+        ],
+        "warm_median_ms": 7.563374999999983,
+        "warm_p95_ms": 7.5907125000000075,
+        "ms_per_megapixel": 28.85198593139642,
+        "support_mapping_ms_shared": 1.4534169999999846,
+        "pre_compute_peak_rss_mib": 75.328125,
+        "peak_rss_mib": 96.953125,
+        "incremental_high_water_mib": 21.625,
+        "rss_scope": "fresh process; imports+inputs+supports+compute; excludes metrics/output IO"
+      },
+      "arm": "A3_multiscale",
+      "case_id": "dscf6754_cheek_patch_01",
+      "geometry": {
+        "sigmas_px": [
+          1.17,
+          2.34,
+          4.68,
+          9.36,
+          18.72
+        ],
+        "tensor_sigma_px": 2.34,
+        "frequency_k_low": 89,
+        "frequency_k_mid": 29,
+        "common_radius_px": 58,
+        "collapsed_bands": [],
+        "face_width_px": 734.0
+      }
+    },
+    {
+      "eligible_pixels": 74259,
+      "weighted_coverage": 0.2801074981689453,
+      "eligible_fraction_of_allow": 0.671759661311333,
+      "delta_rms": 0.03217166787915833,
+      "delta_luma_mean": -4.454255031305365e-05,
+      "broad_luma_rms": 0.002619688657449574,
+      "chroma_delta_rms": 0.02013261231349189,
+      "forbidden_max_abs_delta": null,
+      "clipped_pixel_count": 0,
+      "pore_truth": "external annotations only",
+      "rois": [
+        {
+          "id": "fine_hair_left_band",
+          "tags": [
+            "fine_hair_review"
+          ],
+          "eligible_pixels": 0,
+          "delta_luma_rms": 0.0,
+          "delta_luma_mean": 0.0,
+          "broad_luma_rms": 4.116785627284461e-05,
+          "chroma_delta_rms": 0.0,
+          "flat_variance_change_proxy": 0.0
+        }
+      ],
+      "features": [],
+      "profiles": [],
+      "rings": [],
+      "hair_trace_samples": [],
+      "measurement": {
+        "cold_compute_ms": 34.70804199999999,
+        "warm_compute_ms": [
+          15.083415999999989,
+          35.417167,
+          30.800875000000005
+        ],
+        "warm_median_ms": 30.800875000000005,
+        "warm_p95_ms": 34.9555378,
+        "ms_per_megapixel": 117.49601364135745,
+        "support_mapping_ms_shared": 1.4377499999999876,
+        "pre_compute_peak_rss_mib": 75.40625,
+        "peak_rss_mib": 119.953125,
+        "incremental_high_water_mib": 44.546875,
+        "rss_scope": "fresh process; imports+inputs+supports+compute; excludes metrics/output IO"
+      },
+      "arm": "A4_orientation",
+      "case_id": "dscf6754_cheek_patch_01",
+      "geometry": {
+        "sigmas_px": [
+          1.17,
+          2.34,
+          4.68,
+          9.36,
+          18.72
+        ],
+        "tensor_sigma_px": 2.34,
+        "frequency_k_low": 89,
+        "frequency_k_mid": 29,
+        "common_radius_px": 58,
+        "collapsed_bands": [],
+        "face_width_px": 734.0
+      }
+    },
+    {
+      "eligible_pixels": 74259,
+      "weighted_coverage": 0.2801074981689453,
+      "eligible_fraction_of_allow": 0.671759661311333,
+      "delta_rms": 0.12825505916364735,
+      "delta_luma_mean": -0.0006204058299772441,
+      "broad_luma_rms": 0.01489771989194823,
+      "chroma_delta_rms": 0.06286424891058673,
+      "forbidden_max_abs_delta": null,
+      "clipped_pixel_count": 0,
+      "pore_truth": "external annotations only",
+      "rois": [
+        {
+          "id": "fine_hair_left_band",
+          "tags": [
+            "fine_hair_review"
+          ],
+          "eligible_pixels": 0,
+          "delta_luma_rms": 0.0,
+          "delta_luma_mean": 0.0,
+          "broad_luma_rms": 0.0002428863139536874,
+          "chroma_delta_rms": 0.0,
+          "flat_variance_change_proxy": 0.0
+        }
+      ],
+      "features": [],
+      "profiles": [],
+      "rings": [],
+      "hair_trace_samples": [],
+      "measurement": {
+        "cold_compute_ms": 21.030124999999984,
+        "warm_compute_ms": [
+          22.088417,
+          18.852584000000007,
+          19.361917000000005
+        ],
+        "warm_median_ms": 19.361917000000005,
+        "warm_p95_ms": 21.815767,
+        "ms_per_megapixel": 73.85985183715823,
+        "support_mapping_ms_shared": 1.5053329999999976,
+        "pre_compute_peak_rss_mib": 77.265625,
+        "peak_rss_mib": 95.921875,
+        "incremental_high_water_mib": 18.65625,
+        "rss_scope": "fresh process; imports+inputs+supports+compute; excludes metrics/output IO"
+      },
+      "arm": "A5_retouch_frequency",
+      "case_id": "dscf6754_cheek_patch_01",
+      "geometry": {
+        "sigmas_px": [
+          1.17,
+          2.34,
+          4.68,
+          9.36,
+          18.72
+        ],
+        "tensor_sigma_px": 2.34,
+        "frequency_k_low": 89,
+        "frequency_k_mid": 29,
+        "common_radius_px": 58,
+        "collapsed_bands": [],
+        "face_width_px": 734.0
+      }
+    }
+  ],
+  "portrait_quality_winner": null,
+  "automatic_ranking": "disabled: owner native review required"
+}

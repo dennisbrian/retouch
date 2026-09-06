@@ -1,0 +1,133 @@
+{
+  "assets": [
+    {
+      "asset_id": "nahida_DSCF9559",
+      "label_validation": {
+        "method": "owner_manual_review",
+        "reference": "Owner-confirmed dev-split assignment, 2026-09-06 session (low_key lighting patch)",
+        "status": "validated"
+      },
+      "metadata": {
+        "decodable": true,
+        "format": "JPEG",
+        "height": 4160,
+        "mode": "RGB",
+        "probe_status": "ok",
+        "width": 6240
+      },
+      "path": "DSCF9559_native.jpg",
+      "person_ids": [
+        "subject_nahida_01"
+      ],
+      "sha256": "290c5e172628c6827d830dee039075a3ab11e1160f89cae1fa5b8fc5959d734e",
+      "source": "Nahida shoot",
+      "split": "dev",
+      "strata": {
+        "face_scale": "close",
+        "lighting": "low_key",
+        "pose": "three_quarter",
+        "skin_tone": "very_light"
+      },
+      "tags": [
+        "cosplay"
+      ]
+    }
+  ],
+  "consent_reference": "Own shoot / full usage rights -- Nahida shoot, owner-supplied 2026-09-06",
+  "required_strata": [
+    "face_scale",
+    "lighting",
+    "pose",
+    "skin_tone"
+  ],
+  "schema_version": 3,
+  "vocabulary": {
+    "strata": {
+      "compression": [
+        "clean",
+        "compressed",
+        "mixed",
+        "noisy"
+      ],
+      "exposure": [
+        "high_key",
+        "low_key",
+        "mixed",
+        "normal"
+      ],
+      "face_scale": [
+        "close",
+        "medium",
+        "small"
+      ],
+      "faces": [
+        "multiple",
+        "single"
+      ],
+      "lighting": [
+        "backlit",
+        "daylight",
+        "flash",
+        "high_key",
+        "low_key",
+        "mixed",
+        "overcast",
+        "studio"
+      ],
+      "lighting_difficulty": [
+        "easy",
+        "extreme",
+        "hard",
+        "moderate"
+      ],
+      "occlusion": [
+        "facial_hair",
+        "glasses",
+        "hands",
+        "mixed",
+        "none",
+        "props",
+        "wig"
+      ],
+      "pose": [
+        "frontal",
+        "mixed",
+        "profile",
+        "three_quarter"
+      ],
+      "skin_tone": [
+        "deep",
+        "light",
+        "medium",
+        "tan",
+        "varied",
+        "very_deep",
+        "very_light"
+      ],
+      "texture": [
+        "clean",
+        "marks",
+        "mixed",
+        "textured"
+      ]
+    },
+    "tags": [
+      "compression",
+      "cosplay",
+      "facial_hair",
+      "glasses",
+      "group_portrait",
+      "hands",
+      "high_key",
+      "low_key",
+      "makeup",
+      "marks",
+      "multi_image_shoot",
+      "multiple_faces",
+      "noise",
+      "props",
+      "texture",
+      "wig"
+    ]
+  }
+}
