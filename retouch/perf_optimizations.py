@@ -717,6 +717,26 @@ def _process_face_core(
     # (equivalent to micro_restore=0, arm A0_disabled). Abstention is the safe
     # fallback, never a relaxation of a safety check.
     #
+    # IMPORTANT, corrected 2026-09-06 (was stated wrong in an earlier session
+    # report): an ABSTAINING non-legacy face is NOT byte-identical to a
+    # `natural`-recipe render of the same face. `natural` never sets
+    # `fa02_texture_mode`, so it takes the `if ... == 'legacy'` branch above
+    # and runs the LEGACY `skin.restore_micro_texture` (which is a no-op only
+    # when `ctx.micro_restore == 0`, and every recipe including `natural`
+    # defaults it to 20). An abstaining non-legacy face skips BOTH branches --
+    # the legacy op never runs either -- so it is strictly LESS processed
+    # than `natural`, not equivalent to it. There are three distinct output
+    # states for any face under `fa02_texture_mode != "legacy"`, and a
+    # comparison baseline must keep them separate:
+    #   1. `natural` (or any legacy-mode recipe): legacy restoration runs.
+    #   2. non-legacy mode, gate ABSTAINS: no restoration runs at all
+    #      (`ran` field starts with "abstained").
+    #   3. non-legacy mode, gate passes and a candidate composite ran: the
+    #      new detail-signal path executed (`ran` == the mode name, or
+    #      "raw_residual (skin.restore_micro_texture)").
+    # See `fa02_diagnostics["ran"]` (perf_optimizations) / the "ran" field of
+    # the FA-02 log line for which state a given face landed in.
+    #
     # NOTHING here is calibrated. Every threshold in fa02_texture_eligibility is
     # PROVISIONAL or an outright PLACEHOLDER, and no candidate has been shown to
     # be better than any other. This is plumbing with safe abstention, not a
