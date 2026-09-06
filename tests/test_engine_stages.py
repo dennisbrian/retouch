@@ -3,6 +3,8 @@ import cv2
 import numpy as np
 import pytest
 from retouch.engine import (
+    ProcessingContext,
+    RetouchEngine,
     _adjust_vibrance,
     _apply_uniform_saturation,
     _adjust_contrast,
@@ -173,3 +175,77 @@ class TestApplySelectiveSharpening:
         mask = np.ones((20, 20, 1), dtype=np.float32)
         result = _apply_selective_sharpening(img, mask)
         assert result.shape == (20, 20, 3)
+
+
+class TestStageGlobalClarityDispatch:
+    """Regression for the 2026-09-07 clarity call-site bug.
+
+    _stage_global's `if ctx.clarity:` branch called self._grader._add_clarity
+    (the uint8-contract implementation) unconditionally, with no `is_float`
+    guard — every other op in this function (contrast, brightness, tonal)
+    branches on is_float. A float32 [0,1] frame (the normal contract for
+    this function per its own docstring) was therefore always fed into the
+    uint8-oriented function, which silently produced a badly wrong result
+    (a real production render of a 24MP photo came back with a mean pixel
+    value of ~1.5/255 — effectively black) rather than raising, because
+    cv2.cvtColor tolerates a float array outside its expected [0,1] range
+    without erroring. Guards against ANY future clarity dispatch reaching
+    the wrong-dtype implementation, at either input dtype.
+    """
+
+    @staticmethod
+    def _make_engine_and_image(dtype_float: bool):
+        engine = RetouchEngine()
+        ctx = ProcessingContext()
+        ctx.clarity = 8.0
+        rng = np.random.default_rng(0)
+        img_u8 = rng.integers(40, 220, (48, 48, 3), dtype=np.uint8)
+        if dtype_float:
+            img = img_u8.astype(np.float32) / 255.0
+        else:
+            img = img_u8.copy()
+        return engine, ctx, img
+
+    def test_float_input_stays_in_plausible_range(self):
+        """A float32 [0,1] image with nonzero clarity must not collapse
+        toward black — the exact failure mode of the missing is_float
+        branch (mean pixel value dropped to ~1.5/255 in production)."""
+        engine, ctx, img = self._make_engine_and_image(dtype_float=True)
+        result = engine._stage_global(img.copy(), ctx)
+        assert result.dtype == np.float32
+        # Source mean is comfortably mid-range (rng draws from [40, 220));
+        # a healthy clarity pass should not move the mean by more than a
+        # small fraction of that — collapse-to-black moves it by ~two
+        # orders of magnitude.
+        assert result.mean() > img.mean() * 0.5, (
+            f"float32 input mean collapsed after _stage_global: "
+            f"source={img.mean():.4f} -> out={result.mean():.4f}"
+        )
+
+    def test_uint8_input_stays_in_plausible_range(self):
+        """Same check on the uint8 path, so a future regression that breaks
+        uint8 dispatch instead of float dispatch is also caught."""
+        engine, ctx, img = self._make_engine_and_image(dtype_float=False)
+        result = engine._stage_global(img.copy(), ctx)
+        assert result.dtype == np.uint8
+        assert result.mean() > img.mean() * 0.5, (
+            f"uint8 input mean collapsed after _stage_global: "
+            f"source={img.mean():.4f} -> out={result.mean():.4f}"
+        )
+
+    def test_float_and_uint8_paths_agree(self):
+        """The float and uint8 entry points should produce visually
+        equivalent results for the same source image and clarity strength
+        — if dispatch ever routes float input into the uint8 function (or
+        vice versa), this diverges sharply."""
+        engine, ctx, img_f = self._make_engine_and_image(dtype_float=True)
+        img_u8 = np.clip(img_f * 255.0 + 0.5, 0, 255).astype(np.uint8)
+
+        out_f = engine._stage_global(img_f.copy(), ctx)
+        out_u8 = engine._stage_global(img_u8.copy(), ctx)
+
+        out_f_as_u8 = np.clip(out_f * 255.0 + 0.5, 0, 255).astype(np.uint8)
+        max_diff = np.abs(out_f_as_u8.astype(np.int32) - out_u8.astype(np.int32)).max()
+        assert max_diff <= 20, (
+            f"_stage_global float-vs-uint8 delta too high: {max_diff}"
+        )

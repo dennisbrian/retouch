@@ -2641,6 +2641,76 @@ RECIPES["cosplay_clear_protected_v1"] = {
     "mark_policy": "protect_identity",
 }
 
+RECIPES["cosplay_kitsune_daylight_v1"] = {
+    # Built and validated 2026-09-07 for the arisaff47/arisaedited kitsune
+    # shoot: outdoor flat-overcast daylight, pale skin with an existing warm
+    # blush gradient, cool blue/white/silver costume, busy convention
+    # background. Extends cosplay_clear_v1 (not outdoor_overcast_v1) because
+    # A/B on the true source (arisaedited/DSCF1884, not the pre-retouched
+    # arisaff47improved copy) showed outdoor_overcast_v1's hue_unify=0.40 +
+    # chroma_even=0.25 + sculpt=0.40 stack visibly flattens this face's
+    # existing blush/cheek gradient toward a waxier, cooler result compared
+    # to plain cosplay_clear_v1 on the same source — the "flat light needs
+    # structure reintroduced" premise doesn't hold here because the source
+    # light isn't as shadowless as that recipe assumes. Do not add sculpt,
+    # hue_unify, or chroma_even to this recipe without re-running that A/B.
+    #
+    # contrast/clarity kept below outdoor_overcast_v1's 12/15 — just enough
+    # lift for the flat sky/background, not enough to fight the face's own
+    # tonal range. color_harmony "blue_dream" at low amount (not
+    # cosplay_ice_cathedral_v1's approach, and far below blue_dream's own
+    # 0.80 default) nudges toward the costume's cool palette without a
+    # heavy stylized push.
+    #
+    # NOTE on grain (2026-09-07): this recipe's first draft (clarity=8,
+    # contrast=6) showed visible sky/background grain not present in the
+    # source. That was NOT clarity amplifying real sensor/JPEG noise — it
+    # was a real engine bug: _stage_global's clarity branch (engine.py) had
+    # no is_float guard (every sibling op there does), so float32 [0,1]
+    # frames were always routed into uint8-contract _add_clarity, and that
+    # function's BGR->LAB(uint8)->BGR roundtrip injected HF energy on its
+    # own — measured 31.7->65.6 Laplacian-variance on a flat sky patch at
+    # effectively zero clarity strength. Fixed at the root: engine.py now
+    # dispatches to _F_add_clarity for float input, and both _add_clarity/
+    # _F_add_clarity in grading.py use bgr_f32_to_lab_f32/lab_f32_to_bgr_f32
+    # instead of a uint8 roundtrip, so genuine strength=0.04 on the fixed
+    # path holds flat-sky HF at ~31.8 (source: 31.7). See
+    # docs/plans/RESEARCH_CLARITY_QUANTIZATION_2026_09_07.md. Values below
+    # restored to their originally-intended level now that the root cause
+    # is fixed, not because 4/3 was itself unsafe.
+    "extends": "cosplay_clear_v1",
+    "contrast": 6.0,
+    "clarity": 8.0,
+    "vibrance": 8.0,
+    "color_harmony": {"preset": "blue_dream", "amount": 0.15},
+}
+
+RECIPES["cosplay_color_ref_v1"] = {
+    # cosplay_clear_v1 + a pinned color_transfer_intensity, so a reference-
+    # matched cosplay job needs only "--recipe cosplay_color_ref_v1
+    # --color-ref <path>" instead of also passing
+    # --color-transfer-intensity by hand each time. --color-ref itself has
+    # no recipe_key (it's a runtime file path, not a tunable), so it must
+    # still be supplied on the command line regardless of recipe.
+    #
+    # Deliberately does NOT set fa02_texture_mode. That gate (cce14e5,
+    # 2026-09-06) has not cleared a single real face yet across every case
+    # tested so far — see docs/plans/EXPERIMENT_FA02_TEXTURE_REPRESENTATIONS_2026_09_06.md
+    # and fa02_texture_experimental_v1's comment block. Adding it here would
+    # ship a claimed feature with no evidence behind it; owner sign-off
+    # criteria (per that recipe's comment) haven't been met.
+    #
+    # 0.85 chosen over cosplay_character_showcase_v1 specifically because
+    # that recipe's contrast/bloom stack clips highlights on pale/
+    # theatrical-makeup faces (measured 2026-09-07: 10,000/10,000 px fully
+    # clipped in a nose-bridge/cheek patch vs. 0/10,000 on cosplay_clear_v1
+    # at the same coordinates). cosplay_clear_v1 carries no contrast/bloom/
+    # equalize overrides, so 0.85 was verified clip-free (max 253, 0 fully-
+    # clipped px in the same patch) on the same corpus.
+    "extends": "cosplay_clear_v1",
+    "color_transfer_intensity": 0.85,
+}
+
 RECIPES["studio_porcelain_clear_v1"] = {
     # Studio portrait on the porcelain base + new primitives. The porcelain
     # base unifies skin tone; anisotropic + region-aware smooth then clean the
@@ -4326,6 +4396,8 @@ CURATED_RECIPE_NAMES: List[str] = [
     # Cosplay and convention
     "cosplay_clear_v1",
     "cosplay_clear_protected_v1",
+    "cosplay_color_ref_v1",
+    "cosplay_kitsune_daylight_v1",
     "cosplay_portrait_polish_v1",
     "cosplay_flash_rescue_v1",
     "cosplay_powder_v1",

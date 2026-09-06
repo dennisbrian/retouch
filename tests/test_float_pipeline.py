@@ -225,6 +225,76 @@ class TestFAddClarity:
         max_diff = np.abs(f_as_u8.astype(np.int32) - u_out.astype(np.int32)).max()
         assert max_diff <= 15, f"clarity float-vs-uint8 delta too high: {max_diff}"
 
+    @staticmethod
+    def _hf_energy(img_bgr_u8: np.ndarray) -> float:
+        """Laplacian-variance proxy for high-frequency energy on the L channel."""
+        lab = cv2.cvtColor(img_bgr_u8, cv2.COLOR_BGR2LAB)
+        l_chan = lab[:, :, 0].astype(np.float32)
+        return float(cv2.Laplacian(l_chan, cv2.CV_32F, ksize=3).var())
+
+    def test_low_texture_region_not_disproportionately_amplified(self, grader, gradient_float_01):
+        """A flat/smooth region must not gain HF energy out of proportion to
+        a region with genuine edge detail, at the same clarity strength.
+
+        Regression for the 2026-09-07 clarity-quantization bug: the old
+        uint8 BGR->LAB->BGR roundtrip inside _add_clarity/_F_add_clarity
+        injected high-frequency energy on flat regions (measured 31.7->65.6
+        Laplacian-variance on a real photo's flat sky patch, effectively at
+        clarity strength 0) that had nothing to do with the recipe's
+        intended amplification. gradient_float_01 is a smooth, noise-free
+        gradient — the flat-region proxy. A checkerboard-edge image is the
+        genuine-detail proxy; clarity is expected to amplify its real edges
+        far more than it amplifies the gradient's near-zero residual.
+        """
+        strength = 0.04  # matches cosplay_kitsune_daylight_v1's recipe value / 100
+
+        flat_u8 = np.clip(gradient_float_01 * 255.0 + 0.5, 0, 255).astype(np.uint8)
+        flat_src_hf = self._hf_energy(flat_u8)
+        flat_out = grader._F_add_clarity(gradient_float_01, strength)
+        flat_out_u8 = np.clip(flat_out * 255.0 + 0.5, 0, 255).astype(np.uint8)
+        flat_out_hf = self._hf_energy(flat_out_u8)
+
+        # Edge fixture: a coarse checkerboard in the *mid-range* (0.3-0.7),
+        # giving real step-edges with headroom on both sides for clarity to
+        # amplify into. A 0/1 (pure black/white) checkerboard saturates at
+        # the op's own np.clip(..., 0, 255) boundary — amplifying a residual
+        # that's already fully saturated is a no-op by construction, which
+        # would make this fixture indistinguishable from "clarity does
+        # nothing" rather than "clarity has nothing to amplify here".
+        h, w = gradient_float_01.shape[:2]
+        yy, xx = np.mgrid[0:h, 0:w]
+        checker = (((yy // 8) + (xx // 8)) % 2).astype(np.float32)
+        checker = 0.3 + checker * 0.4  # values in {0.3, 0.7}
+        edge_img = np.stack([checker, checker, checker], axis=-1)
+        edge_u8 = np.clip(edge_img * 255.0 + 0.5, 0, 255).astype(np.uint8)
+        edge_src_hf = self._hf_energy(edge_u8)
+        edge_out = grader._F_add_clarity(edge_img, strength)
+        edge_out_u8 = np.clip(edge_out * 255.0 + 0.5, 0, 255).astype(np.uint8)
+        edge_out_hf = self._hf_energy(edge_out_u8)
+
+        # The flat region's HF energy must stay close to its own source
+        # (no artifact injection from nothing) ...
+        assert flat_out_hf <= flat_src_hf * 1.5 + 1.0, (
+            f"flat region HF energy grew disproportionately: "
+            f"source={flat_src_hf:.3f} -> out={flat_out_hf:.3f}"
+        )
+        # ... while genuine edge detail is still free to be amplified by
+        # clarity (the whole point of the op). Compare ABSOLUTE HF-energy
+        # deltas, not ratios: the two fixtures start from wildly different
+        # baselines (a near-zero-HF gradient vs. a real-edge checkerboard),
+        # so a ratio makes a tiny absolute change on the gradient look like
+        # a large relative jump and can invert the comparison. The
+        # quantization bug this test guards against injected HF energy from
+        # nothing on a flat region — an absolute-delta comparison is the
+        # metric that actually distinguishes "amplifying real detail" from
+        # "injecting energy where there was none".
+        flat_delta = flat_out_hf - flat_src_hf
+        edge_delta = edge_out_hf - edge_src_hf
+        assert edge_delta > flat_delta, (
+            f"expected genuine edge detail to gain more HF energy than a "
+            f"flat region: flat_delta={flat_delta:.3f} edge_delta={edge_delta:.3f}"
+        )
+
 
 class TestFApplyRgbCurves:
     CURVES = {"R": [(0, 0), (128, 200), (255, 255)], "G": [(0, 0), (255, 255)]}

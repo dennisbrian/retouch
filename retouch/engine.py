@@ -4100,7 +4100,17 @@ class RetouchEngine:
                 )
 
         if ctx.clarity:
-            result = self._grader._add_clarity(result, ctx.clarity / 100.0)
+            # Every other op in this function branches on is_float; this one
+            # didn't, so a float32 [0,1] `result` was always routed into the
+            # uint8-contract _add_clarity. The old uint8-path implementation
+            # happened to degrade gracefully enough on [0,1] input (via an
+            # accidental cv2.cvtColor float/uint8 range mismatch) to not be
+            # visibly broken, but it was never running the intended float
+            # path — see docs/plans/RESEARCH_CLARITY_QUANTIZATION_2026_09_07.md.
+            if is_float:
+                result = self._grader._F_add_clarity(result, ctx.clarity / 100.0)
+            else:
+                result = self._grader._add_clarity(result, ctx.clarity / 100.0)
 
         if ctx.vibrance:
             if is_float:

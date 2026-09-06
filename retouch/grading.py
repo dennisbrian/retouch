@@ -825,26 +825,44 @@ class ColorGrader:
     def _add_clarity(self, img: np.ndarray, strength: float) -> np.ndarray:
         if strength == 0:
             return img
-        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-        l_chan = lab[:, :, 0].astype(np.float32)
-        
-        # MAJOR FIX: Removed useless clarity cache. np.array_equal takes ~20ms on 4K 
-        # and always fails because earlier grading steps modify the L channel.
+        # F1/E1: was cv2.cvtColor(img, COLOR_BGR2LAB) on a uint8 input, then
+        # `l_new.astype(np.uint8)` on the way back out — two truncating
+        # quantization points bracketing the guided-filter residual. On a
+        # flat, low-texture region (sky, out-of-focus background) that
+        # roundtrip alone injects high-frequency energy from nothing: a
+        # bare BGR->LAB(uint8)->BGR trip on a flat patch raised Laplacian-
+        # variance HF energy from 31.7 to 34.8 with NO clarity applied at
+        # all (verified 2026-09-07, arisaedited/DSCF1884 sky crop), and the
+        # same 31.7->34.8 floor reproduced at strength=1e-9 (a mathematical
+        # no-op). bgr_f32_to_lab_f32/lab_f32_to_bgr_f32 keep everything in
+        # float32 through both conversions, eliminating that floor. This
+        # does not change the amplification math (detail * (1+strength)),
+        # so genuine high-frequency detail (hair, eyebrows, edges) is
+        # amplified exactly as before — only the quantization artifact on
+        # flat regions is removed.
+        lab = bgr_f32_to_lab_f32(img.astype(np.float32))
+        l_chan = lab[:, :, 0]
+
         h, w = img.shape[:2]
         r = max(int(min(h, w) * 0.015), 5)
         eps = 0.02
         l_norm = l_chan / 255.0
         base = self._guided_filter(l_norm, l_norm, r, eps) * 255.0
         detail = l_chan - base
-        
+
         l_new = np.clip(base + detail * (1.0 + strength), 0, 255)
-        lab[:, :, 0] = l_new.astype(np.uint8)
-        return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+        lab[:, :, 0] = l_new
+        out_f = lab_f32_to_bgr_f32(lab)
+        return np.clip(out_f, 0, 255).astype(np.uint8)
 
     def _F_add_clarity(self, img_f: np.ndarray, strength: float) -> np.ndarray:
         if strength == 0:
             return img_f
-        lab = _bgr_f_to_lab_u8_conv(img_f)
+        # Float-native counterpart of _add_clarity's F1/E1 fix above — same
+        # bgr_f32_to_lab_f32/lab_f32_to_bgr_f32 swap, replacing the prior
+        # _bgr_f_to_lab_u8_conv/_lab_u8_conv_to_bgr_f uint8-LAB roundtrip.
+        # img_f here is [0,1]; bgr_f32_to_lab_f32 expects [0,255].
+        lab = bgr_f32_to_lab_f32(img_f * 255.0)
         l_chan = lab[:, :, 0]
         h, w = img_f.shape[:2]
         r = max(int(min(h, w) * 0.015), 5)
@@ -854,8 +872,8 @@ class ColorGrader:
         detail = l_chan - base
         l_new = np.clip(base + detail * (1.0 + strength), 0, 255)
         lab[:, :, 0] = l_new
-        out_f = _lab_u8_conv_to_bgr_f(np.clip(lab, 0.0, 255.0).astype(np.float32))
-        return np.clip(out_f, 0.0, 1.0).astype(np.float32)
+        out_f = lab_f32_to_bgr_f32(lab)
+        return np.clip(out_f / 255.0, 0.0, 1.0).astype(np.float32)
 
     def _add_vignette(self, img: np.ndarray, strength: float) -> np.ndarray:
         h, w = img.shape[:2]

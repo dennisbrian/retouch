@@ -163,7 +163,11 @@ class TestRecipeDefaults:
         # studio_headshot_protected_v1 to the curated catalog.
         # 62 -> 63: 2026-09-06 added fa02_texture_experimental_v1 (research-
         # only, exposes fa02_texture_mode; see cce14e5).
-        assert len(CURATED_RECIPE_NAMES) == 63
+        # 63 -> 65: 2026-09-07 added cosplay_color_ref_v1 (cosplay_clear_v1 +
+        # pinned color_transfer_intensity) and cosplay_kitsune_daylight_v1
+        # (cosplay_clear_v1 + restrained outdoor-daylight grade, built for
+        # the arisaff47/arisaedited shoot).
+        assert len(CURATED_RECIPE_NAMES) == 65
         assert set(RECOMMENDED_RECIPE_NAMES).isdisjoint(CONDITIONAL_RECIPE_NAMES)
         assert set(CURATED_RECIPE_NAMES) == (
             set(RECOMMENDED_RECIPE_NAMES) | set(CONDITIONAL_RECIPE_NAMES)
