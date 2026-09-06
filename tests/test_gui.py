@@ -96,6 +96,9 @@ EXPECTED_RECIPE_KEYS = [
     "wrinkle_soften_forehead", "wrinkle_soften_nasolabial", "wrinkle_soften_neck",
     "micro_grain", "purple_fringing", "flyaway_cleanup", "split_toning",
     "corneal_shading",
+    # FA-02 opt-in texture-restoration mode (default "legacy" = today's
+    # behaviour). No recipe sets it; see tests/test_fa02_production_eligibility.py.
+    "fa02_texture_mode",
 ]
 
 # Add new HSL / Calibration / lens_blur keys dynamically
@@ -105,7 +108,7 @@ for color in ["red", "green", "blue"]:
     EXPECTED_RECIPE_KEYS.extend([f"calibration_{color}_hue", f"calibration_{color}_sat", f"calibration_{color}_lum"])
 EXPECTED_RECIPE_KEYS.append("lens_blur")
 
-EXPECTED_RECIPE_KEY_COUNT = 252
+EXPECTED_RECIPE_KEY_COUNT = 253
 # Self-updating: the recipe/smart-style slider tuple length is the contract
 # defined by RECIPE_OUTPUT_KEYS, so this constant can never go stale.
 EXPECTED_UI_OUTPUT_COUNT = len(gui.RECIPE_OUTPUT_KEYS)
@@ -168,6 +171,7 @@ class TestRecipeDefaults:
         string_fields = {
             "lip_tint", "whiten_tone", "lip_finish", "specular_bloom_tone", "color_grade", "lut", "mask_feather_mode",
             "background_harmonize_mode", "saturation_mode", "smooth_engine", "specular_finish", "mark_policy", "heal_engine",
+            "fa02_texture_mode",
             "mv2_brows_color", "mv2_eyeliner_color", "mv2_eyeliner_style",
             "mv2_eyeshadow_color", "mv2_eyeshadow_style", "mv2_ombre_color1", "mv2_ombre_color2"
         }

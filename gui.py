@@ -3526,6 +3526,13 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 label="Identity Mark Policy",
                                 info="Optional preserve mask for freckles/moles and H4 QA. Legacy keeps existing behavior.",
                             )
+                            # FA-02 experimental texture-restoration mode.
+                            # Deliberately a gr.State, NOT a visible Dropdown:
+                            # "dog"/"multiscale" are unevaluated research arms
+                            # with no evidence behind them, so the flag must not
+                            # be reachable by clicking around the UI. API/CLI
+                            # callers can still set it explicitly.
+                            _fa02_texture_mode_state = gr.State(value="legacy")
                             mole_protect = gr.Slider(
                                 0.0, 1.0, 0.0, step=0.05,
                                 label="Mole / Beauty-Mark Protect",
@@ -4794,6 +4801,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "freckle_removal": freckle_removal,
         "heal_engine": heal_engine,
         "mark_policy": mark_policy,
+        "fa02_texture_mode": _fa02_texture_mode_state,
         "micro_restore": micro_restore,
         "micro_dodge_burn": _micro_dodge_burn_state,
         "redness_even": _redness_even_state,

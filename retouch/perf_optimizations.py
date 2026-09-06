@@ -666,7 +666,31 @@ def _process_face_core(
     # Re-injects dimensional micro-contrast in cheek / nose / under-eye zones
     # that the bilateral+mid_reduction step washed out. Modulated by
     # smooth_strength so this is a no-op when smoothing is off.
-    if ctx.micro_restore > 0:
+    #
+    # FA-02: this legacy block and the FA-02 block below are MUTUALLY EXCLUSIVE.
+    # `micro_restore` defaults to 20 and the `natural` base recipe never
+    # overrides it, so this legacy restoration already runs on virtually every
+    # production render today. If the FA-02 path also ran, restoration would be
+    # applied twice. `_fa02_mode` is read via getattr because ctx arrives as a
+    # SimpleNamespace built from a pickled dict in the worker path, where an
+    # older payload may not carry the key at all.
+    _fa02_mode = getattr(ctx, 'fa02_texture_mode', 'legacy') or 'legacy'
+    if _fa02_mode not in ('legacy', 'raw_residual', 'dog', 'multiscale'):
+        # Unknown mode. The CLI validates against ParamSpec.choices
+        # (params.py:548), but the Python API (engine.process(...)) and a
+        # hand-edited recipe do not, so a typo or a reserved research arm name
+        # (A4_orientation / A5_retouch_frequency) can reach here. Fall back to
+        # legacy: the contract's safe fallback is "keep existing behaviour",
+        # and crashing mid-render is not an acceptable alternative.
+        logger.warning(
+            "FA-02 texture: unknown fa02_texture_mode=%r; falling back to "
+            "'legacy'. Valid values: legacy, raw_residual, dog, multiscale "
+            "(A4/A5 are reserved research arms, deliberately not implemented "
+            "in production).",
+            _fa02_mode,
+        )
+        _fa02_mode = 'legacy'
+    if ctx.micro_restore > 0 and _fa02_mode == 'legacy':
         canvas = _tr('restore_micro_texture', canvas)
         canvas = skin.restore_micro_texture(
             canvas,
@@ -674,6 +698,127 @@ def _process_face_core(
             regions,
             strength=ctx.micro_restore,
             smooth_strength=ctx.smooth / 100.0,
+        )
+
+    # ---- FA-02 experimental micro-texture restoration (opt-in) ----
+    # Additive, opt-in-only. Execution NEVER reaches this block at the default
+    # `fa02_texture_mode == "legacy"`, which is what keeps every existing recipe
+    # byte-identical (proved by tests/test_golden_pipeline_face.py, whose
+    # snapshots are unchanged by this feature).
+    #
+    # The gate is the operative half: a face that does not clear every
+    # eligibility threshold ABSTAINS, meaning no restoration runs at all
+    # (equivalent to micro_restore=0, arm A0_disabled). Abstention is the safe
+    # fallback, never a relaxation of a safety check.
+    #
+    # NOTHING here is calibrated. Every threshold in fa02_texture_eligibility is
+    # PROVISIONAL or an outright PLACEHOLDER, and no candidate has been shown to
+    # be better than any other. This is plumbing with safe abstention, not a
+    # production-ready quality feature.
+    elif _fa02_mode != 'legacy':
+        from .fa02_texture_eligibility import (
+            collapsed_bands,
+            evaluate_face_eligibility,
+            extract_detail,
+            scaled_sigmas,
+        )
+        from .utils import restore_outside_support
+
+        _fa02_decision = evaluate_face_eligibility(
+            pre_smooth_canvas,
+            skin_n,
+            face_width,
+            protected_mask=mark_protect_mask,
+        )
+        # Collapsed bands are a real operating condition of the frozen sigma
+        # stack, not an error: below ~face width 250 the two finest sigmas both
+        # clamp to the 0.6 px floor and their difference is identically zero,
+        # so the A2 (dog) arm becomes a no-op while A3 (multiscale) still has
+        # its second band. The spec requires this be LOGGED, never papered over
+        # by upsampling into invented detail.
+        _fa02_collapsed = collapsed_bands(face_width)
+        _fa02_ran = None
+        if _fa02_decision["eligible"] and ctx.micro_restore > 0:
+            _fa02_support = _fa02_decision["effective_support"]
+            _fa02_before = canvas
+            if _fa02_mode == 'raw_residual':
+                # The EXISTING production op, under the new gate. Deliberately
+                # not reimplemented: "current raw residual" means the algorithm
+                # that ships today, and maintaining a second copy of it would
+                # let the two drift.
+                #
+                # NOTE the deliberate absence of a restore_outside_support call
+                # on this branch. restore_micro_texture writes through its OWN
+                # dimensional mask, whose attrs include left_eye/right_eye and
+                # crows_feet -- and regions.skin EXCLUDES eyes/brows (parsing's
+                # _masks_from_label_map subtracts them). Measured on the golden
+                # fixture: only ~19-21% of each eye region lies inside
+                # regions.skin. Containing this branch to the skin-derived
+                # support would therefore strip most of the legacy op's eye
+                # restoration, making "raw_residual" NOT the existing op. The
+                # op already confines itself to its own mask, so no extra
+                # containment is needed or wanted here.
+                canvas = _tr('restore_micro_texture', canvas)
+                canvas = skin.restore_micro_texture(
+                    canvas,
+                    pre_smooth_canvas,
+                    regions,
+                    strength=ctx.micro_restore,
+                    smooth_strength=ctx.smooth / 100.0,
+                )
+                _fa02_ran = 'raw_residual (skin.restore_micro_texture)'
+            else:
+                # Frozen A2 (DoG) / A3 (multiscale) detail signals. The
+                # compositing convention deliberately mirrors
+                # skin.restore_micro_texture's: additive re-injection of a
+                # signed detail signal, scaled by strength/100 * smooth_strength,
+                # confined to a mask. Only the *detail extraction* differs, so
+                # this is an architectural comparison of representations rather
+                # than a comparison of two differently-composited ops.
+                canvas = _tr('restore_micro_texture', canvas)
+                _fa02_residual = pre_smooth_canvas.astype(np.float32) - canvas.astype(np.float32)
+                _fa02_detail = extract_detail(_fa02_residual, _fa02_mode, face_width)
+                _fa02_amount = (ctx.micro_restore / 100.0) * float(ctx.smooth / 100.0)
+                canvas = np.clip(
+                    canvas.astype(np.float32)
+                    + _fa02_detail * _fa02_amount * _fa02_support[:, :, np.newaxis],
+                    0.0, 255.0,
+                )
+                # Hard containment for the NEW composite only (see the
+                # raw_residual branch above for why it must not be applied
+                # there). The additive step is written by this file, is not
+                # self-masking beyond the multiply, and the float32 E1 canvas
+                # can carry out-of-range values a global clip would move, so
+                # restore the exact source pixels outside the support.
+                canvas = restore_outside_support(
+                    _fa02_before, canvas, _fa02_support,
+                )
+                _fa02_ran = _fa02_mode
+
+        # Observability: one structured line per face, whether it ran or not.
+        # `micro_restore` is reported because it scales every candidate exactly
+        # as it scales the legacy op: at micro_restore=0 an ELIGIBLE face still
+        # does nothing, and the line must not imply otherwise.
+        if _fa02_ran is not None:
+            _fa02_outcome = _fa02_ran
+        elif _fa02_decision["eligible"]:
+            _fa02_outcome = "abstained -- eligible but micro_restore=0 (no-op)"
+        else:
+            _fa02_outcome = "abstained -- fell back to no-op"
+        logger.info(
+            "FA-02 texture: mode=%s eligible=%s reason=%s measured=%s "
+            "thresholds=%s micro_restore=%s sigmas=%s collapsed_bands=%s ran=%s "
+            "legacy_micro_restore_ran=False status=%s",
+            _fa02_mode,
+            _fa02_decision["eligible"],
+            _fa02_decision["reason"],
+            _fa02_decision["measured"],
+            _fa02_decision["thresholds"],
+            ctx.micro_restore,
+            [round(s, 4) for s in scaled_sigmas(face_width)],
+            list(_fa02_collapsed),
+            _fa02_outcome,
+            _fa02_decision["threshold_status"],
         )
 
     # ---- Micro dodge & burn (blotch evening) ----

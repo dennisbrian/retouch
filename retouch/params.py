@@ -348,6 +348,27 @@ _SKIN_PARAMS = [
         choices=("legacy", "protect_identity", "preserve_all"),
     ),
     ParamSpec(
+        # FA-02 production texture-restoration mode. "legacy" (default) is the
+        # existing behaviour: skin.restore_micro_texture runs whenever
+        # micro_restore > 0, which is true for nearly every recipe because
+        # micro_restore's own default is 20 and the `natural` base recipe never
+        # overrides it. Any other value routes to the NEW opt-in FA-02 path,
+        # which first runs an eligibility gate (retouch/fa02_texture_eligibility)
+        # and abstains unless the face clears every threshold.
+        #
+        # "dog" and "multiscale" are EXPERIMENTAL research arms with no evidence
+        # behind them. No recipe sets this key and none should until the FA-02
+        # scoring lock has a verdict — see the report referenced in
+        # docs/plans/EXPERIMENT_FA02_TEXTURE_REPRESENTATIONS_2026_09_06.md.
+        name="fa02_texture_mode",
+        cli_flag="fa02-texture-mode",
+        cli_type=str,
+        default="legacy",
+        recipe_key="fa02_texture_mode",
+        conversion="dropdown",
+        choices=("legacy", "raw_residual", "dog", "multiscale"),
+    ),
+    ParamSpec(
         name="micro_restore",
         cli_flag="micro-restore",
         cli_type=int,

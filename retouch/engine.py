@@ -181,6 +181,10 @@ class ProcessingContext:
     blemish: float = 0.0
     nose_smooth: Optional[float] = None
     micro_restore: float = _DEFAULTS["micro_restore"]
+    # FA-02 opt-in texture-restoration mode. "legacy" keeps today's behaviour
+    # exactly; any other value routes to the gated experimental path in
+    # perf_optimizations._process_face_core.
+    fa02_texture_mode: str = _DEFAULTS["fa02_texture_mode"]
     micro_dodge_burn: float = 0.0
     mid_reduction: float = _DEFAULTS["mid_reduction"]
     blotch_reduction: float = _DEFAULTS["blotch_reduction"]
@@ -1124,6 +1128,7 @@ class RetouchEngine:
         mid_reduction: Optional[float] = None,
         nose_smooth: Optional[float] = None,
         micro_restore: Optional[float] = None,
+        fa02_texture_mode: Optional[str] = None,
         micro_dodge_burn: Optional[float] = None,
         hair_enhance: Optional[float] = None,
         hair_deglare: Optional[float] = None,
@@ -1413,6 +1418,7 @@ class RetouchEngine:
             "mid_reduction": mid_reduction,
             "nose_smooth": nose_smooth,
             "micro_restore": micro_restore,
+            "fa02_texture_mode": fa02_texture_mode,
             "micro_dodge_burn": micro_dodge_burn,
             "hair_enhance": hair_enhance,
             "hair_deglare": hair_deglare,
