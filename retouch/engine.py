@@ -540,6 +540,19 @@ class ProcessingContext:
     calibration_blue_sat: float = 0.0
     calibration_blue_lum: float = 0.0
 
+    # Explicit opt-in P6 confidence-qualified noise-floor attenuation. Kept at
+    # the end of the context fields so existing positional construction of the
+    # long-lived dataclass remains stable. Legacy clarity remains the default
+    # because the candidate is not yet a validated universal replacement.
+    clarity_noise_aware: bool = False
+
+    # Explicit P5 analytical duplicate-layer tone operator.  These are
+    # caller-only controls; no recipe supplies them and ``None`` is a strict
+    # no-op so the established grading path remains byte-compatible.
+    self_blend_mode: Optional[str] = None
+    self_blend_amount: Optional[float] = None
+    self_blend_domain: str = "encoded"
+
 
 # ---------------------------------------------------------------------------
 # ProcessingResult — rich return value
@@ -946,6 +959,15 @@ def build_context(
         skin_locus=final_skin_locus,
         smooth_exposure_lock=final_exposure_lock,
         mark_policy=mark_policy,
+        clarity_noise_aware=bool(overrides.get("clarity_noise_aware"))
+        if overrides.get("clarity_noise_aware") is not None else False,
+        self_blend_mode=overrides.get("self_blend_mode"),
+        self_blend_amount=overrides.get("self_blend_amount"),
+        self_blend_domain=(
+            overrides.get("self_blend_domain")
+            if overrides.get("self_blend_domain") is not None
+            else "encoded"
+        ),
         # ``nose_smooth`` reads the caller override first, then the recipe's
         # ``frequency.nose_smooth`` (0-1 fraction, converted to 0-100 like
         # ``frequency.smooth``); absent → None (nose smoothed with the face).
@@ -1086,6 +1108,64 @@ class RetouchEngine:
     def invalidate_lut_cache(self, name: Optional[str] = None) -> None:
         """Invalidate LUTs cached by the live render-path ColorGrader."""
         self._grader.invalidate_lut_cache(name)
+
+    @staticmethod
+    def apply_bounded_makeup_attenuation(
+        img_bgr: np.ndarray,
+        support_mask: np.ndarray,
+        reference_bgr: np.ndarray,
+        reference_mask: np.ndarray,
+        *,
+        category: str = "blush",
+        strength: float = 0.25,
+        protected_mask: Optional[np.ndarray] = None,
+        max_delta: float = 5.0,
+        max_reference_std: float = 0.08,
+        min_pixels: int = 16,
+    ):
+        """Run the explicit P4 bounded makeup-attenuation operation.
+
+        This is a leaf operation, not an automatic pipeline stage.  It
+        requires externally reviewed support/reference masks and returns the
+        ``BoundedAttenuationResult`` diagnostics, including abstention and
+        applied-delta bounds.  It never claims bare-skin recovery and leaves
+        the legacy generic unmix path untouched.
+        """
+        from .makeup_unmix import (
+            apply_bounded_makeup_attenuation as _apply_bounded,
+        )
+
+        return _apply_bounded(
+            img_bgr,
+            support_mask,
+            reference_bgr,
+            reference_mask,
+            category=category,
+            strength=strength,
+            protected_mask=protected_mask,
+            max_delta=max_delta,
+            max_reference_std=max_reference_std,
+            min_pixels=min_pixels,
+        )
+
+    def apply_self_blend_tone(
+        self,
+        img_bgr: np.ndarray,
+        mode: str,
+        amount: float = 1.0,
+        *,
+        domain: str = "encoded",
+    ) -> np.ndarray:
+        """Apply one analytical P5 self-blend tone operator.
+
+        ``mode`` is caller-selected and must be one of the ten analytical
+        operators.  ``domain`` is explicitly ``encoded`` or ``linear``.
+        This method is not a Photoshop pixel-parity claim and is not enabled
+        by any recipe.
+        """
+        return self._grader.apply_self_blend_tone(
+            img_bgr, mode=mode, amount=amount, domain=domain,
+        )
 
     def process(
         self,
@@ -1326,6 +1406,14 @@ class RetouchEngine:
         auto_body_reshape: Optional[float] = None,
         # --- Per-face recipe / param overrides (detection-order index) ---
         face_params: Optional[Mapping[int, Mapping[str, Any]]] = None,
+        # Explicit opt-in P6 confidence-qualified clarity gate. Kept at the
+        # end of the signature so existing positional callers remain stable.
+        clarity_noise_aware: Optional[bool] = None,
+        # Explicit opt-in P5 analytical tone operator.  Kept at the end so
+        # existing positional callers remain stable; recipes never set it.
+        self_blend_mode: Optional[str] = None,
+        self_blend_amount: Optional[float] = None,
+        self_blend_domain: Optional[str] = None,
         **kwargs: Any,
     ) -> ProcessingResult:
         """Process a single image through the full Retouch pipeline.
@@ -1556,6 +1644,10 @@ class RetouchEngine:
             "color_ref": color_ref,
             "color_transfer_intensity": color_transfer_intensity,
             "clarity": clarity,
+            "clarity_noise_aware": clarity_noise_aware,
+            "self_blend_mode": self_blend_mode,
+            "self_blend_amount": self_blend_amount,
+            "self_blend_domain": self_blend_domain,
             "vibrance": vibrance,
             "saturation": saturation,
             "glow": glow,
@@ -1619,6 +1711,8 @@ class RetouchEngine:
             ctx.heals = heals
         if quality is not None:
             ctx.quality = quality
+        if clarity_noise_aware is not None:
+            ctx.clarity_noise_aware = bool(clarity_noise_aware)
         if local_adjustments is not None:
             ctx._local_adjustments = local_adjustments
         if face_params is not None:
@@ -2078,8 +2172,24 @@ class RetouchEngine:
         # ------------------------------------------------------------------
         if not faces_proxy:
             h_img, w_img = native_img_bgr.shape[:2]
+            no_face_result = native_img_bgr.copy()
+            # F8.2 historically returns a pristine no-face frame here, while
+            # the non-proxy path runs ``_no_face_fallback`` upstream.  Keep
+            # that default byte-compatible behavior, but do not silently drop
+            # an explicitly selected P5 operator on large no-face inputs.
+            if getattr(ctx, "self_blend_mode", None) is not None:
+                no_face_result = self._grader.apply_self_blend_tone(
+                    no_face_result,
+                    mode=ctx.self_blend_mode,
+                    amount=(
+                        1.0
+                        if getattr(ctx, "self_blend_amount", None) is None
+                        else ctx.self_blend_amount
+                    ),
+                    domain=getattr(ctx, "self_blend_domain", "encoded"),
+                )
             return _CoreResult(
-                result=native_img_bgr.copy(),
+                result=no_face_result,
                 acc_skin=np.zeros((h_img, w_img), dtype=np.float32),
                 acc_skin_hair=np.zeros((h_img, w_img), dtype=np.float32),
                 acc_lips=np.zeros((h_img, w_img), dtype=np.float32),
@@ -2876,6 +2986,24 @@ class RetouchEngine:
                 skin_protect_strength=ctx.skin_protect_strength,
                 return_float=True,
             )
+
+        # Keep the no-face fallback's grading route consistent with the
+        # face-aware global stage: P5 is still caller-only, and is applied
+        # only when a mode is explicitly selected.  Recipes that omit the
+        # mode take the exact existing path.
+        self_blend_mode = getattr(ctx, "self_blend_mode", None)
+        if self_blend_mode is not None:
+            result = self._grader.apply_self_blend_tone(
+                result,
+                mode=self_blend_mode,
+                amount=(
+                    1.0
+                    if getattr(ctx, "self_blend_amount", None) is None
+                    else ctx.self_blend_amount
+                ),
+                domain=getattr(ctx, "self_blend_domain", "encoded"),
+            )
+
         # Remaining ops are uint8-contract — boundary conversions
         result_u8 = to_uint8(result)
 
@@ -4100,14 +4228,19 @@ class RetouchEngine:
                 )
 
         if ctx.clarity:
-            # Every other op in this function branches on is_float; this one
-            # didn't, so a float32 [0,1] `result` was always routed into the
-            # uint8-contract _add_clarity. The old uint8-path implementation
-            # happened to degrade gracefully enough on [0,1] input (via an
-            # accidental cv2.cvtColor float/uint8 range mismatch) to not be
-            # visibly broken, but it was never running the intended float
-            # path — see docs/plans/RESEARCH_CLARITY_QUANTIZATION_2026_09_07.md.
-            if is_float:
+            # Preserve the corrected float/uint8 dispatch from
+            # 1b3e341. The noise-aware candidate is an explicit caller opt-in;
+            # it must not change the legacy path or recipe strength units.
+            if getattr(ctx, "clarity_noise_aware", False):
+                if is_float:
+                    result = self._grader._F_add_clarity_noise_aware(
+                        result, ctx.clarity / 100.0
+                    )
+                else:
+                    result = self._grader._add_clarity_noise_aware(
+                        result, ctx.clarity / 100.0
+                    )
+            elif is_float:
                 result = self._grader._F_add_clarity(result, ctx.clarity / 100.0)
             else:
                 result = self._grader._add_clarity(result, ctx.clarity / 100.0)
@@ -4385,6 +4518,23 @@ class RetouchEngine:
 
         if _finish_needs_scale:
             result = np.clip(result / 255.0, 0.0, 1.0).astype(np.float32)
+
+        # P5 analytical self-blend is a caller-only tone operation.  Apply it
+        # after the core grade/finish transforms but before optional post
+        # effects, so legacy recipes remain untouched and grain/halation are
+        # not themselves remapped by the selected transfer curve.
+        self_blend_mode = getattr(ctx, "self_blend_mode", None)
+        if self_blend_mode is not None:
+            result = self._grader.apply_self_blend_tone(
+                result,
+                mode=self_blend_mode,
+                amount=(
+                    1.0
+                    if getattr(ctx, "self_blend_amount", None) is None
+                    else ctx.self_blend_amount
+                ),
+                domain=getattr(ctx, "self_blend_domain", "encoded"),
+            )
 
         # Apply post-effects
         if post_effects:

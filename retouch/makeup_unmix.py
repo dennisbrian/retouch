@@ -1,18 +1,20 @@
-"""P4 skin↔makeup unmix — classical alpha composite + multi-cue prior.
+"""P4 makeup utilities.
 
-Full product path: unmix → (edit α / S) → recompose.
-strength=0 / all gates off → identity (same array when possible).
+The historical alpha-composite heuristic remains for compatibility, while
+``apply_bounded_makeup_attenuation`` is the conservative reference-conditioned
+appearance API. Neither path claims single-image bare-skin recovery.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Optional, Tuple
 
 import cv2
 import numpy as np
 
 from .chromophore import decompose_chromophores, reconstruct_from_chromophores
-from .color_science import bgr_to_oklab, oklab_to_oklch
+from .color_science import bgr_to_oklab, oklab_to_bgr, oklab_to_oklch
 from .specular import extract_specular
 
 
@@ -25,6 +27,32 @@ _MIN_COMPONENT_FRACTION = 0.008
 _MAX_COMPONENT_FRACTION = 0.12
 _MAX_COMPONENT_BBOX_FRACTION = 0.20
 _MAX_AUTOMATIC_EDIT_DELTA = 5.0
+
+# This is deliberately a separate contract from the legacy unmix entry point.
+# Only categories whose visible colour can be bounded against an accepted
+# reference are eligible; all other categories abstain by policy.
+_REFERENCE_ATTENUATION_CATEGORIES = frozenset({
+    "blush", "translucent_blush", "translucent_color",
+})
+
+
+@dataclass(frozen=True)
+class BoundedAttenuationResult:
+    """Result and audit diagnostics for reference-conditioned P4 attenuation.
+
+    ``image`` is an appearance edit only.  No field represents recovered skin,
+    physical opacity, or a material classification.
+    """
+
+    image: np.ndarray
+    applied: bool
+    abstained: bool
+    reason: str
+    category: str
+    eligible_pixels: int
+    changed_pixels: int
+    proposed_delta_max: float
+    applied_delta_max: float
 
 
 def _smoothstep(e0: float, e1: float, x: np.ndarray) -> np.ndarray:
@@ -375,6 +403,146 @@ def cake_reduce(alpha: np.ndarray, strength: float) -> np.ndarray:
     return np.clip(low + high * (1.0 - s), 0.0, 1.0)
 
 
+def apply_bounded_makeup_attenuation(
+    img_bgr: np.ndarray,
+    support_mask: np.ndarray,
+    reference_bgr: np.ndarray,
+    reference_mask: np.ndarray,
+    *,
+    category: str = "blush",
+    strength: float = 0.25,
+    protected_mask: Optional[np.ndarray] = None,
+    max_delta: float = _MAX_AUTOMATIC_EDIT_DELTA,
+    max_reference_std: float = 0.08,
+    min_pixels: int = 16,
+) -> BoundedAttenuationResult:
+    """Apply a bounded, reference-conditioned chroma attenuation.
+
+    This opt-in leaf operation requires an externally reviewed support and a
+    separately captured/accepted reference.  It shifts only OKLab chroma
+    toward the reference's mean chroma, retaining source luminance/detail;
+    it does not estimate alpha, skin, makeup layers, or hidden pixels.  The
+    legacy ``apply_makeup_unmix`` path is intentionally not called here.
+
+    Unsupported/uncertain categories, malformed inputs, insufficient support,
+    non-finite references, and inconsistent reference colour all return an
+    unchanged image with ``abstained=True`` and a machine-readable reason.
+    ``max_delta`` is an encoded BGR per-channel bound, not a perceptual safety
+    guarantee. Image and reference arrays are uint8 or float32 BGR in the
+    engine's encoded [0, 255] convention; normalized [0, 1] float arrays are
+    intentionally rejected rather than silently being misinterpreted.
+    """
+    image = np.asarray(img_bgr)
+    identity = image.copy()
+    cat = str(category or "unknown").strip().lower()
+
+    def abstain(reason: str, eligible: int = 0) -> BoundedAttenuationResult:
+        return BoundedAttenuationResult(
+            identity, False, True, reason, cat, int(eligible), 0, 0.0, 0.0,
+        )
+
+    if image.ndim != 3 or image.shape[-1] != 3 or image.dtype not in (np.uint8, np.float32):
+        return abstain("invalid_image")
+    if not np.isfinite(image.astype(np.float32)).all():
+        return abstain("non_finite_image")
+    if np.any(image < 0) or np.any(image > 255):
+        return abstain("image_out_of_range")
+    if image.dtype == np.float32 and image.size and float(np.max(image)) <= 1.0:
+        return abstain("normalized_float_not_supported")
+    if cat not in _REFERENCE_ATTENUATION_CATEGORIES:
+        return abstain("protected_or_unsupported_category")
+    try:
+        s = float(strength)
+        bound = float(max_delta)
+        ref_std_limit = float(max_reference_std)
+    except (TypeError, ValueError):
+        return abstain("invalid_parameters")
+    if not np.isfinite(s) or s < 0.0 or s > 1.0:
+        return abstain("invalid_strength")
+    if s == 0.0:
+        return abstain("zero_strength")
+    if not np.isfinite(bound) or bound <= 0.0:
+        return abstain("invalid_delta_bound")
+    if bound > _MAX_AUTOMATIC_EDIT_DELTA:
+        return abstain("delta_bound_exceeds_policy")
+    if not np.isfinite(ref_std_limit) or ref_std_limit < 0.0:
+        return abstain("invalid_reference_tolerance")
+    try:
+        min_count = int(min_pixels)
+    except (TypeError, ValueError):
+        return abstain("invalid_min_pixels")
+    if min_count < 1:
+        return abstain("invalid_min_pixels")
+
+    h, w = image.shape[:2]
+    ref = np.asarray(reference_bgr)
+    if ref.shape != image.shape or ref.dtype not in (np.uint8, np.float32):
+        return abstain("invalid_reference")
+    if not np.isfinite(ref.astype(np.float32)).all():
+        return abstain("non_finite_reference")
+    if np.any(ref < 0) or np.any(ref > 255):
+        return abstain("reference_out_of_range")
+    if ref.dtype == np.float32 and ref.size and float(np.max(ref)) <= 1.0:
+        return abstain("normalized_float_not_supported")
+    try:
+        support = _prep_mask(support_mask, h, w)
+        ref_mask = _prep_mask(reference_mask, h, w)
+        protected = _prep_mask(protected_mask, h, w)
+    except (AttributeError, TypeError, ValueError, cv2.error):
+        return abstain("invalid_support_or_protection_mask")
+    if support is None or ref_mask is None:
+        return abstain("missing_external_support_or_reference")
+    if not np.isfinite(support).all() or not np.isfinite(ref_mask).all():
+        return abstain("non_finite_support_or_reference_mask")
+    if protected is not None and not np.isfinite(protected).all():
+        return abstain("non_finite_protection_mask")
+    eligible_mask = support if protected is None else support * (1.0 - protected)
+    eligible = int(np.count_nonzero(eligible_mask > 0.5))
+    refs = ref[ref_mask > 0.5].astype(np.float32)
+    source = image[eligible_mask > 0.5].astype(np.float32)
+    if eligible < min_count or refs.shape[0] < min_count:
+        return abstain("insufficient_reference_or_support", eligible)
+    source_lab = bgr_to_oklab(source)
+    ref_lab = bgr_to_oklab(refs)
+    if not np.isfinite(source_lab).all() or not np.isfinite(ref_lab).all():
+        return abstain("non_finite_color_measurement", eligible)
+    ref_ab = ref_lab[:, 1:3]
+    # A broad/inconsistent reference is not a credible local target.
+    if float(np.max(np.std(ref_ab, axis=0))) > ref_std_limit:
+        return abstain("inconsistent_reference", eligible)
+    source_ab = np.mean(source_lab[:, 1:3], axis=0)
+    target_ab = np.mean(ref_ab, axis=0)
+    correction = (target_ab - source_ab) * s
+    if not np.isfinite(correction).all():
+        return abstain("non_finite_correction", eligible)
+    if float(np.linalg.norm(correction)) <= 1e-7:
+        return abstain("reference_matches_source", eligible)
+    lab = bgr_to_oklab(image.astype(np.float32))
+    lab[..., 1] += correction[0] * eligible_mask
+    lab[..., 2] += correction[1] * eligible_mask
+    edited = oklab_to_bgr(lab, float32_out=True).astype(np.float32)
+    if not np.isfinite(edited).all():
+        return abstain("non_finite_edit", eligible)
+    delta = edited - image.astype(np.float32)
+    proposed_max = float(np.max(np.abs(delta[eligible_mask > 0.5]))) if eligible else 0.0
+    # Bound in the output (encoded BGR) domain and restore protected/source
+    # pixels exactly.  This is an appearance cap, not a truth or harm metric.
+    delta = np.clip(delta, -bound, bound)
+    delta *= eligible_mask[..., None]
+    output = np.clip(image.astype(np.float32) + delta, 0.0, 255.0)
+    output[eligible_mask <= 0.5] = image.astype(np.float32)[eligible_mask <= 0.5]
+    if image.dtype == np.uint8:
+        output = np.clip(output, 0, 255).astype(np.uint8)
+    else:
+        output = output.astype(np.float32)
+    applied_max = float(np.max(np.abs(output.astype(np.float32) - image.astype(np.float32))))
+    changed = int(np.count_nonzero(np.max(np.abs(output.astype(np.float32) - image.astype(np.float32)), axis=2) > 1e-6))
+    return BoundedAttenuationResult(
+        output, changed > 0, False, "applied", cat, eligible, changed,
+        proposed_max, applied_max,
+    )
+
+
 def even_coverage(
     img_bgr: np.ndarray,
     alpha: np.ndarray,
@@ -408,7 +576,15 @@ def apply_makeup_unmix(
     exclude_mask: Optional[np.ndarray] = None,
     specular_mask: Optional[np.ndarray] = None,
 ) -> np.ndarray:
-    """Full product entry: unmix → edit α → recompose. All strengths 0 = identity."""
+    """Legacy compatibility entry: unmix → edit α → recompose.
+
+    This heuristic remains available for existing recipes and callers whose
+    strengths are zero by default.  It is *not* a recovered bare-skin model:
+    the single-image inverse is non-identifiable.  New appearance edits should
+    use :func:`apply_bounded_makeup_attenuation` with reviewed supports and an
+    external reference; this function is intentionally not called by that
+    bounded API.  All strengths 0 = identity.
+    """
     ce = float(coverage_even or 0.0)
     cr = float(cake_reduce_strength or 0.0)
     if ce <= 0 and cr <= 0:

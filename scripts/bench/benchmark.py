@@ -370,6 +370,7 @@ def _peak_rss_mb() -> float:
 def assert_grading_peak_rss(
     dims: List[tuple],
     max_peak_mb: float = 4096.0,
+    max_pixels: int = 25_000_000,
 ) -> List[Dict[str, Any]]:
     """Run grading on large synthetic images and assert peak RSS stays bounded.
 
@@ -381,12 +382,24 @@ def assert_grading_peak_rss(
     Args:
         dims: List of (H, W) tuples to probe (e.g. [(2160, 3840), (3240, 5760)]).
         max_peak_mb: Hard ceiling; an AssertionError is raised if exceeded.
+        max_pixels: Allocation safety ceiling applied before constructing a
+            synthetic frame.  The default accommodates the 4K/6K probes while
+            preventing a malformed QA invocation from attempting an
+            unbounded allocation.
 
     Returns:
         List of per-dimension dicts with keys ``dim``, ``peak_mb``, ``passed``.
     """
     import numpy as np
     from retouch.grading import ColorGrader
+
+    try:
+        ceiling_pixels = int(max_pixels)
+        ceiling_mb = float(max_peak_mb)
+    except (TypeError, ValueError):
+        raise ValueError("max_pixels and max_peak_mb must be numeric") from None
+    if ceiling_pixels < 1 or not np.isfinite(ceiling_mb) or ceiling_mb <= 0:
+        raise ValueError("max_pixels must be positive and max_peak_mb finite")
 
     results: List[Dict[str, Any]] = []
     grader = ColorGrader()
@@ -395,11 +408,24 @@ def assert_grading_peak_rss(
         "glow": 0.4,
         "orton_glow": 0.3,
     }
-    for h, w in dims:
+    for dim in dims:
+        if not isinstance(dim, (tuple, list)) or len(dim) != 2:
+            raise ValueError("Each RSS probe dimension must be a (height, width) pair")
+        try:
+            h, w = (int(dim[0]), int(dim[1]))
+        except (TypeError, ValueError):
+            raise ValueError("RSS probe dimensions must be positive integers") from None
+        if h < 1 or w < 1:
+            raise ValueError("RSS probe dimensions must be positive integers")
+        if h * w > ceiling_pixels:
+            raise ValueError(
+                f"RSS probe {h}x{w} exceeds allocation safety ceiling "
+                f"({ceiling_pixels} pixels)"
+            )
         img = (np.random.RandomState(0).rand(h, w, 3) * 255.0).astype(np.uint8)
         _ = grader.grade(img, settings, 1.0, skip_post_effects=False)
         peak = _peak_rss_mb()
-        passed = peak <= max_peak_mb
+        passed = peak <= ceiling_mb
         results.append(
             {
                 "dim": f"{h}x{w}",
@@ -409,13 +435,13 @@ def assert_grading_peak_rss(
         )
         print(
             f"[benchmark] grading peak-RSS {h}x{w}: "
-            f"peak={peak:.1f}MB ceiling={max_peak_mb:.0f}MB "
+            f"peak={peak:.1f}MB ceiling={ceiling_mb:.0f}MB "
             f"({'PASS' if passed else 'FAIL'})"
         )
         if not passed:
             raise AssertionError(
                 f"Grading peak RSS {peak:.1f}MB exceeds ceiling "
-                f"{max_peak_mb:.0f}MB at {h}x{w} — _large_sigma_blur downsample "
+                f"{ceiling_mb:.0f}MB at {h}x{w} — _large_sigma_blur downsample "
                 f"guard may be bypassed."
             )
         del img

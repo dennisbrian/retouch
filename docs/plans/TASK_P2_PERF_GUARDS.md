@@ -61,6 +61,18 @@ surrounding conversions untouched).
    hits the unchanged code path). If a <=2048px hash changes, you broke something.
 4. Targeted grading tests + `benchmark.py` run — report actual numbers.
 
+## Production verification note (2026-09-07)
+
+The RSS probe remains an explicit QA gate, not a required GitHub Actions step.
+Peak RSS includes allocator/runtime history and varies by runner, so enforcing
+the 4K/6K ceiling as a deterministic CI assertion would create brittle failures.
+Run `python scripts/bench/benchmark.py --peak-rss` on a representative machine
+and retain the printed 4K/6K measurements with the release evidence. CI still
+runs the regular benchmark workflow; it does not claim RSS certification. The
+probe validates dimensions and applies a 25-million-pixel pre-allocation
+ceiling, so malformed ad-hoc dimensions fail with `ValueError` before creating
+an image rather than risking a pathological allocation.
+
 ---
 
 ## ⚠️ ACCOUNTABILITY — read this, it is not boilerplate

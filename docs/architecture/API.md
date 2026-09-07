@@ -160,6 +160,10 @@ def process(
     whites: Optional[int] = None,
     blacks: Optional[int] = None,
     clarity: Optional[float] = None,
+    clarity_noise_aware: Optional[bool] = None,
+    self_blend_mode: Optional[str] = None,
+    self_blend_amount: Optional[float] = None,
+    self_blend_domain: Optional[str] = None,
     vibrance: Optional[float] = None,
     saturation: Optional[float] = None,
     auto_exposure: Optional[bool] = None,
@@ -427,6 +431,10 @@ Passing an explicit value override to these parameters takes precedence over the
 *   **`whites`** (Type: `int`, Default: `None`, Range: `-100` to `100`, Recipe key: `whites`): Adjusts the whites parameter.
 *   **`blacks`** (Type: `int`, Default: `None`, Range: `-100` to `100`, Recipe key: `blacks`): Adjusts the blacks parameter.
 *   **`clarity`** (Type: `float`, Default: `0.0`, Range: `-50` to `50`, Recipe key: `clarity`): Adjusts the clarity parameter.
+*   **`clarity_noise_aware`** (Type: `bool`, Default: `False`, Recipe key: caller-only): Explicitly opts into the P6 confidence-qualified noise-floor gate. Legacy clarity remains the default; this does not denoise, classify semantic regions, or claim a universal noise model.
+*   **`self_blend_mode`** (Type: `str`, Default: `None`, Range: analytical P5 modes, Recipe key: caller-only): Applies one explicitly selected analytical duplicate-layer tone operator; omitted means no-op.
+*   **`self_blend_amount`** (Type: `float`, Default: `None`/`1.0` when a mode is selected, Range: `0.0` to `1.0`, Recipe key: caller-only): Sets opaque-layer opacity for the selected self-blend operator.
+*   **`self_blend_domain`** (Type: `str`, Default: `encoded`, Range: `encoded` or `linear`, Recipe key: caller-only): Selects the analytical processing domain; this is not evidence of Photoshop's working domain.
 *   **`vibrance`** (Type: `float`, Default: `0.0`, Range: `-100` to `100`, Recipe key: `vibrance`): Adjusts the vibrance parameter.
 *   **`saturation`** (Type: `float`, Default: `0.0`, Range: `-100` to `100`, Recipe key: `saturation`): Adjusts the saturation parameter.
 *   **`auto_exposure`** (Type: `bool`, Default: `False`, Range: None, Recipe key: `auto_exposure`): Boolean flag to toggle auto exposure.
@@ -684,7 +692,67 @@ print(result.dtype)  # dtype('uint8')
 
 ---
 
-## 5. Style Library & Machine Learning APIs
+## 5. Research-derived opt-in APIs
+
+These APIs are explicit leaves and are not enabled by existing recipes.
+They preserve the research evidence boundaries: neither operation claims to
+recover hidden ground truth, and callers must supply any reviewed supports or
+references required by the operation.
+
+### Bounded makeup attenuation (P4)
+
+```python
+from retouch.makeup_unmix import (
+    BoundedAttenuationResult,
+    apply_bounded_makeup_attenuation,
+)
+
+result = apply_bounded_makeup_attenuation(
+    image_bgr,
+    support_mask,
+    reference_bgr,
+    reference_mask,
+    category="blush",
+    strength=0.25,
+    protected_mask=protected_mask,
+)
+```
+
+The same leaf is available through `RetouchEngine.apply_bounded_makeup_attenuation(...)`;
+it remains explicit and does not run as part of `process()` unless a future
+caller supplies a reviewed operation request.
+
+This is reference-conditioned appearance attenuation, not bare-skin
+reconstruction. The current supported category is confirmed translucent
+blush/color; unsupported or protected cosmetics abstain. The result exposes
+`applied`, `abstained`, `reason`, support coverage and proposed/applied delta
+diagnostics. Image/reference arrays use the engine's uint8 or float32 BGR
+`[0,255]` convention. The legacy `apply_makeup_unmix` path remains available for
+backward compatibility but is not the basis for a physical unmix claim.
+
+### Analytical self-blend tone operators (P5)
+
+```python
+from retouch.self_blend import apply_self_blend, self_blend_transfer
+
+curve_value = self_blend_transfer(0.5, "soft_light")
+edited = apply_self_blend(image, "soft_light", amount=0.25, domain="encoded")
+```
+
+For full-engine routing, pass `self_blend_mode`, `self_blend_amount`, and
+`self_blend_domain` to `RetouchEngine.process()`. These caller-only arguments
+apply the selected operator in the global grading stage; leaving the mode
+`None` preserves the existing path byte-for-byte where its existing contract
+applies.
+
+The module provides the ten mathematically derived per-channel self-blend
+operators. `amount` is opaque-layer opacity in the selected domain; `domain`
+is explicitly `encoded` or `linear`; uint8/uint16 and float image contracts
+are supported. These are analytical operators, not a
+Photoshop pixel-parity or Fill implementation. Existing Retouch recipes do
+not call them automatically.
+
+## 6. Style Library & Machine Learning APIs
 
 The `retouch` package provides tools to extract editing patterns from Lightroom/Photoshop-edited image pairs and save them as reusable custom styles.
 
@@ -751,7 +819,7 @@ Performs machine learning over a folder pair. It matches image filenames, filter
 
 ---
 
-## 6. Changelog
+## 7. Changelog
 
 ### 2026-06-23 — Micro-Texture Restore & Xiaohongshu Light-Sculpting
 

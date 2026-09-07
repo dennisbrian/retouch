@@ -29,6 +29,14 @@ from .white_balance import white_balance_cat16
 
 logger = logging.getLogger(__name__)
 
+# P6 accepted candidate constants. The noise-aware clarity path is opt-in;
+# these are intentionally not recipe/UI knobs until a separately calibrated
+# photographic set supports them. Values match the fixed variance-SNR arm in
+# scripts/qa/p6_clarity_experiment.py.
+CLARITY_NOISE_FLOOR_L_DN = 0.25
+CLARITY_NOISE_VARIANCE_FACTOR = 1.5
+CLARITY_NOISE_VARIANCE_WINDOW = 9
+
 
 def _apply_curve_f(channel: np.ndarray, curve_points: Sequence[Tuple[int, int]]) -> np.ndarray:
     """Float counterpart of ``apply_curve`` for use inside float pipelines.
@@ -335,6 +343,24 @@ class ColorGrader:
             for key in stale_keys:
                 self._lut_cache.pop(key, None)
 
+    @staticmethod
+    def apply_self_blend_tone(
+        img_bgr: np.ndarray,
+        mode: str,
+        amount: float = 1.0,
+        *,
+        domain: str = "encoded",
+    ) -> np.ndarray:
+        """Apply an analytical duplicate-layer tone operator.
+
+        The implementation is kept in :mod:`retouch.self_blend` so the ten
+        equations have one source of truth.  This grading-facing adapter is
+        deliberately opt-in and makes no Photoshop pixel-parity claim.
+        """
+        from .self_blend import apply_self_blend
+
+        return apply_self_blend(img_bgr, mode, amount=amount, domain=domain)
+
     def grade(
         self,
         img_bgr: np.ndarray,
@@ -348,6 +374,9 @@ class ColorGrader:
         skip_post_effects: bool = False,
         skin_protect_strength: float = 0.0,
         return_float: bool = False,
+        self_blend_mode: Optional[str] = None,
+        self_blend_amount: float = 1.0,
+        self_blend_domain: str = "encoded",
     ) -> np.ndarray:
         """Apply a colour grading preset to an image.
 
@@ -370,6 +399,11 @@ class ColorGrader:
                 highlight rolloff, film grain) are now applied as global stages in
                 ``engine.py``, not as kwargs to ``grade()``.
             return_float: If True, return float32 [0,1] instead of uint8.
+            self_blend_mode: Optional analytical P5 self-blend mode. ``None``
+                preserves the existing grading path exactly.
+            self_blend_amount: Opaque-layer amount in [0,1] for the selected
+                self-blend mode.
+            self_blend_domain: ``encoded`` or ``linear`` analytical domain.
 
         Returns:
             (H, W, 3) uint8 or float32 [0,1] BGR image.
@@ -463,6 +497,17 @@ class ColorGrader:
                 result = skin_protect.protect_skin(result, _color_ops, skin_protect_strength)
         else:
             result = _color_ops(result)
+
+        # P5 is an explicit grading operation.  Keep this after the existing
+        # color-op/protection path and before gamut/post-effect handling so a
+        # missing mode remains a strict no-op for all established callers.
+        if self_blend_mode is not None:
+            result = self.apply_self_blend_tone(
+                result,
+                mode=self_blend_mode,
+                amount=self_blend_amount,
+                domain=self_blend_domain,
+            )
 
         # K3 — gamut-aware chroma compression. No-op when the graded result is
         # fully in-gamut (byte-identical golden path); otherwise rolls over-saturated
@@ -874,6 +919,127 @@ class ColorGrader:
         lab[:, :, 0] = l_new
         out_f = lab_f32_to_bgr_f32(lab)
         return np.clip(out_f / 255.0, 0.0, 1.0).astype(np.float32)
+
+    @staticmethod
+    def _clarity_noise_sigma(l_norm: np.ndarray) -> float:
+        """Estimate a conservative L-channel noise floor from 2x2 Haar HH.
+
+        ``l_norm`` is normalized L* (0–1). This is a small patch-wide
+        estimator, not camera-noise calibration; edited/JPEG inputs can make
+        it unreliable. The estimate is used only to attenuate additional
+        clarity gain and to abstain below the local residual-variance floor.
+        """
+        h = (l_norm.shape[0] // 2) * 2
+        w = (l_norm.shape[1] // 2) * 2
+        if h < 2 or w < 2:
+            return CLARITY_NOISE_FLOOR_L_DN / 255.0
+        even = l_norm[:h, :w]
+        hh = (even[::2, ::2] - even[1::2, ::2]
+              - even[::2, 1::2] + even[1::2, 1::2]) * 0.5
+        median = float(np.median(hh))
+        mad = float(np.median(np.abs(hh - median))) / 0.67448975
+        if not np.isfinite(mad):
+            mad = 0.0
+        return max(mad, CLARITY_NOISE_FLOOR_L_DN) / 255.0
+
+    def _F_add_clarity_noise_aware(self, img_f: np.ndarray, strength: float) -> np.ndarray:
+        """Opt-in P6 variance/SNR-gated clarity for float [0,1] BGR images.
+
+        Legacy clarity remains untouched. Local residual variance must exceed
+        ``CLARITY_NOISE_VARIANCE_FACTOR * sigma²`` before any additional
+        clarity is applied. Pixels below that confidence threshold are copied
+        from the source, including bypassing the otherwise unavoidable float
+        LAB round-trip. The modified LAB render is used for confident pixels;
+        the exact source is restored for abstained pixels. This deliberately
+        avoids a second native-size RGB bridge, but is not a denoising or
+        colour-conversion identity guarantee outside the abstained support.
+
+        The estimator is not sensor calibration and this path does not denoise,
+        classify texture, or infer semantic regions. It is a bounded, opt-in
+        attenuation/bypass mechanism; callers must retain legacy mode unless
+        they explicitly accept the research-qualified behavior.
+        """
+        image = np.asarray(img_f, dtype=np.float32)
+        if image.ndim != 3 or image.shape[-1] != 3:
+            raise ValueError("_F_add_clarity_noise_aware expects HxWx3 BGR")
+        try:
+            gain = float(strength)
+        except (TypeError, ValueError):
+            raise ValueError("clarity strength must be finite and in [-1, 1]") from None
+        if not np.isfinite(gain) or abs(gain) > 1.0:
+            raise ValueError("clarity strength must be finite and in [-1, 1]")
+        if not np.isfinite(image).all() or np.any((image < 0.0) | (image > 1.0)):
+            raise ValueError("_F_add_clarity_noise_aware expects finite BGR in [0, 1]")
+        if gain == 0:
+            return img_f
+
+        lab = bgr_f32_to_lab_f32(image * 255.0)
+        l_chan = lab[:, :, 0]
+        l_norm = l_chan / 255.0
+        h, w = image.shape[:2]
+        r = max(int(min(h, w) * 0.015), 5)
+        base = self._guided_filter(l_norm, l_norm, r, 0.02)
+        detail = l_norm - base
+
+        sigma = self._clarity_noise_sigma(l_norm)
+        window = CLARITY_NOISE_VARIANCE_WINDOW
+        mean = cv2.boxFilter(detail, -1, (window, window), normalize=True)
+        # Reuse the variance buffer for the final gate. This matters on native
+        # 20+ MP frames: keeping separate variance/gate/result temporaries
+        # would make the optional path exceed the pipeline's memory budget.
+        mean *= mean
+        # ``detail`` is no longer needed in its original form until after the
+        # gate is built, so square it in-place instead of allocating a second
+        # full-size product buffer.
+        np.multiply(detail, detail, out=detail)
+        variance = cv2.boxFilter(detail, -1, (window, window), normalize=True)
+        variance -= mean
+        del mean
+        np.maximum(variance, 0.0, out=variance)
+        sigma2 = sigma * sigma
+        # g=0 is an explicit local abstention. The denominator is guarded so
+        # perfectly flat detail remains finite and never generates NaN/Inf.
+        # Algebraically use 1 - (c+eps)/(V+eps) so V can be transformed
+        # in-place into the gate without retaining a second full-size map.
+        np.add(variance, 1e-12, out=variance)
+        np.divide(
+            CLARITY_NOISE_VARIANCE_FACTOR * sigma2 + 1e-12,
+            variance,
+            out=variance,
+        )
+        np.subtract(1.0, variance, out=variance)
+        np.clip(variance, 0.0, 1.0, out=variance)
+        gate = variance
+
+        # Reconstruct the original signed residual in the existing buffer.
+        np.subtract(l_norm, base, out=detail)
+        np.multiply(detail, gate, out=detail)
+        np.multiply(detail, gain * 255.0, out=detail)
+        new_l = np.clip(l_chan + detail, 0.0, 255.0)
+        lab[:, :, 0] = new_l
+        # A zero gate is stronger than multiplying the increment by zero: it
+        # also prevents a float LAB conversion floor from changing source. A
+        # full-frame RGB delta bridge would make this opt-in path allocate two
+        # additional native-size colour buffers; use the modified LAB render
+        # directly and restore the exact source only at abstained pixels.
+        abstain = gate <= 0.0
+        del new_l, detail, base, l_norm, gate, variance
+        if np.all(abstain):
+            return image
+        rendered = lab_f32_to_bgr_f32(lab)
+        rendered *= 1.0 / 255.0
+        rendered[abstain] = image[abstain]
+        return rendered.astype(np.float32)
+
+    def _add_clarity_noise_aware(self, img: np.ndarray, strength: float) -> np.ndarray:
+        """Opt-in P6 noise-aware clarity for uint8 BGR images."""
+        if np.asarray(img).dtype != np.uint8:
+            raise ValueError("_add_clarity_noise_aware expects uint8 BGR input")
+        if strength == 0:
+            return img
+        image_f = np.asarray(img, dtype=np.float32) / 255.0
+        result = self._F_add_clarity_noise_aware(image_f, strength)
+        return np.clip(result * 255.0, 0.0, 255.0).astype(np.uint8)
 
     def _add_vignette(self, img: np.ndarray, strength: float) -> np.ndarray:
         h, w = img.shape[:2]

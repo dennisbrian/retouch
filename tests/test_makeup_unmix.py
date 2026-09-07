@@ -13,6 +13,7 @@ from retouch.makeup_unmix import (
     even_coverage,
     recompose,
     unmix_makeup,
+    apply_bounded_makeup_attenuation,
 )
 
 
@@ -214,3 +215,111 @@ def test_compact_specular_highlight_cannot_bleed_coverage_even(tone):
     out = apply_makeup_coverage_even(highlighted, np.ones((h, w), np.float32), 0.7)
     assert float(alpha[spot].mean()) < 0.05
     assert float(np.abs(out.astype(np.float32) - highlighted)[~spot].max()) <= 1.0
+
+
+def test_bounded_reference_attenuation_is_explicit_and_protected():
+    img = np.full((32, 32, 3), (80, 100, 180), dtype=np.uint8)
+    ref = np.full_like(img, (110, 120, 165))
+    support = np.zeros((32, 32), np.float32)
+    support[8:24, 8:24] = 1.0
+    protected = np.zeros_like(support)
+    protected[12:16, 12:16] = 1.0
+    result = apply_bounded_makeup_attenuation(
+        img, support, ref, support, category="blush", strength=1.0,
+        protected_mask=protected, max_delta=5.0,
+    )
+    assert result.applied and not result.abstained
+    assert result.eligible_pixels == 240
+    assert result.applied_delta_max <= 5.0 + 1e-5
+    assert np.array_equal(result.image[protected > 0.5], img[protected > 0.5])
+    assert np.array_equal(result.image[support <= 0.5], img[support <= 0.5])
+
+
+def test_bounded_reference_attenuation_abstains_without_credible_reference():
+    img = np.full((32, 32, 3), (80, 100, 180), dtype=np.uint8)
+    support = np.ones((32, 32), np.float32)
+    ref = img.copy()
+    result = apply_bounded_makeup_attenuation(
+        img, support, ref, support, category="lipstick", strength=0.5,
+    )
+    assert result.abstained and result.reason == "protected_or_unsupported_category"
+    assert np.array_equal(result.image, img)
+
+    noisy_ref = np.zeros_like(img)
+    noisy_ref[:, :16] = (0, 0, 255)
+    noisy_ref[:, 16:] = (255, 255, 0)
+    result = apply_bounded_makeup_attenuation(
+        img, support, noisy_ref, support, category="blush", strength=0.5,
+    )
+    assert result.abstained and result.reason == "inconsistent_reference"
+    assert np.array_equal(result.image, img)
+
+
+def test_bounded_reference_attenuation_missing_or_invalid_support_abstains():
+    img = np.full((24, 24, 3), 96, dtype=np.uint8)
+    ref = np.full_like(img, 110)
+    result = apply_bounded_makeup_attenuation(
+        img, None, ref, None, category="blush", strength=0.5,
+    )
+    assert result.abstained and result.reason == "missing_external_support_or_reference"
+    assert np.array_equal(result.image, img)
+
+    support = np.ones((24, 24), np.float32)
+    zero = apply_bounded_makeup_attenuation(
+        img, support, ref, support, category="blush", strength=0.0,
+    )
+    assert zero.abstained and zero.reason == "zero_strength"
+    assert np.array_equal(zero.image, img)
+
+    result = apply_bounded_makeup_attenuation(
+        img, support, ref, support, category="blush", strength=0.5,
+        max_delta=6.0,
+    )
+    assert result.abstained and result.reason == "delta_bound_exceeds_policy"
+    assert np.array_equal(result.image, img)
+
+    bad = img.astype(np.float32)
+    bad[0, 0, 0] = -1.0
+    result = apply_bounded_makeup_attenuation(
+        bad, support, ref, support, category="blush", strength=0.5,
+    )
+    assert result.abstained and result.reason == "image_out_of_range"
+
+    normalized = np.full((24, 24, 3), 0.5, dtype=np.float32)
+    result = apply_bounded_makeup_attenuation(
+        normalized, support, normalized, support, category="blush", strength=0.5,
+    )
+    assert result.abstained and result.reason == "normalized_float_not_supported"
+
+
+def test_bounded_reference_attenuation_float_contract_is_finite_and_deterministic():
+    image = np.full((20, 20, 3), (80.0, 100.0, 180.0), dtype=np.float32)
+    reference = np.full_like(image, (100.0, 110.0, 165.0))
+    support = np.ones((20, 20), dtype=np.float32)
+    first = apply_bounded_makeup_attenuation(
+        image, support, reference, support, category="blush", strength=0.5,
+    )
+    second = apply_bounded_makeup_attenuation(
+        image, support, reference, support, category="blush", strength=0.5,
+    )
+    assert first.applied and first.image.dtype == np.float32
+    assert np.isfinite(first.image).all()
+    assert first.image.min() >= 0 and first.image.max() <= 255
+    np.testing.assert_array_equal(first.image, second.image)
+
+    invalid_reference = reference.copy()
+    invalid_reference[0, 0, 0] = np.nan
+    result = apply_bounded_makeup_attenuation(
+        image, support, invalid_reference, support, category="blush", strength=0.5,
+    )
+    assert result.abstained and result.reason == "non_finite_reference"
+
+
+def test_bounded_reference_attenuation_does_not_roundtrip_when_reference_matches():
+    image = np.full((20, 20, 3), (80, 100, 180), dtype=np.uint8)
+    support = np.ones((20, 20), dtype=np.float32)
+    result = apply_bounded_makeup_attenuation(
+        image, support, image, support, category="blush", strength=0.5,
+    )
+    assert result.abstained and result.reason == "reference_matches_source"
+    assert np.array_equal(result.image, image)
