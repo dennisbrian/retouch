@@ -196,14 +196,20 @@ class TestFaceParserInit:
         assert parser._sess is None
 
     def test_session_set_when_onnx_init_succeeds(self):
-        with patch("os.path.exists", return_value=True), \
+        with patch(
+            "retouch.parsing.model_status",
+            return_value={"available": True, "path": "fake.onnx"},
+        ), patch("os.path.exists", return_value=True), \
              patch("retouch.parsing.ort.InferenceSession") as mock_sess_cls:
             mock_sess_cls.return_value = MagicMock(name="fake_ort_session")
             parser = FaceParser()
         assert parser._sess is not None
 
     def test_bisenet_session_is_pinned_to_cpu(self):
-        with patch("os.path.exists", return_value=True), \
+        with patch(
+            "retouch.parsing.model_status",
+            return_value={"available": True, "path": "fake.onnx"},
+        ), patch("os.path.exists", return_value=True), \
              patch("retouch.parsing.ort.InferenceSession") as mock_sess_cls:
             mock_sess_cls.return_value = MagicMock(name="fake_ort_session")
             FaceParser()
