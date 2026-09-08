@@ -73,7 +73,10 @@ def test_uint16_png_orientation_applied_once(tmp_path, orientation):
 
 @pytest.mark.parametrize("prefer_16bit", [True, False])
 def test_raw_ingest_uses_linear_decode_then_iec_srgb(tmp_path, monkeypatch, prefer_16bit):
-    import rawpy
+    # rawpy is an optional package; the core test matrix intentionally does
+    # not install the ``raw`` extra, so keep this RAW-specific contract
+    # runnable when the optional decoder is present and skipped otherwise.
+    rawpy = pytest.importorskip("rawpy")
     calls = []
     samples = np.array([[[0, 205, 11796], [32768, 65535, 655]]], dtype=np.uint16)
 
