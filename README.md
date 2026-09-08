@@ -163,3 +163,12 @@ The dev server watches `.` and `retouch/` for `.py` changes and restarts the Gra
 - [GUI.md](docs/guides/GUI.md) — Gradio web UI layout, components, and styling
 - [RECIPE_GUIDE.md](docs/guides/RECIPE_GUIDE.md) — recipe authoring reference
 - [docs/INDEX.md](docs/INDEX.md) — full documentation map
+
+## License
+
+The original Retouch Engine source code is released under the [MIT License](LICENSE).
+
+Third-party assets retain their own terms. Model sources and licenses are recorded
+in [models/manifest.json](models/manifest.json), and the bundled demo LUT policy is
+documented in [luts/ACQUISITION.md](luts/ACQUISITION.md). Do not commit commercial
+LUTs or model files without confirming their redistribution rights.
