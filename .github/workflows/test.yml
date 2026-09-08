@@ -88,12 +88,15 @@ jobs:
           wheel-smoke-venv/bin/python -c '
           from importlib import resources
           import json
+          # This venv intentionally has no runtime dependencies; keep this
+          # check limited to package data shipped inside the wheel.
           manifest = json.loads(resources.files("models").joinpath("manifest.json").read_text())
           assert "pose_landmarker_full" in manifest["models"]
           assert all(entry.get("availability") != "bundled" for entry in manifest["models"].values())
           assert resources.files("presets").joinpath("natural.json").is_file()
-          from retouch.model_fetch import model_status
-          assert model_status("resnet18_bisenet")["downloadable"] is False
+          unavailable = manifest["models"]["resnet18_bisenet"]
+          assert unavailable["availability"] == "unavailable"
+          assert unavailable["url"] == ""
           print("wheel package data verified")
           '
       - name: Upload wheel

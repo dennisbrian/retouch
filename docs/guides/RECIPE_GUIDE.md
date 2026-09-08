@@ -238,6 +238,7 @@ These keys are defined directly at the top level of a recipe dictionary.
 | `color_transfer_intensity` | 0.0 to 1.0 | `1.0` | `--color-transfer-intensity` if applicable |
 | `contrast` | -50 to 50 | `0.0` | `--contrast` if applicable |
 | `dodge_burn` | 0 to 100 | `0` | `--dodge-burn` if applicable |
+| `fa02_texture_mode` | `legacy`, `raw_residual`, `dog`, or `multiscale` | `legacy` | `--fa02-texture-mode` if applicable |
 | `gamut_compress` | 0.0 to 1.0 | `True` | `--gamut-compress` if applicable |
 | `glow` | 0 to 100 | `0.0` | None |
 | `grain_strength` | 0.0 to 1.0 | `0.0` | `--film-grain` if applicable |
@@ -472,6 +473,7 @@ and 0–360 for split-toning hue).
 | Mask Feather Mode | `mask.feather_mode` | direct |
 | Matte Black | `background.matte_black` | direct |
 | Micro Dodge Burn | `skin.micro_db` | ÷ 100 |
+| FA-02 Texture Mode | `fa02_texture_mode` | direct |
 | Micro Restore | `micro_restore` | direct |
 | Mid Reduction | `frequency.mid_reduction` | direct |
 | Midtone Hue | `midtone_hue` | direct |

@@ -340,20 +340,26 @@ class TestBenchmarkColorGrading:
         assert median < 100.0, f"grade(natural) too slow: {median:.1f}ms (expected < 100ms)"
 
     def test_grade_skip_post_effects(self):
-        """When post-effects are disabled, grading should be substantially faster."""
+        """Disabling an enabled post-effect should take the fast path."""
         from retouch.grading import ColorGrader
         grader = ColorGrader()
         img = np.random.randint(0, 255, (600, 800, 3), dtype=np.uint8)
+        # natural has no enabled post-effects, so benchmarking it here would
+        # measure the same work in both modes. Use a post-effect-only preset to
+        # isolate the skip flag from the core color-operation budget.
+        settings = {
+            "halation": {"threshold": 210, "radius": 21, "intensity": 0.4},
+        }
 
         def run():
             return grader.grade(
-                img, preset="natural", intensity=1.0, skip_post_effects=True
+                img, preset=settings, intensity=1.0, skip_post_effects=True
             )
 
         median, samples = _bench(run, iterations=20, warmup=2)
-        _print("grading.grade(natural,no-post) 800x600", median, samples)
+        _print("grading.grade(halation,no-post) 800x600", median, samples)
         assert median < 60.0, (
-            f"grade(natural,no-post) too slow: {median:.1f}ms (expected < 60ms)"
+            f"grade(halation,no-post) too slow: {median:.1f}ms (expected < 60ms)"
         )
 
     def test_grade_unknown_falls_back(self):

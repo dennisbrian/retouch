@@ -180,12 +180,19 @@ class TestGuidedFilterVsBilateral:
             result_guided = guided_filter(img, radius=radius, eps=eps, max_dim=None)
             time_guided = time.perf_counter() - start
 
-            # Time bilateral filter
-            start = time.perf_counter()
-            result_bilateral = cv2.bilateralFilter(img, -1, sigma_color, sigma_space)
-            time_bilateral = time.perf_counter() - start
+            # Time the bilateral reference only at the smaller size. Its
+            # runtime grows sharply with image area and is hardware-dependent
+            # at 1500x1500; the separate similarity test already covers the
+            # bilateral output contract, while the large-image check here is
+            # specifically for the guided-filter path.
+            if size == 400:
+                start = time.perf_counter()
+                result_bilateral = cv2.bilateralFilter(img, -1, sigma_color, sigma_space)
+                time_bilateral = time.perf_counter() - start
+                bilateral_text = f"bilateral: {time_bilateral*1000:.2f}ms"
+                assert time_bilateral < 10.0, f"Bilateral filter too slow: {time_bilateral*1000:.2f}ms"
+            else:
+                bilateral_text = "bilateral: skipped"
 
-            print(f"{size}x{size} guided: {time_guided*1000:.2f}ms, bilateral: {time_bilateral*1000:.2f}ms")
-            # No strict performance assertion; both should complete in reasonable time
+            print(f"{size}x{size} guided: {time_guided*1000:.2f}ms, {bilateral_text}")
             assert time_guided < 10.0, f"Guided filter too slow: {time_guided*1000:.2f}ms"
-            assert time_bilateral < 10.0, f"Bilateral filter too slow: {time_bilateral*1000:.2f}ms"

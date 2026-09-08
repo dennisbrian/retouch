@@ -783,11 +783,13 @@ class TestFaceCoreIntegration:
 
 
 # ---------------------------------------------------------------------------
-# Opt-in guarantees: no recipe or default enables a candidate
+# Opt-in guarantees: only the explicit research recipe enables a candidate
 # ---------------------------------------------------------------------------
 
 
 class TestOptInOnly:
+    _FA02_EXPERIMENTAL_RECIPE = "fa02_texture_experimental_v1"
+
     def test_paramspec_default_is_legacy(self):
         from retouch.params import PROCESSING_PARAMS
 
@@ -795,28 +797,37 @@ class TestOptInOnly:
         assert spec.default == "legacy"
         assert spec.choices == ("legacy", "raw_residual", "dog", "multiscale")
 
-    def test_every_recipe_resolves_to_legacy(self):
+    def test_only_explicit_experimental_recipe_resolves_to_candidate(self):
         from retouch.engine import build_context
         from retouch.params import RECIPES, resolve_recipe
+        from retouch.recipes import EXPERIMENTAL_RECIPE_NAMES, RECOMMENDED_RECIPE_NAMES
 
         offenders = [
             name for name in RECIPES
             if build_context(name, resolve_recipe(name), {}).fa02_texture_mode
             != "legacy"
         ]
-        assert offenders == [], (
-            "recipes must not enable an FA-02 candidate: {0}".format(offenders)
+        assert offenders == [self._FA02_EXPERIMENTAL_RECIPE], (
+            "only the explicit FA-02 research recipe may enable a candidate: "
+            "{0}".format(offenders)
         )
+        assert self._FA02_EXPERIMENTAL_RECIPE in EXPERIMENTAL_RECIPE_NAMES
+        assert self._FA02_EXPERIMENTAL_RECIPE not in RECOMMENDED_RECIPE_NAMES
 
     def test_no_recipe_source_file_sets_the_key(self):
-        """Grep guard: the key must not appear in any recipe definition file."""
-        offenders = []
+        """Only the named research recipe may set the candidate mode."""
+        entries = []
         for path in sorted((ROOT / "retouch").glob("*recipe*.py")):
             text = path.read_text()
-            if re.search(r"[\"']fa02_texture_mode[\"']", text):
-                offenders.append(path.name)
-        assert offenders == [], (
-            "fa02_texture_mode must not be set in recipe files: {0}".format(offenders)
+            entries.extend(
+                (path.name, match.group(1))
+                for match in re.finditer(
+                    r"[\"']fa02_texture_mode[\"']\s*:\s*[\"']([^\"']+)[\"']",
+                    text,
+                )
+            )
+        assert entries == [("recipes.py", "multiscale")], (
+            "unexpected FA-02 recipe source entries: {0}".format(entries)
         )
 
     def test_thresholds_are_documented_as_uncalibrated(self):

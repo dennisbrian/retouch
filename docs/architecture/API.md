@@ -332,6 +332,7 @@ Passing an explicit value override to these parameters takes precedence over the
 *   **`whiten_hue_stable`** (Type: `bool`, Default: `False`, Range: None, Recipe key: `skin.whiten_hue_stable`): Boolean flag to toggle whiten hue stable.
 *   **`whiten`** (Type: `int`, Default: `10`, Range: `0` to `100`, Recipe key: `skin.rosy`): Adjusts the whiten parameter.
 *   **`equalize`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.equalize`): Adjusts the equalize parameter.
+*   **`fa02_texture_mode`** (Type: `str`, Default: `legacy`, Choices: `legacy`, `raw_residual`, `dog`, `multiscale`, Recipe key: `fa02_texture_mode`): Selects the opt-in FA-02 texture-restoration arm. Ordinary recipes and the default remain on `legacy`; `fa02_texture_experimental_v1` is research-only and uncalibrated.
 *   **`blemish`** (Type: `int`, Default: `30`, Range: None, Recipe key: None): Alias/mirror of the `smooth` slider.
 *   **`whiten_tone`** (Type: `str`, Default: `rosy`, Range: None, Recipe key: `skin.porcelain`): Adjusts the whiten tone parameter.
 *   **`white_costume_lift`** (Type: `bool`, Default: `False`, Range: None, Recipe key: `white_costume_lift`): Boolean flag to toggle white costume lift.

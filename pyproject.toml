@@ -20,7 +20,9 @@ dependencies = [
     "mediapipe==0.10.5",
     "protobuf>=3.20,<4",
     "numpy>=1.24.0,<2",
-    "onnxruntime>=1.16.0",
+    # 1.19.2 is the last tested release with wheels for every supported
+    # CPython 3.9-3.11 CI target, including Linux and macOS.
+    "onnxruntime==1.19.2",
     "tqdm>=4.65.0",
     "Pillow>=10.0.0",
     "jsonschema>=4.18.0,<5",

@@ -6,7 +6,9 @@ mediapipe==0.10.5
 # MediaPipe 0.10.5 requires the pre-4 protobuf API.
 protobuf>=3.20,<4
 numpy>=1.24.0,<2
-onnxruntime>=1.16.0
+# Keep the legacy Python 3.9-3.11 matrix on a release with wheels for all
+# supported CI targets. Newer releases currently omit the CPython 3.10 wheel.
+onnxruntime==1.19.2
 tqdm>=4.65.0
 Pillow>=10.0.0
 jsonschema>=4.18.0,<5

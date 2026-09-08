@@ -357,8 +357,9 @@ _SKIN_PARAMS = [
         # and abstains unless the face clears every threshold.
         #
         # "dog" and "multiscale" are EXPERIMENTAL research arms with no evidence
-        # behind them. No recipe sets this key and none should until the FA-02
-        # scoring lock has a verdict — see the report referenced in
+        # behind them. Only the explicitly named research-only recipe exposes
+        # this key; ordinary recipes and the default remain legacy until the
+        # FA-02 scoring lock has a verdict. See the report referenced in
         # docs/plans/EXPERIMENT_FA02_TEXTURE_REPRESENTATIONS_2026_09_06.md.
         name="fa02_texture_mode",
         cli_flag="fa02-texture-mode",
