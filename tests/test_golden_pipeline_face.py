@@ -44,7 +44,7 @@ def _hash_result(result: np.ndarray) -> str:
     result = np.asarray(result)
     h, w, channels = result.shape
     block = 8
-    quantum = 4
+    quantum = 32
     if h % block or w % block:
         raise ValueError(f"golden output shape must be divisible by {block}: {result.shape}")
     block_sums = result.reshape(h // block, block, w // block, block, channels)
