@@ -11,6 +11,7 @@ latest-request-wins state machine (T4) are correctly out of scope here.
 """
 
 import json
+from pathlib import Path
 import subprocess
 import sys
 
@@ -458,6 +459,7 @@ class TestRegistryValidationNegativeCases:
 
 
 _HEAVY_MODULES = ("gradio", "cv2", "torch", "onnxruntime", "PIL")
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class TestModulePurity:
@@ -477,7 +479,7 @@ class TestModulePurity:
             capture_output=True,
             text=True,
             check=True,
-            cwd="/Applications/htdocs/retouch",
+            cwd=_REPO_ROOT,
         )
         assert result.stdout.strip() == "[]", result.stdout
 
@@ -496,7 +498,7 @@ class TestModulePurity:
             capture_output=True,
             text=True,
             check=True,
-            cwd="/Applications/htdocs/retouch",
+            cwd=_REPO_ROOT,
         )
         assert result.stdout.strip() == "[]", result.stdout
 
