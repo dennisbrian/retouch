@@ -47,9 +47,12 @@ class TestPipelineOnSyntheticFace:
     """
 
     def test_pipeline_runs_all_recipes(self, engine, synthetic_face):
+        # Keep this broad recipe smoke test below pytest-timeout on slower
+        # hosted macOS runners while retaining a real image-processing path.
+        smoke_face = cv2.resize(synthetic_face, (200, 200), interpolation=cv2.INTER_AREA)
         for recipe_name in RECIPES:
-            result = engine.process(synthetic_face, recipe=recipe_name)
-            _assert_valid_output(result, synthetic_face)
+            result = engine.process(smoke_face, recipe=recipe_name)
+            _assert_valid_output(result, smoke_face)
             assert result.params.active_recipe == recipe_name
 
     def test_pipeline_with_overrides(self, engine, synthetic_face):
