@@ -159,7 +159,12 @@ def _resolve_safe_path(path: Union[str, Path], base_dir: Optional[Union[str, Pat
     the resolved path must stay within it. When *base_dir* is None (single-file
     CLI/GUI case), the path must not resolve to a system directory.
     """
-    p = Path(path).expanduser().resolve()
+    raw_path = Path(path).expanduser()
+    if base_dir is None and ".." in raw_path.parts:
+        raise ValueError(
+            f"Path traversal rejected: {path!r} contains a parent directory component"
+        )
+    p = raw_path.resolve()
     if base_dir is not None:
         base = Path(base_dir).expanduser().resolve()
         try:
