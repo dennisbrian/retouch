@@ -1,10 +1,19 @@
 # Documentation Organization
 
+## How to Use Retouch
+
+Start with the [Getting Started guide](guides/GETTING_STARTED.md) for the
+desktop workflow: launch the local GUI, retouch one photo, export a full-quality
+result, or switch to the CLI and recipe-sweep workflow. Then use the focused
+guides below for batch processing, recipe authoring, runtime recovery, and
+output verification.
+
 ## Root Level (Keep Short)
 - `README.md` — Installation & quick start
 - `CLAUDE.md` — Development guidelines & architecture
 
 ## Guides (`docs/guides/`)
+- `GETTING_STARTED.md` — Desktop one-photo workflow, CLI basics, and result checks
 - `RECIPE_GUIDE.md` — Creating custom presets
 - `GUI.md` — Gradio UI layout & components
 - `BATCH_GUIDE.md` — Batch processing via CLI
