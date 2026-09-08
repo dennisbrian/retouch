@@ -210,11 +210,34 @@ def _relative_features(
     reference_mask: np.ndarray,
     mel_map: Optional[np.ndarray],
     hb_map: Optional[np.ndarray],
+    *,
+    lab: Optional[np.ndarray] = None,
+    reference_pixels: Optional[np.ndarray] = None,
+    reference_stats: Optional[dict[int, tuple[float, float]]] = None,
+    map_context: Optional[dict[str, tuple[np.ndarray, float, float]]] = None,
 ) -> dict[str, float]:
-    """Extract only subject-relative appearance features for one component."""
-    lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    """Extract only subject-relative appearance features for one component.
+
+    ``lab``/``reference_pixels``/``*_stats`` are optional so this private
+    helper remains compatible with callers that used the original signature.
+    ``detect_marks`` supplies a precomputed context: those values are
+    invariant for every component in one detection pass and used to be
+    recomputed in the per-component loop.
+    """
+    if lab is None:
+        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
     reference = reference_mask > 0.3
-    reference_pixels = lab[reference] if np.any(reference) else lab.reshape(-1, 3)
+    if reference_pixels is None:
+        reference_pixels = lab[reference] if np.any(reference) else lab.reshape(-1, 3)
+
+    if reference_stats is None:
+        reference_stats = {}
+        for channel in (0, 1):
+            values = reference_pixels[:, channel]
+            median = float(np.median(values))
+            mad = float(np.median(np.abs(values - median)))
+            reference_stats[channel] = (median, mad)
+
     x, y, width, height = classification.bbox
     h, w = img_bgr.shape[:2]
     x0, x1 = max(x, 0), min(x + width, w)
@@ -223,8 +246,7 @@ def _relative_features(
     component_pixels = component.reshape(-1, 3) if component.size else reference_pixels
 
     def relative(channel: int) -> float:
-        median = float(np.median(reference_pixels[:, channel]))
-        mad = float(np.median(np.abs(reference_pixels[:, channel] - median)))
+        median, mad = reference_stats[channel]
         return (float(np.median(component_pixels[:, channel])) - median) / max(1.4826 * mad, 1.0)
 
     features = _geometry_features(width, height)
@@ -233,11 +255,14 @@ def _relative_features(
         if source is None:
             features[name] = 0.0
             continue
-        values = source.astype(np.float32)
-        baseline = values[reference] if np.any(reference) else values.reshape(-1)
+        if map_context is not None and name in map_context:
+            values, median, mad = map_context[name]
+        else:
+            values = source.astype(np.float32)
+            baseline = values[reference] if np.any(reference) else values.reshape(-1)
+            median = float(np.median(baseline))
+            mad = float(np.median(np.abs(baseline - median)))
         comp_values = values[y0:y1, x0:x1]
-        median = float(np.median(baseline))
-        mad = float(np.median(np.abs(baseline - median)))
         features[name] = (float(np.median(comp_values)) - median) / max(1.4826 * mad, 1e-4)
     return features
 
@@ -288,6 +313,40 @@ def detect_marks(
     records: list[MarkRecord] = []
     classifications = FreckleRemover().classify_anomalies(
         img_bgr, face_mask=normalized_face, confidence_threshold=confidence_threshold)
+
+    if classifications:
+        # Build the appearance context once per detection pass.  These values
+        # are identical for every component; keeping them outside the
+        # classification loop removes repeated LAB conversion, boolean
+        # extraction, median and MAD work without changing per-component
+        # arithmetic.  A no-component pass skips this extra conversion.
+        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+        reference = normalized_face > 0.3
+        has_reference = bool(np.any(reference))
+        reference_pixels = lab[reference] if has_reference else lab.reshape(-1, 3)
+        reference_stats: dict[int, tuple[float, float]] = {}
+        for channel in (0, 1):
+            values = reference_pixels[:, channel]
+            median = float(np.median(values))
+            mad = float(np.median(np.abs(values - median)))
+            reference_stats[channel] = (median, mad)
+        map_context: dict[str, tuple[np.ndarray, float, float]] = {}
+        for name, source in (("mel_rel", mel_map), ("hb_rel", hb_map)):
+            if source is None:
+                continue
+            values = source.astype(np.float32)
+            baseline = values[reference] if has_reference else values.reshape(-1)
+            median = float(np.median(baseline))
+            mad = float(np.median(np.abs(baseline - median)))
+            map_context[name] = (values, median, mad)
+
+    else:
+        # Keep these names defined for type checkers; the loop below is empty.
+        lab = None
+        reference_pixels = None
+        reference_stats = None
+        map_context = None
+
     for classification in classifications:
         records.append(MarkRecord(
             mark_id=len(records),
@@ -296,7 +355,17 @@ def detect_marks(
             centroid=classification.centroid,
             area_norm=classification.area / max(width ** 2, 1.0),
             bbox=classification.bbox,
-            features=_relative_features(img_bgr, classification, normalized_face, mel_map, hb_map),
+            features=_relative_features(
+                img_bgr,
+                classification,
+                normalized_face,
+                mel_map,
+                hb_map,
+                lab=lab,
+                reference_pixels=reference_pixels,
+                reference_stats=reference_stats,
+                map_context=map_context,
+            ),
             on_body=on_body,
         ))
     for detector_mask, mark_class in (

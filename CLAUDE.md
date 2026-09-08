@@ -103,12 +103,14 @@ Measured on a 6240×4160 (24 MP) input, `natural`, M3 Pro / macOS 25.5
 |---|---|---|
 | `--max-dim 2048` (pre-shrunk before the engine) | 5.3 s | low |
 | full-res, `quality="draft"` | 23.5 s | 8.1 GB |
-| full-res, `quality="full"` (default) | **>25 min, never observed completing** | 11.2 GB |
+| full-res, `quality="full"` (default) | **27–325 s observed on the current native corpus** | **5.64 GB observed peak** |
 
 The older "7.5 GB → 1.84 GB, 15.3s → 3.09s" figure describes the **draft**
-round-trip only; it does not apply to the default full path. A full-res
-`quality="full"` sweep looks like a hang but is doing native-resolution work —
-prefer `--max-dim 2048` or `quality="draft"` for multi-recipe sweeps.
+round-trip only; it does not apply to the default full path. The older
+">25 min, never observed completing" figure is stale: current 26 MP corpus
+runs complete in roughly 27–325 s depending on recipe and face workload. The
+5.64 GB value is one measured peak, not a hard memory guarantee; prefer
+`--max-dim 2048` or `quality="draft"` for multi-recipe sweeps.
 
 ---
 

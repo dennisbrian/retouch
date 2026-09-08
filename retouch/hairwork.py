@@ -620,7 +620,7 @@ _FLY_TOPHAT_SCALES: tuple = (2, 3, 4) # px scales for black-hat line detection
 _FLY_MIN_AREA_PX: int = 2            # drop specks smaller than this
 
 
-def _flyaway_mask(
+def _flyaway_mask_full(
     img_bgr: np.ndarray,
     hair_mask: np.ndarray,
     orientation: np.ndarray,
@@ -765,13 +765,102 @@ def _flyaway_mask(
         clean = np.zeros_like(thin_u8)
         for i in range(1, n):
             if stats[i, cv2.CC_STAT_AREA] >= _FLY_MIN_AREA_PX:
-                clean[labels == i] = 255
+                x = int(stats[i, cv2.CC_STAT_LEFT])
+                y = int(stats[i, cv2.CC_STAT_TOP])
+                width = int(stats[i, cv2.CC_STAT_WIDTH])
+                height = int(stats[i, cv2.CC_STAT_HEIGHT])
+                labels_roi = labels[y : y + height, x : x + width]
+                clean_roi = clean[y : y + height, x : x + width]
+                clean_roi[labels_roi == i] = 255
         thin_only = (clean.astype(np.float32) / 255.0)
 
     # Feather the mask edges so the heal blends cleanly.
     feather_k = max(3, int(face_width * 0.03)) | 1
     out = cv2.GaussianBlur(thin_only, (feather_k, feather_k), 0)
     return np.clip(out, 0.0, 1.0).astype(np.float32)
+
+
+def _flyaway_mask(
+    img_bgr: np.ndarray,
+    hair_mask: np.ndarray,
+    orientation: np.ndarray,
+    coherence: np.ndarray,
+    strength: int,
+    exclude_mask: Optional[np.ndarray],
+    face_width: float,
+) -> np.ndarray:
+    """ROI-confined wrapper for :func:`_flyaway_mask_full`.
+
+    The detector's output is confined to a band around ``hair_mask``.  Use a
+    correctness-preserving padded crop for the expensive morphology, local
+    orientation blur and output feathering, then restore the historical
+    full-frame mask contract.  The pad covers every kernel radius and the
+    Gaussian support used by the dominant-flow estimate.
+    """
+    h, w = img_bgr.shape[:2]
+    mask_f = normalize_mask(hair_mask)
+    if mask_f is None:
+        return np.zeros((h, w), dtype=np.float32)
+    if mask_f.shape != (h, w):
+        mask_f = cv2.resize(mask_f, (w, h), interpolation=cv2.INTER_LINEAR)
+    if mask_f.max() < 0.05:
+        return np.zeros((h, w), dtype=np.float32)
+
+    exclude_f: Optional[np.ndarray] = None
+    if exclude_mask is not None:
+        exclude_f = normalize_mask(exclude_mask)
+        if exclude_f is not None and exclude_f.shape != (h, w):
+            exclude_f = cv2.resize(exclude_f, (w, h), interpolation=cv2.INTER_LINEAR)
+
+    band_w = max(3, int(face_width * 0.06))
+    feather_k = max(3, int(face_width * 0.03)) | 1
+    dom_sigma = max(2.0, float(face_width) / 20.0)
+    dom_radius = int(np.ceil(3.0 * dom_sigma))
+    roi_pad = max(
+        band_w,
+        (band_w + 1) // 2,
+        4,  # largest black-hat/cap kernel radius
+        feather_k // 2,
+        dom_radius,
+    )
+
+    # Preserve even feathered, sub-threshold mask values: the full detector
+    # uses them when building ``search_band`` and normalizing the response.
+    # A positive-value bbox is still tight for the binary/feathered masks
+    # produced by the parser, while avoiding an exactness-changing cutoff.
+    roi_source = mask_f > 0.0
+    if exclude_f is not None:
+        roi_source |= exclude_f > 0.0
+    ys, xs = np.where(roi_source)
+    if ys.size == 0:
+        return np.zeros((h, w), dtype=np.float32)
+    x0 = max(int(xs.min()) - roi_pad, 0)
+    y0 = max(int(ys.min()) - roi_pad, 0)
+    x1 = min(int(xs.max()) + roi_pad + 1, w)
+    y1 = min(int(ys.max()) + roi_pad + 1, h)
+    if (x0, y0, x1, y1) == (0, 0, w, h):
+        return _flyaway_mask_full(
+            img_bgr,
+            mask_f,
+            orientation,
+            coherence,
+            strength,
+            exclude_f,
+            face_width,
+        )
+
+    cropped = _flyaway_mask_full(
+        img_bgr[y0:y1, x0:x1],
+        mask_f[y0:y1, x0:x1],
+        orientation[y0:y1, x0:x1],
+        coherence[y0:y1, x0:x1],
+        strength,
+        None if exclude_f is None else exclude_f[y0:y1, x0:x1],
+        face_width,
+    )
+    result = np.zeros((h, w), dtype=np.float32)
+    result[y0:y1, x0:x1] = cropped
+    return result
 
 
 def remove_flyaways(

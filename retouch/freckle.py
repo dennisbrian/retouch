@@ -323,15 +323,21 @@ class FreckleRemover:
                     self._MAX_COMPONENTS,
                 )
                 break
-            comp_mask = labels == i
-            cls, conf, reason, _area, _, _ = self._classify_anomaly(
-                lab, comp_mask, a_median, a_std, l_median, l_std
-            )
-            cx, cy = float(centroids[i, 0]), float(centroids[i, 1])
+            # Connected-component stats provide a tight bounding rectangle.
+            # Restrict both the label comparison and LAB gather to that slice;
+            # the local boolean array has the same row-major membership and
+            # pixel order as ``labels == i`` on the full canvas.
             x = int(stats[i, cv2.CC_STAT_LEFT])
             y = int(stats[i, cv2.CC_STAT_TOP])
             w = int(stats[i, cv2.CC_STAT_WIDTH])
             h = int(stats[i, cv2.CC_STAT_HEIGHT])
+            labels_roi = labels[y : y + h, x : x + w]
+            lab_roi = lab[y : y + h, x : x + w]
+            comp_mask = labels_roi == i
+            cls, conf, reason, _area, _, _ = self._classify_anomaly(
+                lab_roi, comp_mask, a_median, a_std, l_median, l_std
+            )
+            cx, cy = float(centroids[i, 0]), float(centroids[i, 1])
             classifications.append(
                 FreckleClassification(
                     anomaly_id=len(classifications),

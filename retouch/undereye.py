@@ -121,17 +121,82 @@ def build_undereye_support(
         support (float32 0-1, feathered, exactly 0 outside), ring (bool),
         valid (bool: pixels the low-pass estimate may sample from).
     """
-    m = normalize_mask(mask)
-    assert m is not None
-    hard = (m > 0.5).astype(np.uint8)
-    if not hard.any():
-        z = np.zeros(m.shape, np.float32)
-        return z, np.zeros(m.shape, bool), np.ones(m.shape, bool)
+    m_full = normalize_mask(mask)
+    assert m_full is not None
+    if m_full.ndim != 2:
+        raise ValueError(f"under-eye mask must be 2-D, got shape {m_full.shape}")
+    original_shape = m_full.shape
+    h_full, w_full = original_shape
+
+    # The support is spatially local, but the legacy implementation paid for
+    # every morphology and distance transform over the full native canvas.
+    # Crop once around the landmark/exclusion masks and leave enough context
+    # for every kernel plus the distance-transform taper.  The latter is
+    # clipped at ``ext_px``; a 3x pad keeps its local distance values identical
+    # to the full-frame result, including at image edges.
+    hard_full = m_full > 0.5
+    if not hard_full.any():
+        z = np.zeros(original_shape, np.float32)
+        return z, np.zeros(original_shape, bool), np.ones(original_shape, bool)
+
+    ex_full: Optional[np.ndarray] = None
+    if exclude is not None:
+        ex_full = normalize_mask(exclude)
+        assert ex_full is not None
+        if ex_full.shape != original_shape:
+            raise ValueError(
+                "exclude mask shape must match under-eye mask: "
+                f"{ex_full.shape} != {original_shape}"
+            )
 
     lash_r = max(int(ied * _UE_LASH_MARGIN), 1)
-    poly = hard.copy()
     ext_px = max(int(ied * _UE_EXTEND_DOWN), 1)
-    hard = _dilate_down(hard, ext_px, max(int(ied * _UE_EXTEND_SIDE), 1))
+    ext_side = max(int(ied * _UE_EXTEND_SIDE), 1)
+    feather_r = max(int(ied * _UE_FEATHER), 2)
+    eye_ring_excl = max(int(ied * _UE_EYE_RING_EXCL), 1)
+    ring_outer = max(int(ied * (_UE_RING_OUTER + _UE_RING_GAP)), 2)
+    ring_gap = max(int(ied * _UE_RING_GAP), 1)
+    max_kernel_radius = max(
+        ext_px,
+        ext_side,
+        lash_r,
+        eye_ring_excl,
+        feather_r,
+        feather_r * 3,
+        ring_outer,
+        ring_gap,
+    )
+    roi_pad = max(3 * ext_px, max_kernel_radius)
+
+    roi_source = hard_full.copy()
+    if ex_full is not None:
+        roi_source |= ex_full > 0.3
+    ys, xs = np.where(roi_source)
+    x0 = max(int(xs.min()) - roi_pad, 0)
+    y0 = max(int(ys.min()) - roi_pad, 0)
+    x1 = min(int(xs.max()) + roi_pad + 1, w_full)
+    y1 = min(int(ys.max()) + roi_pad + 1, h_full)
+    use_roi = (x0, y0, x1, y1) != (0, 0, w_full, h_full)
+
+    if use_roi:
+        m = m_full[y0:y1, x0:x1]
+        if ex_full is not None:
+            exclude = ex_full[y0:y1, x0:x1]
+        skin_roi = normalize_mask(skin)
+        if skin_roi is not None:
+            if skin_roi.shape != original_shape:
+                raise ValueError(
+                    "skin mask shape must match under-eye mask: "
+                    f"{skin_roi.shape} != {original_shape}"
+                )
+            skin = skin_roi[y0:y1, x0:x1]
+    else:
+        m = m_full
+
+    hard = (m > 0.5).astype(np.uint8)
+
+    poly = hard.copy()
+    hard = _dilate_down(hard, ext_px, ext_side)
 
     if exclude is not None:
         ex = (normalize_mask(exclude) > 0.3).astype(np.uint8)
@@ -149,7 +214,6 @@ def build_undereye_support(
         ex_ring = cv2.dilate(ex_lash, _ellipse(max(int(ied * _UE_EYE_RING_EXCL), 1)))
     hard[ex_lash > 0] = 0
 
-    feather_r = max(int(ied * _UE_FEATHER), 2)
     support = _feather_mask(hard.astype(np.float32), radius=feather_r)
     support = np.clip(support, 0.0, 1.0).astype(np.float32)
     # keep the eye itself and everything beyond the feathered halo exactly 0;
@@ -173,8 +237,8 @@ def build_undereye_support(
             # keep the op on skin (hair / brows / background at the temple)
             support *= sk
 
-    outer = cv2.dilate(hard, _ellipse(max(int(ied * (_UE_RING_OUTER + _UE_RING_GAP)), 2)))
-    inner = cv2.dilate(hard, _ellipse(max(int(ied * _UE_RING_GAP), 1)))
+    outer = cv2.dilate(hard, _ellipse(ring_outer))
+    inner = cv2.dilate(hard, _ellipse(ring_gap))
     ring = (outer > 0) & (inner == 0) & (ex_ring == 0)
     if skin is not None:
         sk = normalize_mask(skin)
@@ -184,7 +248,20 @@ def build_undereye_support(
     # (the wider ``ex_ring`` exclusion is for the reference ring only;
     # using it here starved the estimate right under the lid).
     valid = ex_lash == 0
-    return support, ring, valid
+
+    if not use_roi:
+        return support, ring, valid
+
+    # Restore the historical full-frame contract.  Outside the ROI support
+    # and ring are known to be zero by construction; valid is true wherever
+    # the exclusion mask is zero, which is also true outside this ROI.
+    support_full = np.zeros((h_full, w_full), dtype=np.float32)
+    ring_full = np.zeros((h_full, w_full), dtype=bool)
+    valid_full = np.ones((h_full, w_full), dtype=bool)
+    support_full[y0:y1, x0:x1] = support
+    ring_full[y0:y1, x0:x1] = ring
+    valid_full[y0:y1, x0:x1] = valid
+    return support_full, ring_full, valid_full
 
 
 class UndereyeAnalyzer:
@@ -271,7 +348,13 @@ class UndereyeAnalyzer:
         filtered_dark = np.zeros_like(dark_u8)
         for i in range(1, num_labels):  # Skip background (label 0)
             if stats[i, cv2.CC_STAT_AREA] >= 100:
-                filtered_dark[labels == i] = 1
+                x = int(stats[i, cv2.CC_STAT_LEFT])
+                y = int(stats[i, cv2.CC_STAT_TOP])
+                width = int(stats[i, cv2.CC_STAT_WIDTH])
+                height = int(stats[i, cv2.CC_STAT_HEIGHT])
+                labels_roi = labels[y : y + height, x : x + width]
+                filtered_roi = filtered_dark[y : y + height, x : x + width]
+                filtered_roi[labels_roi == i] = 1
 
         return filtered_dark.astype(np.float32), float(local_median_l)
 
