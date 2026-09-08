@@ -250,6 +250,45 @@ class TestNeuralBoostersEngineIntegration:
         np.testing.assert_array_equal(result, img_float)
         assert result.dtype == np.float32
 
+    def test_stage_converts_float32_255_input_for_enabled_segmenter(self, monkeypatch):
+        """Enabled boosters receive clipped uint8 data from float32 engine input."""
+        import retouch.neural_boosters as neural_boosters
+
+        class RecordingSegmenter:
+            enabled = True
+
+            def __init__(self):
+                self.seen = None
+
+            def detect(self, image):
+                self.seen = image.copy()
+                return np.zeros(image.shape[:2], dtype=np.uint8)
+
+        segmenter = RecordingSegmenter()
+        monkeypatch.setattr(
+            neural_boosters,
+            "StrayHairSegmenter",
+            lambda: segmenter,
+        )
+
+        engine = RetouchEngine()
+        ctx = ProcessingContext()
+        ctx.neural_stray_hair_boost = 50.0
+        ctx.neural_defect_boost = 0.0
+        img_float = np.array(
+            [[[0.0, 127.5, 255.0], [300.0, -1.0, 64.9]]],
+            dtype=np.float32,
+        )
+
+        result = engine._stage_neural_boosters(img_float.copy(), ctx)
+
+        np.testing.assert_array_equal(
+            segmenter.seen,
+            np.clip(img_float, 0.0, 255.0).astype(np.uint8),
+        )
+        np.testing.assert_array_equal(result, img_float)
+        assert result.dtype == np.float32
+
     def test_stage_no_op_stray_hair_enabled_but_placeholder_disabled(self):
         """Stage accepts stray_hair param but no-ops (placeholder disabled)."""
         engine = RetouchEngine()

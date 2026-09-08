@@ -4956,10 +4956,11 @@ class RetouchEngine:
         from .neural_boosters import StrayHairSegmenter, DefectSegmenter
         from .safe_auto import decide
 
-        # Normalize to uint8 for processing (or use float if already float32)
+        # Neural booster inputs use the engine's float32 [0, 255] contract;
+        # convert that range directly for the uint8 segmenter interface.
         is_float = img.dtype == np.float32
         if is_float:
-            img_uint8 = to_uint8(img)
+            img_uint8 = np.clip(img, 0.0, 255.0).astype(np.uint8)
         else:
             img_uint8 = img
 
