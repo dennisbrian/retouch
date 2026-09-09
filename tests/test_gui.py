@@ -906,6 +906,83 @@ class TestResetFunctions:
         b = gui.reset_skin_smoothing("natural")
         assert a == b
 
+    # --- reset_* / .click(outputs=[...]) drift guard ------------------------
+    #
+    # Each reset_* body builds its return tuple from name-keyed `d["..."]`
+    # lookups (safe by construction), but the `.click(outputs=[component, ...])`
+    # site pairs that tuple with a hand-typed, purely positional component
+    # list elsewhere in build_app(). If the two orderings ever diverge, a
+    # slider silently receives the wrong reset value with no error raised —
+    # the same footgun class closed for _process_inputs/_recipe_outputs (see
+    # TestProcessInputKeys). This statically compares source order instead of
+    # instantiating Gradio components.
+
+    @staticmethod
+    def _reset_func_key_order(src):
+        """AST: for every `def reset_*`, the `d["key"]` order in its return
+        statement. Functions with no dict-keyed return (reset_color_transfer,
+        reset_debug) are omitted."""
+        import ast
+        tree = ast.parse(src)
+        result = {}
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.FunctionDef) and node.name.startswith("reset_")):
+                continue
+            keys, saw_non_dict_elt = [], False
+            for n in ast.walk(node):
+                if isinstance(n, ast.Return) and n.value is not None:
+                    elts = n.value.elts if isinstance(n.value, ast.Tuple) else [n.value]
+                    for e in elts:
+                        if (isinstance(e, ast.Subscript) and isinstance(e.value, ast.Name)
+                                and e.value.id == "d" and isinstance(e.slice, ast.Constant)):
+                            keys.append(e.slice.value)
+                        else:
+                            saw_non_dict_elt = True
+            if keys and not saw_non_dict_elt:
+                result[node.name] = keys
+        return result
+
+    @staticmethod
+    def _click_output_order(src):
+        """Regex: for every `fn=reset_X, inputs=[...], outputs=[...]` click
+        wiring, the outputs component-name order."""
+        import re
+        pattern = r'fn=(reset_\w+),\s*\n\s*inputs=\[[^\]]*\],\s*\n\s*outputs=\[([^\]]*)\]'
+        result = {}
+        for m in re.finditer(pattern, src):
+            fname, outs_src = m.group(1), m.group(2)
+            result[fname] = [x.strip() for x in outs_src.split(",") if x.strip()]
+        return result
+
+    def test_reset_function_key_order_matches_click_output_order(self):
+        """The d["key"] order inside each reset_* return must match the
+        component order in its .click(outputs=[...]) wiring, key-for-key.
+        Component variable names are expected to equal their param key
+        (e.g. `smooth` -> smooth, `face_exposure` -> face_exposure)."""
+        src = open(gui.__file__).read()
+        func_keys = self._reset_func_key_order(src)
+        click_outs = self._click_output_order(src)
+
+        assert func_keys, "no reset_* dict-keyed functions found — extraction broke"
+        for fname, keys in func_keys.items():
+            outs = click_outs.get(fname)
+            assert outs is not None, f"{fname}: no matching .click(outputs=[...]) site found"
+            assert len(outs) == len(keys), (
+                f"{fname}: return tuple has {len(keys)} values but "
+                f"outputs=[...] has {len(outs)} components"
+            )
+            assert outs == keys, (
+                f"{fname}: order drift between return tuple {keys} "
+                f"and outputs=[...] {outs}"
+            )
+
+    def test_reset_function_click_sites_are_declared(self):
+        """Every reset_* function referenced by a .click(fn=...) call must
+        actually exist on gui (catches renamed/removed handlers)."""
+        src = open(gui.__file__).read()
+        for fname in self._click_output_order(src):
+            assert hasattr(gui, fname), f"{fname} wired via .click() but not defined in gui.py"
+
 
 # ---------------------------------------------------------------------------
 # TestOnSaveStyleValidation

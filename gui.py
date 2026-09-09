@@ -2616,21 +2616,25 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         letter-spacing: 0.04em !important;
     }
     
-    /* Preset chips (glass style - Dark Mode Only) */
+    /* Preset chips: scroll cap applies in both themes — with 65+ recipes,
+       an uncapped list buries the primary action buttons below the fold
+       (this was previously .dark-only, so light-mode users got no cap). */
     .preset-chips { border: none !important; background: transparent !important; padding: 0 !important; }
     .preset-chips .wrap {
         display: flex !important;
         flex-direction: column !important;
-        max-height: 380px !important;
+        flex-wrap: nowrap !important;
+        max-height: 220px !important;
         overflow-y: auto !important;
         gap: 4px !important;
-        background: transparent !important;
-        border: none !important;
         padding: 0 4px 0 0 !important;
     }
     .preset-chips .wrap::-webkit-scrollbar { width: 3px !important; }
-    .preset-chips .wrap::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12) !important; border-radius: 2px !important; }
-    
+    .preset-chips .wrap::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.15) !important; border-radius: 2px !important; }
+    .dark .preset-chips .wrap::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12) !important; }
+
+    /* Preset chips (glass style - Dark Mode Only) */
+
     .dark .preset-chips label {
         display: flex !important;
         align-items: center !important;
@@ -3061,6 +3065,16 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             info="Recommended recipes are correction-first. Scene / creative recipes need matching light or intent.",
                             elem_classes=["preset-chips"]
                         )
+
+                        with gr.Row():
+                            process_btn = gr.Button("Render Preview ⚡", variant="primary", size="lg", elem_classes=["primary-btn"])
+                            export_full_btn = gr.Button("Export Full Quality", variant="primary", size="lg", elem_classes=["primary-btn"])
+                        with gr.Row():
+                            smart_process_btn = gr.Button("🧠 Smart Process", variant="secondary", size="sm", elem_classes=["primary-btn"])
+                            export_all_btn = gr.Button("Export All → Batch", variant="secondary", size="sm", elem_classes=["secondary-btn"])
+                            apply_smart_btn = gr.Button("Apply Smart Suggestion", variant="secondary", size="sm", interactive=False, elem_classes=["secondary-btn"])
+                            reset_btn = gr.Button("Reload Recipe Defaults 🔄", variant="secondary", size="sm", elem_classes=["secondary-btn"], elem_id="reset-btn")
+
                         custom_style_preset = gr.Dropdown(
                             choices=custom_style_choices, value=None, label="Or Load Custom Style Profile", interactive=True,
                             info="Select an extracted style from your library"
@@ -3102,14 +3116,6 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         with gr.Row():
                             fast = gr.Checkbox(label="Legacy fast override", value=True,
                                                info="Render Preview is always fast; Export Full Quality is always full resolution.")
-                        
-                        with gr.Row():
-                            process_btn = gr.Button("Render Preview ⚡", variant="primary", size="lg", elem_classes=["primary-btn"])
-                            export_full_btn = gr.Button("Export Full Quality", variant="primary", size="lg", elem_classes=["primary-btn"])
-                            export_all_btn = gr.Button("Export All → Batch", variant="secondary", size="lg", elem_classes=["secondary-btn"])
-                            smart_process_btn = gr.Button("🧠 Smart Process", variant="primary", size="lg", elem_classes=["primary-btn"])
-                            apply_smart_btn = gr.Button("Apply Smart Suggestion", variant="secondary", size="lg", interactive=False, elem_classes=["secondary-btn"])
-                            reset_btn = gr.Button("Reload Recipe Defaults 🔄", variant="secondary", size="lg", elem_classes=["secondary-btn"], elem_id="reset-btn")
 
                         with gr.Accordion("💾 Session & History", open=False):
                             with gr.Row():

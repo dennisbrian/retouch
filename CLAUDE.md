@@ -65,7 +65,7 @@ Every tunable parameter is registered in `PROCESSING_PARAMS` (a list of `ParamSp
 **When adding a new parameter:**
 1. Add one `ParamSpec` entry in `params.py` — CLI flag + engine defaults auto-wire.
 2. GUI does NOT auto-wire: add a matching entry to `_process_input_components` (name → Gradio component, or a `gr.State(...)` placeholder) in `gui.py`, keyed by name. Order is derived, not hand-placed — forgetting the entry raises an `AssertionError` at import time (see `tests/test_gui.py::TestProcessInputKeys`), not a silent slider mismatch.
-3. Same pattern applies to `_recipe_output_components` / `RECIPE_OUTPUT_KEYS` for recipe/reset-handler outputs (see `tests/test_gui.py`, `TestRecipeOutputKeys`-style tests). The 10 `reset_*` handlers are still hand-ordered pairs (latent, low-risk, not covered by the guard).
+3. Same pattern applies to `_recipe_output_components` / `RECIPE_OUTPUT_KEYS` for recipe/reset-handler outputs (see `tests/test_gui.py`, `TestRecipeOutputKeys`-style tests). The 15 `reset_*` handlers are still hand-ordered pairs (latent, low-risk), but `TestResetFunctions::test_reset_function_key_order_matches_click_output_order` in `tests/test_gui.py` statically compares each handler's return-tuple key order against its `.click(outputs=[...])` order and fails on drift — see the 2026-09-09 entry below.
 
 ### Modular Pipeline (7 Stages)
 ```
@@ -147,7 +147,7 @@ runs complete in roughly 27–325 s depending on recipe and face workload. The
 - ✅ 2026-07-13 `_process_inputs` argument-order footgun — name-keyed dict + import-time drift guard, see [Architecture Decisions](#single-source-of-truth-retouchparamspy) — `f0b656b`, `da1f8cb`
 - ✅ 2026-07-13 `_recipe_outputs` mirror-image footgun (same fix pattern; closed a live 107-vs-111 value drift) — see [Architecture Decisions](#single-source-of-truth-retouchparamspy)
 - ✅ 2026-07-21 LUT hot-reload wired: GUI watcher (gui.py) + CLI `--reload-luts` flag — `7c8d607`
-- MINOR, deferred: 10 `reset_*` handlers in gui.py remain hand-ordered positional pairs (latent, low-risk)
+- ✅ 2026-09-09 static drift guard added for the 15 `reset_*` handlers in gui.py: audited all 13 dict-keyed handlers (`reset_color_transfer`/`reset_debug` take no dict) — no live order drift found today. `tests/test_gui.py::TestResetFunctions::test_reset_function_key_order_matches_click_output_order` now statically compares each handler's `d["key"]` return order against its `.click(outputs=[...])` order via AST/regex (mirrors the `TestProcessInputKeys` pattern) and fails loudly on future drift. Handlers remain hand-ordered pairs — not converted to name-keyed dicts, since the static check already closes the silent-failure mode.
 - ✅ 2026-08-11 redundant `ci.yml` workflow removed — `7b97df9`
 - ✅ 2026-07-14 `tests/test_cosplay_moat.py` bare-`RetouchEngine()` → module `engine` fixture (same teardown pattern as skin_locus)
 - ✅ 2026-07-14 `test_ext_map_keys_match_radio_choices` — expect `PNG-16` (map already had it; test was stale)
