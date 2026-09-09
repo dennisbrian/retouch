@@ -113,6 +113,29 @@ class BodySkinStage(_EngineStage):
         )
 
 
+class CrossRegionSkinStage(_EngineStage):
+    """Stage 3.55: P7 — opt-in cross-region skin appearance propagation."""
+
+    name = "cross_region_skin"
+    phase = "global"
+
+    def enabled(self, state: PipelineState) -> bool:
+        # ``PipelineState`` is also used by lightweight registry callers that
+        # may carry a legacy context without the opt-in P7 field.
+        return float(getattr(state.ctx, "cross_region_skin", 0.0)) > 0.0
+
+    def _call(self, state: PipelineState) -> np.ndarray:
+        return self._engine._stage_cross_region_skin(
+            state.img,
+            state.ctx,
+            state.person_mask,
+            state.acc_skin,
+            state.acc_skin_hair,
+            state.acc_lips,
+            state.faces,
+        )
+
+
 class CosplayMoatStage(_EngineStage):
     """Stage 3.6: A3 — cosplay skin moat (wig-lace, stockings, consistency).
 
@@ -241,6 +264,7 @@ def build_global_registry(engine: "RetouchEngine") -> "StageRegistry":
     registry.add(BackgroundHarmonizeStage(engine))
     registry.add(BackgroundReplaceStage(engine))
     registry.add(BodySkinStage(engine))
+    registry.add(CrossRegionSkinStage(engine))
     registry.add(CosplayMoatStage(engine))
     registry.add(GlobalStage(engine))
     registry.add(GradeStage(engine))

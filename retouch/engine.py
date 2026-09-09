@@ -124,6 +124,11 @@ from .style_transfer import subject_aware_transfer
 from .utils import correct_exposure, apply_global_bloom, apply_skin_diffusion, vibrance as _vibrance_fn, squeeze_mask, feather_mask, guided_filter, normalize_mask, blend_masked, bgr_f32_to_lab_f32, lab_f32_to_bgr_f32
 from .color_space import bgr_to_lch, skin_mask_lch
 from .color_science import bgr_to_oklab, oklab_to_oklch
+from .cross_region_skin import (
+    CrossRegionSkinResult,
+    infer_same_person_skin_support,
+    propagate_face_edit_delta,
+)
 from .params import resolve_recipe, _deep_merge, PROCESSING_PARAMS  # noqa: F401  (re-export for backward compat)
 
 
@@ -234,6 +239,13 @@ class ProcessingContext:
     body_relight: float = 0.0
     body_dodge_burn: float = 0.0
     body_shadow_lift: float = 0.0
+    # P7 opt-in cross-region appearance propagation.  This is intentionally a
+    # caller-only control: no recipe or GUI enables it.  A caller may provide
+    # a reviewed same-person support; when omitted the engine builds a
+    # conservative LCH/person-component candidate and may abstain.
+    cross_region_skin: float = 0.0
+    cross_region_skin_mask: Optional[np.ndarray] = None
+    cross_region_protect_mask: Optional[np.ndarray] = None
     shadow_lift: float = 0.0
     nose_restore: float = 0.0
     skin_sss: float = 0.0
@@ -552,6 +564,7 @@ class ProcessingContext:
     self_blend_mode: Optional[str] = None
     self_blend_amount: Optional[float] = None
     self_blend_domain: str = "encoded"
+    _p7_diagnostics: Dict[str, Any] = field(default_factory=dict, repr=False)
 
 
 # ---------------------------------------------------------------------------
@@ -703,6 +716,7 @@ class ProcessingResult(np.ndarray):
         safe_auto_decisions: Optional[List[Dict[str, Any]]] = None,
         runtime_diagnostics: Optional[Dict[str, Any]] = None,
         fa02_diagnostics: Optional[List[Optional[Dict[str, Any]]]] = None,
+        p7_diagnostics: Optional[Dict[str, Any]] = None,
         precision: Optional[ProcessingPrecision] = None,
         source_dtype: Optional[Any] = None,
     ):
@@ -722,6 +736,7 @@ class ProcessingResult(np.ndarray):
         obj.safe_auto_decisions = list(safe_auto_decisions or [])
         obj.runtime_diagnostics = dict(runtime_diagnostics or {})
         obj.fa02_diagnostics = list(fa02_diagnostics or [])
+        obj.p7_diagnostics = dict(p7_diagnostics or {})
         obj.precision = precision or ProcessingPrecision.from_output(
             np.asarray(image), source_dtype=source_dtype
         )
@@ -746,6 +761,7 @@ class ProcessingResult(np.ndarray):
         self.safe_auto_decisions = getattr(obj, "safe_auto_decisions", [])
         self.runtime_diagnostics = getattr(obj, "runtime_diagnostics", {})
         self.fa02_diagnostics = getattr(obj, "fa02_diagnostics", [])
+        self.p7_diagnostics = getattr(obj, "p7_diagnostics", {})
         self.precision = getattr(obj, "precision", None)
         self.precision_metadata = getattr(obj, "precision_metadata", {})
 
@@ -968,6 +984,16 @@ def build_context(
             if overrides.get("self_blend_domain") is not None
             else "encoded"
         ),
+        # Explicit opt-in P7 cross-region appearance propagation.  The
+        # support/protection masks are caller-owned and never come from a
+        # recipe; omission lets the stage form a conservative candidate.
+        cross_region_skin=(
+            float(overrides.get("cross_region_skin"))
+            if overrides.get("cross_region_skin") is not None
+            else 0.0
+        ),
+        cross_region_skin_mask=overrides.get("cross_region_skin_mask"),
+        cross_region_protect_mask=overrides.get("cross_region_protect_mask"),
         # ``nose_smooth`` reads the caller override first, then the recipe's
         # ``frequency.nose_smooth`` (0-1 fraction, converted to 0-100 like
         # ``frequency.smooth``); absent → None (nose smoothed with the face).
@@ -1165,6 +1191,33 @@ class RetouchEngine:
         """
         return self._grader.apply_self_blend_tone(
             img_bgr, mode=mode, amount=amount, domain=domain,
+        )
+
+    @staticmethod
+    def apply_cross_region_skin(
+        source_bgr: np.ndarray,
+        edited_bgr: np.ndarray,
+        face_mask: np.ndarray,
+        target_mask: Optional[np.ndarray],
+        *,
+        strength: float = 1.0,
+        protect_mask: Optional[np.ndarray] = None,
+    ) -> CrossRegionSkinResult:
+        """Apply the isolated P7 face-delta propagation primitive.
+
+        ``source_bgr`` must be the image before the face edit and
+        ``edited_bgr`` the current image.  The caller supplies a reviewed
+        same-person target mask; a missing target deliberately abstains.  This
+        leaf API is separate from recipe processing and returns diagnostics,
+        including exact abstention reasons and bounded LAB deltas.
+        """
+        return propagate_face_edit_delta(
+            source_bgr,
+            edited_bgr,
+            face_mask,
+            target_mask,
+            strength=strength,
+            protect_mask=protect_mask,
         )
 
     def process(
@@ -1414,6 +1467,12 @@ class RetouchEngine:
         self_blend_mode: Optional[str] = None,
         self_blend_amount: Optional[float] = None,
         self_blend_domain: Optional[str] = None,
+        # Explicit opt-in P7 cross-region appearance propagation.  The
+        # support/protection masks are reviewed caller inputs; recipes never
+        # enable this path.
+        cross_region_skin: Optional[float] = None,
+        cross_region_skin_mask: Optional[np.ndarray] = None,
+        cross_region_protect_mask: Optional[np.ndarray] = None,
         **kwargs: Any,
     ) -> ProcessingResult:
         """Process a single image through the full Retouch pipeline.
@@ -1648,6 +1707,9 @@ class RetouchEngine:
             "self_blend_mode": self_blend_mode,
             "self_blend_amount": self_blend_amount,
             "self_blend_domain": self_blend_domain,
+            "cross_region_skin": cross_region_skin,
+            "cross_region_skin_mask": cross_region_skin_mask,
+            "cross_region_protect_mask": cross_region_protect_mask,
             "vibrance": vibrance,
             "saturation": saturation,
             "glow": glow,
@@ -1836,6 +1898,7 @@ class RetouchEngine:
                 safe_auto_decisions=getattr(ctx, "_safe_auto_decisions", []),
                 runtime_diagnostics=getattr(ctx, "_runtime_diagnostics", {}),
                 fa02_diagnostics=getattr(ctx, "_fa02_diagnostics", []),
+                p7_diagnostics=getattr(ctx, "_p7_diagnostics", {}),
                 source_dtype=source_dtype,
             )
 
@@ -1918,6 +1981,7 @@ class RetouchEngine:
             safe_auto_decisions=getattr(ctx, "_safe_auto_decisions", []),
             runtime_diagnostics=getattr(ctx, "_runtime_diagnostics", {}),
             fa02_diagnostics=getattr(ctx, "_fa02_diagnostics", []),
+            p7_diagnostics=getattr(ctx, "_p7_diagnostics", {}),
             source_dtype=source_dtype,
         )
 
@@ -2025,6 +2089,17 @@ class RetouchEngine:
         if proxy_scale < 1.0:
             # Upscale face-region result + masks back to native resolution
             upscaled_core = self._upscale_core_result(core, h, w, native_guide=native_img_bgr)
+
+            # The P7 reference is captured at the proxy resolution in this
+            # legacy/draft path. Keep it aligned with the upscaled masks and
+            # image before the global registry runs.
+            p7_source = getattr(ctx, "_p7_source", None)
+            if p7_source is not None and p7_source.shape[:2] != (h, w):
+                ctx._p7_source = cv2.resize(
+                    p7_source,
+                    (w, h),
+                    interpolation=cv2.INTER_LINEAR,
+                ).astype(np.float32, copy=False)
 
             # F8.1: Composite upscaled face edits onto native image
             # Only paste the face ROIs that were actually retouched
@@ -2261,6 +2336,13 @@ class RetouchEngine:
         t1 = time.perf_counter()
         result_native = self._stage_reshape(native_img_bgr, faces_native, ctx)
         timings["reshape"] = (time.perf_counter() - t1) * 1000
+        if ctx.cross_region_skin > 0.0:
+            # Capture the post-reshape, pre-face-edit reference so geometry
+            # changes are not mistaken for a tone edit to propagate.
+            ctx._p7_source = (
+                np.clip(result_native.astype(np.float32), 0.0, 255.0)
+                * (1.0 / 255.0)
+            )
 
         t2 = time.perf_counter()
         h_img, w_img = result_native.shape[:2]
@@ -2469,6 +2551,13 @@ class RetouchEngine:
         t1 = time.perf_counter()
         result = self._stage_reshape(img_bgr, faces, ctx)
         timings["reshape"] = (time.perf_counter() - t1) * 1000
+        if ctx.cross_region_skin > 0.0:
+            # Capture the post-reshape, pre-face-edit reference so geometry
+            # changes are not mistaken for a tone edit to propagate.
+            ctx._p7_source = (
+                np.clip(result.astype(np.float32), 0.0, 255.0)
+                * (1.0 / 255.0)
+            )
 
         # ------------------------------------------------------------------
         # Stage 2 — Per-face processing (parallel when >1 face)
@@ -3747,6 +3836,138 @@ class RetouchEngine:
         if is_float:
             return np.clip(out / 255.0, 0.0, 1.0).astype(np.float32)
         return out
+
+    def _stage_cross_region_skin(
+        self,
+        img: np.ndarray,
+        ctx: ProcessingContext,
+        person_mask: Optional[np.ndarray],
+        acc_skin: Optional[np.ndarray],
+        acc_skin_hair: Optional[np.ndarray],
+        acc_lips: Optional[np.ndarray],
+        faces: Optional[list],
+    ) -> np.ndarray:
+        """P7: propagate one face's approved appearance delta to body skin.
+
+        The stage is caller-only and opt-in. It captures its reference before
+        face edits in ``ctx._p7_source`` and only permits a single detected
+        face, because the current face accumulator cannot identify which body
+        region belongs to which person in a group shot. A reviewed target mask
+        may be supplied through ``cross_region_skin_mask``; otherwise a
+        conservative person-component/LCH candidate is inferred.
+
+        Mutually exclusive with ``body_match_face``: both apply a face-to-
+        body-skin LAB correction to the same LCH skin-candidate region, and
+        this stage runs immediately after ``BodySkinStage`` in the global
+        registry, so enabling both would stack two corrections rather than
+        apply one. Abstains (does not raise) if both are enabled, matching
+        this stage's other abstention contracts.
+
+        ``img`` is float32 BGR [0, 1], as required by the global-stage
+        contract. The helper performs LAB arithmetic and restores pixels
+        outside the final support exactly.
+        """
+        strength = float(getattr(ctx, "cross_region_skin", 0.0))
+        if (
+            not np.isfinite(strength)
+            or strength < 0.0
+            or strength > 100.0
+        ):
+            raise ValueError("cross_region_skin must be finite and in [0, 100]")
+        if strength <= 0.0:
+            return img
+
+        def _record(reason: str, **extra: Any) -> np.ndarray:
+            diagnostics = CrossRegionSkinResult(
+                image=img,
+                applied=False,
+                abstained=True,
+                reason=reason,
+                **extra,
+            )
+            ctx._p7_diagnostics = diagnostics.to_dict()
+            return img
+
+        if float(getattr(ctx, "body_match_face", 0.0)) > 0.0:
+            # Both stages independently compute a face-to-body-skin LAB
+            # correction over the same LCH skin-candidate region, and this
+            # stage runs immediately after BodySkinStage in the global
+            # registry, so enabling both would stack two corrections on the
+            # same pixels instead of applying one. Same failure shape as the
+            # undereye dark_circles/undereye_darken_removal double-apply
+            # (e73d3ba). Abstain rather than silently compounding the edit.
+            return _record("body_match_face_conflict")
+
+        source = getattr(ctx, "_p7_source", None)
+        if source is None:
+            return _record("face_reference_unavailable")
+        if source.shape != img.shape:
+            return _record("face_reference_shape_mismatch")
+        if faces is None or len(faces) != 1:
+            return _record(
+                "single_face_required",
+                face_pixels=0,
+                target_pixels=0,
+            )
+        if acc_skin is None:
+            return _record("face_skin_support_unavailable")
+
+        face = normalize_mask(acc_skin)
+        if face is None:
+            return _record("face_skin_support_unavailable")
+        face = squeeze_mask(face)
+        if face.shape != img.shape[:2]:
+            return _record("face_skin_support_shape_mismatch")
+
+        target = getattr(ctx, "cross_region_skin_mask", None)
+        if target is None:
+            target = infer_same_person_skin_support(
+                source,
+                person_mask,
+                face,
+                face_exclusion=acc_skin_hair,
+                lip_exclusion=acc_lips,
+            )
+        else:
+            target = normalize_mask(target)
+            if target is None:
+                return _record("target_support_required")
+            target = squeeze_mask(target)
+            if target.shape != img.shape[:2]:
+                return _record("target_support_shape_mismatch")
+            target = np.clip(target, 0.0, 1.0).astype(np.float32, copy=False)
+
+            # Even an explicitly reviewed target cannot escape the detected
+            # person's segmentation or re-enter face-owned regions.
+            if person_mask is not None:
+                person = normalize_mask(person_mask)
+                if person is not None:
+                    person = squeeze_mask(person)
+                    if person.shape != target.shape:
+                        return _record("person_support_shape_mismatch")
+                    target *= person
+
+            exclusion = face.copy()
+            for extra in (acc_skin_hair, acc_lips):
+                if extra is not None:
+                    extra_mask = normalize_mask(extra)
+                    if extra_mask is not None:
+                        extra_mask = squeeze_mask(extra_mask)
+                        if extra_mask.shape != target.shape:
+                            return _record("exclusion_support_shape_mismatch")
+                        exclusion = np.maximum(exclusion, extra_mask)
+            target *= np.clip(1.0 - exclusion, 0.0, 1.0)
+
+        result = propagate_face_edit_delta(
+            source,
+            img,
+            face,
+            target,
+            strength=strength / 100.0,
+            protect_mask=getattr(ctx, "cross_region_protect_mask", None),
+        )
+        ctx._p7_diagnostics = result.to_dict()
+        return result.image
 
     def _stage_body_skin(
         self,
