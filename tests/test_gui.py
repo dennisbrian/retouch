@@ -629,9 +629,11 @@ class TestProcessInputKeys:
     def test_count_matches_process_image_arity(self):
         """PROCESS_INPUT_KEYS length must equal the arity of process_image."""
         from retouch.params import param_names
-        # 2 leading + registry (minus 2 excluded) + 13 trailing transport keys
-        # (look_params + face_params State + face_params_json).
-        expected = 2 + (len(param_names()) - 2) + 13
+        # 2 leading + registry (minus 2 excluded) + 12 trailing transport keys
+        # (look_params + face_params State + face_params_json). The dead
+        # "fast" checkbox was removed (render mode already fully determines
+        # it); this was 13 before that removal.
+        expected = 2 + (len(param_names()) - 2) + 12
         assert len(gui.PROCESS_INPUT_KEYS) == expected
 
     def test_first_key_is_img_paths(self):
@@ -1205,7 +1207,7 @@ class TestProcessImageValidation:
             "contrast": 0, "brightness": 0,
             "highlights": 0, "shadows": 0, "whites": 0, "blacks": 0,
             "color_ref_img": None, "color_ref_strength": 0.0,
-            "show_compare": False, "fast": True,
+            "show_compare": False,
             "export_fmt": "JPEG", "export_quality": 95, "export_res": "Original",
             "blemish": 0, "dark_circles": 0, "catchlight": 0,
             "whiten_tone": "rosy", "auto_exposure": False,

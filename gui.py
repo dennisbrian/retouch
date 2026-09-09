@@ -911,7 +911,7 @@ PROCESS_INPUT_KEYS = (
     + [n for n in param_names() if n not in ("color_transfer_intensity", "freckle_preserve_mask")]
     + [
         "color_ref_img", "color_ref_strength",
-        "show_compare", "fast",
+        "show_compare",
         "export_fmt", "export_quality", "export_res",
         "quality_tier",
         "debug_mode",
@@ -1316,9 +1316,9 @@ def process_image(
     color_ref_img = params.get("color_ref_img")
     color_ref_strength = _coerce_float(params.get("color_ref_strength"))
     show_compare = params.get("show_compare")
-    fast = params.get("fast")
     preview_only = render_mode == MODE_RENDER_PREVIEW
     full_quality_export = render_mode == MODE_EXPORT_FULL_QUALITY
+    fast = False
     if preview_only:
         fast = True
     elif full_quality_export:
@@ -3113,10 +3113,6 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
 
                         show_compare = gr.Checkbox(label="Show side-by-side comparison screen", value=True, info="Split view: original | separator | retouched result")
 
-                        with gr.Row():
-                            fast = gr.Checkbox(label="Legacy fast override", value=True,
-                                               info="Render Preview is always fast; Export Full Quality is always full resolution.")
-
                         with gr.Accordion("💾 Session & History", open=False):
                             with gr.Row():
                                 save_session_btn = gr.Button("Save Session", variant="secondary", size="sm")
@@ -3507,251 +3503,257 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                     with gr.Group():
                         gr.Markdown("### ⚙️ Develop Adjustments")
                         
-                        with gr.Accordion("✨ Skin Smoothing & Texture", open=True):
-                            reset_skin_smooth_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
-                            smooth = gr.Slider(0, 100, 30, step=1, label="Smooth", info="Strength of skin smoothing (blur/median blend)")
-                            nose_smooth = gr.Slider(0, 100, 0, step=1, label="Nose Smooth (0 = follow face)", info="Additional smoothing for nose bridge highlights")
-                            smooth_engine = gr.Dropdown(choices=["guided", "bilateral", "anisotropic"], value="guided", label="Smoothing Engine", info="guided=isotropic (fast); anisotropic=orientation-aware (preserves wrinkle direction)")
-                            regional_modulation = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Region-Aware Modulation", info="Per-region smoothing strength (0=off, 1=full modulation)")
-                            mid_reduction = gr.Slider(0.0, 1.0, 0.45, step=0.05, label="Mid Frequency Reduction", info="Target mid-level skin blemishes while preserving high-frequency pores")
-                            texture_opacity = gr.Slider(0.0, 1.0, 1.0, step=0.05, label="Texture Opacity", info="Control original pore structure opacity overlay")
-                            micro_restore = gr.Slider(0, 50, 20, step=1, label="Micro-Texture Restore", info="Re-inject dimensional micro-contrast in cheek/nose/under-eye zones after smoothing (0 = off, 25 = subtle, 50 = strong)")
-                            _micro_dodge_burn_state = gr.State(value=0)
-                            _redness_even_state = gr.State(value=0)
-                            hb_even = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Hemoglobin Even", info="Even redness variation in linear pigment space while preserving melanin marks")
-                            hb_shift = gr.Slider(-1.0, 1.0, 0.0, step=0.05, label="Hemoglobin Shift", info="Negative reduces facial flush; positive adds it. Uses the face's own pigment range")
-                            _whiten_hue_stable_state = gr.State(value=0)
-                            pore_synthesis = gr.Slider(0, 100, 0, step=1, label="Pore Synthesis", info="Add micro-texture/synthesized pores to prevent artificial plastic skin")
-                            blemish = gr.Slider(0, 100, 30, step=1, label="Blemish Removal", info="AI blemish detection and inpainting for acne/spots")
-                            freckle_removal = gr.Slider(0, 100, 0, step=1, label="Freckle Removal", info="Remove freckles while preserving beauty marks (0=off)")
-                            heal_engine = gr.Dropdown(choices=["telea", "patchmatch"], value="telea", label="Auto Heal Engine", info="PatchMatch synthesizes from nearby skin texture; Telea remains the fast default")
-                            mark_policy = gr.Dropdown(
-                                choices=list(MARK_POLICY_PRESET_NAMES),
-                                value="legacy",
-                                label="Identity Mark Policy",
-                                info="Optional preserve mask for freckles/moles and H4 QA. Legacy keeps existing behavior.",
-                            )
-                            # FA-02 experimental texture-restoration mode.
-                            # Deliberately a gr.State, NOT a visible Dropdown:
-                            # "dog"/"multiscale" are unevaluated research arms
-                            # with no evidence behind them, so the flag must not
-                            # be reachable by clicking around the UI. API/CLI
-                            # callers can still set it explicitly.
-                            _fa02_texture_mode_state = gr.State(value="legacy")
-                            mole_protect = gr.Slider(
-                                0.0, 1.0, 0.0, step=0.05,
-                                label="Mole / Beauty-Mark Protect",
-                                info="R10: protect compact melanin spots from blemish+freckle heals (0=off, 1=full). Classical, no paid corpus.",
-                            )
-                            skin_flatten = gr.Slider(0, 100, 0, step=1, label="Skin Flatten (Anime)", info="Edge-preserving cel flatten for anime-style shading · 0=off, 80=aggressive")
-                            skin_quantize = gr.Slider(0, 100, 0, step=1, label="Tone Quantize (Anime)", info="Cel shading colour bands on skin · 0=off, 60=dramatic bands")
+                        with gr.Accordion("Skin", open=False):
+                            with gr.Accordion("✨ Skin Smoothing & Texture", open=True):
+                                reset_skin_smooth_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
+                                smooth = gr.Slider(0, 100, 30, step=1, label="Smooth", info="Strength of skin smoothing (blur/median blend)")
+                                nose_smooth = gr.Slider(0, 100, 0, step=1, label="Nose Smooth (0 = follow face)", info="Additional smoothing for nose bridge highlights")
+                                smooth_engine = gr.Dropdown(choices=["guided", "bilateral", "anisotropic"], value="guided", label="Smoothing Engine", info="guided=isotropic (fast); anisotropic=orientation-aware (preserves wrinkle direction)")
+                                regional_modulation = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Region-Aware Modulation", info="Per-region smoothing strength (0=off, 1=full modulation)")
+                                mid_reduction = gr.Slider(0.0, 1.0, 0.45, step=0.05, label="Mid Frequency Reduction", info="Target mid-level skin blemishes while preserving high-frequency pores")
+                                texture_opacity = gr.Slider(0.0, 1.0, 1.0, step=0.05, label="Texture Opacity", info="Control original pore structure opacity overlay")
+                                micro_restore = gr.Slider(0, 50, 20, step=1, label="Micro-Texture Restore", info="Re-inject dimensional micro-contrast in cheek/nose/under-eye zones after smoothing (0 = off, 25 = subtle, 50 = strong)")
+                                _micro_dodge_burn_state = gr.State(value=0)
+                                _redness_even_state = gr.State(value=0)
+                                hb_even = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Hemoglobin Even", info="Even redness variation in linear pigment space while preserving melanin marks")
+                                hb_shift = gr.Slider(-1.0, 1.0, 0.0, step=0.05, label="Hemoglobin Shift", info="Negative reduces facial flush; positive adds it. Uses the face's own pigment range")
+                                _whiten_hue_stable_state = gr.State(value=0)
+                                pore_synthesis = gr.Slider(0, 100, 0, step=1, label="Pore Synthesis", info="Add micro-texture/synthesized pores to prevent artificial plastic skin")
+                                blemish = gr.Slider(0, 100, 30, step=1, label="Blemish Removal", info="AI blemish detection and inpainting for acne/spots")
+                                freckle_removal = gr.Slider(0, 100, 0, step=1, label="Freckle Removal", info="Remove freckles while preserving beauty marks (0=off)")
+                                heal_engine = gr.Dropdown(choices=["telea", "patchmatch"], value="telea", label="Auto Heal Engine", info="PatchMatch synthesizes from nearby skin texture; Telea remains the fast default")
+                                mark_policy = gr.Dropdown(
+                                    choices=list(MARK_POLICY_PRESET_NAMES),
+                                    value="legacy",
+                                    label="Identity Mark Policy",
+                                    info="Optional preserve mask for freckles/moles and H4 QA. Legacy keeps existing behavior.",
+                                )
+                                # FA-02 experimental texture-restoration mode.
+                                # Deliberately a gr.State, NOT a visible Dropdown:
+                                # "dog"/"multiscale" are unevaluated research arms
+                                # with no evidence behind them, so the flag must not
+                                # be reachable by clicking around the UI. API/CLI
+                                # callers can still set it explicitly.
+                                _fa02_texture_mode_state = gr.State(value="legacy")
+                                mole_protect = gr.Slider(
+                                    0.0, 1.0, 0.0, step=0.05,
+                                    label="Mole / Beauty-Mark Protect",
+                                    info="R10: protect compact melanin spots from blemish+freckle heals (0=off, 1=full). Classical, no paid corpus.",
+                                )
+                                skin_flatten = gr.Slider(0, 100, 0, step=1, label="Skin Flatten (Anime)", info="Edge-preserving cel flatten for anime-style shading · 0=off, 80=aggressive")
+                                skin_quantize = gr.Slider(0, 100, 0, step=1, label="Tone Quantize (Anime)", info="Cel shading colour bands on skin · 0=off, 60=dramatic bands")
 
-                        with gr.Accordion("🎨 Skin Tone", open=False):
-                            reset_skin_tone_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
-                            whiten = gr.Slider(0, 100, 10, step=1, label="Whitening", info="Luminance boost and porcelain skin color match")
-                            whiten_tone = gr.Dropdown(choices=WHITEN_TONE_CHOICES, value="rosy", label="Whitening Tone", interactive=True, info="Tone direction: rosy (warm pink), porcelain (cool neutral), neutral")
-                            equalize = gr.Slider(0, 100, 20, step=1, label="Equalize", info="Even out skin redness and regional color inconsistencies")
-                            shadow_lift = gr.Slider(0, 100, 0, step=1, label="Shadow Lift", info="Brighten small localized face shadows relative to local neighborhood")
-                            nose_restore = gr.Slider(0, 100, 0, step=1, label="Nose Restore", info="Blend original (pre-retouch) nose pixels back in, to preserve natural nose shading")
-                            skin_sss = gr.Slider(0, 100, 0, step=1, label="Subsurface Scatter", info="Game-render skin translucency: red-weighted shading diffusion + warm shadow terminators (pores stay crisp)")
-                            skin_unify = gr.Slider(0, 100, 0, step=1, label="Skin Hue Unify (Anime)", info="Pull skin hues toward a single cel color · 0=off, 60=strong unified look")
-                            skin_unify_hue = gr.Slider(-1.0, 360.0, -1.0, step=1.0, label="Target Hue (Anime)", info="Target skin hue angle · -1=auto (detect from face), 0=red, 50=orange, 180=cyan")
-                            auto_exposure = gr.Checkbox(label="Auto Exposure Correction", value=False, info="Automatically correct under/over-exposed images before processing")
-                            white_costume_lift = gr.Checkbox(label="White Costume Lift", value=False, info="Selectively boost bright clothing to create separation")
-                            face_exposure = gr.Slider(0, 100, 0, step=1, label="Face Exposure Lift", info="Brighten/darken the exposed face relative to the body (skin.face_exposure) · 0 = off")
+                            with gr.Accordion("🎨 Skin Tone", open=False):
+                                reset_skin_tone_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
+                                whiten = gr.Slider(0, 100, 10, step=1, label="Whitening", info="Luminance boost and porcelain skin color match")
+                                whiten_tone = gr.Dropdown(choices=WHITEN_TONE_CHOICES, value="rosy", label="Whitening Tone", interactive=True, info="Tone direction: rosy (warm pink), porcelain (cool neutral), neutral")
+                                equalize = gr.Slider(0, 100, 20, step=1, label="Equalize", info="Even out skin redness and regional color inconsistencies")
+                                shadow_lift = gr.Slider(0, 100, 0, step=1, label="Shadow Lift", info="Brighten small localized face shadows relative to local neighborhood")
+                                nose_restore = gr.Slider(0, 100, 0, step=1, label="Nose Restore", info="Blend original (pre-retouch) nose pixels back in, to preserve natural nose shading")
+                                skin_sss = gr.Slider(0, 100, 0, step=1, label="Subsurface Scatter", info="Game-render skin translucency: red-weighted shading diffusion + warm shadow terminators (pores stay crisp)")
+                                skin_unify = gr.Slider(0, 100, 0, step=1, label="Skin Hue Unify (Anime)", info="Pull skin hues toward a single cel color · 0=off, 60=strong unified look")
+                                skin_unify_hue = gr.Slider(-1.0, 360.0, -1.0, step=1.0, label="Target Hue (Anime)", info="Target skin hue angle · -1=auto (detect from face), 0=red, 50=orange, 180=cyan")
+                                auto_exposure = gr.Checkbox(label="Auto Exposure Correction", value=False, info="Automatically correct under/over-exposed images before processing")
+                                white_costume_lift = gr.Checkbox(label="White Costume Lift", value=False, info="Selectively boost bright clothing to create separation")
+                                face_exposure = gr.Slider(0, 100, 0, step=1, label="Face Exposure Lift", info="Brighten/darken the exposed face relative to the body (skin.face_exposure) · 0 = off")
 
-                        with gr.Accordion("🦵 Body Skin", open=False):
-                            reset_body_skin_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
-                            body_smooth = gr.Slider(0, 100, 0, step=1, label="Body Smooth", info="Smoothing for arms, legs, décolletage · milder curve than face to preserve texture")
-                            body_equalize = gr.Slider(0, 100, 0, step=1, label="Body Equalize", info="Even out tone in body skin regions · tone harmonization at body scale")
-                            body_whiten = gr.Slider(0, 100, 0, step=1, label="Body Whiten", info="Lighten body skin to match face whitening treatment")
-                            body_match_face = gr.Slider(0, 100, 0, step=1, label="Body Match Face", info="Pull body skin L/a/b toward retouched face skin color · bounded ±8L ±6a/b")
-                            body_relight = gr.Slider(0, 100, 0, step=1, label="Body Relight", info="Landmark-free directional shading on exposed body skin · matches face relight intensity")
-                            body_dodge_burn = gr.Slider(0, 100, 0, step=1, label="Body Dodge & Burn", info="Local-contrast sculpting on body skin (CLAHE-based highlight/shadow)")
-                            body_shadow_lift = gr.Slider(0, 100, 0, step=1, label="Body Shadow Lift", info="Brighten small localized shadows on body skin")
+                            with gr.Accordion("🦵 Body Skin", open=False):
+                                reset_body_skin_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
+                                body_smooth = gr.Slider(0, 100, 0, step=1, label="Body Smooth", info="Smoothing for arms, legs, décolletage · milder curve than face to preserve texture")
+                                body_equalize = gr.Slider(0, 100, 0, step=1, label="Body Equalize", info="Even out tone in body skin regions · tone harmonization at body scale")
+                                body_whiten = gr.Slider(0, 100, 0, step=1, label="Body Whiten", info="Lighten body skin to match face whitening treatment")
+                                body_match_face = gr.Slider(0, 100, 0, step=1, label="Body Match Face", info="Pull body skin L/a/b toward retouched face skin color · bounded ±8L ±6a/b")
+                                body_relight = gr.Slider(0, 100, 0, step=1, label="Body Relight", info="Landmark-free directional shading on exposed body skin · matches face relight intensity")
+                                body_dodge_burn = gr.Slider(0, 100, 0, step=1, label="Body Dodge & Burn", info="Local-contrast sculpting on body skin (CLAHE-based highlight/shadow)")
+                                body_shadow_lift = gr.Slider(0, 100, 0, step=1, label="Body Shadow Lift", info="Brighten small localized shadows on body skin")
 
-                        with gr.Accordion("📊 Basic Tone & Color", open=False):
-                            reset_basic_tone_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
-                            contrast = gr.Slider(-50, 50, 0, step=1, label="Contrast", info="Adjust global image contrast")
-                            brightness = gr.Slider(-50, 50, 0, step=1, label="Brightness", info="Adjust global image brightness")
-                            clarity = gr.Slider(-100, 100, 0, step=1, label="Clarity", info="Mid-tone contrast / local contrast enhancement (negative = soften)")
-                            vibrance = gr.Slider(-100, 100, 0, step=1, label="Vibrance", info="Smart saturation boost that protects skin tones")
-                            saturation = gr.Slider(-100, 100, 0, step=1, label="Saturation", info="Uniform global saturation adjustment")
+                        with gr.Accordion("Tone & Light", open=False):
+                            with gr.Accordion("📊 Basic Tone & Color", open=False):
+                                reset_basic_tone_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
+                                contrast = gr.Slider(-50, 50, 0, step=1, label="Contrast", info="Adjust global image contrast")
+                                brightness = gr.Slider(-50, 50, 0, step=1, label="Brightness", info="Adjust global image brightness")
+                                clarity = gr.Slider(-100, 100, 0, step=1, label="Clarity", info="Mid-tone contrast / local contrast enhancement (negative = soften)")
+                                vibrance = gr.Slider(-100, 100, 0, step=1, label="Vibrance", info="Smart saturation boost that protects skin tones")
+                                saturation = gr.Slider(-100, 100, 0, step=1, label="Saturation", info="Uniform global saturation adjustment")
 
-                        with gr.Accordion("📈 Tone Curve", open=False):
-                            reset_tone_curve_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
-                            highlights = gr.Slider(-100, 100, 0, step=1, label="Highlights", info="Recover or boost bright highlight regions")
-                            shadows = gr.Slider(-100, 100, 0, step=1, label="Shadows", info="Open up or deepen shadow regions")
-                            whites = gr.Slider(-100, 100, 0, step=1, label="Whites", info="Control absolute white point ceiling")
-                            blacks = gr.Slider(-100, 100, 0, step=1, label="Blacks", info="Control absolute black point floor")
+                            with gr.Accordion("📈 Tone Curve", open=False):
+                                reset_tone_curve_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
+                                highlights = gr.Slider(-100, 100, 0, step=1, label="Highlights", info="Recover or boost bright highlight regions")
+                                shadows = gr.Slider(-100, 100, 0, step=1, label="Shadows", info="Open up or deepen shadow regions")
+                                whites = gr.Slider(-100, 100, 0, step=1, label="Whites", info="Control absolute white point ceiling")
+                                blacks = gr.Slider(-100, 100, 0, step=1, label="Blacks", info="Control absolute black point floor")
 
-                        with gr.Accordion("💡 Virtual Studio Relighting", open=False):
-                            reset_relighting_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
-                            relight = gr.Slider(0, 100, 0, step=1, label="Relight Strength", info="Intensity of 3D virtual studio light source redirection")
-                            relight_azimuth = gr.Slider(-180, 180, 0, step=1, label="Light Azimuth", info="Horizontal light source direction angle (-180° to 180°)")
-                            relight_elevation = gr.Slider(-90, 90, 30, step=1, label="Light Elevation", info="Vertical light source direction angle (-90° to 90°)")
-                            sculpt = gr.Slider(0, 100, 0, step=1, label="Facial Sculpting", info="Shape reflectance: deepen cheekbones, nose ridge, and jawline via low-band shading")
-                            shine_removal = gr.Slider(0, 100, 0, step=1, label="Shine Removal", info="Remove oily/sweaty shine: compress specular highlights and reconstruct chroma")
-                            wrinkle_soften = gr.Slider(0, 100, 0, step=1, label="Wrinkle & Line Softening", info="Reduce nasolabial folds, forehead lines, and crow's feet via ridge-aware attenuation")
-                            texture_transplant = gr.Slider(0, 100, 0, step=1, label="Texture Transplant", info="Clone pore texture from clean skin regions to over-smoothed/inpainted zones for realistic texture")
+                            with gr.Accordion("💡 Virtual Studio Relighting", open=False):
+                                reset_relighting_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
+                                relight = gr.Slider(0, 100, 0, step=1, label="Relight Strength", info="Intensity of 3D virtual studio light source redirection")
+                                relight_azimuth = gr.Slider(-180, 180, 0, step=1, label="Light Azimuth", info="Horizontal light source direction angle (-180° to 180°)")
+                                relight_elevation = gr.Slider(-90, 90, 30, step=1, label="Light Elevation", info="Vertical light source direction angle (-90° to 90°)")
+                                sculpt = gr.Slider(0, 100, 0, step=1, label="Facial Sculpting", info="Shape reflectance: deepen cheekbones, nose ridge, and jawline via low-band shading")
+                                shine_removal = gr.Slider(0, 100, 0, step=1, label="Shine Removal", info="Remove oily/sweaty shine: compress specular highlights and reconstruct chroma")
+                                wrinkle_soften = gr.Slider(0, 100, 0, step=1, label="Wrinkle & Line Softening", info="Reduce nasolabial folds, forehead lines, and crow's feet via ridge-aware attenuation")
+                                texture_transplant = gr.Slider(0, 100, 0, step=1, label="Texture Transplant", info="Clone pore texture from clean skin regions to over-smoothed/inpainted zones for realistic texture")
 
-                        with gr.Accordion("👁️ Eyes & Lips", open=False):
-                            reset_eyes_lips_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
-                            eye_enhance = gr.Slider(0, 100, 5, step=1, label="Eye Enhance", info="Boost eye clarity, iris reflection details, and whites brightness")
-                            catchlight = gr.Slider(0, 100, 0, step=1, label="Catchlight Boost", info="Amplify existing catchlight highlights in the iris (0 = follow Eye Enhance)")
-                            corneal_shading = gr.Slider(0, 100, 0, step=1, label="Corneal Curvature", info="3D spherical corneal shading for eye depth and wetness (0 = off)")
-                            dark_circles = gr.Slider(0, 100, 0, step=1, label="Dark Circle Repair", info="Under-eye dark circle detection and repair")
-                            undereye_shadow_strength = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Under-Eye Shadow Smooth", info="Soften under-eye shadows conservatively (0=off)")
-                            undereye_darken_removal = gr.Slider(0, 100, 0, step=1, label="Under-Eye Darken Removal", info="Lift under-eye darkening / discoloration (0=off)")
-                            undereye_puffiness_reduction = gr.Slider(0, 100, 0, step=1, label="Under-Eye Puffiness Reduction", info="Reduce under-eye puffiness / bag volume (0=off)")
-                            eye_sclera_brighten = gr.Slider(0, 100, 0, step=1, label="Sclera Brighten", info="Whiten/brighten the eye whites (sclera) for a clean look")
-                            eye_iris_saturate = gr.Slider(0, 100, 0, step=1, label="Iris Saturate", info="Deepen iris color saturation")
-                            eye_iris_brightness = gr.Slider(0, 100, 0, step=1, label="Iris Brightness", info="Brighten iris detail and reflection")
-                            eye_iris_hue_shift = gr.Slider(-30, 30, 0, step=1, label="Iris Hue Shift", info="Rotate iris hue for colored-contact effects (-30..30°)")
-                            teeth_whiten = gr.Slider(0, 100, 5, step=1, label="Teeth Whiten", info="Naturally whiten and brighten teeth enamel")
-                            lip_enhance = gr.Slider(0, 100, 5, step=1, label="Lip Enhance", info="Enhance lip texture definition, gloss, and contour")
-                            lip_tint = gr.Dropdown(choices=LIP_TINTS, value="none", label="Lip Tint Color", interactive=True, info="Apply a natural cosmetic tint overlay")
-                            lip_finish = gr.Dropdown(choices=LIP_FINISH_CHOICES, value="gloss", label="Lip Finish", interactive=True, info="Surface finish style: gloss (shiny), matte (flat), velvet (soft)")
-                            blush = gr.Slider(0, 100, 0, step=1, label="Blush Strength", info="Intensity of virtual cosmetic blush on cheeks")
-                            with gr.Row():
-                                nose_blush = gr.Checkbox(label="Nose Blush", value=False, info="Add cosmetic pink tone to nose tip")
-                                under_eye_blush = gr.Checkbox(label="Under-Eye Blush", value=False, info="Apply soft under-eye blush for a fresh/cosplay look")
-                                eye_gate = gr.Checkbox(label="Eye Occlusion Gate", value=True, info="Skip enhancing eyes detected as closed/occluded (prevents painting an iris onto hair or a closed lid)")
+                        with gr.Accordion("Face Detail & Structure", open=False):
+                            with gr.Accordion("👁️ Eyes & Lips", open=False):
+                                reset_eyes_lips_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
+                                eye_enhance = gr.Slider(0, 100, 5, step=1, label="Eye Enhance", info="Boost eye clarity, iris reflection details, and whites brightness")
+                                catchlight = gr.Slider(0, 100, 0, step=1, label="Catchlight Boost", info="Amplify existing catchlight highlights in the iris (0 = follow Eye Enhance)")
+                                corneal_shading = gr.Slider(0, 100, 0, step=1, label="Corneal Curvature", info="3D spherical corneal shading for eye depth and wetness (0 = off)")
+                                dark_circles = gr.Slider(0, 100, 0, step=1, label="Dark Circle Repair", info="Under-eye dark circle detection and repair")
+                                undereye_shadow_strength = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Under-Eye Shadow Smooth", info="Soften under-eye shadows conservatively (0=off)")
+                                undereye_darken_removal = gr.Slider(0, 100, 0, step=1, label="Under-Eye Darken Removal", info="Lift under-eye darkening / discoloration (0=off)")
+                                undereye_puffiness_reduction = gr.Slider(0, 100, 0, step=1, label="Under-Eye Puffiness Reduction", info="Reduce under-eye puffiness / bag volume (0=off)")
+                                eye_sclera_brighten = gr.Slider(0, 100, 0, step=1, label="Sclera Brighten", info="Whiten/brighten the eye whites (sclera) for a clean look")
+                                eye_iris_saturate = gr.Slider(0, 100, 0, step=1, label="Iris Saturate", info="Deepen iris color saturation")
+                                eye_iris_brightness = gr.Slider(0, 100, 0, step=1, label="Iris Brightness", info="Brighten iris detail and reflection")
+                                eye_iris_hue_shift = gr.Slider(-30, 30, 0, step=1, label="Iris Hue Shift", info="Rotate iris hue for colored-contact effects (-30..30°)")
+                                teeth_whiten = gr.Slider(0, 100, 5, step=1, label="Teeth Whiten", info="Naturally whiten and brighten teeth enamel")
+                                lip_enhance = gr.Slider(0, 100, 5, step=1, label="Lip Enhance", info="Enhance lip texture definition, gloss, and contour")
+                                lip_tint = gr.Dropdown(choices=LIP_TINTS, value="none", label="Lip Tint Color", interactive=True, info="Apply a natural cosmetic tint overlay")
+                                lip_finish = gr.Dropdown(choices=LIP_FINISH_CHOICES, value="gloss", label="Lip Finish", interactive=True, info="Surface finish style: gloss (shiny), matte (flat), velvet (soft)")
+                                blush = gr.Slider(0, 100, 0, step=1, label="Blush Strength", info="Intensity of virtual cosmetic blush on cheeks")
+                                with gr.Row():
+                                    nose_blush = gr.Checkbox(label="Nose Blush", value=False, info="Add cosmetic pink tone to nose tip")
+                                    under_eye_blush = gr.Checkbox(label="Under-Eye Blush", value=False, info="Apply soft under-eye blush for a fresh/cosplay look")
+                                    eye_gate = gr.Checkbox(label="Eye Occlusion Gate", value=True, info="Skip enhancing eyes detected as closed/occluded (prevents painting an iris onto hair or a closed lid)")
 
-                        with gr.Accordion("🧬 Face Reshaping", open=False):
-                            reset_face_reshaping_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
-                            slimming = gr.Slider(0, 100, 0, step=1, label="Face Slimming", info="Liquify-based face slimming/reshaping via landmark-driven warp")
+                            with gr.Accordion("🧬 Face Reshaping", open=False):
+                                reset_face_reshaping_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
+                                slimming = gr.Slider(0, 100, 0, step=1, label="Face Slimming", info="Liquify-based face slimming/reshaping via landmark-driven warp")
 
-                        with gr.Accordion("🌟 Structure & Effects", open=False):
-                            reset_structure_effects_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
-                            hair_enhance = gr.Slider(0, 100, 5, step=1, label="Hair Shine", info="Boost highlight reflections and depth in hair strands")
-                            dodge_burn = gr.Slider(0, 100, 0, step=1, label="Dodge & Burn", info="Sculpt face structure with local highlight/shadow contouring")
-                            impact = gr.Slider(0, 100, 0, step=1, label="Global Impact Finish", info="Final punch: combined clarity, sharpening, and micro-contrast boost")
-                            specular_bloom = gr.Slider(0, 100, 0, step=1, label="Specular Bloom", info="Dreamy bloom glow applied specifically to skin highlight zones")
-                            specular_bloom_tone = gr.Dropdown(choices=SPECULAR_BLOOM_TONE_CHOICES, value="rosy", label="Specular Bloom Tone", interactive=True, info="Color tint of the specular bloom glow")
-                            bloom = gr.Slider(0, 100, 0, step=1, label="Orton Bloom (Overall Glow)", info="High-key glow blending for high-fashion portraits")
-                            bloom_threshold = gr.Slider(150, 250, 210, step=1, label="Bloom Threshold", info="Brightness threshold where the glow begins to bleed")
-                            bloom_softness = gr.Slider(1, 100, 30, step=1, label="Bloom Softness", info="Softness blur radius of the bloom filter")
-                            sharpen = gr.Slider(0, 100, 0, step=1, label="Selective Sharpening", info="Sharpen eyes, eyebrows, and hair edges (mask-driven)")
-                            sharpen_radius = gr.Slider(0.1, 5.0, 1.0, step=0.1, label="Sharpen Radius", info="Blur radius for unsharp mask kernel")
-                            glow = gr.Slider(0, 100, 0, step=1, label="Atmospheric Glow", info="Multi-scale atmospheric glow/bloom effect")
-                            skin_glow = gr.Slider(0, 100, 0, step=1, label="Skin Light-Wrap (Anime)", info="Skin-scoped diffusion glow / light-wrap for anime cel blending · 0=off, 30=visible halo")
-                            mask_feather_mode = gr.Dropdown(
-                                choices=["gaussian", "guided"],
-                                value="gaussian",
-                                label="Mask Edge Refinement",
-                                info="Gaussian is conservative; guided preserves fine wig, hairline, and lash edges.",
-                            )
-                            vignette = gr.Slider(0, 100, 0, step=1, label="Vignette", info="Darken image corners for a focused portrait look")
-                            fade_toe = gr.Slider(0, 100, 0, step=1, label="Fade Toe", info="Lift shadows while preserving hue (L-only LAB fade for 透明感)")
-                            highlight_drift = gr.Slider(0, 100, 0, step=1, label="Highlight Drift", info="Bounded cyan hue rotation in highlights with skin protection")
-                            airy_haze = gr.Slider(0, 100, 0, step=1, label="Airy Haze", info="L-threshold-scoped atmospheric glow for 空気感 effect")
-                            clarity_split_neg = gr.Slider(0, 100, 0, step=1, label="Clarity Split (Form)", info="Reduce form-band local contrast for soft look")
-                            clarity_split_pos = gr.Slider(0, 100, 0, step=1, label="Clarity Split (Texture)", info="Boost texture-band micro-contrast for detail")
-                            subject_separation = gr.Slider(0, 100, 0, step=1, label="Subject-Background Separation", info="Brighten subject / darken background using person segmentation mask")
+                            with gr.Accordion("🌟 Structure & Effects", open=False):
+                                reset_structure_effects_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
+                                hair_enhance = gr.Slider(0, 100, 5, step=1, label="Hair Shine", info="Boost highlight reflections and depth in hair strands")
+                                dodge_burn = gr.Slider(0, 100, 0, step=1, label="Dodge & Burn", info="Sculpt face structure with local highlight/shadow contouring")
+                                impact = gr.Slider(0, 100, 0, step=1, label="Global Impact Finish", info="Final punch: combined clarity, sharpening, and micro-contrast boost")
+                                specular_bloom = gr.Slider(0, 100, 0, step=1, label="Specular Bloom", info="Dreamy bloom glow applied specifically to skin highlight zones")
+                                specular_bloom_tone = gr.Dropdown(choices=SPECULAR_BLOOM_TONE_CHOICES, value="rosy", label="Specular Bloom Tone", interactive=True, info="Color tint of the specular bloom glow")
+                                bloom = gr.Slider(0, 100, 0, step=1, label="Orton Bloom (Overall Glow)", info="High-key glow blending for high-fashion portraits")
+                                bloom_threshold = gr.Slider(150, 250, 210, step=1, label="Bloom Threshold", info="Brightness threshold where the glow begins to bleed")
+                                bloom_softness = gr.Slider(1, 100, 30, step=1, label="Bloom Softness", info="Softness blur radius of the bloom filter")
+                                sharpen = gr.Slider(0, 100, 0, step=1, label="Selective Sharpening", info="Sharpen eyes, eyebrows, and hair edges (mask-driven)")
+                                sharpen_radius = gr.Slider(0.1, 5.0, 1.0, step=0.1, label="Sharpen Radius", info="Blur radius for unsharp mask kernel")
+                                glow = gr.Slider(0, 100, 0, step=1, label="Atmospheric Glow", info="Multi-scale atmospheric glow/bloom effect")
+                                skin_glow = gr.Slider(0, 100, 0, step=1, label="Skin Light-Wrap (Anime)", info="Skin-scoped diffusion glow / light-wrap for anime cel blending · 0=off, 30=visible halo")
+                                mask_feather_mode = gr.Dropdown(
+                                    choices=["gaussian", "guided"],
+                                    value="gaussian",
+                                    label="Mask Edge Refinement",
+                                    info="Gaussian is conservative; guided preserves fine wig, hairline, and lash edges.",
+                                )
+                                vignette = gr.Slider(0, 100, 0, step=1, label="Vignette", info="Darken image corners for a focused portrait look")
+                                fade_toe = gr.Slider(0, 100, 0, step=1, label="Fade Toe", info="Lift shadows while preserving hue (L-only LAB fade for 透明感)")
+                                highlight_drift = gr.Slider(0, 100, 0, step=1, label="Highlight Drift", info="Bounded cyan hue rotation in highlights with skin protection")
+                                airy_haze = gr.Slider(0, 100, 0, step=1, label="Airy Haze", info="L-threshold-scoped atmospheric glow for 空気感 effect")
+                                clarity_split_neg = gr.Slider(0, 100, 0, step=1, label="Clarity Split (Form)", info="Reduce form-band local contrast for soft look")
+                                clarity_split_pos = gr.Slider(0, 100, 0, step=1, label="Clarity Split (Texture)", info="Boost texture-band micro-contrast for detail")
+                                subject_separation = gr.Slider(0, 100, 0, step=1, label="Subject-Background Separation", info="Brighten subject / darken background using person segmentation mask")
 
-                        with gr.Accordion("🎭 Cosplay Moat (A3)", open=False):
-                            gr.Markdown("Cosplay-specific skin / wardrobe continuity (wig lace blend, stockings smooth, cross-shot consistency).")
-                            cosplay_wig_lace_blend = gr.Slider(0, 100, 0, step=1, label="Wig Lace Blend", info="Fade wig lace edge into forehead skin")
-                            cosplay_stockings_smooth = gr.Slider(0, 100, 0, step=1, label="Stockings Smooth", info="Smooth hosiery / stocking texture")
-                            cosplay_consistency_strength = gr.Slider(0, 100, 0, step=1, label="Consistency Strength", info="Cross-shot lighting / white-balance continuity for a cosplay set")
+                        with gr.Accordion("Cosplay & Body", open=False):
+                            with gr.Accordion("🎭 Cosplay Moat (A3)", open=False):
+                                gr.Markdown("Cosplay-specific skin / wardrobe continuity (wig lace blend, stockings smooth, cross-shot consistency).")
+                                cosplay_wig_lace_blend = gr.Slider(0, 100, 0, step=1, label="Wig Lace Blend", info="Fade wig lace edge into forehead skin")
+                                cosplay_stockings_smooth = gr.Slider(0, 100, 0, step=1, label="Stockings Smooth", info="Smooth hosiery / stocking texture")
+                                cosplay_consistency_strength = gr.Slider(0, 100, 0, step=1, label="Consistency Strength", info="Cross-shot lighting / white-balance continuity for a cosplay set")
 
-                        with gr.Accordion("🦵 Body Reshape (T3)", open=False):
-                            gr.Markdown("Landmark-driven body reshape via MediaPipe Pose (±15% segment displacement at ±100). 50 = no change.")
-                            body_reshape_arm_length = gr.Slider(0, 100, 50, step=1, label="Arm Length", info="0 = shorter, 100 = longer arms")
-                            body_reshape_leg_length = gr.Slider(0, 100, 50, step=1, label="Leg Length", info="0 = shorter, 100 = longer legs")
-                            body_reshape_torso_width = gr.Slider(0, 100, 50, step=1, label="Torso Width", info="0 = narrower, 100 = wider torso")
-                            body_reshape_shoulder_width = gr.Slider(0, 100, 50, step=1, label="Shoulder Width", info="0 = narrower, 100 = wider shoulders")
-                            body_reshape_hip_width = gr.Slider(0, 100, 50, step=1, label="Hip Width", info="0 = narrower, 100 = wider hips")
-                            auto_body_reshape = gr.Slider(0, 100, 0, step=1, label="Auto Body Reshape", info="Automatic proportional reshape strength (0 = off)")
+                            with gr.Accordion("🦵 Body Reshape (T3)", open=False):
+                                gr.Markdown("Landmark-driven body reshape via MediaPipe Pose (±15% segment displacement at ±100). 50 = no change.")
+                                body_reshape_arm_length = gr.Slider(0, 100, 50, step=1, label="Arm Length", info="0 = shorter, 100 = longer arms")
+                                body_reshape_leg_length = gr.Slider(0, 100, 50, step=1, label="Leg Length", info="0 = shorter, 100 = longer legs")
+                                body_reshape_torso_width = gr.Slider(0, 100, 50, step=1, label="Torso Width", info="0 = narrower, 100 = wider torso")
+                                body_reshape_shoulder_width = gr.Slider(0, 100, 50, step=1, label="Shoulder Width", info="0 = narrower, 100 = wider shoulders")
+                                body_reshape_hip_width = gr.Slider(0, 100, 50, step=1, label="Hip Width", info="0 = narrower, 100 = wider hips")
+                                auto_body_reshape = gr.Slider(0, 100, 0, step=1, label="Auto Body Reshape", info="Automatic proportional reshape strength (0 = off)")
 
-                        with gr.Accordion("🎬 Film Color Grading", open=False):
-                            reset_color_grading_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
-                            color_grade = gr.Dropdown(choices=COLOR_GRADE_NAMES, value="natural", label="Color Grade Preset", interactive=True, info="Apply a film/color grading preset from the presets library")
-                            grade_intensity = gr.Slider(0, 100, 0, step=1, label="Grade Intensity", info="Blend strength of the color grade (0-100%)")
+                        with gr.Accordion("Color & Film", open=False):
+                            with gr.Accordion("🎬 Film Color Grading", open=False):
+                                reset_color_grading_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
+                                color_grade = gr.Dropdown(choices=COLOR_GRADE_NAMES, value="natural", label="Color Grade Preset", interactive=True, info="Apply a film/color grading preset from the presets library")
+                                grade_intensity = gr.Slider(0, 100, 0, step=1, label="Grade Intensity", info="Blend strength of the color grade (0-100%)")
 
-                        with gr.Accordion("🎞️ Film & Analog Effects", open=False):
-                            reset_film_effects_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
-                            film_enable = gr.Checkbox(label="Enable Film Density Engine", value=False, info="Required for film highlight controls")
-                            film_highlight_purity = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Highlight Purity", info="Roll saturated highlights naturally toward white instead of neon yellow or orange")
-                            chromatic_aberration = gr.Slider(0, 20, 0, step=0.5, label="Chromatic Aberration", info="Lens fringing effect (RGB channel shift in pixels)")
-                            grain = gr.Slider(0, 100, 0, step=1, label="Film Grain", info="Analog film grain noise overlay (0-100 maps to engine 0.0-0.2)")
-                            halation = gr.Slider(0, 100, 0, step=1, label="Halation", info="Red light bloom around bright highlights (0-100 maps to engine 0.0-1.0)")
-                            tonal_curve_strength = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Tonal Curve", info="Film H&D tonal curve strength (lifted blacks + S-curve)")
-                            skin_protect_strength = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Skin Protection", info="Preserve skin hues during color grading ops")
-                            grain_strength = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Organic Grain", info="Clumped luminance-correlated film grain (Fuji-style)")
-                            highlight_rolloff_strength = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Highlight Rolloff", info="Soft C¹-continuous highlight compression")
-                            lut = gr.Dropdown(choices=LUT_CHOICES, value="none", label="Film Emulation LUT", interactive=True, info="Apply a film stock emulation LUT (Kodak / Fuji)")
+                            with gr.Accordion("🎞️ Film & Analog Effects", open=False):
+                                reset_film_effects_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
+                                film_enable = gr.Checkbox(label="Enable Film Density Engine", value=False, info="Required for film highlight controls")
+                                film_highlight_purity = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Highlight Purity", info="Roll saturated highlights naturally toward white instead of neon yellow or orange")
+                                chromatic_aberration = gr.Slider(0, 20, 0, step=0.5, label="Chromatic Aberration", info="Lens fringing effect (RGB channel shift in pixels)")
+                                grain = gr.Slider(0, 100, 0, step=1, label="Film Grain", info="Analog film grain noise overlay (0-100 maps to engine 0.0-0.2)")
+                                halation = gr.Slider(0, 100, 0, step=1, label="Halation", info="Red light bloom around bright highlights (0-100 maps to engine 0.0-1.0)")
+                                tonal_curve_strength = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Tonal Curve", info="Film H&D tonal curve strength (lifted blacks + S-curve)")
+                                skin_protect_strength = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Skin Protection", info="Preserve skin hues during color grading ops")
+                                grain_strength = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Organic Grain", info="Clumped luminance-correlated film grain (Fuji-style)")
+                                highlight_rolloff_strength = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Highlight Rolloff", info="Soft C¹-continuous highlight compression")
+                                lut = gr.Dropdown(choices=LUT_CHOICES, value="none", label="Film Emulation LUT", interactive=True, info="Apply a film stock emulation LUT (Kodak / Fuji)")
 
-                        with gr.Accordion("🌈 Split Toning", open=False):
-                            reset_split_toning_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
-                            gr.Markdown("**Shadows**")
-                            shadow_hue = gr.Slider(0, 360, 0, step=1, label="Shadow Hue", info="Hue shift applied to shadow tones (degrees)")
-                            shadow_sat = gr.Slider(0, 100, 0, step=1, label="Shadow Saturation", info="Saturation boost for shadow tones")
-                            gr.Markdown("**Midtones**")
-                            midtone_hue = gr.Slider(0, 360, 0, step=1, label="Midtone Hue", info="Hue shift applied to midtone tones (degrees)")
-                            midtone_sat = gr.Slider(0, 100, 0, step=1, label="Midtone Saturation", info="Saturation boost for midtone tones")
-                            gr.Markdown("**Highlights**")
-                            highlight_hue = gr.Slider(0, 360, 0, step=1, label="Highlight Hue", info="Hue shift applied to highlight tones (degrees)")
-                            highlight_sat = gr.Slider(0, 100, 0, step=1, label="Highlight Saturation", info="Saturation boost for highlight tones")
+                            with gr.Accordion("🌈 Split Toning", open=False):
+                                reset_split_toning_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
+                                gr.Markdown("**Shadows**")
+                                shadow_hue = gr.Slider(0, 360, 0, step=1, label="Shadow Hue", info="Hue shift applied to shadow tones (degrees)")
+                                shadow_sat = gr.Slider(0, 100, 0, step=1, label="Shadow Saturation", info="Saturation boost for shadow tones")
+                                gr.Markdown("**Midtones**")
+                                midtone_hue = gr.Slider(0, 360, 0, step=1, label="Midtone Hue", info="Hue shift applied to midtone tones (degrees)")
+                                midtone_sat = gr.Slider(0, 100, 0, step=1, label="Midtone Saturation", info="Saturation boost for midtone tones")
+                                gr.Markdown("**Highlights**")
+                                highlight_hue = gr.Slider(0, 360, 0, step=1, label="Highlight Hue", info="Hue shift applied to highlight tones (degrees)")
+                                highlight_sat = gr.Slider(0, 100, 0, step=1, label="Highlight Saturation", info="Saturation boost for highlight tones")
 
-                        with gr.Accordion("🎨 LCH Color Tools", open=False):
-                            reset_lch_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
-                            gr.Markdown("**White Balance**")
-                            white_balance_kelvin = gr.Slider(2000, 12000, 6500, step=100, label="Temperature (K)", info="2000=warm candlelight, 6500=neutral daylight, 12000=cool shade")
-                            white_balance_tint = gr.Slider(-100, 100, 0, step=1, label="Tint", info="Negative=green correction, positive=magenta correction")
-                            gr.Markdown("**B&W Channel Mixer**")
-                            bw_channel_mixer_r = gr.Slider(-100, 200, 30, step=1, label="Red Weight", info="Red channel weight for B&W conversion")
-                            bw_channel_mixer_g = gr.Slider(-100, 200, 59, step=1, label="Green Weight", info="Green channel weight for B&W conversion")
-                            bw_channel_mixer_b = gr.Slider(-100, 200, 11, step=1, label="Blue Weight", info="Blue channel weight for B&W conversion")
-                            gr.Markdown("**Negative Split Tone**")
-                            negative_split_tone_shadow = gr.Slider(0, 100, 0, step=1, label="Shadow Desaturation", info="Fade shadows toward grayscale")
-                            negative_split_tone_highlight = gr.Slider(0, 100, 0, step=1, label="Highlight Desaturation", info="Fade highlights toward grayscale")
-                            gr.Markdown("**Master HSL**")
-                            hsl_hue_global = gr.Slider(-100, 100, 0, step=1, label="Hue Shift", info="Global hue rotation in LCH space")
-                            hsl_sat_global = gr.Slider(-100, 100, 0, step=1, label="Saturation", info="Global perceptual saturation ±100%")
-                            hsl_lum_global = gr.Slider(-100, 100, 0, step=1, label="Luminance", info="Global L* lightness ±100")
+                            with gr.Accordion("🎨 LCH Color Tools", open=False):
+                                reset_lch_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
+                                gr.Markdown("**White Balance**")
+                                white_balance_kelvin = gr.Slider(2000, 12000, 6500, step=100, label="Temperature (K)", info="2000=warm candlelight, 6500=neutral daylight, 12000=cool shade")
+                                white_balance_tint = gr.Slider(-100, 100, 0, step=1, label="Tint", info="Negative=green correction, positive=magenta correction")
+                                gr.Markdown("**B&W Channel Mixer**")
+                                bw_channel_mixer_r = gr.Slider(-100, 200, 30, step=1, label="Red Weight", info="Red channel weight for B&W conversion")
+                                bw_channel_mixer_g = gr.Slider(-100, 200, 59, step=1, label="Green Weight", info="Green channel weight for B&W conversion")
+                                bw_channel_mixer_b = gr.Slider(-100, 200, 11, step=1, label="Blue Weight", info="Blue channel weight for B&W conversion")
+                                gr.Markdown("**Negative Split Tone**")
+                                negative_split_tone_shadow = gr.Slider(0, 100, 0, step=1, label="Shadow Desaturation", info="Fade shadows toward grayscale")
+                                negative_split_tone_highlight = gr.Slider(0, 100, 0, step=1, label="Highlight Desaturation", info="Fade highlights toward grayscale")
+                                gr.Markdown("**Master HSL**")
+                                hsl_hue_global = gr.Slider(-100, 100, 0, step=1, label="Hue Shift", info="Global hue rotation in LCH space")
+                                hsl_sat_global = gr.Slider(-100, 100, 0, step=1, label="Saturation", info="Global perceptual saturation ±100%")
+                                hsl_lum_global = gr.Slider(-100, 100, 0, step=1, label="Luminance", info="Global L* lightness ±100")
 
-                        with gr.Accordion("🔮 Color Transfer", open=False):
-                            reset_color_transfer_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
-                            gr.Markdown("Upload a reference image to match its color tone using CDF-based histogram transfer")
-                            color_ref_img = gr.Image(type="filepath", label="Reference Image", show_label=True, height=160)
-                            color_ref_strength = gr.Slider(0.0, 1.0, 1.0, step=0.05, label="Transfer Strength", info="Mix ratio between original grade and matched reference grade (1.0 = full transfer, 0.0 = no transfer)")
+                            with gr.Accordion("🔮 Color Transfer", open=False):
+                                reset_color_transfer_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
+                                gr.Markdown("Upload a reference image to match its color tone using CDF-based histogram transfer")
+                                color_ref_img = gr.Image(type="filepath", label="Reference Image", show_label=True, height=160)
+                                color_ref_strength = gr.Slider(0.0, 1.0, 1.0, step=0.05, label="Transfer Strength", info="Mix ratio between original grade and matched reference grade (1.0 = full transfer, 0.0 = no transfer)")
 
-                        with gr.Accordion("🎨 Look Extractor (F6)", open=False):
-                            gr.Markdown("Upload a reference image to reverse-engineer an editable tone/color look. The extracted params are applied on the next Process (overriding recipe defaults).")
-                            look_ref_file = gr.File(label="Reference Image (look source)", file_types=["image", *sorted(RAW_EXTENSIONS)], file_count="single")
-                            look_extract_btn = gr.Button("✨ Extract Look", variant="secondary", size="sm", elem_classes=["secondary-btn"])
-                            look_status = gr.Markdown("")
+                            with gr.Accordion("🎨 Look Extractor (F6)", open=False):
+                                gr.Markdown("Upload a reference image to reverse-engineer an editable tone/color look. The extracted params are applied on the next Process (overriding recipe defaults).")
+                                look_ref_file = gr.File(label="Reference Image (look source)", file_types=["image", *sorted(RAW_EXTENSIONS)], file_count="single")
+                                look_extract_btn = gr.Button("✨ Extract Look", variant="secondary", size="sm", elem_classes=["secondary-btn"])
+                                look_status = gr.Markdown("")
 
-                        with gr.Accordion("🎞️ LUT Library", open=False):
-                            gr.Markdown("Hot-reload the 3D LUT registry after adding/removing `.cube` files in the luts directory.")
-                            reload_luts_btn = gr.Button("🔄 Reload LUTs", variant="secondary", size="sm", elem_classes=["secondary-btn"])
-                            reload_luts_status = gr.Markdown("")
+                            with gr.Accordion("🎞️ LUT Library", open=False):
+                                gr.Markdown("Hot-reload the 3D LUT registry after adding/removing `.cube` files in the luts directory.")
+                                reload_luts_btn = gr.Button("🔄 Reload LUTs", variant="secondary", size="sm", elem_classes=["secondary-btn"])
+                                reload_luts_status = gr.Markdown("")
 
-                        with gr.Accordion("🔍 Debug & Mask Preview", open=False):
-                            reset_debug_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
-                            debug_mode = gr.Checkbox(label="Generate Debug Masks", value=False, info="Save skin/lips/frequency-layer masks and display them for tuning")
+                        with gr.Accordion("Tools & Debug", open=False):
+                            with gr.Accordion("🔍 Debug & Mask Preview", open=False):
+                                reset_debug_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
+                                debug_mode = gr.Checkbox(label="Generate Debug Masks", value=False, info="Save skin/lips/frequency-layer masks and display them for tuning")
 
-                        with gr.Accordion("🩺 Diagnostics", open=False):
-                            gr.Markdown("Version/environment bundle for bug reports. Click, then copy the text below.")
-                            with gr.Row():
-                                diagnostics_btn = gr.Button("📋 Generate Diagnostics", variant="secondary", size="sm", elem_classes=["secondary-btn"])
-                                runtime_doctor_btn = gr.Button("🩺 Runtime Doctor", variant="secondary", size="sm", elem_classes=["secondary-btn"])
-                                clear_diagnostics_btn = gr.Button("🗑️ Clear Diagnostics", variant="secondary", size="sm", elem_classes=["secondary-btn"])
-                            diagnostics_status = gr.Markdown("")
-                            diagnostics_out = gr.Textbox(label="Diagnostics", lines=8, interactive=False)
-                            runtime_doctor_out = gr.Textbox(
-                                label="Runtime Doctor (static; no native probe)",
-                                lines=16,
-                                interactive=False,
-                            )
-                            render_manifest_out = gr.Code(
-                                label="Render Manifest (pixel-free)",
-                                language="json",
-                                lines=18,
-                                interactive=False,
-                            )
+                            with gr.Accordion("🩺 Diagnostics", open=False):
+                                gr.Markdown("Version/environment bundle for bug reports. Click, then copy the text below.")
+                                with gr.Row():
+                                    diagnostics_btn = gr.Button("📋 Generate Diagnostics", variant="secondary", size="sm", elem_classes=["secondary-btn"])
+                                    runtime_doctor_btn = gr.Button("🩺 Runtime Doctor", variant="secondary", size="sm", elem_classes=["secondary-btn"])
+                                    clear_diagnostics_btn = gr.Button("🗑️ Clear Diagnostics", variant="secondary", size="sm", elem_classes=["secondary-btn"])
+                                diagnostics_status = gr.Markdown("")
+                                diagnostics_out = gr.Textbox(label="Diagnostics", lines=8, interactive=False)
+                                runtime_doctor_out = gr.Textbox(
+                                    label="Runtime Doctor (static; no native probe)",
+                                    lines=16,
+                                    interactive=False,
+                                )
+                                render_manifest_out = gr.Code(
+                                    label="Render Manifest (pixel-free)",
+                                    language="json",
+                                    lines=18,
+                                    interactive=False,
+                                )
 
                         process_btn_bottom = gr.Button("Render Preview ⚡", variant="primary", size="lg", elem_classes=["primary-btn"])
 
@@ -5048,7 +5050,6 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "color_ref_img": color_ref_img,
         "color_ref_strength": color_ref_strength,
         "show_compare": show_compare,
-        "fast": fast,
         "export_fmt": export_fmt,
         "export_quality": export_quality,
         "export_res": export_res,
@@ -5081,7 +5082,6 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         optical_correction,
         export_res,
         quality_tier,
-        fast,
     ):
         _cache_invalidation_component.change(
             fn=invalidate_preview_cache_handler,
