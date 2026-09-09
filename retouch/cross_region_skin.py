@@ -337,6 +337,7 @@ def propagate_face_edit_delta(
 
     result_lab255 = edited_lab.copy()
     result_lab255 += target_support[:, :, None] * applied_delta[None, None, :]
+    result_lab255 = np.clip(result_lab255, 0.0, 255.0)
     result_lab = _lab255_to_lab_float(result_lab255)
     processed = np.clip(lab_f32_to_bgr_f32(result_lab) * (1.0 / 255.0), 0.0, 1.0).astype(np.float32)
     # The operation has no authority outside the final support. This also
