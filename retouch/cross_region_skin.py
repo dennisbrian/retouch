@@ -31,6 +31,8 @@ from .utils import (
 
 __all__ = [
     "CrossRegionSkinResult",
+    "MAX_L_DELTA",
+    "MAX_AB_DELTA",
     "infer_same_person_skin_support",
     "propagate_face_edit_delta",
 ]
@@ -43,22 +45,6 @@ MAX_AB_DELTA = 4.0
 MIN_FACE_PIXELS = 32
 MIN_TARGET_PIXELS = 32
 MIN_DELTA = 0.05
-
-
-def _lab_float_to_lab255(lab: np.ndarray) -> np.ndarray:
-    """Convert float-native CIELAB (L* / centred a,b) to explicit LAB codes."""
-    out = lab.astype(np.float32, copy=True)
-    out[..., 0] *= np.float32(255.0 / 100.0)
-    out[..., 1:] += np.float32(128.0)
-    return out
-
-
-def _lab255_to_lab_float(lab255: np.ndarray) -> np.ndarray:
-    """Convert explicit LAB codes back to float-native CIELAB."""
-    out = lab255.astype(np.float32, copy=True)
-    out[..., 0] *= np.float32(100.0 / 255.0)
-    out[..., 1:] -= np.float32(128.0)
-    return out
 
 
 @dataclass(frozen=True)
@@ -126,8 +112,8 @@ def _mask(mask: Optional[np.ndarray], shape: Tuple[int, int], name: str) -> Opti
 
 def infer_same_person_skin_support(
     source_bgr: np.ndarray,
-    person_mask: np.ndarray,
-    face_mask: np.ndarray,
+    person_mask: Optional[np.ndarray],
+    face_mask: Optional[np.ndarray],
     *,
     face_exclusion: Optional[np.ndarray] = None,
     lip_exclusion: Optional[np.ndarray] = None,
@@ -177,7 +163,10 @@ def infer_same_person_skin_support(
     )
 
     exclusion = face.copy()
-    for extra, extra_name in ((face_exclusion, "face_exclusion"), (lip_exclusion, "lip_exclusion")):
+    for extra, extra_name in (
+        (face_exclusion, "face_exclusion"),
+        (lip_exclusion, "lip_exclusion"),
+    ):
         if extra is not None:
             extra_mask = _mask(extra, shape, extra_name)
             if extra_mask is not None:
@@ -212,7 +201,7 @@ def _abstain(
 def propagate_face_edit_delta(
     source_bgr: np.ndarray,
     edited_bgr: np.ndarray,
-    face_mask: np.ndarray,
+    face_mask: Optional[np.ndarray],
     target_mask: Optional[np.ndarray],
     *,
     strength: float = 1.0,
@@ -224,7 +213,7 @@ def propagate_face_edit_delta(
 ) -> CrossRegionSkinResult:
     """Propagate a bounded face appearance delta to an owned target support.
 
-        ``source_bgr`` is the image immediately before face edits and
+    ``source_bgr`` is the image immediately before face edits and
     ``edited_bgr`` is the current image after those edits. The robust median
     LAB delta over ``face_mask`` is the approved appearance change. It is
     applied uniformly in LAB to ``target_mask``; local luminance/chroma
@@ -294,8 +283,11 @@ def propagate_face_edit_delta(
             target_pixels=target_pixels,
         )
 
-    source_lab = _lab_float_to_lab255(bgr_f32_to_lab_f32(source * 255.0))
-    edited_lab = _lab_float_to_lab255(bgr_f32_to_lab_f32(edited * 255.0))
+    # The shared utils conversion already returns the repository's explicit
+    # OpenCV-LAB code scale (L255, centred a/b) in float32; do not rescale it a
+    # second time here.
+    source_lab = bgr_f32_to_lab_f32(source * 255.0)
+    edited_lab = bgr_f32_to_lab_f32(edited * 255.0)
     delta_pixels = edited_lab[face_indices] - source_lab[face_indices]
     if not np.isfinite(delta_pixels).all():
         return _abstain(
@@ -335,10 +327,9 @@ def propagate_face_edit_delta(
             face_delta=face_delta_tuple,
         )
 
-    result_lab255 = edited_lab.copy()
-    result_lab255 += target_support[:, :, None] * applied_delta[None, None, :]
-    result_lab255 = np.clip(result_lab255, 0.0, 255.0)
-    result_lab = _lab255_to_lab_float(result_lab255)
+    result_lab = edited_lab.copy()
+    result_lab += target_support[:, :, None] * applied_delta[None, None, :]
+    result_lab = np.clip(result_lab, 0.0, 255.0)
     processed = np.clip(lab_f32_to_bgr_f32(result_lab) * (1.0 / 255.0), 0.0, 1.0).astype(np.float32)
     # The operation has no authority outside the final support. This also
     # prevents a float LAB round trip from changing unrelated background pixels.

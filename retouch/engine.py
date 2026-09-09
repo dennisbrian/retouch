@@ -239,13 +239,6 @@ class ProcessingContext:
     body_relight: float = 0.0
     body_dodge_burn: float = 0.0
     body_shadow_lift: float = 0.0
-    # P7 opt-in cross-region appearance propagation.  This is intentionally a
-    # caller-only control: no recipe or GUI enables it.  A caller may provide
-    # a reviewed same-person support; when omitted the engine builds a
-    # conservative LCH/person-component candidate and may abstain.
-    cross_region_skin: float = 0.0
-    cross_region_skin_mask: Optional[np.ndarray] = None
-    cross_region_protect_mask: Optional[np.ndarray] = None
     shadow_lift: float = 0.0
     nose_restore: float = 0.0
     skin_sss: float = 0.0
@@ -564,6 +557,13 @@ class ProcessingContext:
     self_blend_mode: Optional[str] = None
     self_blend_amount: Optional[float] = None
     self_blend_domain: str = "encoded"
+    # P7 opt-in cross-region appearance propagation.  These are appended to
+    # preserve positional construction of the long-lived context dataclass.
+    # No recipe or GUI enables them; callers may provide a reviewed support or
+    # let the stage form a conservative LCH/person-component candidate.
+    cross_region_skin: float = 0.0
+    cross_region_skin_mask: Optional[np.ndarray] = None
+    cross_region_protect_mask: Optional[np.ndarray] = None
     _p7_diagnostics: Dict[str, Any] = field(default_factory=dict, repr=False)
 
 
@@ -716,9 +716,11 @@ class ProcessingResult(np.ndarray):
         safe_auto_decisions: Optional[List[Dict[str, Any]]] = None,
         runtime_diagnostics: Optional[Dict[str, Any]] = None,
         fa02_diagnostics: Optional[List[Optional[Dict[str, Any]]]] = None,
-        p7_diagnostics: Optional[Dict[str, Any]] = None,
         precision: Optional[ProcessingPrecision] = None,
         source_dtype: Optional[Any] = None,
+        # Appended to preserve positional construction of this ndarray
+        # subclass; P7 diagnostics are optional metadata only.
+        p7_diagnostics: Optional[Dict[str, Any]] = None,
     ):
         obj = np.asarray(image).view(cls)
         obj.image = image
@@ -1780,6 +1782,26 @@ class RetouchEngine:
         if face_params is not None:
             from .face_params import coerce_face_params
             ctx.face_params = coerce_face_params(face_params)
+
+        # The preview path runs the face/global stages on a downscaled frame.
+        # Keep caller-reviewed P7 masks aligned with that frame while leaving
+        # masks at native resolution for the normal and legacy proxy paths.
+        if fast and scale < 1.0:
+            preview_shape = img_bgr.shape[:2]
+            for mask_name in ("cross_region_skin_mask", "cross_region_protect_mask"):
+                mask_value = getattr(ctx, mask_name, None)
+                if (
+                    isinstance(mask_value, np.ndarray)
+                    and mask_value.ndim >= 2
+                    and mask_value.shape[:2] == (orig_h, orig_w)
+                    and preview_shape != (orig_h, orig_w)
+                ):
+                    resized_mask = cv2.resize(
+                        mask_value.astype(np.float32, copy=False),
+                        (preview_shape[1], preview_shape[0]),
+                        interpolation=cv2.INTER_LINEAR,
+                    )
+                    setattr(ctx, mask_name, resized_mask.astype(np.float32, copy=False))
 
         if style_profile is not None:
             if overrides["contrast"] is None:

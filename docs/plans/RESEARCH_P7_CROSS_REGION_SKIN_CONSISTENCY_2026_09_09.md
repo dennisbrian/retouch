@@ -1,8 +1,12 @@
 # P7 — Cross-region skin consistency
 
 Date: 2026-09-09. Code baseline inspected: `2e88a89`.
-Scope: literature review, code inspection and proposed experiments only.
-No production edits, new models, image processing or test execution.
+Status: bounded opt-in implementation landed; research/evaluation follow-ups
+remain open.
+Scope: literature review, code inspection and proposed experiments. The
+implementation follow-through below is intentionally a bounded, opt-in leaf
+experiment; it is not a production-quality claim or a completion of the P7
+plan.
 
 Scope assumption: P7 means the cross-region proposal in
 [Skin ProMax](PLAN_SKIN_PROMAX.md#p7--cross-region-skin-consistency-neckearshandschest-as-one-tone-system--novel),
@@ -198,10 +202,10 @@ an aggregate average cannot excuse damage on a region or lighting condition.
    per-person ownership and calibrated abstention. Extend to mixed lighting,
    ears and texture parity as separately evaluated capabilities.
 
-Completed in this task: live source review, current-code inspection and this
-research/experiment brief. No photos were changed, models downloaded, or
-production/recipe/GUI path enabled. P7 is ready for a bounded experiment
-proposal, not a production-quality claim.
+Research baseline completed: live source review, current-code inspection and
+this research/experiment brief. No recipe or GUI path is enabled. The bounded
+implementation follow-through is recorded below; P7 remains an experiment,
+not a production-quality claim.
 
 **2026-09-09 addendum:** the isolated primitive described as a candidate in
 §5 (edit-delta propagation, bounded LAB deltas, exact abstention) was
@@ -209,13 +213,18 @@ implemented the same day as `retouch/cross_region_skin.py` and wired as an
 opt-in engine stage (`ProcessingContext.cross_region_skin`, default `0.0`,
 no `ParamSpec`/CLI flag/recipe/GUI control sets it — verified by grep against
 `params.py`, `cli.py`, `recipes*.py`). This is a leaf primitive matching the
-"Edit propagation" arm's mechanics, not completion of the plan: none of §7's
-next-work items (photograph inventory, manual-mask baseline audit,
-edit-delta-vs-median-matching comparison, synthetic fixtures) have been run.
-Tests: `tests/test_p7_cross_region.py` (contract/wiring: registry order,
-`body_match_face` mutual-exclusion abstention, opt-in defaults) and
-`tests/test_cross_region_skin.py` (input validation, per-abstention-reason
-coverage, `infer_same_person_skin_support` ownership/exclusion). On a real
-single-face portrait (DSCF8007) with no reviewed target mask supplied, the
-stage does not abstain — it applies the auto-inferred candidate support; this
-is exercised, not just asserted possible.
+"Edit propagation" arm's mechanics, not completion of the plan: the
+photograph inventory, manual-mask baseline audit and
+edit-delta-vs-median-matching comparison remain open.
+
+The implementation has focused synthetic coverage in
+`tests/test_cross_region_skin.py` and `tests/test_p7_cross_region.py`, plus
+registry/integration regressions. The real fixture path is
+`test_output/DSCF8007.jpg`; a separate native portrait visual pass used
+`/Users/dennis/Desktop/arisaedited/DSCF1884.jpg` with `whiten=40`,
+`cross_region_skin=70`, `fast=True`, one detected face, 4,785 inferred target
+pixels and 5,715 changed pixels at processing scale. The source/baseline/P7
+plates and diagnostics are in the ignored local directory
+`test_output/p7_visual_v3/`. Visual review found no visible blotches or halos;
+the delivery-size diff was confined to exposed-skin areas at a maximum of 3
+8-bit levels, with interpolation caveats documented by the export path.
