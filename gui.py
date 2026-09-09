@@ -3496,11 +3496,10 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             choices=["Classic", "Smart Color (preview)"],
                             value="Classic",
                             label="Editing mode",
-                            info="Smart Color (preview) is a thin, reviewable control surface over the same Classic sliders below — it does not add a second processing engine.",
+                            info="Smart Color drives the same Classic sliders below through three simple controls — no second processing engine, no hidden behavior.",
                         )
                         with gr.Group(visible=False) as smart_color_group:
-                            gr.Markdown("### 🎨 Smart Color")
-                            gr.Markdown("Preview — Color card only; Face/Auto Polish/Background/Clean not yet available. See `retouch/smart_intents.py` for the underlying contract.")
+                            gr.Markdown("### 🎨 Color")
                             smart_amount = gr.Slider(-1.0, 1.0, 0.0, step=0.05, label="Amount", info="Vibrance + saturation, protecting skin tones less than Classic Vibrance alone")
                             smart_warmth = gr.Slider(-1.0, 1.0, 0.0, step=0.05, label="Warmth", info="White balance temperature + tint")
                             smart_contrast_macro = gr.Slider(-1.0, 1.0, 0.0, step=0.05, label="Contrast", info="Contrast + highlight/shadow rolloff")
