@@ -34,6 +34,7 @@ class TestHelpAndArgs:
         rc, out, err = _run_cli("--help")
         assert rc == 0
         assert "usage:" in out.lower() or "usage:" in err.lower()
+        assert "--cross-region-skin" in out
 
     def test_dry_run_no_input(self):
         """--dry-run without input should fail with usage."""

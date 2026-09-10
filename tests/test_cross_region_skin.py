@@ -334,8 +334,12 @@ class TestEngineIntegration:
         else:
             assert diag["abstained"] is True
 
-    def test_no_recipe_or_param_spec_enables_it_by_default(self):
+    def test_param_spec_exposes_opt_in_without_recipe_default(self):
         from retouch.params import PROCESSING_PARAMS
 
-        names = {p.name for p in PROCESSING_PARAMS}
-        assert "cross_region_skin" not in names
+        specs = {p.name: p for p in PROCESSING_PARAMS}
+        assert specs["cross_region_skin"].cli_flag == "cross-region-skin"
+        assert specs["cross_region_skin"].default == 0.0
+        assert specs["cross_region_skin"].recipe_key is None
+        from retouch.params import recipe_to_params
+        assert recipe_to_params("natural")["cross_region_skin"] == 0.0

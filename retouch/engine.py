@@ -559,8 +559,9 @@ class ProcessingContext:
     self_blend_domain: str = "encoded"
     # P7 opt-in cross-region appearance propagation.  These are appended to
     # preserve positional construction of the long-lived context dataclass.
-    # No recipe or GUI enables them; callers may provide a reviewed support or
-    # let the stage form a conservative LCH/person-component candidate.
+    # No recipe enables this; API, CLI, and GUI callers may provide a reviewed
+    # support or let the stage form a conservative LCH/person-component
+    # candidate.
     cross_region_skin: float = 0.0
     cross_region_skin_mask: Optional[np.ndarray] = None
     cross_region_protect_mask: Optional[np.ndarray] = None
@@ -918,6 +919,10 @@ def build_context(
         "color_transfer_intensity",
         "skin_locus",
         "smooth_exposure_lock",
+        # P7 is hand-wired below because its masks are caller-owned and must
+        # never be sourced from a recipe, even though its scalar control is
+        # registered for CLI/GUI exposure.
+        "cross_region_skin",
     }
     spec_kwargs = {
         spec.name: resolved[spec.name]

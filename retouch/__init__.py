@@ -21,7 +21,13 @@ from typing import Any
 
 
 __version__ = "2.0.0"
-__all__ = ["RetouchEngine", "retouch", "__version__"]
+__all__ = [
+    "RetouchEngine",
+    "retouch",
+    "measure_p8_cues",
+    "P8CueReadout",
+    "__version__",
+]
 
 
 def __getattr__(name: str) -> Any:
@@ -37,5 +43,10 @@ def __getattr__(name: str) -> Any:
         from .engine import RetouchEngine, retouch
 
         globals().update(RetouchEngine=RetouchEngine, retouch=retouch)
+        return globals()[name]
+    if name in {"measure_p8_cues", "P8CueReadout"}:
+        from .aging_cues import P8CueReadout, measure_p8_cues
+
+        globals().update(P8CueReadout=P8CueReadout, measure_p8_cues=measure_p8_cues)
         return globals()[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -89,6 +89,7 @@ def process(
     body_equalize: Optional[float] = None,
     body_whiten: Optional[float] = None,
     body_match_face: Optional[float] = None,
+    cross_region_skin: Optional[float] = None,
     body_relight: Optional[float] = None,
     body_dodge_burn: Optional[float] = None,
     shadow_lift: Optional[float] = None,
@@ -579,6 +580,7 @@ Passing an explicit value override to these parameters takes precedence over the
 *   **`body_equalize`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `body_skin.equalize`): Adjusts the body equalize parameter.
 *   **`body_whiten`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `body_skin.whiten`): Adjusts the body whiten parameter.
 *   **`body_match_face`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `body_skin.match_face`): Adjusts the body match face parameter.
+*   **`cross_region_skin`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: none): Explicit opt-in P7 control that propagates the approved face-edit LAB delta to same-person exposed skin. It is limited to one detected face, abstains on ambiguous ownership, and remains disabled by every recipe. Keep `body_match_face=0` when using it; a reviewed `cross_region_skin_mask` may be supplied through the Python API.
 *   **`body_relight`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `body_skin.relight`): Adjusts the body relight parameter.
 *   **`body_dodge_burn`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `body_skin.dodge_burn`): Adjusts the body dodge burn parameter.
 *   **`body_shadow_lift`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `body_skin.shadow_lift`): Adjusts the body shadow lift parameter.
@@ -752,6 +754,26 @@ is explicitly `encoded` or `linear`; uint8/uint16 and float image contracts
 are supported. These are analytical operators, not a
 Photoshop pixel-parity or Fill implementation. Existing Retouch recipes do
 not call them automatically.
+
+### Observable appearance cues (P8 R1)
+
+```python
+from retouch import measure_p8_cues
+
+# `regions` is a reviewed FaceRegions-like support object for this face.
+readout = measure_p8_cues(image_bgr, regions)
+print(readout.to_dict())
+```
+
+The P8 readout measures signed LAB contrast for eyes, lips, and brows against
+nearby skin plus face-scaled skin chroma variation. It retains support counts,
+units, confidence-as-support metadata, and explicit unavailable states. It is
+an observable-appearance measurement only: it does not estimate chronological
+or apparent age, recover translucency/volume, fit an aging vector, or edit
+pixels. Missing support is returned as `values=None`, not as a zero score.
+The implementation is a standalone leaf in `retouch/aging_cues.py`; the
+diagnostic command `scripts/qa/p8_cue_readout.py` performs detection/parsing
+and emits JSON without calling `RetouchEngine.process()`.
 
 ## 6. Style Library & Machine Learning APIs
 

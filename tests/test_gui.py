@@ -61,6 +61,7 @@ EXPECTED_RECIPE_KEYS = [
     "body_whiten", "brightness", "bw_channel_mixer_b", "bw_channel_mixer_g", "bw_channel_mixer_r",
     "catchlight", "chromatic_aberration", "clarity", "clarity_split_neg", "clarity_split_pos",
     "color_grade", "color_transfer_intensity", "contrast", "cosplay_consistency_strength", "cosplay_stockings_smooth",
+    "cross_region_skin",
     "cosplay_wig_lace_blend", "cyan_midtone_grade", "dark_circles", "dodge_burn", "equalize",
     "eye_enhance", "eye_gate", "eye_iris_brightness", "eye_iris_hue_shift", "eye_iris_saturate", "eye_sclera_brighten",
     "eye_sclera_vessel_remove", "fabric_wrinkle_smooth", "face_exposure", "fade_toe", "film_crosstalk_cy_mg",
@@ -108,7 +109,7 @@ for color in ["red", "green", "blue"]:
     EXPECTED_RECIPE_KEYS.extend([f"calibration_{color}_hue", f"calibration_{color}_sat", f"calibration_{color}_lum"])
 EXPECTED_RECIPE_KEYS.append("lens_blur")
 
-EXPECTED_RECIPE_KEY_COUNT = 253
+EXPECTED_RECIPE_KEY_COUNT = 254
 # Self-updating: the recipe/smart-style slider tuple length is the contract
 # defined by RECIPE_OUTPUT_KEYS, so this constant can never go stale.
 EXPECTED_UI_OUTPUT_COUNT = len(gui.RECIPE_OUTPUT_KEYS)
@@ -148,6 +149,7 @@ class TestRecipeDefaults:
         assert d["clarity"] == 0
         assert d["glow"] == 0
         assert d["vignette"] == 0
+        assert d["cross_region_skin"] == 0.0
         # natural recipe gives eye_enhance=5 and catchlight falls back to iris (=5)
         assert d["catchlight"] == 5
 
@@ -845,6 +847,12 @@ class TestResetFunctions:
         result = gui.reset_relighting("natural")
         assert isinstance(result, tuple)
         assert len(result) == 3
+
+    def test_reset_body_skin_returns_eight_values_with_p7_off(self):
+        result = gui.reset_body_skin("natural")
+        assert isinstance(result, tuple)
+        assert len(result) == 8
+        assert result[4] == 0.0
 
     def test_reset_eyes_lips_returns_seventeen_values(self):
         result = gui.reset_eyes_lips("natural")

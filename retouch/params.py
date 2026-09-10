@@ -637,6 +637,19 @@ _SKIN_PARAMS = [
         max_val=100,
     ),
     ParamSpec(
+        # P7 is an explicit caller-selected experiment. It deliberately has
+        # no recipe source, so exposing the control cannot enable it for an
+        # existing recipe or silently stack it with body_match_face.
+        name="cross_region_skin",
+        cli_flag="cross-region-skin",
+        cli_type=float,
+        default=0.0,
+        recipe_key=None,
+        conversion="gui_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
         name="body_relight",
         cli_flag=None,
         cli_type=None,

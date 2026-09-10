@@ -12,7 +12,7 @@ from retouch.cross_region_skin import (
     propagate_face_edit_delta,
 )
 from retouch.engine import ProcessingContext, RetouchEngine, build_context
-from retouch.params import resolve_recipe
+from retouch.params import PROCESSING_PARAMS, resolve_recipe
 from retouch.stage_wrappers import build_global_registry
 
 
@@ -218,6 +218,14 @@ def test_p7_context_and_registry_are_opt_in():
     assert names.index("cross_region_skin") == names.index("body_skin") + 1
 
 
+def test_p7_registry_exposes_cli_control_but_keeps_recipe_default_off():
+    spec = next(item for item in PROCESSING_PARAMS if item.name == "cross_region_skin")
+    assert spec.cli_flag == "cross-region-skin"
+    assert spec.cli_type is float
+    assert spec.recipe_key is None
+    assert spec.default == 0.0
+
+
 def test_negative_stage_strength_is_rejected():
     source, edited, face, target, _ = _edited_pair()
     ctx = ProcessingContext(cross_region_skin=-1.0, _p7_diagnostics={})
@@ -233,5 +241,4 @@ def test_negative_stage_strength_is_rejected():
             np.zeros_like(face),
             [object()],
         )
-
 

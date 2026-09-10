@@ -1909,7 +1909,11 @@ def reset_debug(recipe_name):
 
 def reset_body_skin(recipe_name):
     d = recipe_defaults(recipe_name)
-    return d["body_smooth"], d["body_equalize"], d["body_whiten"], d["body_match_face"], d["body_relight"], d["body_dodge_burn"], d["body_shadow_lift"]
+    return (
+        d["body_smooth"], d["body_equalize"], d["body_whiten"],
+        d["body_match_face"], d["cross_region_skin"], d["body_relight"],
+        d["body_dodge_burn"], d["body_shadow_lift"],
+    )
 
 
 def reset_lch(recipe_name):
@@ -3563,6 +3567,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 body_equalize = gr.Slider(0, 100, 0, step=1, label="Body Equalize", info="Even out tone in body skin regions · tone harmonization at body scale")
                                 body_whiten = gr.Slider(0, 100, 0, step=1, label="Body Whiten", info="Lighten body skin to match face whitening treatment")
                                 body_match_face = gr.Slider(0, 100, 0, step=1, label="Body Match Face", info="Pull body skin L/a/b toward retouched face skin color · bounded ±8L ±6a/b")
+                                cross_region_skin = gr.Slider(
+                                    0, 100, 0, step=1,
+                                    label="P7 Cross-Region Skin (Experimental)",
+                                    info="Propagate the approved face edit delta to same-person exposed skin · single-face only; ambiguous ownership abstains · keep Body Match Face at 0",
+                                )
                                 body_relight = gr.Slider(0, 100, 0, step=1, label="Body Relight", info="Landmark-free directional shading on exposed body skin · matches face relight intensity")
                                 body_dodge_burn = gr.Slider(0, 100, 0, step=1, label="Body Dodge & Burn", info="Local-contrast sculpting on body skin (CLAHE-based highlight/shadow)")
                                 body_shadow_lift = gr.Slider(0, 100, 0, step=1, label="Body Shadow Lift", info="Brighten small localized shadows on body skin")
@@ -4098,9 +4107,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
  "nose_restore",
  "mole_protect",
  "texture_transplant",
- "body_relight",
+        "body_relight",
         "body_dodge_burn",
- "body_shadow_lift",
+        "body_shadow_lift",
+        # Caller-only P7 control is visible but remains zero in every recipe.
+        "cross_region_skin",
         "mark_policy",
         # These controls are visible and recipe-driven. Keep them appended so
         # existing callback positions remain stable while a film/heal recipe
@@ -4137,7 +4148,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
  "body_smooth": body_smooth,
         "body_equalize": body_equalize,
  "body_whiten": body_whiten,
- "body_match_face": body_match_face,
+        "body_match_face": body_match_face,
+        "cross_region_skin": cross_region_skin,
         "dodge_burn": dodge_burn,
  "relight": relight,
  "relight_azimuth": relight_azimuth,
@@ -4422,7 +4434,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     _track_reset_event(reset_body_skin_btn.click(
         fn=reset_body_skin,
         inputs=[recipe],
-        outputs=[body_smooth, body_equalize, body_whiten, body_match_face, body_relight, body_dodge_burn, body_shadow_lift],
+        outputs=[body_smooth, body_equalize, body_whiten, body_match_face, cross_region_skin, body_relight, body_dodge_burn, body_shadow_lift],
         queue=False,
         show_progress="hidden",
     ))
@@ -4837,6 +4849,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "body_equalize": body_equalize,
         "body_whiten": body_whiten,
         "body_match_face": body_match_face,
+        "cross_region_skin": cross_region_skin,
         "body_relight": body_relight,
         "body_dodge_burn": body_dodge_burn,
         "shadow_lift": shadow_lift,

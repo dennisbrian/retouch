@@ -203,19 +203,19 @@ an aggregate average cannot excuse damage on a region or lighting condition.
    ears and texture parity as separately evaluated capabilities.
 
 Research baseline completed: live source review, current-code inspection and
-this research/experiment brief. No recipe or GUI path is enabled. The bounded
-implementation follow-through is recorded below; P7 remains an experiment,
-not a production-quality claim.
+this research/experiment brief. At that baseline, no recipe or GUI path was
+enabled. The bounded implementation follow-through is recorded below; P7
+remains an experiment, not a production-quality claim.
 
 **2026-09-09 addendum:** the isolated primitive described as a candidate in
 §5 (edit-delta propagation, bounded LAB deltas, exact abstention) was
 implemented the same day as `retouch/cross_region_skin.py` and wired as an
-opt-in engine stage (`ProcessingContext.cross_region_skin`, default `0.0`,
-no `ParamSpec`/CLI flag/recipe/GUI control sets it — verified by grep against
-`params.py`, `cli.py`, `recipes*.py`). This is a leaf primitive matching the
-"Edit propagation" arm's mechanics, not completion of the plan: the
-photograph inventory, manual-mask baseline audit and
-edit-delta-vs-median-matching comparison remain open.
+opt-in engine stage (`ProcessingContext.cross_region_skin`, default `0.0`).
+The initial follow-through intentionally kept it out of `ParamSpec`, CLI,
+recipes, and GUI controls. This is a leaf primitive matching the "Edit
+propagation" arm's mechanics, not completion of the plan: the photograph
+inventory, manual-mask baseline audit and edit-delta-vs-median-matching
+comparison remain open.
 
 The implementation has focused synthetic coverage in
 `tests/test_cross_region_skin.py` and `tests/test_p7_cross_region.py`, plus
@@ -228,3 +228,14 @@ plates and diagnostics are in the ignored local directory
 `test_output/p7_visual_v3/`. Visual review found no visible blotches or halos;
 the delivery-size diff was confined to exposed-skin areas at a maximum of 3
 8-bit levels, with interpolation caveats documented by the export path.
+
+**2026-09-10 integration addendum:** the bounded leaf is now exposed through
+the canonical `cross_region_skin` parameter registry, the CLI flag
+`--cross-region-skin`, and an explicitly labeled experimental GUI slider. The
+control remains `0.0` for every recipe; selecting a non-zero value is still a
+caller decision. The GUI uses the stage's conservative single-face inferred
+support. Reviewed `cross_region_skin_mask` and
+`cross_region_protect_mask` inputs remain available through the Python API.
+On `test_output/DSCF8007.jpg`, a live `--cross-region-skin 50` render applied
+the bounded delta successfully and produced a valid output. This surface
+exposure does not promote P7 to a default or production-quality claim.

@@ -35,6 +35,15 @@ output verification.
 
 ## Plans (`docs/plans/`)
 - `MASTER_PLAN.md` — Overall roadmap
+- [P8 apparent-age cue validity research — 2026-09-10](plans/RESEARCH_P8_CUE_VALIDITY_2026_09_10.md)
+  — Primary-source and current-code review correcting the earlier P8 drafts;
+  separates image descriptors, apparent-age associations and perceptual editing
+- [P8 revised research protocol — 2026-09-10](plans/PLAN_P8_CUE_VALIDITY_RESEARCH_2026_09_10.md)
+  — Proposed support, repeatability, labeling and intervention gates; research
+  only, with no code or photo experiments executed
+- P8 R1 implementation — `retouch/aging_cues.py` and
+  `scripts/qa/p8_cue_readout.py` provide measurement-only observable cue
+  readouts; no age slider or render-path coupling
 - [Face retouch algorithm research — 2026-09-05](plans/RESEARCH_FACE_RETOUCH_ALGORITHMS_2026_09_05.md)
   — Documentation-only current-code review, thirteen classical/learned algorithm
   comparisons, and seven proposed experiments for masks, blemish repair, texture,
