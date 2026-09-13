@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import atexit
 import sys
 import os
 import time
@@ -177,6 +178,24 @@ _worker_engine = None
 def _init_worker():
     global _worker_engine
     _worker_engine = RetouchEngine()
+    # Each pool worker owns a RetouchEngine, which owns its own internal
+    # FaceProcessorPool (a nested ProcessPoolExecutor, up to 4 more
+    # processes). Without an explicit close() before interpreter shutdown,
+    # teardown falls to GC/atexit ordering between the outer and inner
+    # pools' own atexit hooks, which can deadlock (worker process never
+    # exits, ProcessPoolExecutor.shutdown()'s join() in the parent then
+    # hangs forever) or leak the inner pool's child processes as orphans.
+    atexit.register(_close_worker_engine)
+
+
+def _close_worker_engine():
+    global _worker_engine
+    if _worker_engine is not None:
+        try:
+            _worker_engine.close()
+        except Exception:
+            pass
+        _worker_engine = None
 
 
 def _linear_raw_to_engine_bgr(path, exposure: float = 0.0, contrast: float = 1.0):
