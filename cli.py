@@ -2,6 +2,7 @@
 
 import argparse
 import atexit
+import shutil
 import sys
 import os
 import time
@@ -536,6 +537,67 @@ def _preflight_destinations(
             destinations[key] = image_path
 
 
+# Measured from a real 5-image / 44MB "Priority for Printing" batch vs. its
+# `--compare` fullres output (84MB, 10 files: image + compare pair per input)
+# on 2026-09-05/06 renders -- ratio ~1.9. Rounded up to 2.0 since this has no
+# visibility into recipe-specific output format/bit-depth/compression choices
+# and is meant to warn before the estimate itself runs low, not fit tightly.
+_ESTIMATED_OUTPUT_BYTES_PER_INPUT_BYTE = 2.0
+
+# Minimum free space to leave after the estimated run, so an unrelated
+# concurrent process (or the estimate itself running low) doesn't drive the
+# volume to 0 bytes free.
+_MIN_FREE_BYTES_AFTER_RUN = 5 * 1024 * 1024 * 1024  # 5 GiB
+
+
+def _check_disk_space(files: list[Path], output_dir: Optional[Path], compare: bool) -> None:
+    """Warn if the output directory's volume likely can't hold this run.
+
+    Estimates output size from total input bytes, a measured output/input
+    ratio, and whether `--compare` doubles the per-image artifact count.
+    This is a warn-only heuristic (no recipe/format/bit-depth visibility),
+    not a hard guarantee — see `_ESTIMATED_OUTPUT_BYTES_PER_INPUT_BYTE`.
+    """
+    target_dir = output_dir if output_dir is not None else Path.cwd()
+    # output_dir is typically created by the caller *after* this check, so
+    # walk up to the nearest existing ancestor to find its volume -- passing
+    # a not-yet-created path to disk_usage() raises FileNotFoundError, which
+    # would otherwise silently skip the check on every fresh output path.
+    probe_dir = target_dir
+    while not probe_dir.exists():
+        parent = probe_dir.parent
+        if parent == probe_dir:
+            break
+        probe_dir = parent
+    try:
+        total_input_bytes = sum(f.stat().st_size for f in files)
+        free_bytes = shutil.disk_usage(probe_dir).free
+    except OSError:
+        return  # Can't stat input/output volume — don't block on a guess.
+
+    estimated_output_bytes = total_input_bytes * _ESTIMATED_OUTPUT_BYTES_PER_INPUT_BYTE
+    if compare:
+        estimated_output_bytes *= 2
+
+    projected_free = free_bytes - estimated_output_bytes
+    if projected_free >= _MIN_FREE_BYTES_AFTER_RUN:
+        return
+
+    def _gb(n: float) -> str:
+        return f"{n / (1024 ** 3):.1f} GB"
+
+    print(
+        f"⚠ Disk space warning: {len(files)} input file(s) total "
+        f"{_gb(total_input_bytes)}; estimated output ~{_gb(estimated_output_bytes)}. "
+        f"{_gb(free_bytes)} free on {target_dir}'s volume — after this run, "
+        f"only ~{_gb(max(projected_free, 0))} would remain "
+        f"(want at least {_gb(_MIN_FREE_BYTES_AFTER_RUN)}). "
+        f"This is an estimate, not exact. Free up space, target a different "
+        f"volume, or pass --skip-disk-check to proceed anyway."
+    )
+    sys.exit(1)
+
+
 def _add_processing_arg(parser, spec):
     """Add an argparse argument for a single ``PROCESSING_PARAMS`` entry.
 
@@ -687,6 +749,8 @@ def main() -> None:
                         help="Skip face detection and apply only global color/impact retouch")
     parser.add_argument("--optical-correction", action="store_true",
                         help="Apply verified Lensfun distortion/TCA/vignetting from EXIF; reports unavailable, unmatched, or precision-preserving skips")
+    parser.add_argument("--skip-disk-check", action="store_true",
+                        help="Skip the pre-run disk space estimate/warning")
 
     # Processing controls
     parser.add_argument("--recipe", choices=RECIPE_CHOICES,
@@ -939,6 +1003,8 @@ def main() -> None:
     except (OSError, ValueError) as exc:
         print(f"✖ Output preflight failed: {exc}")
         sys.exit(1)
+    if not args.skip_disk_check:
+        _check_disk_space(files, output_dir, args.compare)
     if output_dir:
         output_dir.mkdir(parents=True, exist_ok=True)
 

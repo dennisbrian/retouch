@@ -1,11 +1,13 @@
 """Unit tests for CLI helpers and shared I/O utilities."""
 
+import shutil
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 from cli import (
+    _check_disk_space,
     _destination_for_image,
     _finalize_params,
     _preflight_destinations,
@@ -125,6 +127,84 @@ class TestDestinationSafety:
                 [source], input_root / "exports", "jpg", 8,
                 recursive_root=input_root, compare=False, save_session=None,
             )
+
+
+class TestCheckDiskSpace:
+    def _make_file(self, tmp_path, size_bytes):
+        path = tmp_path / "input.jpg"
+        path.write_bytes(b"\0" * size_bytes)
+        return path
+
+    def test_exits_when_projected_free_space_too_low(self, tmp_path, monkeypatch, capsys):
+        source = self._make_file(tmp_path, 1_000_000)
+
+        class FakeUsage:
+            free = 5_500_000  # just over 5GB min margin plus estimate below
+
+        monkeypatch.setattr(shutil, "disk_usage", lambda _: FakeUsage())
+        with pytest.raises(SystemExit) as exc_info:
+            _check_disk_space([source], tmp_path, compare=False)
+        assert exc_info.value.code == 1
+        assert "Disk space warning" in capsys.readouterr().out
+
+    def test_passes_when_plenty_of_free_space(self, tmp_path, monkeypatch, capsys):
+        source = self._make_file(tmp_path, 1_000_000)
+
+        class FakeUsage:
+            free = 100 * 1024 ** 3  # 100 GiB
+
+        monkeypatch.setattr(shutil, "disk_usage", lambda _: FakeUsage())
+        _check_disk_space([source], tmp_path, compare=False)  # must not raise
+        assert "Disk space warning" not in capsys.readouterr().out
+
+    def test_compare_flag_doubles_estimate(self, tmp_path, monkeypatch):
+        source = self._make_file(tmp_path, 2 * 1024 ** 3)  # 2 GiB
+
+        # Free space that clears the no-compare estimate but not the
+        # compare-doubled one, to prove `compare=True` changes the outcome.
+        # no-compare: 2GiB * 2.0 = 4GiB estimate; compare: 8GiB estimate.
+        class FakeUsage:
+            free = 10 * 1024 ** 3  # 10 GiB
+
+        monkeypatch.setattr(shutil, "disk_usage", lambda _: FakeUsage())
+        _check_disk_space([source], tmp_path, compare=False)  # 10 - 4 = 6 >= 5, ok
+
+        with pytest.raises(SystemExit):
+            _check_disk_space([source], tmp_path, compare=True)  # 10 - 8 = 2 < 5
+
+    def test_skips_silently_on_stat_failure(self, tmp_path, monkeypatch):
+        missing = tmp_path / "does_not_exist.jpg"
+        monkeypatch.setattr(
+            shutil, "disk_usage",
+            lambda _: (_ for _ in ()).throw(OSError("no such volume")),
+        )
+        _check_disk_space([missing], tmp_path, compare=False)  # must not raise
+
+    def test_checks_volume_of_nearest_existing_ancestor(self, tmp_path, monkeypatch):
+        # output_dir is created by the caller *after* this check runs, so a
+        # fresh --output path won't exist yet. disk_usage() on a missing path
+        # raises FileNotFoundError -- if _check_disk_space passed the
+        # not-yet-created path straight through, that would be silently
+        # swallowed by the OSError handler and never warn. Regression for
+        # exactly that: only tmp_path itself exists on disk.
+        source = self._make_file(tmp_path, 2 * 1024 ** 3)  # 2 GiB
+        not_yet_created = tmp_path / "brand-new-output-dir"
+        assert not not_yet_created.exists()
+
+        seen_paths = []
+
+        class FakeUsage:
+            free = 1024  # far below any margin, to force the warning path
+
+        def fake_disk_usage(path):
+            seen_paths.append(Path(path))
+            return FakeUsage()
+
+        monkeypatch.setattr(shutil, "disk_usage", fake_disk_usage)
+        with pytest.raises(SystemExit):
+            _check_disk_space([source], not_yet_created, compare=False)
+
+        assert seen_paths == [tmp_path]
 
 
 class TestImreadExif:
