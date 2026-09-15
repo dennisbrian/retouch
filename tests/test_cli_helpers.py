@@ -132,7 +132,10 @@ class TestDestinationSafety:
 class TestCheckDiskSpace:
     def _make_file(self, tmp_path, size_bytes):
         path = tmp_path / "input.jpg"
-        path.write_bytes(b"\0" * size_bytes)
+        # The disk check only needs the logical byte count.  Keep large-size
+        # cases sparse so this regression suite never allocates gigabytes.
+        with path.open("wb") as handle:
+            handle.truncate(size_bytes)
         return path
 
     def test_exits_when_projected_free_space_too_low(self, tmp_path, monkeypatch, capsys):
@@ -205,6 +208,41 @@ class TestCheckDiskSpace:
             _check_disk_space([source], not_yet_created, compare=False)
 
         assert seen_paths == [tmp_path]
+
+    def test_in_place_conversion_checks_source_parent_volume(self, tmp_path, monkeypatch):
+        source_dir = tmp_path / "photos"
+        source_dir.mkdir()
+        source = self._make_file(source_dir, 1_000_000)
+        seen_paths = []
+
+        class FakeUsage:
+            free = 100 * 1024 ** 3
+
+        def fake_disk_usage(path):
+            seen_paths.append(Path(path))
+            return FakeUsage()
+
+        monkeypatch.setattr(shutil, "disk_usage", fake_disk_usage)
+        _check_disk_space([source], None, compare=False)
+
+        assert seen_paths == [source_dir]
+
+    def test_in_place_sources_on_one_volume_share_one_estimate(self, tmp_path, monkeypatch):
+        first_dir = tmp_path / "card-a"
+        second_dir = tmp_path / "card-b"
+        first_dir.mkdir()
+        second_dir.mkdir()
+        first = self._make_file(first_dir, 1024 ** 3)
+        second = self._make_file(second_dir, 1024 ** 3)
+
+        class FakeUsage:
+            # Each source alone would leave 6 GiB after its 2 GiB estimate;
+            # together they leave 4 GiB, below the 5 GiB safety margin.
+            free = 8 * 1024 ** 3
+
+        monkeypatch.setattr(shutil, "disk_usage", lambda _: FakeUsage())
+        with pytest.raises(SystemExit):
+            _check_disk_space([first, second], None, compare=False)
 
 
 class TestImreadExif:

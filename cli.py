@@ -181,11 +181,12 @@ def _init_worker():
     _worker_engine = RetouchEngine()
     # Each pool worker owns a RetouchEngine, which owns its own internal
     # FaceProcessorPool (a nested ProcessPoolExecutor, up to 4 more
-    # processes). Without an explicit close() before interpreter shutdown,
-    # teardown falls to GC/atexit ordering between the outer and inner
-    # pools' own atexit hooks, which can deadlock (worker process never
-    # exits, ProcessPoolExecutor.shutdown()'s join() in the parent then
-    # hangs forever) or leak the inner pool's child processes as orphans.
+    # processes). This atexit hook is a backstop for the single-face case
+    # (inner pool never started) and for abrupt interpreter exits; it is
+    # NOT sufficient by itself on multi-face images — see the inline
+    # engine._face_pool.shutdown() in _process_single's finally block and
+    # cli-batch-hangs-on-exit-after-done for why atexit alone cannot reach
+    # RetouchEngine.close() once the inner pool's grandchildren are alive.
     atexit.register(_close_worker_engine)
 
 
@@ -299,6 +300,23 @@ def _process_single(args):
             finally:
                 if should_close:
                     engine.close()
+                else:
+                    # Shut down the reused engine's inner FaceProcessorPool
+                    # (its own nested ProcessPoolExecutor, started lazily on
+                    # multi-face images) after every task rather than
+                    # deferring to atexit. Under --workers>1, this worker
+                    # process is non-daemon and so are the pool's own
+                    # grandchild processes; multiprocessing's own exit
+                    # handler joins non-daemon children before running our
+                    # atexit-registered _close_worker_engine, so as long as
+                    # any grandchildren are alive, this worker never reaches
+                    # interpreter shutdown and _close_worker_engine's
+                    # RetouchEngine.close() call is never reached — the
+                    # ProcessPoolExecutor's own final shutdown() then blocks
+                    # forever joining this worker. Shutting the inner pool
+                    # down here (a no-op if it was never started) breaks
+                    # that cycle. See cli-batch-hangs-on-exit-after-done.
+                    engine._face_pool.shutdown()
 
         # Upscale back to original dimensions
         if _scale < 1.0:
@@ -550,52 +568,93 @@ _ESTIMATED_OUTPUT_BYTES_PER_INPUT_BYTE = 2.0
 _MIN_FREE_BYTES_AFTER_RUN = 5 * 1024 * 1024 * 1024  # 5 GiB
 
 
-def _check_disk_space(files: list[Path], output_dir: Optional[Path], compare: bool) -> None:
-    """Warn if the output directory's volume likely can't hold this run.
-
-    Estimates output size from total input bytes, a measured output/input
-    ratio, and whether `--compare` doubles the per-image artifact count.
-    This is a warn-only heuristic (no recipe/format/bit-depth visibility),
-    not a hard guarantee — see `_ESTIMATED_OUTPUT_BYTES_PER_INPUT_BYTE`.
-    """
-    target_dir = output_dir if output_dir is not None else Path.cwd()
-    # output_dir is typically created by the caller *after* this check, so
-    # walk up to the nearest existing ancestor to find its volume -- passing
-    # a not-yet-created path to disk_usage() raises FileNotFoundError, which
-    # would otherwise silently skip the check on every fresh output path.
-    probe_dir = target_dir
+def _nearest_existing_ancestor(path: Path) -> Path:
+    """Return the nearest existing ancestor for a possibly-new output path."""
+    probe_dir = Path(path)
     while not probe_dir.exists():
         parent = probe_dir.parent
         if parent == probe_dir:
             break
         probe_dir = parent
+    return probe_dir
+
+
+def _check_disk_space(files: list[Path], output_dir: Optional[Path], compare: bool) -> None:
+    """Warn if the destination volume(s) likely cannot hold this run.
+
+    Estimates output size from total input bytes, a measured output/input
+    ratio, and whether `--compare` doubles the per-image artifact count.
+    This is a warn-only heuristic (no recipe/format/bit-depth visibility),
+    not a hard guarantee — see `_ESTIMATED_OUTPUT_BYTES_PER_INPUT_BYTE`.
+
+    With an explicit output directory, every render targets its volume.  With
+    no ``--output``, the CLI writes each converted file next to its source, so
+    inputs on separate volumes must be estimated independently rather than
+    against the caller's current working directory.
+    """
     try:
-        total_input_bytes = sum(f.stat().st_size for f in files)
-        free_bytes = shutil.disk_usage(probe_dir).free
+        if output_dir is not None:
+            target_dir = output_dir
+            volume_checks = [
+                (
+                    target_dir,
+                    _nearest_existing_ancestor(target_dir),
+                    sum(f.stat().st_size for f in files),
+                    len(files),
+                )
+            ]
+        else:
+            # Group by device so multiple source folders on one volume share
+            # one free-space estimate, while sources on different volumes are
+            # assessed against their own destination capacity.
+            grouped: dict[int, tuple[Path, Path, int, int]] = {}
+            for image_path in files:
+                target_dir = image_path.parent
+                probe_dir = _nearest_existing_ancestor(target_dir)
+                volume_key = probe_dir.stat().st_dev
+                prior = grouped.get(volume_key)
+                size = image_path.stat().st_size
+                if prior is None:
+                    grouped[volume_key] = (target_dir, probe_dir, size, 1)
+                else:
+                    first_target, first_probe, total, count = prior
+                    grouped[volume_key] = (
+                        first_target,
+                        first_probe,
+                        total + size,
+                        count + 1,
+                    )
+            volume_checks = list(grouped.values())
     except OSError:
         return  # Can't stat input/output volume — don't block on a guess.
-
-    estimated_output_bytes = total_input_bytes * _ESTIMATED_OUTPUT_BYTES_PER_INPUT_BYTE
-    if compare:
-        estimated_output_bytes *= 2
-
-    projected_free = free_bytes - estimated_output_bytes
-    if projected_free >= _MIN_FREE_BYTES_AFTER_RUN:
-        return
 
     def _gb(n: float) -> str:
         return f"{n / (1024 ** 3):.1f} GB"
 
-    print(
-        f"⚠ Disk space warning: {len(files)} input file(s) total "
-        f"{_gb(total_input_bytes)}; estimated output ~{_gb(estimated_output_bytes)}. "
-        f"{_gb(free_bytes)} free on {target_dir}'s volume — after this run, "
-        f"only ~{_gb(max(projected_free, 0))} would remain "
-        f"(want at least {_gb(_MIN_FREE_BYTES_AFTER_RUN)}). "
-        f"This is an estimate, not exact. Free up space, target a different "
-        f"volume, or pass --skip-disk-check to proceed anyway."
-    )
-    sys.exit(1)
+    for target_dir, probe_dir, total_input_bytes, input_count in volume_checks:
+        try:
+            free_bytes = shutil.disk_usage(probe_dir).free
+        except OSError:
+            continue  # Can't stat this volume — don't block on a guess.
+
+        estimated_output_bytes = total_input_bytes * _ESTIMATED_OUTPUT_BYTES_PER_INPUT_BYTE
+        if compare:
+            estimated_output_bytes *= 2
+
+        projected_free = free_bytes - estimated_output_bytes
+        if projected_free >= _MIN_FREE_BYTES_AFTER_RUN:
+            continue
+
+        print(
+            f"⚠ Disk space warning: {input_count} input file(s) total "
+            f"{_gb(total_input_bytes)}; estimated output ~{_gb(estimated_output_bytes)}. "
+            f"{_gb(free_bytes)} free on {target_dir}'s volume — after this run, "
+            f"only ~{_gb(max(projected_free, 0))} would remain "
+            f"(want at least {_gb(_MIN_FREE_BYTES_AFTER_RUN)}). "
+            f"This is an estimate, not exact. Free up space, target a different "
+            f"volume, or pass --skip-disk-check to proceed anyway."
+        )
+        sys.exit(1)
 
 
 def _add_processing_arg(parser, spec):
