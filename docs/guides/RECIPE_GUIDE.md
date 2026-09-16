@@ -70,6 +70,7 @@ These keys are defined inside nested dictionary blocks inside a recipe.
 | `color_harmony` | `amount` | 0.0 to 1.0 | `0.0` | `grade_intensity` |
 | `color_harmony` | `preset` | 0.0 to 1.0 | `none` | `color_grade` |
 | `cosplay` | `consistency_strength` | 0 to 100 | `0` | `cosplay_consistency_strength` |
+| `cross_region_skin` | n/a | 0 to 100 | `0` | `cross_region_skin` (caller-owned masks; never recipe-sourced) |
 | `cosplay` | `stockings_smooth` | 0 to 100 | `0` | `cosplay_stockings_smooth` |
 | `cosplay` | `wig_lace_blend` | 0 to 100 | `0` | `cosplay_wig_lace_blend` |
 | `eye` | `iris_brightness` | 0 to 100 | `0` | `eye_iris_brightness` |
@@ -240,6 +241,7 @@ These keys are defined directly at the top level of a recipe dictionary.
 | `dodge_burn` | 0 to 100 | `0` | `--dodge-burn` if applicable |
 | `fa02_texture_mode` | `legacy`, `raw_residual`, `dog`, or `multiscale` | `legacy` | `--fa02-texture-mode` if applicable |
 | `gamut_compress` | 0.0 to 1.0 | `True` | `--gamut-compress` if applicable |
+| `gamut_target` | srgb / p3 / rec2020 | `srgb` | `--gamut-target` if applicable |
 | `glow` | 0 to 100 | `0.0` | None |
 | `grain_strength` | 0.0 to 1.0 | `0.0` | `--film-grain` if applicable |
 | `grain` | 0.0 to 1.0 | `0.0` | `--grain` if applicable |
@@ -279,6 +281,9 @@ These keys are defined directly at the top level of a recipe dictionary.
 | `vignette` | -100 to 100 | `0.0` | None |
 | `white_balance_kelvin` | 2000 to 12000 | `6500` | `--wb-kelvin` if applicable |
 | `white_balance_tint` | -100.0 to 100.0 | `0.0` | `--wb-tint` if applicable |
+| `multi_illuminant_key_kelvin` | 2000 to 12000 | `6500` | `--mi-key-kelvin` if applicable |
+| `multi_illuminant_fill_kelvin` | 2000 to 12000 | `6500` | `--mi-fill-kelvin` if applicable |
+| `multi_illuminant_mix` | 0.0 to 100.0 | `0.0` | `--mi-mix` if applicable |
 | `white_costume_lift` | 0.0 to 1.0 | `False` | `--white-costume-lift` if applicable |
 | `whites` | -100 to 100 | `None` | `--whites` if applicable |
 
@@ -408,6 +413,7 @@ and 0–360 for split-toning hue).
 | Film Tonemap Toe | `film.tonemap.toe` | direct |
 | Freckle Removal | `frequency.freckle_removal` | direct |
 | Gamut Compress | `gamut_compress` | direct |
+| Gamut Target | `gamut_target` | direct |
 | Glow | `glow` | direct |
 | Grade Intensity | `color_harmony.amount` | ÷ 100 |
 | Grain Strength | `grain_strength` | direct |
@@ -563,6 +569,9 @@ and 0–360 for split-toning hue).
 | Vignette | `vignette` | direct |
 | White Balance Kelvin | `white_balance_kelvin` | direct |
 | White Balance Tint | `white_balance_tint` | direct |
+| Multi-Illuminant Key Kelvin | `white_balance.multi_illuminant_key_kelvin` | direct |
+| Multi-Illuminant Fill Kelvin | `white_balance.multi_illuminant_fill_kelvin` | direct |
+| Multi-Illuminant Mix | `white_balance.multi_illuminant_mix` | direct |
 | White Costume Lift | `white_costume_lift` | direct |
 | Whiten Hue Stable | `skin.whiten_hue_stable` | direct |
 | Whiten Tone | `skin.porcelain` | direct |

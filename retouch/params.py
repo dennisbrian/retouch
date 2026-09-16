@@ -1692,6 +1692,18 @@ _GRADING_PARAMS = [
         recipe_key="gamut_compress",
         conversion="bool_flag",
     ),
+    # K5: output gamut for the K3 chroma compression knee. Wider targets let
+    # more chroma through before the roll-off engages (P3 ~1.25x, Rec.2020
+    # ~1.40x the sRGB boundary). Only meaningful for wide-gamut export paths.
+    ParamSpec(
+        name="gamut_target",
+        cli_flag="gamut-target",
+        cli_type=str,
+        default="srgb",
+        recipe_key="gamut_target",
+        conversion="dropdown",
+        choices=("srgb", "p3", "rec2020"),
+    ),
     ParamSpec(
         name="saturation_mode",
         cli_flag="saturation-mode",
@@ -2142,6 +2154,39 @@ _WB_BW_PARAMS = [
         recipe_key="white_balance_tint",
         conversion="gui_direct",
         min_val=-100.0,
+        max_val=100.0,
+    ),
+    # K6: multi-illuminant skin adaptation. Key/fill Kelvin describe the two
+    # light sources; the mix slider weights the skin adaptation between them.
+    # Defaults are neutral (equal) white points → exact no-op.
+    ParamSpec(
+        name="multi_illuminant_key_kelvin",
+        cli_flag="mi-key-kelvin",
+        cli_type=int,
+        default=6500,
+        recipe_key="white_balance.multi_illuminant_key_kelvin",
+        conversion="gui_direct",
+        min_val=2000,
+        max_val=12000,
+    ),
+    ParamSpec(
+        name="multi_illuminant_fill_kelvin",
+        cli_flag="mi-fill-kelvin",
+        cli_type=int,
+        default=6500,
+        recipe_key="white_balance.multi_illuminant_fill_kelvin",
+        conversion="gui_direct",
+        min_val=2000,
+        max_val=12000,
+    ),
+    ParamSpec(
+        name="multi_illuminant_mix",
+        cli_flag="mi-mix",
+        cli_type=float,
+        default=0.0,
+        recipe_key="white_balance.multi_illuminant_mix",
+        conversion="gui_direct",
+        min_val=0.0,
         max_val=100.0,
     ),
     ParamSpec(

@@ -810,6 +810,10 @@ def main() -> None:
                         help="Apply verified Lensfun distortion/TCA/vignetting from EXIF; reports unavailable, unmatched, or precision-preserving skips")
     parser.add_argument("--skip-disk-check", action="store_true",
                         help="Skip the pre-run disk space estimate/warning")
+    parser.add_argument("--preflight-check", action="store_true",
+                        help="Run system pre-flight integrity checks (color "
+                             "science, QA detectors, acceleration layer) and "
+                             "exit; does not process images")
 
     # Processing controls
     parser.add_argument("--recipe", choices=RECIPE_CHOICES,
@@ -972,6 +976,38 @@ def main() -> None:
                 print(f"  {stem}")
         except Exception as e:
             print(f"✖ LUT reload failed: {e}")
+            sys.exit(1)
+        return
+
+    # BB6: opt-in pre-flight sanity check. Runs the integrity checks on
+    # demand and exits; never implicit per-init overhead.
+    if args.preflight_check:
+        from retouch.benchmark import run_preflight_checks, benchmark_engine_throughput
+        checks = run_preflight_checks()
+        all_ok = True
+        for name, ok in checks.items():
+            print(f"  {'✓' if ok else '✖'} {name}")
+            if not ok:
+                all_ok = False
+        if all_ok:
+            try:
+                engine = RetouchEngine()
+                try:
+                    results = benchmark_engine_throughput(
+                        lambda img: engine.process(img, recipe="natural"),
+                        resolutions={"720p": (1280, 720)},
+                        iterations=1,
+                    )
+                    for label, r in results.items():
+                        print(f"  ⏱ {label}: {r.elapsed_seconds:.2f}s "
+                              f"({r.mpx_per_sec:.1f} Mpx/s)")
+                finally:
+                    engine.close()
+            except Exception as e:
+                print(f"  ⚠ throughput benchmark skipped: {e}")
+            print("✓ Pre-flight checks passed")
+        else:
+            print("✖ Pre-flight checks failed")
             sys.exit(1)
         return
 

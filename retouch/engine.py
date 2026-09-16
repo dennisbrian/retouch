@@ -326,6 +326,8 @@ class ProcessingContext:
     # is a no-op on in-gamut colors (golden path byte-identical); additive is the
     # legacy saturation mode.
     gamut_compress: bool = True
+    # K5: target gamut for the K3 compression knee ("srgb"/"p3"/"rec2020").
+    gamut_target: str = "srgb"
     saturation_mode: str = "additive"
     auto_exposure: bool = _DEFAULTS["auto_exposure"]
 
@@ -375,6 +377,10 @@ class ProcessingContext:
     # --- White balance / B&W mixer ---
     white_balance_kelvin: int = _DEFAULTS["white_balance_kelvin"]
     white_balance_tint: float = _DEFAULTS["white_balance_tint"]
+    # K6: multi-illuminant skin adaptation (key/fill Kelvin + mix weight).
+    multi_illuminant_key_kelvin: int = _DEFAULTS["multi_illuminant_key_kelvin"]
+    multi_illuminant_fill_kelvin: int = _DEFAULTS["multi_illuminant_fill_kelvin"]
+    multi_illuminant_mix: float = _DEFAULTS["multi_illuminant_mix"]
     bw_channel_mixer_r: int = _DEFAULTS["bw_channel_mixer_r"]
     bw_channel_mixer_g: int = _DEFAULTS["bw_channel_mixer_g"]
     bw_channel_mixer_b: int = _DEFAULTS["bw_channel_mixer_b"]
@@ -3053,6 +3059,7 @@ class RetouchEngine:
                 if k in settings and k not in post_effects:
                     post_effects[k] = settings[k]
             settings["gamut_compress"] = ctx.gamut_compress
+            settings["gamut_target"] = getattr(ctx, "gamut_target", "srgb")
             settings["saturation_mode"] = ctx.saturation_mode
 
             h_adj = {}
@@ -4573,6 +4580,37 @@ class RetouchEngine:
                     tint=ctx.white_balance_tint,
                 )
 
+        # --- K6: Multi-illuminant skin adaptation (key/fill CAT16 blend) ---
+        # Adapts skin pixels toward D65 under a key/fill illuminant mix, so
+        # mixed-lighting portraits (warm key + cool fill) get consistent
+        # skin chroma instead of a split cast. Skin-only via acc_skin.
+        mi_key = getattr(ctx, "multi_illuminant_key_kelvin", 6500)
+        mi_fill = getattr(ctx, "multi_illuminant_fill_kelvin", 6500)
+        mi_mix = getattr(ctx, "multi_illuminant_mix", 0.0)
+        if mi_key != mi_fill and mi_mix > 0.0:
+            from .color_science import adapt_multi_illuminant_skin
+            from .white_balance import source_white_xyz
+            if acc_skin is not None and acc_skin.shape[:2] == result.shape[:2]:
+                skin_m = np.clip(acc_skin.astype(np.float32), 0.0, 1.0)
+                if is_float:
+                    mi_in = np.clip(result * 255.0, 0.0, 255.0).astype(np.float32)
+                    mi_out = adapt_multi_illuminant_skin(
+                        mi_in,
+                        skin_mask=skin_m,
+                        key_wp=tuple(source_white_xyz(float(mi_key))),
+                        fill_wp=tuple(source_white_xyz(float(mi_fill))),
+                        mix_factor=float(np.clip(mi_mix / 100.0, 0.0, 1.0)),
+                    )
+                    result = np.clip(mi_out / 255.0, 0.0, 1.0).astype(np.float32)
+                else:
+                    result = adapt_multi_illuminant_skin(
+                        result,
+                        skin_mask=skin_m,
+                        key_wp=tuple(source_white_xyz(float(mi_key))),
+                        fill_wp=tuple(source_white_xyz(float(mi_fill))),
+                        mix_factor=float(np.clip(mi_mix / 100.0, 0.0, 1.0)),
+                    )
+
         # --- Master HSL (Phase 1.d) — global LCH adjustments ---
         if ctx.hsl_hue_global != 0 or ctx.hsl_sat_global != 0 or ctx.hsl_lum_global != 0:
             # adjust_hsl_lch runs through bgr_f32_to_lch_f32, which expects float
@@ -4648,6 +4686,7 @@ class RetouchEngine:
                 if k in settings and k not in post_effects:
                     post_effects[k] = settings[k]
             settings["gamut_compress"] = ctx.gamut_compress
+            settings["gamut_target"] = getattr(ctx, "gamut_target", "srgb")
             settings["saturation_mode"] = ctx.saturation_mode
 
             result = self._grader.grade(

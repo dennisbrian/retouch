@@ -3369,6 +3369,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             )
                         _vein_attenuate_state = gr.State(value=0.0)
                         _gamut_compress_state = gr.State(value=True)
+                        _gamut_target_state = gr.State(value="srgb")
                         _saturation_mode_state = gr.State(value="additive")
                         _reshape_eye_size_state = gr.State(value=0.0)
                         _reshape_eye_distance_state = gr.State(value=0.0)
@@ -3710,6 +3711,10 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 gr.Markdown("**White Balance**")
                                 white_balance_kelvin = gr.Slider(2000, 12000, 6500, step=100, label="Temperature (K)", info="2000=warm candlelight, 6500=neutral daylight, 12000=cool shade")
                                 white_balance_tint = gr.Slider(-100, 100, 0, step=1, label="Tint", info="Negative=green correction, positive=magenta correction")
+                                gr.Markdown("**Multi-Illuminant Skin (K6)**")
+                                multi_illuminant_key_kelvin = gr.Slider(2000, 12000, 6500, step=100, label="Key Light (K)", info="Key-light color temperature for skin adaptation")
+                                multi_illuminant_fill_kelvin = gr.Slider(2000, 12000, 6500, step=100, label="Fill Light (K)", info="Fill-light color temperature for skin adaptation")
+                                multi_illuminant_mix = gr.Slider(0, 100, 0, step=1, label="Fill Mix", info="0=key-only, 100=fill-only blend of CAT16 skin adaptation (no-op when key==fill or mix=0)")
                                 gr.Markdown("**B&W Channel Mixer**")
                                 bw_channel_mixer_r = gr.Slider(-100, 200, 30, step=1, label="Red Weight", info="Red channel weight for B&W conversion")
                                 bw_channel_mixer_g = gr.Slider(-100, 200, 59, step=1, label="Green Weight", info="Green channel weight for B&W conversion")
@@ -4117,10 +4122,14 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         # existing callback positions remain stable while a film/heal recipe
         # can actually activate the capability it declares.
         "heal_engine",
-        "hb_even",
-        "hb_shift",
-        "film_enable",
-        "film_highlight_purity",
+ "hb_even",
+ "hb_shift",
+ "film_enable",
+ "film_highlight_purity",
+        # K6 multi-illuminant skin sliders: visible + recipe-driven.
+        "multi_illuminant_key_kelvin",
+        "multi_illuminant_fill_kelvin",
+        "multi_illuminant_mix",
     )
 
     # Name -> Gradio component map for the recipe-output tuple.  Mirrors the
@@ -4225,8 +4234,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "highlight_sat": highlight_sat,
  "white_balance_kelvin": white_balance_kelvin,
  "white_balance_tint": white_balance_tint,
-        "bw_channel_mixer_r": bw_channel_mixer_r,
- "bw_channel_mixer_g": bw_channel_mixer_g,
+        "bw_channel_mixer_r": bw_channel_mixer_r, "bw_channel_mixer_g": bw_channel_mixer_g,
  "bw_channel_mixer_b": bw_channel_mixer_b,
         "negative_split_tone_shadow": negative_split_tone_shadow,
  "negative_split_tone_highlight": negative_split_tone_highlight,
@@ -4257,6 +4265,9 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "hb_shift": hb_shift,
         "film_enable": film_enable,
         "film_highlight_purity": film_highlight_purity,
+        "multi_illuminant_key_kelvin": multi_illuminant_key_kelvin,
+        "multi_illuminant_fill_kelvin": multi_illuminant_fill_kelvin,
+        "multi_illuminant_mix": multi_illuminant_mix,
     }
     _missing_outputs = set(RECIPE_OUTPUT_KEYS) - set(_recipe_output_components)
     _extra_outputs = set(_recipe_output_components) - set(RECIPE_OUTPUT_KEYS)
@@ -4953,6 +4964,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "grain_strength": grain_strength,
         "highlight_rolloff_strength": highlight_rolloff_strength,
         "gamut_compress": _gamut_compress_state,
+        "gamut_target": _gamut_target_state,
         "saturation_mode": _saturation_mode_state,
         "hsl_hue_red": _hsl_hue_red_state,
         "hsl_sat_red": _hsl_sat_red_state,
@@ -5023,6 +5035,9 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "highlight_sat": highlight_sat,
         "white_balance_kelvin": white_balance_kelvin,
         "white_balance_tint": white_balance_tint,
+        "multi_illuminant_key_kelvin": multi_illuminant_key_kelvin,
+        "multi_illuminant_fill_kelvin": multi_illuminant_fill_kelvin,
+        "multi_illuminant_mix": multi_illuminant_mix,
         "bw_channel_mixer_r": bw_channel_mixer_r,
         "bw_channel_mixer_g": bw_channel_mixer_g,
         "bw_channel_mixer_b": bw_channel_mixer_b,

@@ -5,6 +5,12 @@ from __future__ import annotations
 import io
 import logging
 import os
+
+# OpenCV's EXR codec must be enabled before cv2 is first imported anywhere in
+# the process; this module is the shared I/O entry point, so set it here at
+# the very top, ahead of the cv2 import below.
+os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
+
 import shutil
 import struct
 import subprocess
@@ -22,6 +28,10 @@ from PIL import Image, TiffImagePlugin, TiffTags
 from .color_context import ColorContext
 from .white_balance import linear_to_srgb, srgb_to_linear
 
+try:  # K7: ST 2084 PQ encode for HDR EXR export (color_science is stdlib-safe)
+    from .color_science import linear_to_pq
+except ImportError:  # pragma: no cover
+    linear_to_pq = None
 try:
     from PIL.ExifTags import Base as _ExifBase
 except ImportError:  # pragma: no cover - Pillow >=10 is the supported range
@@ -320,6 +330,29 @@ def read_image_16bit(path: Union[str, Path]) -> np.ndarray:
         raise FileNotFoundError(f"read_image_16bit: {safe} not found")
 
     ext = safe.suffix.lower()
+    if ext == ".exr":
+        # BB3: EXR stores scene-linear float32, frequently unbounded (HDR).
+        # The engine contract is display-encoded [0, 255]. Tone-map unbounded
+        # values with a soft shoulder (Reinhard) so highlights survive the
+        # range fold instead of hard-clipping, then sRGB-encode.
+        img = cv2.imread(str(safe), cv2.IMREAD_UNCHANGED)
+        if img is None:
+            raise ValueError(f"read_image_16bit: failed to decode EXR {safe} "
+                             "(OpenCV built without OpenEXR support?)")
+        out = img.astype(np.float32, copy=False)
+        if out.ndim == 2:
+            out = cv2.cvtColor(out, cv2.COLOR_GRAY2BGR)
+        elif out.ndim == 3 and out.shape[2] == 4:
+            out = cv2.cvtColor(out, cv2.COLOR_BGRA2BGR)
+        luminance = np.clip(out, 0.0, None)
+        # Identity in [0, 1]; smooth Reinhard-style shoulder only above 1.0
+        # so SDR-range pixels round-trip exactly and HDR highlights compress.
+        mapped = luminance / (1.0 + np.maximum(luminance - 1.0, 0.0))
+        # cv2.imread returns BGR already; only sRGB-encode, no channel flip.
+        return np.ascontiguousarray(
+            linear_to_srgb(mapped) * 255.0, dtype=np.float32,
+        )
+
     if ext in RAW_EXTENSIONS:
         import rawpy
 
@@ -1349,6 +1382,21 @@ def write_image_with_icc(
     pil_format = kwargs.pop("format", _ICC_WRITE_FORMAT_MAP.get(ext))
     quality = int(kwargs.pop("quality", 95))
     float_range = _resolve_float_range(img, str(kwargs.pop("float_range", "auto")))
+
+    # BB3: EXR float32 export — scene-linear, uncompressed-equivalent HDR.
+    # K7: optional ST 2084 PQ encode of the linear signal before write.
+    if ext == ".exr":
+        pq_encode = bool(kwargs.pop("pq_encode", False))
+        if pq_encode and linear_to_pq is None:  # pragma: no cover
+            raise RuntimeError("PQ encode requires retouch.color_science.linear_to_pq")
+        unit = img.astype(np.float32, copy=False) / 255.0
+        linear = srgb_to_linear(np.clip(unit, 0.0, 1.0))
+        samples = linear_to_pq(linear) if pq_encode else linear
+        if not cv2.imwrite(str(path), np.ascontiguousarray(samples)):
+            raise cv2.error(f"cv2.imwrite returned False for EXR write to {path}")
+        if c2pa_manifest:
+            logger.info("C2PA passthrough is not supported for EXR output; manifest dropped")
+        return
 
     # 16-bit export: only PNG and TIFF support it
     if bit_depth == 16:

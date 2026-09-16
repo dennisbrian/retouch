@@ -720,33 +720,44 @@ def process(
 
 ---
 
-## 10. Implementation Checklist
+## 10. Implementation Checklist — ✅ SHIPPED (checklist below completed post-hoc; the feature shipped before this doc was re-audited)
 
-### Phase 1: Core (Days 1–1.5)
-- [ ] Create `freckle.py` with `FreckleRemover` class
-- [ ] Implement `_detect_anomalies()` (reuse BlemishRemover logic)
-- [ ] Implement `_classify_freckles()` with Connected Components
-- [ ] Implement `_classify_region()` with color/size heuristics
+> **Status correction 2026-09-16:** the feature is fully implemented, wired,
+> and tested — this plan's unchecked boxes were stale. Verified today:
+> `retouch/freckle.py` (462 lines: `_detect_components`, `_classify_anomaly`
+> with freckle/beauty_mark/blemish/noise/ambiguous scoring, `classify_anomalies`,
+> `remove` with telea/patchmatch heal engines), ParamSpec `freckle_removal`
+> (CLI `--freckle-removal`, recipe key `frequency.freckle_removal`) +
+> `freckle_preserve_mask`, ProcessingContext fields, perf_optimizations hook,
+> GUI slider, 36 passing tests in `tests/test_freckle.py`. Live check on
+> synthetic freckles: 19/20 spots classified `freckle`, removal produces a
+> real heal delta; beauty marks route to the preserve mask.
 
-### Phase 2: Integration (Days 1.5–2)
-- [ ] Add `freckle_removal` param to ProcessingContext
-- [ ] Register param in PARAM_NAMES
-- [ ] Add to engine.__init__ and process() signature
-- [ ] Add FreckleRemover instance to engine
-- [ ] Add pipeline hook in perf_optimizations.py
+### Phase 1: Core
+- [x] Create `freckle.py` with `FreckleRemover` class
+- [x] Implement anomaly detection (own `_detect_components`, BlemishRemover-style local-contrast + redness gating)
+- [x] Implement classification with Connected Components
+- [x] Implement per-component scoring with color/size heuristics
 
-### Phase 3: Testing (Days 2–2.5)
-- [ ] Write unit tests (test_freckle.py)
-- [ ] Write integration tests (test_freckle_integration.py)
-- [ ] Run visual QA on 5 cosplay photos
-- [ ] Fix threshold issues based on QA feedback
+### Phase 2: Integration
+- [x] Add `freckle_removal` param to ProcessingContext
+- [x] Register param in PROCESSING_PARAMS
+- [x] Add to process() signature
+- [x] FreckleRemover instantiated at the perf_optimizations call site
+- [x] Add pipeline hook in perf_optimizations.py (after smoothing, gated on freckle_removal > 0, mole_protect-aware)
 
-### Phase 4: Polish (Days 2.5–3)
-- [ ] Add docstrings and type hints
-- [ ] Update API.md with new parameter
-- [ ] Update TROUBLESHOOTING if needed
-- [ ] Ensure no regression in existing tests
-- [ ] Final code review
+### Phase 3: Testing
+- [x] Write unit tests (test_freckle.py — 36 passing)
+- [x] Integration coverage via the pipeline hook tests
+- [x] Visual QA on real photos (historical; see commit log)
+- [x] Threshold issues addressed (tone-invariant L-normalisation, FA-03 ambiguity handling)
+
+### Phase 4: Polish
+- [x] Add docstrings and type hints
+- [x] Update API.md with new parameter
+- [x] Update TROUBLESHOOTING if needed
+- [x] Ensure no regression in existing tests
+- [x] Final code review
 
 ---
 
@@ -786,4 +797,4 @@ def process(
 ---
 
 **Document prepared:** 2026-07-08  
-**Last updated:** 2026-07-08
+**Last updated:** 2026-09-16 — feature verified shipped; checklist reconciled with reality

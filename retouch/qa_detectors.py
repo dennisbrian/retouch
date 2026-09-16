@@ -78,7 +78,7 @@ def _detector_failure(name: str, exc: Exception) -> Dict[str, Any]:
 ALL_DETECTOR_NAMES = (
     "banding", "clipping", "plastic_skin", "halo", "kee_farid", "seam",
     "color_drift", "pore_spectrum", "asymmetry", "skin_score", "harmony",
-    "perceived_retouching",
+    "perceived_retouching", "cam16_delta_e",
 )
 
 # Explicit per-detector status vocabulary. "passed"/"flagged" require the
@@ -124,6 +124,12 @@ COLOR_DRIFT_THRESHOLD = 15.0           # Max Δh (deg) considered the flag bound
 PORE_SPECTRUM_THRESHOLD = 0.50  # Flag if pore-energy loss ratio > 50%
 ASYMMETRY_THRESHOLD = 0.40      # Flag if a zone < 60% of face texture energy
 SKIN_SCORE_FLOOR = 25.0         # Below this 0-100 skin score = clearly plastic
+
+# K1 — CAM16-UCS perceptual colour-difference gate. Mean skin ΔE above this
+# means the grade has visibly shifted skin appearance in a uniform
+# perceptual space (values are J'/a'/b' units, roughly JND ~2.3).
+CAM16_DELTA_E_MEAN_THRESHOLD = 10.0
+CAM16_DELTA_E_MAX_THRESHOLD = 30.0
 
 # AA6 — Kee–Farid's deterministic 8-statistic retouching vector.  This is a
 # read-only diagnostic; its corpus-calibrated 1–5 mapping is deliberately not
@@ -1239,6 +1245,76 @@ def compute_kee_farid_vector(
 
 
 
+def detect_cam16_delta_e(
+    img_bgr: np.ndarray,
+    reference_img_bgr: np.ndarray,
+    skin_mask: Optional[np.ndarray] = None,
+) -> Dict[str, Any]:
+    """K1: mean/max CAM16-UCS perceptual colour difference vs the reference.
+
+    Exact uniform-space ΔE (Li et al. 2017) on skin pixels; complements
+    ``detect_color_drift`` (hue-only, Lab) by catching combined
+    lightness/chroma/hue appearance shifts.
+
+    Args:
+        img_bgr: (H, W, 3) BGR image after processing.
+        reference_img_bgr: (H, W, 3) BGR image before processing.
+        skin_mask: Optional (H, W) mask; ΔE is measured inside it.
+
+    Returns:
+        Detector dict with mean/max ΔE and a flagged verdict.
+    """
+    from .color_science import bgr_to_cam16_ucs, cam16_ucs_delta_e
+
+    if img_bgr.shape != reference_img_bgr.shape:
+        return {
+            "status": QA_STATUS_NOT_RUN,
+            "score": None,
+            "flagged": False,
+            "reason": "reference/image shape mismatch",
+        }
+
+    # Perf: CAM16 conversion is pure-NumPy and costs ~0.7 ms/MPx per image.
+    # Stride-subsample large inputs before conversion — mean/p99.5 statistics
+    # over skin are statistically stable on a 4x-decimated grid, and this
+    # keeps the QA hot path (every render, every recipe) affordable.
+    stride = 1
+    h, w = img_bgr.shape[:2]
+    if h * w > 256 * 256:
+        stride = 2
+    if h * w > 1024 * 1024:
+        stride = 4
+    if stride > 1:
+        img_bgr = img_bgr[::stride, ::stride]
+        reference_img_bgr = reference_img_bgr[::stride, ::stride]
+        if skin_mask is not None:
+            skin_mask = skin_mask[::stride, ::stride]
+
+    delta = cam16_ucs_delta_e(
+        _to_u8_for_analysis(img_bgr), _to_u8_for_analysis(reference_img_bgr)
+    )
+    if skin_mask is not None:
+        m = skin_mask.astype(np.float32, copy=False)
+        if m.max() > 1.5:
+            m = m / 255.0
+        inside = delta[m > 0.5]
+        measured = inside if inside.size > 0 else delta
+    else:
+        measured = delta
+
+    mean_de = float(np.mean(measured))
+    max_de = float(np.percentile(measured, 99.5))
+    flagged = mean_de > CAM16_DELTA_E_MEAN_THRESHOLD or max_de > CAM16_DELTA_E_MAX_THRESHOLD
+    return {
+        "status": QA_STATUS_FLAGGED if flagged else QA_STATUS_PASSED,
+        "score": mean_de,
+        "mean_delta_e": mean_de,
+        "max_delta_e": max_de,
+        "flagged": flagged,
+        "reason": "CAM16-UCS skin appearance shift beyond budget" if flagged else None,
+    }
+
+
 def run_all(
     img_bgr: np.ndarray,
     skin_mask: Optional[np.ndarray] = None,
@@ -1314,6 +1390,12 @@ def run_all(
         result["harmony"] = _detector_failure("harmony", exc)
     if reference_img_bgr is not None:
         try:
+            result["cam16_delta_e"] = detect_cam16_delta_e(
+                img_bgr, reference_img_bgr, skin_mask=skin_mask
+            )
+        except Exception as exc:
+            result["cam16_delta_e"] = _detector_failure("cam16_delta_e", exc)
+        try:
             result["perceived_retouching"] = perceived_retouching_vector(
                 img_bgr,
                 reference_img_bgr,
@@ -1351,6 +1433,7 @@ _QA_MESSAGES = {
     "pore_spectrum": "Skin pore-spectrum loss detected — may appear plastic",
     "asymmetry": "Asymmetric over-smoothing detected — one face zone over-retouched",
     "skin_score": "Skin quality score low — plastic/over-evolved appearance",
+    "cam16_delta_e": "CAM16-UCS skin appearance shift detected — perceptual ΔE beyond budget",
 }
 
 _QA_THRESHOLDS_BY_DETECTOR = {
@@ -1362,6 +1445,8 @@ _QA_THRESHOLDS_BY_DETECTOR = {
     "color_drift": COLOR_DRIFT_THRESHOLD,
     "pore_spectrum": PORE_SPECTRUM_THRESHOLD,
     "asymmetry": ASYMMETRY_THRESHOLD,
+    # cam16_delta_e gates on the mean ΔE (max is a secondary signal in details).
+    "cam16_delta_e": CAM16_DELTA_E_MEAN_THRESHOLD,
     # skin_score is informational (soft); no hard gate threshold.
 }
 
