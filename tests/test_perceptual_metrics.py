@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import cv2
 import numpy as np
+import pytest
 
 from retouch.input_rescue import analyze_input_quality
 from retouch.perceptual_metrics import facial_feature_contrast, skin_homogeneity_state
@@ -45,6 +46,29 @@ def test_missing_skin_is_low_confidence_not_a_fake_measurement():
     regions.skin = None
     report = facial_feature_contrast(_face(_regions()), regions)
     assert all(item.confidence == 0.0 for item in report.values())
+
+
+def test_feature_confidence_is_pure_support_size_not_an_evidence_ranking():
+    # RESEARCH_RETOUCH_REMAINING_GAPS_2026_09_15.md #4 flags that this
+    # confidence is "a support-size heuristic, not a correctness probability".
+    # This test pins the exact relationship: confidence is a deterministic,
+    # monotonic function of min(feature_pixels, surround_pixels) alone, with
+    # no other signal (chroma, luminance contrast, etc.) contributing. Two
+    # measurements with the same pixel counts but very different photographed
+    # content must report identical confidence -- if this ever fails after an
+    # intentional change, the "confidence == support size" framing used in
+    # the gap research is stale and needs correcting alongside the code.
+    regions = _regions()
+    plain = facial_feature_contrast(_face(regions), regions)
+    darker = facial_feature_contrast(_face(regions, dark_lips=True), regions)
+
+    assert plain["lips"].feature_pixels == darker["lips"].feature_pixels
+    assert plain["lips"].surround_pixels == darker["lips"].surround_pixels
+    assert plain["lips"].confidence == darker["lips"].confidence
+    assert abs(darker["lips"].luminance_contrast) > abs(plain["lips"].luminance_contrast)
+
+    expected = min(plain["lips"].feature_pixels, plain["lips"].surround_pixels) / 500.0
+    assert plain["lips"].confidence == pytest.approx(min(expected, 1.0))
 
 
 def test_homogeneity_separates_chroma_blotch_and_pore_retention():
