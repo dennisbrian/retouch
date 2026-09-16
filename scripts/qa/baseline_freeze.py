@@ -128,7 +128,15 @@ def freeze_one_asset(
     p7 = result.p7_diagnostics or {}
     row["p7_diagnostics"] = _json_safe(p7)
     if not p7:
-        unknowns.append("p7_diagnostics empty -- no P7 ownership decision recorded for this asset")
+        # Not actually unknown: cross_region_skin (params.py) defaults to 0.0
+        # and deliberately has recipe_key=None -- no recipe can ever set it,
+        # only an explicit CLI flag or GUI slider override. p7_diagnostics is
+        # empty on every asset under every recipe by construction, not
+        # because P7 declined to run on this particular multi-face case.
+        row["p7_diagnostics_explanation"] = (
+            "cross_region_skin defaults to 0.0 with no recipe source (params.py) -- "
+            "P7 cannot run under any recipe unless a caller explicitly overrides it"
+        )
 
     fa02 = result.fa02_diagnostics or []
     row["fa02_diagnostics"] = _json_safe(fa02)

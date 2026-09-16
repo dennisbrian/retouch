@@ -62,7 +62,7 @@ def test_freeze_one_asset_flags_missing_ground_truth(tmp_path, monkeypatch):
     assert row["status"] == "processed"
     assert row["ground_truth_available"] is False
     assert any("no reviewed per-region ground-truth" in u for u in row["unknowns"])
-    assert any("p7_diagnostics empty" in u for u in row["unknowns"])
+    assert "cross_region_skin defaults to 0.0" in row["p7_diagnostics_explanation"]
     assert any("fa02_diagnostics all None" in u for u in row["unknowns"])
 
 
