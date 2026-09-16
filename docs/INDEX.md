@@ -35,6 +35,12 @@ output verification.
 
 ## Plans (`docs/plans/`)
 - `MASTER_PLAN.md` — Overall roadmap
+- [Proposed P9: support usability and selective retouch research — 2026-09-11](plans/RESEARCH_P9_SELECTIVE_RETOUCH_PROPOSAL_2026_09_11.md)
+  — Provisional topic after P8; current-code and six-primary-source review of
+  evidence calibration, accepted-region errors, coverage, and abstention
+- [Proposed P9 research protocol — 2026-09-11](plans/PLAN_P9_SELECTIVE_RETOUCH_RESEARCH_2026_09_11.md)
+  — P8 support-usability pilot followed by independent policy qualification
+  and a separate P7 ownership/render study; no experiments run or roadmap adoption
 - [P8 apparent-age cue validity research — 2026-09-10](plans/RESEARCH_P8_CUE_VALIDITY_2026_09_10.md)
   — Primary-source and current-code review correcting the earlier P8 drafts;
   separates image descriptors, apparent-age associations and perceptual editing
