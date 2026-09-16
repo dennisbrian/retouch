@@ -110,10 +110,17 @@ def freeze_one_asset(
     if result.face_count == 0:
         unknowns.append("zero faces detected -- per-face pipeline did not run on this asset")
 
+    # result.qa is FLAGGED-ONLY (see qa_detectors.run_qa_with_evidence's own
+    # docstring) -- do not use it to compute a per-detector flag rate, since a
+    # detector absent from every asset's qa list would then be silently
+    # dropped from the denominator instead of counted as flagged=False.
+    # result.qa_evidence is the complete map (every ALL_DETECTOR_NAMES entry,
+    # every asset), which is what summarize_qa_signals below actually needs.
     row["qa_signals"] = [_json_safe(warning) for warning in (result.qa or [])]
     row["qa_signals_note"] = (
         "QA detector scores/flags are heuristic signals against fixed thresholds, "
-        "not reviewed defect labels -- a flagged=True entry is not a confirmed mistake"
+        "not reviewed defect labels -- a flagged=True entry is not a confirmed mistake. "
+        "This list is FLAGGED-ONLY; use qa_evidence for the complete per-detector record."
     )
 
     row["safe_auto_decisions"] = _json_safe(result.safe_auto_decisions or [])
@@ -152,6 +159,16 @@ def freeze_one_asset(
 def summarize_qa_signals(rows: List[Mapping[str, Any]]) -> Dict[str, Any]:
     """Per-detector flag rate across assets -- a cross-asset pattern, not a verdict.
 
+    Reads ``row["qa_evidence"]`` (the complete per-detector map, every asset),
+    NOT ``row["qa_signals"]`` -- the latter is the engine's flagged-only list
+    (qa_detectors.run_qa_with_evidence's own contract), so a detector that is
+    never flagged would silently vanish from both numerator and denominator
+    instead of counting as a real "not flagged" observation. Only detectors
+    with status "checked-pass"/"checked-flagged" count toward total_count;
+    "not-run"/"unavailable" entries are excluded rather than treated as a
+    flagged=False vote, since that status means the detector was not actually
+    evaluated on that asset.
+
     A detector flagged on every asset is worth surfacing loudly (either a real
     shared defect at this recipe/resolution, or a miscalibrated/broken
     detector) but this function does not decide which; that needs reviewed
@@ -159,14 +176,14 @@ def summarize_qa_signals(rows: List[Mapping[str, Any]]) -> Dict[str, Any]:
     """
     per_detector: Dict[str, Dict[str, Any]] = {}
     for row in rows:
-        for signal in row.get("qa_signals", []):
-            detector = signal.get("detector")
-            if detector is None:
+        for detector, evidence in (row.get("qa_evidence") or {}).items():
+            status = evidence.get("status")
+            if status not in ("checked-pass", "checked-flagged"):
                 continue
             entry = per_detector.setdefault(detector, {"flagged_count": 0, "total_count": 0, "scores": []})
             entry["total_count"] += 1
-            entry["scores"].append(signal.get("score"))
-            if signal.get("flagged"):
+            entry["scores"].append(evidence.get("score"))
+            if evidence.get("flagged"):
                 entry["flagged_count"] += 1
     for detector, entry in per_detector.items():
         entry["flagged_fraction"] = round(entry["flagged_count"] / entry["total_count"], 3) if entry["total_count"] else None

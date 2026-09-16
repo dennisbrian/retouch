@@ -77,15 +77,44 @@ def test_freeze_one_asset_handles_unreadable_image(tmp_path):
 
 def test_summarize_qa_signals_reports_flag_fraction():
     rows = [
-        {"qa_signals": [{"detector": "banding", "flagged": True, "score": 0.9}]},
-        {"qa_signals": [{"detector": "banding", "flagged": True, "score": 0.8}]},
-        {"qa_signals": [{"detector": "banding", "flagged": False, "score": 0.1}]},
+        {"qa_evidence": {"banding": {"status": "checked-flagged", "flagged": True, "score": 0.9}}},
+        {"qa_evidence": {"banding": {"status": "checked-flagged", "flagged": True, "score": 0.8}}},
+        {"qa_evidence": {"banding": {"status": "checked-pass", "flagged": False, "score": 0.1}}},
     ]
     summary = baseline_freeze.summarize_qa_signals(rows)
 
     assert summary["banding"]["flagged_count"] == 2
     assert summary["banding"]["total_count"] == 3
     assert summary["banding"]["flagged_fraction"] == round(2 / 3, 3)
+
+
+def test_summarize_qa_signals_excludes_not_run_and_unavailable():
+    rows = [
+        {"qa_evidence": {"banding": {"status": "checked-flagged", "flagged": True, "score": 0.9}}},
+        {"qa_evidence": {"banding": {"status": "not-run", "flagged": False, "score": None}}},
+        {"qa_evidence": {"banding": {"status": "unavailable", "flagged": False, "score": None}}},
+    ]
+    summary = baseline_freeze.summarize_qa_signals(rows)
+
+    assert summary["banding"]["total_count"] == 1
+    assert summary["banding"]["flagged_fraction"] == 1.0
+
+
+def test_summarize_qa_signals_counts_unflagged_detector_as_not_flagged_not_absent():
+    # A detector never flagged on any asset (real "not-run" is a different
+    # status) must still show total_count == asset count with flagged_count
+    # 0 -- not disappear from the summary entirely, which is the bug this
+    # test guards: reading qa_signals (flagged-only) instead of qa_evidence
+    # (complete map) would silently drop this detector.
+    rows = [
+        {"qa_evidence": {"asymmetry": {"status": "checked-pass", "flagged": False, "score": 0.1}}},
+        {"qa_evidence": {"asymmetry": {"status": "checked-pass", "flagged": False, "score": 0.2}}},
+    ]
+    summary = baseline_freeze.summarize_qa_signals(rows)
+
+    assert summary["asymmetry"]["total_count"] == 2
+    assert summary["asymmetry"]["flagged_count"] == 0
+    assert summary["asymmetry"]["flagged_fraction"] == 0.0
 
 
 def test_freeze_one_asset_flags_zero_faces(tmp_path):
