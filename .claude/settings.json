@@ -21,6 +21,23 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/uncommitted-changes-check.sh",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/stop-pytest-bg.sh",
+            "asyncRewake": true,
+            "timeout": 900
+          }
+        ]
+      }
     ]
   }
 }
