@@ -542,4 +542,11 @@ def run_desktop(**runtime_kwargs: Any) -> bool:
 
 
 if __name__ == "__main__":
+    # The engine's FaceProcessorPool uses the "spawn" start method. In a
+    # frozen build each worker re-executes this binary, and without
+    # freeze_support() every worker boots the whole desktop app instead of
+    # running its task, so renders never finish.
+    import multiprocessing
+
+    multiprocessing.freeze_support()
     run_desktop()
