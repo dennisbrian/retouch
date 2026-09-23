@@ -194,7 +194,9 @@ def _face_index(selection: Any, count: int) -> Optional[int]:
     try:
         index = int(selection)
     except (TypeError, ValueError):
-        return None
+        # Only the explicit tokens above mean "all faces"; a malformed target
+        # must not silently broaden a face-scoped edit to every face.
+        raise ValueError(f"Face selection {selection!r} is not recognised; choose a face again.")
     if index < 0 or index >= count:
         raise ValueError(f"Face {selection} is not available; detect faces again.")
     return index

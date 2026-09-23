@@ -493,3 +493,17 @@ def test_explicit_rebase_warns_that_masks_keep_old_coordinates():
 
     fresh = gui.on_advanced_processed_result(processed, [], None, [])
     assert "rebase warning" not in fresh[8].lower()
+
+
+def test_malformed_face_selection_is_rejected_not_treated_as_all_faces():
+    # T5c (RESEARCH_RETOUCH_TARGET_AND_PREVIEW_PARITY_2026_09_23 §5): a
+    # nonnumeric unrecognised value returned None, which means "all faces".
+    import pytest
+    from retouch.advanced_retouch import _face_index
+
+    assert _face_index("All faces", 2) is None
+    assert _face_index(None, 2) is None
+    assert _face_index("1", 2) == 1
+    for bad in ("Face 1", "left", object()):
+        with pytest.raises(ValueError):
+            _face_index(bad, 2)
