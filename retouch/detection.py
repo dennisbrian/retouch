@@ -10,6 +10,7 @@ The detector returns a list of FaceData objects that downstream modules consume.
 from __future__ import annotations
 
 import dataclasses
+import logging
 import os
 from types import SimpleNamespace
 os.environ["TF_USE_LEGACY_KERAS"] = "1"
@@ -22,6 +23,8 @@ import numpy as np
 from .parsing import FaceRegions
 from .lighting import LightDirection
 from .utils import inter_eye_distance
+
+_logger = logging.getLogger(__name__)
 
 # Resolve model paths relative to this package
 _MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models")
@@ -354,6 +357,10 @@ class FaceDetector:
                     confidence=1.0,
                     confidence_source="mediapipe_presence_unavailable",
                 ))
+            # Gate BEFORE the zero-face check: when the only main-pass hit
+            # is a background FP, dropping it lets the tiled fallback look
+            # for the real subject instead of being skipped.
+            faces, person_mask = self._person_gate(img_bgr, faces)
             if not faces:
                 # Tiling fallback: FaceMesh's internal detector samples a
                 # fixed 128x128 crop, so mid-size faces (~250 px) inside a
@@ -362,7 +369,9 @@ class FaceDetector:
                 # the internal detector. Measured +25-36 ms, gated to the
                 # zero-face case so working images pay nothing. Recovers
                 # documented misses (DSCF4454-class, TODO_WEEK_2026_07_20).
-                faces = self._detect_tiled_legacy(img_bgr, w, h)
+                faces, _ = self._person_gate(
+                    img_bgr, self._detect_tiled_legacy(img_bgr, w, h), person_mask
+                )
             else:
                 # Dual-scale augmentation: FaceMesh detectability is
                 # scale-dependent, and the scale it misses at differs per
@@ -374,7 +383,7 @@ class FaceDetector:
                 # poles: posters person-coverage 0.000 vs subjects 1.000;
                 # see docs/plans/RESEARCH_DETECTION_RECALL_2026_08_19.md).
                 faces = faces + self._dual_scale_augment_legacy(
-                    img_bgr, w, h, faces
+                    img_bgr, w, h, faces, person_mask=person_mask
                 )
             return faces
 
@@ -555,7 +564,81 @@ class FaceDetector:
                         confidence_source="mediapipe_presence_unavailable",
                     ))
 
+        faces, _ = self._person_gate(img_bgr, faces)
         return faces
+
+    # A detection whose central region has less person-mask coverage than
+    # this is treated as a background false positive and dropped. Same pole
+    # and threshold as the dual-scale gate below. Measured on the 2026-09-19/
+    # 20 cosplay shoots (439 images, 435 detections): 6 FPs (bokeh, night
+    # sky, costume, wall, legs) all at coverage <= 0.212; lowest real face
+    # 0.575. Coverage only — texture vetoes are unsafe (real faces reach
+    # Laplacian-var 1-170 under blur/makeup, RESEARCH_POSTERFP_VETO_2026_08_19).
+    _MAIN_PERSON_GATE_COVERAGE = 0.5
+
+    @staticmethod
+    def _central_person_coverage(
+        mask: np.ndarray, bbox: Tuple[int, int, int, int]
+    ) -> Optional[float]:
+        """Fraction of the bbox's central 60% (20% inset per side) that the
+        person mask covers, or None when that region is empty."""
+        mh, mw = mask.shape[:2]
+        x, y, bw, bh = bbox
+        dx, dy = int(bw * 0.2), int(bh * 0.2)
+        x1, y1 = max(0, x + dx), max(0, y + dy)
+        x2, y2 = min(mw, x + bw - dx), min(mh, y + bh - dy)
+        if x2 <= x1 or y2 <= y1:
+            return None
+        region = mask[y1:y2, x1:x2]
+        if region.size == 0:
+            return None
+        return float((region > 0.5).mean())
+
+    def _person_gate(
+        self,
+        img_bgr: np.ndarray,
+        faces: List[FaceData],
+        person_mask: Optional[np.ndarray] = None,
+    ) -> Tuple[List[FaceData], Optional[np.ndarray]]:
+        """Drop detections that do not sit on a person (background FP veto).
+
+        Fails OPEN — unlike the dual-scale gate — because here the candidates
+        include the subject: if the segmenter raises or returns an unusable
+        mask, every face is kept. Returns ``(kept_faces, person_mask)`` so the
+        caller can reuse the mask; the mask is None when unavailable.
+        """
+        if not faces:
+            return faces, person_mask
+        h, w = img_bgr.shape[:2]
+        try:
+            if person_mask is None:
+                person_mask = self.segment_person(img_bgr)
+            mask = np.asarray(person_mask, dtype=np.float32)
+            if mask.ndim != 2:
+                mask = np.squeeze(mask)
+            if mask.ndim != 2:
+                raise ValueError(f"person mask has shape {mask.shape}")
+            if mask.shape != (h, w):
+                mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_LINEAR)
+        except Exception as exc:
+            _logger.warning(
+                "Person gate skipped (segmenter unavailable: %s: %s); "
+                "keeping all %d detection(s)", type(exc).__name__, exc, len(faces)
+            )
+            return faces, None
+        kept: List[FaceData] = []
+        for face in faces:
+            coverage = self._central_person_coverage(mask, face.bbox)
+            if coverage is None or coverage >= self._MAIN_PERSON_GATE_COVERAGE:
+                kept.append(face)
+            else:
+                _logger.info(
+                    "Person gate: dropped detection bbox=%s (person coverage "
+                    "%.3f < %.2f) as a background false positive",
+                    tuple(int(v) for v in face.bbox), coverage,
+                    self._MAIN_PERSON_GATE_COVERAGE,
+                )
+        return kept, mask
 
     def segment_person(self, img_bgr: np.ndarray) -> np.ndarray:
         """Return a float mask (H, W) separating person from background.
@@ -746,6 +829,7 @@ class FaceDetector:
         w: int,
         h: int,
         existing: List["FaceData"],
+        person_mask: Optional[np.ndarray] = None,
     ) -> List[FaceData]:
         """Second FaceMesh pass at 1024px, adding faces the main pass missed.
 
@@ -787,9 +871,10 @@ class FaceDetector:
         if not candidates:
             return []
 
-        # Person gate (central 40% of each candidate box).
+        # Person gate (central 60% of each candidate box; reuses the main
+        # pass's mask when the caller already computed one).
         try:
-            mask = self.segment_person(img_bgr)
+            mask = person_mask if person_mask is not None else self.segment_person(img_bgr)
         except Exception:
             # Segmenter unavailable: this augmentation is a recall nicety,
             # not a correctness requirement — decline to add anything rather
@@ -801,15 +886,7 @@ class FaceDetector:
                 continue
             if any(_iou(cand.bbox, a.bbox) > 0.5 for a in additions):
                 continue
-            x, y, bw, bh = cand.bbox
-            dx, dy = int(bw * 0.2), int(bh * 0.2)
-            x1, y1 = max(0, x + dx), max(0, y + dy)
-            x2, y2 = min(w, x + bw - dx), min(h, y + bh - dy)
-            if x2 <= x1 or y2 <= y1:
-                continue
-            region = mask[y1:y2, x1:x2]
-            if region.size == 0:
-                continue
-            if float((region > 0.5).mean()) >= self._PERSON_GATE_COVERAGE:
+            coverage = self._central_person_coverage(mask, cand.bbox)
+            if coverage is not None and coverage >= self._PERSON_GATE_COVERAGE:
                 additions.append(cand)
         return additions
