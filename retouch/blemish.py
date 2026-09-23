@@ -207,6 +207,12 @@ class BlemishRemover:
         dilate_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_dilate, k_dilate))
         result = cv2.dilate(result, dilate_kernel, iterations=1)
 
+        # Final write domain: closing/dilation above can bridge a thin excluded
+        # gap (protected mark, lash line) between two eligible defects, and the
+        # repair engines rewrite every nonzero pixel. Clip back to eligible
+        # skin after ALL expansion (RESEARCH_RETOUCH_PROTECTION_LIFECYCLE §3).
+        result = cv2.bitwise_and(result, skin_binary)
+
         return result
 
 
