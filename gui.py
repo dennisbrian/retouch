@@ -1491,7 +1491,11 @@ def process_image(
                             if Path(curr_path).suffix.lower() in RAW_EXTENSIONS
                             else "uint8"
                         ),
-                        raw_settings={"prefer_16bit": True, "raw_decoder": "rawpy"},
+                        raw_settings={
+                            "prefer_16bit": True,
+                            "raw_decoder": "rawpy",
+                            "raf_exposure_bias": True,
+                        },
                         detector_backend=_detector_cache_descriptor(engine_for_cache),
                         engine_version=__version__,
                     )

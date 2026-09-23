@@ -49,6 +49,12 @@ class ColorContext:
             into the working profile. An embedded sRGB profile may be tagged
             without requiring a non-identity transform.
         source_profile_name: Best-effort human-readable ICC description.
+        raw_exposure_bias_ev: RAW decode only. The camera's recorded exposure
+            bias as read from the file (Fujifilm RAF header record 0x9650,
+            ExifTool ``RawExposureBias``), or ``None`` if not read/absent.
+        raw_exposure_gain_ev: RAW decode only. Linear gain actually applied
+            at decode, in EV (after clamping); ``0.0`` when the decode ran
+            but no gain was applied, ``None`` for non-RAW sources.
     """
 
     working_space: str = WORKING_SPACE_SRGB
@@ -62,6 +68,8 @@ class ColorContext:
     transform_intent: Optional[str] = None
     black_point_compensation: Optional[bool] = None
     alpha_mode: Optional[str] = None
+    raw_exposure_bias_ev: Optional[float] = None
+    raw_exposure_gain_ev: Optional[float] = None
 
     def __post_init__(self) -> None:
         if self.working_space != WORKING_SPACE_SRGB:
@@ -135,6 +143,8 @@ class ColorContext:
             "transform_intent": self.transform_intent,
             "black_point_compensation": self.black_point_compensation,
             "alpha_mode": self.alpha_mode,
+            "raw_exposure_bias_ev": self.raw_exposure_bias_ev,
+            "raw_exposure_gain_ev": self.raw_exposure_gain_ev,
         }
 
     @classmethod
@@ -171,10 +181,15 @@ class ColorContext:
     def raw_srgb_context(
         cls,
         working_profile: Optional[bytes],
+        *,
+        raw_exposure_bias_ev: Optional[float] = None,
+        raw_exposure_gain_ev: Optional[float] = None,
     ) -> "ColorContext":
         """Build a context for a RAW decoder that emits sRGB pixels."""
         return cls(
             working_profile=working_profile,
             source_kind=SOURCE_RAW_SRGB,
             conversion_applied=False,
+            raw_exposure_bias_ev=raw_exposure_bias_ev,
+            raw_exposure_gain_ev=raw_exposure_gain_ev,
         )

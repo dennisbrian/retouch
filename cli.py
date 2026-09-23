@@ -212,7 +212,7 @@ def _process_single(args):
      max_dim, compare_flag, global_only, bit_depth, fail_on_qa, save_session,
      smart, linear_raw, raw_exposure, raw_contrast, raf_decoder,
      raf2jpeg_path, raf2jpeg_quality, fuji_match_strength, optical_correction,
-     input_root, destination_stem) = args
+     input_root, destination_stem, raf_exposure_bias) = args
     try:
         fmt = output_format(img_path, format_arg)
         # For 16-bit, force PNG or TIFF
@@ -246,6 +246,7 @@ def _process_single(args):
                 fuji_match_strength=fuji_match_strength,
                 optical_correction=optical_correction,
                 correction_status=correction_status,
+                apply_exposure_bias=raf_exposure_bias,
             )
             if optical_correction:
                 print(f"  ℹ {img_path.name}: Lensfun {correction_status.get('reason') or correction_status.get('applied', ())}")
@@ -982,6 +983,12 @@ def main() -> None:
         metavar="0-1",
         help="Camera-preview calibration strength with --raf-decoder rawpy-fuji-match (default: 0.85)",
     )
+    parser.add_argument(
+        "--no-raf-exposure-bias",
+        action="store_true",
+        help="With --raf-decoder rawpy (default): do not undo the RAF's recorded "
+             "RawExposureBias at decode (restores the pre-2026-09 darker decode)",
+    )
 
     args = parser.parse_args()
 
@@ -1095,6 +1102,7 @@ def main() -> None:
             raf2jpeg_quality=args.raf2jpeg_quality,
             fuji_match_strength=args.fuji_match_strength,
             optical_correction=args.optical_correction,
+            apply_exposure_bias=not args.no_raf_exposure_bias,
         )
 
     files = input_plan.selected_paths
@@ -1185,6 +1193,7 @@ def main() -> None:
         "max_input_pixels": args.max_input_pixels,
         "multi_frame_policy": args.multi_frame_policy,
         "raw_decoder": args.raf_decoder,
+        "raf_exposure_bias": not args.no_raf_exposure_bias,
         "raw_jpeg_policy": args.raw_jpeg_policy,
     })
     if args.resume_plan:
@@ -1331,7 +1340,8 @@ def main() -> None:
              args.linear_raw, args.raw_exposure, args.raw_contrast,
              args.raf_decoder, args.raf2jpeg_path, args.raf2jpeg_quality,
              args.fuji_match_strength, args.optical_correction,
-             recursive_root, output_stems.get(_path_key(f)))
+             recursive_root, output_stems.get(_path_key(f)),
+             not args.no_raf_exposure_bias)
             for f in files
         ]
         with ProcessPoolExecutor(
@@ -1393,6 +1403,7 @@ def main() -> None:
                             fuji_match_strength=args.fuji_match_strength,
                             optical_correction=args.optical_correction,
                             correction_status=correction_status,
+                            apply_exposure_bias=not args.no_raf_exposure_bias,
                         )
                     except (OSError, ValueError, RuntimeError) as e:
                         failed += 1

@@ -293,7 +293,128 @@ def write_image_16bit(
     return True
 
 
-def read_image_16bit(path: Union[str, Path]) -> np.ndarray:
+# --- RAW exposure bias -------------------------------------------------------
+# Fujifilm bodies meter RAW data below the rendered exposure to leave highlight
+# headroom (DR100 ~ -1.7 EV, DR200 ~ -2.7 EV on the X-T4) and record the
+# offset in the RAF header's own metadata directory as record 0x9650 (two
+# big-endian int16: numerator, denominator), which ExifTool reports as
+# ``RAF:RawExposureBias``. This is NOT ``ExposureBiasValue`` /
+# ``ExposureCompensation`` (the user's EV dial in the embedded JPEG's EXIF),
+# which is 0 on files carrying a -1.7 EV raw bias.
+_RAF_MAGIC = b"FUJIFILMCCD-RAW "
+_RAF_META_DIR_OFFSET = 92  # u32 BE offset, then u32 BE length, of the meta dir
+_RAF_TAG_RAW_EXPOSURE_BIAS = 0x9650
+# Applied gain is clamped to [0, +3] EV: a positive recorded bias would darken,
+# and anything beyond +3 EV is not a plausible headroom offset.
+RAW_EXPOSURE_BIAS_MAX_GAIN_EV = 3.0
+# Linear-light knee of the highlight shoulder (~ sRGB 188/255). Below it the
+# full 2**-bias gain applies exactly, so mid-tones and skin keep full gain.
+RAW_EXPOSURE_SHOULDER_KNEE = 0.5
+
+
+def read_raf_exposure_bias(path: Union[str, Path]) -> Optional[float]:
+    """Return a RAF's recorded ``RawExposureBias`` in EV, or ``None``.
+
+    Parses the RAF header's metadata directory directly (no ExifTool/rawpy
+    dependency). Returns ``None`` for non-RAF files, truncated or malformed
+    headers, a missing record, or a zero denominator. Never raises.
+    """
+    try:
+        source = Path(path)
+        if source.suffix.lower() != ".raf":
+            return None
+        size = source.stat().st_size
+        with open(source, "rb") as fh:
+            header = fh.read(_RAF_META_DIR_OFFSET + 8)
+            if len(header) < _RAF_META_DIR_OFFSET + 8 or header[:16] != _RAF_MAGIC:
+                return None
+            offset, length = struct.unpack_from(">II", header, _RAF_META_DIR_OFFSET)
+            if length < 4 or offset + length > size or length > 16 * 1024 * 1024:
+                return None
+            fh.seek(offset)
+            directory = fh.read(length)
+        count = struct.unpack_from(">I", directory, 0)[0]
+        pos = 4
+        for _ in range(count):
+            if pos + 4 > len(directory):
+                break
+            tag, rec_size = struct.unpack_from(">HH", directory, pos)
+            pos += 4
+            if tag == _RAF_TAG_RAW_EXPOSURE_BIAS:
+                if rec_size != 4 or pos + 4 > len(directory):
+                    return None
+                num, den = struct.unpack_from(">hh", directory, pos)
+                return None if den == 0 else num / den
+            pos += rec_size
+    except (OSError, struct.error, ValueError) as exc:
+        logger.debug("RawExposureBias unreadable for %s: %s", path, exc)
+    return None
+
+
+def apply_raw_exposure_gain(linear_rgb: np.ndarray, gain_ev: float) -> np.ndarray:
+    """Scale linear RGB in [0, 1] by ``2**gain_ev`` with a highlight shoulder.
+
+    Pixels whose brightest channel stays at or below
+    :data:`RAW_EXPOSURE_SHOULDER_KNEE` after the gain get the exact gain.
+    Above it, the brightest channel is compressed with an extended-Reinhard
+    curve (slope 1 at the knee, gained white ``2**gain_ev`` -> 1.0); all
+    three channels are scaled by the same factor, then blended toward that
+    compressed peak by ``(peak - knee) / (white - knee)``. Just above the knee
+    channel ratios (hue) are kept; toward gained white pixels go neutral, so
+    sensor-clipped regions lose their reconstruction cast. No channel
+    exceeds 1.0 -- no hard clip. Operates in place on float arrays and
+    returns the array.
+    """
+    gain = float(2.0 ** gain_ev)
+    if gain <= 1.0:
+        return linear_rgb
+    linear_rgb *= gain
+    knee = RAW_EXPOSURE_SHOULDER_KNEE
+    peak = linear_rgb.max(axis=-1)
+    over = peak > knee
+    if not np.any(over):
+        return linear_rgb
+    white = (gain - knee) / (1.0 - knee)  # gained input white, in shoulder units
+    m = peak[over]
+    u = (m - knee) / (1.0 - knee)
+    compressed = knee + (1.0 - knee) * (u * (1.0 + u / (white * white)) / (1.0 + u))
+    px = linear_rgb[over] * (compressed / m)[:, None]
+    # Desaturate toward the compressed peak as the pixel approaches gained
+    # white (weight 0 at the knee, 1 at white). Sensor-clipped areas come out
+    # of LibRaw with a reconstruction cast (e.g. a teal sky disc on
+    # DSCF4348); keeping their ratios would carry that cast into view.
+    weight = (u / white)[:, None]
+    px += (compressed[:, None] - px) * weight
+    linear_rgb[over] = px
+    np.clip(linear_rgb, 0.0, 1.0, out=linear_rgb)
+    return linear_rgb
+
+
+def _raw_exposure_gain_ev(path: Path, decode_info: Optional[Dict[str, Any]]) -> float:
+    """Resolve the gain (EV) to apply for *path*'s recorded exposure bias."""
+    bias = read_raf_exposure_bias(path)
+    if decode_info is not None:
+        decode_info["raw_exposure_bias_ev"] = bias
+    if bias is None:
+        logger.debug("No RawExposureBias for %s; decoding without exposure gain", path.name)
+        return 0.0
+    requested = -bias
+    gain_ev = min(max(requested, 0.0), RAW_EXPOSURE_BIAS_MAX_GAIN_EV)
+    if gain_ev != requested:
+        logger.warning(
+            "RawExposureBias %+.2f EV on %s clamped to a %+.2f EV gain (allowed 0..%+.1f)",
+            bias, path.name, gain_ev, RAW_EXPOSURE_BIAS_MAX_GAIN_EV,
+        )
+    else:
+        logger.debug("Applying %+.2f EV RawExposureBias gain to %s", gain_ev, path.name)
+    return gain_ev
+
+
+def read_image_16bit(
+    path: Union[str, Path],
+    apply_exposure_bias: bool = True,
+    decode_info: Optional[Dict[str, Any]] = None,
+) -> np.ndarray:
     """Read a 16-bit PNG/TIFF/RAW image and return float32 BGR in [0, 255].
 
     The inverse of :func:`write_image_16bit`: uint16 [0, 65535] is divided
@@ -306,6 +427,14 @@ def read_image_16bit(path: Union[str, Path]) -> np.ndarray:
         path: Filesystem path to a 16-bit (or 8-bit) PNG/TIFF, or a RAW
             camera file (``.raf``/``.cr2``/``.nef``/``.dng``/…). RAW files
             are decoded via rawpy at 16-bit when the driver supports it.
+        apply_exposure_bias: RAW only. When True (default), a Fujifilm RAF's
+            recorded ``RawExposureBias`` (see :func:`read_raf_exposure_bias`)
+            is undone by a linear gain of ``2**-bias`` -- clamped to
+            0..+3 EV, with a highlight shoulder (:func:`apply_raw_exposure_gain`)
+            -- before sRGB encoding. Missing/unreadable tag: no gain.
+        decode_info: Optional mutable dict. For RAW input it receives
+            ``raw_exposure_bias_ev`` (tag value or ``None``) and
+            ``raw_exposure_gain_ev`` (EV actually applied).
 
     Returns:
         ``(H, W, 3)`` float32 BGR image with values in [0, 255].
@@ -335,7 +464,14 @@ def read_image_16bit(path: Union[str, Path]) -> np.ndarray:
             )
         # Decode linearly, then encode IEC sRGB explicitly. rawpy's default
         # transfer is BT.709 even when output_color requests sRGB primaries.
-        srgb = linear_to_srgb(rgb16.astype(np.float32) / 65535.0)
+        linear = rgb16.astype(np.float32) / 65535.0
+        gain_ev = _raw_exposure_gain_ev(safe, decode_info) if apply_exposure_bias else 0.0
+        if decode_info is not None:
+            decode_info["raw_exposure_gain_ev"] = gain_ev
+            decode_info.setdefault("raw_exposure_bias_ev", None)
+        if gain_ev > 0.0:
+            linear = apply_raw_exposure_gain(linear, gain_ev)
+        srgb = linear_to_srgb(linear)
         return np.ascontiguousarray(srgb[..., ::-1] * 255.0, dtype=np.float32)
 
     flag = cv2.IMREAD_UNCHANGED if ext in (".png", ".tif", ".tiff") else cv2.IMREAD_COLOR
@@ -605,9 +741,10 @@ def imread_exif_with_context(
     """
     path = Path(path)
     if path.suffix.lower() in RAW_EXTENSIONS:
-        bgr = np.rint(read_image_16bit(path)).clip(0, 255).astype(np.uint8)
+        decode_info: Dict[str, Any] = {}
+        bgr = np.rint(read_image_16bit(path, decode_info=decode_info)).clip(0, 255).astype(np.uint8)
         return bgr, ColorContext.raw_srgb_context(
-            get_working_srgb_icc()
+            get_working_srgb_icc(), **decode_info
         )
     return _read_non_raw_with_color_context(path)
 
@@ -728,8 +865,13 @@ def read_raf_with_fuji_match(
     colour characteristics from the RAF's embedded camera JPEG.  It is a
     calibrated approximation of Fuji's proprietary camera processing, not a
     byte-identical replacement for it.
+
+    The RAW source is decoded *without* the RAF exposure-bias gain: the
+    calibration already learns the full tone mapping to the camera preview,
+    so the bias gain would stack a second brightening step under it and move
+    the input this path was tuned on.
     """
-    source = read_image_16bit(path)
+    source = read_image_16bit(path, apply_exposure_bias=False)
     preview = read_raf_with_raf2jpeg(path, raf2jpeg_path, quality=100)
     from .fuji_match import calibrate_to_fuji_preview
 
@@ -745,6 +887,7 @@ def imread_engine_with_context(
     fuji_match_strength: float = 0.85,
     optical_correction: bool = False,
     correction_status: Optional[Dict[str, Any]] = None,
+    apply_exposure_bias: bool = True,
 ) -> Tuple[np.ndarray, ColorContext]:
     """Load an image for the engine, using the 16-bit path for RAW.
 
@@ -782,6 +925,11 @@ def imread_engine_with_context(
         correction_status: Optional mutable dict populated with the
             correction result. This makes an unavailable backend, metadata
             mismatch, or precision-preserving skip visible to UI/CLI callers.
+        apply_exposure_bias: Default ``rawpy`` RAW path only. Undo a RAF's
+            recorded ``RawExposureBias`` at decode (see
+            :func:`read_image_16bit`); the value read and the gain applied are
+            recorded on the returned ColorContext. ``raf2jpeg`` and
+            ``rawpy-fuji-match`` never apply it.
 
     Returns:
         ``(image_bgr, color_context)``. The image is float32 [0, 255] for
@@ -800,9 +948,15 @@ def imread_engine_with_context(
     elif raw_decoder == "rawpy-fuji-match" and p.suffix.lower() == ".raf":
         image = read_raf_with_fuji_match(p, raf2jpeg_path, fuji_match_strength)
         context = ColorContext.raw_srgb_context(get_working_srgb_icc())
-    elif prefer_16bit and p.suffix.lower() in RAW_EXTENSIONS:
-        image = read_image_16bit(p)
-        context = ColorContext.raw_srgb_context(get_working_srgb_icc())
+    elif p.suffix.lower() in RAW_EXTENSIONS:
+        decode_info: Dict[str, Any] = {}
+        image = read_image_16bit(
+            p, apply_exposure_bias=apply_exposure_bias, decode_info=decode_info
+        )
+        if not prefer_16bit:
+            # Legacy uint8 RAW contract (same quantisation as imread_exif).
+            image = np.rint(image).clip(0, 255).astype(np.uint8)
+        context = ColorContext.raw_srgb_context(get_working_srgb_icc(), **decode_info)
     else:
         image, context = imread_exif_with_context(p)
     if optical_correction:
@@ -824,6 +978,7 @@ def imread_engine(
     fuji_match_strength: float = 0.85,
     optical_correction: bool = False,
     correction_status: Optional[Dict[str, Any]] = None,
+    apply_exposure_bias: bool = True,
 ) -> np.ndarray:
     """Load an image for the engine while retaining the legacy array API."""
     return imread_engine_with_context(
@@ -835,6 +990,7 @@ def imread_engine(
         fuji_match_strength=fuji_match_strength,
         optical_correction=optical_correction,
         correction_status=correction_status,
+        apply_exposure_bias=apply_exposure_bias,
     )[0]
 
 

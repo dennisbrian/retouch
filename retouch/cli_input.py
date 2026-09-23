@@ -564,6 +564,7 @@ def decode_plan_inputs(
     raf2jpeg_quality: int = 100,
     fuji_match_strength: float = 0.85,
     optical_correction: bool = False,
+    apply_exposure_bias: bool = True,
 ) -> None:
     """Run the configured decoder route without starting the retouch engine."""
     from .io import imread_engine_with_context
@@ -578,6 +579,7 @@ def decode_plan_inputs(
                 raf2jpeg_quality=raf2jpeg_quality,
                 fuji_match_strength=fuji_match_strength,
                 optical_correction=optical_correction,
+                apply_exposure_bias=apply_exposure_bias,
             )
             if image is None or getattr(image, "ndim", 0) != 3:
                 raise ValueError("decoder returned no 3-channel image")
