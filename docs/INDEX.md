@@ -35,6 +35,32 @@ output verification.
 
 ## Plans (`docs/plans/`)
 - `MASTER_PLAN.md` — Overall roadmap
+- [Retouch target identity and preview/export agreement — 2026-09-23](plans/RESEARCH_RETOUCH_TARGET_AND_PREVIEW_PARITY_2026_09_23.md)
+  — Documentation-only cache coordinate audit, preview inspection/detail limits,
+  per-face target association, and exact replay versus explicit manual rebase
+- [Proposed target and preview/export validation — 2026-09-23](plans/PLAN_RETOUCH_TARGET_AND_PREVIEW_VALIDATION_2026_09_23.md)
+  — Future cold/warm cache, coordinate, target, rebase, and photo-delivery checks;
+  no implementation, tests, or image experiments performed
+- [CLI photo input research — 2026-09-22](plans/RESEARCH_CLI_PHOTO_INPUT_2026_09_22.md)
+  — Input-selection and dry-run audit plus bounded implementation: shared input
+  plan, multiple-photo/filtering workflow, decoder checks, RAW+JPEG policy,
+  hash-verified reruns, and opt-in resource estimation; no visual-quality claim
+- [Retouch protection across operation boundaries — 2026-09-22](plans/RESEARCH_RETOUCH_PROTECTION_LIFECYCLE_2026_09_22.md)
+  — Documentation-only repair-mask containment, donor/fallback constraints,
+  cross-stage mark decisions, restoration reversing intentional corrections,
+  and combined under-eye preservation; source-backed risks and proposed controls
+- [Retouch QA validity research — 2026-09-21](plans/RESEARCH_RETOUCH_QA_VALIDITY_2026_09_21.md)
+  — Post-reference-implementation source review: geometry/skin-support validity,
+  reference loss versus back-off, mixed-scope observations, missing-measurement
+  semantics, delivery coverage, and bounded correction-map literature
+- [Proposed Retouch QA validation study — 2026-09-21](plans/PLAN_RETOUCH_QA_VALIDATION_2026_09_21.md)
+  — Documentation-only stage-pair contract, discriminating controls, preservation
+  pilot, grouped calibration, harm/benefit/abstention endpoints, and promotion gates;
+  no implementation or experiments authorized or performed
+- [Retouch improvement research — 2026-09-21](plans/RESEARCH_RETOUCH_IMPROVEMENTS_2026_09_21.md)
+  — Research-only follow-up against newer local main: QA reference boundaries,
+  EXR/color delivery findings, preservation evidence, additive correction-map
+  literature, and proposed study order; no code changes or photo experiments
 - [Face retouch algorithm research — 2026-09-05](plans/RESEARCH_FACE_RETOUCH_ALGORITHMS_2026_09_05.md)
   — Documentation-only current-code review, thirteen classical/learned algorithm
   comparisons, and seven proposed experiments for masks, blemish repair, texture,
@@ -45,10 +71,9 @@ output verification.
   restoration (FA-02), 2-factor blemish matrix (FA-03/04), reference/material
   decomposition (FA-05/06), and bounded learned assistance (FA-07)
 - [FA-01 protection-consistency and abstention-observability audit — 2026-09-05](plans/RESEARCH_FA01_PROTECTION_AND_ABSTENTION_AUDIT_2026_09_05.md)
-  — Base smoothing unprotected against marks (verified byte-identical render);
-  accessory/facial-hair protection gaps (code-read only, no corpus cases);
-  abstention observability ranked, `yaw_gate_factor`/`assess_eye_artifact_scales`
-  compute reasons that are never logged
+  — Historical smoothing-protection gap, followed by implemented guided-engine
+  protection (§1.1b) and abstention logging; non-guided-engine limits and
+  accessory/facial-hair evidence gaps remain explicit
 - `RESEARCH_COLOR_SCIENCE_2026_09_04.md` — Current-tree color-science audit and
   engineering contract: SDR sRGB baseline, ICC/RAW/high-bit/alpha findings,
   operation-domain rules, conformance matrix, and staged P3/HDR gates

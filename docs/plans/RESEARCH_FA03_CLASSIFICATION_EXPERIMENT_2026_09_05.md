@@ -3,6 +3,17 @@
 **Date:** 2026-09-05
 
 **Status:** Experimental/diagnostic only. No production code changed.
+
+**Later source-status note (2026-09-22):** The experiment and results below
+retain their September 5 baseline. Current `freckle.py` now has the narrow
+beauty-mark tie/near-tie → `ambiguous` path, and `marks.py` maps that result to
+`unknown`; the taxonomy/integration statements in §§8–9 are historical.
+The other experimental classifiers and their qualification limitations are not
+promoted by that narrow change. See the documentation-only
+[protection-lifecycle follow-up](RESEARCH_RETOUCH_PROTECTION_LIFECYCLE_2026_09_22.md)
+for current cross-operation findings. No tests or photo experiments were rerun
+for this status note.
+
 Continues `docs/plans/RESEARCH_FA03_MARK_LOCALIZATION_2026_09_05.md`
 ("Astra's report," treated as the research baseline and not re-derived
 here) with the first authorized classification experiment from that
