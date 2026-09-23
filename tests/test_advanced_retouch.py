@@ -464,3 +464,32 @@ def test_person_and_background_semantic_masks_intersect_brush():
         )
         assert result.mask[inside] == 1.0
         assert result.mask[outside] == 0.0
+
+
+def test_explicit_rebase_warns_that_masks_keep_old_coordinates():
+    # T6 (RESEARCH_RETOUCH_TARGET_AND_PREVIEW_PARITY_2026_09_23 §6): loading a
+    # new processed result with current edits replays the stored post-semantic
+    # mask at its old pixel position; it must not be reported as a plain success.
+    import gui
+    from retouch.heal import mask_to_b64
+
+    mask = np.zeros((24, 32), dtype=np.float32)
+    mask[4:12, 6:18] = 1.0
+    edit = {
+        "version": 1,
+        "image_shape": [24, 32],
+        "mode": "Adjust",
+        "operation": "exposure",
+        "strength": 20.0,
+        "semantic": "None",
+        "selection": None,
+        "mask_png_b64": mask_to_b64(mask),
+    }
+    processed = np.full((24, 32, 3), 120, dtype=np.uint8)
+
+    rebased = gui.on_advanced_processed_result(processed, [], None, [edit])
+    assert "rebase warning" in rebased[8].lower()
+    assert "1 masked edit" in rebased[8]
+
+    fresh = gui.on_advanced_processed_result(processed, [], None, [])
+    assert "rebase warning" not in fresh[8].lower()

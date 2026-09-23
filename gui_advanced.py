@@ -269,6 +269,22 @@ def _advanced_load_rgb_source(
         delivery_status = " Native uploaded-source evidence recorded."
     replay_status = f" and replayed {len(edits)} edit(s)" if edits else ""
     status = f"{status_prefix}{replay_status}.{delivery_status}"
+    if explicit_legacy_replay and edits:
+        # Rebase onto a different base is not exact replay: stored masks are
+        # the old post-semantic masks in old pixel coordinates, and Reshape
+        # re-detects and picks faces by index. Same dimensions do not mean a
+        # new reshape/detection left the face where the mask expects it.
+        n_reshape = sum(1 for e in edits if str(e.get("mode", "")) == "Reshape")
+        n_masked = len(edits) - n_reshape
+        parts = []
+        if n_masked:
+            parts.append(f"{n_masked} masked edit(s) reused their original pixel positions")
+        if n_reshape:
+            parts.append(f"{n_reshape} reshape edit(s) re-selected faces by detection index")
+        status += (
+            " Rebase warning: " + "; ".join(parts)
+            + ". They are not re-fitted to the new base; review the result before export."
+        )
     return (
         source,
         current,
