@@ -18,6 +18,11 @@ By default, this will:
 *   Save the retouched images in the output folder.
 *   Generate side-by-side comparison images (e.g. `filename_compare.jpg`).
 
+For a non-destructive preview of the exact selection and planned destinations,
+add `--dry-run --input-plan /path/to/plan.json`. The preview does not create the
+output directory or start the retouch engine. Any source-overwrite or collision
+condition is shown as a blocking execution warning.
+
 ---
 
 ## 2. Command Reference & Common Options
@@ -34,13 +39,29 @@ By default, this will:
 | **`--max-dim`** | | *Original* | Downscale the longest side of the image to `N` pixels before processing (speeds up CPU processing significantly). e.g., `--max-dim 2048`. |
 | **`--quality`** | `-q` | `95` | Compression quality for JPEG/WebP output (1–100). |
 | **`--format`** | | `same` | Output image format: `jpg`, `png`, `webp`, or `same` to match source. |
+| **`--input-list`** | | *None* | Load literal paths from a versioned JSON list; relative paths use the list's `base_dir` or directory. |
+| **`--input-plan`** | | *None* | Write the deterministic input selection, planned artifacts, and per-file results as JSON. |
+| **`--resume-plan`** | | *None* | Skip only rows whose settings, source hash, output path, and output hash still match. |
+| **`--include`** | | *None* | Include discovered paths matching a repeatable pattern. |
+| **`--exclude`** | | *None* | Exclude discovered paths matching a repeatable pattern. |
+| **`--include-hidden`** | | *Off* | Include hidden files/directories during folder discovery. |
+| **`--raw-jpeg-policy`** | | `error` | Resolve matching RAW+JPEG pairs as `raw-only`, `jpeg-only`, or `suffix`; default reports the conflict. |
+| **`--input-check`** | | `paths` | Use `headers` for container checks or `decode` for the configured decoder before rendering. |
+| **`--max-input-pixels`** | | *None* | With header/decode checks, reject images larger than the specified pixel count. |
+| **`--multi-frame-policy`** | | `error` | With header/decode checks, reject multi-frame inputs or explicitly allow first-frame processing. |
+| **`--ram-budget-gib`** | | *None* | Opt-in cap on workers from estimated decoded working memory. It is an estimate, not a peak-RAM guarantee. |
+| **`--skip-disk-check`** | | *Off* | Bypass the destination-volume free-space estimate (use only with an explicit operator decision). |
 | **`--raf-decoder`** | | `rawpy` | RAF development path: native 16-bit `rawpy` (default), camera-JPEG `raf2jpeg`, or `rawpy-fuji-match` for full-resolution RAW calibrated to the camera preview. |
 | **`--raf2jpeg-path`** | | Auto | Explicit `raf2jpeg` executable path. By default Retouch discovers the sibling `../raf2jpeg/bin/raf2jpeg` checkout, then searches `PATH`. |
 | **`--raf2jpeg-quality`** | | `100` | JPEG quality passed to a `raf2jpeg` re-encoding fallback. The normal embedded-camera-JPEG path preserves its original bytes unchanged. |
 | **`--fuji-match-strength`** | | `0.85` | Blend from the native RAW development (0) to the camera-preview calibration (1), used with `--raf-decoder rawpy-fuji-match`. |
 | **`--no-compare`** | | *Off* | Skip generating the `_compare` side-by-side comparison files. |
 | **`--no-exif`** | | *Off* | Skip copying EXIF metadata (orientation, camera tags, etc.) from the source image. |
-| **`--dry-run`** | | *Off* | Scan the directories and print settings without executing any retouching. |
+| **`--dry-run`** | | *Off* | Print the input plan, settings, and safety conditions without creating outputs or executing retouching. |
+
+`--format same` preserves PNG and WebP. Other recognized source formats,
+including TIFF, BMP, RAW, and EXR, currently resolve to JPEG unless an explicit
+format is requested; a 16-bit request forces PNG/TIFF as documented by the CLI.
 
 ---
 

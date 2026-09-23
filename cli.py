@@ -5,6 +5,8 @@ import sys
 import os
 import time
 import warnings
+import json
+import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -38,6 +40,17 @@ from retouch.params import PROCESSING_PARAMS, recipe_to_params
 from retouch.session import Session, create_session_from_params
 from retouch.recipe_cookbook import list_recipes, search_recipes
 from retouch.look_extractor import LookExtractor
+from retouch.cli_input import (
+    apply_resume_plan,
+    attach_destinations,
+    build_input_plan,
+    decode_plan_inputs,
+    inspect_plan_headers,
+    load_input_list,
+    print_input_plan,
+    sha256_file,
+    stable_fingerprint,
+)
 
 
 class _DeprecatedAliasAction(argparse.Action):
@@ -199,7 +212,7 @@ def _process_single(args):
      max_dim, compare_flag, global_only, bit_depth, fail_on_qa, save_session,
      smart, linear_raw, raw_exposure, raw_contrast, raf_decoder,
      raf2jpeg_path, raf2jpeg_quality, fuji_match_strength, optical_correction,
-     input_root) = args
+     input_root, destination_stem) = args
     try:
         fmt = output_format(img_path, format_arg)
         # For 16-bit, force PNG or TIFF
@@ -207,12 +220,16 @@ def _process_single(args):
             fmt = "png"
 
         out_path = _destination_for_image(
-            img_path, output_dir, fmt, input_root=input_root,
+            img_path,
+            output_dir,
+            fmt,
+            input_root=input_root,
+            output_stem=destination_stem,
         )
         _assert_safe_destination(img_path, out_path)
 
         if out_path.exists() and not force:
-            return (img_path.name, "skipped")
+            return (str(img_path), "skipped")
 
         if linear_raw and Path(img_path).suffix.lower() in RAW_EXTENSIONS:
             img_bgr = _linear_raw_to_engine_bgr(
@@ -275,7 +292,7 @@ def _process_single(args):
                         flagged = [w for w in qa if w.flagged]
                         if flagged:
                             reasons = "; ".join(f"{w.detector}={w.score:.2f}" for w in flagged)
-                            return (img_path.name, f"QA_FAIL: {reasons}")
+                            return (str(img_path), f"QA_FAIL: {reasons}")
             finally:
                 if should_close:
                     engine.close()
@@ -310,9 +327,9 @@ def _process_single(args):
             try:
                 _save_session(effective_params, img_path, out_path, save_path)
             except (OSError, ValueError) as e:
-                return (img_path.name, f"saved_image_but_session_failed: {e}")
+                return (str(img_path), f"saved_image_but_session_failed: {e}")
 
-        return (img_path.name, "done")
+        return (str(img_path), "done")
     except Exception as e:
         from retouch.utils import log_crash
         log_crash(e, {
@@ -326,7 +343,7 @@ def _process_single(args):
             "global_only": global_only,
             "bit_depth": bit_depth,
         })
-        return (img_path.name, f"failed: {e}")
+        return (str(img_path), f"failed: {e}")
 
 
 def _recipe_defaults(recipe_name):
@@ -404,10 +421,12 @@ def _destination_for_image(
     fmt: str,
     *,
     input_root: Optional[Path] = None,
+    output_stem: Optional[str] = None,
 ) -> Path:
     """Build one deterministic destination without flattening recursive input."""
+    stem = output_stem or image_path.stem
     if output_dir is None:
-        return image_path.with_suffix(f".{fmt}")
+        return image_path.with_name(f"{stem}.{fmt}")
     if input_root is not None:
         try:
             relative = image_path.resolve().relative_to(Path(input_root).resolve())
@@ -417,7 +436,7 @@ def _destination_for_image(
             ) from exc
     else:
         relative = Path(image_path.name)
-    return output_dir / relative.parent / f"{relative.stem}.{fmt}"
+    return output_dir / relative.parent / f"{output_stem or relative.stem}.{fmt}"
 
 
 def _path_key(path: Path) -> str:
@@ -454,6 +473,7 @@ def _preflight_destinations(
     recursive_root: Optional[Path],
     compare: bool,
     save_session: Any,
+    output_stems: Optional[Dict[str, str]] = None,
 ) -> None:
     """Reject source overwrites and any duplicate artifact before processing."""
     if output_dir is not None and recursive_root is not None:
@@ -474,7 +494,11 @@ def _preflight_destinations(
         if bit_depth == 16 and fmt not in ("png", "tif", "tiff"):
             fmt = "png"
         output_path = _destination_for_image(
-            image_path, output_dir, fmt, input_root=recursive_root,
+            image_path,
+            output_dir,
+            fmt,
+            input_root=recursive_root,
+            output_stem=(output_stems or {}).get(_path_key(image_path)),
         )
         artifacts = [output_path]
         if compare:
@@ -515,6 +539,90 @@ def _preflight_destinations(
                     f"multiple input images (already claimed by {previous})"
                 )
             destinations[key] = image_path
+
+
+_ESTIMATED_OUTPUT_BYTES_PER_INPUT_BYTE = 2.0
+_MIN_FREE_BYTES_AFTER_RUN = 5 * 1024 * 1024 * 1024
+
+
+def _nearest_existing_ancestor(path: Path) -> Path:
+    """Find a real directory for disk-usage checks before output creation."""
+    probe = Path(path)
+    while not probe.exists():
+        parent = probe.parent
+        if parent == probe:
+            break
+        probe = parent
+    return probe
+
+
+def _check_disk_space(
+    files: list[Path],
+    output_dir: Optional[Path],
+    compare: bool,
+    *,
+    enforce: bool = True,
+) -> list[str]:
+    """Estimate destination capacity without confusing compressed size for RAM.
+
+    The estimate is intentionally conservative and warn-oriented. Explicit
+    output paths use their nearest existing ancestor; in-place exports are
+    grouped by device because each source directory is a destination volume.
+    """
+    try:
+        if output_dir is not None:
+            probe = _nearest_existing_ancestor(output_dir)
+            volume_checks = [
+                (output_dir, probe, sum(path.stat().st_size for path in files), len(files))
+            ]
+        else:
+            grouped: dict[int, tuple[Path, Path, int, int]] = {}
+            for image_path in files:
+                target = image_path.parent
+                probe = _nearest_existing_ancestor(target)
+                device = probe.stat().st_dev
+                prior = grouped.get(device)
+                size = image_path.stat().st_size
+                if prior is None:
+                    grouped[device] = (target, probe, size, 1)
+                else:
+                    first_target, first_probe, total, count = prior
+                    grouped[device] = (
+                        first_target,
+                        first_probe,
+                        total + size,
+                        count + 1,
+                    )
+            volume_checks = list(grouped.values())
+    except OSError:
+        return []
+
+    warnings_found: list[str] = []
+    for target, probe, total_input, count in volume_checks:
+        try:
+            free_bytes = shutil.disk_usage(probe).free
+        except OSError:
+            continue
+        estimated = total_input * _ESTIMATED_OUTPUT_BYTES_PER_INPUT_BYTE
+        if compare:
+            estimated *= 2
+        projected = free_bytes - estimated
+        if projected >= _MIN_FREE_BYTES_AFTER_RUN:
+            continue
+        message = (
+            f"{count} input file(s), estimated output ~{estimated / (1024 ** 3):.1f} GiB; "
+            f"{free_bytes / (1024 ** 3):.1f} GiB free on {target}'s volume, "
+            f"projected remainder ~{max(projected, 0) / (1024 ** 3):.1f} GiB "
+            f"(want at least {_MIN_FREE_BYTES_AFTER_RUN / (1024 ** 3):.1f} GiB)"
+        )
+        warnings_found.append(message)
+        if enforce:
+            print(
+                f"⚠ Disk space warning: {message}. Free space, choose another "
+                "volume, or pass --skip-disk-check to proceed."
+            )
+            sys.exit(1)
+    return warnings_found
 
 
 def _add_processing_arg(parser, spec):
@@ -648,7 +756,76 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Professional batch face retouching tool"
     )
-    parser.add_argument("input", nargs="?", help="Image file or directory")
+    parser.add_argument(
+        "input",
+        nargs="*",
+        help="One or more image files/directories (quote paths containing spaces)",
+    )
+    parser.add_argument(
+        "--input-list",
+        type=str,
+        default=None,
+        metavar="PATH.json",
+        help="Load literal input paths from a versioned JSON list",
+    )
+    parser.add_argument(
+        "--input-plan",
+        type=str,
+        default=None,
+        metavar="PATH.json",
+        help="Write the input selection/preflight plan and update per-file results",
+    )
+    parser.add_argument(
+        "--resume-plan",
+        type=str,
+        default=None,
+        metavar="PATH.json",
+        help="Reuse only rows whose prior source/output hashes and settings match",
+    )
+    parser.add_argument(
+        "--include",
+        action="append",
+        default=[],
+        metavar="PATTERN",
+        help="Include discovered paths matching PATTERN (repeatable)",
+    )
+    parser.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="PATTERN",
+        help="Exclude discovered paths matching PATTERN (repeatable)",
+    )
+    parser.add_argument(
+        "--include-hidden",
+        action="store_true",
+        help="Include hidden files/directories during folder discovery",
+    )
+    parser.add_argument(
+        "--raw-jpeg-policy",
+        choices=["error", "raw-only", "jpeg-only", "suffix"],
+        default="error",
+        help="Handle same-basename RAW+JPEG pairs (default: error)",
+    )
+    parser.add_argument(
+        "--input-check",
+        choices=["paths", "headers", "decode"],
+        default="paths",
+        help="Input validation level: paths, container headers, or full decode",
+    )
+    parser.add_argument(
+        "--max-input-pixels",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Reject header-checked images larger than N pixels (opt-in safety cap)",
+    )
+    parser.add_argument(
+        "--multi-frame-policy",
+        choices=["error", "first"],
+        default="error",
+        help="Header-check policy for multi-frame images (default: error)",
+    )
     parser.add_argument("-o", "--output", help="Output directory")
     parser.add_argument("-q", "--quality", type=int, default=95,
                         help="Output quality 1-100 (default: 95)")
@@ -702,6 +879,18 @@ def main() -> None:
     # Batch
     parser.add_argument("--workers", type=int, default=max(1, cpu_count() // 2),
                         help="Parallel workers (default: CPU count / 2)")
+    parser.add_argument(
+        "--ram-budget-gib",
+        type=float,
+        default=None,
+        metavar="GIB",
+        help="Cap workers from the input-plan working-memory estimate (opt-in)",
+    )
+    parser.add_argument(
+        "--skip-disk-check",
+        action="store_true",
+        help="Skip the destination-volume free-space estimate",
+    )
     parser.add_argument("--no-compare", action="store_false", dest="compare",
                         help="Skip side-by-side comparison output")
     parser.add_argument("--no-exif", action="store_true",
@@ -798,6 +987,12 @@ def main() -> None:
 
     if not 0.0 <= args.fuji_match_strength <= 1.0:
         parser.error("--fuji-match-strength must be between 0 and 1")
+    if args.workers < 1:
+        parser.error("--workers must be at least 1")
+    if args.ram_budget_gib is not None and args.ram_budget_gib <= 0:
+        parser.error("--ram-budget-gib must be greater than 0")
+    if args.max_input_pixels is not None and args.max_input_pixels <= 0:
+        parser.error("--max-input-pixels must be greater than 0")
     if args.linear_raw and args.raf_decoder != "rawpy":
         parser.error("--linear-raw can only be combined with --raf-decoder rawpy")
 
@@ -833,14 +1028,86 @@ def main() -> None:
             sys.exit(1)
         return
 
-    input_path = Path(args.input)
+    input_tokens = list(args.input or [])
+    if args.input_list:
+        try:
+            input_tokens.extend(load_input_list(Path(args.input_list)))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f"✖ Could not load input list: {exc}")
+            sys.exit(1)
+    if args.input_plan and args.resume_plan:
+        if _path_key(Path(args.input_plan)) == _path_key(Path(args.resume_plan)):
+            print("✖ --input-plan and --resume-plan must be different files")
+            sys.exit(1)
+    if not input_tokens and args.resume_plan:
+        try:
+            resume_payload = json.loads(
+                Path(args.resume_plan).expanduser().read_text(encoding="utf-8")
+            )
+            input_tokens.extend(resume_payload.get("input_tokens", []))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f"✖ Could not load resume plan inputs: {exc}")
+            sys.exit(1)
+    if not input_tokens:
+        parser.error("an input file/directory or --input-list is required")
 
-    if not input_path.exists():
-        print(f"✖ Input not found: {input_path}")
+    try:
+        input_plan = build_input_plan(
+            input_tokens,
+            recursive=args.recursive,
+            include=args.include,
+            exclude=args.exclude,
+            include_hidden=args.include_hidden,
+            raw_jpeg_policy=args.raw_jpeg_policy,
+        )
+    except (OSError, ValueError) as exc:
+        print(f"✖ Input planning failed: {exc}")
         sys.exit(1)
 
-    files = find_images(args.input, args.recursive)
+    for row in input_plan.selected_records:
+        row.decoder_requested = (
+            args.raf_decoder
+            if row.source_kind == "raw"
+            else "pillow/opencv"
+        )
+
+    input_path = Path(input_tokens[0]).expanduser()
+    output_dir = Path(args.output).expanduser().resolve() if args.output else None
+    recursive_root = (
+        input_path.resolve()
+        if len(input_tokens) == 1 and input_path.is_dir() and args.recursive
+        else None
+    )
+
+    if args.input_check in ("headers", "decode"):
+        inspect_plan_headers(
+            input_plan,
+            max_pixels=args.max_input_pixels,
+            multi_frame_policy=args.multi_frame_policy,
+            raw_decoder=args.raf_decoder,
+            raf2jpeg_path=args.raf2jpeg_path,
+        )
+    if args.input_check == "decode":
+        decode_plan_inputs(
+            input_plan,
+            raw_decoder=args.raf_decoder,
+            raf2jpeg_path=args.raf2jpeg_path,
+            raf2jpeg_quality=args.raf2jpeg_quality,
+            fuji_match_strength=args.fuji_match_strength,
+            optical_correction=args.optical_correction,
+        )
+
+    files = input_plan.selected_paths
     if not files:
+        print_input_plan(input_plan)
+        if args.input_plan:
+            input_plan.write(Path(args.input_plan))
+        hard_input_failure = any(
+            row.status in {"missing", "rejected_not_regular_file"}
+            for row in input_plan.rows
+        )
+        if args.dry_run and not hard_input_failure:
+            return
         print("✖ No image files found")
         sys.exit(1)
 
@@ -891,22 +1158,73 @@ def main() -> None:
             print(f"✖ Look extraction failed: {e}")
             sys.exit(1)
 
-    if args.dry_run:
-        print(f"Dry run — {len(files)} image(s) found:\n")
-        for f in files:
-            print(f"  {f}")
-        print(f"\nSettings: {params}")
-        print(f"Workers: {args.workers}")
+    output_stems = {
+        _path_key(Path(row.path)): row.output_stem
+        for row in input_plan.selected_records
+        if row.path and row.output_stem
+    }
+    attach_destinations(
+        input_plan,
+        output_dir=output_dir,
+        format_arg=args.format,
+        bit_depth=args.bit_depth,
+        compare=args.compare,
+        save_session=args.save_session,
+        recursive_root=recursive_root,
+        destination_builder=_destination_for_image,
+        output_format_resolver=output_format,
+    )
+    input_plan.config_fingerprint = stable_fingerprint({
+        "params": params,
+        "format": args.format,
+        "quality": args.quality,
+        "bit_depth": args.bit_depth,
+        "compare": args.compare,
+        "global_only": args.global_only,
+        "max_dim": args.max_dim,
+        "max_input_pixels": args.max_input_pixels,
+        "multi_frame_policy": args.multi_frame_policy,
+        "raw_decoder": args.raf_decoder,
+        "raw_jpeg_policy": args.raw_jpeg_policy,
+    })
+    if args.resume_plan:
+        apply_resume_plan(
+            input_plan,
+            Path(args.resume_plan),
+            input_plan.config_fingerprint,
+            force=args.force,
+        )
+    files = input_plan.execution_paths
+
+    if args.ram_budget_gib is not None and files:
+        selected_sizes = [
+            row.estimated_working_bytes or 24 * 1024 * 1024
+            for row in input_plan.selected_records
+            if row.status != "resume_verified"
+        ]
+        largest_input = max(selected_sizes, default=24 * 1024 * 1024)
+        worker_cap = max(
+            1,
+            int((args.ram_budget_gib * (1024 ** 3)) // largest_input),
+        )
+        if worker_cap < args.workers:
+            print(
+                f"⚠ RAM budget caps workers from {args.workers} to {worker_cap} "
+                f"(largest estimated input {largest_input / (1024 ** 3):.2f} GiB)"
+            )
+            args.workers = worker_cap
+
+    if not files:
+        print_input_plan(input_plan)
+        if args.input_plan:
+            input_plan.write(Path(args.input_plan))
+        if input_plan.blocking_issues:
+            sys.exit(1)
+        print("✓ All selected inputs are already verified in the resume plan")
         return
 
-    params = _finalize_params(params)
-
-    output_dir = Path(args.output).expanduser().resolve() if args.output else None
-    recursive_root = (
-        input_path.expanduser().resolve()
-        if input_path.is_dir() and args.recursive
-        else None
-    )
+    validation_errors = [issue["message"] for issue in input_plan.blocking_issues]
+    preflight_error = "; ".join(validation_errors) if validation_errors else None
     try:
         _preflight_destinations(
             files,
@@ -916,15 +1234,63 @@ def main() -> None:
             recursive_root=recursive_root,
             compare=args.compare,
             save_session=args.save_session,
+            output_stems=output_stems,
         )
     except (OSError, ValueError) as exc:
-        print(f"✖ Output preflight failed: {exc}")
+        destination_error = str(exc)
+        preflight_error = "; ".join(
+            item for item in (preflight_error, destination_error) if item
+        )
+        input_plan.add_issue("destination_preflight", preflight_error)
+
+    if not args.skip_disk_check:
+        for warning in _check_disk_space(
+            files,
+            output_dir,
+            args.compare,
+            enforce=not args.dry_run,
+        ):
+            input_plan.add_issue("disk_space_estimate", warning, severity="warning")
+
+    if args.input_plan:
+        input_plan.write(Path(args.input_plan))
+
+    if args.dry_run:
+        print_input_plan(input_plan)
+        print(f"\nSettings: {params}")
+        print(f"Workers: {args.workers}")
+        if preflight_error:
+            print(f"⚠ Output preflight would block execution: {preflight_error}")
+        return
+
+    if preflight_error:
+        print(f"✖ Output preflight failed: {preflight_error}")
         sys.exit(1)
+
+    params = _finalize_params(params)
     if output_dir:
         output_dir.mkdir(parents=True, exist_ok=True)
 
     t0 = time.time()
     done = skipped = failed = 0
+
+    def _record_result(path_value: str, status: str) -> None:
+        row = input_plan.row_for(Path(path_value))
+        if row is None:
+            return
+        row.result_status = "done" if status == "done" else (
+            "skipped_existing" if status == "skipped" else "failed"
+        )
+        if status not in ("done", "skipped"):
+            row.result_message = status
+        row.source_sha256 = sha256_file(Path(path_value))
+        if status == "done" and row.planned_output:
+            row.output_sha256 = sha256_file(Path(row.planned_output))
+            row.artifact_sha256 = {
+                artifact: digest
+                for artifact in row.planned_artifacts
+                if (digest := sha256_file(Path(artifact))) is not None
+            }
 
     if args.workers > 1 and len(files) > 1:
         pool_args = [
@@ -934,7 +1300,7 @@ def main() -> None:
              args.linear_raw, args.raw_exposure, args.raw_contrast,
              args.raf_decoder, args.raf2jpeg_path, args.raf2jpeg_quality,
              args.fuji_match_strength, args.optical_correction,
-             recursive_root)
+             recursive_root, output_stems.get(_path_key(f)))
             for f in files
         ]
         with ProcessPoolExecutor(
@@ -944,18 +1310,36 @@ def main() -> None:
             futures = {pool.submit(_process_single, a): a[0] for a in pool_args}
             for future in tqdm(as_completed(futures), total=len(files),
                                desc="Retouching", unit="img"):
-                name, status = future.result()
+                path_value, status = future.result()
+                _record_result(path_value, status)
                 if status == "done":
                     done += 1
                 elif status == "skipped":
                     skipped += 1
                 else:
                     failed += 1
-                    tqdm.write(f"  ✖ {name}: {status}")
+                    tqdm.write(f"  ✖ {path_value}: {status}")
     else:
         engine = None if args.global_only else RetouchEngine()
         try:
             for f in tqdm(files, desc="Retouching", unit="img"):
+                fmt = output_format(f, args.format)
+                # For 16-bit, force PNG or TIFF
+                if args.bit_depth == 16 and fmt not in ("png", "tif", "tiff"):
+                    fmt = "png"
+                out_path = _destination_for_image(
+                    f,
+                    output_dir,
+                    fmt,
+                    input_root=recursive_root,
+                    output_stem=output_stems.get(_path_key(f)),
+                )
+                _assert_safe_destination(f, out_path)
+                if out_path.exists() and not args.force:
+                    skipped += 1
+                    _record_result(str(f), "skipped")
+                    continue
+
                 if args.linear_raw and f.suffix.lower() in RAW_EXTENSIONS:
                     try:
                         img_bgr = _linear_raw_to_engine_bgr(
@@ -965,6 +1349,7 @@ def main() -> None:
                     except Exception as e:
                         failed += 1
                         tqdm.write(f"  ✖ {f.name}: linear-raw {e}")
+                        _record_result(str(f), f"linear-raw {e}")
                         continue
                 else:
                     correction_status = {}
@@ -981,6 +1366,7 @@ def main() -> None:
                     except (OSError, ValueError, RuntimeError) as e:
                         failed += 1
                         tqdm.write(f"  ✖ {f.name}: {e}")
+                        _record_result(str(f), str(e))
                         continue
                     if args.optical_correction:
                         tqdm.write(
@@ -990,19 +1376,7 @@ def main() -> None:
                 if img_bgr is None:
                     failed += 1
                     tqdm.write(f"  ✖ {f.name}: failed to read")
-                    continue
-
-                fmt = output_format(f, args.format)
-                # For 16-bit, force PNG or TIFF
-                if args.bit_depth == 16 and fmt not in ("png", "tif", "tiff"):
-                    fmt = "png"
-                out_path = _destination_for_image(
-                    f, output_dir, fmt, input_root=recursive_root,
-                )
-                _assert_safe_destination(f, out_path)
-
-                if out_path.exists() and not args.force:
-                    skipped += 1
+                    _record_result(str(f), "failed to read")
                     continue
 
                 orig_shape = img_bgr.shape[:2]
@@ -1038,12 +1412,13 @@ def main() -> None:
                                 reasons = "; ".join(f"{w.detector}={w.score:.2f}" for w in flagged)
                                 print(f"  ✖ {f.name}: QA_FAIL: {reasons}")
                                 failed += 1
+                                _record_result(str(f), f"QA_FAIL: {reasons}")
                                 continue
 
                 if _scale < 1.0:
                     result = cv2.resize(result, (orig_shape[1], orig_shape[0]),
                                         interpolation=cv2.INTER_LINEAR)
-                
+
                 # Embed the working-space ICC selected by ColorContext. The
                 # source ICC is never reattached to already-converted pixels.
                 from retouch.io import read_exif_bytes
@@ -1073,9 +1448,11 @@ def main() -> None:
                         written = _save_session(effective_params, f, out_path, save_path)
                     except (OSError, ValueError) as e:
                         tqdm.write(f"  ⚠ {f.name}: could not save session: {e}")
+                        _record_result(str(f), f"saved_image_but_session_failed: {e}")
                     else:
                         tqdm.write(f"  💾 session → {written}")
                 done += 1
+                _record_result(str(f), "done")
         finally:
             if engine is not None:
                 engine.close()
@@ -1083,6 +1460,10 @@ def main() -> None:
     elapsed = time.time() - t0
     print(f"\nDone — {done} processed, {skipped} skipped, {failed} failed"
           f"  ({elapsed:.1f}s)")
+    if args.input_plan:
+        input_plan.write(Path(args.input_plan))
+    if failed:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

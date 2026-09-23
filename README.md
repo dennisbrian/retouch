@@ -82,6 +82,15 @@ python3 cli.py /path/to/photos -o /path/to/output --recipe cosplay --workers 4
 
 See [BATCH_GUIDE.md](docs/guides/BATCH_GUIDE.md) for full CLI options.
 
+The CLI also accepts several literal input paths and can save a deterministic
+selection/output plan before rendering:
+
+```bash
+python3 cli.py --dry-run --input-plan selection.json \
+  "/path/to/A 01.jpg" "/path/to/B 02.RAF" \
+  -o "/path/to/retouched"
+```
+
 ### Recipe QA
 
 Compare recipes on one photo or sweep selected recipes across a folder before
