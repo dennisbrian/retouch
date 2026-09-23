@@ -6,6 +6,7 @@ import os
 import time
 import warnings
 import json
+import math
 import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -223,12 +224,215 @@ def _linear_raw_to_engine_bgr(
     return bgr
 
 
+def _evidence_scalar(value):
+    """Return one bounded JSON scalar, excluding non-finite/path-like text."""
+    if isinstance(value, np.generic):
+        value = value.item()
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float):
+        return float(value) if math.isfinite(value) else None
+    if isinstance(value, str):
+        value = value.strip()
+        if (
+            value
+            and len(value) <= 128
+            and "/" not in value
+            and "\\" not in value
+            and "\n" not in value
+            and "\r" not in value
+        ):
+            return value
+    return None
+
+
+def _evidence_fields(value, allowed):
+    if not isinstance(value, dict):
+        return {}
+    compact = {}
+    for key in allowed:
+        if key not in value:
+            continue
+        item = value[key]
+        if isinstance(item, (list, tuple)):
+            compact[key] = [
+                normalized
+                for normalized in (_evidence_scalar(child) for child in item[:32])
+                if normalized is not None
+            ]
+        else:
+            normalized = _evidence_scalar(item)
+            if normalized is not None:
+                compact[key] = normalized
+    return compact
+
+
+def _processing_evidence(result, *, global_only=False, color_context=None):
+    """Capture a small, versioned per-image diagnostic envelope.
+
+    Only selected scalar diagnostics cross the CLI/ProcessPool boundary. No
+    pixels, masks, face crops, raw exception text, or arbitrary engine attrs
+    are persisted in the input-plan ledger.
+    """
+    face_count = getattr(result, "face_count", None) if result is not None else None
+    if isinstance(face_count, np.generic):
+        face_count = face_count.item()
+    if not isinstance(face_count, int) or isinstance(face_count, bool) or face_count < 0:
+        face_count = None
+
+    runtime = getattr(result, "runtime_diagnostics", {}) if result is not None else {}
+    runtime = runtime if isinstance(runtime, dict) else {}
+    detector_raw = runtime.get("face_detection", {})
+    detector = _evidence_fields(
+        detector_raw,
+        ("mode", "available", "backend", "probe_state", "reason"),
+    )
+    detector_mode = detector.get("mode")
+    if global_only:
+        detector = {"mode": "not_run_global_only"}
+        detector_mode = "global_only"
+    runtime_summary = {}
+    for name in ("denoise", "super_resolution", "body_reshape"):
+        summary = _evidence_fields(
+            runtime.get(name),
+            (
+                "backend", "providers", "provider_order", "fallback_chain",
+                "available", "stage", "action", "status", "fallback_reason",
+                "reason", "confidence", "scale",
+            ),
+        )
+        if summary:
+            runtime_summary[name] = summary
+    healing = runtime.get("healing")
+    if isinstance(healing, list):
+        runtime_summary["healing"] = [
+            _evidence_fields(
+                item,
+                (
+                    "index", "status", "requested", "executed", "reason",
+                    "error_type", "valid_source_centres", "permitted_donor_pixels",
+                    "fallback_pixels", "source_map_available",
+                ),
+            )
+            for item in healing[:32]
+            if isinstance(item, dict)
+        ]
+
+    qa_evidence = getattr(result, "qa_evidence", {}) if result is not None else {}
+    detectors = {}
+    if isinstance(qa_evidence, dict):
+        for name, item in sorted(qa_evidence.items(), key=lambda pair: str(pair[0]))[:32]:
+            if not isinstance(name, str) or not isinstance(item, dict):
+                continue
+            summary = _evidence_fields(item, ("status", "score", "flagged", "available"))
+            if summary:
+                detectors[name[:64]] = summary
+    if global_only:
+        qa = {"status": "not_applicable_global_only", "detectors": {}}
+    elif detectors:
+        qa = {"status": "captured", "detectors": detectors}
+    else:
+        qa = {"status": "not_captured", "detectors": {}}
+
+    safe_auto = []
+    decisions = getattr(result, "safe_auto_decisions", []) if result is not None else []
+    if isinstance(decisions, (list, tuple)):
+        for decision in decisions[:32]:
+            compact = _evidence_fields(
+                decision,
+                ("stage", "action", "confidence", "reason", "strength_scale"),
+            )
+            if compact:
+                safe_auto.append(compact)
+
+    fa02 = []
+    fa02_values = getattr(result, "fa02_diagnostics", []) if result is not None else []
+    if isinstance(fa02_values, (list, tuple)):
+        for item in fa02_values[:32]:
+            if not isinstance(item, dict):
+                fa02.append({"status": "not_run"})
+                continue
+            fa02.append(
+                _evidence_fields(
+                    item,
+                    ("face_width_px", "mode", "eligible", "reason", "ran"),
+                )
+            )
+
+    timings = getattr(result, "timings", {}) if result is not None else {}
+    timing_summary = {}
+    if isinstance(timings, dict):
+        timing_summary = {
+            str(name)[:64]: number
+            for name, value in list(timings.items())[:64]
+            if (number := _evidence_scalar(value)) is not None
+            and isinstance(number, (int, float))
+        }
+    precision = getattr(result, "precision_metadata", {}) if result is not None else {}
+    precision_summary = _evidence_fields(
+        precision,
+        (
+            "source_dtype", "source_bit_depth", "storage_dtype", "storage_bit_depth",
+            "processed_precision", "processed_bit_depth", "precision_status",
+            "downgraded", "downgrade_reason", "is_true_16bit", "supports_16bit_export",
+        ),
+    )
+    color_summary = {}
+    to_dict = getattr(color_context, "to_dict", None)
+    if callable(to_dict):
+        color_summary = _evidence_fields(
+            to_dict(),
+            (
+                "schema", "working_space", "source_kind", "assumed_srgb",
+                "is_tagged", "conversion_applied", "source_profile_name",
+                "source_profile_sha256", "working_profile_sha256",
+                "source_bit_depth", "working_bit_depth", "transform_intent",
+                "black_point_compensation", "alpha_mode", "raw_exposure_bias_ev",
+                "raw_exposure_gain_ev",
+            ),
+        )
+
+    return {
+        "schema": "retouch.cli_processing_evidence",
+        "version": 1,
+        "capture_status": "captured",
+        "execution_mode": "global_only" if global_only else "engine",
+        "face_detection": detector or {"mode": "unknown"},
+        "face_count": face_count,
+        "face_aware_execution": (
+            False
+            if global_only
+            else (
+                detector_mode == "face_aware" and face_count > 0
+                if face_count is not None and detector_mode in ("face_aware", "global_only")
+                else None
+            )
+        ),
+        "qa": qa,
+        "runtime_diagnostics": runtime_summary,
+        "safe_auto_decisions": safe_auto,
+        "fa02_diagnostics": fa02,
+        "timings_ms": timing_summary,
+        "precision": precision_summary,
+        "color_context": color_summary,
+    }
+
+
 def _process_single(args):
+    """Compatibility wrapper retaining the original two-item worker result."""
+    path, status, _evidence = _process_single_with_evidence(args)
+    return path, status
+
+
+def _process_single_with_evidence(args):
     (img_path, output_dir, params, format_arg, quality, force, copy_exif_flag,
      max_dim, compare_flag, global_only, bit_depth, fail_on_qa, save_session,
      smart, linear_raw, raw_exposure, raw_contrast, raf_decoder,
      raf2jpeg_path, raf2jpeg_quality, fuji_match_strength, optical_correction,
      input_root, destination_stem, raf_exposure_bias) = args
+    processing_evidence = None
     try:
         fmt = output_format(img_path, format_arg)
         # For 16-bit, force PNG or TIFF
@@ -244,8 +448,8 @@ def _process_single(args):
         )
         _assert_safe_destination(img_path, out_path)
 
-        if out_path.exists() and not force:
-            return (str(img_path), "skipped")
+        if os.path.lexists(os.fspath(out_path)) and not force:
+            return (str(img_path), "skipped", None)
 
         if linear_raw and Path(img_path).suffix.lower() in RAW_EXTENSIONS:
             decode_info = {}
@@ -257,7 +461,9 @@ def _process_single(args):
                 decode_info=decode_info,
             )
             color_context = color_context_for_path(
-                img_path, apply_exposure_bias=raf_exposure_bias
+                img_path,
+                apply_exposure_bias=raf_exposure_bias,
+                raw_exposure_info=decode_info,
             )
         else:
             correction_status = {}
@@ -299,6 +505,9 @@ def _process_single(args):
 
         if global_only:
             result = _apply_global_finish(img_bgr, dict(effective_params))
+            processing_evidence = _processing_evidence(
+                result, global_only=True, color_context=color_context
+            )
         else:
             global _worker_engine
             if _worker_engine is not None:
@@ -310,13 +519,16 @@ def _process_single(args):
 
             try:
                 result = engine.process(img_bgr, **dict(effective_params))
+                processing_evidence = _processing_evidence(
+                    result, color_context=color_context
+                )
                 if fail_on_qa:
                     qa = getattr(result, 'qa', [])
                     if qa:
                         flagged = [w for w in qa if w.flagged]
                         if flagged:
                             reasons = "; ".join(f"{w.detector}={w.score:.2f}" for w in flagged)
-                            return (str(img_path), f"QA_FAIL: {reasons}")
+                            return (str(img_path), f"QA_FAIL: {reasons}", processing_evidence)
             finally:
                 if should_close:
                     engine.close()
@@ -331,6 +543,7 @@ def _process_single(args):
         exif_bytes = read_exif_bytes(img_path) if copy_exif_flag else None
         c2pa_manifest = read_c2pa_manifest(img_path) if copy_exif_flag else None
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        _assert_safe_destination(img_path, out_path)
         write_image_with_color_context(
             str(out_path),
             result,
@@ -351,9 +564,13 @@ def _process_single(args):
             try:
                 _save_session(effective_params, img_path, out_path, save_path)
             except (OSError, ValueError) as e:
-                return (str(img_path), f"saved_image_but_session_failed: {e}")
+                return (
+                    str(img_path),
+                    f"saved_image_but_session_failed: {e}",
+                    processing_evidence,
+                )
 
-        return (str(img_path), "done")
+        return (str(img_path), "done", processing_evidence)
     except Exception as e:
         from retouch.utils import log_crash
         log_crash(e, {
@@ -367,7 +584,7 @@ def _process_single(args):
             "global_only": global_only,
             "bit_depth": bit_depth,
         })
-        return (str(img_path), f"failed: {e}")
+        return (str(img_path), f"failed: {e}", processing_evidence)
 
 
 def _recipe_defaults(recipe_name):
@@ -473,11 +690,18 @@ def _path_key(path: Path) -> str:
 
 
 def _assert_safe_destination(source: Path, destination: Path) -> None:
+    # Path.exists() follows a symlink and returns False for a dangling one.
+    # Writers may then follow that link and create an external target, so
+    # output leaf symlinks are never valid CLI destinations.
+    if os.path.islink(os.fspath(destination)):
+        raise ValueError(
+            f"Refusing to write through symlink destination {destination}"
+        )
     if _path_key(source) == _path_key(destination):
         raise ValueError(
             f"Refusing to overwrite source image {source} with its own output"
         )
-    if source.exists() and destination.exists():
+    if os.path.lexists(os.fspath(source)) and os.path.lexists(os.fspath(destination)):
         try:
             aliases_source = os.path.samefile(str(source), str(destination))
         except OSError:
@@ -538,7 +762,7 @@ def _preflight_destinations(
 
         for destination in artifacts:
             _assert_safe_destination(image_path, destination)
-            if destination.exists():
+            if os.path.lexists(os.fspath(destination)):
                 for source_path in files:
                     try:
                         aliases_input = os.path.samefile(
@@ -1337,10 +1561,16 @@ def main() -> None:
     t0 = time.time()
     done = skipped = failed = 0
 
-    def _record_result(path_value: str, status: str) -> None:
+    def _record_result(
+        path_value: str,
+        status: str,
+        processing_evidence: Optional[Dict[str, Any]] = None,
+    ) -> None:
         row = input_plan.row_for(Path(path_value))
         if row is None:
             return
+        if processing_evidence is not None:
+            row.processing_evidence = processing_evidence
         row.result_status = "done" if status == "done" else (
             "skipped_existing" if status == "skipped" else "failed"
         )
@@ -1371,11 +1601,14 @@ def main() -> None:
             max_workers=args.workers,
             initializer=None if args.global_only else _init_worker,
         ) as pool:
-            futures = {pool.submit(_process_single, a): a[0] for a in pool_args}
+            futures = {
+                pool.submit(_process_single_with_evidence, a): a[0]
+                for a in pool_args
+            }
             for future in tqdm(as_completed(futures), total=len(files),
                                desc="Retouching", unit="img"):
-                path_value, status = future.result()
-                _record_result(path_value, status)
+                path_value, status, processing_evidence = future.result()
+                _record_result(path_value, status, processing_evidence)
                 if status == "done":
                     done += 1
                 elif status == "skipped":
@@ -1398,11 +1631,19 @@ def main() -> None:
                     input_root=recursive_root,
                     output_stem=output_stems.get(_path_key(f)),
                 )
-                _assert_safe_destination(f, out_path)
-                if out_path.exists() and not _force_for(f):
+                try:
+                    _assert_safe_destination(f, out_path)
+                except Exception as e:
+                    failed += 1
+                    tqdm.write(f"  ✖ {f.name}: {e}")
+                    _record_result(str(f), f"failed: {e}")
+                    continue
+                if os.path.lexists(os.fspath(out_path)) and not _force_for(f):
                     skipped += 1
                     _record_result(str(f), "skipped")
                     continue
+
+                processing_evidence = None
 
                 if args.linear_raw and f.suffix.lower() in RAW_EXTENSIONS:
                     try:
@@ -1415,7 +1656,9 @@ def main() -> None:
                             decode_info=decode_info,
                         )
                         color_context = color_context_for_path(
-                            f, apply_exposure_bias=not args.no_raf_exposure_bias
+                            f,
+                            apply_exposure_bias=not args.no_raf_exposure_bias,
+                            raw_exposure_info=decode_info,
                         )
                     except Exception as e:
                         failed += 1
@@ -1474,8 +1717,14 @@ def main() -> None:
 
                 if args.global_only:
                     result = _apply_global_finish(img_bgr, dict(effective_params))
+                    processing_evidence = _processing_evidence(
+                        result, global_only=True, color_context=color_context
+                    )
                 else:
                     result = engine.process(img_bgr, **dict(effective_params))
+                    processing_evidence = _processing_evidence(
+                        result, color_context=color_context
+                    )
                     if args.fail_on_qa:
                         qa = getattr(result, 'qa', [])
                         if qa:
@@ -1484,35 +1733,46 @@ def main() -> None:
                                 reasons = "; ".join(f"{w.detector}={w.score:.2f}" for w in flagged)
                                 print(f"  ✖ {f.name}: QA_FAIL: {reasons}")
                                 failed += 1
-                                _record_result(str(f), f"QA_FAIL: {reasons}")
+                                _record_result(
+                                    str(f), f"QA_FAIL: {reasons}", processing_evidence
+                                )
                                 continue
 
                 if _scale < 1.0:
                     result = cv2.resize(result, (orig_shape[1], orig_shape[0]),
                                         interpolation=cv2.INTER_LINEAR)
 
-                # Embed the working-space ICC selected by ColorContext. The
-                # source ICC is never reattached to already-converted pixels.
-                from retouch.io import read_exif_bytes
-                exif_bytes = read_exif_bytes(f) if not args.no_exif else None
-                c2pa_manifest = read_c2pa_manifest(f) if not args.no_exif else None
-                out_path.parent.mkdir(parents=True, exist_ok=True)
-                write_image_with_color_context(
-                    str(out_path),
-                    result,
-                    color_context,
-                    bit_depth=args.bit_depth,
-                    quality=args.quality,
-                    exif=exif_bytes,
-                    c2pa_manifest=c2pa_manifest,
-                )
-
-                if args.compare:
-                    compare_path = out_path.with_name(
-                        f"{out_path.stem}_compare{out_path.suffix}"
+                try:
+                    # Embed the working-space ICC selected by ColorContext.
+                    # The source ICC is never reattached to converted pixels.
+                    from retouch.io import read_exif_bytes
+                    exif_bytes = read_exif_bytes(f) if not args.no_exif else None
+                    c2pa_manifest = read_c2pa_manifest(f) if not args.no_exif else None
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    _assert_safe_destination(f, out_path)
+                    write_image_with_color_context(
+                        str(out_path),
+                        result,
+                        color_context,
+                        bit_depth=args.bit_depth,
+                        quality=args.quality,
+                        exif=exif_bytes,
+                        c2pa_manifest=c2pa_manifest,
                     )
-                    _assert_safe_destination(f, compare_path)
-                    make_comparison(original_full, result, compare_path, fmt, args.quality)
+
+                    if args.compare:
+                        compare_path = out_path.with_name(
+                            f"{out_path.stem}_compare{out_path.suffix}"
+                        )
+                        _assert_safe_destination(f, compare_path)
+                        make_comparison(
+                            original_full, result, compare_path, fmt, args.quality
+                        )
+                except Exception as e:
+                    failed += 1
+                    tqdm.write(f"  ✖ {f.name}: export failed: {e}")
+                    _record_result(str(f), f"failed: {e}", processing_evidence)
+                    continue
 
                 if args.save_session is not None:
                     save_path = None if args.save_session is True else args.save_session
@@ -1520,11 +1780,17 @@ def main() -> None:
                         written = _save_session(effective_params, f, out_path, save_path)
                     except (OSError, ValueError) as e:
                         tqdm.write(f"  ⚠ {f.name}: could not save session: {e}")
-                        _record_result(str(f), f"saved_image_but_session_failed: {e}")
+                        _record_result(
+                            str(f),
+                            f"saved_image_but_session_failed: {e}",
+                            processing_evidence,
+                        )
+                        failed += 1
+                        continue
                     else:
                         tqdm.write(f"  💾 session → {written}")
                 done += 1
-                _record_result(str(f), "done")
+                _record_result(str(f), "done", processing_evidence)
         finally:
             if engine is not None:
                 engine.close()

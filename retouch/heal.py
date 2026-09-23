@@ -50,13 +50,30 @@ def heal_region(
         (H, W, 3) image matching input dtype. The uint8 path is byte-identical
         to the legacy implementation; the float32 path returns float32 [0, 255].
     """
-    if mask.sum() == 0:
+    def _report_empty_mask() -> None:
+        if report is not None:
+            requested = method.lower() if isinstance(method, str) else str(method)
+            report.update(
+                requested=requested,
+                executed="none",
+                reason="empty_mask",
+            )
+
+    if mask.size == 0 or mask.sum() == 0:
+        _report_empty_mask()
         return img_bgr
 
     if mask.dtype == np.float32 or mask.max() <= 1.0:
         mask_uint8 = (mask * 255).astype(np.uint8)
     else:
         mask_uint8 = mask.astype(np.uint8)
+
+    # Supported float masks may contain positive values too small to survive
+    # the conversion to the uint8 inpaint mask. Treat that quantized-empty
+    # case as a no-op too, so runtime evidence does not claim a backend ran.
+    if not np.any(mask_uint8):
+        _report_empty_mask()
+        return img_bgr
 
     method_key = method.lower()
     if method_key == "patchmatch":

@@ -1174,7 +1174,10 @@ def read_icc_profile(path: Union[str, Path]) -> Optional[bytes]:
 
 
 def color_context_for_path(
-    path: Union[str, Path], apply_exposure_bias: bool = True
+    path: Union[str, Path],
+    apply_exposure_bias: bool = True,
+    *,
+    raw_exposure_info: Optional[Dict[str, Optional[float]]] = None,
 ) -> ColorContext:
     """Return the ingest/delivery color contract for *path* without decoding it.
 
@@ -1183,13 +1186,24 @@ def color_context_for_path(
     need the matching context at export time. This helper reads only the
     source ICC metadata (or records the RAW decoder's sRGB contract), so those
     callers cannot accidentally reattach the source profile to working-space
-    pixels.
+    pixels. ``raw_exposure_info`` lets alternate RAW decoders reuse the exact
+    bias/gain selected while decoding their pixels.
     """
     source = Path(path)
     if source.suffix.lower() in RAW_EXTENSIONS:
+        exposure_info = raw_exposure_info
+        if exposure_info is None:
+            exposure_info = raw_exposure_decode_info(source, apply_exposure_bias)
+        else:
+            exposure_info = {
+                "raw_exposure_bias_ev": exposure_info.get("raw_exposure_bias_ev"),
+                "raw_exposure_gain_ev": float(
+                    exposure_info.get("raw_exposure_gain_ev") or 0.0
+                ),
+            }
         return ColorContext.raw_srgb_context(
             get_working_srgb_icc(),
-            **raw_exposure_decode_info(source, apply_exposure_bias),
+            **exposure_info,
         )
     return _color_context_for_source(read_icc_profile(source))
 

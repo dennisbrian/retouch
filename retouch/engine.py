@@ -76,6 +76,7 @@ from __future__ import annotations
 
 import copy
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -87,6 +88,11 @@ import numpy as np
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Some tests and lightweight integrations construct an engine with ``__new__``
+# and initialize only the components they exercise.  Guard lazy per-instance
+# lock creation so those engines still get the same diagnostic isolation.
+_ENGINE_LOCK_INIT_GUARD = threading.Lock()
 
 from .detection import FaceDetector, FaceData, FaceContext
 from .lighting import LightDirection, estimate_light_direction
@@ -1140,6 +1146,8 @@ class RetouchEngine:
         self._hair = HairEnhancer()
         self._relighter = Relighter()
         self._enhancer: Optional[AIEnhancer] = None
+        self._enhancer_lock = threading.Lock()
+        self._reshape_lock = threading.Lock()
         self._harmonizer = BackgroundHarmonizer()
         self._background_replacer = BackgroundReplacer()
 
@@ -1174,6 +1182,25 @@ class RetouchEngine:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def _get_enhancer(self) -> AIEnhancer:
+        """Return the shared enhancer, initializing it exactly once."""
+        with self._enhancer_lock:
+            if self._enhancer is None:
+                self._enhancer = AIEnhancer()
+            return self._enhancer
+
+    def _get_reshape_lock(self) -> Any:
+        """Return the per-engine lock protecting reshape diagnostics."""
+        lock = getattr(self, "_reshape_lock", None)
+        if lock is not None:
+            return lock
+        with _ENGINE_LOCK_INIT_GUARD:
+            lock = getattr(self, "_reshape_lock", None)
+            if lock is None:
+                lock = threading.Lock()
+                self._reshape_lock = lock
+        return lock
 
     def invalidate_lut_cache(self, name: Optional[str] = None) -> None:
         """Invalidate LUTs cached by the live render-path ColorGrader."""
@@ -1265,7 +1292,9 @@ class RetouchEngine:
                 )
                 diagnostics.append({
                     "index": index,
-                    "status": "done",
+                    "status": (
+                        "skipped" if report.get("executed") == "none" else "done"
+                    ),
                     **report,
                 })
             except Exception as exc:
@@ -1867,16 +1896,18 @@ class RetouchEngine:
         # blend between the original and the denoised image.
         # ------------------------------------------------------------------
         if ctx.ai_denoise and ctx.ai_denoise > 0.0:
-            if self._enhancer is None:
-                self._enhancer = AIEnhancer()
+            enhancer = self._get_enhancer()
             t_dn = time.perf_counter()
             strength = float(ctx.ai_denoise) / 100.0
             before_denoise = img_bgr.copy()
-            img_bgr = self._enhancer.denoise(img_bgr, strength=strength)
-            ctx._runtime_diagnostics.update(getattr(self._enhancer, "last_runtime", {}))
+            img_bgr = enhancer.denoise(img_bgr, strength=strength)
+            enhancer_runtime = getattr(enhancer, "last_runtime", {})
+            denoise_runtime = enhancer_runtime.get("denoise", {})
+            if isinstance(denoise_runtime, dict):
+                ctx._runtime_diagnostics["denoise"] = dict(denoise_runtime)
             if bool(getattr(ctx, "safe_auto", True)):
                 from .safe_auto import apply_decision, decide
-                runtime = getattr(self._enhancer, "last_runtime", {}).get("denoise", {})
+                runtime = denoise_runtime
                 backend = runtime.get("backend", "unknown") if isinstance(runtime, dict) else "unknown"
                 confidence = 0.95 if backend == "onnx" else 0.50
                 decision = decide(
@@ -2079,15 +2110,17 @@ class RetouchEngine:
         """F7 export-time super-resolution. No-op when ``ai_sr_scale <= 1``."""
         if not ctx.ai_sr_scale or ctx.ai_sr_scale <= 1:
             return result
-        if self._enhancer is None:
-            self._enhancer = AIEnhancer()
+        enhancer = self._get_enhancer()
         t_sr = time.perf_counter()
         before_sr = result.copy()
-        out = self._enhancer.super_resolve(result, scale=int(ctx.ai_sr_scale))
-        ctx._runtime_diagnostics.update(getattr(self._enhancer, "last_runtime", {}))
+        out = enhancer.super_resolve(result, scale=int(ctx.ai_sr_scale))
+        enhancer_runtime = getattr(enhancer, "last_runtime", {})
+        sr_runtime = enhancer_runtime.get("super_resolution", {})
+        if isinstance(sr_runtime, dict):
+            ctx._runtime_diagnostics["super_resolution"] = dict(sr_runtime)
         if bool(getattr(ctx, "safe_auto", True)):
             from .safe_auto import apply_decision, decide
-            runtime = getattr(self._enhancer, "last_runtime", {}).get("super_resolution", {})
+            runtime = sr_runtime
             backend = runtime.get("backend", "unknown") if isinstance(runtime, dict) else "unknown"
             confidence = 0.95 if backend == "onnx" else 0.50
             decision = decide(
@@ -2170,6 +2203,12 @@ class RetouchEngine:
         if proxy_scale < 1.0:
             # Upscale face-region result + masks back to native resolution
             upscaled_core = self._upscale_core_result(core, h, w, native_guide=native_img_bgr)
+            # AA6 displacement vectors are expressed in proxy pixels. The
+            # downstream comparison runs against native-resolution frames,
+            # so resample the field and scale each vector axis accordingly.
+            ctx._aa6_warp_field = self._upscale_warp_field(
+                getattr(ctx, "_aa6_warp_field", None), h, w
+            )
 
             # F8.1: Composite upscaled face edits onto native image
             # Only paste the face ROIs that were actually retouched
@@ -2524,6 +2563,28 @@ class RetouchEngine:
                     up_m = guided_filter(up_m.astype(np.float32), radius=4, eps=1e-3, guide=guide_gray)
                 setattr(core, attr, up_m)
         return core
+
+    @staticmethod
+    def _upscale_warp_field(
+        warp_field: Optional[np.ndarray], target_h: int, target_w: int
+    ) -> Optional[np.ndarray]:
+        """Resize proxy AA6 displacement vectors into target-image pixels."""
+        if warp_field is None:
+            return None
+        field = np.asarray(warp_field, dtype=np.float32)
+        if field.ndim != 3 or field.shape[2] != 2:
+            raise ValueError("AA6 warp_field must have shape (H, W, 2)")
+        source_h, source_w = field.shape[:2]
+        if source_h <= 0 or source_w <= 0:
+            raise ValueError("AA6 warp_field dimensions must be positive")
+        if (source_h, source_w) == (target_h, target_w):
+            return field.copy()
+        resized = cv2.resize(
+            field, (target_w, target_h), interpolation=cv2.INTER_LINEAR
+        )
+        resized[:, :, 0] *= target_w / float(source_w)
+        resized[:, :, 1] *= target_h / float(source_h)
+        return resized.astype(np.float32, copy=False)
 
     @staticmethod
     def _composite_upscaled_faces_onto_native(
@@ -3216,8 +3277,19 @@ class RetouchEngine:
     def _stage_reshape(self, img: np.ndarray, faces, ctx: ProcessingContext) -> np.ndarray:
         face_ctxs = self._face_ctxs_for_reshape(ctx, len(faces) if faces else 0)
         if self._any_reshape_active(ctx, face_ctxs):
-            result = self._reshaper.reshape(img, faces, ctx, face_ctxs=face_ctxs)
-            ctx._aa6_warp_field = self._reshaper.last_displacement_field
+            # FaceReshaper retains its last displacement field on the shared
+            # instance. Keep the render and its diagnostic snapshot in one
+            # critical section so concurrent images cannot borrow one another's
+            # AA6 field. Copy it before releasing the lock; QA owns this image-
+            # specific snapshot from here on.
+            with self._get_reshape_lock():
+                result = self._reshaper.reshape(img, faces, ctx, face_ctxs=face_ctxs)
+                warp_field = self._reshaper.last_displacement_field
+                ctx._aa6_warp_field = (
+                    np.array(warp_field, dtype=np.float32, copy=True)
+                    if warp_field is not None
+                    else None
+                )
             ctx._qa_geometry_changed = True
             ctx._qa_geometry_reference_img_bgr = np.array(result, copy=True)
             return result

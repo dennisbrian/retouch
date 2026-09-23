@@ -10,6 +10,7 @@ import subprocess
 import time
 import tempfile
 import threading
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -682,12 +683,65 @@ def build_render_manifest_handler(
         if isinstance(preview_cache, GuiPreviewCache)
         else {}
     )
+    attempt = evidence.get("render_attempt")
+    attempt = attempt if isinstance(attempt, dict) else None
     render_revision = _coerce_settings_revision(
-        snapshot.get("settings_revision", evidence.get("render_revision", 0))
+        attempt.get("revision", snapshot.get("settings_revision", evidence.get("render_revision", 0)))
+        if attempt is not None
+        else snapshot.get("settings_revision", evidence.get("render_revision", 0))
     )
     current = _coerce_settings_revision(current_revision)
-    mode_value = snapshot.get("render_mode", MODE_RENDER_PREVIEW)
+    mode_value = (
+        attempt.get("render_mode", snapshot.get("render_mode", MODE_RENDER_PREVIEW))
+        if attempt is not None
+        else snapshot.get("render_mode", MODE_RENDER_PREVIEW)
+    )
     mode = "full" if mode_value == MODE_EXPORT_FULL_QUALITY else "preview"
+    status = attempt.get("status", "completed") if attempt is not None else "completed"
+    error = attempt.get("error") if attempt is not None else None
+    full_export_info = None
+    full_export_identity = None
+    if status not in {"completed", "failed", "cancelled"}:
+        status = "failed"
+        error = "Render attempt did not reach a recognized terminal state"
+    if status == "completed" and mode == "full":
+        if current > render_revision:
+            status = "cancelled"
+            error = "Full export discarded because settings changed"
+        elif not export_file:
+            status = "failed"
+            error = "Full-quality render completed without an export artifact"
+        else:
+            try:
+                artifact_path = os.fspath(export_file)
+                if not isinstance(artifact_path, str) or not artifact_path:
+                    raise ValueError("export path is not a non-empty text path")
+                from PIL import Image
+
+                with Image.open(artifact_path) as exported_image:
+                    dimensions = {
+                        "width": int(exported_image.width),
+                        "height": int(exported_image.height),
+                        "channels": len(exported_image.getbands()),
+                    }
+                    dtype = (
+                        "uint16"
+                        if exported_image.mode.startswith("I;16")
+                        or exported_image.mode == "I"
+                        else "float32" if exported_image.mode == "F" else "uint8"
+                    )
+                    exported_image.verify()
+                full_export_identity = source_identity(artifact_path)
+                full_export_info = {
+                    "dimensions": dimensions,
+                    "dtype": dtype,
+                }
+            except Exception as exc:  # noqa: BLE001 - invalid artifacts cannot certify success
+                status = "failed"
+                error = (
+                    "Full-quality export artifact is unreadable or unavailable "
+                    f"({type(exc).__name__})"
+                )
     settings_sha256 = None
     contract = snapshot.get("render_contract")
     if isinstance(contract, dict):
@@ -707,7 +761,11 @@ def build_render_manifest_handler(
             }
         )
 
-    source_path = evidence.get("source_path")
+    source_path = (
+        attempt.get("source_path", evidence.get("source_path"))
+        if attempt is not None
+        else evidence.get("source_path")
+    )
     source: Dict[str, Any] = {
         "id": str(source_path or "unknown-source"),
     }
@@ -725,18 +783,61 @@ def build_render_manifest_handler(
         except (FileNotFoundError, OSError, ValueError):
             pass
 
-    output_id = export_file or "preview-%d" % render_revision
-    output: Dict[str, Any] = {
-        "id": str(output_id),
-        "dimensions": {
-            "width": int(evidence.get("output", {}).get("width", 1)),
-            "height": int(evidence.get("output", {}).get("height", 1)),
-            "channels": 3,
-        },
-        "dtype": str(evidence.get("output", {}).get("dtype", "uint8")),
-    }
     hashes = {"settings_sha256": settings_sha256}
-    if export_file and isinstance(export_file, (str, os.PathLike)):
+    output: Optional[Dict[str, Any]] = None
+    if status == "completed":
+        output_id = export_file or "preview-%d" % render_revision
+        if mode == "full" and full_export_info is not None:
+            output = {"id": str(output_id), **full_export_info}
+        else:
+            output_evidence = evidence.get("output", {})
+            output = {
+                "id": str(output_id),
+                "dimensions": {
+                    "width": int(output_evidence.get("width", 1)),
+                    "height": int(output_evidence.get("height", 1)),
+                    "channels": int(output_evidence.get("channels", 3)),
+                },
+                "dtype": str(output_evidence.get("dtype", "uint8")),
+            }
+        if (
+            mode == "full"
+            and full_export_identity is not None
+            and output is not None
+        ):
+            output.update(
+                {
+                    "path": full_export_identity.path,
+                    "mtime_ns": full_export_identity.mtime_ns,
+                    "size_bytes": full_export_identity.size_bytes,
+                    "sha256": full_export_identity.content_sha256,
+                }
+            )
+            hashes["output_sha256"] = full_export_identity.content_sha256
+        elif mode != "full" and export_file and isinstance(export_file, (str, os.PathLike)):
+            try:
+                from PIL import Image
+
+                with Image.open(export_file) as exported_image:
+                    output["dimensions"] = {
+                        "width": int(exported_image.width),
+                        "height": int(exported_image.height),
+                        "channels": len(exported_image.getbands()),
+                    }
+                    output["dtype"] = (
+                        "uint16"
+                        if exported_image.mode.startswith("I;16")
+                        or exported_image.mode == "I"
+                        else "float32" if exported_image.mode == "F" else "uint8"
+                    )
+            except (FileNotFoundError, OSError, ValueError):
+                pass
+    if (
+        status == "completed"
+        and mode != "full"
+        and export_file
+        and isinstance(export_file, (str, os.PathLike))
+    ):
         try:
             output_identity = source_identity(export_file)
             output.update(
@@ -751,34 +852,38 @@ def build_render_manifest_handler(
         except (FileNotFoundError, OSError, ValueError):
             pass
 
-    cache_status = str(evidence.get("cache_status", "unknown"))
+    # A failed/cancelled attempt must not inherit QA/runtime/output metadata
+    # from a prior successful preview that remains visible in the cache.
+    report_evidence = evidence if status == "completed" else {}
+    cache_status = str(report_evidence.get("cache_status", "unknown"))
     if cache_status not in {"hit", "miss", "bypassed", "unknown"}:
         cache_status = "unknown"
     manifest = RenderManifest(
         render_revision=render_revision,
         settings_sha256=settings_sha256,
         mode=mode,
-        status="completed",
+        status=status,
         source=source,
         output=output,
         cache={
             "status": cache_status,
             "hit": cache_status == "hit" if cache_status != "unknown" else False,
         },
-        color_context=evidence.get("color_context", {}),
-        metadata_result=evidence.get("metadata_result", {}),
-        face_count=evidence.get("face_count"),
-        timings_ms=evidence.get("timings_ms", {}),
-        qa=evidence.get("qa", {}),
-        safe_auto_decisions=evidence.get("safe_auto_decisions", []),
-        backend=evidence.get("backend", {}),
-        provider=evidence.get("provider"),
+        color_context=report_evidence.get("color_context", {}),
+        metadata_result=report_evidence.get("metadata_result", {}),
+        face_count=report_evidence.get("face_count"),
+        timings_ms=report_evidence.get("timings_ms", {}),
+        qa=report_evidence.get("qa", {}),
+        safe_auto_decisions=report_evidence.get("safe_auto_decisions", []),
+        backend=report_evidence.get("backend", {}),
+        provider=report_evidence.get("provider"),
         hashes=hashes,
+        error=error if status in {"failed", "cancelled"} else None,
         extensions={
             "stale": current > render_revision,
             "render_mode": mode_value,
-            "precision": evidence.get("precision", {}),
-            "qa_provenance": evidence.get("qa_provenance", {}),
+            "precision": report_evidence.get("precision", {}),
+            "qa_provenance": report_evidence.get("qa_provenance", {}),
         },
     )
     return manifest.to_json(indent=2)
@@ -823,7 +928,82 @@ def process_image_event(*args, request=None):
         if current_revision is None
         else _coerce_settings_revision(current_revision)
     )
-    def _contract_failure(message):
+
+    def _record_attempt(status, error=None, result=None):
+        if preview_cache is None:
+            return
+        source_paths = _render_contract_paths(
+            dict(zip(PROCESS_INPUT_KEYS, process_args)).get("img_paths")
+        )
+        source_paths = [os.fsdecode(os.fspath(path)) for path in source_paths]
+        source_path = source_paths[0] if source_paths else None
+        mode = render_mode or MODE_RENDER_PREVIEW
+        latest = preview_cache.latest_render_evidence
+        face_contexts = preview_cache.latest_render_face_contexts
+        if status == "completed":
+            # Promote evidence only when process_image explicitly tagged it
+            # with this attempt ID. A same-source prior preview is still stale
+            # evidence if a legacy handler returned pixels without refreshing
+            # diagnostics.
+            tagged_for_attempt = latest.get("_evidence_attempt_id") == attempt_id
+            evidence_source = latest.get("source_path")
+
+            def _source_key(value):
+                if not value:
+                    return None
+                try:
+                    path_value = os.fsdecode(os.fspath(value))
+                    return os.path.normcase(os.path.abspath(path_value))
+                except (OSError, TypeError, ValueError):
+                    return None
+
+            evidence_source_key = _source_key(evidence_source)
+            requested_source_keys = {
+                key for key in (_source_key(path) for path in source_paths) if key
+            }
+            if tagged_for_attempt and evidence_source_key in requested_source_keys:
+                # process_image displays the first successful input, which can
+                # differ from the first requested path when earlier inputs
+                # fail. Bind the manifest to the exact tagged evidence source.
+                source_path = os.fsdecode(os.fspath(evidence_source))
+            elif len(source_paths) > 1:
+                # A legacy handler without attempt-tagged evidence cannot tell
+                # which of several requested inputs produced its returned image.
+                source_path = None
+            if (
+                not tagged_for_attempt
+                or evidence_source_key != _source_key(source_path)
+            ):
+                latest = {"source_path": source_path}
+                face_contexts = ()
+            latest.pop("_evidence_attempt_id", None)
+            latest["render_revision"] = _coerce_settings_revision(snapshot_revision)
+            latest["render_mode"] = mode
+            if isinstance(snapshot, dict) and snapshot.get("render_contract"):
+                settings = snapshot["render_contract"].get("settings", {})
+                latest["settings_sha256"] = settings.get("settings_sha256")
+            rendered = result[2] if isinstance(result, tuple) and len(result) > 2 else None
+            if isinstance(rendered, np.ndarray):
+                latest["output"] = {
+                    "width": int(rendered.shape[1]),
+                    "height": int(rendered.shape[0]),
+                    "dtype": str(rendered.dtype),
+                }
+        attempt = {
+            "status": status,
+            "revision": _coerce_settings_revision(snapshot_revision),
+            "render_mode": mode,
+            "source_path": source_path,
+        }
+        if error:
+            attempt["error"] = str(error)[:1024]
+        latest["render_attempt"] = attempt
+        preview_cache.set_latest_render(latest, face_contexts=face_contexts)
+
+    attempt_id = uuid.uuid4().hex
+
+    def _contract_failure(message, *, status="failed"):
+        _record_attempt(status, message)
         result = (None, gr.update(visible=False), None, None, message, None, gr.update(visible=False), "")
         return result + (preview_cache,) if preview_cache is not None else result
     if isinstance(snapshot, dict) and snapshot.get("render_contract"):
@@ -836,29 +1016,44 @@ def process_image_event(*args, request=None):
             and current_for_contract > _coerce_settings_revision(snapshot_revision)
         ):
             return _contract_failure(
-                "Export Full Quality cancelled: settings changed before rendering started."
+                "Export Full Quality cancelled: settings changed before rendering started.",
+                status="cancelled",
             )
     process_kwargs = {}
     if render_mode in {MODE_RENDER_PREVIEW, MODE_EXPORT_FULL_QUALITY}:
         process_kwargs["render_mode"] = render_mode
     if preview_cache is not None:
         process_kwargs["preview_cache"] = preview_cache
+        process_kwargs["render_attempt_id"] = attempt_id
     if isinstance(snapshot, dict) and preserve_source_profile:
         process_kwargs["preserve_source_profile"] = preserve_source_profile
     workspace = _workspace_for_request(request)
     if workspace is not None:
         process_kwargs["workspace"] = workspace
-    result = process_image(*process_args, **process_kwargs)
-    if preview_cache is not None and isinstance(result, tuple) and len(result) >= 8:
-        latest = preview_cache.latest_render_evidence
-        latest["render_revision"] = _coerce_settings_revision(snapshot_revision)
-        latest["render_mode"] = render_mode or MODE_RENDER_PREVIEW
-        if isinstance(snapshot, dict) and snapshot.get("render_contract"):
-            settings = snapshot["render_contract"].get("settings", {})
-            latest["settings_sha256"] = settings.get("settings_sha256")
-        preview_cache.set_latest_render(
-            latest,
-            face_contexts=preview_cache.latest_render_face_contexts,
+    try:
+        result = process_image(*process_args, **process_kwargs)
+    except Exception as exc:  # noqa: BLE001 - preserve a terminal manifest on render faults
+        _logger.exception("Unhandled render attempt failure: %s", exc)
+        result = (
+            None,
+            gr.update(visible=False),
+            None,
+            None,
+            "Error: Render failed (%s: %s)" % (type(exc).__name__, exc),
+            None,
+            gr.update(visible=False),
+            "",
+        )
+    succeeded = (
+        isinstance(result, tuple)
+        and len(result) >= 8
+        and result[2] is not None
+    )
+    if isinstance(result, tuple) and len(result) >= 8:
+        _record_attempt(
+            "completed" if succeeded else "failed",
+            None if succeeded else (result[4] or "Render did not produce an image"),
+            result=result,
         )
     if isinstance(result, tuple) and len(result) > 4 and result[0] is not None:
         result = list(result)
@@ -1322,6 +1517,7 @@ def process_image(
     *args,
     render_mode=None,
     preview_cache=None,
+    render_attempt_id=None,
     preserve_source_profile=False,
     workspace=None,
 ):
@@ -1615,6 +1811,7 @@ def process_image(
                         ),
                         "backend": runtime_diagnostics,
                         "precision": getattr(result, "precision_metadata", {}),
+                        "_evidence_attempt_id": render_attempt_id,
                     },
                     face_contexts=runtime_contexts,
                 )

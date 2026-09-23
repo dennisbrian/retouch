@@ -87,6 +87,158 @@ class TestProcessingResult:
         assert view.qa_provenance == provenance
 
 
+def test_lazy_enhancer_initialization_is_singleton_under_concurrency(monkeypatch):
+    import threading
+    import time
+
+    from retouch import engine as engine_module
+
+    created = []
+
+    class FakeEnhancer:
+        def __init__(self):
+            created.append(self)
+            time.sleep(0.01)
+
+    monkeypatch.setattr(engine_module, "AIEnhancer", FakeEnhancer)
+    engine = RetouchEngine.__new__(RetouchEngine)
+    engine._enhancer = None
+    engine._enhancer_lock = threading.Lock()
+    start = threading.Barrier(8)
+    returned = []
+
+    def worker():
+        start.wait(timeout=5)
+        returned.append(engine._get_enhancer())
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert len(created) == 1
+    assert len(returned) == 8
+    assert all(instance is created[0] for instance in returned)
+
+
+def test_concurrent_engine_sr_calls_keep_per_context_provider_evidence(monkeypatch):
+    import threading
+
+    from retouch.enhance import AIEnhancer
+
+    engine = RetouchEngine.__new__(RetouchEngine)
+    enhancer = AIEnhancer()
+    engine._enhancer = enhancer
+    engine._enhancer_lock = threading.Lock()
+    sessions = {
+        "engine-sr-a": type(
+            "SessionA", (), {"get_providers": lambda self: ["ProviderA"]}
+        )(),
+        "engine-sr-b": type(
+            "SessionB", (), {"get_providers": lambda self: ["ProviderB"]}
+        )(),
+    }
+    overlap = threading.Barrier(2)
+    monkeypatch.setattr(
+        enhancer,
+        "_sr_model",
+        lambda: sessions[threading.current_thread().name],
+    )
+
+    def run_sr(_session, image, _scale):
+        overlap.wait(timeout=5)
+        return image
+
+    monkeypatch.setattr(enhancer, "_run_sr_model", run_sr)
+    source = np.zeros((12, 12, 3), dtype=np.uint8)
+    observations = {}
+
+    def worker(name):
+        threading.current_thread().name = name
+        ctx = ProcessingContext(ai_sr_scale=2, safe_auto=False)
+        image = engine._apply_sr_export(source, ctx, {})
+        observations[name] = (
+            image.shape,
+            ctx._runtime_diagnostics["super_resolution"]["providers"],
+        )
+
+    threads = [
+        threading.Thread(target=worker, args=(name,))
+        for name in sessions
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert observations == {
+        "engine-sr-a": ((12, 12, 3), ["ProviderA"]),
+        "engine-sr-b": ((12, 12, 3), ["ProviderB"]),
+    }
+
+
+def test_concurrent_reshape_calls_keep_their_own_aa6_field_on_new_engine():
+    import threading
+    import time
+
+    engine = RetouchEngine.__new__(RetouchEngine)
+    state_lock = threading.Lock()
+    active = 0
+    max_active = 0
+
+    class SharedFakeReshaper:
+        last_displacement_field = None
+
+        def reshape(self, image, _faces, _ctx, face_ctxs=None):
+            nonlocal active, max_active
+            with state_lock:
+                active += 1
+                max_active = max(max_active, active)
+            value = float(image[0, 0, 0])
+            self.last_displacement_field = np.full(
+                (*image.shape[:2], 2), value, dtype=np.float32
+            )
+            # Give the other caller a chance to overwrite instance diagnostics
+            # if _stage_reshape does not serialize the call-and-snapshot pair.
+            time.sleep(0.03)
+            with state_lock:
+                active -= 1
+            return image.copy()
+
+    engine._reshaper = SharedFakeReshaper()
+    start = threading.Barrier(2)
+    snapshots = {}
+    errors = []
+
+    def worker(value):
+        image = np.full((18, 24, 3), value, dtype=np.uint8)
+        ctx = ProcessingContext(slimming=1.0)
+        try:
+            start.wait(timeout=5)
+            output = engine._stage_reshape(image, [object()], ctx)
+            snapshots[value] = (output.shape, ctx._aa6_warp_field.copy())
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(value,)) for value in (31, 97)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert errors == []
+    assert max_active == 1
+    assert set(snapshots) == {31, 97}
+    for value, (shape, field) in snapshots.items():
+        assert shape == (18, 24, 3)
+        assert field.shape == (18, 24, 2)
+        np.testing.assert_array_equal(field, np.full_like(field, value))
+
+
 class TestResolveRecipe:
     def test_known_recipe(self):
         for name in RECIPES:
@@ -549,6 +701,71 @@ class TestEngineBloom:
         assert np.array_equal(ctx._qa_geometry_reference_img_bgr, reshaped)
         assert not np.shares_memory(ctx._qa_geometry_reference_img_bgr, reshaped)
         assert ctx._qa_geometry_changed is True
+
+    def test_draft_proxy_scales_aa6_warp_for_native_qa(self, monkeypatch):
+        from retouch import engine as engine_module
+
+        monkeypatch.setattr(engine_module, "PROXY_MAX_DIM", 18)
+        engine = RetouchEngine.__new__(RetouchEngine)
+        ctx = ProcessingContext(quality="draft")
+        native = np.zeros((24, 36, 3), dtype=np.uint8)
+        captured = {}
+
+        def fake_detect(proxy, request_ctx, _timings):
+            field = np.empty((*proxy.shape[:2], 2), dtype=np.float32)
+            field[:, :, 0] = 1.25
+            field[:, :, 1] = -0.75
+            request_ctx._aa6_warp_field = field
+            return engine_module._CoreResult(
+                result=proxy.copy(),
+                acc_skin=None,
+                acc_skin_hair=None,
+                acc_lips=None,
+                acc_sharpen=None,
+                faces=[],
+                person_mask=None,
+            )
+
+        def fake_global(image, request_ctx, *_args, **_kwargs):
+            captured["warp_field"] = request_ctx._aa6_warp_field.copy()
+            return engine_module._CoreResult(
+                result=image,
+                acc_skin=None,
+                acc_skin_hair=None,
+                acc_lips=None,
+                acc_sharpen=None,
+                faces=[],
+                person_mask=None,
+            )
+
+        engine._run_detection_and_faces = fake_detect
+        engine._run_global_phases = fake_global
+        output = engine._process_with_proxy(native, ctx, None, {})
+
+        field = captured["warp_field"]
+        assert output.result.shape == native.shape
+        assert field.shape == (*native.shape[:2], 2)
+        np.testing.assert_allclose(field[:, :, 0], 2.5, atol=1e-6)
+        np.testing.assert_allclose(field[:, :, 1], -1.5, atol=1e-6)
+
+        from retouch import qa_detectors
+        reference = np.tile(
+            np.linspace(20, 220, native.shape[1], dtype=np.uint8)[None, :, None],
+            (native.shape[0], 1, 3),
+        )
+        mask = np.ones(native.shape[:2], dtype=np.float32)
+        warnings, evidence = qa_detectors.run_qa_with_evidence(
+            reference,
+            mask,
+            reference_img_bgr=reference,
+            face_skin_mask=mask,
+            warp_field=field,
+        )
+        assert evidence["perceived_retouching"]["available"] is True
+        assert not any(
+            warning.detector in ("perceived_retouching", "qa_pipeline")
+            for warning in warnings
+        )
 
 
 class TestNoFaceFallbackFloatNative:

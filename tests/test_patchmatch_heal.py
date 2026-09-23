@@ -35,6 +35,22 @@ class TestPatchmatchFill:
         assert np.array_equal(result, image)
         assert np.all(source_map == -1)
 
+    def test_float_mask_quantized_to_empty_reports_noop(self) -> None:
+        image = _periodic_texture(32, 32)
+        # Positive in float space, but every value truncates to zero in the
+        # uint8 inpaint mask.
+        mask = np.full(image.shape[:2], 0.001, dtype=np.float32)
+        report = {}
+
+        result = heal_region(image, mask, method="telea", report=report)
+
+        assert result is image
+        assert report == {
+            "requested": "telea",
+            "executed": "none",
+            "reason": "empty_mask",
+        }
+
     def test_is_deterministic_and_honours_source_mask(self) -> None:
         image = _periodic_texture()
         hole = np.zeros(image.shape[:2], dtype=np.uint8)
@@ -192,6 +208,23 @@ class TestDegenerateSourceFallbackHonoursDonors:
             "permitted_donor_pixels": 0,
             "fallback_pixels": 0,
             "source_map_available": False,
+        }]
+
+    def test_engine_manual_empty_heal_is_reported_as_skipped_noop(self):
+        image = _periodic_texture(24, 24)
+        empty_mask = np.zeros(image.shape[:2], dtype=np.uint8)
+        result, diagnostics = RetouchEngine._apply_manual_heals(
+            image,
+            [{"mask_png_b64": mask_to_b64(empty_mask), "method": "telea"}],
+        )
+
+        assert np.array_equal(result, image)
+        assert diagnostics == [{
+            "index": 0,
+            "status": "skipped",
+            "requested": "telea",
+            "executed": "none",
+            "reason": "empty_mask",
         }]
 
     def test_patchmatch_success_reports_patchmatch(self) -> None:

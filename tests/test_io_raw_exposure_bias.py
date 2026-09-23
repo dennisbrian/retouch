@@ -144,6 +144,22 @@ def test_path_context_records_bias_for_batch_exports(tmp_path):
     assert context.raw_exposure_gain_ev == pytest.approx(1.72)
 
 
+def test_path_context_reuses_exact_raw_decode_info(tmp_path, monkeypatch):
+    path = _write_raf(tmp_path / "a.RAF", [_bias_record(-172)])
+    decode_info = {
+        "raw_exposure_bias_ev": -1.72,
+        "raw_exposure_gain_ev": 0.0,
+    }
+
+    def unexpected_reread(*_args, **_kwargs):
+        raise AssertionError("context should reuse the completed decode metadata")
+
+    monkeypatch.setattr("retouch.io.raw_exposure_decode_info", unexpected_reread)
+    context = color_context_for_path(path, raw_exposure_info=decode_info)
+    assert context.raw_exposure_bias_ev == pytest.approx(-1.72)
+    assert context.raw_exposure_gain_ev == 0.0
+
+
 def test_exposure_decode_info_records_bias_when_opted_out(tmp_path):
     path = _write_raf(tmp_path / "a.RAF", [_bias_record(-172)])
     assert raw_exposure_decode_info(path, apply_exposure_bias=False) == {
