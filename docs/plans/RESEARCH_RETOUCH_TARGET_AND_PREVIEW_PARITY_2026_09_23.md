@@ -15,6 +15,14 @@ consumer is operating on the same face, coordinates, and base image at all.
 The [proposed execution plan](PLAN_RETOUCH_TARGET_AND_PREVIEW_VALIDATION_2026_09_23.md)
 specifies future checks; it is not authorization to execute them.
 
+**Status update (2026-09-23, later same day):** the three "First" rows were checked
+on a real photo (DSCF4463, 6240×4160). §3 double scaling: reproduced and fixed
+(`17377c8`). §4 preview face coordinates: reproduced and fixed (`bf70524`); the
+`native_one_to_one` detail label remains open. §4 "cache hit removes inspection
+evidence": not reproduced on fast, small full-quality or draft paths, because
+`_run_detection_and_faces` returns the supplied contexts when none are rebuilt.
+Detail: [TODO_WEEK_2026_09_21.md](TODO_WEEK_2026_09_21.md).
+
 ## 1. Recommendation
 
 Before calling this research tranche ready for quality qualification, establish
