@@ -281,6 +281,59 @@ class TestCompositeFaces:
         _, _, _, _, _, next_hair_only = engine._composite_faces(base, [], 4, 4)
         assert float(next_hair_only.max()) == 0.0
 
+    @staticmethod
+    def _soft_result(rng, roi, value):
+        x1, y1, x2, y2 = roi
+        h, w = y2 - y1, x2 - x1
+        mask = rng.random((h, w)).astype(np.float32)
+        return _FaceResult(
+            canvas=np.full((h, w, 3), value, dtype=np.uint8),
+            skin_mask=mask, skin_hair_mask=mask,
+            lips_mask=np.zeros((h, w), np.float32),
+            sharpen_mask=np.zeros((h, w), np.float32),
+            roi_box=roi,
+        )
+
+    def test_face_boxes_leave_single_and_disjoint_faces_bit_identical(self):
+        """T5b ownership only touches pixels where face ROIs intersect."""
+        engine = RetouchEngine.__new__(RetouchEngine)
+        rng = np.random.default_rng(0)
+        base = rng.integers(0, 256, (40, 80, 3), dtype=np.uint8)
+        a = self._soft_result(rng, (0, 0, 30, 40), 200)
+        b = self._soft_result(rng, (50, 0, 80, 40), 30)
+        for frs, boxes in (([a], [(8, 8, 10, 10)]),
+                           ([a, b], [(8, 8, 10, 10), (58, 8, 10, 10)])):
+            ref = engine._composite_faces(base, frs, 40, 80)
+            got = engine._composite_faces(base, frs, 40, 80, face_boxes=boxes)
+            for r, g in zip(ref, got):
+                assert np.array_equal(r, g)
+
+    def test_later_face_cannot_overwrite_nearer_face(self):
+        """T5b: overlapping ROIs -- face B (composited last) has alpha 1 over
+        face A's box, but A is nearer there, so A's canvas must survive."""
+        engine = RetouchEngine.__new__(RetouchEngine)
+        base = np.full((60, 40, 3), 100, dtype=np.uint8)
+        ones_a = np.ones((40, 40), np.float32)
+        zeros_a = np.zeros_like(ones_a)
+        a = _FaceResult(canvas=np.full((40, 40, 3), 150, np.uint8),
+                        skin_mask=ones_a, skin_hair_mask=ones_a,
+                        lips_mask=zeros_a, sharpen_mask=zeros_a,
+                        roi_box=(0, 20, 40, 60))
+        b = _FaceResult(canvas=np.full((50, 40, 3), 60, np.uint8),
+                        skin_mask=np.zeros((50, 40), np.float32),
+                        skin_hair_mask=np.ones((50, 40), np.float32),
+                        lips_mask=np.zeros((50, 40), np.float32),
+                        sharpen_mask=np.zeros((50, 40), np.float32),
+                        roi_box=(0, 0, 40, 50))
+        box_a, box_b = (15, 40, 10, 10), (15, 2, 10, 10)
+        old = engine._composite_faces(base, [a, b], 60, 40)[0]
+        assert (old[40:50, 15:25] == 60).all()  # pre-fix: B wins over A
+        res = engine._composite_faces(
+            base, [a, b], 60, 40, face_boxes=[box_a, box_b],
+        )[0]
+        assert (res[40:50, 15:25] == 150).all()
+        assert (res[2:12, 15:25] == 60).all()
+
 
 class TestApplyWhiteCostumeLift:
     """Unit tests for ``RetouchEngine._apply_white_costume_lift``.

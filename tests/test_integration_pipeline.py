@@ -326,6 +326,66 @@ class TestMultiFaceHandling:
         assert result.shape == (400, 500, 3)
         assert result.face_count == 3
 
+    @pytest.mark.parametrize("size", [(300, 400), (2400, 3200)])
+    def test_overlapping_roi_does_not_overwrite_neighbour_face(self, size):
+        """T5b: a later face whose padded ROI (and its own parse, e.g. a
+        false-positive's "hair") covers an earlier face must not composite
+        its canvas -- an un-retouched copy of the neighbour plus its own
+        edits -- over that neighbour. Covers both composite call sites
+        (in-place path and the >PROXY_MAX_DIM native path)."""
+        h_img, w_img = size
+        s = h_img / 300
+        box_a = (int(150 * s), int(170 * s), int(60 * s), int(60 * s))  # subject
+        box_b = (int(140 * s), int(40 * s), int(60 * s), int(60 * s))   # above it
+        engine = _make_mock_engine(face_count=2)
+
+        def detect(img_bgr):
+            k = img_bgr.shape[0] / h_img
+            out = []
+            for (x, y, w, h) in (box_a, box_b):
+                fd = _make_synthetic_face_data(ied=20.0 * k)
+                fd.bbox = (int(x * k), int(y * k), int(w * k), int(h * k))
+                out.append(fd)
+            return out
+
+        engine._detector.detect = detect
+        engine._detector.detect_faces = detect
+
+        def per_face(img, faces, person_mask, ctx, h, w):
+            results = []
+            for idx, face in enumerate(faces):
+                fx, fy, fw, fh = face.bbox
+                pt, pb, pl, pr = engine._compute_face_roi_padding(fw, fh)
+                x1, y1 = max(0, fx - pl), max(0, fy - pt)
+                x2, y2 = min(w, fx + fw + pr), min(h, fy + fh + pb)
+                crop = img[y1:y2, x1:x2].astype(np.int16)
+                shift = 30 if idx == 0 else -30  # A retouched; B's own edits
+                canvas = np.clip(crop + shift, 0, 255).astype(np.uint8)
+                ones = np.ones((y2 - y1, x2 - x1), dtype=np.float32)
+                zeros = np.zeros_like(ones)
+                results.append(_FaceResult(
+                    canvas=canvas, skin_mask=zeros, skin_hair_mask=ones,
+                    lips_mask=zeros, sharpen_mask=zeros, roi_box=(x1, y1, x2, y2),
+                ))
+            return results, []
+
+        engine._stage_per_face = per_face
+        img = np.full((h_img, w_img, 3), 120, dtype=np.uint8)
+        processed = engine.process(img, recipe="natural")
+        assert processed.face_count == 2
+        result = np.asarray(processed)
+        x, y, w, h = box_a
+        face_a = result[y:y + h, x:x + w].astype(np.int16)
+        # A's own retouch (+30) must survive everywhere in A's face box.
+        assert int(np.abs(face_a - 150).max()) <= 1, (
+            f"neighbour face overwrote subject: box values "
+            f"{np.unique(face_a).tolist()[:8]}"
+        )
+        # B keeps its edit on its own face.
+        bx, by, bw, bh = box_b
+        face_b = result[by:by + bh, bx:bx + bw].astype(np.int16)
+        assert int(np.abs(face_b - 90).max()) <= 1
+
     def test_max_faces_caps_detection(self):
         """Even when the detector returns more faces than ``max_faces``,
         the result should reflect the actual count returned by detection."""

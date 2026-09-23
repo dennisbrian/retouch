@@ -79,7 +79,7 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import cv2
 import numpy as np
@@ -2405,6 +2405,7 @@ class RetouchEngine:
             acc_hair_only,
         ) = self._composite_faces(
             result_native, face_results, h_img, w_img,
+            face_boxes=[f.bbox for f in faces_native],
         )
 
         core = _CoreResult(
@@ -2617,7 +2618,8 @@ class RetouchEngine:
             acc_sharpen,
             acc_hair_only,
         ) = self._composite_faces(
-            result, face_results, h_img, w_img
+            result, face_results, h_img, w_img,
+            face_boxes=[f.bbox for f in faces],
         )
 
         final_contexts = built_contexts if built_contexts is not None else cached_contexts
@@ -3649,6 +3651,7 @@ class RetouchEngine:
         face_results: List[_FaceResult],
         h_img: int,
         w_img: int,
+        face_boxes: Optional[Sequence[Tuple[int, int, int, int]]] = None,
     ) -> Tuple[
         np.ndarray,
         np.ndarray,
@@ -3657,7 +3660,19 @@ class RetouchEngine:
         np.ndarray,
         np.ndarray,
     ]:
-        """Merge face canvases and request-local masks into one output image."""
+        """Merge face canvases and request-local masks into one output image.
+
+        ``face_boxes`` (optional, one ``(x, y, w, h)`` per face result, same
+        coordinate space as ``roi_box``) enables overlap ownership: where two
+        faces' padded ROIs intersect, each face's composite alpha is
+        attenuated by the claim of any face that is nearer to the pixel (see
+        :meth:`_overlap_owned_alphas`). Without it, a later face's absolute
+        canvas -- which holds an un-retouched copy of its neighbour -- wins
+        wherever its own parse (e.g. a false-positive's "hair") covers the
+        neighbour, erasing the neighbour's retouch and leaking the later
+        face's per-face overrides onto it. Single-face and non-overlapping
+        ROIs are unaffected (identical arithmetic).
+        """
         acc_skin = np.zeros((h_img, w_img), dtype=np.float32)
         acc_skin_hair = np.zeros((h_img, w_img), dtype=np.float32)
         acc_lips = np.zeros((h_img, w_img), dtype=np.float32)
@@ -3666,16 +3681,23 @@ class RetouchEngine:
         # consumed by _stage_background for Z3 wisp recovery.
         acc_hair_only = np.zeros((h_img, w_img), dtype=np.float32)
 
+        owned_alphas = None
+        if face_boxes is not None and len(face_results) > 1:
+            owned_alphas = self._overlap_owned_alphas(face_results, face_boxes)
+
         result = base.copy()
-        for fr in face_results:
+        for idx, fr in enumerate(face_results):
             x1, y1, x2, y2 = fr.roi_box
-            edit_mask = np.maximum.reduce((
-                fr.skin_hair_mask,
-                fr.lips_mask,
-                fr.sharpen_mask,
-            ))
-            alpha = np.clip(edit_mask, 0.0, 1.0)[:, :, np.newaxis]
-            
+            if owned_alphas is not None and owned_alphas[idx] is not None:
+                alpha = owned_alphas[idx][:, :, np.newaxis]
+            else:
+                edit_mask = np.maximum.reduce((
+                    fr.skin_hair_mask,
+                    fr.lips_mask,
+                    fr.sharpen_mask,
+                ))
+                alpha = np.clip(edit_mask, 0.0, 1.0)[:, :, np.newaxis]
+
             # Blend cropped canvas back anywhere this face ROI was edited.
             roi_blend = np.clip(
                 fr.canvas.astype(np.float32) * alpha
@@ -3697,6 +3719,86 @@ class RetouchEngine:
             acc_sharpen[y1:y2, x1:x2] = np.maximum(acc_sharpen[y1:y2, x1:x2], fr.sharpen_mask)
 
         return result, acc_skin, acc_skin_hair, acc_lips, acc_sharpen, acc_hair_only
+
+    # Feather of a face's bbox claim, as a fraction of that face's own w/h.
+    _OWNERSHIP_BOX_FEATHER = 0.15
+    # Width (normalised face-size units) of the soft hand-over between faces.
+    _OWNERSHIP_PROXIMITY_BAND = 0.5
+
+    @classmethod
+    def _overlap_owned_alphas(
+        cls,
+        face_results: List[_FaceResult],
+        face_boxes: Sequence[Tuple[int, int, int, int]],
+    ) -> List[Optional[np.ndarray]]:
+        """Per-face composite alphas with overlapping ROIs resolved by proximity.
+
+        For face *i*, at every pixel inside another face *j*'s ROI, the alpha
+        is multiplied by ``1 - claim_j * near_j`` with
+        ``claim_j = max(alpha_j, feathered bbox_j)`` and ``near_j`` a
+        smoothstep of how much nearer *j*'s centre is than *i*'s (distances
+        normalised by each face's bbox w/h; 0.5 on the equidistant line,
+        saturating ``_OWNERSHIP_PROXIMITY_BAND`` either side). So a face
+        never composites over a clearly-nearer face's own edits or detected
+        face box, pixels the nearer face neither edits nor frames keep the
+        farther face's edit (no holes from feather tails), and the hand-over
+        through hair both faces edited is gradual, not a seam. Returns ``None``
+        for faces whose ROI intersects no other ROI (caller uses the
+        unmodified alpha, so their arithmetic is unchanged).
+        """
+        n = len(face_results)
+        raw = [
+            np.clip(
+                np.maximum.reduce((fr.skin_hair_mask, fr.lips_mask, fr.sharpen_mask)),
+                0.0, 1.0,
+            ).astype(np.float32)
+            for fr in face_results
+        ]
+        feather = cls._OWNERSHIP_BOX_FEATHER
+        band = cls._OWNERSHIP_PROXIMITY_BAND
+        out: List[Optional[np.ndarray]] = [None] * n
+        for i, fi in enumerate(face_results):
+            x1, y1, x2, y2 = fi.roi_box
+            overlaps = []
+            for j, fj in enumerate(face_results):
+                if j == i:
+                    continue
+                u1, v1, u2, v2 = fj.roi_box
+                ix1, iy1 = max(x1, u1), max(y1, v1)
+                ix2, iy2 = min(x2, u2), min(y2, v2)
+                if ix2 > ix1 and iy2 > iy1:
+                    overlaps.append((j, ix1, iy1, ix2, iy2))
+            if not overlaps:
+                continue
+            alpha = raw[i].copy()
+            bx_i, by_i, bw_i, bh_i = face_boxes[i]
+            for j, ix1, iy1, ix2, iy2 in overlaps:
+                u1, v1 = face_results[j].roi_box[:2]
+                yy, xx = np.mgrid[iy1:iy2, ix1:ix2].astype(np.float32)
+                d_i = np.hypot(
+                    (xx - (bx_i + bw_i / 2.0)) / max(bw_i, 1),
+                    (yy - (by_i + bh_i / 2.0)) / max(bh_i, 1),
+                )
+                bx, by, bw, bh = face_boxes[j]
+                bw, bh = max(bw, 1), max(bh, 1)
+                d_j = np.hypot(
+                    (xx - (bx + bw / 2.0)) / bw, (yy - (by + bh / 2.0)) / bh,
+                )
+                dx = np.maximum(np.maximum(bx - xx, xx - (bx + bw)), 0.0) / (feather * bw)
+                dy = np.maximum(np.maximum(by - yy, yy - (by + bh)), 0.0) / (feather * bh)
+                box_claim = np.clip(1.0 - np.hypot(dx, dy), 0.0, 1.0)
+                claim = np.maximum(
+                    raw[j][iy1 - v1:iy2 - v1, ix1 - u1:ix2 - u1], box_claim,
+                )
+                # Soft proximity weight: 0.5 on the equidistant line, 1 where
+                # j is clearly nearer, 0 where i is -- a hard Voronoi switch
+                # draws a visible seam through hair both faces edited.
+                t = np.clip(0.5 + (d_i - d_j) / (2.0 * band), 0.0, 1.0)
+                near_w = t * t * (3.0 - 2.0 * t)
+                sub = alpha[iy1 - y1:iy2 - y1, ix1 - x1:ix2 - x1]
+                sub *= 1.0 - claim * near_w
+            out[i] = alpha
+        return out
 
     def _stage_subject_separation(
         self,
