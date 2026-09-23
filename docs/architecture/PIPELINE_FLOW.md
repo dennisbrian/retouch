@@ -87,7 +87,7 @@ flowchart TD
 
 The Mermaid diagram above is the 2026-06-23 view. This section is the flow as it
 actually executes today, derived from `engine.py` (`process` →
-`_run_core_pipeline` → `_process_with_proxy` / `_run_global_phases`),
+`_process_with_proxy` → `_run_detection_and_faces` / `_run_global_phases`),
 `stage_wrappers.build_global_registry` (global stage order) and
 `perf_optimizations._process_face_core` (per-face op order, from its `_tr()`
 trace labels). Re-derive it from those three places when it drifts.
@@ -100,9 +100,10 @@ trace labels). Re-derive it from those three places when it drifts.
                               └─> build_context() ──> ProcessingContext   (data-driven from PROCESSING_PARAMS)
 
  ┌───────────────────────────────────────────────────────────────────────────────────────────────┐
- │  _run_core_pipeline                                                                           │
+ │  _process_with_proxy (stages 0–6)                                                           │
  │                                                                                               │
- │  ┌─ _process_with_proxy ────────────────────────────────────────────────────────────────────┐ │
+ │  ┌─ _run_detection_and_faces (stages 0–2, proxy or native) ──────────────────────────────┐   │
+ │  │                                                                                          │ │
  │  │  max side > 2048 ?  ──yes──> proxy = resize(2048)         no ──> proxy = native          │ │
  │  │                                                                                          │ │
  │  │  STAGE 0  Detection & segmentation      (ALWAYS on the proxy)                            │ │
