@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Launcher for the environment built by ./setup.
+#
+#   ./run                  open the app (native window on macOS, browser elsewhere)
+#   ./run web              open the app in your browser
+#   ./run batch ARGS...    run the batch CLI (same options as cli.py)
+#   ./run recipes          list the built-in recipes
+#   ./run update           pull the latest code and refresh dependencies
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT_DIR"
+
+case "${1:-}" in
+    -h|--help|help) sed -n '2,8p' "$0"; exit 0 ;;
+esac
+
+PYTHON="$ROOT_DIR/.venv/bin/python"
+if [ ! -x "$PYTHON" ]; then
+    echo "No environment found. Run ./setup first." >&2
+    exit 1
+fi
+
+cmd="${1:-app}"
+[ $# -gt 0 ] && shift
+
+case "$cmd" in
+    app)
+        if [ "$(uname -s)" = "Darwin" ]; then
+            exec "$PYTHON" desktop.py "$@"
+        fi
+        exec "$PYTHON" gui.py "$@"
+        ;;
+    web|gui)
+        exec "$PYTHON" gui.py "$@"
+        ;;
+    batch|cli)
+        exec "$PYTHON" cli.py "$@"
+        ;;
+    recipes)
+        exec "$PYTHON" cli.py --list-recipes "$@"
+        ;;
+    update)
+        git pull --ff-only
+        exec "$ROOT_DIR/setup" --no-models
+        ;;
+    *)
+        echo "Unknown command: $cmd" >&2
+        sed -n '2,8p' "$0" >&2
+        exit 2
+        ;;
+esac
