@@ -21,6 +21,10 @@ on a real photo (DSCF4463, 6240×4160). §3 double scaling: reproduced and fixed
 `native_one_to_one` detail label remains open. §4 "cache hit removes inspection
 evidence": not reproduced on fast, small full-quality or draft paths, because
 `_run_detection_and_faces` returns the supplied contexts when none are rebuilt.
+Remaining rows: §7 parser-dependency cache reuse reproduced and fixed
+(`3e5d071`); §5 detection-order targeting reproduced on DSCF4599 and fixed with
+position anchors (`db8ae05`); §6 explicit rebase now warns (`3c09e28`) but the
+rebase design choice remains open.
 Detail: [TODO_WEEK_2026_09_21.md](TODO_WEEK_2026_09_21.md).
 
 ## 1. Recommendation
