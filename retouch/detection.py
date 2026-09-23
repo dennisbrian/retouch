@@ -76,6 +76,10 @@ class FaceContext:
     face_image: Optional[np.ndarray] = None
     # Cached once after parsing. Consumers must honor confidence before use.
     light_direction: Optional[LightDirection] = None
+    # (width, height) of the image whose pixel frame ``face_data.bbox``/``ied``
+    # are expressed in. ``None`` = unknown (legacy); consumers must convert
+    # from this frame exactly once rather than assume proxy resolution.
+    frame_size: Optional[Tuple[int, int]] = None
 
 
 class _LandmarkCompat:

@@ -2244,15 +2244,46 @@ class RetouchEngine:
         and pore detail are never resampled through the proxy.
         """
         h_native, w_native = native_img_bgr.shape[:2]
+        h_proxy, w_proxy = proxy_img_bgr.shape[:2]
         scale_up = 1.0 / proxy_scale  # proxy → native multiplier
+
+        def _rescale_face(face: FaceData, factor: float) -> FaceData:
+            if factor == 1.0:
+                return face
+            x, y, bw, bh = face.bbox
+            return FaceData(
+                landmarks=face.landmarks,  # normalized [0,1] — resolution-independent
+                bbox=(
+                    int(round(x * factor)),
+                    int(round(y * factor)),
+                    int(round(bw * factor)),
+                    int(round(bh * factor)),
+                ),
+                ied=face.ied * factor,
+                confidence=face.confidence,
+            )
+
+        def _cached_face_in(fc: "FaceContext", target_w: int) -> FaceData:
+            # Convert from the context's declared frame exactly once.  Contexts
+            # returned by this method carry native boxes; treating them as
+            # proxy boxes re-applied ``scale_up`` and pushed faces off-image.
+            # Legacy contexts without a declared frame keep the historical
+            # proxy-frame assumption.
+            frame = getattr(fc, "frame_size", None)
+            src_w = frame[0] if frame else w_proxy
+            return _rescale_face(fc.face_data, target_w / float(src_w))
 
         # ------------------------------------------------------------------
         # Stage 0 — Detection + segmentation at proxy resolution
         # ------------------------------------------------------------------
         t0 = time.perf_counter()
         cached_contexts = ctx.face_contexts
+        faces_native_cached: Optional[List[FaceData]] = None
         if cached_contexts is not None:
-            faces_proxy = [fc.face_data for fc in cached_contexts]
+            faces_proxy = [_cached_face_in(fc, w_proxy) for fc in cached_contexts]
+            faces_native_cached = [
+                _cached_face_in(fc, w_native) for fc in cached_contexts
+            ]
             if ctx.auto_exposure:
                 bboxes = [f.bbox for f in faces_proxy] if faces_proxy else None
                 proxy_img_bgr, corrected = correct_exposure(proxy_img_bgr, face_bboxes=bboxes)
@@ -2260,6 +2291,7 @@ class RetouchEngine:
                 if corrected:
                     faces_proxy = self._detector.detect(proxy_img_bgr)
                     cached_contexts = None  # cache stale after re-detect
+                    faces_native_cached = None
         else:
             if ctx.auto_exposure:
                 faces_proxy = self._detector.detect(proxy_img_bgr)
@@ -2313,21 +2345,10 @@ class RetouchEngine:
         # ------------------------------------------------------------------
         # Scale face bboxes + ied to native (landmarks stay normalized [0,1])
         # ------------------------------------------------------------------
-        def _scale_face(face: FaceData) -> FaceData:
-            x, y, bw, bh = face.bbox
-            return FaceData(
-                landmarks=face.landmarks,  # normalized [0,1] — resolution-independent
-                bbox=(
-                    int(round(x * scale_up)),
-                    int(round(y * scale_up)),
-                    int(round(bw * scale_up)),
-                    int(round(bh * scale_up)),
-                ),
-                ied=face.ied * scale_up,
-                confidence=face.confidence,
-            )
-
-        faces_native = [_scale_face(f) for f in faces_proxy]
+        if faces_native_cached is not None:
+            faces_native = faces_native_cached
+        else:
+            faces_native = [_rescale_face(f, scale_up) for f in faces_proxy]
 
         # Upscale person mask to native (smooth, so INTER_LINEAR is fine)
         person_mask_native = (
@@ -3365,6 +3386,7 @@ class RetouchEngine:
                     index=i,
                     face_image=crop_list[i],
                     light_direction=all_light_directions[i],
+                    frame_size=(w_img, h_img),
                 )
                 for i in range(len(faces))
             ]
