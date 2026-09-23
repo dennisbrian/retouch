@@ -104,3 +104,28 @@ def test_render_manifest_is_pixel_free_and_reports_precision_and_color():
     assert payload["extensions"]["precision"]["precision_status"] == "downgraded_to_uint8"
     assert payload["extensions"]["qa_provenance"]["schema"] == "retouch_qa_reference_v1"
     assert "pixels" not in json.dumps(payload).lower()
+
+
+def test_inspection_reports_effective_detail_not_just_display_zoom():
+    # T2b (RESEARCH_RETOUCH_TARGET_AND_PREVIEW_PARITY_2026_09_23 §4): a fast
+    # preview enlarged to native size was shown as "native_one_to_one" with no
+    # indication that its detail came from ~800px processing.
+    import gui
+    from retouch.gui_preview_cache import GuiPreviewCache
+
+    image = np.zeros((10, 12, 3), dtype=np.uint8)
+    cache = GuiPreviewCache()
+    cache.set_latest_render(
+        {"render_revision": 4, "native": {"width": 12, "height": 10},
+         "output": {"width": 12, "height": 10}},
+        face_contexts=[{"bbox": (2, 3, 4, 4)}],
+    )
+    preview = {"settings_revision": 4, "render_mode": gui.MODE_RENDER_PREVIEW}
+    _, contract_json = gui.inspect_render_handler(image, preview, 4, "100%", 0, "", cache)
+    detail = json.loads(contract_json)["detail"]
+    assert detail["effective_detail"] == "proxy"
+
+    full = {"settings_revision": 4, "render_mode": gui.MODE_EXPORT_FULL_QUALITY,
+            "settings_sha256": "a" * 64}
+    _, contract_json = gui.inspect_render_handler(image, full, 4, "100%", 0, "", cache)
+    assert json.loads(contract_json)["detail"]["effective_detail"] == "native"

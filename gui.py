@@ -127,6 +127,7 @@ from retouch.advanced_contract import (
     compare_base_contracts,
     delivery_decision as advanced_delivery_decision,
     parse_session_payload as parse_advanced_session_payload,
+    render_detail,
     pixel_sha256 as advanced_pixel_sha256,
     replay_result_matches,
     source_file_matches,
@@ -623,6 +624,11 @@ def inspect_render_handler(
     elif isinstance(roi_json, (dict, list, tuple)):
         roi = roi_json
 
+    detail_evidence = dict(evidence) if isinstance(evidence, dict) else {}
+    for key in ("render_mode", "settings_sha256"):
+        if key in render_snapshot:
+            detail_evidence[key] = render_snapshot[key]
+    detail_evidence.setdefault("render_revision", render_revision)
     try:
         contract = build_inspection_contract(
             mode=inspection_mode,
@@ -633,6 +639,7 @@ def inspect_render_handler(
             face_index=requested_face,
             face_padding=24,
             roi=roi,
+            effective_detail=render_detail(np.asarray(processed_image), detail_evidence),
         )
         cropped = crop_from_inspection_contract(
             np.asarray(processed_image),
@@ -653,6 +660,7 @@ def inspect_render_handler(
                 "render_revision": contract["render"]["revision"],
                 "crop": contract["crop"],
                 "native": contract["native"],
+                "detail": contract["detail"],
                 "download_enabled": False,
             },
             indent=2,

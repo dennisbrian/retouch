@@ -507,8 +507,14 @@ def build_inspection_contract(
     face_index: int = 0,
     face_padding: int = 0,
     roi: Any = None,
+    effective_detail: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build a native-resolution inspection contract.
+
+    ``display.scale`` describes array-to-screen zoom only. ``detail`` records
+    whether those pixels were processed at native resolution (supply
+    ``effective_detail`` from :func:`retouch.advanced_contract.render_detail`);
+    it is ``unverified`` when no evidence is supplied.
 
     ``render_revision`` identifies the pixels supplied by the render.  If
     ``requested_revision`` is omitted, the current draft revision is the
@@ -590,6 +596,16 @@ def build_inspection_contract(
         "crop": crop.to_dict(),
         "selection": selection,
         "display": display,
+        "detail": {
+            "effective_detail": str(
+                (effective_detail or {}).get("effective_detail") or "unverified"
+            ),
+            "reason": (
+                (effective_detail or {}).get("reason")
+                if effective_detail
+                else "no render detail evidence supplied"
+            ),
+        },
         "preview": _download_disabled_preview_state(rendered, canonical_mode),
         "safe_to_commit": True,
     }
