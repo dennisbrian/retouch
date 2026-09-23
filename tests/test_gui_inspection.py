@@ -102,6 +102,27 @@ def test_face_selection_uses_bbox_and_clamps_padding_to_native_bounds():
     assert contract["crop"]["height"] == 60
 
 
+def test_face_selection_converts_declared_processing_frame_to_native():
+    # Fast preview: faces reported in an 800x533 processing frame, pixels
+    # enlarged to 6240x4160. Regression: the box was used as-is and Face
+    # inspection cropped background in the top-left corner.
+    from retouch.detection import FaceContext, FaceData
+
+    fc = FaceContext(
+        face_data=FaceData(landmarks=None, bbox=(333, 179, 163, 172), ied=60.0),
+        regions=None,
+        frame_size=(800, 533),
+    )
+    selected = select_face_crop([fc], 0, (6240, 4160), padding=0)
+    assert selected.source_bbox.to_tuple() == (333, 179, 163, 172)
+    assert selected.native_bbox.to_tuple() == (2597, 1397, 1271, 1342)
+    assert selected.crop.to_tuple() == (2597, 1397, 1271, 1342)
+    assert selected.to_dict()["source_frame"] == [800, 533]
+
+    same = {"bbox": (10, 20, 30, 40), "frame_size": (100, 80)}
+    assert select_face_crop([same], 0, (100, 80)).crop.to_tuple() == (10, 20, 30, 40)
+
+
 def test_roi_selection_accepts_native_pixel_mapping_and_clamps():
     roi = select_roi_crop(
         {"left": 85.2, "top": 70.4, "right": 120.1, "bottom": 95.9},

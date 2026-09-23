@@ -290,6 +290,24 @@ def _face_bbox(face: Any) -> CropRect:
     return coerce_crop_rect(bbox)
 
 
+def _face_frame(face: Any) -> Optional[Tuple[int, int]]:
+    """Return the declared ``(width, height)`` frame of a face's bbox, if any."""
+
+    if isinstance(face, Mapping):
+        frame = face.get("frame_size")
+    else:
+        frame = getattr(face, "frame_size", None)
+    if frame is None:
+        return None
+    try:
+        fw, fh = int(frame[0]), int(frame[1])
+    except (TypeError, ValueError, IndexError):
+        raise InspectionContractError("face frame_size must be (width, height)")
+    if fw <= 0 or fh <= 0:
+        raise InspectionContractError("face frame_size must be positive")
+    return fw, fh
+
+
 @dataclass(frozen=True)
 class FaceCropSelection:
     """Evidence for the face chosen by a native inspection contract."""
@@ -298,12 +316,17 @@ class FaceCropSelection:
     source_bbox: CropRect
     crop: CropRect
     padding: int
+    # Frame ``source_bbox`` was expressed in; ``None`` = assumed native.
+    source_frame: Optional[Tuple[int, int]] = None
+    native_bbox: Optional[CropRect] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "kind": "face",
             "index": self.index,
             "source_bbox": self.source_bbox.to_dict(),
+            "source_frame": list(self.source_frame) if self.source_frame else None,
+            "native_bbox": (self.native_bbox or self.source_bbox).to_dict(),
             "crop": self.crop.to_dict(),
             "padding": self.padding,
         }
@@ -331,12 +354,28 @@ def select_face_crop(
     if isinstance(padding, bool) or not isinstance(padding, int) or padding < 0:
         raise InspectionContractError("face padding must be a non-negative integer")
 
-    source_bbox = _face_bbox(face_values[face_index])
+    face = face_values[face_index]
+    source_bbox = _face_bbox(face)
+    source_frame = _face_frame(face)
+    native_bbox = source_bbox
+    if source_frame is not None:
+        # Fast preview processes (and reports faces) at ~800px, then enlarges
+        # only the pixels; convert the box into the inspected frame once.
+        size = coerce_native_size(native_size)
+        if source_frame != (size.width, size.height):
+            sx = size.width / float(source_frame[0])
+            sy = size.height / float(source_frame[1])
+            native_bbox = CropRect(
+                int(round(source_bbox.x * sx)),
+                int(round(source_bbox.y * sy)),
+                max(1, int(round(source_bbox.width * sx))),
+                max(1, int(round(source_bbox.height * sy))),
+            )
     padded = CropRect(
-        source_bbox.x - padding,
-        source_bbox.y - padding,
-        source_bbox.width + (2 * padding),
-        source_bbox.height + (2 * padding),
+        native_bbox.x - padding,
+        native_bbox.y - padding,
+        native_bbox.width + (2 * padding),
+        native_bbox.height + (2 * padding),
     )
     crop = clamp_native_crop(padded, native_size)
     return FaceCropSelection(
@@ -344,6 +383,8 @@ def select_face_crop(
         source_bbox=source_bbox,
         crop=crop,
         padding=padding,
+        source_frame=source_frame,
+        native_bbox=native_bbox,
     )
 
 
