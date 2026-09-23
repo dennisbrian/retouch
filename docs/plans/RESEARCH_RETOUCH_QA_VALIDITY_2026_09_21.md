@@ -14,6 +14,15 @@ traces final repair masks, permitted donor material/fallback, persistent mark
 decisions, restoration-stage ownership, and combined under-eye preservation.
 It is also documentation only; the findings here remain the QA prerequisite.
 
+**Status update (2026-09-23):** findings checked on real renders. Missing
+measurements reported as passes: fixed (`d1eacdc`). Sweep flag/score mixing:
+fixed (`2f8b833`). Mask scope and plastic-skin decision: confirmed but not
+changed, because it needs calibration. Evidence: `plastic_skin` flags every tested
+portrait (absolute hf/mf ratio over the person mask), and `pore_spectrum` measures
+the whole frame (0.000 → 0.000 under maximum face smoothing). Also found: the A5
+back-off loop that would act on `plastic_skin` is in `_run_core_pipeline`, which
+has no callers. Detail: [TODO_WEEK_2026_09_21.md](TODO_WEEK_2026_09_21.md).
+
 ## 1. Recommendation and evidence boundary
 
 **Validate what each QA measurement actually measures before tuning retouch
