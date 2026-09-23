@@ -549,4 +549,10 @@ if __name__ == "__main__":
     import multiprocessing
 
     multiprocessing.freeze_support()
+
+    # gui.py only sets up its log file when run as a script; the desktop
+    # app imports it as a module, so do it here.
+    from retouch.diagnostics import setup_file_logging
+
+    setup_file_logging()
     run_desktop()

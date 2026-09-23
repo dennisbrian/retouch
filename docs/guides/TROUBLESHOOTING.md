@@ -7,22 +7,30 @@ Quick fixes for common issues. If your problem isn't here, open an issue on GitH
 ## Installation & Setup
 
 ### ImportError: No module named 'retouch'
-**Cause:** Package not installed or venv not activated.
+**Cause:** Environment not set up, or a different Python is running.
 
-**Fix:**
+**Fix:** run `./setup` from the repository root and launch with `./run`, which
+always uses `.venv`. In a manual install:
 ```bash
-source venv/bin/activate
-python -m pip install --upgrade pip
+source .venv/bin/activate
 python -m pip install -e .  # Install in editable mode
 ```
 
-### Models downloading very slowly
-**Cause:** Large files (~800 MB). First run downloads all models.
+### MediaPipe or protobuf fails to install
+**Cause:** Python 3.12 or newer. MediaPipe 0.10.5 only has wheels up to 3.11.
+
+**Fix:** `./setup` uses the `.python-version` pin (3.11) automatically. For a
+manual install, create the venv with `python3.11 -m venv .venv`.
+
+### Models downloading slowly or failing
+**Cause:** The three core models (about 13 MB) download on first use into
+`~/.cache/retouch/models`. Offline mode (`RETOUCH_OFFLINE=1`) or a blocked
+network stops the download.
 
 **Fix:**
-1. ✅ Just wait (takes 5-15 min depending on connection)
-2. Or manually download from S3 (see docs/architecture/ARCHITECTURE.md for URLs)
-3. Place in `models/` directory
+1. ✅ Run `./setup` once while online; it pre-fetches and verifies them
+2. Or download them by hand with the `curl` commands in the [README](../../README.md#model-files) into `models/`
+3. Set `RETOUCH_CACHE_DIR` if the default cache location is not writable
 
 **Check status:**
 ```bash
@@ -229,15 +237,21 @@ top  # Watch %MEM column
 
 2. ✅ **Reinstall dependencies**
    ```bash
-   pip install --upgrade -r requirements/gui.txt
+   ./setup     # or, in a manual install: pip install --upgrade -r requirements/gui.txt
    ```
 
-3. ✅ **Download models**
+3. ✅ **"When localhost is not accessible, a shareable link must be created"**
+   Gradio raises this when its own page request fails. With Starlette 1.0 or
+   newer every page returns 500 (`unhashable type: 'dict'`), because Gradio 4
+   uses the older `TemplateResponse` call. The requirements cap Starlette
+   below 1.0; check with `pip show starlette` and re-run `./setup`.
+
+4. ✅ **Download models**
    ```bash
-   python3 -c "from retouch import RetouchEngine; RetouchEngine()"
+   ./setup     # re-fetches and verifies the core models
    ```
 
-4. ✅ **Check browser compatibility** (Chrome/Safari/Firefox all work)
+5. ✅ **Check browser compatibility** (Chrome/Safari/Firefox all work)
 
 ### GUI slider changes not applying
 **Symptom:** Move slider, but preview doesn't update.

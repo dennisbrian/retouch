@@ -27,6 +27,12 @@ has its own verified resolution and acceptance evidence.
 
 ### Onnxruntime wheel gap and the 3.11 recovery track
 
+> **Update 2026-09-23:** the gap below is closed. `pyproject.toml` now pins
+> `onnxruntime==1.19.2`, which has wheels for CPython 3.9 through 3.11, and
+> `uv sync --locked --extra dev` installs cleanly on 3.9 and 3.10 again. 3.11
+> remains the default (`.python-version`, `./setup`). The section is kept as
+> the record of why 3.11 became the recovery interpreter.
+
 The original recovery target was CPython 3.9.6, matching the project's
 `requires-python = ">=3.9"`. That path is **not installable** with the current
 `uv.lock`:
@@ -133,7 +139,7 @@ different TensorFlow/protobuf installation—from contaminating the pinned
 runtime.
 
 ```bash
-cd /Applications/htdocs/retouch
+cd /path/to/retouch   # your checkout
 
 export RETOUCH_RECOVERY_ROOT=/private/tmp/retouch-runtime-recovery
 export LEGACY_ENV="$RETOUCH_RECOVERY_ROOT/venv-legacy-py311"
@@ -293,7 +299,7 @@ platform, or wheel set cannot satisfy the input, stop and record the failure
 instead of weakening the constraints or modifying `uv.lock`.
 
 ```bash
-cd /Applications/htdocs/retouch
+cd /path/to/retouch   # your checkout
 
 export RETOUCH_RECOVERY_ROOT=/private/tmp/retouch-runtime-recovery
 export MIGRATION_ENV="$RETOUCH_RECOVERY_ROOT/venv-py312-migration"

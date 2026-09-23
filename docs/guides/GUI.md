@@ -51,7 +51,7 @@ Styled with class `.develop-panel` to **scroll independently** while the center 
 
 ## 2. Core Styling System (CSS)
 
-All stylesheets are injected inside [gui.py](file:///Applications/htdocs/retouch/gui.py). The styling uses a **Liquid Glass** aesthetic inspired by Apple's glassmorphism design language — a deep purple gradient backdrop with frosted-glass panels.
+All stylesheets are injected inside [gui.py](../../gui.py). The styling uses a **Liquid Glass** aesthetic inspired by Apple's glassmorphism design language — a deep purple gradient backdrop with frosted-glass panels.
 
 ### 2.1 Design Tokens (Colors & Effects)
 | Token | Value | Purpose |
@@ -152,11 +152,11 @@ All typography forced to `#e8edf5` on the dark gradient backdrop:
 
 Launch the interactive dashboard:
 ```bash
-python3 gui.py
+./run web        # after ./setup; in a manual install: python3 gui.py
 ```
 Or with auto-reload on file changes:
 ```bash
-bash dev.sh
+watchfiles "python3 gui.py" . retouch
 ```
 
 * **Default Port**: `7860` (accessible at `http://127.0.0.1:7860/`).

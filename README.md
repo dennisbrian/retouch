@@ -7,12 +7,33 @@ Professional automated face retouching for portraits, cosplay, and batch workflo
 
 ## Requirements
 
-- Python 3.9+
+- Python 3.9–3.11 (3.11 recommended). MediaPipe 0.10.5 has no wheels for 3.12+.
 - macOS, Linux, or Windows
 
-## Install
+## Quick setup (macOS and Linux)
 
 ```bash
+./setup        # installs uv if needed, builds .venv from uv.lock, fetches the core models
+./run          # opens the app: a native window on macOS, your browser elsewhere
+```
+
+`./setup` is safe to re-run. `.python-version` pins Python 3.11, and uv
+downloads that interpreter if your system does not have it. Other launcher
+commands:
+
+```bash
+./run web                                  # open the app in your browser
+./run batch ~/photos -o ~/photos_out --recipe natural --workers 4
+./run recipes                              # list the built-in recipes
+./run update                               # git pull, then refresh dependencies
+```
+
+## Manual install
+
+On Windows, or if you prefer pip:
+
+```bash
+python -m venv .venv          # use Python 3.9–3.11
 pip install -r requirements/base.txt
 ```
 
@@ -22,12 +43,18 @@ Optional extras:
 pip install -r requirements/dev.txt   # pytest
 pip install -r requirements/gui.txt   # Gradio web UI
 pip install -r requirements/raw.txt   # RAW camera file support
-pip install retinaface                # improved face detection (optional)
 ```
+
+RetinaFace is not supported: its dependencies conflict with the pinned
+MediaPipe runtime, so MediaPipe is the only detection path.
 
 ## Model files
 
-Create a `models/` directory and download these files before running the full pipeline:
+The three core MediaPipe models (about 13 MB together) download automatically,
+verified against `models/manifest.json`, into `~/.cache/retouch/models` the
+first time they are needed; `./setup` fetches them up front. Set
+`RETOUCH_CACHE_DIR` to use another location. To place them in `models/`
+by hand instead (for example on an offline machine):
 
 ```bash
 mkdir -p models
@@ -118,15 +145,18 @@ For a quick local smoke test without face-model initialization, add
 ### Web GUI
 
 ```bash
-pip install -r requirements/gui.txt
-python3 gui.py
+./run web            # or, in a manual install: python3 gui.py
 ```
 
-Opens at `http://127.0.0.1:7860`. Restart after updating:
+Opens at `http://127.0.0.1:7860`. Press Ctrl+C in the terminal to stop it,
+and start it again after updating.
 
-```bash
-pkill -f "python3 -u gui.py" && python3 gui.py
-```
+### Standalone app
+
+`scripts/build/retouch_app.spec` builds a self-contained desktop app with
+PyInstaller, so end users need no Python. Builds are per platform (macOS,
+Windows, Linux); the `Desktop builds` workflow produces all three. See
+[BUILD.md](BUILD.md).
 
 ## Recipes
 
@@ -139,20 +169,20 @@ python3 cli.py --help
 ## Tests
 
 ```bash
-pip install -r requirements/dev.txt
+uv sync --locked --extra desktop --extra dev   # or: pip install -r requirements/dev.txt
 scripts/dev/test tests/ -v
 ```
 
 ## Development
 
-Auto-reload on file changes (requires `watchfiles`):
+Auto-reload the GUI on file changes (requires `watchfiles`):
 
 ```bash
 pip install watchfiles
-./dev.sh
+watchfiles "python3 gui.py" . retouch
 ```
 
-The dev server watches `.` and `retouch/` for `.py` changes and restarts the Gradio GUI automatically.
+This restarts the Gradio GUI whenever a file under `.` or `retouch/` changes.
 
 ## Documentation
 

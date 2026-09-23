@@ -6,21 +6,23 @@ source file.
 
 ## 1. Start the local GUI
 
-From the repository root:
+From the repository root, set up once and then launch:
 
 ```bash
-cd /Applications/htdocs/retouch
-python3 gui.py
+./setup      # first time only: dependencies and core models
+./run web    # starts the GUI
 ```
+
+On Windows, or in a manual pip install, run `python3 gui.py` instead of
+`./run web`; see the [README](../../README.md#manual-install).
 
 Open <http://127.0.0.1:7860/> in Safari, Chrome, or another browser. Keep the
 terminal running while using the GUI. Press `Ctrl+C` in that terminal to stop
-it.
+it. On macOS, plain `./run` opens the same app in its own window.
 
-For an offline run, use `RETOUCH_OFFLINE=1` before the command. Install the
-dependencies and verify the required model files first; see the
-[README installation section](../../README.md#install) and
-[runtime recovery guide](RUNTIME_RECOVERY.md).
+For an offline run, put `RETOUCH_OFFLINE=1` before the command. Models are not
+downloaded in offline mode, so run `./setup` once while online first; see the
+[runtime recovery guide](RUNTIME_RECOVERY.md) for isolated environments.
 
 ## 2. Retouch one photo
 
