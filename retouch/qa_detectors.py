@@ -98,6 +98,22 @@ def _qa_status(det_result: Dict[str, Any]) -> str:
     return QA_STATUS_FLAGGED if det_result.get("flagged", False) else QA_STATUS_PASSED
 
 
+def _not_measured(reason: str, **null_fields: Any) -> Dict[str, Any]:
+    """Result for a detector that could not measure (e.g. no/mismatched reference).
+
+    Zero scores here used to classify as ``checked-pass``; an unmeasured
+    comparison must stay distinguishable from a measured pass.
+    """
+    return {
+        "status": QA_STATUS_NOT_RUN,
+        "score": None,
+        "flagged": False,
+        "reason": reason,
+        "note": reason,
+        **null_fields,
+    }
+
+
 def not_run_evidence(reason: str) -> Dict[str, Dict[str, Any]]:
     """Build a complete not-run evidence dict for every known detector."""
     return {
@@ -793,25 +809,16 @@ def detect_color_drift(
             - "note": str, explanatory text when no reference is supplied.
     """
     if reference_img_bgr is None:
-        return {
-            "score": 0.0,
-            "flagged": False,
-            "deltaE_mean": 0.0,
-            "deltaH_mean_deg": 0.0,
-            "deltaH_max_deg": 0.0,
-            "note": "no reference supplied — self-check skipped; "
-                    "color_drift gate is a before/after comparison",
-        }
+        return _not_measured(
+            "no reference supplied — color_drift is a before/after comparison",
+            deltaE_mean=None, deltaH_mean_deg=None, deltaH_max_deg=None,
+        )
 
     if reference_img_bgr.shape != img_bgr.shape:
-        return {
-            "score": 0.0,
-            "flagged": False,
-            "deltaE_mean": 0.0,
-            "deltaH_mean_deg": 0.0,
-            "deltaH_max_deg": 0.0,
-            "note": "reference shape mismatch",
-        }
+        return _not_measured(
+            "reference shape mismatch",
+            deltaE_mean=None, deltaH_mean_deg=None, deltaH_max_deg=None,
+        )
 
     out_lab = _bgr_to_lab_f(img_bgr)
     ref_lab = _bgr_to_lab_f(reference_img_bgr)
@@ -825,14 +832,10 @@ def detect_color_drift(
         region = np.ones(out_lab.shape[:2], dtype=bool)
 
     if not np.any(region):
-        return {
-            "score": 0.0,
-            "flagged": False,
-            "deltaE_mean": 0.0,
-            "deltaH_mean_deg": 0.0,
-            "deltaH_max_deg": 0.0,
-            "note": "empty skin region",
-        }
+        return _not_measured(
+            "empty skin region",
+            deltaE_mean=None, deltaH_mean_deg=None, deltaH_max_deg=None,
+        )
 
     out_sub = out_lab[region]
     ref_sub = ref_lab[region]
@@ -950,24 +953,16 @@ def detect_pore_spectrum_distance(
             - "note": str when no reference is supplied.
     """
     if reference_img_bgr is None:
-        return {
-            "score": 0.0,
-            "flagged": False,
-            "pore_energy_ratio": 0.0,
-            "pore_band_energy": 0.0,
-            "ref_pore_band_energy": None,
-            "note": "no reference",
-        }
+        return _not_measured(
+            "no reference",
+            pore_energy_ratio=None, pore_band_energy=None, ref_pore_band_energy=None,
+        )
 
     if reference_img_bgr.shape != img_bgr.shape:
-        return {
-            "score": 0.0,
-            "flagged": False,
-            "pore_energy_ratio": 0.0,
-            "pore_band_energy": 0.0,
-            "ref_pore_band_energy": None,
-            "note": "reference shape mismatch",
-        }
+        return _not_measured(
+            "reference shape mismatch",
+            pore_energy_ratio=None, pore_band_energy=None, ref_pore_band_energy=None,
+        )
 
     proc_energy = _pore_band_energy(_gray_f32(img_bgr))
     ref_energy = _pore_band_energy(_gray_f32(reference_img_bgr))

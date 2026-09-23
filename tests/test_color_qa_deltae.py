@@ -121,7 +121,9 @@ def test_detect_color_drift_no_reference():
     img = _make_skin_patch(20.0)
     res = detect_color_drift(img, skin_mask=None, reference_img_bgr=None)
     assert res["flagged"] is False
-    assert res["score"] == 0.0
+    # Unmeasured, not a zero-drift pass (Q5, 2026-09-23).
+    assert res["score"] is None
+    assert res["status"] == "not-run"
     assert "note" in res
 
 
