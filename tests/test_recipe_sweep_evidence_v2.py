@@ -309,3 +309,29 @@ def test_manifest_keeps_full_qa_and_marks_global_only_non_certifying(tmp_path, m
     assert row["qa_warnings"] == []
     assert row["qa_evidence"]["status"] == "diagnostic_only"
     assert row["runtime_evidence"]["detector"]["status"] == "not_run"
+
+
+def test_merged_flag_keeps_score_from_the_flagging_measurement():
+    # Q4 (RESEARCH_RETOUCH_QA_VALIDITY_2026_09_21 §6): the engine's warning
+    # (pre-face reference, pre-neural stage) flagged color_drift while the
+    # sweep's own run_all row (sweep input vs final output) did not. The merge
+    # used to produce flagged=True with the unrelated runner score 0.02.
+    complete = [{
+        "detector": "color_drift", "score": 0.02, "flagged": False, "threshold": 15.0,
+        "status": "passed", "source": "qa_detectors.run_all", "available": True,
+    }]
+    warning = [{
+        "detector": "color_drift", "score": 0.66, "flagged": True, "threshold": 15.0,
+        "source": "processing_result.qa", "message": "drift",
+    }]
+    row = recipe_sweep._merge_qa_observations(warning, complete)[0]
+    assert row["flagged"] is True
+    assert row["score"] == 0.66
+    assert row["measurement_source"] == "processing_result.qa"
+    assert row["runner_observation"]["score"] == 0.02
+    assert row["runner_observation"]["flagged"] is False
+
+    agreeing = recipe_sweep._merge_qa_observations(
+        warning, [{**complete[0], "flagged": True, "score": 0.7}],
+    )[0]
+    assert agreeing["score"] == 0.7 and "runner_observation" not in agreeing

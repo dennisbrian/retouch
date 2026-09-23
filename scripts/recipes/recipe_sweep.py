@@ -315,13 +315,24 @@ def _merge_qa_observations(
             by_detector[detector] = len(merged) - 1
             continue
         target = merged[by_detector[detector]]
-        if warning.get("flagged"):
+        if warning.get("flagged") and not target.get("flagged"):
+            # Never lose a flag, but keep flag/score/threshold from ONE
+            # measurement: the flagging observation compared a different
+            # stage/reference than this row's own score (Q4,
+            # RESEARCH_RETOUCH_QA_VALIDITY_2026_09_21 §6).
+            target.setdefault("runner_observation", {
+                key: target.get(key)
+                for key in ("score", "flagged", "threshold", "status", "source")
+            })
             target["flagged"] = True
             target["status"] = "flagged" if target.get("available", True) else "unavailable"
+            target["score"] = warning.get("score")
+            target["threshold"] = warning.get("threshold")
+            target["measurement_source"] = warning.get("source")
+        elif warning.get("threshold") is not None and target.get("threshold") is None:
+            target["threshold"] = warning["threshold"]
         if warning.get("message"):
             target["message"] = warning["message"]
-        if warning.get("threshold") is not None:
-            target["threshold"] = warning["threshold"]
         if target.get("score") is None and warning.get("score") is not None:
             target["score"] = warning["score"]
         # Keep the actual ProcessingResult warning distinct from context/raw
