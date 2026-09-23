@@ -7,6 +7,19 @@
 
 ---
 
+## Git Conventions
+- NEVER add 'Co-Authored-By: Claude' or 'Generated with Claude Code' trailers to commit messages.
+- Before switching branches (e.g. to hotfix/production), run `git status`. Stash local config (config/db.php, dev-login changes) with a descriptive message, and never commit it.
+- When porting a change to production, branch or worktree off `origin/production` and cherry-pick only the requested commits. Never merge whole feature branches unless explicitly asked.
+- After any fix, confirm `git status` is clean BEFORE testing on staging. Uncommitted fixes do not deploy.
+
+## Audit & Review Scope
+- When asked to audit or review a branch, scope it to files changed on THAT branch only: `git diff --name-only origin/production...HEAD` (or the named base). Confirm the file list with me before reviewing. Do not audit unrelated modules or the full master..HEAD diff.
+- Before claiming something has 'no tests' or 'no coverage', check untracked files too (`git status --porcelain`, `ls tests/`).
+- Record hypotheses in memory/docs only AFTER they are verified by a discriminating experiment.
+
+---
+
 ## Quick Context
 
 This is a **production-grade image processing engine** that applies professional retouching to portraits via a modular 7-stage pipeline. It combines:
@@ -202,6 +215,15 @@ runs complete in roughly 27–325 s depending on recipe and face workload. The
 ### Tone-Invariance & Fairness
 - **No Absolute Intensity Thresholds:** Do not use hardcoded absolute intensity, luminance, or reflectance threshold checks (e.g., `I > 170.0`, `L > 0.85`) on signals that scale with the subject's skin tone. These absolute gates systematically degrade or fail on darker skin tones (Fitzpatrick V-VI).
 - **Tone-Adaptive Alternatives:** Use margin-above-baseline measures relative to each face's own diffuse baseline (e.g., computed via median over the skin mask or crop). See `retouch/specular.py::extract_specular` for a reference implementation.
+
+---
+
+## Batch Processing
+- Batch jobs are long (hundreds of 26MP photos). Report progress counts periodically (e.g. 120/327) so I know it isn't stuck.
+- Known issues: false-completion and single-file hangs. Always verify output count == input count and detect/skip hung files with a per-file timeout.
+- Output layout: final/ and compare/ subfolders, then sync to Google Drive.
+- Loosely named folders (e.g. 'cosmic day3') should be resolved with `find` and confirmed before running.
+- Another Claude session may be editing the same files. Check `git status` before committing and don't commit files you didn't change.
 
 ---
 
