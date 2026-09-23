@@ -725,7 +725,12 @@ def print_input_plan(plan: InputPlan) -> None:
         label = row.path or row.token
         detail = row.reason or row.planned_output or ""
         if row.selected:
-            marker = "↺" if row.status == "resume_verified" else "✓"
+            if "failed" in (row.header_status, row.decode_status):
+                marker = "✖"
+            elif row.status == "resume_verified":
+                marker = "↺"
+            else:
+                marker = "✓"
             suffix = " [verified resume]" if row.status == "resume_verified" else ""
             observations = []
             if row.header_status != "not_checked":

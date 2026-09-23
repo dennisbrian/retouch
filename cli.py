@@ -1241,7 +1241,9 @@ def main() -> None:
         preflight_error = "; ".join(
             item for item in (preflight_error, destination_error) if item
         )
-        input_plan.add_issue("destination_preflight", preflight_error)
+        # Record only the new destination problem; the plan's own blocking
+        # issues are already listed individually.
+        input_plan.add_issue("destination_preflight", destination_error)
 
     if not args.skip_disk_check:
         for warning in _check_disk_space(
