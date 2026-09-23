@@ -764,6 +764,7 @@ def build_render_manifest_handler(
             "stale": current > render_revision,
             "render_mode": mode_value,
             "precision": evidence.get("precision", {}),
+            "qa_provenance": evidence.get("qa_provenance", {}),
         },
     )
     return manifest.to_json(indent=2)
@@ -1583,6 +1584,9 @@ def process_image(
                                 for item in qa_warnings
                             ],
                         },
+                        "qa_provenance": dict(
+                            getattr(result, "qa_provenance", {}) or {}
+                        ),
                         "safe_auto_decisions": list(
                             getattr(result, "safe_auto_decisions", []) or []
                         ),

@@ -110,6 +110,54 @@ def test_qa_results_stored_on_context():
 
 
 @requires_retouch
+def test_qa_reference_is_captured_before_face_processing():
+    """Reference-based QA must see the pre-face image, not post-face input."""
+    import retouch.engine as engine_mod
+    from tests.benchmark_pipeline import _make_mock_engine_cls, _wire_mocks
+
+    _bd, _bp, dets, pars = _make_mock_engine_cls()
+    with patch.object(engine_mod, "FaceDetector", _bd), \
+         patch.object(engine_mod, "FaceParser", _bp):
+        eng = engine_mod.RetouchEngine()
+
+    img = np.random.RandomState(7).randint(0, 255, (200, 200, 3), dtype=np.uint8)
+    _wire_mocks(dets[0], pars[0], 200, 200, no_face=False)
+    captured = {}
+
+    def fake_run_all(_result, **kwargs):
+        captured.update(kwargs)
+        return {}
+
+    with patch.object(engine_mod.qa_detectors, "run_all", side_effect=fake_run_all):
+        result = eng.process(img, recipe="natural", fast=False)
+
+    reference = captured["reference_img_bgr"]
+    assert isinstance(reference, np.ndarray)
+    assert reference.shape == img.shape
+    assert reference.dtype == img.dtype
+    assert reference is not img
+    np.testing.assert_array_equal(reference, img)
+    assert result.qa_provenance["schema"] == "retouch_qa_reference_v1"
+    assert result.qa_provenance["reference_stage"] == "pre_face_post_input_preprocess"
+    assert result.qa_provenance["comparison_stage"] == "post_global_pre_neural"
+    assert result.qa_provenance["reference_available"] is True
+    assert result.qa_provenance["reference_is_pre_face"] is True
+
+
+@requires_retouch
+def test_no_face_qa_provenance_is_explicitly_not_run():
+    img = np.random.RandomState(8).randint(50, 200, (100, 100, 3), dtype=np.uint8)
+    with _mocked_engine_for(100, 100, no_face=True) as engine:
+        result = engine.process(img, recipe="natural")
+
+    assert result.qa_provenance["schema"] == "retouch_qa_reference_v1"
+    assert result.qa_provenance["comparison_stage"] == "not_run_no_face"
+    assert result.qa_provenance["qa_ran"] is False
+    assert result.qa_provenance["reference_available"] is True
+    assert result.qa_provenance["reference_is_pre_face"] is True
+
+
+@requires_retouch
 def test_qa_detectors_benchmark_integration():
     """Benchmark script should have qa_detector_metrics function."""
     from scripts.bench.benchmark import qa_detector_metrics

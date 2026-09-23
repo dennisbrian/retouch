@@ -161,6 +161,8 @@ def test_runtime_evidence_records_faces_landmarks_parser_provider_and_roi():
     ]
     assert evidence["roi_provenance"]["masks"]["skin_mask"]["source"] == "processing_result.skin_mask"
     assert evidence["runtime_diagnostics"]["denoise"]["backend"] == "stub"
+    # A result without the new field remains serializable and explicit.
+    assert evidence["qa_provenance"] == {}
 
 
 def test_unavailable_detector_is_explicitly_non_face_aware():

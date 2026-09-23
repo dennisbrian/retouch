@@ -85,6 +85,10 @@ def test_render_manifest_is_pixel_free_and_reports_precision_and_color():
             "face_count": 0,
             "timings_ms": {"total": 12.5},
             "qa": {"warning_count": 0},
+            "qa_provenance": {
+                "schema": "retouch_qa_reference_v1",
+                "reference_stage": "pre_face_post_input_preprocess",
+            },
             "precision": {"precision_status": "downgraded_to_uint8"},
         }
     )
@@ -98,4 +102,5 @@ def test_render_manifest_is_pixel_free_and_reports_precision_and_color():
     assert payload["output"]["dtype"] == "uint8"
     assert payload["color_context"]["source_kind"] == "assumed-srgb"
     assert payload["extensions"]["precision"]["precision_status"] == "downgraded_to_uint8"
+    assert payload["extensions"]["qa_provenance"]["schema"] == "retouch_qa_reference_v1"
     assert "pixels" not in json.dumps(payload).lower()

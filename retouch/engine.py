@@ -684,6 +684,8 @@ class ProcessingResult(np.ndarray):
     can treat it directly as a standard BGR image array.  ``precision`` and
     ``precision_metadata`` state what precision the returned pixels actually
     carry; they do not infer 16-bit quality from a container name.
+    ``qa_provenance`` identifies the reference and comparison stages used by
+    the built-in QA evidence.
     """
 
     def __new__(
@@ -705,6 +707,7 @@ class ProcessingResult(np.ndarray):
         fa02_diagnostics: Optional[List[Optional[Dict[str, Any]]]] = None,
         precision: Optional[ProcessingPrecision] = None,
         source_dtype: Optional[Any] = None,
+        qa_provenance: Optional[Dict[str, Any]] = None,
     ):
         obj = np.asarray(image).view(cls)
         obj.image = image
@@ -722,6 +725,7 @@ class ProcessingResult(np.ndarray):
         obj.safe_auto_decisions = list(safe_auto_decisions or [])
         obj.runtime_diagnostics = dict(runtime_diagnostics or {})
         obj.fa02_diagnostics = list(fa02_diagnostics or [])
+        obj.qa_provenance = dict(qa_provenance or {})
         obj.precision = precision or ProcessingPrecision.from_output(
             np.asarray(image), source_dtype=source_dtype
         )
@@ -746,6 +750,7 @@ class ProcessingResult(np.ndarray):
         self.safe_auto_decisions = getattr(obj, "safe_auto_decisions", [])
         self.runtime_diagnostics = getattr(obj, "runtime_diagnostics", {})
         self.fa02_diagnostics = getattr(obj, "fa02_diagnostics", [])
+        self.qa_provenance = getattr(obj, "qa_provenance", {})
         self.precision = getattr(obj, "precision", None)
         self.precision_metadata = getattr(obj, "precision_metadata", {})
 
@@ -1004,6 +1009,74 @@ def build_context(
 # ---------------------------------------------------------------------------
 
 
+QA_REFERENCE_SCHEMA = "retouch_qa_reference_v1"
+
+
+def _resolve_qa_reference(
+    ctx: ProcessingContext,
+    comparison_img_bgr: np.ndarray,
+    *,
+    comparison_stage: str,
+    qa_ran: bool,
+) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Return the explicit QA reference and its stage/coverage metadata.
+
+    ``_run_global_phases`` receives an image after face processing.  Passing
+    that image back to reference-based detectors makes the face edit invisible
+    to preservation checks.  ``process`` captures a copy before entering the
+    face pipeline; this helper selects that copy and records a conservative
+    fallback when a direct/private caller did not provide one.
+    """
+    captured = getattr(ctx, "_qa_reference_img_bgr", None)
+    comparison = np.asarray(comparison_img_bgr)
+    captured_is_valid = (
+        isinstance(captured, np.ndarray)
+        and captured.ndim == comparison.ndim
+        and captured.shape == comparison.shape
+    )
+    if captured_is_valid:
+        reference = captured
+        reference_stage = "pre_face_post_input_preprocess"
+        reference_source = "process_capture"
+        fallback_reason = None
+    else:
+        # A fallback keeps direct/private callers functional, but it must not
+        # be represented as a genuine pre-face preservation reference.
+        reference = comparison
+        reference_stage = "post_face_pre_global_fallback"
+        reference_source = "comparison_input_fallback"
+        if captured is None:
+            fallback_reason = "pre-face reference was not captured"
+        else:
+            fallback_reason = (
+                "pre-face reference shape did not match comparison shape: "
+                f"reference={getattr(captured, 'shape', None)} "
+                f"comparison={comparison.shape}"
+            )
+
+    provenance: Dict[str, Any] = {
+        "schema": QA_REFERENCE_SCHEMA,
+        "reference_stage": reference_stage,
+        "comparison_stage": comparison_stage,
+        "reference_source": reference_source,
+        "reference_available": bool(captured_is_valid),
+        "reference_is_pre_face": bool(captured_is_valid),
+        "reference_shape": [int(value) for value in reference.shape],
+        "reference_dtype": str(reference.dtype),
+        "comparison_shape": [int(value) for value in comparison.shape],
+        "comparison_dtype": str(comparison.dtype),
+        "qa_ran": bool(qa_ran),
+        # Neural boosters currently run after this QA stage. Keeping this
+        # explicit prevents a future consumer from treating QA as final-output
+        # evidence without checking the stage order.
+        "qa_covers_post_qa_stages": False,
+        "post_qa_stage": "neural_boosters",
+    }
+    if fallback_reason is not None:
+        provenance["fallback_reason"] = fallback_reason
+    return reference, provenance
+
+
 @dataclass
 class _CoreResult:
     """Output of the core pipeline (stages 0–6), returned by
@@ -1020,6 +1093,7 @@ class _CoreResult:
     face_contexts: Optional[List["FaceContext"]] = None
     qa: List[QAWarning] = field(default_factory=list)
     qa_evidence: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    qa_provenance: Dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -1799,6 +1873,14 @@ class RetouchEngine:
                     logger.warning("Heal failed: %s", e)
             timings["heal"] = (time.perf_counter() - t_heal) * 1000
 
+        # QA-REF: preserve the image after input preprocessing but before any
+        # face detection/reshape/per-face work.  The global QA phase receives
+        # a post-face image as its main input; without this snapshot, the
+        # reference-based detectors cannot measure preservation across the
+        # face edit itself.  Keep the copy explicit so later in-place changes
+        # cannot silently change the reference.
+        ctx._qa_reference_img_bgr = np.array(img_bgr, copy=True)
+
         # ------------------------------------------------------------------
         # Core pipeline (stages 0–6) with automatic proxy down/upscaling
         # for high-res inputs. The fast=True 800 px preview path is
@@ -1817,6 +1899,19 @@ class RetouchEngine:
         person_mask = core.person_mask
         built_contexts = core.face_contexts
 
+        # No-face branches intentionally skip the detector run.  Still expose
+        # whether a pre-face reference was available so manifests can
+        # distinguish a deliberate not-run result from a missing QA record.
+        if core.no_face and not core.qa_provenance:
+            _, core.qa_provenance = _resolve_qa_reference(
+                ctx,
+                core.result,
+                comparison_stage="not_run_no_face",
+                qa_ran=False,
+            )
+        if core.qa_provenance:
+            ctx._qa_provenance = core.qa_provenance
+
         # ------------------------------------------------------------------
         # No-face fallback: minimal global processing
         # ------------------------------------------------------------------
@@ -1825,6 +1920,10 @@ class RetouchEngine:
                 result = cv2.resize(result, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
             result = self._apply_sr_export(result, ctx, timings)
             timings["total"] = sum(timings.values())
+            # The reference is needed only while the pipeline and any QA
+            # back-off iterations are running. Do not retain a second full
+            # image inside the returned ProcessingContext.
+            ctx._qa_reference_img_bgr = None
             return ProcessingResult(
                 image=result,
                 face_count=0,
@@ -1833,6 +1932,7 @@ class RetouchEngine:
                 face_contexts=built_contexts,
                 qa=core.qa,
                 qa_evidence=core.qa_evidence,
+                qa_provenance=core.qa_provenance,
                 safe_auto_decisions=getattr(ctx, "_safe_auto_decisions", []),
                 runtime_diagnostics=getattr(ctx, "_runtime_diagnostics", {}),
                 fa02_diagnostics=getattr(ctx, "_fa02_diagnostics", []),
@@ -1902,6 +2002,10 @@ class RetouchEngine:
                 for i in range(len(faces))
                 if i in ctx.face_params
             }
+        # The reference is needed only while the pipeline and any QA
+        # back-off iterations are running. Do not retain a second full image
+        # inside the returned ProcessingContext.
+        ctx._qa_reference_img_bgr = None
         return ProcessingResult(
             image=result,
             skin_mask=acc_skin,
@@ -1914,6 +2018,7 @@ class RetouchEngine:
             face_contexts=built_contexts,
             qa=core.qa,
             qa_evidence=core.qa_evidence,
+            qa_provenance=core.qa_provenance,
             face_recipes=face_recipes or None,
             safe_auto_decisions=getattr(ctx, "_safe_auto_decisions", []),
             runtime_diagnostics=getattr(ctx, "_runtime_diagnostics", {}),
@@ -2620,8 +2725,14 @@ class RetouchEngine:
         # ------------------------------------------------------------------
         # QA detectors
         # ------------------------------------------------------------------
+        qa_reference, qa_provenance = _resolve_qa_reference(
+            ctx,
+            img_bgr,
+            comparison_stage="post_global_pre_neural",
+            qa_ran=True,
+        )
         qa_warnings, qa_evidence = self._run_qa_with_evidence(
-            result, person_mask, img_bgr,
+            result, person_mask, qa_reference,
             face_skin_mask=acc_skin,
             mark_policy=ctx.mark_policy,
             warp_field=getattr(ctx, "_aa6_warp_field", None),
@@ -2630,6 +2741,7 @@ class RetouchEngine:
         # unavailable / not-run for every detector), not just the flagged
         # subset — see qa_detectors.run_qa_with_evidence.
         ctx._qa_results = qa_evidence
+        ctx._qa_provenance = qa_provenance
 
         # ------------------------------------------------------------------
         # A4: Neural boosters (PARKED — runs only if enabled, after QA)
@@ -2651,6 +2763,7 @@ class RetouchEngine:
             face_contexts=face_contexts,
             qa=qa_warnings,
             qa_evidence=qa_evidence,
+            qa_provenance=qa_provenance,
         )
 
     @staticmethod

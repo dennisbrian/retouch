@@ -75,6 +75,17 @@ class TestProcessingResult:
         assert pr.face_count == 0
         assert pr.timings == {}
 
+    def test_qa_provenance_survives_ndarray_views(self):
+        img = np.full((5, 5, 3), 100, dtype=np.uint8)
+        provenance = {
+            "schema": "retouch_qa_reference_v1",
+            "reference_stage": "pre_face_post_input_preprocess",
+            "reference_available": True,
+        }
+        pr = ProcessingResult(image=img, qa_provenance=provenance)
+        view = pr[:2]
+        assert view.qa_provenance == provenance
+
 
 class TestResolveRecipe:
     def test_known_recipe(self):
