@@ -60,6 +60,12 @@ from retouch.io import (
     write_image_with_color_context,
 )
 from retouch.color_context import ColorContext
+from retouch.face_params import (
+    ANCHOR_KEY as FACE_ANCHOR_KEY,
+    ANCHOR_SOURCE_KEY as FACE_ANCHOR_SOURCE_KEY,
+    face_params_for_source,
+    make_anchor as make_face_anchor,
+)
 from retouch.lips import LIP_TINT_NAMES
 from retouch.recipes import CURATED_RECIPE_NAMES, RECIPE_UI_CHOICES, RECIPES
 from retouch.params import recipe_to_params, PROCESSING_PARAMS, param_names, gui_values_to_engine_kwargs
@@ -1441,16 +1447,21 @@ def process_image(
             except Exception as e:
                 _logger.warning("face_params_json parse failed: %s", e)
                 fp = None
+    batch_face_params = None
     if fp:
-        coerced = coerce_face_params(fp)
-        if coerced:
-            engine_kwargs["face_params"] = coerced
+        batch_face_params = coerce_face_params(fp)
 
     for idx, path_item in enumerate(img_paths):
         try:
             curr_path = path_item
             if isinstance(path_item, dict):
                 curr_path = path_item.get("name") or path_item.get("path")
+            if batch_face_params:
+                # Anchors bind only on the image they were selected on; other
+                # batch images keep plain index semantics.
+                engine_kwargs["face_params"] = face_params_for_source(
+                    batch_face_params, str(curr_path),
+                )
 
             cache_key = None
             cache_entry = None
@@ -1952,7 +1963,15 @@ def on_detect_faces(img_paths):
         choices.append(str(i))
     
     suggested = get_engine().suggest_face_params(img, faces_data=faces)
-    
+    # Anchor each entry to the selected face's position so the engine binds it
+    # to the same person even if its own (proxy/fast) detection orders faces
+    # differently (DSCF4599: native vs 2048/800 order is swapped).
+    frame = (img.shape[1], img.shape[0])
+    for i, f in enumerate(faces):
+        if i in suggested:
+            suggested[i][FACE_ANCHOR_KEY] = make_face_anchor(f.bbox, frame)
+            suggested[i][FACE_ANCHOR_SOURCE_KEY] = str(path)
+
     status = f"{len(choices)} face(s) detected.\n\nSuggested default recipes:\n"
     for k, v in suggested.items():
         status += f"- Face {k}: {v['recipe']}\n"

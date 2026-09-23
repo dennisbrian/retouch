@@ -2383,6 +2383,7 @@ class RetouchEngine:
             # automatic mode a true no-op so it cannot alter a person's
             # treatment based on guessed age, sex, or appearance.
             ctx.face_params = None
+        self._bind_face_targets(ctx, faces_native, (w_native, h_native))
 
         t1 = time.perf_counter()
         result_native = self._stage_reshape(native_img_bgr, faces_native, ctx)
@@ -2591,6 +2592,7 @@ class RetouchEngine:
             # is intentionally neutral. Users may still assign a recipe to a
             # specific face explicitly through the face_params API or GUI.
             ctx.face_params = None
+        self._bind_face_targets(ctx, faces, (img_bgr.shape[1], img_bgr.shape[0]))
 
         t1 = time.perf_counter()
         result = self._stage_reshape(img_bgr, faces, ctx)
@@ -3193,6 +3195,21 @@ class RetouchEngine:
             )
 
         return result_u8
+
+    @staticmethod
+    def _bind_face_targets(ctx: ProcessingContext, faces, frame_size: Tuple[int, int]) -> None:
+        """Re-key anchored per-face overrides to this render's detection order."""
+        if not ctx.face_params or ctx.face_params == "auto" or not faces:
+            return
+        from .face_params import bind_face_params
+        bound, report = bind_face_params(
+            ctx.face_params, [f.bbox for f in faces], frame_size,
+        )
+        ctx.face_params = bound
+        if report:
+            diagnostics = getattr(ctx, "_runtime_diagnostics", None)
+            if isinstance(diagnostics, dict):
+                diagnostics["face_param_binding"] = report
 
     def _ctx_for_face(self, ctx: ProcessingContext, face_index: int) -> ProcessingContext:
         """Resolve per-face overrides; identity when face_params empty/missing."""
