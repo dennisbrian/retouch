@@ -136,6 +136,65 @@ def test_batch_export_passes_color_context_to_writer(monkeypatch, tmp_path):
     assert captured["color_context"].source_kind == "assumed-srgb"
 
 
+def test_batch_writes_face_mode_manifest_and_bundles_it_in_zip(monkeypatch, tmp_path):
+    import json
+    import zipfile
+
+    in_dir, out_dir = _make_input_dir(tmp_path, names=("portrait.jpg",))
+    engine = MagicMock()
+    result = _fake_result()
+    result.face_count = 1
+    result.runtime_diagnostics = {
+        "face_detection": {
+            "mode": "face_aware",
+            "available": True,
+            "backend": "test-backend",
+            "probe_state": "initialized",
+        }
+    }
+    engine.process.return_value = result
+    processor = BatchProcessor(engine)
+    monkeypatch.setattr(
+        "retouch.batch_processor.analyze_and_group",
+        lambda paths, cache, eng: {"Portrait": paths},
+    )
+    monkeypatch.setattr(
+        "retouch.batch_processor.imread_exif",
+        lambda path: np.zeros((64, 64, 3), dtype=np.uint8),
+    )
+
+    def fake_write(path, *args, **kwargs):
+        Path(path).write_bytes(b"verified test output")
+
+    monkeypatch.setattr("retouch.io.write_image_with_icc", fake_write)
+    processed, _, zip_path, status = processor.process_folder(
+        in_dir,
+        out_dir,
+        generate_sheet=False,
+        export_zip=True,
+        num_workers=1,
+    )
+
+    manifests = list(out_dir.glob("retouch_batch_manifest_*.json"))
+    assert len(manifests) == 1
+    payload = json.loads(manifests[0].read_text(encoding="utf-8"))
+    assert payload["schema"] == "retouch.batch-manifest.v1"
+    assert payload["summary"] == {"total": 1, "done": 1, "failed": 0, "skipped": 0}
+    row = payload["files"][0]
+    assert row["source"] == "portrait.jpg"
+    assert row["output"] == "portrait_retouched.jpg"
+    assert row["face_detection"]["mode"] == "face_aware"
+    assert row["global_only"] is False
+    assert row["face_count"] == 1
+    assert row["face_aware_execution"] is True
+    assert str(in_dir) not in manifests[0].read_text(encoding="utf-8")
+    assert manifests[0].name in status
+    assert len(processed) == 1
+    assert zip_path is not None
+    with zipfile.ZipFile(zip_path) as archive:
+        assert manifests[0].name in archive.namelist()
+
+
 def test_owned_batch_uses_worker_local_engines(monkeypatch, tmp_path):
     import threading
 

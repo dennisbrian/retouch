@@ -25,6 +25,7 @@ from retouch.io import (
     IMAGE_EXTENSIONS,
     RAW_EXTENSIONS,
     _resolve_safe_path,
+    apply_raw_exposure_gain,
     color_context_for_path,
     imread_engine_with_context,
     imread_exif,
@@ -33,6 +34,7 @@ from retouch.io import (
     read_exif_bytes,
     read_c2pa_manifest,
     resize_for_processing,
+    raw_exposure_decode_info,
     write_image_with_color_context,
 )
 from retouch.recipes import CURATED_RECIPE_NAMES, RECIPES
@@ -192,12 +194,26 @@ def _init_worker():
     _worker_engine = RetouchEngine()
 
 
-def _linear_raw_to_engine_bgr(path, exposure: float = 0.0, contrast: float = 1.0):
+def _linear_raw_to_engine_bgr(
+    path,
+    exposure: float = 0.0,
+    contrast: float = 1.0,
+    *,
+    apply_exposure_bias: bool = True,
+    decode_info: Optional[Dict[str, Any]] = None,
+):
     """T5 path: linear decode → develop → gamma-encode → float32 BGR [0,255]."""
     from retouch.raw_develop import RAWDeveloper
 
     dev = RAWDeveloper()
     linear_rgb, _meta = dev.load_raw(path)
+    exposure_info = raw_exposure_decode_info(path, apply_exposure_bias)
+    gain_ev = float(exposure_info["raw_exposure_gain_ev"] or 0.0)
+    if decode_info is not None:
+        decode_info.clear()
+        decode_info.update(exposure_info)
+    if gain_ev > 0.0:
+        linear_rgb = apply_raw_exposure_gain(linear_rgb, gain_ev)
     linear_rgb = dev.develop(
         linear_rgb, exposure=exposure, contrast=contrast,
     )
@@ -232,10 +248,17 @@ def _process_single(args):
             return (str(img_path), "skipped")
 
         if linear_raw and Path(img_path).suffix.lower() in RAW_EXTENSIONS:
+            decode_info = {}
             img_bgr = _linear_raw_to_engine_bgr(
-                img_path, exposure=raw_exposure, contrast=raw_contrast,
+                img_path,
+                exposure=raw_exposure,
+                contrast=raw_contrast,
+                apply_exposure_bias=raf_exposure_bias,
+                decode_info=decode_info,
             )
-            color_context = color_context_for_path(img_path)
+            color_context = color_context_for_path(
+                img_path, apply_exposure_bias=raf_exposure_bias
+            )
         else:
             correction_status = {}
             img_bgr, color_context = imread_engine_with_context(
@@ -951,7 +974,7 @@ def main() -> None:
                         help="For RAW inputs: decode linear (gamma=1,1), optional "
                              "exposure/contrast develop, then gamma-encode into engine.")
     parser.add_argument("--raw-exposure", type=float, default=0.0,
-                        help="With --linear-raw: exposure stops (default 0)")
+                        help="With --linear-raw: additional exposure stops after RAF bias (default 0)")
     parser.add_argument("--raw-contrast", type=float, default=1.0,
                         help="With --linear-raw: linear contrast factor (default 1)")
     parser.add_argument(
@@ -987,7 +1010,7 @@ def main() -> None:
         "--no-raf-exposure-bias",
         action="store_true",
         help="With --raf-decoder rawpy (default): do not undo the RAF's recorded "
-             "RawExposureBias at decode (restores the pre-2026-09 darker decode)",
+             "RawExposureBias at decode, including --linear-raw",
     )
 
     args = parser.parse_args()
@@ -1383,10 +1406,17 @@ def main() -> None:
 
                 if args.linear_raw and f.suffix.lower() in RAW_EXTENSIONS:
                     try:
+                        decode_info = {}
                         img_bgr = _linear_raw_to_engine_bgr(
-                            f, exposure=args.raw_exposure, contrast=args.raw_contrast,
+                            f,
+                            exposure=args.raw_exposure,
+                            contrast=args.raw_contrast,
+                            apply_exposure_bias=not args.no_raf_exposure_bias,
+                            decode_info=decode_info,
                         )
-                        color_context = color_context_for_path(f)
+                        color_context = color_context_for_path(
+                            f, apply_exposure_bias=not args.no_raf_exposure_bias
+                        )
                     except Exception as e:
                         failed += 1
                         tqdm.write(f"  ✖ {f.name}: linear-raw {e}")

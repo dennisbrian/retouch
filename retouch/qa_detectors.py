@@ -1332,10 +1332,25 @@ def run_all(
     mark_policy: Optional[Mapping[str, Any]] = None,
     warp_field: Optional[np.ndarray] = None,
     body_region_weights: Optional[np.ndarray] = None,
+    geometry_reference_img_bgr: Optional[np.ndarray] = None,
+    geometry_reference_reason: Optional[str] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Run all QA detectors and aggregate their results."""
     result: Dict[str, Dict[str, Any]] = {}
-    ref_before = img_before if img_before is not None else reference_img_bgr
+    photo_reference = geometry_reference_img_bgr
+    if geometry_reference_reason is not None:
+        photo_reference = None
+    elif photo_reference is None:
+        photo_reference = reference_img_bgr
+    if (
+        photo_reference is not None
+        and photo_reference.shape != img_bgr.shape
+    ):
+        photo_reference = None
+        geometry_reference_reason = "geometry-only reference shape mismatch"
+    ref_before = photo_reference
+    if ref_before is None and geometry_reference_reason is None:
+        ref_before = img_before if img_before is not None else reference_img_bgr
     try:
         result["banding"] = detect_banding(img_bgr, skin_mask)
     except Exception as exc:
@@ -1345,7 +1360,7 @@ def run_all(
     except Exception as exc:
         result["clipping"] = _detector_failure("clipping", exc)
     try:
-        result["plastic_skin"] = detect_plastic_skin(img_bgr, skin_mask, reference_img_bgr)
+        result["plastic_skin"] = detect_plastic_skin(img_bgr, skin_mask, photo_reference)
     except Exception as exc:
         result["plastic_skin"] = _detector_failure("plastic_skin", exc)
     try:
@@ -1364,13 +1379,13 @@ def run_all(
         result["seam"] = _detector_failure("seam", exc)
     try:
         result["color_drift"] = detect_color_drift(
-            img_bgr, skin_mask, reference_img_bgr
+            img_bgr, skin_mask, photo_reference
         )
     except Exception as exc:
         result["color_drift"] = _detector_failure("color_drift", exc)
     try:
         result["pore_spectrum"] = detect_pore_spectrum_distance(
-            img_bgr, skin_mask, reference_img_bgr
+            img_bgr, skin_mask, photo_reference
         )
     except Exception as exc:
         result["pore_spectrum"] = _detector_failure("pore_spectrum", exc)
@@ -1380,7 +1395,7 @@ def run_all(
         result["asymmetry"] = _detector_failure("asymmetry", exc)
     try:
         result["skin_score"] = gui_skin_score(
-            img_bgr, skin_mask, reference_img_bgr
+            img_bgr, skin_mask, photo_reference
         )
     except Exception as exc:
         result["skin_score"] = _detector_failure("skin_score", exc)
@@ -1389,7 +1404,7 @@ def run_all(
             img_bgr,
             face_skin_mask=face_skin_mask,
             body_skin_mask=body_skin_mask,
-            reference_img_bgr=reference_img_bgr,
+            reference_img_bgr=photo_reference,
             mark_policy=mark_policy,
         )
     except Exception as exc:
@@ -1420,6 +1435,20 @@ def run_all(
             "status": QA_STATUS_NOT_RUN, "score": None, "flagged": False,
             "reason": "no reference image supplied",
         }
+    if geometry_reference_reason is not None:
+        for name in ("color_drift", "pore_spectrum"):
+            measurement = result.get(name)
+            if measurement is not None and measurement.get("status") == QA_STATUS_NOT_RUN:
+                measurement["reason"] = geometry_reference_reason
+                measurement["geometry_reference_available"] = False
+        plastic = result.get("plastic_skin")
+        if plastic is not None:
+            plastic["geometry_reference_available"] = False
+            plastic["geometry_reference_reason"] = geometry_reference_reason
+        skin_score = result.get("skin_score")
+        if skin_score is not None:
+            skin_score["geometry_reference_available"] = False
+            skin_score["geometry_reference_reason"] = geometry_reference_reason
     return result
 
 
@@ -1455,6 +1484,8 @@ def run_qa_with_evidence(
     face_skin_mask: Optional[np.ndarray] = None,
     mark_policy: Optional[Mapping[str, Any]] = None,
     warp_field: Optional[np.ndarray] = None,
+    geometry_reference_img_bgr: Optional[np.ndarray] = None,
+    geometry_reference_reason: Optional[str] = None,
 ) -> "tuple[List[QAWarning], Dict[str, Dict[str, Any]]]":
     """Run the QA detector pipeline, returning warnings AND complete evidence.
 
@@ -1474,9 +1505,17 @@ def run_qa_with_evidence(
     qa_warnings: List[QAWarning] = []
     try:
         body_skin_mask = None
-        if face_skin_mask is not None and reference_img_bgr is not None:
+        body_reference = geometry_reference_img_bgr
+        if geometry_reference_reason is not None:
+            body_reference = None
+        elif body_reference is None:
+            body_reference = reference_img_bgr
+        elif body_reference.shape != result.shape:
+            body_reference = None
+            geometry_reference_reason = "geometry-only reference shape mismatch"
+        if face_skin_mask is not None and body_reference is not None:
             body_skin_mask = build_face_anchored_body_mask(
-                reference_img_bgr, face_skin_mask, person_mask,
+                body_reference, face_skin_mask, person_mask,
             )
         qa_raw = run_all(
             result,
@@ -1488,6 +1527,8 @@ def run_qa_with_evidence(
             body_skin_mask=body_skin_mask,
             mark_policy=mark_policy,
             warp_field=warp_field,
+            geometry_reference_img_bgr=geometry_reference_img_bgr,
+            geometry_reference_reason=geometry_reference_reason,
         )
     except Exception as e:
         logger.warning("QA pipeline failed: %s", e, exc_info=True)
@@ -1552,6 +1593,8 @@ def run_qa(
     face_skin_mask: Optional[np.ndarray] = None,
     mark_policy: Optional[Mapping[str, Any]] = None,
     warp_field: Optional[np.ndarray] = None,
+    geometry_reference_img_bgr: Optional[np.ndarray] = None,
+    geometry_reference_reason: Optional[str] = None,
 ) -> List["QAWarning"]:
     """Run the QA detector pipeline on a processed uint8 BGR image.
 
@@ -1568,5 +1611,7 @@ def run_qa(
         face_skin_mask=face_skin_mask,
         mark_policy=mark_policy,
         warp_field=warp_field,
+        geometry_reference_img_bgr=geometry_reference_img_bgr,
+        geometry_reference_reason=geometry_reference_reason,
     )
     return warnings

@@ -410,6 +410,27 @@ def _raw_exposure_gain_ev(path: Path, decode_info: Optional[Dict[str, Any]]) -> 
     return gain_ev
 
 
+def raw_exposure_decode_info(
+    path: Union[str, Path], apply_exposure_bias: bool = True
+) -> Dict[str, Optional[float]]:
+    """Return RAF exposure metadata and the gain selected for this decode.
+
+    This keeps alternate RAW decode paths (for example the CLI's linear-RAW
+    developer) on the same metadata and clamp policy as ``read_image_16bit``.
+    The recorded bias is still reported when applying it is explicitly
+    disabled; the applied gain is then ``0.0``.
+    """
+    source = Path(path)
+    info: Dict[str, Optional[float]] = {}
+    if apply_exposure_bias:
+        gain_ev = _raw_exposure_gain_ev(source, info)
+    else:
+        info["raw_exposure_bias_ev"] = read_raf_exposure_bias(source)
+        gain_ev = 0.0
+    info["raw_exposure_gain_ev"] = float(gain_ev)
+    return info
+
+
 def read_image_16bit(
     path: Union[str, Path],
     apply_exposure_bias: bool = True,
@@ -465,10 +486,10 @@ def read_image_16bit(
         # Decode linearly, then encode IEC sRGB explicitly. rawpy's default
         # transfer is BT.709 even when output_color requests sRGB primaries.
         linear = rgb16.astype(np.float32) / 65535.0
-        gain_ev = _raw_exposure_gain_ev(safe, decode_info) if apply_exposure_bias else 0.0
+        exposure_info = raw_exposure_decode_info(safe, apply_exposure_bias)
         if decode_info is not None:
-            decode_info["raw_exposure_gain_ev"] = gain_ev
-            decode_info.setdefault("raw_exposure_bias_ev", None)
+            decode_info.update(exposure_info)
+        gain_ev = float(exposure_info["raw_exposure_gain_ev"] or 0.0)
         if gain_ev > 0.0:
             linear = apply_raw_exposure_gain(linear, gain_ev)
         srgb = linear_to_srgb(linear)
@@ -1152,7 +1173,9 @@ def read_icc_profile(path: Union[str, Path]) -> Optional[bytes]:
     return bytes(icc)
 
 
-def color_context_for_path(path: Union[str, Path]) -> ColorContext:
+def color_context_for_path(
+    path: Union[str, Path], apply_exposure_bias: bool = True
+) -> ColorContext:
     """Return the ingest/delivery color contract for *path* without decoding it.
 
     ``imread_exif`` already converts tagged non-RAW pixels into the Retouch
@@ -1164,7 +1187,10 @@ def color_context_for_path(path: Union[str, Path]) -> ColorContext:
     """
     source = Path(path)
     if source.suffix.lower() in RAW_EXTENSIONS:
-        return ColorContext.raw_srgb_context(get_working_srgb_icc())
+        return ColorContext.raw_srgb_context(
+            get_working_srgb_icc(),
+            **raw_exposure_decode_info(source, apply_exposure_bias),
+        )
     return _color_context_for_source(read_icc_profile(source))
 
 

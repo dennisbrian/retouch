@@ -10,6 +10,8 @@ import hashlib
 import queue
 import tempfile
 import threading
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Callable, Union
 
@@ -127,6 +129,82 @@ def plan_batch_outputs(
             claimed[key] = source
             plan[str(source.resolve())] = candidate
     return plan
+
+
+def _relative_manifest_path(path: Optional[Path], root: Path) -> Optional[str]:
+    if path is None:
+        return None
+    try:
+        return path.resolve(strict=False).relative_to(
+            root.resolve(strict=False)
+        ).as_posix()
+    except ValueError:
+        return path.name
+
+
+def _batch_manifest_row(
+    source: Path,
+    output: Optional[Path],
+    input_root: Path,
+    output_root: Path,
+    status: str,
+    *,
+    result: Optional[Any] = None,
+    color_context: Optional[Any] = None,
+    error: Optional[BaseException] = None,
+) -> Dict[str, Any]:
+    runtime = getattr(result, "runtime_diagnostics", {}) if result is not None else {}
+    runtime = runtime if isinstance(runtime, dict) else {}
+    detector = runtime.get("face_detection", {})
+    detector = detector if isinstance(detector, dict) else {}
+    mode = detector.get("mode", "unknown")
+    face_count = getattr(result, "face_count", None) if result is not None else None
+    row: Dict[str, Any] = {
+        "source": _relative_manifest_path(source, input_root),
+        "output": _relative_manifest_path(output, output_root),
+        "status": status,
+        "face_detection": {
+            key: detector.get(key)
+            for key in ("mode", "available", "backend", "probe_state", "reason")
+            if key in detector
+        } or {"mode": "unknown"},
+        "global_only": (
+            bool(mode == "global_only") if mode in ("face_aware", "global_only") else None
+        ),
+        "face_count": int(face_count) if isinstance(face_count, (int, np.integer)) else None,
+        "face_aware_execution": (
+            bool(mode == "face_aware" and int(face_count) > 0)
+            if isinstance(face_count, (int, np.integer))
+            else None
+        ),
+    }
+    to_dict = getattr(color_context, "to_dict", None)
+    if callable(to_dict):
+        row["color_context"] = to_dict()
+    if error is not None:
+        row["error_type"] = type(error).__name__
+    return row
+
+
+def _write_batch_manifest(
+    output_root: Path, payload: Dict[str, Any], run_id: str
+) -> Path:
+    """Write a new per-run manifest without replacing any existing artifact."""
+    path = output_root / ("retouch_batch_manifest_%s.json" % run_id)
+    descriptor = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, ensure_ascii=False, indent=2, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+    except Exception:
+        try:
+            path.unlink()
+        except OSError:
+            logger.warning("Could not remove incomplete batch manifest %s", path)
+        raise
+    return path
 
 
 def _estimate_image_working_bytes(path: Path) -> int:
@@ -604,6 +682,12 @@ class BatchProcessor:
         """
         input_path, output_path = validate_batch_roots(input_dir, output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
+        started_at = datetime.now(timezone.utc)
+        run_id = "%s-%s" % (
+            started_at.strftime("%Y%m%dT%H%M%S%fZ"), uuid.uuid4().hex[:8]
+        )
+        manifest_records: Dict[str, Dict[str, Any]] = {}
+        manifest_records_lock = threading.Lock()
 
         # Resolve session once (immutable snapshot for the whole batch).
         resolved_session = _resolve_session(session)
@@ -769,6 +853,8 @@ class BatchProcessor:
                         input_root=input_path,
                         engine=self.engine,
                         output_file=output_plan[str(fp.resolve())],
+                        manifest_records=manifest_records,
+                        manifest_records_lock=manifest_records_lock,
                     )
 
                 processed_paths = _run_async_batch_queue(
@@ -810,6 +896,8 @@ class BatchProcessor:
                         input_root=input_path,
                         engine=worker_engine,
                         output_file=output_plan[str(fp.resolve())],
+                        manifest_records=manifest_records,
+                        manifest_records_lock=manifest_records_lock,
                     )
 
                 try:
@@ -844,6 +932,8 @@ class BatchProcessor:
                     on_file_result,
                     input_root=input_path,
                     output_file=output_plan[str(file_path.resolve())],
+                    manifest_records=manifest_records,
+                    manifest_records_lock=manifest_records_lock,
                 )
                 if res_path is not None:
                     processed_paths.append(res_path)
@@ -867,6 +957,59 @@ class BatchProcessor:
                 log_crash(e, {"stage": "generate_contact_sheet"})
                 status_msg += f"Failed to generate contact sheet: {e}\n"
 
+        # Record the exact per-file detector availability and ingest color
+        # provenance so a later reviewer can distinguish a face-aware run
+        # from a global-only fallback. Paths are output-relative to avoid
+        # embedding private absolute directory names in the artifact.
+        with manifest_records_lock:
+            rows_by_source = dict(manifest_records)
+        processed_keys = {_destination_key(Path(path)) for path in processed_paths}
+        for source in all_files:
+            source_key = _relative_manifest_path(source, input_path)
+            if source_key in rows_by_source:
+                continue
+            destination = output_plan[str(source.resolve())]
+            is_done = _destination_key(destination) in processed_keys
+            rows_by_source[source_key] = _batch_manifest_row(
+                source,
+                destination if is_done else None,
+                input_path,
+                output_path,
+                "done" if is_done else "failed",
+            )
+        file_rows = [rows_by_source[key] for key in sorted(rows_by_source)]
+        counts = {
+            status: sum(1 for row in file_rows if row["status"] == status)
+            for status in ("done", "failed", "skipped")
+        }
+        manifest_payload = {
+            "schema": "retouch.batch-manifest.v1",
+            "run_id": run_id,
+            "started_at": started_at.isoformat(),
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "request": {
+                "recipe": str(style_name_or_recipe),
+                "custom_style_profile": custom_style_profile is not None,
+                "session_applied": resolved_session is not None,
+                "export_format": str(export_fmt),
+                "export_quality": int(export_quality),
+                "export_resolution": str(export_res),
+            },
+            "input_root_name": input_path.name,
+            "output_root_name": output_path.name,
+            "summary": {"total": len(all_files), **counts},
+            "files": file_rows,
+        }
+        manifest_path: Optional[Path] = None
+        try:
+            manifest_path = _write_batch_manifest(
+                output_path, manifest_payload, run_id
+            )
+            status_msg += "Run manifest: %s\n" % manifest_path.name
+        except (OSError, TypeError, ValueError) as exc:
+            logger.warning("Could not write batch manifest: %s", exc)
+            status_msg += "Failed to write run manifest: %s\n" % type(exc).__name__
+
         # 6. Package into ZIP
         zip_path = None
         if export_zip and processed_paths:
@@ -884,6 +1027,8 @@ class BatchProcessor:
                         zipf.write(exp_path, arcname=arcname)
                     if contact_sheet_path:
                         zipf.write(contact_sheet_path, arcname="contact_sheet.jpg")
+                    if manifest_path is not None:
+                        zipf.write(manifest_path, arcname=manifest_path.name)
                 zip_path = str(z_path)
                 status_msg += "Packaged files into ZIP: batch_export.zip\n"
             except Exception as e:
@@ -925,8 +1070,12 @@ class BatchProcessor:
         input_root: Optional[Path] = None,
         engine: Optional[Any] = None,
         output_file: Optional[Path] = None,
+        manifest_records: Optional[Dict[str, Dict[str, Any]]] = None,
+        manifest_records_lock: Optional[threading.Lock] = None,
     ) -> Optional[Path]:
         """Process a single file and write output with embedded metadata."""
+        result = None
+        color_context = None
         try:
             img_bgr = imread_exif(file_path)
             request_engine = engine if engine is not None else self.engine
@@ -995,6 +1144,17 @@ class BatchProcessor:
                 except OSError:
                     pass
                 raise
+            self._record_manifest_row(
+                file_path,
+                out_file_path,
+                input_root,
+                output_path,
+                "done",
+                manifest_records,
+                manifest_records_lock,
+                result=result,
+                color_context=color_context,
+            )
             if on_file_result is not None:
                 on_file_result(file_path, out_file_path, qa_list, None)
             return out_file_path
@@ -1009,4 +1169,48 @@ class BatchProcessor:
             })
             if on_file_result is not None:
                 on_file_result(file_path, None, None, str(e))
+            self._record_manifest_row(
+                file_path,
+                None,
+                input_root,
+                output_path,
+                "failed",
+                manifest_records,
+                manifest_records_lock,
+                result=result,
+                color_context=color_context,
+                error=e,
+            )
             return None
+
+    @staticmethod
+    def _record_manifest_row(
+        source: Path,
+        output: Optional[Path],
+        input_root: Optional[Path],
+        output_root: Path,
+        status: str,
+        records: Optional[Dict[str, Dict[str, Any]]],
+        records_lock: Optional[threading.Lock],
+        *,
+        result: Optional[Any] = None,
+        color_context: Optional[Any] = None,
+        error: Optional[BaseException] = None,
+    ) -> None:
+        if records is None or records_lock is None or input_root is None:
+            return
+        row = _batch_manifest_row(
+            source,
+            output,
+            input_root,
+            output_root,
+            status,
+            result=result,
+            color_context=color_context,
+            error=error,
+        )
+        source_key = row["source"]
+        if source_key is None:
+            return
+        with records_lock:
+            records[source_key] = row

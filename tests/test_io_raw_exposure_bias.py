@@ -18,8 +18,10 @@ from retouch.io import (
     RAW_EXPOSURE_SHOULDER_KNEE,
     apply_raw_exposure_gain,
     imread_engine_with_context,
+    color_context_for_path,
     read_image_16bit,
     read_raf_exposure_bias,
+    raw_exposure_decode_info,
 )
 
 
@@ -133,6 +135,50 @@ def test_context_records_bias_and_applied_gain(tmp_path, mock_rawpy):
     assert context.raw_exposure_bias_ev == pytest.approx(-1.72)
     assert context.raw_exposure_gain_ev == pytest.approx(1.72)
     assert context.to_dict()["raw_exposure_gain_ev"] == pytest.approx(1.72)
+
+
+def test_path_context_records_bias_for_batch_exports(tmp_path):
+    path = _write_raf(tmp_path / "a.RAF", [_bias_record(-172)])
+    context = color_context_for_path(path)
+    assert context.raw_exposure_bias_ev == pytest.approx(-1.72)
+    assert context.raw_exposure_gain_ev == pytest.approx(1.72)
+
+
+def test_exposure_decode_info_records_bias_when_opted_out(tmp_path):
+    path = _write_raf(tmp_path / "a.RAF", [_bias_record(-172)])
+    assert raw_exposure_decode_info(path, apply_exposure_bias=False) == {
+        "raw_exposure_bias_ev": pytest.approx(-1.72),
+        "raw_exposure_gain_ev": 0.0,
+    }
+
+
+def test_linear_raw_cli_path_applies_and_reports_bias(tmp_path, monkeypatch):
+    path = _write_raf(tmp_path / "a.RAF", [_bias_record(-172)])
+
+    class FakeDeveloper:
+        def load_raw(self, _path):
+            return np.full((2, 2, 3), 0.1, dtype=np.float32), {}
+
+        def develop(self, image, exposure=0.0, contrast=1.0):
+            return image
+
+    monkeypatch.setattr("retouch.raw_develop.RAWDeveloper", FakeDeveloper)
+    from cli import _linear_raw_to_engine_bgr
+
+    applied_info = {}
+    applied = _linear_raw_to_engine_bgr(path, decode_info=applied_info)
+    expected = _srgb(0.1 * 2 ** 1.72) * 255
+    np.testing.assert_allclose(applied, expected, atol=1e-4)
+    assert applied_info["raw_exposure_bias_ev"] == pytest.approx(-1.72)
+    assert applied_info["raw_exposure_gain_ev"] == pytest.approx(1.72)
+
+    disabled_info = {}
+    disabled = _linear_raw_to_engine_bgr(
+        path, apply_exposure_bias=False, decode_info=disabled_info
+    )
+    np.testing.assert_allclose(disabled, _srgb(0.1) * 255, atol=1e-4)
+    assert disabled_info["raw_exposure_bias_ev"] == pytest.approx(-1.72)
+    assert disabled_info["raw_exposure_gain_ev"] == 0.0
 
 
 def test_legacy_uint8_raw_path_also_gains(tmp_path, mock_rawpy):

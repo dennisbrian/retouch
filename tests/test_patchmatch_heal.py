@@ -6,6 +6,8 @@ import pytest
 
 from retouch.heal import heal_region
 from retouch.patchmatch import patchmatch_fill, seamless_blend_roi
+from retouch.engine import RetouchEngine
+from retouch.heal import mask_to_b64
 
 
 def _periodic_texture(height: int = 112, width: int = 112) -> np.ndarray:
@@ -170,6 +172,27 @@ class TestDegenerateSourceFallbackHonoursDonors:
         assert np.array_equal(result, image)
         assert report["executed"] == "abstain"
         assert report["reason"] == "no_permitted_donor"
+
+    def test_engine_manual_heal_exposes_fallback_in_runtime_diagnostics(self):
+        image = _periodic_texture(24, 24)
+        full_mask = np.full(image.shape[:2], 255, dtype=np.uint8)
+        result, diagnostics = RetouchEngine._apply_manual_heals(
+            image,
+            [{"mask_png_b64": mask_to_b64(full_mask), "method": "patchmatch"}],
+        )
+
+        assert np.array_equal(result, image)
+        assert diagnostics == [{
+            "index": 0,
+            "status": "done",
+            "requested": "patchmatch",
+            "executed": "abstain",
+            "reason": "no_permitted_donor",
+            "valid_source_centres": 0,
+            "permitted_donor_pixels": 0,
+            "fallback_pixels": 0,
+            "source_map_available": False,
+        }]
 
     def test_patchmatch_success_reports_patchmatch(self) -> None:
         image = _periodic_texture(56, 56)

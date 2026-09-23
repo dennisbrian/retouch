@@ -508,6 +508,48 @@ class TestEngineBloom:
         assert res.params.bloom_threshold == 200.0
         assert res.params.bloom_softness == 10.0
 
+    def test_render_reports_face_detector_mode(self, engine):
+        img = np.full((32, 32, 3), 96, dtype=np.uint8)
+        result = engine.process(img)
+
+        assert result.runtime_diagnostics["face_detection"] == engine._detector.runtime_status()
+
+    def test_manual_heal_report_is_attached_to_render_diagnostics(self, engine):
+        from retouch.heal import mask_to_b64
+
+        img = np.full((24, 24, 3), 96, dtype=np.uint8)
+        full_mask = np.full((24, 24), 255, dtype=np.uint8)
+        result = engine.process(
+            img,
+            heals=[{"mask_png_b64": mask_to_b64(full_mask), "method": "patchmatch"}],
+        )
+
+        assert result.runtime_diagnostics["healing"][0]["requested"] == "patchmatch"
+        assert result.runtime_diagnostics["healing"][0]["executed"] == "abstain"
+        assert result.runtime_diagnostics["healing"][0]["reason"] == "no_permitted_donor"
+
+    def test_reshape_captures_geometry_only_reference_without_retaining_alias(self):
+        class FakeReshaper:
+            last_displacement_field = None
+
+            def reshape(self, image, _faces, _ctx, face_ctxs=None):
+                self.last_displacement_field = np.ones(
+                    (*image.shape[:2], 2), dtype=np.float32
+                )
+                return image + 3
+
+        engine = RetouchEngine.__new__(RetouchEngine)
+        engine._reshaper = FakeReshaper()
+        image = np.zeros((12, 12, 3), dtype=np.uint8)
+        ctx = ProcessingContext(slimming=10.0)
+
+        reshaped = engine._stage_reshape(image, [object()], ctx)
+
+        assert np.all(reshaped == 3)
+        assert np.array_equal(ctx._qa_geometry_reference_img_bgr, reshaped)
+        assert not np.shares_memory(ctx._qa_geometry_reference_img_bgr, reshaped)
+        assert ctx._qa_geometry_changed is True
+
 
 class TestNoFaceFallbackFloatNative:
     """F1/E2: _no_face_fallback's white balance and master HSL used to

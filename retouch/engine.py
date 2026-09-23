@@ -1237,6 +1237,48 @@ class RetouchEngine:
             img_bgr, mode=mode, amount=amount, domain=domain,
         )
 
+    @staticmethod
+    def _apply_manual_heals(
+        img_bgr: np.ndarray,
+        heals: Sequence[Dict[str, Any]],
+    ) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
+        """Apply serialized manual heals and retain backend/abstention evidence."""
+        from .heal import heal_region, b64_to_mask
+
+        diagnostics: List[Dict[str, Any]] = []
+        for index, heal_entry in enumerate(heals):
+            mask_b64 = heal_entry.get("mask_png_b64", "")
+            method = heal_entry.get("method", "telea")
+            if not mask_b64:
+                diagnostics.append({
+                    "index": index,
+                    "status": "skipped",
+                    "requested": method,
+                    "reason": "missing_mask",
+                })
+                continue
+            report: Dict[str, Any] = {}
+            try:
+                heal_mask = b64_to_mask(mask_b64, img_bgr.shape)
+                img_bgr = heal_region(
+                    img_bgr, heal_mask, method=method, report=report
+                )
+                diagnostics.append({
+                    "index": index,
+                    "status": "done",
+                    **report,
+                })
+            except Exception as exc:
+                logger.warning("Heal failed: %s", exc)
+                diagnostics.append({
+                    "index": index,
+                    "status": "failed",
+                    "requested": method,
+                    "error_type": type(exc).__name__,
+                    "reason": "heal_exception",
+                })
+        return img_bgr, diagnostics
+
     def process(
         self,
         img_bgr: np.ndarray,
@@ -1772,6 +1814,13 @@ class RetouchEngine:
         overrides.update(kwargs)
 
         ctx = build_context(active_recipe, rec, overrides)
+        # Expose whether this render's engine had a face-aware detector
+        # available. A zero face count is still distinct from global-only:
+        # the detector may have run successfully and found no face.
+        detector_status = getattr(self._detector, "runtime_status", None)
+        ctx._runtime_diagnostics["face_detection"] = (
+            detector_status() if callable(detector_status) else {"mode": "unknown"}
+        )
         if safe_auto is not None:
             ctx.safe_auto = bool(safe_auto)
         ctx.hi_ref = hi_ref
@@ -1855,18 +1904,11 @@ class RetouchEngine:
         # F4: Pre-pipeline heal hook — heals run BEFORE retouch/grade
         # ------------------------------------------------------------------
         if ctx.heals:
-            from .heal import heal_region, b64_to_mask
             t_heal = time.perf_counter()
-            for heal_entry in ctx.heals:
-                mask_b64 = heal_entry.get("mask_png_b64", "")
-                method = heal_entry.get("method", "telea")
-                if not mask_b64:
-                    continue
-                try:
-                    heal_mask = b64_to_mask(mask_b64, img_bgr.shape)
-                    img_bgr = heal_region(img_bgr, heal_mask, method=method)
-                except Exception as e:
-                    logger.warning("Heal failed: %s", e)
+            img_bgr, heal_diagnostics = self._apply_manual_heals(
+                img_bgr, ctx.heals
+            )
+            ctx._runtime_diagnostics["healing"] = heal_diagnostics
             timings["heal"] = (time.perf_counter() - t_heal) * 1000
 
         # QA-REF: preserve the image after input preprocessing but before any
@@ -1920,6 +1962,7 @@ class RetouchEngine:
             # back-off iterations are running. Do not retain a second full
             # image inside the returned ProcessingContext.
             ctx._qa_reference_img_bgr = None
+            ctx._qa_geometry_reference_img_bgr = None
             return ProcessingResult(
                 image=result,
                 face_count=0,
@@ -2002,6 +2045,7 @@ class RetouchEngine:
         # back-off iterations are running. Do not retain a second full image
         # inside the returned ProcessingContext.
         ctx._qa_reference_img_bgr = None
+        ctx._qa_geometry_reference_img_bgr = None
         return ProcessingResult(
             image=result,
             skin_mask=acc_skin,
@@ -2752,11 +2796,39 @@ class RetouchEngine:
             comparison_stage="post_global_pre_neural",
             qa_ran=True,
         )
+        geometry_reference = getattr(ctx, "_qa_geometry_reference_img_bgr", None)
+        geometry_reference_reason = None
+        if geometry_reference is not None:
+            if geometry_reference.shape != result.shape:
+                geometry_reference = None
+                geometry_reference_reason = (
+                    "geometry-only reference shape mismatch after proxy scaling"
+                )
+                geometry_stage = "unavailable"
+            else:
+                geometry_stage = "post_reshape_pre_face"
+        elif getattr(ctx, "_qa_geometry_changed", False):
+            geometry_reference_reason = (
+                "reshape was applied but its geometry-only reference is unavailable"
+            )
+            geometry_stage = "unavailable"
+        else:
+            geometry_stage = qa_provenance.get(
+                "reference_stage", "pre_face_post_input_preprocess"
+            )
+        qa_provenance["photometric_reference_stage"] = geometry_stage
+        qa_provenance["photometric_reference_available"] = (
+            geometry_reference_reason is None
+        )
+        if geometry_reference_reason is not None:
+            qa_provenance["photometric_reference_reason"] = geometry_reference_reason
         qa_warnings, qa_evidence = self._run_qa_with_evidence(
             result, person_mask, qa_reference,
             face_skin_mask=acc_skin,
             mark_policy=ctx.mark_policy,
             warp_field=getattr(ctx, "_aa6_warp_field", None),
+            geometry_reference_img_bgr=geometry_reference,
+            geometry_reference_reason=geometry_reference_reason,
         )
         # Complete per-detector evidence (checked-pass / checked-flagged /
         # unavailable / not-run for every detector), not just the flagged
@@ -2795,6 +2867,8 @@ class RetouchEngine:
         face_skin_mask: Optional[np.ndarray] = None,
         mark_policy: Optional[Mapping[str, Any]] = None,
         warp_field: Optional[np.ndarray] = None,
+        geometry_reference_img_bgr: Optional[np.ndarray] = None,
+        geometry_reference_reason: Optional[str] = None,
     ) -> List[QAWarning]:
         """Run QA detectors on a processed uint8 BGR image.
 
@@ -2811,6 +2885,8 @@ class RetouchEngine:
             face_skin_mask=face_skin_mask,
             mark_policy=mark_policy,
             warp_field=warp_field,
+            geometry_reference_img_bgr=geometry_reference_img_bgr,
+            geometry_reference_reason=geometry_reference_reason,
         )
 
     @staticmethod
@@ -2821,6 +2897,8 @@ class RetouchEngine:
         face_skin_mask: Optional[np.ndarray] = None,
         mark_policy: Optional[Mapping[str, Any]] = None,
         warp_field: Optional[np.ndarray] = None,
+        geometry_reference_img_bgr: Optional[np.ndarray] = None,
+        geometry_reference_reason: Optional[str] = None,
     ) -> "tuple[List[QAWarning], Dict[str, Dict[str, Any]]]":
         """Run QA detectors, returning flagged warnings AND complete evidence.
 
@@ -2836,6 +2914,8 @@ class RetouchEngine:
             face_skin_mask=face_skin_mask,
             mark_policy=mark_policy,
             warp_field=warp_field,
+            geometry_reference_img_bgr=geometry_reference_img_bgr,
+            geometry_reference_reason=geometry_reference_reason,
         )
 
     @staticmethod
@@ -3138,8 +3218,12 @@ class RetouchEngine:
         if self._any_reshape_active(ctx, face_ctxs):
             result = self._reshaper.reshape(img, faces, ctx, face_ctxs=face_ctxs)
             ctx._aa6_warp_field = self._reshaper.last_displacement_field
+            ctx._qa_geometry_changed = True
+            ctx._qa_geometry_reference_img_bgr = np.array(result, copy=True)
             return result
         ctx._aa6_warp_field = np.zeros((*img.shape[:2], 2), dtype=np.float32)
+        ctx._qa_geometry_changed = False
+        ctx._qa_geometry_reference_img_bgr = None
         return img.copy()
 
     @staticmethod
