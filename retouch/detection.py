@@ -80,6 +80,8 @@ class FaceContext:
     # are expressed in. ``None`` = unknown (legacy); consumers must convert
     # from this frame exactly once rather than assume proxy resolution.
     frame_size: Optional[Tuple[int, int]] = None
+    # Parser option the cached ``regions`` were built with (``None`` = unknown).
+    mask_feather_mode: Optional[str] = None
 
 
 class _LandmarkCompat:

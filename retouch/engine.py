@@ -3287,6 +3287,28 @@ class RetouchEngine:
         return _active(ctx)
 
     @staticmethod
+    def _cached_regions_match(
+        cached_contexts: List["FaceContext"],
+        crop_list: List[np.ndarray],
+        ctx: ProcessingContext,
+    ) -> bool:
+        """True when cached parsed regions were built from these exact crops.
+
+        Contexts without a recorded parser input (``face_image``) or option
+        (``mask_feather_mode``) predate this check and are trusted as before.
+        """
+        if len(cached_contexts) != len(crop_list):
+            return False
+        for fc, crop in zip(cached_contexts, crop_list):
+            mode = getattr(fc, "mask_feather_mode", None)
+            if mode is not None and mode != ctx.mask_feather_mode:
+                return False
+            parsed = getattr(fc, "face_image", None)
+            if parsed is not None and not np.array_equal(parsed, crop):
+                return False
+        return True
+
+    @staticmethod
     def _compute_face_roi_padding(
         face_w: int, face_h: int
     ) -> Tuple[int, int, int, int]:
@@ -3362,6 +3384,17 @@ class RetouchEngine:
 
         # Region parsing — or reuse cached regions from ctx.face_contexts
         cached_contexts = ctx.face_contexts
+        if cached_contexts is not None and not self._cached_regions_match(
+            cached_contexts, crop_list, ctx,
+        ):
+            # Parsed regions depend on the pixels the parser saw (after
+            # denoise/heals/exposure/reshape) and on mask_feather_mode, none of
+            # which are in the GUI cache key. Reuse only when they match.
+            logger.info(
+                "Cached face regions do not match current parser input; "
+                "re-parsing %d face(s)", len(faces),
+            )
+            cached_contexts = None
         if cached_contexts is not None:
             all_regions = [fc.regions for fc in cached_contexts]
             all_light_directions: List[Optional[LightDirection]] = [
@@ -3387,6 +3420,7 @@ class RetouchEngine:
                     face_image=crop_list[i],
                     light_direction=all_light_directions[i],
                     frame_size=(w_img, h_img),
+                    mask_feather_mode=ctx.mask_feather_mode,
                 )
                 for i in range(len(faces))
             ]
