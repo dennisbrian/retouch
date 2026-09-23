@@ -469,3 +469,50 @@ class TestOrdinaryNonTiedClassificationsAreUnchanged:
             img, m, freckle_removal=100, confidence_threshold=0.7
         )
         np.testing.assert_array_equal(out, repeat)
+
+
+# --- P2b (2026-09-23): preserved marks are not repair material ---------------
+# RESEARCH_RETOUCH_PROTECTION_LIFECYCLE_2026_09_22 §4: the freckle heal used the
+# whole face mask as donor/context, so repainting a preserved mole changed
+# repaired freckles outside it (patchmatch 9 px up to 165 levels, telea 10 px
+# up to 96).
+
+import pytest as _pytest
+
+
+def _freckles_around_mole():
+    import cv2 as _cv2
+    import numpy as _np
+
+    rng = _np.random.default_rng(3)
+    H = W = 400
+    img = _np.clip(
+        _np.full((H, W, 3), (150, 170, 205), _np.float32) + rng.normal(0, 3, (H, W, 3)), 0, 255
+    ).astype(_np.uint8)
+    pts = [(int(x), int(y)) for x, y in rng.uniform(60, 340, (30, 2))]
+    pts += [(200 + int(22 * _np.cos(t)), 200 + int(22 * _np.sin(t)))
+            for t in _np.linspace(0, 6.28, 10, endpoint=False)]
+    for p in pts:
+        _cv2.circle(img, p, 2, (120, 130, 200), -1)
+    yy, xx = _np.mgrid[:H, :W]
+    mole = (yy - 200) ** 2 + (xx - 200) ** 2 <= 14 ** 2
+    img[mole] = (35, 40, 70)
+    return img, _np.ones((H, W), _np.float32), mole
+
+
+@_pytest.mark.parametrize("engine", ["telea", "patchmatch"])
+def test_freckle_repair_does_not_depend_on_preserved_mole(engine):
+    import numpy as _np
+    from retouch.freckle import FreckleRemover
+
+    img, face, mole = _freckles_around_mole()
+    alt = img.copy()
+    alt[mole] = (200, 60, 40)
+    fr = FreckleRemover()
+    kw = dict(face_mask=face, freckle_removal=100, mole_mask=mole.astype(_np.float32), heal_engine=engine)
+    a, b = fr.remove(img, **kw), fr.remove(alt, **kw)
+    assert (_np.abs(a.astype(int) - img.astype(int)).max(axis=2) > 8).sum() > 100, "freckles must be repaired"
+    d = _np.abs(a.astype(int) - b.astype(int)).max(axis=2)
+    d[mole] = 0
+    assert d.max() == 0
+    assert _np.array_equal(a[mole], img[mole]), "preserved mole must be untouched"

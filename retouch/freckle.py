@@ -443,20 +443,44 @@ class FreckleRemover:
         scale = face_width / 500.0
         inpaint_r = max(int(3 * scale), 2)
         blend_k = max(int(7 * scale), 3) | 1
+        # Preserved marks are destinations to protect, not repair material:
+        # neither engine may copy them into a freckle hole (P2b,
+        # RESEARCH_RETOUCH_PROTECTION_LIFECYCLE §4). Measured before: repaint
+        # a preserved mole and 9-10 repaired px outside it changed by up to
+        # 165 levels.
+        preserved = preserve_mask > 0
+        # ``> 0`` matches patchmatch's own source-mask coercion, so a face
+        # without preserved marks keeps exactly its previous donor region.
+        face_ok = (
+            normalize_mask(face_mask) > 0 if face_mask is not None
+            else np.ones((h, w), dtype=bool)
+        )
+        donor = face_ok & ~preserved & (removal_mask == 0)
+        # Both engines also read hole-neighbour context (Telea propagates it,
+        # PatchMatch scores candidates against it), so hide preserved marks
+        # behind the donor median in a working copy and restore them after.
+        hide = np.any(preserved) and np.any(donor)
+        work = img_bgr.copy()
+        if hide:
+            work[preserved] = np.median(img_bgr[donor], axis=0).astype(img_bgr.dtype)
         if heal_engine == "telea":
-            return inpaint_and_blend(
-                img_bgr, removal_mask, inpaint_r, cv2.INPAINT_TELEA, blend_k
+            out = inpaint_and_blend(
+                work, removal_mask, inpaint_r, cv2.INPAINT_TELEA, blend_k
             )
-        if heal_engine == "patchmatch":
+        elif heal_engine == "patchmatch":
             from .heal import heal_region
 
-            return heal_region(
-                img_bgr,
+            out = heal_region(
+                work,
                 removal_mask,
                 method="patchmatch",
-                source_mask=face_mask,
+                source_mask=donor.astype(np.float32),
                 patch_size=7,
                 iterations=5,
                 seamless=False,
             )
-        raise ValueError("heal_engine must be 'telea' or 'patchmatch'")
+        else:
+            raise ValueError("heal_engine must be 'telea' or 'patchmatch'")
+        if hide:
+            out[preserved] = img_bgr[preserved]
+        return out
