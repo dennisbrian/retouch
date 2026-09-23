@@ -113,7 +113,6 @@ from .harmonizer import BackgroundHarmonizer
 from .background import BackgroundReplacer
 from . import grain, highlight, tonal, qa_detectors
 from .qa_detectors import QAWarning
-from .qa_backoff import QABackoff
 from .hair import HairEnhancer
 from .relight import Relighter
 from .enhance import AIEnhancer
@@ -1079,8 +1078,9 @@ def _resolve_qa_reference(
 
 @dataclass
 class _CoreResult:
-    """Output of the core pipeline (stages 0–6), returned by
-    ``_run_core_pipeline`` and upscaled by ``_process_with_proxy``."""
+    """Output of the core pipeline (stages 0–6), produced by
+    ``_run_detection_and_faces`` (stages 0–2) and ``_run_global_phases``
+    (stages 3–6), combined by ``_process_with_proxy``."""
     result: np.ndarray
     acc_skin: Optional[np.ndarray]
     acc_skin_hair: Optional[np.ndarray]
@@ -1170,10 +1170,6 @@ class RetouchEngine:
         # Built once; used by _run_global_phases when use_registry=True.
         from .stage_wrappers import build_global_registry
         self._global_registry = build_global_registry(self)
-
-        # A5: QA auto-back-off. Conservative param reduction driven by QA
-        # flags (plastic-skin). Lazily reusable; stateless per image.
-        self._qa_backoff = QABackoff()
 
     # ------------------------------------------------------------------
     # Public API
@@ -2802,11 +2798,11 @@ class RetouchEngine:
     ) -> List[QAWarning]:
         """Run QA detectors on a processed uint8 BGR image.
 
-        Thin wrapper over :func:`retouch.qa_detectors.run_qa`; kept as a
-        method so :meth:`_run_core_pipeline` can re-run QA after a
-        back-off iteration without re-entering :meth:`_run_global_phases`.
-        Returns only the flagged-detector list; see :meth:`_run_qa_with_evidence`
-        for the complete pass/flagged/unavailable/not-run picture.
+        Thin wrapper over :func:`retouch.qa_detectors.run_qa`. Returns only
+        the flagged-detector list; see :meth:`_run_qa_with_evidence` for the
+        complete pass/flagged/unavailable/not-run picture. Currently unused
+        directly in the render pipeline; :meth:`_run_qa_with_evidence` is the
+        primary method called from :meth:`_run_global_phases`.
         """
         return qa_detectors.run_qa(
             result,
@@ -2841,130 +2837,6 @@ class RetouchEngine:
             mark_policy=mark_policy,
             warp_field=warp_field,
         )
-
-    def _run_core_pipeline(
-        self,
-        img_bgr: np.ndarray,
-        ctx: ProcessingContext,
-        style_ref: Optional[np.ndarray],
-        timings: Dict[str, float],
-    ) -> _CoreResult:
-        """F8.1: Wrapper that runs the full pipeline (stages 0–6).
-
-        For backward compatibility, this delegates to the split methods:
-        _run_detection_and_faces() for stages 0-2, then handles no-face
-        fallback OR runs _run_global_phases() for stages 3+.
-
-        Honours ``ctx.face_contexts``: when provided, detection and parsing
-        are skipped and the cached face data / regions are reused. Otherwise
-        detection + parsing run normally and ``FaceContext`` objects are
-        built and returned for caller caching.
-        """
-        # Stages 0-2: detection + reshape + per-face
-        core = self._run_detection_and_faces(img_bgr, ctx, timings)
-
-        # No-face fallback: run minimal global processing
-        if core.no_face:
-            result = self._no_face_fallback(img_bgr, ctx, core.person_mask)
-            h_img, w_img = result.shape[:2]
-            return _CoreResult(
-                result=result,
-                acc_skin=np.zeros((h_img, w_img), dtype=np.float32),
-                acc_skin_hair=np.zeros((h_img, w_img), dtype=np.float32),
-                acc_lips=np.zeros((h_img, w_img), dtype=np.float32),
-                acc_sharpen=np.zeros((h_img, w_img), dtype=np.float32),
-                faces=core.faces,
-                person_mask=core.person_mask,
-                acc_hair_only=core.acc_hair_only,
-                no_face=True,
-                face_contexts=core.face_contexts,
-                qa=core.qa,
-                qa_evidence=qa_detectors.not_run_evidence("no face detected"),
-            )
-
-        # Stages 3+: global phases (tonal, grading, finish)
-        core = self._run_global_phases(
-            core.result,
-            ctx, style_ref, timings,
-            acc_skin=core.acc_skin,
-            acc_skin_hair=core.acc_skin_hair,
-            acc_lips=core.acc_lips,
-            acc_sharpen=core.acc_sharpen,
-            faces=core.faces,
-            person_mask=core.person_mask,
-            acc_hair_only=core.acc_hair_only,
-            face_contexts=core.face_contexts,
-        )
-
-        # ------------------------------------------------------------------
-        # A5: "No plastic skin" guarantee — QA auto-back-off.
-        # If plastic-skin is flagged after the first pass, iteratively
-        # reduce smoothing-related params and re-process. Re-detection is
-        # skipped (face contexts are cached from pass 1) so only the
-        # per-face skin work + global phases re-run. We keep the best
-        # result: the first iteration that clears the flag wins; if none
-        # clear, the most-reduced (last) result ships since it is the
-        # least plastic.
-        # ------------------------------------------------------------------
-        backoff = getattr(self, "_qa_backoff", None)
-        if backoff is not None and core.face_contexts and not core.no_face:
-            best_core = core
-            for iteration in range(backoff.max_iterations):
-                plastic_flagged = any(
-                    w.detector == "plastic_skin" and w.flagged
-                    for w in best_core.qa
-                )
-                if not plastic_flagged:
-                    break  # flag cleared — ship this result
-
-                adjustments = backoff.check_and_backoff(
-                    best_core.result, ctx, best_core.qa
-                )
-                if not adjustments:
-                    break  # nothing to back off — give up
-
-                logger.info(
-                    "A5 back-off iteration %d: applying %s",
-                    iteration + 1, adjustments,
-                )
-                # Preserve original ctx values so we can revert if the
-                # back-off made things worse (e.g. a different artifact
-                # appeared). The last iteration's ctx is what ships.
-                QABackoff.apply_adjustments(ctx, adjustments)
-
-                # Re-use cached face contexts to skip re-detection /
-                # re-parsing — only the per-face skin work + global
-                # phases re-run with the adjusted params.
-                re_core = self._run_detection_and_faces(
-                    img_bgr, ctx, timings,
-                )
-                if re_core.no_face:
-                    break  # detection diverged — keep best_core
-                re_core = self._run_global_phases(
-                    re_core.result,
-                    ctx, style_ref, timings,
-                    acc_skin=re_core.acc_skin,
-                    acc_skin_hair=re_core.acc_skin_hair,
-                    acc_lips=re_core.acc_lips,
-                    acc_sharpen=re_core.acc_sharpen,
-                    faces=re_core.faces,
-                    person_mask=re_core.person_mask,
-                    face_contexts=re_core.face_contexts,
-                    acc_hair_only=re_core.acc_hair_only,
-                )
-                best_core = re_core
-
-                # If the flag cleared on this iteration, stop early.
-                still_plastic = any(
-                    w.detector == "plastic_skin" and w.flagged
-                    for w in best_core.qa
-                )
-                if not still_plastic:
-                    break
-
-            core = best_core
-
-        return core
 
     @staticmethod
     def _assemble_post_effects(ctx: ProcessingContext) -> Dict[str, Any]:
