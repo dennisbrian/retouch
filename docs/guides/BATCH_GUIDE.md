@@ -41,7 +41,7 @@ condition is shown as a blocking execution warning.
 | **`--format`** | | `same` | Output image format: `jpg`, `png`, `webp`, or `same` to match source. |
 | **`--input-list`** | | *None* | Load literal paths from a versioned JSON list; relative paths use the list's `base_dir` or directory. |
 | **`--input-plan`** | | *None* | Write the deterministic input selection, planned artifacts, and per-file results as JSON. |
-| **`--resume-plan`** | | *None* | Skip only rows whose settings, source hash, output path, and output hash still match. |
+| **`--resume-plan`** | | *None* | Skip only rows whose settings, source hash, output path, and output hash still match; every other selected row re-renders (dry-run shows why: settings changed / source changed / output missing / output modified). A re-render replaces the plan's own prior output without `-f` only if that file still hashes to the plan's record; any other existing output blocks the run unless `-f` is given. |
 | **`--include`** | | *None* | Include discovered paths matching a repeatable pattern. |
 | **`--exclude`** | | *None* | Exclude discovered paths matching a repeatable pattern. |
 | **`--include-hidden`** | | *Off* | Include hidden files/directories during folder discovery. |

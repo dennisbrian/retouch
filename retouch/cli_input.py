@@ -159,6 +159,14 @@ class InputRecord:
     artifact_sha256: Dict[str, str] = field(default_factory=dict)
     result_status: Optional[str] = None
     result_message: Optional[str] = None
+    # Resume decision for this run: "skip" (verified) or "rerender", plus the
+    # human-readable why (settings changed / source changed / output missing /
+    # output modified / no completed result). ``replace_prior_output`` is set
+    # only when every existing planned artifact is byte-identical to this
+    # plan's own record, which authorizes replacing it without --force.
+    resume_action: Optional[str] = None
+    resume_reason: Optional[str] = None
+    replace_prior_output: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -596,14 +604,29 @@ def apply_resume_plan(
     *,
     force: bool = False,
 ) -> None:
-    """Mark only cryptographically verified completed rows as resumable.
+    """Skip only verified rows; mark every other selected row for re-render.
 
-    A previous plan is advisory until its configuration, source hash, output
-    hash, and output path all match the current filesystem. Any mismatch leaves
-    the current row selected for a fresh render; an existing stale output
-    blocks unless ``force`` explicitly authorizes replacement. A config
-    mismatch blocks the entire run so an operator cannot accidentally mix
-    settings.
+    A row is skipped (``resume_verified``) only when the previous plan's
+    settings fingerprint, the source hash, the output path, the output hash
+    and every recorded artifact hash all still match. Every other selected
+    row is re-rendered, and the reason is recorded on the row
+    (``resume_reason``): settings changed, source changed, output missing,
+    output modified, or no completed result in the plan.
+
+    Overwrite policy for re-rendered rows (without ``force``):
+
+    * If every existing planned artifact of the row is byte-identical to this
+      plan's own record for the same path (the prior run's untouched output),
+      the row may replace it: ``replace_prior_output`` is set.
+    * If an existing planned artifact is *not* hash-matched to the plan's
+      record (edited by hand, foreign file, or a path the plan never wrote),
+      the run blocks with ``resume_output_mismatch`` so nothing unverified is
+      overwritten silently; ``--force`` authorizes it explicitly.
+    * Rows with no completed result in the plan are not resume-managed and
+      keep the ordinary CLI policy (existing output skipped without force).
+
+    A settings mismatch is reported as a warning, not a blocking error: it
+    simply means no row can be verified, so all selected rows re-render.
     """
     source = Path(path).expanduser().resolve()
     try:
@@ -615,13 +638,14 @@ def apply_resume_plan(
     if not isinstance(previous_run, dict):
         plan.add_issue("resume_plan_invalid", "Resume plan has no run metadata")
         return
-    previous_fingerprint = previous_run.get("config_fingerprint")
-    if previous_fingerprint != config_fingerprint:
+    settings_match = previous_run.get("config_fingerprint") == config_fingerprint
+    if not settings_match:
         plan.add_issue(
             "resume_config_mismatch",
-            "Resume plan settings do not match this run; no rows were skipped",
+            "Resume plan settings differ from this run; every selected row "
+            "will re-render (plan-owned outputs are replaced)",
+            severity="warning",
         )
-        return
 
     previous_rows = payload.get("rows", []) if isinstance(payload, dict) else []
     by_path: Dict[str, Dict[str, Any]] = {}
@@ -633,44 +657,113 @@ def apply_resume_plan(
     for row in plan.selected_records:
         current_path = Path(row.path or "")
         previous = by_path.get(path_key(current_path))
-        if not previous or previous.get("result_status") != "done":
+        row.resume_action = "rerender"
+        # A ledger written by a resumed run records verified rows as
+        # "resume_verified"; they are as complete as "done" rows.
+        if not previous or previous.get("result_status") not in (
+            "done",
+            "resume_verified",
+        ):
+            # Not resume-managed: the plan holds no evidence for this row, so
+            # the ordinary CLI policy applies unchanged (an existing output
+            # is skipped without --force, replaced with it).
+            row.resume_reason = "no completed result in resume plan"
             continue
+
         previous_source_hash = previous.get("source_sha256")
         previous_output_hash = previous.get("output_sha256")
         previous_output = previous.get("planned_output")
+        previous_artifacts = dict(previous.get("artifact_sha256") or {})
+        if previous_output and previous_output_hash:
+            previous_artifacts.setdefault(previous_output, previous_output_hash)
         current_source_hash = sha256_file(current_path)
         current_output_hash = (
             sha256_file(Path(previous_output)) if previous_output else None
         )
-        previous_artifacts = previous.get("artifact_sha256") or {}
-        artifacts_match = bool(previous_artifacts)
-        if artifacts_match:
-            for artifact, expected_hash in previous_artifacts.items():
-                if sha256_file(Path(artifact)) != expected_hash:
-                    artifacts_match = False
-                    break
+        artifacts_match = bool(previous_artifacts) and all(
+            sha256_file(Path(artifact)) == expected_hash
+            for artifact, expected_hash in previous_artifacts.items()
+        )
+        same_output_path = bool(previous_output) and (
+            row.planned_output is not None
+            and path_key(Path(row.planned_output)) == path_key(Path(previous_output))
+        )
+        source_match = bool(previous_source_hash) and (
+            current_source_hash == previous_source_hash
+        )
+        output_match = bool(previous_output_hash) and (
+            current_output_hash == previous_output_hash
+        )
+
         if (
-            previous_source_hash
-            and previous_output_hash
-            and previous_output
-            and current_source_hash == previous_source_hash
-            and current_output_hash == previous_output_hash
+            settings_match
+            and source_match
+            and output_match
             and artifacts_match
-            and row.planned_output == previous_output
+            and same_output_path
         ):
             row.status = "resume_verified"
             row.result_status = "resume_verified"
+            row.resume_action = "skip"
+            row.resume_reason = "verified"
             row.source_sha256 = current_source_hash
             row.output_sha256 = current_output_hash
-            row.artifact_sha256 = dict(previous_artifacts)
+            row.artifact_sha256 = dict(previous.get("artifact_sha256") or {})
+            continue
+
+        if not settings_match:
+            row.resume_reason = "settings changed"
+        elif not source_match:
+            row.resume_reason = "source changed"
+        elif not same_output_path:
+            row.resume_reason = "output path changed"
+        elif current_output_hash is None:
+            row.resume_reason = "output missing"
+        elif not output_match or not artifacts_match:
+            row.resume_reason = "output modified"
         else:
-            row.reason = "prior result did not match current source/output; rerendering"
-            if previous_output and Path(previous_output).exists() and not force:
-                plan.add_issue(
-                    "resume_output_mismatch",
-                    f"{current_path.name}: prior output is stale or incomplete; "
-                    "use --force to replace it explicitly",
-                )
+            row.resume_reason = "prior result incomplete"
+        row.reason = f"re-render: {row.resume_reason}"
+        _guard_foreign_outputs(plan, row, previous_artifacts, force)
+
+
+def _guard_foreign_outputs(
+    plan: InputPlan,
+    row: InputRecord,
+    recorded_hashes: Dict[str, str],
+    force: bool,
+) -> None:
+    """Authorize or block replacing existing artifacts of a re-render row.
+
+    Replacement without ``force`` is allowed only for artifacts whose current
+    bytes match the resume plan's own record for that exact path. Anything
+    else that already exists blocks the run (never a silent skip or a silent
+    overwrite).
+    """
+    recorded = {path_key(Path(p)): digest for p, digest in recorded_hashes.items()}
+    targets = row.planned_artifacts or ([row.planned_output] if row.planned_output else [])
+    existing = [Path(p) for p in targets if Path(p).exists()]
+    if not existing:
+        return
+    if force:
+        row.replace_prior_output = True
+        return
+    foreign = [
+        target
+        for target in existing
+        if recorded.get(path_key(target)) is None
+        or sha256_file(target) != recorded[path_key(target)]
+    ]
+    if foreign:
+        names = ", ".join(target.name for target in foreign)
+        plan.add_issue(
+            "resume_output_mismatch",
+            f"{Path(row.path or '').name}: re-render ({row.resume_reason}) would "
+            f"replace {names}, which does not match the resume plan's recorded "
+            "output; use --force to replace it explicitly",
+        )
+        return
+    row.replace_prior_output = True
 
 
 def attach_destinations(
@@ -731,7 +824,17 @@ def print_input_plan(plan: InputPlan) -> None:
                 marker = "↺"
             else:
                 marker = "✓"
-            suffix = " [verified resume]" if row.status == "resume_verified" else ""
+            if row.status == "resume_verified":
+                suffix = " [verified resume: skip]"
+            elif row.resume_action == "rerender":
+                replace = (
+                    ", replaces plan-owned output"
+                    if row.replace_prior_output
+                    else ""
+                )
+                suffix = f" [re-render: {row.resume_reason}{replace}]"
+            else:
+                suffix = ""
             observations = []
             if row.header_status != "not_checked":
                 observations.append(f"header={row.header_status}")

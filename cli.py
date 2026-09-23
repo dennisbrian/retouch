@@ -1194,7 +1194,36 @@ def main() -> None:
             input_plan.config_fingerprint,
             force=args.force,
         )
+        verified = [
+            row for row in input_plan.selected_records
+            if row.status == "resume_verified"
+        ]
+        rerender = [
+            row for row in input_plan.selected_records
+            if row.status != "resume_verified"
+        ]
+        reasons: Dict[str, int] = {}
+        for row in rerender:
+            key = row.resume_reason or "not in resume plan"
+            reasons[key] = reasons.get(key, 0) + 1
+        reason_text = ", ".join(f"{count} {why}" for why, count in reasons.items())
+        print(
+            f"↺ Resume plan: {len(verified)} verified (skipped), "
+            f"{len(rerender)} to re-render"
+            + (f" ({reason_text})" if reason_text else "")
+        )
     files = input_plan.execution_paths
+    # Rows the resume plan authorized to replace their own hash-verified prior
+    # output (see apply_resume_plan). Everything else keeps the global
+    # --force policy: an existing output is skipped unless -f is given.
+    replace_keys = {
+        _path_key(Path(row.path))
+        for row in input_plan.selected_records
+        if row.path and row.replace_prior_output
+    }
+
+    def _force_for(path: Path) -> bool:
+        return bool(args.force) or _path_key(path) in replace_keys
 
     if args.ram_budget_gib is not None and files:
         selected_sizes = [
@@ -1296,7 +1325,7 @@ def main() -> None:
 
     if args.workers > 1 and len(files) > 1:
         pool_args = [
-            (f, output_dir, params, args.format, args.quality, args.force,
+            (f, output_dir, params, args.format, args.quality, _force_for(f),
              not args.no_exif, args.max_dim, args.compare, args.global_only,
              args.bit_depth, args.fail_on_qa, args.save_session, args.smart,
              args.linear_raw, args.raw_exposure, args.raw_contrast,
@@ -1337,7 +1366,7 @@ def main() -> None:
                     output_stem=output_stems.get(_path_key(f)),
                 )
                 _assert_safe_destination(f, out_path)
-                if out_path.exists() and not args.force:
+                if out_path.exists() and not _force_for(f):
                     skipped += 1
                     _record_result(str(f), "skipped")
                     continue
