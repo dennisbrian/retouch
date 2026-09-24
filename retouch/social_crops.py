@@ -179,7 +179,7 @@ def plan_crop(
     uy0 = min(b[1] for b in faces)
     ux1 = max(b[0] + b[2] for b in faces)
     uy1 = max(b[1] + b[3] for b in faces)
-    uw, uh = ux1 - ux0, uy1 - uy0
+    uw = ux1 - ux0
     face_h = max(b[3] for b in faces)
     reason = "group" if len(faces) > 1 else "face"
 
