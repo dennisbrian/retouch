@@ -2,7 +2,7 @@
 from pathlib import Path
 import numpy as np
 import pytest
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 from PIL.ExifTags import Base as ExifBase
 from retouch.io import (
     resize_for_processing,
@@ -13,6 +13,7 @@ from retouch.io import (
     imread_exif,
     imread_engine,
     read_raf_with_raf2jpeg,
+    open_image,
 )
 
 
@@ -539,3 +540,39 @@ def test_make_comparison_creates_file(tmp_path):
     assert written.shape[0] == 50
     # original (100) + separator (4) + retouched (100)
     assert written.shape[1] == 100 + 4 + 100
+
+
+class TestOpenImageFormats:
+    """User files only reach Pillow's common decoders (see PIL_INPUT_FORMATS)."""
+
+    @pytest.mark.parametrize("fmt,ext", [
+        ("JPEG", ".jpg"), ("PNG", ".png"), ("TIFF", ".tif"),
+        ("BMP", ".bmp"), ("WEBP", ".webp"),
+    ])
+    def test_supported_formats_open(self, tmp_path, fmt, ext):
+        path = tmp_path / f"img{ext}"
+        Image.new("RGB", (8, 6), (10, 20, 30)).save(path, format=fmt)
+        with open_image(path) as img:
+            assert img.size == (8, 6)
+
+    def test_camera_mpo_jpeg_opens(self, tmp_path):
+        path = tmp_path / "camera.jpg"
+        frames = [Image.new("RGB", (8, 6), c) for c in ((255, 0, 0), (0, 255, 0))]
+        frames[0].save(path, format="MPO", save_all=True, append_images=frames[1:])
+        with open_image(path) as img:
+            assert img.format in ("MPO", "JPEG")
+
+    @pytest.mark.parametrize("fmt", ["GIF", "PCX", "TGA", "SGI", "PPM"])
+    def test_other_formats_renamed_to_jpg_are_rejected(self, tmp_path, fmt):
+        path = tmp_path / "disguised.jpg"
+        Image.new("RGB", (8, 6)).save(path, format=fmt)
+        with Image.open(path) as sniffed:
+            assert sniffed.format == fmt  # plain Pillow would decode it
+        with pytest.raises(UnidentifiedImageError):
+            open_image(path)
+
+    def test_engine_reader_rejects_disguised_file(self, tmp_path):
+        path = tmp_path / "disguised.jpg"
+        Image.new("RGB", (8, 6)).save(path, format="PCX")
+        with pytest.raises(UnidentifiedImageError):
+            imread_exif(path)

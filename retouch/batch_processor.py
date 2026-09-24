@@ -24,6 +24,7 @@ from .io import (
     IMAGE_EXTENSIONS,
     EXPORT_RES_MAP,
     EXT_MAP,
+    open_image,
 )
 from .utils import get_cache_dir, normalize_mask
 
@@ -132,7 +133,7 @@ def plan_batch_outputs(
 def _estimate_image_working_bytes(path: Path) -> int:
     """Estimate peak RAM for one image (input + output + pipeline buffers)."""
     try:
-        with Image.open(path) as im:
+        with open_image(path) as im:
             w, h = im.size
         return h * w * 3 * 4
     except Exception:
