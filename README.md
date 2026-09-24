@@ -121,6 +121,15 @@ Each batch also writes `review.html` into the output folder: open it in a browse
 A new set starts after a 15-minute pause (`--gap`), or use `--by hour` / `--by day`.
 See [SPLIT_SHOOT.md](docs/guides/SPLIT_SHOOT.md).
 
+The CLI also accepts several literal input paths and can save a deterministic
+selection/output plan before rendering:
+
+```bash
+python3 cli.py --dry-run --input-plan selection.json \
+  "/path/to/A 01.jpg" "/path/to/B 02.RAF" \
+  -o "/path/to/retouched"
+```
+
 ### Recipe QA
 
 Compare recipes on one photo or sweep selected recipes across a folder before

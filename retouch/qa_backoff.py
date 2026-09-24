@@ -1,13 +1,15 @@
-"""A5 — "No plastic skin" guarantee (QA auto-back-off).
+"""QA auto-back-off helper (plastic-skin parameter back-off).
 
-When the QA detectors flag plastic skin on a processed image, this module
-computes a conservative set of parameter adjustments that reduce the
-skin-smoothing aggressiveness so the engine can re-process and recover
-texture. Back-off is only triggered on an actual *flag*, never on a mere
-warning, and is bounded so the engine can never oscillate or push params
-into a degenerate state.
+This module provides parameter-adjustment logic for reducing smoothing
+aggressiveness when QA detectors flag plastic skin artifacts. As of 2026-09-23,
+this back-off loop is not wired into the render pipeline — the only caller
+(``_run_core_pipeline`` in engine.py) was unreachable and has been removed.
 
-Public API:
+The ``plastic_skin`` detector currently flags every portrait (absolute ratio
+over the person mask), so this module must not be wired without recalibration.
+See docs/plans/TODO_WEEK_2026_09_21.md, Q1 for the decision pending.
+
+Public API (not currently used):
     QABackoff.check_and_backoff(img, ctx, qa_warnings) -> Optional[Dict[str, float]]
     QABackoff.backoff_strategy(warning_type, current_params) -> Dict[str, float]
 """

@@ -79,3 +79,74 @@ def test_custom_hsl_calibration_params():
     assert ctx.hsl_hue_green == 0.0
     assert hasattr(ctx, "calibration_red_hue")
     assert ctx.calibration_red_hue == 0.0
+
+
+# --- Anchored per-face targets (T5, 2026-09-23) -------------------------------
+# DSCF4599: GUI detection at native res lists faces in the opposite order to
+# the engine's 2048/800px detection, so an index-keyed override edited the
+# other person. Anchored entries bind by position instead.
+
+from retouch.face_params import ANCHOR_KEY, bind_face_params, filter_face_local, make_anchor
+
+_FRAME = (4160, 6240)
+_SUBJECT = (1249, 1517, 740, 874)
+_BACKGROUND = (500, 146, 832, 893)
+
+
+def _anchored(bbox, **extra):
+    return {"recipe": "natural", ANCHOR_KEY: make_anchor(bbox, _FRAME), **extra}
+
+
+def test_anchor_binds_to_same_person_when_engine_order_is_swapped():
+    # GUI order: 0 = background, 1 = subject. Engine order: 0 = subject.
+    fp = {0: _anchored(_BACKGROUND, smooth=100)}
+    bound, report = bind_face_params(fp, [_SUBJECT, _BACKGROUND], _FRAME)
+    assert set(bound) == {1}
+    assert bound[1]["smooth"] == 100
+    assert report == [{"selected_index": 0, "bound_index": 1, "iou": 1.0}]
+
+
+def test_anchor_matches_across_scales():
+    # Same faces detected on an 800px-wide proxy of the 4160px source.
+    s = 800 / 4160
+    proxy = [tuple(int(round(v * s)) for v in b) for b in (_SUBJECT, _BACKGROUND)]
+    bound, _ = bind_face_params({1: _anchored(_SUBJECT)}, proxy, (800, int(round(6240 * s))))
+    assert set(bound) == {0}
+
+
+def test_unmatched_anchor_is_dropped_not_applied_by_index():
+    fp = {0: _anchored(_BACKGROUND, smooth=100)}
+    bound, report = bind_face_params(fp, [_SUBJECT], _FRAME)
+    assert bound is None
+    assert report[0]["bound_index"] is None
+
+
+def test_unanchored_entries_keep_index_semantics():
+    fp = {0: {"recipe": "natural", "smooth": 50}}
+    bound, report = bind_face_params(fp, [_SUBJECT, _BACKGROUND], _FRAME)
+    assert bound == fp and report == []
+
+
+def test_one_to_one_matching():
+    fp = {0: _anchored(_SUBJECT, smooth=10), 1: _anchored(_SUBJECT, smooth=20)}
+    bound, report = bind_face_params(fp, [_SUBJECT], _FRAME)
+    assert list(bound) == [0]
+    assert sum(r["bound_index"] is None for r in report) == 1
+
+
+def test_anchor_key_is_not_a_face_local_param(caplog):
+    with caplog.at_level("WARNING"):
+        out = filter_face_local(_anchored(_SUBJECT, smooth=10))
+    assert out == {"smooth": 10}
+    assert ANCHOR_KEY not in caplog.text
+
+
+def test_anchor_from_other_source_falls_back_to_index():
+    from retouch.face_params import ANCHOR_SOURCE_KEY, face_params_for_source
+
+    fp = {0: {**_anchored(_BACKGROUND, smooth=100), ANCHOR_SOURCE_KEY: "/a.jpg"}}
+    same = face_params_for_source(fp, "/a.jpg")
+    other = face_params_for_source(fp, "/b.jpg")
+    assert ANCHOR_KEY in same[0]
+    assert ANCHOR_KEY not in other[0] and ANCHOR_SOURCE_KEY not in other[0]
+    assert other[0]["smooth"] == 100

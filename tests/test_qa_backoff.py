@@ -1,8 +1,8 @@
-"""Tests for A5 — "No plastic skin" guarantee (QA auto-back-off).
+"""Tests for QA auto-back-off parameter adjustment logic.
 
 Covers :class:`retouch.qa_backoff.QABackoff` in isolation (no engine /
-no MediaPipe required) plus an integration check that the engine wires
-the back-off loop into ``_run_core_pipeline``.
+no MediaPipe required). The back-off loop is not wired into the render
+pipeline as of 2026-09-23.
 """
 
 from __future__ import annotations
@@ -291,26 +291,6 @@ class TestIntegrationWithDetectors:
 
 
 class TestEngineWiring:
-    def test_engine_has_qa_backoff_attribute(self):
-        # Without instantiating (avoids MediaPipe/model load), verify the
-        # class wires the attribute in __init__ by inspecting source.
-        import inspect
-        from retouch import engine as engine_mod
-
-        src = inspect.getsource(engine_mod.RetouchEngine.__init__)
-        assert "_qa_backoff" in src
-        assert "QABackoff" in src
-
-    def test_core_pipeline_has_backoff_loop(self):
-        import inspect
-        from retouch import engine as engine_mod
-
-        src = inspect.getsource(engine_mod.RetouchEngine._run_core_pipeline)
-        # The A5 back-off loop must be present.
-        assert "check_and_backoff" in src
-        assert "plastic_skin" in src
-        assert "apply_adjustments" in src
-
     def test_run_qa_helper_exists(self):
         import inspect
         from retouch import engine as engine_mod

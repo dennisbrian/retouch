@@ -95,6 +95,24 @@ def test_enable_native_crash_log_points_faulthandler_at_log_dir(tmp_path, monkey
         diagnostics._native_crash_stream.close()
 
 
+def test_native_crash_logging_fails_soft_without_file_or_stderr(tmp_path, monkeypatch):
+    import faulthandler
+    import io
+    import retouch.diagnostics as diagnostics
+
+    monkeypatch.setattr(diagnostics, "_native_crash_stream", None)
+    monkeypatch.setattr(diagnostics, "log_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        diagnostics, "open", lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("denied")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        faulthandler, "enable", lambda **kwargs: (_ for _ in ()).throw(io.UnsupportedOperation("fileno")),
+    )
+
+    assert diagnostics.enable_native_crash_log() is None
+
+
 def test_native_crash_leaves_a_traceback_on_disk(tmp_path):
     """A real segfault in a child process must end up in native-crash.log."""
     import os

@@ -189,6 +189,22 @@ def _processed_render_contract(
     }
 
 
+def render_detail(
+    image: np.ndarray,
+    render_evidence: Optional[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """Classify the effective processing detail of rendered pixels.
+
+    Same rule the Advanced delivery gate uses: array size alone does not
+    prove native processing (fast preview enlarges ~800px work to native).
+    """
+    contract = _processed_render_contract(np.asarray(image), render_evidence)
+    return {
+        "effective_detail": contract["effective_detail"],
+        "reason": contract["delivery_block_reason"],
+    }
+
+
 def build_base_contract(
     image_rgb: Any,
     *,

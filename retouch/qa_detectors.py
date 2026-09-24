@@ -98,6 +98,22 @@ def _qa_status(det_result: Dict[str, Any]) -> str:
     return QA_STATUS_FLAGGED if det_result.get("flagged", False) else QA_STATUS_PASSED
 
 
+def _not_measured(reason: str, **null_fields: Any) -> Dict[str, Any]:
+    """Result for a detector that could not measure (e.g. no/mismatched reference).
+
+    Zero scores here used to classify as ``checked-pass``; an unmeasured
+    comparison must stay distinguishable from a measured pass.
+    """
+    return {
+        "status": QA_STATUS_NOT_RUN,
+        "score": None,
+        "flagged": False,
+        "reason": reason,
+        "note": reason,
+        **null_fields,
+    }
+
+
 def not_run_evidence(reason: str) -> Dict[str, Dict[str, Any]]:
     """Build a complete not-run evidence dict for every known detector."""
     return {
@@ -115,10 +131,29 @@ SEAM_THRESHOLD = 5.0   # Flag if boundary gradient >5 L-levels above context
 
 # K8 — color-fidelity (Δ-E / hue-drift) gate.
 # Skin hue should shift only a few degrees under a grade; beyond these the
-# grade has wrecked skin color. COLOR_DRIFT_THRESHOLD mirrors the max-band.
-COLOR_DRIFT_HUE_MEAN_THRESHOLD = 6.0   # Flag if mean skin Δh exceeds 6°
-COLOR_DRIFT_HUE_MAX_THRESHOLD = 15.0   # Flag if any skin pixel Δh exceeds 15°
-COLOR_DRIFT_THRESHOLD = 15.0           # Max Δh (deg) considered the flag boundary
+# grade has wrecked skin color. Hue angle is undefined as chroma → 0, so the
+# gate only looks at pixels whose chroma (in BOTH ref and output) is at least
+# COLOR_DRIFT_CHROMA_FLOOR_FRAC × the region's own median reference chroma —
+# a relative floor, so it tracks each subject's skin chroma instead of an
+# absolute Lab number. Over that chroma-floored population:
+#   flag if mean Δh > COLOR_DRIFT_HUE_MEAN_THRESHOLD
+#        or 99th-percentile Δh > COLOR_DRIFT_HUE_P99_THRESHOLD.
+# Calibrated 2026-09-23 on real `natural` renders (7 images, p99 ≤ 7.2°,
+# floored mean ≤ 0.32°) vs uniform OKLCh skin-hue rotations (+8°: p99
+# 10.5–14.8°, +15°: 18.6–21.5°) — see detect_color_drift docstring.
+COLOR_DRIFT_HUE_MEAN_THRESHOLD = 6.0   # Flag if chroma-floored mean Δh > 6°
+COLOR_DRIFT_HUE_P99_THRESHOLD = 10.0   # Flag if chroma-floored p99 Δh > 10°
+COLOR_DRIFT_HUE_PERCENTILE = 99.0      # Percentile replacing the old max rule
+COLOR_DRIFT_CHROMA_FLOOR_FRAC = 0.5    # Keep pixels with C ≥ 0.5·median(C_ref)
+# Numerical guard only: hue is undefined below ~1 ΔE of chroma (≈ one JND),
+# for ANY skin tone. Real skin chroma is ≥ ~5; this never binds on skin and
+# exists so a neutral-grey reference region can't admit pure hue noise.
+COLOR_DRIFT_CHROMA_EPS = 1.0
+COLOR_DRIFT_MIN_HUE_PIXELS = 100       # Fewer kept pixels → hue gate not measured
+# Deprecated: the old single-pixel max rule (flagged plain `natural` renders
+# via one near-neutral pixel). Kept for import compatibility; not used.
+COLOR_DRIFT_HUE_MAX_THRESHOLD = 15.0
+COLOR_DRIFT_THRESHOLD = COLOR_DRIFT_HUE_P99_THRESHOLD  # Reported flag boundary (p99 Δh, deg)
 
 # R15 — QA extensions (read-only analysis detectors).
 PORE_SPECTRUM_THRESHOLD = 0.50  # Flag if pore-energy loss ratio > 50%
@@ -782,6 +817,26 @@ def detect_color_drift(
     computes ΔE2000 and per-pixel hue-angle shift Δh over the skin region and
     flags if the skin hue has wandered beyond a few degrees.
 
+    Hue gate (chroma-floored, percentile-based). Hue angle is undefined as
+    chroma → 0, so a near-neutral pixel's Δh is noise (one such pixel read
+    19.9° on a plain ``natural`` render whose mean Δh was 0.33°). The gate
+    therefore only considers pixels whose chroma in BOTH reference and output
+    is ≥ ``COLOR_DRIFT_CHROMA_FLOOR_FRAC`` × the region's median reference
+    chroma (relative, so it follows the subject's own skin chroma — no
+    absolute chroma cut that behaves differently across skin tones; the tiny
+    ``COLOR_DRIFT_CHROMA_EPS`` is a numerical "hue is defined" guard only).
+    Over that population it flags if the mean Δh >
+    ``COLOR_DRIFT_HUE_MEAN_THRESHOLD`` (6°) or the 99th-percentile Δh >
+    ``COLOR_DRIFT_HUE_P99_THRESHOLD`` (10°). The old single-pixel max rule
+    is gone; if fewer than ``COLOR_DRIFT_MIN_HUE_PIXELS`` pixels clear the
+    floor (e.g. a B&W grade) the hue gate is not evaluated: the result is
+    ``not-run`` (never flagged) and still carries ``deltaE_mean``.
+
+    Calibration (2026-09-23, person mask as passed by the pipeline):
+    ``natural`` renders of 7 real photos: p99 ≤ 7.2°, floored mean ≤ 0.32°.
+    Uniform OKLCh hue rotation of the reference: +8° → p99 10.5–14.8°,
+    +15° → 18.6–21.5°, +30° → 35.4–36.6° (all flag).
+
     Args:
         img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR output image.
         skin_mask: Optional (H, W) float mask [0, 1]; analysis restricted to
@@ -791,33 +846,36 @@ def detect_color_drift(
 
     Returns:
         dict with keys:
-            - "score": float in [0, 1] (higher = worse). 0 if no reference.
-            - "flagged": bool, True if mean Δh > 6° or max Δh > 15°.
+            - "score": float in [0, 1] (higher = worse); 0.5 sits at the flag
+              boundary (max of p99/(2·p99 threshold), mean/(2·mean threshold)).
+            - "flagged": bool, True if chroma-floored mean Δh > 6° or
+              chroma-floored p99 Δh > 10°.
             - "deltaE_mean": float, mean ΔE2000 over (skin) region.
-            - "deltaH_mean_deg": float, mean |hue-angle shift| in degrees.
-            - "deltaH_max_deg": float, max |hue-angle shift| in degrees.
+            - "deltaH_p99_deg": float | None, chroma-floored 99th-percentile
+              |Δh| (drives ``flagged``); None if too few pixels cleared the floor.
+            - "deltaH_mean_chroma_floored_deg": float | None, chroma-floored
+              mean |Δh| (drives ``flagged``).
+            - "chroma_floor": float, the chroma floor used (Lab units).
+            - "hue_kept_fraction": float, fraction of region pixels kept.
+            - "deltaH_mean_deg": float, raw (unfloored) mean |Δh| — kept for
+              compatibility; informational, does not drive ``flagged``.
+            - "deltaH_max_deg": float, raw (unfloored) max |Δh| — kept for
+              compatibility; dominated by near-neutral pixels, informational.
             - "note": str, explanatory text when no reference is supplied.
     """
+    _none_fields = dict(
+        deltaE_mean=None, deltaH_mean_deg=None, deltaH_max_deg=None,
+        deltaH_p99_deg=None, deltaH_mean_chroma_floored_deg=None,
+        chroma_floor=None, hue_kept_fraction=None,
+    )
     if reference_img_bgr is None:
-        return {
-            "score": 0.0,
-            "flagged": False,
-            "deltaE_mean": 0.0,
-            "deltaH_mean_deg": 0.0,
-            "deltaH_max_deg": 0.0,
-            "note": "no reference supplied — self-check skipped; "
-                    "color_drift gate is a before/after comparison",
-        }
+        return _not_measured(
+            "no reference supplied — color_drift is a before/after comparison",
+            **_none_fields,
+        )
 
     if reference_img_bgr.shape != img_bgr.shape:
-        return {
-            "score": 0.0,
-            "flagged": False,
-            "deltaE_mean": 0.0,
-            "deltaH_mean_deg": 0.0,
-            "deltaH_max_deg": 0.0,
-            "note": "reference shape mismatch",
-        }
+        return _not_measured("reference shape mismatch", **_none_fields)
 
     out_lab = _bgr_to_lab_f(img_bgr)
     ref_lab = _bgr_to_lab_f(reference_img_bgr)
@@ -831,14 +889,7 @@ def detect_color_drift(
         region = np.ones(out_lab.shape[:2], dtype=bool)
 
     if not np.any(region):
-        return {
-            "score": 0.0,
-            "flagged": False,
-            "deltaE_mean": 0.0,
-            "deltaH_mean_deg": 0.0,
-            "deltaH_max_deg": 0.0,
-            "note": "empty skin region",
-        }
+        return _not_measured("empty skin region", **_none_fields)
 
     out_sub = out_lab[region]
     ref_sub = ref_lab[region]
@@ -865,11 +916,46 @@ def detect_color_drift(
     deltaH_mean_deg = float(np.mean(delta_h))
     deltaH_max_deg = float(np.max(delta_h))
 
-    flagged = (
-        deltaH_mean_deg > COLOR_DRIFT_HUE_MEAN_THRESHOLD
-        or deltaH_max_deg > COLOR_DRIFT_HUE_MAX_THRESHOLD
+    # Chroma floor relative to the region's own reference chroma: hue is only
+    # meaningful where both samples carry colour. EPS is a numerical guard
+    # (hue undefined below ~1 JND of chroma), not a skin-tone threshold.
+    c_ref = np.hypot(ref_sub[:, 1], ref_sub[:, 2])
+    c_out = np.hypot(out_sub[:, 1], out_sub[:, 2])
+    chroma_floor = max(
+        COLOR_DRIFT_CHROMA_FLOOR_FRAC * float(np.median(c_ref)),
+        COLOR_DRIFT_CHROMA_EPS,
     )
-    score = min(1.0, deltaH_max_deg / 30.0)
+    keep = np.minimum(c_ref, c_out) >= chroma_floor
+    n_keep = int(np.count_nonzero(keep))
+    hue_kept_fraction = float(n_keep / delta_h.shape[0])
+
+    if n_keep < COLOR_DRIFT_MIN_HUE_PIXELS:
+        # Too little chroma left (e.g. B&W grade / neutral region): hue drift
+        # is not measurable, so the gate did not run (status not-run, not a
+        # measured pass); ΔE is still reported for information.
+        return _not_measured(
+            "too few chromatic pixels for a hue-drift measurement",
+            deltaE_mean=deltaE_mean,
+            deltaH_mean_deg=deltaH_mean_deg,
+            deltaH_max_deg=deltaH_max_deg,
+            deltaH_p99_deg=None,
+            deltaH_mean_chroma_floored_deg=None,
+            chroma_floor=float(chroma_floor),
+            hue_kept_fraction=hue_kept_fraction,
+        )
+
+    dh_kept = delta_h[keep]
+    deltaH_p99_deg = float(np.percentile(dh_kept, COLOR_DRIFT_HUE_PERCENTILE))
+    deltaH_mean_floored = float(np.mean(dh_kept))
+
+    flagged = (
+        deltaH_mean_floored > COLOR_DRIFT_HUE_MEAN_THRESHOLD
+        or deltaH_p99_deg > COLOR_DRIFT_HUE_P99_THRESHOLD
+    )
+    score = min(1.0, max(
+        deltaH_p99_deg / (2.0 * COLOR_DRIFT_HUE_P99_THRESHOLD),
+        deltaH_mean_floored / (2.0 * COLOR_DRIFT_HUE_MEAN_THRESHOLD),
+    ))
 
     return {
         "score": float(score),
@@ -877,6 +963,10 @@ def detect_color_drift(
         "deltaE_mean": deltaE_mean,
         "deltaH_mean_deg": deltaH_mean_deg,
         "deltaH_max_deg": deltaH_max_deg,
+        "deltaH_p99_deg": deltaH_p99_deg,
+        "deltaH_mean_chroma_floored_deg": deltaH_mean_floored,
+        "chroma_floor": float(chroma_floor),
+        "hue_kept_fraction": hue_kept_fraction,
     }
 
 
@@ -956,24 +1046,16 @@ def detect_pore_spectrum_distance(
             - "note": str when no reference is supplied.
     """
     if reference_img_bgr is None:
-        return {
-            "score": 0.0,
-            "flagged": False,
-            "pore_energy_ratio": 0.0,
-            "pore_band_energy": 0.0,
-            "ref_pore_band_energy": None,
-            "note": "no reference",
-        }
+        return _not_measured(
+            "no reference",
+            pore_energy_ratio=None, pore_band_energy=None, ref_pore_band_energy=None,
+        )
 
     if reference_img_bgr.shape != img_bgr.shape:
-        return {
-            "score": 0.0,
-            "flagged": False,
-            "pore_energy_ratio": 0.0,
-            "pore_band_energy": 0.0,
-            "ref_pore_band_energy": None,
-            "note": "reference shape mismatch",
-        }
+        return _not_measured(
+            "reference shape mismatch",
+            pore_energy_ratio=None, pore_band_energy=None, ref_pore_band_energy=None,
+        )
 
     proc_energy = _pore_band_energy(_gray_f32(img_bgr))
     ref_energy = _pore_band_energy(_gray_f32(reference_img_bgr))
@@ -1326,10 +1408,25 @@ def run_all(
     mark_policy: Optional[Mapping[str, Any]] = None,
     warp_field: Optional[np.ndarray] = None,
     body_region_weights: Optional[np.ndarray] = None,
+    geometry_reference_img_bgr: Optional[np.ndarray] = None,
+    geometry_reference_reason: Optional[str] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Run all QA detectors and aggregate their results."""
     result: Dict[str, Dict[str, Any]] = {}
-    ref_before = img_before if img_before is not None else reference_img_bgr
+    photo_reference = geometry_reference_img_bgr
+    if geometry_reference_reason is not None:
+        photo_reference = None
+    elif photo_reference is None:
+        photo_reference = reference_img_bgr
+    if (
+        photo_reference is not None
+        and photo_reference.shape != img_bgr.shape
+    ):
+        photo_reference = None
+        geometry_reference_reason = "geometry-only reference shape mismatch"
+    ref_before = photo_reference
+    if ref_before is None and geometry_reference_reason is None:
+        ref_before = img_before if img_before is not None else reference_img_bgr
     try:
         result["banding"] = detect_banding(img_bgr, skin_mask)
     except Exception as exc:
@@ -1339,7 +1436,7 @@ def run_all(
     except Exception as exc:
         result["clipping"] = _detector_failure("clipping", exc)
     try:
-        result["plastic_skin"] = detect_plastic_skin(img_bgr, skin_mask, reference_img_bgr)
+        result["plastic_skin"] = detect_plastic_skin(img_bgr, skin_mask, photo_reference)
     except Exception as exc:
         result["plastic_skin"] = _detector_failure("plastic_skin", exc)
     try:
@@ -1358,13 +1455,13 @@ def run_all(
         result["seam"] = _detector_failure("seam", exc)
     try:
         result["color_drift"] = detect_color_drift(
-            img_bgr, skin_mask, reference_img_bgr
+            img_bgr, skin_mask, photo_reference
         )
     except Exception as exc:
         result["color_drift"] = _detector_failure("color_drift", exc)
     try:
         result["pore_spectrum"] = detect_pore_spectrum_distance(
-            img_bgr, skin_mask, reference_img_bgr
+            img_bgr, skin_mask, photo_reference
         )
     except Exception as exc:
         result["pore_spectrum"] = _detector_failure("pore_spectrum", exc)
@@ -1374,7 +1471,7 @@ def run_all(
         result["asymmetry"] = _detector_failure("asymmetry", exc)
     try:
         result["skin_score"] = gui_skin_score(
-            img_bgr, skin_mask, reference_img_bgr
+            img_bgr, skin_mask, photo_reference
         )
     except Exception as exc:
         result["skin_score"] = _detector_failure("skin_score", exc)
@@ -1383,7 +1480,7 @@ def run_all(
             img_bgr,
             face_skin_mask=face_skin_mask,
             body_skin_mask=body_skin_mask,
-            reference_img_bgr=reference_img_bgr,
+            reference_img_bgr=photo_reference,
             mark_policy=mark_policy,
         )
     except Exception as exc:
@@ -1420,6 +1517,20 @@ def run_all(
             "status": QA_STATUS_NOT_RUN, "score": None, "flagged": False,
             "reason": "no reference image supplied",
         }
+    if geometry_reference_reason is not None:
+        for name in ("color_drift", "pore_spectrum"):
+            measurement = result.get(name)
+            if measurement is not None and measurement.get("status") == QA_STATUS_NOT_RUN:
+                measurement["reason"] = geometry_reference_reason
+                measurement["geometry_reference_available"] = False
+        plastic = result.get("plastic_skin")
+        if plastic is not None:
+            plastic["geometry_reference_available"] = False
+            plastic["geometry_reference_reason"] = geometry_reference_reason
+        skin_score = result.get("skin_score")
+        if skin_score is not None:
+            skin_score["geometry_reference_available"] = False
+            skin_score["geometry_reference_reason"] = geometry_reference_reason
     return result
 
 
@@ -1458,6 +1569,8 @@ def run_qa_with_evidence(
     face_skin_mask: Optional[np.ndarray] = None,
     mark_policy: Optional[Mapping[str, Any]] = None,
     warp_field: Optional[np.ndarray] = None,
+    geometry_reference_img_bgr: Optional[np.ndarray] = None,
+    geometry_reference_reason: Optional[str] = None,
 ) -> "tuple[List[QAWarning], Dict[str, Dict[str, Any]]]":
     """Run the QA detector pipeline, returning warnings AND complete evidence.
 
@@ -1477,9 +1590,17 @@ def run_qa_with_evidence(
     qa_warnings: List[QAWarning] = []
     try:
         body_skin_mask = None
-        if face_skin_mask is not None and reference_img_bgr is not None:
+        body_reference = geometry_reference_img_bgr
+        if geometry_reference_reason is not None:
+            body_reference = None
+        elif body_reference is None:
+            body_reference = reference_img_bgr
+        elif body_reference.shape != result.shape:
+            body_reference = None
+            geometry_reference_reason = "geometry-only reference shape mismatch"
+        if face_skin_mask is not None and body_reference is not None:
             body_skin_mask = build_face_anchored_body_mask(
-                reference_img_bgr, face_skin_mask, person_mask,
+                body_reference, face_skin_mask, person_mask,
             )
         qa_raw = run_all(
             result,
@@ -1491,6 +1612,8 @@ def run_qa_with_evidence(
             body_skin_mask=body_skin_mask,
             mark_policy=mark_policy,
             warp_field=warp_field,
+            geometry_reference_img_bgr=geometry_reference_img_bgr,
+            geometry_reference_reason=geometry_reference_reason,
         )
     except Exception as e:
         logger.warning("QA pipeline failed: %s", e, exc_info=True)
@@ -1555,6 +1678,8 @@ def run_qa(
     face_skin_mask: Optional[np.ndarray] = None,
     mark_policy: Optional[Mapping[str, Any]] = None,
     warp_field: Optional[np.ndarray] = None,
+    geometry_reference_img_bgr: Optional[np.ndarray] = None,
+    geometry_reference_reason: Optional[str] = None,
 ) -> List["QAWarning"]:
     """Run the QA detector pipeline on a processed uint8 BGR image.
 
@@ -1571,5 +1696,7 @@ def run_qa(
         face_skin_mask=face_skin_mask,
         mark_policy=mark_policy,
         warp_field=warp_field,
+        geometry_reference_img_bgr=geometry_reference_img_bgr,
+        geometry_reference_reason=geometry_reference_reason,
     )
     return warnings

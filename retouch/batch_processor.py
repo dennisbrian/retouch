@@ -10,6 +10,8 @@ import hashlib
 import queue
 import tempfile
 import threading
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Callable, Union
 
@@ -46,6 +48,63 @@ def _path_within(path: Path, parent: Path) -> bool:
         return False
 
 
+def _batch_source_key(path: Union[str, Path]) -> str:
+    """Return the lexical absolute identity of one discovered batch entry.
+
+    File symlinks inside an input tree are distinct user-visible entries even
+    when they resolve to the same target.  Keep that identity for planning and
+    lookup; resolve separately wherever filesystem containment is a concern.
+    """
+    value = os.path.normpath(os.path.abspath(os.fspath(path)))
+    return value.casefold() if sys.platform == "darwin" else value
+
+
+def _batch_source_matches(
+    value: Union[str, Path],
+    discovered_files: List[Path],
+    requested_root: Path,
+    resolved_root: Path,
+) -> List[str]:
+    """Map a caller path to discovered lexical entries without alias fan-out."""
+    path = Path(value).expanduser()
+    discovered = {_batch_source_key(source) for source in discovered_files}
+    lexical_key = _batch_source_key(path)
+    if lexical_key in discovered:
+        return [lexical_key]
+
+    # A root spelled through a directory symlink is resolved for walking, so
+    # remap its relative path under that resolved root while preserving any
+    # file-symlink component below it.
+    try:
+        relative = Path(os.path.abspath(os.fspath(path))).relative_to(
+            Path(os.path.abspath(os.fspath(requested_root)))
+        )
+    except ValueError:
+        relative = None
+    if relative is not None:
+        mapped_key = _batch_source_key(resolved_root / relative)
+        if mapped_key in discovered:
+            return [mapped_key]
+        # The caller spelled a path inside the input tree, but that exact
+        # lexical entry is not in the selected/discovered set. Do not let a
+        # filtered-out alias fall through to a different source sharing its
+        # resolved target (especially for output overrides).
+        return []
+
+    try:
+        resolved_value = path.resolve()
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return []
+    matches = []
+    for source in discovered_files:
+        try:
+            if source.resolve() == resolved_value:
+                matches.append(_batch_source_key(source))
+        except (OSError, RuntimeError, TypeError, ValueError):
+            continue
+    return matches
+
+
 def validate_batch_roots(input_dir: Union[str, Path], output_dir: Union[str, Path]) -> Tuple[Path, Path]:
     """Resolve roots and reject self-ingesting output layouts."""
 
@@ -67,7 +126,11 @@ def _batch_destination(
     discriminator: Optional[str] = None,
 ) -> Path:
     try:
-        relative = file_path.resolve().relative_to(input_root.resolve())
+        # Preserve the discovered path rather than resolving file symlinks:
+        # aliases and their targets need separate outputs and manifest rows.
+        source_absolute = Path(os.path.abspath(os.fspath(file_path)))
+        root_absolute = Path(os.path.abspath(os.fspath(input_root)))
+        relative = source_absolute.relative_to(root_absolute)
     except ValueError:
         relative = Path(file_path.name)
     suffix = "_%s" % discriminator if discriminator else ""
@@ -77,6 +140,50 @@ def _batch_destination(
 def _destination_key(path: Path) -> str:
     value = os.path.normcase(str(path.resolve(strict=False)))
     return value.casefold() if sys.platform == "darwin" else value
+
+
+def _lexical_destination_key(path: Union[str, Path]) -> str:
+    """Return a normalized destination identity without following symlinks."""
+    value = os.path.normcase(os.path.abspath(os.fspath(path)))
+    return value.casefold() if sys.platform == "darwin" else value
+
+
+def _validated_batch_output_destination(
+    path: Union[str, Path], output_root: Union[str, Path]
+) -> Path:
+    """Resolve an image/artifact destination and fail closed outside output_root.
+
+    ``output_root`` is canonicalized by ``validate_batch_roots``. If that
+    directory is replaced with a symlink while a batch is running, treating
+    the new target as the root would silently expand the caller's write scope.
+    Check that the root still resolves to its original lexical location as
+    well as checking the requested destination's resolved containment.
+    """
+    root = Path(output_root)
+    root_lexical = Path(os.path.abspath(os.fspath(root)))
+    lexical_path = Path(path).expanduser()
+    if lexical_path.is_symlink():
+        raise ValueError(
+            "Batch output destination cannot be a symlink: %s" % path
+        )
+    try:
+        resolved_root = root.resolve(strict=False)
+        if _batch_source_key(resolved_root) != _batch_source_key(root_lexical):
+            raise ValueError("Batch output root now resolves through a symlink")
+        resolved_destination = lexical_path.resolve(strict=False)
+        resolved_destination.relative_to(resolved_root)
+    except ValueError as exc:
+        if "Batch output root now resolves through a symlink" in str(exc):
+            raise
+        raise ValueError(
+            "Batch output destination must resolve inside the output root: %s"
+            % path
+        ) from exc
+    except (OSError, RuntimeError, TypeError) as exc:
+        raise ValueError(
+            "Batch output destination cannot be safely resolved: %s" % path
+        ) from exc
+    return resolved_destination
 
 
 def plan_batch_outputs(
@@ -90,7 +197,10 @@ def plan_batch_outputs(
     extension = EXT_MAP.get(export_fmt, ".jpg")
     grouped: Dict[str, List[Path]] = {}
     for source in files:
-        candidate = _batch_destination(source, input_root, output_root, extension)
+        candidate = _validated_batch_output_destination(
+            _batch_destination(source, input_root, output_root, extension),
+            output_root,
+        )
         grouped.setdefault(_destination_key(candidate), []).append(source)
 
     plan: Dict[str, Path] = {}
@@ -101,24 +211,30 @@ def plan_batch_outputs(
             if len(sources) > 1:
                 source_ext = source.suffix.lower().lstrip(".") or "image"
                 discriminator = source_ext
-            candidate = _batch_destination(
-                source,
-                input_root,
-                output_root,
-                extension,
-                discriminator=discriminator,
-            )
-            key = _destination_key(candidate)
-            if key in claimed:
-                relative = str(source.resolve()).encode("utf-8")
-                short_hash = hashlib.sha256(relative).hexdigest()[:8]
-                discriminator = "%s_%s" % (discriminator or "image", short_hash)
-                candidate = _batch_destination(
+            candidate = _validated_batch_output_destination(
+                _batch_destination(
                     source,
                     input_root,
                     output_root,
                     extension,
                     discriminator=discriminator,
+                ),
+                output_root,
+            )
+            key = _destination_key(candidate)
+            if key in claimed:
+                relative = _batch_source_key(source).encode("utf-8")
+                short_hash = hashlib.sha256(relative).hexdigest()[:8]
+                discriminator = "%s_%s" % (discriminator or "image", short_hash)
+                candidate = _validated_batch_output_destination(
+                    _batch_destination(
+                        source,
+                        input_root,
+                        output_root,
+                        extension,
+                        discriminator=discriminator,
+                    ),
+                    output_root,
                 )
                 key = _destination_key(candidate)
             if key in claimed:
@@ -126,8 +242,120 @@ def plan_batch_outputs(
                     "Batch output collision between %s and %s" % (claimed[key], source)
                 )
             claimed[key] = source
-            plan[str(source.resolve())] = candidate
+            plan[_batch_source_key(source)] = candidate
     return plan
+
+
+def _relative_manifest_path(path: Optional[Path], root: Path) -> Optional[str]:
+    if path is None:
+        return None
+    try:
+        # Keep the discovered path's identity for symlinks within an input
+        # tree without disclosing a target outside that tree.
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        try:
+            return path.resolve(strict=False).relative_to(
+                root.resolve(strict=False)
+            ).as_posix()
+        except ValueError:
+            return path.name
+
+
+def _batch_manifest_row(
+    source: Path,
+    output: Optional[Path],
+    input_root: Path,
+    output_root: Path,
+    status: str,
+    *,
+    result: Optional[Any] = None,
+    color_context: Optional[Any] = None,
+    error: Optional[BaseException] = None,
+    runtime_diagnostics: Optional[Dict[str, Any]] = None,
+    face_count: Optional[Any] = None,
+) -> Dict[str, Any]:
+    if runtime_diagnostics is None:
+        runtime = getattr(result, "runtime_diagnostics", {}) if result is not None else {}
+    else:
+        runtime = runtime_diagnostics
+    runtime = runtime if isinstance(runtime, dict) else {}
+    detector = runtime.get("face_detection", {})
+    detector = detector if isinstance(detector, dict) else {}
+    mode = detector.get("mode", "unknown")
+    if face_count is None and result is not None:
+        face_count = getattr(result, "face_count", None)
+    row: Dict[str, Any] = {
+        "source": _relative_manifest_path(source, input_root),
+        "output": _relative_manifest_path(output, output_root),
+        "status": status,
+        "face_detection": {
+            key: detector.get(key)
+            for key in ("mode", "available", "backend", "probe_state", "reason")
+            if key in detector
+        } or {"mode": "unknown"},
+        "global_only": (
+            bool(mode == "global_only") if mode in ("face_aware", "global_only") else None
+        ),
+        "face_count": int(face_count) if isinstance(face_count, (int, np.integer)) else None,
+        "face_aware_execution": (
+            bool(mode == "face_aware" and int(face_count) > 0)
+            if isinstance(face_count, (int, np.integer))
+            else None
+        ),
+    }
+    to_dict = getattr(color_context, "to_dict", None)
+    if callable(to_dict):
+        row["color_context"] = to_dict()
+    healing = runtime.get("healing")
+    if isinstance(healing, list):
+        compact_healing = []
+        integer_fields = {
+            "index", "valid_source_centres", "permitted_donor_pixels", "fallback_pixels"
+        }
+        text_fields = {"status", "requested", "executed", "reason", "error_type"}
+        for item in healing:
+            if not isinstance(item, dict):
+                continue
+            compact: Dict[str, Any] = {}
+            for key in integer_fields:
+                value = item.get(key)
+                if isinstance(value, (int, np.integer)):
+                    compact[key] = int(value)
+            for key in text_fields:
+                if key in item:
+                    value = item[key]
+                    compact[key] = None if value is None else str(value)
+            if isinstance(item.get("source_map_available"), (bool, np.bool_)):
+                compact["source_map_available"] = bool(item["source_map_available"])
+            compact_healing.append(compact)
+        row["healing"] = compact_healing
+    if error is not None:
+        row["error_type"] = type(error).__name__
+    return row
+
+
+def _write_batch_manifest(
+    output_root: Path, payload: Dict[str, Any], run_id: str
+) -> Path:
+    """Write a new per-run manifest without replacing any existing artifact."""
+    path = _validated_batch_output_destination(
+        output_root / ("retouch_batch_manifest_%s.json" % run_id), output_root
+    )
+    descriptor = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, ensure_ascii=False, indent=2, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+    except Exception:
+        try:
+            path.unlink()
+        except OSError:
+            logger.warning("Could not remove incomplete batch manifest %s", path)
+        raise
+    return path
 
 
 def _estimate_image_working_bytes(path: Path) -> int:
@@ -603,8 +831,15 @@ class BatchProcessor:
         once at the start of the call; no shared mutable state is mutated
         across concurrent invocations.
         """
+        requested_input_root = Path(input_dir).expanduser()
         input_path, output_path = validate_batch_roots(input_dir, output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
+        started_at = datetime.now(timezone.utc)
+        run_id = "%s-%s" % (
+            started_at.strftime("%Y%m%dT%H%M%S%fZ"), uuid.uuid4().hex[:8]
+        )
+        manifest_records: Dict[str, Dict[str, Any]] = {}
+        manifest_records_lock = threading.Lock()
 
         # Resolve session once (immutable snapshot for the whole batch).
         resolved_session = _resolve_session(session)
@@ -673,8 +908,20 @@ class BatchProcessor:
                     all_files.append(Path(root) / f)
 
         if only_files is not None:
-            only_set = {Path(p).resolve() for p in only_files}
-            all_files = [fp for fp in all_files if fp.resolve() in only_set]
+            only_keys = set()
+            for value in only_files:
+                matches = _batch_source_matches(
+                    value, all_files, requested_input_root, input_path
+                )
+                if len(matches) > 1:
+                    raise ValueError(
+                        "Batch only_files path is ambiguous across symlink aliases: %s"
+                        % value
+                    )
+                only_keys.update(matches)
+            all_files = [
+                fp for fp in all_files if _batch_source_key(fp) in only_keys
+            ]
 
         if not all_files:
             return [], None, None, "No supported images found in the input folder."
@@ -683,16 +930,18 @@ class BatchProcessor:
         )
         if output_path_overrides:
             for source_value, destination_value in output_path_overrides.items():
-                source_key = str(Path(source_value).expanduser().resolve())
-                if source_key not in output_plan:
+                source_matches = _batch_source_matches(
+                    source_value, all_files, requested_input_root, input_path
+                )
+                if len(source_matches) != 1 or source_matches[0] not in output_plan:
                     raise ValueError(
-                        "Batch output override references a source outside this batch: %s" % source_value
+                        "Batch output override references a missing or ambiguous source: %s"
+                        % source_value
                     )
-                destination = Path(destination_value).expanduser().resolve()
-                if not _path_within(destination, output_path):
-                    raise ValueError(
-                        "Batch output override must stay inside the output root: %s" % destination
-                    )
+                source_key = source_matches[0]
+                destination = _validated_batch_output_destination(
+                    destination_value, output_path
+                )
                 output_plan[source_key] = destination
             destination_keys: Dict[str, str] = {}
             for source_key, destination in output_plan.items():
@@ -704,6 +953,28 @@ class BatchProcessor:
                         )
                     )
                 destination_keys[key] = source_key
+
+        # Image overrides must not claim paths written later by this batch.
+        # Reserve even the run-unique manifest path so a crafted override
+        # cannot turn a successful image into an incomplete manifest write.
+        reserved_artifacts = [
+            output_path / ("retouch_batch_manifest_%s.json" % run_id)
+        ]
+        if generate_sheet:
+            reserved_artifacts.append(output_path / "contact_sheet.jpg")
+        if export_zip:
+            reserved_artifacts.append(output_path / "batch_export.zip")
+        for artifact in reserved_artifacts:
+            safe_artifact = _validated_batch_output_destination(
+                artifact, output_path
+            )
+            artifact_key = _destination_key(safe_artifact)
+            for source_key, destination in output_plan.items():
+                if _destination_key(destination) == artifact_key:
+                    raise ValueError(
+                        "Batch image output %s collides with reserved artifact %s"
+                        % (source_key, artifact.name)
+                    )
 
         # 2. Setup cache (stored under user home to prevent read-only directory issues)
         cache = BatchProcessorCache(input_path)
@@ -769,7 +1040,9 @@ class BatchProcessor:
                         on_file_result,
                         input_root=input_path,
                         engine=self.engine,
-                        output_file=output_plan[str(fp.resolve())],
+                        output_file=output_plan[_batch_source_key(fp)],
+                        manifest_records=manifest_records,
+                        manifest_records_lock=manifest_records_lock,
                     )
 
                 processed_paths = _run_async_batch_queue(
@@ -810,7 +1083,9 @@ class BatchProcessor:
                         on_file_result,
                         input_root=input_path,
                         engine=worker_engine,
-                        output_file=output_plan[str(fp.resolve())],
+                        output_file=output_plan[_batch_source_key(fp)],
+                        manifest_records=manifest_records,
+                        manifest_records_lock=manifest_records_lock,
                     )
 
                 try:
@@ -844,7 +1119,9 @@ class BatchProcessor:
                     applier,
                     on_file_result,
                     input_root=input_path,
-                    output_file=output_plan[str(file_path.resolve())],
+                    output_file=output_plan[_batch_source_key(file_path)],
+                    manifest_records=manifest_records,
+                    manifest_records_lock=manifest_records_lock,
                 )
                 if res_path is not None:
                     processed_paths.append(res_path)
@@ -857,9 +1134,13 @@ class BatchProcessor:
         if generate_sheet and processed_paths:
             if progress_callback:
                 progress_callback(0.85, "Generating contact sheet...")
-            sheet_out = output_path / "contact_sheet.jpg"
+            sheet_out = _validated_batch_output_destination(
+                output_path / "contact_sheet.jpg", output_path
+            )
             try:
                 generate_contact_sheet(processed_paths, sheet_out)
+                if not sheet_out.is_file() or sheet_out.stat().st_size <= 0:
+                    raise IOError("contact-sheet writer produced no non-empty output")
                 contact_sheet_path = str(sheet_out)
                 status_msg += "Generated contact sheet: contact_sheet.jpg\n"
             except Exception as e:
@@ -868,23 +1149,80 @@ class BatchProcessor:
                 log_crash(e, {"stage": "generate_contact_sheet"})
                 status_msg += f"Failed to generate contact sheet: {e}\n"
 
+        # Record the exact per-file detector availability and ingest color
+        # provenance so a later reviewer can distinguish a face-aware run
+        # from a global-only fallback. Paths are output-relative to avoid
+        # embedding private absolute directory names in the artifact.
+        with manifest_records_lock:
+            rows_by_source = dict(manifest_records)
+        processed_keys = {_destination_key(Path(path)) for path in processed_paths}
+        for source in all_files:
+            source_key = _relative_manifest_path(source, input_path)
+            if source_key in rows_by_source:
+                continue
+            destination = output_plan[_batch_source_key(source)]
+            is_done = _destination_key(destination) in processed_keys
+            rows_by_source[source_key] = _batch_manifest_row(
+                source,
+                destination if is_done else None,
+                input_path,
+                output_path,
+                "done" if is_done else "failed",
+            )
+        file_rows = [rows_by_source[key] for key in sorted(rows_by_source)]
+        counts = {
+            status: sum(1 for row in file_rows if row["status"] == status)
+            for status in ("done", "failed", "skipped")
+        }
+        manifest_payload = {
+            "schema": "retouch.batch-manifest.v2",
+            "run_id": run_id,
+            "started_at": started_at.isoformat(),
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "request": {
+                "recipe": str(style_name_or_recipe),
+                "custom_style_profile": custom_style_profile is not None,
+                "session_applied": resolved_session is not None,
+                "export_format": str(export_fmt),
+                "export_quality": int(export_quality),
+                "export_resolution": str(export_res),
+            },
+            "summary": {"total": len(all_files), **counts},
+            "files": file_rows,
+        }
+        manifest_path: Optional[Path] = None
+        try:
+            manifest_path = _write_batch_manifest(
+                output_path, manifest_payload, run_id
+            )
+            status_msg += "Run manifest: %s\n" % manifest_path.name
+        except (OSError, TypeError, ValueError) as exc:
+            logger.warning("Could not write batch manifest: %s", exc)
+            status_msg += "Failed to write run manifest: %s\n" % type(exc).__name__
+
         # 6. Package into ZIP
         zip_path = None
         if export_zip and processed_paths:
             if progress_callback:
                 progress_callback(0.95, "Packaging ZIP...")
             import zipfile
-            z_path = output_path / "batch_export.zip"
+            z_path = _validated_batch_output_destination(
+                output_path / "batch_export.zip", output_path
+            )
             try:
                 with zipfile.ZipFile(z_path, "w") as zipf:
                     for exp_path in processed_paths:
                         try:
-                            arcname = Path(exp_path).resolve().relative_to(output_path.resolve()).as_posix()
+                            arcname = Path(os.path.abspath(os.fspath(exp_path))).relative_to(
+                                Path(os.path.abspath(os.fspath(output_path)))
+                            ).as_posix()
                         except ValueError:
                             arcname = Path(exp_path).name
                         zipf.write(exp_path, arcname=arcname)
                     if contact_sheet_path:
                         zipf.write(contact_sheet_path, arcname="contact_sheet.jpg")
+                    if manifest_path is not None:
+                        zipf.write(manifest_path, arcname=manifest_path.name)
                 zip_path = str(z_path)
                 status_msg += "Packaged files into ZIP: batch_export.zip\n"
             except Exception as e:
@@ -926,8 +1264,14 @@ class BatchProcessor:
         input_root: Optional[Path] = None,
         engine: Optional[Any] = None,
         output_file: Optional[Path] = None,
+        manifest_records: Optional[Dict[str, Dict[str, Any]]] = None,
+        manifest_records_lock: Optional[threading.Lock] = None,
     ) -> Optional[Path]:
         """Process a single file and write output with embedded metadata."""
+        result = None
+        color_context = None
+        manifest_runtime_diagnostics: Optional[Dict[str, Any]] = None
+        manifest_face_count = None
         try:
             img_bgr = imread_exif(file_path)
             request_engine = engine if engine is not None else self.engine
@@ -947,6 +1291,9 @@ class BatchProcessor:
             # with `result` after it's produced — see docs/plans for the Job
             # Dashboard on why this ordering is load-bearing.
             qa_list = getattr(result, "qa", None)
+            runtime = getattr(result, "runtime_diagnostics", {})
+            manifest_runtime_diagnostics = dict(runtime) if isinstance(runtime, dict) else {}
+            manifest_face_count = getattr(result, "face_count", None)
 
             export_max = EXPORT_RES_MAP.get(export_res)
             if export_max is not None:
@@ -963,6 +1310,9 @@ class BatchProcessor:
                 out_file_path = _batch_destination(
                     file_path, source_root, output_path, ext,
                 )
+            out_file_path = _validated_batch_output_destination(
+                out_file_path, output_path
+            )
             out_file_path.parent.mkdir(parents=True, exist_ok=True)
 
             from .io import (
@@ -978,6 +1328,11 @@ class BatchProcessor:
             )
             os.close(fd)
             try:
+                safe_temp_path = _validated_batch_output_destination(
+                    temp_name, output_path
+                )
+                if safe_temp_path != Path(temp_name):
+                    raise ValueError("Batch output temporary path changed during write")
                 write_image_with_color_context(
                     temp_name,
                     result,
@@ -989,6 +1344,15 @@ class BatchProcessor:
                 )
                 if not os.path.isfile(temp_name) or os.path.getsize(temp_name) <= 0:
                     raise IOError("image writer produced no non-empty output")
+                # Re-check both names immediately before the atomic publish;
+                # a replaced output subdirectory must never redirect writes.
+                if (
+                    _validated_batch_output_destination(out_file_path, output_path)
+                    != out_file_path
+                    or _validated_batch_output_destination(temp_name, output_path)
+                    != Path(temp_name)
+                ):
+                    raise ValueError("Batch output path changed during write")
                 os.replace(temp_name, out_file_path)
             except Exception:
                 try:
@@ -996,8 +1360,24 @@ class BatchProcessor:
                 except OSError:
                     pass
                 raise
+            self._record_manifest_row(
+                file_path,
+                out_file_path,
+                input_root,
+                output_path,
+                "done",
+                manifest_records,
+                manifest_records_lock,
+                result=result,
+                color_context=color_context,
+                runtime_diagnostics=manifest_runtime_diagnostics,
+                face_count=manifest_face_count,
+            )
             if on_file_result is not None:
-                on_file_result(file_path, out_file_path, qa_list, None)
+                try:
+                    on_file_result(file_path, out_file_path, qa_list, None)
+                except Exception:
+                    logger.exception("Batch result callback failed for %s", file_path)
             return out_file_path
         except Exception as e:
             logger.error("Failed to process %s: %s", file_path, e)
@@ -1009,5 +1389,58 @@ class BatchProcessor:
                 "export_fmt": export_fmt
             })
             if on_file_result is not None:
-                on_file_result(file_path, None, None, str(e))
+                try:
+                    on_file_result(file_path, None, None, str(e))
+                except Exception:
+                    logger.exception("Batch failure callback failed for %s", file_path)
+            self._record_manifest_row(
+                file_path,
+                None,
+                input_root,
+                output_path,
+                "failed",
+                manifest_records,
+                manifest_records_lock,
+                result=result,
+                color_context=color_context,
+                error=e,
+                runtime_diagnostics=manifest_runtime_diagnostics,
+                face_count=manifest_face_count,
+            )
             return None
+
+    @staticmethod
+    def _record_manifest_row(
+        source: Path,
+        output: Optional[Path],
+        input_root: Optional[Path],
+        output_root: Path,
+        status: str,
+        records: Optional[Dict[str, Dict[str, Any]]],
+        records_lock: Optional[threading.Lock],
+        *,
+        result: Optional[Any] = None,
+        color_context: Optional[Any] = None,
+        error: Optional[BaseException] = None,
+        runtime_diagnostics: Optional[Dict[str, Any]] = None,
+        face_count: Optional[Any] = None,
+    ) -> None:
+        if records is None or records_lock is None or input_root is None:
+            return
+        row = _batch_manifest_row(
+            source,
+            output,
+            input_root,
+            output_root,
+            status,
+            result=result,
+            color_context=color_context,
+            error=error,
+            runtime_diagnostics=runtime_diagnostics,
+            face_count=face_count,
+        )
+        source_key = row["source"]
+        if source_key is None:
+            return
+        with records_lock:
+            records[source_key] = row

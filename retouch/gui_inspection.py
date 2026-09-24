@@ -290,6 +290,31 @@ def _face_bbox(face: Any) -> CropRect:
     return coerce_crop_rect(bbox)
 
 
+def _face_frame(face: Any) -> Tuple[int, int]:
+    """Return the declared ``(width, height)`` frame of a face's bbox.
+
+    Inspection cannot infer whether an untagged box is proxy, preview, or
+    native geometry. Fail closed so a missing frame never crops an unrelated
+    part of the source image.
+    """
+
+    if isinstance(face, Mapping):
+        frame = face.get("frame_size")
+    else:
+        frame = getattr(face, "frame_size", None)
+    if frame is None:
+        raise InspectionContractError(
+            "face frame_size is missing; rerun detection or render before inspection"
+        )
+    try:
+        fw, fh = int(frame[0]), int(frame[1])
+    except (TypeError, ValueError, IndexError):
+        raise InspectionContractError("face frame_size must be (width, height)")
+    if fw <= 0 or fh <= 0:
+        raise InspectionContractError("face frame_size must be positive")
+    return fw, fh
+
+
 @dataclass(frozen=True)
 class FaceCropSelection:
     """Evidence for the face chosen by a native inspection contract."""
@@ -298,12 +323,17 @@ class FaceCropSelection:
     source_bbox: CropRect
     crop: CropRect
     padding: int
+    # Frame ``source_bbox`` was expressed in; inspection requires this value.
+    source_frame: Tuple[int, int]
+    native_bbox: Optional[CropRect] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "kind": "face",
             "index": self.index,
             "source_bbox": self.source_bbox.to_dict(),
+            "source_frame": list(self.source_frame),
+            "native_bbox": (self.native_bbox or self.source_bbox).to_dict(),
             "crop": self.crop.to_dict(),
             "padding": self.padding,
         }
@@ -331,12 +361,28 @@ def select_face_crop(
     if isinstance(padding, bool) or not isinstance(padding, int) or padding < 0:
         raise InspectionContractError("face padding must be a non-negative integer")
 
-    source_bbox = _face_bbox(face_values[face_index])
+    face = face_values[face_index]
+    source_bbox = _face_bbox(face)
+    source_frame = _face_frame(face)
+    native_bbox = source_bbox
+    if source_frame is not None:
+        # Fast preview processes (and reports faces) at ~800px, then enlarges
+        # only the pixels; convert the box into the inspected frame once.
+        size = coerce_native_size(native_size)
+        if source_frame != (size.width, size.height):
+            sx = size.width / float(source_frame[0])
+            sy = size.height / float(source_frame[1])
+            native_bbox = CropRect(
+                int(round(source_bbox.x * sx)),
+                int(round(source_bbox.y * sy)),
+                max(1, int(round(source_bbox.width * sx))),
+                max(1, int(round(source_bbox.height * sy))),
+            )
     padded = CropRect(
-        source_bbox.x - padding,
-        source_bbox.y - padding,
-        source_bbox.width + (2 * padding),
-        source_bbox.height + (2 * padding),
+        native_bbox.x - padding,
+        native_bbox.y - padding,
+        native_bbox.width + (2 * padding),
+        native_bbox.height + (2 * padding),
     )
     crop = clamp_native_crop(padded, native_size)
     return FaceCropSelection(
@@ -344,6 +390,8 @@ def select_face_crop(
         source_bbox=source_bbox,
         crop=crop,
         padding=padding,
+        source_frame=source_frame,
+        native_bbox=native_bbox,
     )
 
 
@@ -466,8 +514,14 @@ def build_inspection_contract(
     face_index: int = 0,
     face_padding: int = 0,
     roi: Any = None,
+    effective_detail: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build a native-resolution inspection contract.
+
+    ``display.scale`` describes array-to-screen zoom only. ``detail`` records
+    whether those pixels were processed at native resolution (supply
+    ``effective_detail`` from :func:`retouch.advanced_contract.render_detail`);
+    it is ``unverified`` when no evidence is supplied.
 
     ``render_revision`` identifies the pixels supplied by the render.  If
     ``requested_revision`` is omitted, the current draft revision is the
@@ -549,6 +603,16 @@ def build_inspection_contract(
         "crop": crop.to_dict(),
         "selection": selection,
         "display": display,
+        "detail": {
+            "effective_detail": str(
+                (effective_detail or {}).get("effective_detail") or "unverified"
+            ),
+            "reason": (
+                (effective_detail or {}).get("reason")
+                if effective_detail
+                else "no render detail evidence supplied"
+            ),
+        },
         "preview": _download_disabled_preview_state(rendered, canonical_mode),
         "safe_to_commit": True,
     }

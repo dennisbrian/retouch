@@ -241,4 +241,3 @@ def test_negative_stage_strength_is_rejected():
             np.zeros_like(face),
             [object()],
         )
-

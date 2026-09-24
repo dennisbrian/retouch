@@ -33,6 +33,7 @@ from retouch.advanced_contract import (
     pixel_sha256 as advanced_pixel_sha256,
     replay_result_matches,
 )
+from retouch.heal import b64_to_mask
 from retouch.gui_preview_cache import GuiPreviewCache
 from retouch.render_manifest import canonical_sha256
 
@@ -40,6 +41,15 @@ _logger = logging.getLogger(__name__)
 
 ADVANCED_PREVIEW_MAX_DIM = 640
 ADVANCED_SNAPSHOT_MAX_COUNT = 20
+ADVANCED_REBASE_REVIEW_MIN_OPACITY = 20
+
+
+def advanced_rebase_overlay_is_reviewable(visible, opacity):
+    """Require a clearly visible support overlay before rebase acknowledgement."""
+    try:
+        return bool(visible) and float(opacity) >= ADVANCED_REBASE_REVIEW_MIN_OPACITY
+    except (TypeError, ValueError):
+        return False
 
 
 def get_engine():
@@ -269,6 +279,22 @@ def _advanced_load_rgb_source(
         delivery_status = " Native uploaded-source evidence recorded."
     replay_status = f" and replayed {len(edits)} edit(s)" if edits else ""
     status = f"{status_prefix}{replay_status}.{delivery_status}"
+    if explicit_legacy_replay and edits:
+        # Rebase onto a different base is not exact replay: stored masks are
+        # the old post-semantic masks in old pixel coordinates, and Reshape
+        # re-detects and picks faces by index. Same dimensions do not mean a
+        # new reshape/detection left the face where the mask expects it.
+        n_reshape = sum(1 for e in edits if str(e.get("mode", "")) == "Reshape")
+        n_masked = len(edits) - n_reshape
+        parts = []
+        if n_masked:
+            parts.append(f"{n_masked} masked edit(s) reused their original pixel positions")
+        if n_reshape:
+            parts.append(f"{n_reshape} reshape edit(s) re-selected faces by detection index")
+        status += (
+            " Rebase warning: " + "; ".join(parts)
+            + ". They are not re-fitted to the new base; review the result before export."
+        )
     return (
         source,
         current,
@@ -284,11 +310,91 @@ def _advanced_load_rgb_source(
     )
 
 
+def _advanced_rebase_support_mask(edits, image_shape):
+    """Union the stored effective mask supports for explicit rebase review."""
+    target_shape = tuple(int(value) for value in image_shape[:2])
+    if len(target_shape) != 2 or min(target_shape) <= 0:
+        raise AdvancedContractError("rebase target dimensions are unavailable")
+    support = np.zeros(target_shape, dtype=np.float32)
+    found = False
+    for edit in list(edits or []):
+        if not isinstance(edit, dict) or str(edit.get("mode", "Adjust")) == "Reshape":
+            continue
+        declared_shape = edit.get("image_shape")
+        if (
+            not isinstance(declared_shape, (list, tuple))
+            or len(declared_shape) != 2
+            or any(
+                isinstance(value, bool) or not isinstance(value, (int, np.integer))
+                for value in declared_shape
+            )
+        ):
+            raise AdvancedContractError("rebase mask has no valid recorded image_shape")
+        declared_shape = tuple(int(value) for value in declared_shape)
+        if declared_shape != target_shape:
+            raise AdvancedContractError(
+                "rebase mask image_shape does not match the new base; mask transport is unavailable"
+            )
+        encoded = edit.get("mask_png_b64")
+        if not encoded:
+            raise AdvancedContractError("rebase mask data is missing")
+        mask = b64_to_mask(str(encoded))
+        if mask.shape != target_shape:
+            raise AdvancedContractError(
+                "rebase mask pixels do not match their recorded image_shape; mask transport is unavailable"
+            )
+        mask = mask.astype(np.float32) / 255.0
+        support = np.maximum(support, mask)
+        found = True
+    return support if found and float(support.max()) > 0.0 else None
+
+
+def _advanced_rebase_blocked_result(message):
+    """Keep the existing Advanced workspace intact while refusing unsafe rebase."""
+    return (
+        gr.update(),
+        gr.update(),
+        gr.update(),
+        gr.update(),
+        gr.update(),
+        gr.update(),
+        gr.update(),
+        gr.update(),
+        message,
+        gr.update(),
+        gr.update(),
+        gr.update(),
+        gr.update(),
+        gr.update(),
+        gr.update(),
+    )
+
+
+def _advanced_rebase_review_guard(message):
+    """Keep state unchanged until the rebased support has been reviewed."""
+    return (gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), message)
+
+
+def _advanced_add_rebase_review(result, support):
+    """Overlay transferred mask support on a successfully replayed result."""
+    result = list(result)
+    if support is not None:
+        result[3] = mask_overlay(result[1], support, 0.42)
+        result[7] = support
+        result[8] += " The stored effective-mask support is highlighted; review the overlay and result before continuing or exporting."
+    return tuple(result)
+
+
 def on_advanced_source_change(img_paths, pending_edits=None):
     """Load the first source image into the Advanced Retouch canvas."""
     path = _resolve_image_path(img_paths)
     if not path:
-        return _advanced_empty_state(None, "Upload an image to begin Advanced Retouch.")
+        return _advanced_empty_state(None, "Upload an image to begin Advanced Retouch.") + (
+            False,
+            gr.update(value=False, visible=False, interactive=True),
+            gr.update(),
+            gr.update(),
+        )
     try:
         # Advanced Retouch edits the same display-referred sRGB pixels as the
         # main GUI. Keep tagged source pixels on that managed ingest path so
@@ -297,20 +403,56 @@ def on_advanced_source_change(img_paths, pending_edits=None):
         if image_bgr.dtype != np.uint8:
             image_bgr = np.clip(image_bgr, 0, 255).astype(np.uint8)
         source = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-        return _advanced_load_rgb_source(
+        result = list(_advanced_load_rgb_source(
             source,
             pending_edits,
             "Loaded uploaded source image",
             base_kind=BASE_KIND_SOURCE,
             source_path=path,
+        ))
+        review_support = None
+        if (
+            isinstance(pending_edits, dict)
+            and not pending_edits.get("legacy_unverified")
+            and result[9] == []
+        ):
+            try:
+                review_support = _advanced_rebase_support_mask(result[6], source.shape)
+            except Exception as exc:
+                _logger.warning("Advanced session mask review could not be prepared: %s", exc)
+                return _advanced_rebase_blocked_result(
+                    "Saved edits were not transferred because their mask support cannot be reviewed safely."
+                )
+        result = list(_advanced_add_rebase_review(result, review_support))
+        if review_support is not None:
+            return tuple(result) + (
+                True,
+                gr.update(value=False, visible=True, interactive=True),
+                gr.update(value=True),
+                gr.update(value=42),
+            )
+        return tuple(result) + (
+            False,
+            gr.update(value=False, visible=False, interactive=True),
+            gr.update(),
+            gr.update(),
         )
     except Exception as exc:
         _logger.warning("Advanced Retouch source load failed: %s", exc)
-        return _advanced_empty_state(None, f"Could not load image: {exc}")
+        return _advanced_empty_state(None, f"Could not load image: {exc}") + (
+            False,
+            gr.update(value=False, visible=False, interactive=True),
+            gr.update(),
+            gr.update(),
+        )
 
 
 def on_advanced_processed_result(processed_rgb, pending_edits=None, preview_cache=None, current_edits=None):
     """Switch the Advanced Retouch workspace to the latest recipe result."""
+    if processed_rgb is None:
+        return _advanced_rebase_blocked_result(
+            "Processed result is unavailable. The current Advanced workspace was preserved; render an image before switching bases."
+        )
     evidence = (
         preview_cache.latest_render_evidence
         if isinstance(preview_cache, GuiPreviewCache)
@@ -318,7 +460,29 @@ def on_advanced_processed_result(processed_rgb, pending_edits=None, preview_cach
     )
     explicit_rebase = not pending_edits and bool(current_edits)
     replay_payload = pending_edits or list(current_edits or [])
-    return _advanced_load_rgb_source(
+    edits = list(replay_payload.get("edits") or []) if isinstance(replay_payload, dict) else list(replay_payload or [])
+    reshape_edits = [
+        edit for edit in edits
+        if isinstance(edit, dict) and str(edit.get("mode", "")) == "Reshape"
+    ]
+    if explicit_rebase and reshape_edits:
+        return _advanced_rebase_blocked_result(
+            "Explicit rebase stopped: reshape edits use detection-order face selection, "
+            "which can select a different person on the new base. No edits were transferred. "
+            "Reset Advanced Retouch, load the new processed base, then recreate and review those edits."
+        )
+
+    review_support = None
+    if explicit_rebase and processed_rgb is not None:
+        try:
+            review_support = _advanced_rebase_support_mask(edits, np.asarray(processed_rgb).shape)
+        except Exception as exc:
+            return _advanced_rebase_blocked_result(
+                "Explicit rebase stopped: stored mask geometry cannot be transferred safely ({}). "
+                "No edits were transferred.".format(exc)
+            )
+
+    result = _advanced_load_rgb_source(
         processed_rgb,
         replay_payload,
         "Loaded processed recipe result",
@@ -326,6 +490,32 @@ def on_advanced_processed_result(processed_rgb, pending_edits=None, preview_cach
         source_path=evidence.get("source_path") if isinstance(evidence, dict) else None,
         render_evidence=evidence,
         explicit_legacy_replay=explicit_rebase,
+    )
+    result = list(result)
+    if review_support is None and (
+        isinstance(pending_edits, dict)
+        and not pending_edits.get("legacy_unverified")
+        and result[9] == []
+    ):
+        try:
+            review_support = _advanced_rebase_support_mask(result[6], np.asarray(processed_rgb).shape)
+        except Exception as exc:
+            return _advanced_rebase_blocked_result(
+                "Saved edits were not transferred because their mask support cannot be reviewed safely ({}).".format(exc)
+            )
+    result = list(_advanced_add_rebase_review(result, review_support))
+    if review_support is not None:
+        return tuple(result) + (
+            True,
+            gr.update(value=False, visible=True, interactive=True),
+            gr.update(value=True),
+            gr.update(value=42),
+        )
+    return tuple(result) + (
+        False,
+        gr.update(value=False, visible=False, interactive=True),
+        gr.update(),
+        gr.update(),
     )
 
 
@@ -340,6 +530,12 @@ def advanced_bind_legacy_handler(source_rgb, pending_payload, base_contract):
             [],
             pending_payload,
             "Load a source before binding legacy Advanced Retouch edits.",
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
         )
     try:
         parsed = parse_advanced_session_payload(pending_payload or {})
@@ -352,10 +548,48 @@ def advanced_bind_legacy_handler(source_rgb, pending_payload, base_contract):
                 [],
                 pending_payload,
                 "No legacy Advanced Retouch edits are pending.",
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
             )
         edits = list(parsed.get("edits") or [])
+        if any(isinstance(edit, dict) and str(edit.get("mode", "")) == "Reshape" for edit in edits):
+            return (
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                "Legacy binding stopped: reshape edits use detection-order face selection and may target a different person. "
+                "Reset Advanced Retouch, load the intended base, then recreate and review those edits.",
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+                gr.update(),
+            )
+        try:
+            support = _advanced_rebase_support_mask(edits, np.asarray(source_rgb).shape)
+        except Exception as exc:
+            return (
+                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
+                "Legacy binding stopped: stored mask geometry cannot be transferred safely ({}). "
+                "No edits were transferred.".format(exc),
+                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
+            )
         current = _replay_advanced_state(source_rgb, edits)
         history = _advanced_history_from_edits(edits)
+        overlay = mask_overlay(current, support, 0.42) if support is not None else None
+        status = f"Explicitly bound and replayed {len(edits)} legacy edit(s)."
+        if support is not None:
+            status += " The old-coordinate mask support is highlighted; review the overlay and result before continuing or exporting."
+        else:
+            status += " Save the session to upgrade it to v2 evidence."
         return (
             current,
             current,
@@ -363,7 +597,13 @@ def advanced_bind_legacy_handler(source_rgb, pending_payload, base_contract):
             history.to_state(),
             history.current_edit_log(),
             [],
-            f"Explicitly bound and replayed {len(edits)} legacy edit(s). Save the session to upgrade it to v2 evidence.",
+            status,
+            support,
+            overlay,
+            support is not None,
+            gr.update(value=False, visible=support is not None, interactive=True),
+            gr.update(value=support is not None) if support is not None else gr.update(),
+            gr.update(value=42) if support is not None else gr.update(),
         )
     except Exception as exc:
         return (
@@ -374,6 +614,12 @@ def advanced_bind_legacy_handler(source_rgb, pending_payload, base_contract):
             [],
             pending_payload,
             f"Legacy Advanced Retouch edits were not applied: {exc}",
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
+            gr.update(),
         )
 
 
@@ -428,6 +674,23 @@ def advanced_apply_handler(
     reshape = dict(zip(reshape_keys, list(reshape_values)[:len(reshape_keys)]))
     mask_action = str(reshape_values[len(reshape_keys)] if len(reshape_values) > len(reshape_keys) else "Keep")
     mask_feather = float(reshape_values[len(reshape_keys) + 1] if len(reshape_values) > len(reshape_keys) + 1 else 0.0)
+    rebase_review_required = bool(
+        reshape_values[len(reshape_keys) + 2]
+        if len(reshape_values) > len(reshape_keys) + 2
+        else False
+    )
+    rebase_review_acknowledged = bool(
+        reshape_values[len(reshape_keys) + 3]
+        if len(reshape_values) > len(reshape_keys) + 3
+        else False
+    )
+    if rebase_review_required and (
+        not rebase_review_acknowledged
+        or not advanced_rebase_overlay_is_reviewable(overlay_visible, overlay_opacity)
+    ):
+        return _advanced_rebase_review_guard(
+            "Review the highlighted old-coordinate mask support and result before applying more edits."
+        )
     try:
         needs_face_models = str(mode or "Adjust") == "Reshape" or str(semantic or "None") != "None"
         detector = parser = None
@@ -496,7 +759,17 @@ def advanced_apply_handler(
         return gr.update(), current_rgb, history, edit_log, None, None, before_after(source_rgb, current_rgb) if source_rgb is not None else None, f"Advanced Retouch failed: {exc}"
 
 
-def advanced_undo_handler(current_rgb, source_rgb, history, edit_log=None):
+def advanced_undo_handler(
+    current_rgb, source_rgb, history, edit_log=None, rebase_review_required=False,
+    rebase_review_acknowledged=False, overlay_visible=True, overlay_opacity=42,
+):
+    if rebase_review_required and (
+        not rebase_review_acknowledged
+        or not advanced_rebase_overlay_is_reviewable(overlay_visible, overlay_opacity)
+    ):
+        return _advanced_rebase_review_guard(
+            "Review the highlighted old-coordinate mask support and result before changing this rebase."
+        )
     compact_history = _advanced_history_object(history, edit_log)
     if compact_history.history_truncated:
         return gr.update(), current_rgb, compact_history.to_state(), list(edit_log or []), None, None, before_after(source_rgb, current_rgb) if source_rgb is not None else None, "Undo unavailable: the compact history boundary has no full-resolution replay baseline."
@@ -512,7 +785,17 @@ def advanced_undo_handler(current_rgb, source_rgb, history, edit_log=None):
     return previous, previous, compact_history.to_state(), edits, None, None, before_after(source_rgb, previous) if source_rgb is not None else None, "Undid the last Advanced Retouch edit."
 
 
-def advanced_redo_handler(current_rgb, source_rgb, history, edit_log=None):
+def advanced_redo_handler(
+    current_rgb, source_rgb, history, edit_log=None, rebase_review_required=False,
+    rebase_review_acknowledged=False, overlay_visible=True, overlay_opacity=42,
+):
+    if rebase_review_required and (
+        not rebase_review_acknowledged
+        or not advanced_rebase_overlay_is_reviewable(overlay_visible, overlay_opacity)
+    ):
+        return _advanced_rebase_review_guard(
+            "Review the highlighted old-coordinate mask support and result before changing this rebase."
+        )
     compact_history = _advanced_history_object(history, edit_log)
     if compact_history.history_truncated:
         return gr.update(), current_rgb, compact_history.to_state(), list(edit_log or []), None, None, before_after(source_rgb, current_rgb) if source_rgb is not None else None, "Redo unavailable: the compact history boundary has no full-resolution replay baseline."
@@ -529,17 +812,40 @@ def advanced_redo_handler(current_rgb, source_rgb, history, edit_log=None):
 
 
 def advanced_reset_handler(source_rgb):
-    return _advanced_empty_state(source_rgb, "Advanced Retouch edits reset.")[1:9]
+    return _advanced_empty_state(source_rgb, "Advanced Retouch edits reset.")[1:9] + (
+        False,
+        gr.update(value=False, visible=False, interactive=True),
+    )
 
 
-def advanced_overlay_handler(current_rgb, mask, visible, opacity):
+def advanced_overlay_handler(
+    current_rgb, mask, visible, opacity, rebase_review_required=False,
+):
+    """Render the current mask overlay and clear acknowledgement if hidden."""
     if current_rgb is None:
-        return None
-    return mask_overlay(current_rgb, mask, float(opacity or 42) / 100.0) if visible and mask is not None else current_rgb
+        overlay = None
+    else:
+        overlay = mask_overlay(current_rgb, mask, float(opacity or 0) / 100.0) if visible and mask is not None else current_rgb
+    if rebase_review_required and not advanced_rebase_overlay_is_reviewable(visible, opacity):
+        return overlay, gr.update(value=False, interactive=False)
+    if rebase_review_required:
+        return overlay, gr.update(interactive=True)
+    return overlay, gr.update()
 
 
-def advanced_clear_mask_handler(editor_value, current_rgb, source_rgb):
+def advanced_clear_mask_handler(
+    editor_value, current_rgb, source_rgb, rebase_review_required=False,
+    rebase_review_acknowledged=False, overlay_visible=True, overlay_opacity=42,
+):
     """Clear only the painted mask; leave the current pixels untouched."""
+    if rebase_review_required and (
+        not rebase_review_acknowledged
+        or not advanced_rebase_overlay_is_reviewable(overlay_visible, overlay_opacity)
+    ):
+        return (
+            gr.update(), gr.update(), gr.update(), gr.update(),
+            "Review the highlighted old-coordinate mask support and result before changing this rebase.",
+        )
     if current_rgb is None:
         return gr.update(), None, None, None, "Load an image first."
     base, _ = extract_editor_image_and_mask(editor_value, fallback_rgb=current_rgb)
@@ -547,7 +853,16 @@ def advanced_clear_mask_handler(editor_value, current_rgb, source_rgb):
     return cleared_editor, None, current_rgb, before_after(source_rgb, current_rgb), "Cleared Advanced Retouch mask."
 
 
-def advanced_save_snapshot_handler(name, current_rgb, edit_log, snapshots, base_contract=None):
+def advanced_save_snapshot_handler(
+    name, current_rgb, edit_log, snapshots, base_contract=None,
+    rebase_review_required=False, rebase_review_acknowledged=False,
+    overlay_visible=True, overlay_opacity=42,
+):
+    if rebase_review_required and (
+        not rebase_review_acknowledged
+        or not advanced_rebase_overlay_is_reviewable(overlay_visible, overlay_opacity)
+    ):
+        return gr.update(), snapshots or {}, "Snapshot was not saved: review the highlighted rebase support and result first."
     if not name or not str(name).strip():
         return gr.update(), snapshots or {}, "Enter a snapshot name."
     if current_rgb is None:

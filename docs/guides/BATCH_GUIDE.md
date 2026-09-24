@@ -22,6 +22,11 @@ By default, this will:
 *   Save the retouched images in the output folder.
 *   Generate side-by-side comparison images (e.g. `filename_compare.jpg`).
 
+For a non-destructive preview of the exact selection and planned destinations,
+add `--dry-run --input-plan /path/to/plan.json`. The preview does not create the
+output directory or start the retouch engine. Any source-overwrite or collision
+condition is shown as a blocking execution warning.
+
 ---
 
 ## 2. Command Reference & Common Options
@@ -38,46 +43,49 @@ By default, this will:
 | **`--max-dim`** | | *Original* | Downscale the longest side of the image to `N` pixels before processing (speeds up CPU processing significantly). e.g., `--max-dim 2048`. |
 | **`--quality`** | `-q` | `95` | Compression quality for JPEG/WebP output (1–100). |
 | **`--format`** | | `same` | Output image format: `jpg`, `png`, `webp`, or `same` to match source. |
+| **`--input-list`** | | *None* | Load literal paths from a versioned JSON list; relative paths use the list's `base_dir` or directory. |
+| **`--input-plan`** | | *None* | Write the deterministic input selection, planned artifacts, and per-file results as JSON. |
+| **`--resume-plan`** | | *None* | Skip only rows whose settings, source hash, output path, and output hash still match; every other selected row re-renders (dry-run shows why: settings changed / source changed / output missing / output modified). A re-render replaces the plan's own prior output without `-f` only if that file still hashes to the plan's record; any other existing output blocks the run unless `-f` is given. |
+| **`--include`** | | *None* | Include discovered paths matching a repeatable pattern. |
+| **`--exclude`** | | *None* | Exclude discovered paths matching a repeatable pattern. |
+| **`--include-hidden`** | | *Off* | Include hidden files/directories during folder discovery. |
+| **`--raw-jpeg-policy`** | | `error` | Resolve matching RAW+JPEG pairs as `raw-only`, `jpeg-only`, or `suffix`; default reports the conflict. |
+| **`--input-check`** | | `paths` | Use `headers` for container checks or `decode` for the configured decoder before rendering. |
+| **`--max-input-pixels`** | | *None* | With header/decode checks, reject images larger than the specified pixel count. |
+| **`--multi-frame-policy`** | | `error` | With header/decode checks, reject multi-frame inputs or explicitly allow first-frame processing. |
+| **`--ram-budget-gib`** | | *None* | Opt-in cap on workers from estimated decoded working memory. It is an estimate, not a peak-RAM guarantee. |
+| **`--skip-disk-check`** | | *Off* | Bypass the destination-volume free-space estimate (use only with an explicit operator decision). |
 | **`--raf-decoder`** | | `rawpy` | RAF development path: native 16-bit `rawpy` (default), camera-JPEG `raf2jpeg`, or `rawpy-fuji-match` for full-resolution RAW calibrated to the camera preview. |
 | **`--raf2jpeg-path`** | | Auto | Explicit `raf2jpeg` executable path. By default Retouch discovers the sibling `../raf2jpeg/bin/raf2jpeg` checkout, then searches `PATH`. |
 | **`--raf2jpeg-quality`** | | `100` | JPEG quality passed to a `raf2jpeg` re-encoding fallback. The normal embedded-camera-JPEG path preserves its original bytes unchanged. |
 | **`--fuji-match-strength`** | | `0.85` | Blend from the native RAW development (0) to the camera-preview calibration (1), used with `--raf-decoder rawpy-fuji-match`. |
 | **`--no-compare`** | | *Off* | Skip generating the `_compare` side-by-side comparison files. |
 | **`--no-exif`** | | *Off* | Skip copying EXIF metadata (orientation, camera tags, etc.) from the source image. |
-| **`--dry-run`** | | *Off* | Scan the directories and print settings without executing any retouching. |
+| **`--dry-run`** | | *Off* | Print the input plan, settings, and safety conditions without creating outputs or executing retouching. |
 | **`--progress-file`** | | `<output>/.retouch-progress.json` | Where to write the live progress JSON (see below). |
 | **`--no-progress-file`** | | *Off* | Do not write the progress JSON. |
 
+`--format same` preserves PNG and WebP. Other recognized source formats,
+including TIFF, BMP, RAW, and EXR, currently resolve to JPEG unless an explicit
+format is requested; a 16-bit request forces PNG/TIFF as documented by the CLI.
+
 ### Live progress, stopping and resuming
 
-A full-resolution image can take several minutes, so the progress bar shows
-what each worker is doing right now instead of only counting finished images:
+The progress bar measures work in megapixels and shows each active image's
+current stage and completed face count. If an image remains in one stage for
+90 seconds, the reporter prints a heartbeat line with the image, stage, and
+elapsed time.
 
-```
-Retouching 1/2 img ETA 58s:  12%|█▏        | 1/6 MP [00:38, portrait_06 per_face 39s]
-```
+`<output>/.retouch-progress.json` is rewritten about once a second with the
+counts, ETA, per-image status, stage, elapsed time, face count, stage timings,
+and QA results. Use `--progress-file /path/to/progress.json` to choose another
+location, or `--no-progress-file` to disable the file. The run summary lists
+the slowest images and any failures or QA flags.
 
-- The bar is measured in **megapixels**, so a 26 MP frame moves it more than
-  a 6 MP crop, and the ETA accounts for how many workers run at once.
-- Each running image shows its current stage (`detection`, `per_face`,
-  `grading`, `write`, `compare`, ...) and how many of its faces are done.
-- If one image stays in the same stage for 90 s, a line such as
-  `… still working on DSCF4463.JPG: per_face (face 1/2) for 3m01s` is printed,
-  so a slow image is visibly alive rather than stuck.
-- `<output>/.retouch-progress.json` is rewritten about once a second with the
-  counts, ETA and per-image status, stage, seconds, face count, stage timings
-  and QA results. `cat` it from another terminal, or have a tool poll it.
-- The end of the run lists the slowest images and any failed or QA-flagged
-  ones (first 10; the rest are in the progress file).
-
-**Stopping:** press Ctrl-C once. Queued images are cancelled, the images in
-progress are ended within a second or two, and the summary prints. Outputs
-are written to a hidden temporary file and renamed into place only when
-complete, so a stopped (or crashed) batch never leaves a half-written JPEG.
-
-**Resuming:** run the same command again. Images whose output already exists
-are skipped without being decoded, and only the rest are rendered. Use
-`-f/--force` to redo everything.
+Press Ctrl-C once to stop. Queued images are cancelled, active workers are
+ended, and partial atomic-write files are removed. Completed images remain
+available; rerunning the same command skips existing outputs and processes the
+rest. Use `-f/--force` to redo everything.
 
 ---
 

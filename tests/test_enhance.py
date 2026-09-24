@@ -93,18 +93,82 @@ class TestSuperResolve:
 
 
 class TestEnhance:
-    def test_combined_denoise_then_sr(self) -> None:
+    def test_combined_denoise_then_sr(self, monkeypatch) -> None:
         enh = AIEnhancer()
+        monkeypatch.setattr(enh, "_denoise_model", lambda: None)
+        monkeypatch.setattr(enh, "_sr_model", lambda: None)
         img = _make_noisy(64, 64, noise_std=25.0).astype(np.uint8)
         out = enh.enhance(img, denoise_strength=0.6, sr_scale=2)
         assert out.shape[:2] == (128, 128)
         assert out.dtype == np.uint8
+        assert set(enh.last_runtime) == {"denoise", "super_resolution"}
+        assert enh.last_runtime["denoise"]["backend"] == "bilateral"
+        assert enh.last_runtime["super_resolution"]["backend"] == "lanczos"
 
     def test_combined_noop(self) -> None:
         enh = AIEnhancer()
         img = _make_noisy(48, 48)
         out = enh.enhance(img, denoise_strength=0.0, sr_scale=1)
         assert np.array_equal(out, img), "strength=0, scale=1 must be a no-op"
+
+    def test_runtime_diagnostics_do_not_leak_across_calls(self, monkeypatch) -> None:
+        enh = AIEnhancer()
+        img = _make_noisy(48, 48)
+        monkeypatch.setattr(enh, "_denoise_model", lambda: None)
+        monkeypatch.setattr(enh, "_sr_model", lambda: None)
+
+        enh.denoise(img, strength=0.5)
+        assert enh.last_runtime["denoise"]["backend"] == "bilateral"
+
+        enh.super_resolve(img, scale=2)
+        assert set(enh.last_runtime) == {"super_resolution"}
+        assert enh.last_runtime["super_resolution"]["backend"] == "lanczos"
+
+        enh.denoise(img, strength=0.0)
+        assert enh.last_runtime == {}
+        enh.super_resolve(img, scale=1)
+        assert enh.last_runtime == {}
+
+    def test_runtime_diagnostics_are_isolated_between_threads(self, monkeypatch) -> None:
+        import threading
+
+        enh = AIEnhancer()
+        img = _make_noisy(24, 24)
+        barrier = threading.Barrier(2)
+        sessions = {
+            "qa-enhancer-a": type(
+                "SessionA", (), {"get_providers": lambda self: ["ProviderA"]}
+            )(),
+            "qa-enhancer-b": type(
+                "SessionB", (), {"get_providers": lambda self: ["ProviderB"]}
+            )(),
+        }
+        monkeypatch.setattr(
+            enh,
+            "_denoise_model",
+            lambda: sessions[threading.current_thread().name],
+        )
+        monkeypatch.setattr(enh, "_run_denoise_model", lambda _sess, image: image)
+        result = {}
+
+        def worker(name):
+            threading.current_thread().name = name
+            enh.denoise(img, strength=0.5)
+            barrier.wait(timeout=5)
+            result[name] = enh.last_runtime
+
+        threads = [
+            threading.Thread(target=worker, args=(name,))
+            for name in sessions
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=6)
+        assert all(not thread.is_alive() for thread in threads)
+        assert result["qa-enhancer-a"]["denoise"]["providers"] == ["ProviderA"]
+        assert result["qa-enhancer-b"]["denoise"]["providers"] == ["ProviderB"]
+        assert enh.last_runtime == {}
 
 
 class TestTiledInference:

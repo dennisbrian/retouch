@@ -46,14 +46,15 @@ class TestPipelineOnSyntheticFace:
     the pipeline handles both the face-found and no-face paths gracefully.
     """
 
-    def test_pipeline_runs_all_recipes(self, engine, synthetic_face):
-        # Keep this broad recipe smoke test below pytest-timeout on slower
-        # hosted macOS runners while retaining a real image-processing path.
+    # One test per recipe: 143 recipes at ~0.55s each exceeded the shared
+    # 120s pytest-timeout as a single test (107–128s observed). Each recipe
+    # now gets its own timeout, and a failure names the recipe.
+    @pytest.mark.parametrize("recipe_name", sorted(RECIPES))
+    def test_pipeline_runs_all_recipes(self, engine, synthetic_face, recipe_name):
         smoke_face = cv2.resize(synthetic_face, (200, 200), interpolation=cv2.INTER_AREA)
-        for recipe_name in RECIPES:
-            result = engine.process(smoke_face, recipe=recipe_name)
-            _assert_valid_output(result, smoke_face)
-            assert result.params.active_recipe == recipe_name
+        result = engine.process(smoke_face, recipe=recipe_name)
+        _assert_valid_output(result, smoke_face)
+        assert result.params.active_recipe == recipe_name
 
     def test_pipeline_with_overrides(self, engine, synthetic_face):
         result = engine.process(

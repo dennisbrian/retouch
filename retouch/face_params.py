@@ -56,11 +56,112 @@ FACE_LOCAL_PARAM_NAMES: frozenset[str] = frozenset({
 })
 
 
+#: Optional entry key: the selected face's bbox as ``[x, y, w, h]`` fractions of
+#: the image it was selected on. Lets the engine bind the entry to the same
+#: person even when its own detection (proxy/fast scale) orders faces
+#: differently. Entries without it keep plain index semantics.
+ANCHOR_KEY = "anchor_bbox_norm"
+#: Optional entry key: source path the anchor was measured on.
+ANCHOR_SOURCE_KEY = "anchor_source"
+#: Minimum IoU between an anchor and a detected face to accept the binding.
+ANCHOR_MIN_IOU = 0.3
+
+
+def make_anchor(bbox: Tuple[int, int, int, int], frame_size: Tuple[int, int]) -> list:
+    """Normalize a pixel ``(x, y, w, h)`` bbox by ``(width, height)``."""
+    fw, fh = float(frame_size[0]), float(frame_size[1])
+    x, y, w, h = bbox
+    return [x / fw, y / fh, w / fw, h / fh]
+
+
+def _iou_norm(a, b) -> float:
+    ix = max(0.0, min(a[0] + a[2], b[0] + b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[1] + a[3], b[1] + b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    union = a[2] * a[3] + b[2] * b[3] - inter
+    return inter / union if union > 0 else 0.0
+
+
+def bind_face_params(
+    face_params: Optional[Dict[int, Dict[str, Any]]],
+    face_bboxes,
+    frame_size: Tuple[int, int],
+) -> Tuple[Optional[Dict[int, Dict[str, Any]]], list]:
+    """Re-key anchored entries to the engine's own detection indices.
+
+    Anchored entries are matched one-to-one to detected faces by IoU (best
+    pairs first, ``ANCHOR_MIN_IOU`` minimum). An anchored entry that matches
+    nothing is dropped rather than applied to whichever face happens to hold
+    its old index. Unanchored entries keep their index unless that index was
+    claimed by an anchored match. Returns ``(bound, report)``; ``report`` has
+    one dict per anchored entry.
+    """
+    if not face_params or not isinstance(face_params, dict):
+        return face_params, []
+    anchored = {k: v for k, v in face_params.items() if v.get(ANCHOR_KEY) is not None}
+    if not anchored:
+        return face_params, []
+
+    detected = [make_anchor(tuple(b), frame_size) for b in face_bboxes]
+    pairs = sorted(
+        (
+            (_iou_norm([float(x) for x in entry[ANCHOR_KEY]], det), key, j)
+            for key, entry in anchored.items()
+            for j, det in enumerate(detected)
+        ),
+        reverse=True,
+    )
+    bound: Dict[int, Dict[str, Any]] = {}
+    report = []
+    used_keys, used_faces = set(), set()
+    for iou, key, j in pairs:
+        if iou < ANCHOR_MIN_IOU or key in used_keys or j in used_faces:
+            continue
+        used_keys.add(key)
+        used_faces.add(j)
+        bound[j] = dict(anchored[key])
+        report.append({"selected_index": key, "bound_index": j, "iou": round(iou, 3)})
+    for key in anchored:
+        if key not in used_keys:
+            _log.warning(
+                "face override for selected face %s matched no detected face "
+                "(IoU < %.2f); not applied", key, ANCHOR_MIN_IOU,
+            )
+            report.append({"selected_index": key, "bound_index": None, "iou": None})
+    for key, entry in face_params.items():
+        if key not in anchored and key not in bound:
+            bound[key] = entry
+    return (bound or None), report
+
+
+def face_params_for_source(
+    face_params: Optional[Dict[int, Dict[str, Any]]],
+    source: Optional[str],
+) -> Optional[Dict[int, Dict[str, Any]]]:
+    """Drop anchors measured on a different source image.
+
+    A position in one photo says nothing about who sits there in another, so
+    for other images the entry falls back to plain index semantics.
+    """
+    if not face_params or not isinstance(face_params, dict):
+        return face_params
+    out: Dict[int, Dict[str, Any]] = {}
+    for key, entry in face_params.items():
+        anchor_source = entry.get(ANCHOR_SOURCE_KEY)
+        if anchor_source is not None and anchor_source != source:
+            entry = {
+                k: v for k, v in entry.items()
+                if k not in (ANCHOR_KEY, ANCHOR_SOURCE_KEY)
+            }
+        out[key] = entry
+    return out
+
+
 def filter_face_local(raw: Mapping[str, Any]) -> Dict[str, Any]:
     """Keep only FACE_LOCAL keys; drop recipe + globals (log once per key)."""
     out: Dict[str, Any] = {}
     for k, v in raw.items():
-        if k in {"recipe", "tone_observation", "selection_reason"}:
+        if k in {"recipe", "tone_observation", "selection_reason", ANCHOR_KEY, ANCHOR_SOURCE_KEY}:
             continue
         if k in FACE_LOCAL_PARAM_NAMES:
             out[k] = v

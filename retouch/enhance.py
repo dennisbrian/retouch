@@ -140,10 +140,26 @@ class AIEnhancer:
         self._sr_lock = threading.Lock()
         self._denoise_loaded = False
         self._sr_loaded = False
-        self.last_runtime: dict[str, object] = {}
+        # Runtime evidence belongs to the calling worker.  The enhancer is
+        # shared by GUI workers, so an instance attribute can make Safe Auto
+        # consume another image's backend (or report its stale backend).
+        self._runtime_local = threading.local()
         # One-shot latch so the "no SR model, falling back to Lanczos"
         # warning fires once per instance instead of once per image.
         self._sr_absent_warned = False
+
+    @property
+    def last_runtime(self) -> dict[str, object]:
+        """Diagnostics for this thread's most recent enhancer operation."""
+        runtime = getattr(self._runtime_local, "diagnostics", None)
+        if runtime is None:
+            runtime = {}
+            self._runtime_local.diagnostics = runtime
+        return runtime
+
+    def _begin_runtime_call(self) -> None:
+        """Discard evidence from earlier images before recording this call."""
+        self._runtime_local.diagnostics = {}
 
     # ------------------------------------------------------------------
     # Model loading
@@ -251,6 +267,7 @@ class AIEnhancer:
 
         Accepts float32 or uint8 BGR; returns the same dtype.
         """
+        self._begin_runtime_call()
         if strength <= 0.0:
             return img
         strength = float(min(max(strength, 0.0), 1.0))
@@ -296,6 +313,7 @@ class AIEnhancer:
         Accepts float32 or uint8 BGR; returns the same dtype. When the ONNX
         Real-ESRGAN model is unavailable, falls back to Lanczos resampling.
         """
+        self._begin_runtime_call()
         if scale <= 1:
             return img
         scale = int(scale)
@@ -351,7 +369,11 @@ class AIEnhancer:
     ) -> np.ndarray:
         """Combined denoise + super-resolution (denoise runs first)."""
         out = self.denoise(img, denoise_strength)
-        return self.super_resolve(out, sr_scale)
+        denoise_runtime = self.last_runtime.get("denoise")
+        out = self.super_resolve(out, sr_scale)
+        if denoise_runtime is not None:
+            self.last_runtime["denoise"] = denoise_runtime
+        return out
 
     # ------------------------------------------------------------------
     # Inference + fallback implementations

@@ -10,6 +10,7 @@ import subprocess
 import time
 import tempfile
 import threading
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -68,6 +69,12 @@ from retouch.io import (
     write_image_with_color_context,
 )
 from retouch.color_context import ColorContext
+from retouch.face_params import (
+    ANCHOR_KEY as FACE_ANCHOR_KEY,
+    ANCHOR_SOURCE_KEY as FACE_ANCHOR_SOURCE_KEY,
+    face_params_for_source,
+    make_anchor as make_face_anchor,
+)
 from retouch.lips import LIP_TINT_NAMES
 from retouch.recipes import CURATED_RECIPE_NAMES, RECIPE_UI_CHOICES, RECIPES
 from retouch.params import recipe_to_params, PROCESSING_PARAMS, param_names, gui_values_to_engine_kwargs
@@ -129,6 +136,7 @@ from retouch.advanced_contract import (
     compare_base_contracts,
     delivery_decision as advanced_delivery_decision,
     parse_session_payload as parse_advanced_session_payload,
+    render_detail,
     pixel_sha256 as advanced_pixel_sha256,
     replay_result_matches,
     source_file_matches,
@@ -173,8 +181,10 @@ from gui_advanced import (
     _replay_advanced_state,
     _advanced_empty_state,
     _advanced_load_rgb_source,
+    _advanced_rebase_support_mask,
     on_advanced_source_change,
     on_advanced_processed_result,
+    advanced_rebase_overlay_is_reviewable,
     on_advanced_face_choices,
     advanced_bind_legacy_handler,
     advanced_apply_handler,
@@ -634,6 +644,11 @@ def inspect_render_handler(
     elif isinstance(roi_json, (dict, list, tuple)):
         roi = roi_json
 
+    detail_evidence = dict(evidence) if isinstance(evidence, dict) else {}
+    for key in ("render_mode", "settings_sha256"):
+        if key in render_snapshot:
+            detail_evidence[key] = render_snapshot[key]
+    detail_evidence.setdefault("render_revision", render_revision)
     try:
         contract = build_inspection_contract(
             mode=inspection_mode,
@@ -644,6 +659,7 @@ def inspect_render_handler(
             face_index=requested_face,
             face_padding=24,
             roi=roi,
+            effective_detail=render_detail(np.asarray(processed_image), detail_evidence),
         )
         cropped = crop_from_inspection_contract(
             np.asarray(processed_image),
@@ -664,6 +680,7 @@ def inspect_render_handler(
                 "render_revision": contract["render"]["revision"],
                 "crop": contract["crop"],
                 "native": contract["native"],
+                "detail": contract["detail"],
                 "download_enabled": False,
             },
             indent=2,
@@ -685,12 +702,65 @@ def build_render_manifest_handler(
         if isinstance(preview_cache, GuiPreviewCache)
         else {}
     )
+    attempt = evidence.get("render_attempt")
+    attempt = attempt if isinstance(attempt, dict) else None
     render_revision = _coerce_settings_revision(
-        snapshot.get("settings_revision", evidence.get("render_revision", 0))
+        attempt.get("revision", snapshot.get("settings_revision", evidence.get("render_revision", 0)))
+        if attempt is not None
+        else snapshot.get("settings_revision", evidence.get("render_revision", 0))
     )
     current = _coerce_settings_revision(current_revision)
-    mode_value = snapshot.get("render_mode", MODE_RENDER_PREVIEW)
+    mode_value = (
+        attempt.get("render_mode", snapshot.get("render_mode", MODE_RENDER_PREVIEW))
+        if attempt is not None
+        else snapshot.get("render_mode", MODE_RENDER_PREVIEW)
+    )
     mode = "full" if mode_value == MODE_EXPORT_FULL_QUALITY else "preview"
+    status = attempt.get("status", "completed") if attempt is not None else "completed"
+    error = attempt.get("error") if attempt is not None else None
+    full_export_info = None
+    full_export_identity = None
+    if status not in {"completed", "failed", "cancelled"}:
+        status = "failed"
+        error = "Render attempt did not reach a recognized terminal state"
+    if status == "completed" and mode == "full":
+        if current > render_revision:
+            status = "cancelled"
+            error = "Full export discarded because settings changed"
+        elif not export_file:
+            status = "failed"
+            error = "Full-quality render completed without an export artifact"
+        else:
+            try:
+                artifact_path = os.fspath(export_file)
+                if not isinstance(artifact_path, str) or not artifact_path:
+                    raise ValueError("export path is not a non-empty text path")
+                from PIL import Image
+
+                with Image.open(artifact_path) as exported_image:
+                    dimensions = {
+                        "width": int(exported_image.width),
+                        "height": int(exported_image.height),
+                        "channels": len(exported_image.getbands()),
+                    }
+                    dtype = (
+                        "uint16"
+                        if exported_image.mode.startswith("I;16")
+                        or exported_image.mode == "I"
+                        else "float32" if exported_image.mode == "F" else "uint8"
+                    )
+                    exported_image.verify()
+                full_export_identity = source_identity(artifact_path)
+                full_export_info = {
+                    "dimensions": dimensions,
+                    "dtype": dtype,
+                }
+            except Exception as exc:  # noqa: BLE001 - invalid artifacts cannot certify success
+                status = "failed"
+                error = (
+                    "Full-quality export artifact is unreadable or unavailable "
+                    f"({type(exc).__name__})"
+                )
     settings_sha256 = None
     contract = snapshot.get("render_contract")
     if isinstance(contract, dict):
@@ -710,7 +780,11 @@ def build_render_manifest_handler(
             }
         )
 
-    source_path = evidence.get("source_path")
+    source_path = (
+        attempt.get("source_path", evidence.get("source_path"))
+        if attempt is not None
+        else evidence.get("source_path")
+    )
     source: Dict[str, Any] = {
         "id": str(source_path or "unknown-source"),
     }
@@ -728,18 +802,61 @@ def build_render_manifest_handler(
         except (FileNotFoundError, OSError, ValueError):
             pass
 
-    output_id = export_file or "preview-%d" % render_revision
-    output: Dict[str, Any] = {
-        "id": str(output_id),
-        "dimensions": {
-            "width": int(evidence.get("output", {}).get("width", 1)),
-            "height": int(evidence.get("output", {}).get("height", 1)),
-            "channels": 3,
-        },
-        "dtype": str(evidence.get("output", {}).get("dtype", "uint8")),
-    }
     hashes = {"settings_sha256": settings_sha256}
-    if export_file and isinstance(export_file, (str, os.PathLike)):
+    output: Optional[Dict[str, Any]] = None
+    if status == "completed":
+        output_id = export_file or "preview-%d" % render_revision
+        if mode == "full" and full_export_info is not None:
+            output = {"id": str(output_id), **full_export_info}
+        else:
+            output_evidence = evidence.get("output", {})
+            output = {
+                "id": str(output_id),
+                "dimensions": {
+                    "width": int(output_evidence.get("width", 1)),
+                    "height": int(output_evidence.get("height", 1)),
+                    "channels": int(output_evidence.get("channels", 3)),
+                },
+                "dtype": str(output_evidence.get("dtype", "uint8")),
+            }
+        if (
+            mode == "full"
+            and full_export_identity is not None
+            and output is not None
+        ):
+            output.update(
+                {
+                    "path": full_export_identity.path,
+                    "mtime_ns": full_export_identity.mtime_ns,
+                    "size_bytes": full_export_identity.size_bytes,
+                    "sha256": full_export_identity.content_sha256,
+                }
+            )
+            hashes["output_sha256"] = full_export_identity.content_sha256
+        elif mode != "full" and export_file and isinstance(export_file, (str, os.PathLike)):
+            try:
+                from PIL import Image
+
+                with Image.open(export_file) as exported_image:
+                    output["dimensions"] = {
+                        "width": int(exported_image.width),
+                        "height": int(exported_image.height),
+                        "channels": len(exported_image.getbands()),
+                    }
+                    output["dtype"] = (
+                        "uint16"
+                        if exported_image.mode.startswith("I;16")
+                        or exported_image.mode == "I"
+                        else "float32" if exported_image.mode == "F" else "uint8"
+                    )
+            except (FileNotFoundError, OSError, ValueError):
+                pass
+    if (
+        status == "completed"
+        and mode != "full"
+        and export_file
+        and isinstance(export_file, (str, os.PathLike))
+    ):
         try:
             output_identity = source_identity(export_file)
             output.update(
@@ -754,33 +871,38 @@ def build_render_manifest_handler(
         except (FileNotFoundError, OSError, ValueError):
             pass
 
-    cache_status = str(evidence.get("cache_status", "unknown"))
+    # A failed/cancelled attempt must not inherit QA/runtime/output metadata
+    # from a prior successful preview that remains visible in the cache.
+    report_evidence = evidence if status == "completed" else {}
+    cache_status = str(report_evidence.get("cache_status", "unknown"))
     if cache_status not in {"hit", "miss", "bypassed", "unknown"}:
         cache_status = "unknown"
     manifest = RenderManifest(
         render_revision=render_revision,
         settings_sha256=settings_sha256,
         mode=mode,
-        status="completed",
+        status=status,
         source=source,
         output=output,
         cache={
             "status": cache_status,
             "hit": cache_status == "hit" if cache_status != "unknown" else False,
         },
-        color_context=evidence.get("color_context", {}),
-        metadata_result=evidence.get("metadata_result", {}),
-        face_count=evidence.get("face_count"),
-        timings_ms=evidence.get("timings_ms", {}),
-        qa=evidence.get("qa", {}),
-        safe_auto_decisions=evidence.get("safe_auto_decisions", []),
-        backend=evidence.get("backend", {}),
-        provider=evidence.get("provider"),
+        color_context=report_evidence.get("color_context", {}),
+        metadata_result=report_evidence.get("metadata_result", {}),
+        face_count=report_evidence.get("face_count"),
+        timings_ms=report_evidence.get("timings_ms", {}),
+        qa=report_evidence.get("qa", {}),
+        safe_auto_decisions=report_evidence.get("safe_auto_decisions", []),
+        backend=report_evidence.get("backend", {}),
+        provider=report_evidence.get("provider"),
         hashes=hashes,
+        error=error if status in {"failed", "cancelled"} else None,
         extensions={
             "stale": current > render_revision,
             "render_mode": mode_value,
-            "precision": evidence.get("precision", {}),
+            "precision": report_evidence.get("precision", {}),
+            "qa_provenance": report_evidence.get("qa_provenance", {}),
         },
     )
     return manifest.to_json(indent=2)
@@ -825,7 +947,82 @@ def process_image_event(*args, request=None):
         if current_revision is None
         else _coerce_settings_revision(current_revision)
     )
-    def _contract_failure(message):
+
+    def _record_attempt(status, error=None, result=None):
+        if preview_cache is None:
+            return
+        source_paths = _render_contract_paths(
+            dict(zip(PROCESS_INPUT_KEYS, process_args)).get("img_paths")
+        )
+        source_paths = [os.fsdecode(os.fspath(path)) for path in source_paths]
+        source_path = source_paths[0] if source_paths else None
+        mode = render_mode or MODE_RENDER_PREVIEW
+        latest = preview_cache.latest_render_evidence
+        face_contexts = preview_cache.latest_render_face_contexts
+        if status == "completed":
+            # Promote evidence only when process_image explicitly tagged it
+            # with this attempt ID. A same-source prior preview is still stale
+            # evidence if a legacy handler returned pixels without refreshing
+            # diagnostics.
+            tagged_for_attempt = latest.get("_evidence_attempt_id") == attempt_id
+            evidence_source = latest.get("source_path")
+
+            def _source_key(value):
+                if not value:
+                    return None
+                try:
+                    path_value = os.fsdecode(os.fspath(value))
+                    return os.path.normcase(os.path.abspath(path_value))
+                except (OSError, TypeError, ValueError):
+                    return None
+
+            evidence_source_key = _source_key(evidence_source)
+            requested_source_keys = {
+                key for key in (_source_key(path) for path in source_paths) if key
+            }
+            if tagged_for_attempt and evidence_source_key in requested_source_keys:
+                # process_image displays the first successful input, which can
+                # differ from the first requested path when earlier inputs
+                # fail. Bind the manifest to the exact tagged evidence source.
+                source_path = os.fsdecode(os.fspath(evidence_source))
+            elif len(source_paths) > 1:
+                # A legacy handler without attempt-tagged evidence cannot tell
+                # which of several requested inputs produced its returned image.
+                source_path = None
+            if (
+                not tagged_for_attempt
+                or evidence_source_key != _source_key(source_path)
+            ):
+                latest = {"source_path": source_path}
+                face_contexts = ()
+            latest.pop("_evidence_attempt_id", None)
+            latest["render_revision"] = _coerce_settings_revision(snapshot_revision)
+            latest["render_mode"] = mode
+            if isinstance(snapshot, dict) and snapshot.get("render_contract"):
+                settings = snapshot["render_contract"].get("settings", {})
+                latest["settings_sha256"] = settings.get("settings_sha256")
+            rendered = result[2] if isinstance(result, tuple) and len(result) > 2 else None
+            if isinstance(rendered, np.ndarray):
+                latest["output"] = {
+                    "width": int(rendered.shape[1]),
+                    "height": int(rendered.shape[0]),
+                    "dtype": str(rendered.dtype),
+                }
+        attempt = {
+            "status": status,
+            "revision": _coerce_settings_revision(snapshot_revision),
+            "render_mode": mode,
+            "source_path": source_path,
+        }
+        if error:
+            attempt["error"] = str(error)[:1024]
+        latest["render_attempt"] = attempt
+        preview_cache.set_latest_render(latest, face_contexts=face_contexts)
+
+    attempt_id = uuid.uuid4().hex
+
+    def _contract_failure(message, *, status="failed"):
+        _record_attempt(status, message)
         result = (None, gr.update(visible=False), None, None, message, None, gr.update(visible=False), "")
         return result + (preview_cache,) if preview_cache is not None else result
     if isinstance(snapshot, dict) and snapshot.get("render_contract"):
@@ -838,29 +1035,44 @@ def process_image_event(*args, request=None):
             and current_for_contract > _coerce_settings_revision(snapshot_revision)
         ):
             return _contract_failure(
-                "Export Full Quality cancelled: settings changed before rendering started."
+                "Export Full Quality cancelled: settings changed before rendering started.",
+                status="cancelled",
             )
     process_kwargs = {}
     if render_mode in {MODE_RENDER_PREVIEW, MODE_EXPORT_FULL_QUALITY}:
         process_kwargs["render_mode"] = render_mode
     if preview_cache is not None:
         process_kwargs["preview_cache"] = preview_cache
+        process_kwargs["render_attempt_id"] = attempt_id
     if isinstance(snapshot, dict) and preserve_source_profile:
         process_kwargs["preserve_source_profile"] = preserve_source_profile
     workspace = _workspace_for_request(request)
     if workspace is not None:
         process_kwargs["workspace"] = workspace
-    result = process_image(*process_args, **process_kwargs)
-    if preview_cache is not None and isinstance(result, tuple) and len(result) >= 8:
-        latest = preview_cache.latest_render_evidence
-        latest["render_revision"] = _coerce_settings_revision(snapshot_revision)
-        latest["render_mode"] = render_mode or MODE_RENDER_PREVIEW
-        if isinstance(snapshot, dict) and snapshot.get("render_contract"):
-            settings = snapshot["render_contract"].get("settings", {})
-            latest["settings_sha256"] = settings.get("settings_sha256")
-        preview_cache.set_latest_render(
-            latest,
-            face_contexts=preview_cache.latest_render_face_contexts,
+    try:
+        result = process_image(*process_args, **process_kwargs)
+    except Exception as exc:  # noqa: BLE001 - preserve a terminal manifest on render faults
+        _logger.exception("Unhandled render attempt failure: %s", exc)
+        result = (
+            None,
+            gr.update(visible=False),
+            None,
+            None,
+            "Error: Render failed (%s: %s)" % (type(exc).__name__, exc),
+            None,
+            gr.update(visible=False),
+            "",
+        )
+    succeeded = (
+        isinstance(result, tuple)
+        and len(result) >= 8
+        and result[2] is not None
+    )
+    if isinstance(result, tuple) and len(result) >= 8:
+        _record_attempt(
+            "completed" if succeeded else "failed",
+            None if succeeded else (result[4] or "Render did not produce an image"),
+            result=result,
         )
     if isinstance(result, tuple) and len(result) > 4 and result[0] is not None:
         result = list(result)
@@ -974,6 +1186,16 @@ def save_session_handler(*args):
     advanced_base = args[len(PROCESS_INPUT_KEYS) + 1] if len(args) > len(PROCESS_INPUT_KEYS) + 1 else None
     advanced_history = args[len(PROCESS_INPUT_KEYS) + 2] if len(args) > len(PROCESS_INPUT_KEYS) + 2 else None
     advanced_current = args[len(PROCESS_INPUT_KEYS) + 3] if len(args) > len(PROCESS_INPUT_KEYS) + 3 else None
+    rebase_review_required = bool(args[len(PROCESS_INPUT_KEYS) + 4]) if len(args) > len(PROCESS_INPUT_KEYS) + 4 else False
+    rebase_review_acknowledged = bool(args[len(PROCESS_INPUT_KEYS) + 5]) if len(args) > len(PROCESS_INPUT_KEYS) + 5 else False
+    overlay_visible = bool(args[len(PROCESS_INPUT_KEYS) + 6]) if len(args) > len(PROCESS_INPUT_KEYS) + 6 else True
+    overlay_opacity = args[len(PROCESS_INPUT_KEYS) + 7] if len(args) > len(PROCESS_INPUT_KEYS) + 7 else 42
+    if rebase_review_required and (
+        not rebase_review_acknowledged
+        or not advanced_rebase_overlay_is_reviewable(overlay_visible, overlay_opacity)
+    ):
+        gr.Warning("Session was not saved: review the highlighted rebase support and result first.")
+        return gr.update(value=None, visible=False)
     params = dict(zip(PROCESS_INPUT_KEYS, process_args))
     img_paths = params.get("img_paths")
     image_path = None
@@ -1044,8 +1266,27 @@ def load_advanced_session_handler(session_file, source_rgb, base_contract=None):
     """Restore serialized Advanced Retouch edits when a source is available."""
     from retouch.session import Session
 
+    def _finish(values, review_support=None):
+        values = list(values)
+        if review_support is not None:
+            values[4] = mask_overlay(values[2], review_support, 0.42)
+            values[8] = review_support
+            values[9] += " The saved effective-mask support is highlighted; review it before continuing or exporting."
+            return tuple(values) + (
+                True,
+                gr.update(value=False, visible=True, interactive=True),
+                gr.update(value=True),
+                gr.update(value=42),
+            )
+        return tuple(values) + (
+            False,
+            gr.update(value=False, visible=False, interactive=True),
+            gr.update(),
+            gr.update(),
+        )
+
     if session_file is None:
-        return (
+        return _finish((
             source_rgb,
             [],
             source_rgb,
@@ -1056,13 +1297,13 @@ def load_advanced_session_handler(session_file, source_rgb, base_contract=None):
             [],
             None,
             "",
-        )
+        ))
     try:
         path = session_file.name if hasattr(session_file, "name") else str(session_file)
         session = Session.from_file(path)
         raw_advanced = session.advanced_retouch or {}
         if not raw_advanced:
-            return (
+            return _finish((
                 source_rgb,
                 [],
                 source_rgb,
@@ -1073,12 +1314,12 @@ def load_advanced_session_handler(session_file, source_rgb, base_contract=None):
                 [],
                 None,
                 "Session contains no Advanced Retouch edits.",
-            )
+            ))
         advanced = parse_advanced_session_payload(raw_advanced)
         edits = list(advanced.get("edits") or [])
     except Exception as exc:
         _logger.warning("Failed to load Advanced Retouch session data: %s", exc)
-        return (
+        return _finish((
             source_rgb,
             [],
             source_rgb,
@@ -1089,10 +1330,10 @@ def load_advanced_session_handler(session_file, source_rgb, base_contract=None):
             [],
             None,
             f"Advanced Retouch session data unavailable: {exc}",
-        )
+        ))
 
     if advanced.get("legacy_unverified"):
-        return (
+        return _finish((
             source_rgb,
             advanced,
             source_rgb,
@@ -1104,9 +1345,9 @@ def load_advanced_session_handler(session_file, source_rgb, base_contract=None):
             None,
             f"Loaded {len(edits)} legacy Advanced Retouch edit(s) as pending. "
             "Legacy sessions have no base hash; use Bind legacy session edits to apply them explicitly.",
-        )
+        ))
     if source_rgb is None or base_contract is None:
-        return (
+        return _finish((
             source_rgb,
             advanced,
             source_rgb,
@@ -1118,10 +1359,10 @@ def load_advanced_session_handler(session_file, source_rgb, base_contract=None):
             None,
             f"Loaded {len(edits)} Advanced Retouch edit(s) as pending. "
             "Load the exact recorded base to verify and replay them.",
-        )
+        ))
     comparison = compare_base_contracts(advanced.get("base"), base_contract)
     if not comparison["matches"]:
-        return (
+        return _finish((
             source_rgb,
             advanced,
             source_rgb,
@@ -1134,7 +1375,22 @@ def load_advanced_session_handler(session_file, source_rgb, base_contract=None):
             "Advanced Retouch session base mismatch; edits remain pending ({}).".format(
                 ", ".join(comparison["reasons"])
             ),
-        )
+        ))
+    try:
+        review_support = _advanced_rebase_support_mask(edits, np.asarray(source_rgb).shape)
+    except Exception as exc:
+        return _finish((
+            source_rgb,
+            advanced,
+            source_rgb,
+            source_rgb,
+            None,
+            before_after(source_rgb, source_rgb),
+            AdvancedHistory().to_state(),
+            [],
+            None,
+            f"Could not verify Advanced Retouch mask geometry; edits remain pending: {exc}",
+        ))
     try:
         current = _replay_advanced_state(source_rgb, edits)
         replay_check = replay_result_matches(advanced, current)
@@ -1142,7 +1398,7 @@ def load_advanced_session_handler(session_file, source_rgb, base_contract=None):
             raise AdvancedContractError(
                 "replay result mismatch: %s" % ", ".join(replay_check["reasons"])
             )
-        return (
+        return _finish((
             source_rgb,
             [],
             current,
@@ -1153,10 +1409,10 @@ def load_advanced_session_handler(session_file, source_rgb, base_contract=None):
             edits,
             None,
             f"Verified and replayed {len(edits)} Advanced Retouch edit(s) on the recorded base.",
-        )
+        ), review_support=review_support)
     except Exception as exc:
         _logger.warning("Failed to replay Advanced Retouch session data: %s", exc)
-        return (
+        return _finish((
             source_rgb,
             advanced,
             source_rgb,
@@ -1167,7 +1423,7 @@ def load_advanced_session_handler(session_file, source_rgb, base_contract=None):
             [],
             None,
             f"Could not verify Advanced Retouch replay; edits remain pending: {exc}",
-        )
+        ))
 
 
 def _history_button_updates(undo_stack):
@@ -1278,6 +1534,16 @@ def save_snapshot_handler(name, *args, snapshots=None):
     advanced_current = args[len(PROCESS_INPUT_KEYS) + 3] if len(args) > len(PROCESS_INPUT_KEYS) + 3 else None
     if snapshots is None and len(args) > len(PROCESS_INPUT_KEYS) + 4:
         snapshots = args[len(PROCESS_INPUT_KEYS) + 4]
+    rebase_review_required = bool(args[len(PROCESS_INPUT_KEYS) + 5]) if len(args) > len(PROCESS_INPUT_KEYS) + 5 else False
+    rebase_review_acknowledged = bool(args[len(PROCESS_INPUT_KEYS) + 6]) if len(args) > len(PROCESS_INPUT_KEYS) + 6 else False
+    overlay_visible = bool(args[len(PROCESS_INPUT_KEYS) + 7]) if len(args) > len(PROCESS_INPUT_KEYS) + 7 else True
+    overlay_opacity = args[len(PROCESS_INPUT_KEYS) + 8] if len(args) > len(PROCESS_INPUT_KEYS) + 8 else 42
+    if rebase_review_required and (
+        not rebase_review_acknowledged
+        or not advanced_rebase_overlay_is_reviewable(overlay_visible, overlay_opacity)
+    ):
+        gr.Warning("Snapshot was not saved: review the highlighted rebase support and result first.")
+        return gr.update(), snapshots or {}
     params = dict(zip(PROCESS_INPUT_KEYS, process_args))
     recipe = params.get("recipe", "natural")
     session = Session(recipe=recipe, params=params)
@@ -1324,6 +1590,7 @@ def process_image(
     *args,
     render_mode=None,
     preview_cache=None,
+    render_attempt_id=None,
     preserve_source_profile=False,
     workspace=None,
 ):
@@ -1458,16 +1725,21 @@ def process_image(
             except Exception as e:
                 _logger.warning("face_params_json parse failed: %s", e)
                 fp = None
+    batch_face_params = None
     if fp:
-        coerced = coerce_face_params(fp)
-        if coerced:
-            engine_kwargs["face_params"] = coerced
+        batch_face_params = coerce_face_params(fp)
 
     for idx, path_item in enumerate(img_paths):
         try:
             curr_path = path_item
             if isinstance(path_item, dict):
                 curr_path = path_item.get("name") or path_item.get("path")
+            if batch_face_params:
+                # Anchors bind only on the image they were selected on; other
+                # batch images keep plain index semantics.
+                engine_kwargs["face_params"] = face_params_for_source(
+                    batch_face_params, str(curr_path),
+                )
 
             cache_key = None
             cache_entry = None
@@ -1489,7 +1761,11 @@ def process_image(
                             if Path(curr_path).suffix.lower() in RAW_EXTENSIONS
                             else "uint8"
                         ),
-                        raw_settings={"prefer_16bit": True, "raw_decoder": "rawpy"},
+                        raw_settings={
+                            "prefer_16bit": True,
+                            "raw_decoder": "rawpy",
+                            "raf_exposure_bias": True,
+                        },
                         detector_backend=_detector_cache_descriptor(engine_for_cache),
                         engine_version=__version__,
                     )
@@ -1601,11 +1877,15 @@ def process_image(
                                 for item in qa_warnings
                             ],
                         },
+                        "qa_provenance": dict(
+                            getattr(result, "qa_provenance", {}) or {}
+                        ),
                         "safe_auto_decisions": list(
                             getattr(result, "safe_auto_decisions", []) or []
                         ),
                         "backend": runtime_diagnostics,
                         "precision": getattr(result, "precision_metadata", {}),
+                        "_evidence_attempt_id": render_attempt_id,
                     },
                     face_contexts=runtime_contexts,
                 )
@@ -1978,7 +2258,15 @@ def on_detect_faces(img_paths):
         choices.append(str(i))
     
     suggested = get_engine().suggest_face_params(img, faces_data=faces)
-    
+    # Anchor each entry to the selected face's position so the engine binds it
+    # to the same person even if its own (proxy/fast) detection orders faces
+    # differently (DSCF4599: native vs 2048/800 order is swapped).
+    frame = (img.shape[1], img.shape[0])
+    for i, f in enumerate(faces):
+        if i in suggested:
+            suggested[i][FACE_ANCHOR_KEY] = make_face_anchor(f.bbox, frame)
+            suggested[i][FACE_ANCHOR_SOURCE_KEY] = str(path)
+
     status = f"{len(choices)} face(s) detected.\n\nSuggested default recipes:\n"
     for k, v in suggested.items():
         status += f"- Face {k}: {v['recipe']}\n"
@@ -2020,10 +2308,27 @@ def on_img_change_clear_faces():
     return {}, [], gr.update(choices=[], value=None), "Image changed — re-detect faces."
 
 
-def advanced_export_handler(current_rgb, export_fmt, source_paths=None, base_contract=None):
+def advanced_export_handler(
+    current_rgb,
+    export_fmt,
+    source_paths=None,
+    base_contract=None,
+    rebase_review_required=False,
+    rebase_review_acknowledged=False,
+    overlay_visible=True,
+    overlay_opacity=42,
+):
     """Export the full-resolution canvas with context-aware metadata."""
     if current_rgb is None:
         return gr.update(visible=False), "Load an image first."
+    if rebase_review_required and (
+        not rebase_review_acknowledged
+        or not advanced_rebase_overlay_is_reviewable(overlay_visible, overlay_opacity)
+    ):
+        return (
+            gr.update(value=None, visible=False),
+            "Advanced Retouch export blocked: review the highlighted old-coordinate mask support and result first.",
+        )
     delivery = advanced_delivery_decision(base_contract)
     if not delivery["allowed"]:
         return (
@@ -3356,7 +3661,10 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 advanced_reset_btn = gr.Button("Reset", variant="secondary")
                             with gr.Row():
                                 advanced_overlay_visible = gr.Checkbox(label="Show mask overlay", value=True)
-                                advanced_overlay_opacity = gr.Slider(0, 100, 42, step=1, label="Overlay opacity")
+                                advanced_overlay_opacity = gr.Slider(
+                                    0, 100, 42, step=1, label="Overlay opacity",
+                                    info="Rebase review requires at least 20% opacity.",
+                                )
                             advanced_mask_overlay = gr.Image(label="Mask overlay", show_label=True, height=260)
                             advanced_before_after = gr.Image(label="Before / after", show_label=True, height=260)
                             with gr.Row():
@@ -3369,6 +3677,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 advanced_export_btn = gr.Button("Download current canvas", size="sm", variant="secondary", scale=1)
                                 advanced_export_file = gr.File(label="Advanced export", visible=False, scale=2)
                             advanced_status = gr.Markdown("Advanced Retouch is ready.")
+                            advanced_rebase_ack = gr.Checkbox(
+                                label="I reviewed the highlighted rebase support and result (20%+ opacity)",
+                                value=False,
+                                visible=False,
+                            )
                             _advanced_source_state = gr.State(value=None)
                             _advanced_current_state = gr.State(value=None)
                             _advanced_history_state = gr.State(value=AdvancedHistory().to_state())
@@ -3377,6 +3690,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             _advanced_snapshots_state = gr.State(value={})
                             _advanced_pending_session_state = gr.State(value=[])
                             _advanced_base_contract_state = gr.State(value=None)
+                            _advanced_rebase_review_required = gr.State(value=False)
                         # Hidden state variables for newly-added parameters (skin_hue_unify, skin_chroma_even)
                         # These maintain alignment with PROCESS_INPUT_KEYS but don't have visible UI yet.
                         _skin_hue_unify_state = gr.State(value=0)
@@ -4570,6 +4884,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
             advanced_mask_overlay, advanced_before_after, _advanced_history_state,
             _advanced_edit_log_state, _advanced_mask_state, advanced_status,
             _advanced_pending_session_state, _advanced_base_contract_state,
+            _advanced_rebase_review_required, advanced_rebase_ack, advanced_overlay_visible,
+            advanced_overlay_opacity,
         ],
         show_progress="minimal",
         concurrency_limit=1,
@@ -4586,6 +4902,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
             advanced_mask_overlay, advanced_before_after, _advanced_history_state,
             _advanced_edit_log_state, _advanced_mask_state, advanced_status,
             _advanced_pending_session_state, _advanced_base_contract_state,
+            _advanced_rebase_review_required, advanced_rebase_ack, advanced_overlay_visible,
+            advanced_overlay_opacity,
         ],
         show_progress="minimal",
         concurrency_limit=1,
@@ -4600,7 +4918,9 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         outputs=[
             _advanced_current_state, advanced_editor, advanced_before_after,
             _advanced_history_state, _advanced_edit_log_state,
-            _advanced_pending_session_state, advanced_status,
+            _advanced_pending_session_state, advanced_status, _advanced_mask_state,
+            advanced_mask_overlay, _advanced_rebase_review_required,
+            advanced_rebase_ack, advanced_overlay_visible, advanced_overlay_opacity,
         ],
         concurrency_limit=1,
         concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
@@ -4629,6 +4949,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
             advanced_nose_width_l, advanced_nose_width_r,
             advanced_jaw_width_l, advanced_jaw_width_r,
             advanced_mask_action, advanced_mask_feather,
+            _advanced_rebase_review_required, advanced_rebase_ack,
         ],
         outputs=[
             advanced_editor, _advanced_current_state, _advanced_history_state,
@@ -4641,7 +4962,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     )
     advanced_undo_btn.click(
         fn=advanced_undo_handler,
-        inputs=[_advanced_current_state, _advanced_source_state, _advanced_history_state, _advanced_edit_log_state],
+        inputs=[
+            _advanced_current_state, _advanced_source_state, _advanced_history_state,
+            _advanced_edit_log_state, _advanced_rebase_review_required, advanced_rebase_ack,
+            advanced_overlay_visible, advanced_overlay_opacity,
+        ],
         outputs=[advanced_editor, _advanced_current_state, _advanced_history_state, _advanced_edit_log_state, _advanced_mask_state, advanced_mask_overlay, advanced_before_after, advanced_status],
         concurrency_limit=1,
         concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
@@ -4649,7 +4974,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     )
     advanced_redo_btn.click(
         fn=advanced_redo_handler,
-        inputs=[_advanced_current_state, _advanced_source_state, _advanced_history_state, _advanced_edit_log_state],
+        inputs=[
+            _advanced_current_state, _advanced_source_state, _advanced_history_state,
+            _advanced_edit_log_state, _advanced_rebase_review_required, advanced_rebase_ack,
+            advanced_overlay_visible, advanced_overlay_opacity,
+        ],
         outputs=[advanced_editor, _advanced_current_state, _advanced_history_state, _advanced_edit_log_state, _advanced_mask_state, advanced_mask_overlay, advanced_before_after, advanced_status],
         concurrency_limit=1,
         concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
@@ -4658,23 +4987,31 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     advanced_reset_btn.click(
         fn=advanced_reset_handler,
         inputs=[_advanced_source_state],
-        outputs=[_advanced_current_state, advanced_editor, advanced_mask_overlay, advanced_before_after, _advanced_history_state, _advanced_edit_log_state, _advanced_mask_state, advanced_status],
+        outputs=[
+            _advanced_current_state, advanced_editor, advanced_mask_overlay, advanced_before_after,
+            _advanced_history_state, _advanced_edit_log_state, _advanced_mask_state, advanced_status,
+            _advanced_rebase_review_required, advanced_rebase_ack,
+        ],
         queue=False,
         show_progress="hidden",
     )
     advanced_overlay_visible.change(
         fn=advanced_overlay_handler,
-        inputs=[_advanced_current_state, _advanced_mask_state, advanced_overlay_visible, advanced_overlay_opacity],
-        outputs=[advanced_mask_overlay],
+        inputs=[_advanced_current_state, _advanced_mask_state, advanced_overlay_visible, advanced_overlay_opacity, _advanced_rebase_review_required],
+        outputs=[advanced_mask_overlay, advanced_rebase_ack],
     )
     advanced_overlay_opacity.change(
         fn=advanced_overlay_handler,
-        inputs=[_advanced_current_state, _advanced_mask_state, advanced_overlay_visible, advanced_overlay_opacity],
-        outputs=[advanced_mask_overlay],
+        inputs=[_advanced_current_state, _advanced_mask_state, advanced_overlay_visible, advanced_overlay_opacity, _advanced_rebase_review_required],
+        outputs=[advanced_mask_overlay, advanced_rebase_ack],
     )
     advanced_clear_mask_btn.click(
         fn=advanced_clear_mask_handler,
-        inputs=[advanced_editor, _advanced_current_state, _advanced_source_state],
+        inputs=[
+            advanced_editor, _advanced_current_state, _advanced_source_state,
+            _advanced_rebase_review_required, advanced_rebase_ack,
+            advanced_overlay_visible, advanced_overlay_opacity,
+        ],
         outputs=[advanced_editor, _advanced_mask_state, advanced_mask_overlay, advanced_before_after, advanced_status],
     )
     advanced_save_snapshot_btn.click(
@@ -4683,6 +5020,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
             advanced_snapshot_name, _advanced_current_state,
             _advanced_edit_log_state, _advanced_snapshots_state,
             _advanced_base_contract_state,
+            _advanced_rebase_review_required, advanced_rebase_ack,
+            advanced_overlay_visible, advanced_overlay_opacity,
         ],
         outputs=[advanced_snapshot_dropdown, _advanced_snapshots_state, advanced_status],
     )
@@ -4695,7 +5034,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         fn=advanced_export_handler,
         inputs=[
             _advanced_current_state, advanced_export_fmt, img_input,
-            _advanced_base_contract_state,
+            _advanced_base_contract_state, _advanced_rebase_review_required, advanced_rebase_ack,
+            advanced_overlay_visible, advanced_overlay_opacity,
         ],
         outputs=[advanced_export_file, advanced_status],
         concurrency_limit=1,
@@ -5347,6 +5687,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         inputs=_process_inputs + [
             _advanced_edit_log_state, _advanced_base_contract_state,
             _advanced_history_state, _advanced_current_state,
+            _advanced_rebase_review_required, advanced_rebase_ack,
+            advanced_overlay_visible, advanced_overlay_opacity,
         ],
         outputs=[session_download],
     )
@@ -5371,20 +5713,20 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         queue=False,
     )
 
-    load_session_file.change(
+    _advanced_session_load_event = load_session_file.change(
         fn=load_advanced_session_handler,
         inputs=[load_session_file, _advanced_source_state, _advanced_base_contract_state],
         outputs=[
             _advanced_source_state, _advanced_pending_session_state, _advanced_current_state,
             advanced_editor, advanced_mask_overlay, advanced_before_after,
             _advanced_history_state, _advanced_edit_log_state, _advanced_mask_state,
-            advanced_status,
+            advanced_status, _advanced_rebase_review_required, advanced_rebase_ack,
+            advanced_overlay_visible, advanced_overlay_opacity,
         ],
         show_progress="minimal",
         concurrency_limit=1,
         concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
     )
-
     _undo_event = undo_btn.click(
         fn=undo_handler,
         inputs=[_undo_stack_state],
@@ -5420,6 +5762,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         inputs=[snapshot_name] + _process_inputs + [
             _advanced_edit_log_state, _advanced_base_contract_state,
             _advanced_history_state, _advanced_current_state, _snapshot_state,
+            _advanced_rebase_review_required, advanced_rebase_ack,
+            advanced_overlay_visible, advanced_overlay_opacity,
         ],
         outputs=[snapshot_dropdown, _snapshot_state],
     )

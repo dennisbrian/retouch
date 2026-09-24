@@ -67,7 +67,8 @@ def test_pore_spectrum_reference_flagged_and_self_zero():
 def test_pore_spectrum_no_reference_safe():
     ref = _make_skin()
     d = detect_pore_spectrum_distance(ref, None, reference_img_bgr=None)
-    assert d["score"] == 0.0
+    assert d["score"] is None
+    assert d["status"] == "not-run"
     assert d["flagged"] is False
     assert d["note"] == "no reference"
 
@@ -124,3 +125,22 @@ def test_detectors_do_not_mutate_inputs():
     ref_before = ref.copy()
     detect_pore_spectrum_distance(blurred, mask, reference_img_bgr=ref)
     assert np.array_equal(ref, ref_before)
+
+
+def test_unmeasured_reference_comparisons_are_not_reported_as_passed():
+    # Q5 (RESEARCH_RETOUCH_QA_VALIDITY_2026_09_21 §7): with no reference, or a
+    # reference of another shape, color_drift/pore_spectrum returned score 0.0
+    # and run_qa_with_evidence classified them "checked-pass".
+    from retouch.qa_detectors import QA_STATUS_NOT_RUN, QA_STATUS_PASSED, run_qa_with_evidence
+
+    img = _make_skin()
+    mask = np.ones(img.shape[:2], np.float32)
+    for ref in (None, img[: img.shape[0] // 2]):
+        _, ev = run_qa_with_evidence(img, mask, reference_img_bgr=ref)
+        for name in ("color_drift", "pore_spectrum"):
+            assert ev[name]["status"] == QA_STATUS_NOT_RUN, (name, ref is None)
+            assert ev[name]["score"] is None
+            assert ev[name]["reason"]
+    _, ev = run_qa_with_evidence(img, mask, reference_img_bgr=img.copy())
+    assert ev["color_drift"]["status"] == QA_STATUS_PASSED
+    assert ev["pore_spectrum"]["status"] == QA_STATUS_PASSED

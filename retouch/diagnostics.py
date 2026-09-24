@@ -83,7 +83,13 @@ def enable_native_crash_log(max_bytes: int = 1_000_000) -> Optional[Path]:
         stream.flush()
     except OSError as exc:
         logging.getLogger(__name__).warning("Could not open %s: %s", path, exc)
-        faulthandler.enable()
+        try:
+            faulthandler.enable()
+        except (OSError, ValueError, RuntimeError) as fallback_exc:
+            # Captured stderr may have no fileno (for example under pytest).
+            logging.getLogger(__name__).warning(
+                "Could not enable native crash logging on stderr: %s", fallback_exc
+            )
         return None
     faulthandler.enable(file=stream, all_threads=True)
     _native_crash_stream = stream

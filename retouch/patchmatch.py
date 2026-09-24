@@ -13,11 +13,14 @@ reconstruct a unique object that is completely occluded by the mask.
 
 from __future__ import annotations
 
-from typing import Optional, Tuple, Union
+import logging
+from typing import Any, Dict, Optional, Tuple, Union
 
 import cv2
 import numpy as np
 
+
+logger = logging.getLogger(__name__)
 
 SourceMap = np.ndarray
 FillResult = Union[np.ndarray, Tuple[np.ndarray, SourceMap]]
@@ -33,6 +36,7 @@ def patchmatch_fill(
     seed: int = 0,
     max_candidates: int = 512,
     return_source_map: bool = False,
+    report: Optional[Dict[str, Any]] = None,
 ) -> FillResult:
     """Fill ``hole_mask`` using patches from an allowed source region.
 
@@ -53,10 +57,18 @@ def patchmatch_fill(
             bounds the cost on high-resolution brush masks.
         return_source_map: Also return ``(H, W, 2)`` integer source centres
             in ``(y, x)`` order; unfilled/non-hole pixels are ``(-1, -1)``.
+        report: Optional dict filled in place with the repair actually
+            executed: ``requested``, ``executed`` (``"patchmatch"``,
+            ``"telea_donor_constrained"``, ``"abstain"`` or ``"none"``),
+            ``reason``, ``valid_source_centres``, ``permitted_donor_pixels``,
+            ``fallback_pixels`` and ``source_map_available``.
 
     Returns:
-        Filled image preserving dtype. On a degenerate source region it falls
-        back to OpenCV Telea and marks source-map entries ``(-1, -1)``.
+        Filled image preserving dtype. On a degenerate source region (no full
+        source patch fits) it falls back to OpenCV Telea that may read only
+        permitted donor pixels, and marks source-map entries ``(-1, -1)``.
+        When no permitted donor pixel exists at all the hole is left
+        unchanged (``executed == "abstain"``).
 
     The routine is classical texture synthesis, not object reconstruction:
     it needs suitable same-material source pixels.  Callers should provide a
@@ -65,7 +77,18 @@ def patchmatch_fill(
     _validate_image(image)
     hole = _coerce_mask(hole_mask, image.shape[:2], "hole_mask")
     source_map = np.full((*image.shape[:2], 2), -1, dtype=np.int32)
+    info: Dict[str, Any] = report if report is not None else {}
+    info.update(
+        requested="patchmatch",
+        executed="patchmatch",
+        reason=None,
+        valid_source_centres=0,
+        permitted_donor_pixels=0,
+        fallback_pixels=0,
+        source_map_available=False,
+    )
     if not np.any(hole):
+        info.update(executed="none", reason="empty_hole")
         result = image.copy()
         return (result, source_map) if return_source_map else result
 
@@ -82,9 +105,25 @@ def patchmatch_fill(
 
     radius = patch_size // 2
     valid_centres = _valid_source_centres(allowed, radius)
+    info["valid_source_centres"] = int(len(valid_centres))
+    info["permitted_donor_pixels"] = int(np.count_nonzero(allowed))
     if len(valid_centres) == 0:
-        fallback = _telea_fallback(image, hole)
+        # The fallback must honour the same donor contract as patch search:
+        # Telea may read only permitted donor pixels, never protected or
+        # otherwise forbidden material next to the hole.
+        fallback, executed = _donor_constrained_telea(image, hole, allowed)
+        reason = "no_full_source_patch" if executed != "abstain" else "no_permitted_donor"
+        info.update(
+            executed=executed,
+            reason=reason,
+            fallback_pixels=int(np.count_nonzero(hole)) if executed != "abstain" else 0,
+        )
+        logger.warning(
+            "patchmatch_fill: %s (%s; %d permitted donor px, %d hole px)",
+            executed, reason, info["permitted_donor_pixels"], int(np.count_nonzero(hole)),
+        )
         return (fallback, source_map) if return_source_map else fallback
+    info["source_map_available"] = True
 
     image_float = image.astype(np.float32, copy=False)
     result = image_float.copy()
@@ -131,8 +170,17 @@ def patchmatch_fill(
     # a deterministic contract for unusual disconnected/tiny masks.
     unresolved = hole & (source_map[..., 0] < 0)
     if np.any(unresolved):
-        fallback = _telea_fallback(image, unresolved)
+        # Pixels already filled by patch search are donor-derived and may be
+        # read; the rest of the hole and every forbidden pixel may not.
+        readable = allowed | (hole & ~unresolved)
+        fallback, executed = _donor_constrained_telea(result, unresolved, readable)
         result[unresolved] = fallback[unresolved].astype(np.float32)
+        if executed != "abstain":
+            info["fallback_pixels"] = int(np.count_nonzero(unresolved))
+        info.update(executed=f"patchmatch+{executed}", reason="unresolved_pixels")
+        logger.warning(
+            "patchmatch_fill: %d unresolved px -> %s", int(np.count_nonzero(unresolved)), executed
+        )
 
     converted = _restore_dtype(result, image.dtype)
     return (converted, source_map) if return_source_map else converted
@@ -291,6 +339,39 @@ def _best_patch_candidate(
     squared_error = ((source_patches - patch[None, ...]) ** 2 * weights).sum(axis=(1, 2, 3))
     best = int(np.argmin(squared_error))
     return int(candidates[best, 0]), int(candidates[best, 1])
+
+
+def _donor_constrained_telea(
+    image: np.ndarray, hole: np.ndarray, allowed: np.ndarray
+) -> Tuple[np.ndarray, str]:
+    """Telea-fill ``hole`` reading only ``allowed`` pixels.
+
+    Every non-permitted pixel in the ROI spanning the hole and all permitted
+    donors is added to the inpainting mask, so OpenCV can only propagate
+    permitted material; only hole pixels are copied back. With
+    ``allowed == ~hole`` (no caller source mask) this is exactly the legacy
+    whole-image Telea call. Returns ``(image, "abstain")`` unchanged when no
+    permitted donor exists.
+    """
+    if not np.any(allowed):
+        return image.copy(), "abstain"
+    y0, y1, x0, x1 = _roi_bounds(hole | allowed, padding=0)
+    roi_hole = hole[y0:y1, x0:x1]
+    roi_allowed = allowed[y0:y1, x0:x1]
+    roi_image = image[y0:y1, x0:x1].copy()
+    # OpenCV Telea's gradient term still reads the initial values of masked
+    # pixels (measured: up to ~5 levels on a 190-level step). Neutralise the
+    # forbidden ones with the donor median so any leak carries only permitted
+    # material. Hole pixels are left as-is, keeping the unconstrained
+    # (``allowed == ~hole``) path byte-identical to the legacy call.
+    forbidden = ~roi_allowed & ~roi_hole
+    if np.any(forbidden):
+        roi_image[forbidden] = np.median(roi_image[roi_allowed], axis=0).astype(image.dtype)
+    filled_roi = _telea_fallback(roi_image, ~roi_allowed)
+    output = image.copy()
+    output_roi = output[y0:y1, x0:x1]
+    output_roi[roi_hole] = filled_roi[roi_hole]
+    return output, "telea_donor_constrained"
 
 
 def _telea_fallback(image: np.ndarray, hole: np.ndarray) -> np.ndarray:

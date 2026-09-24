@@ -315,13 +315,24 @@ def _merge_qa_observations(
             by_detector[detector] = len(merged) - 1
             continue
         target = merged[by_detector[detector]]
-        if warning.get("flagged"):
+        if warning.get("flagged") and not target.get("flagged"):
+            # Never lose a flag, but keep flag/score/threshold from ONE
+            # measurement: the flagging observation compared a different
+            # stage/reference than this row's own score (Q4,
+            # RESEARCH_RETOUCH_QA_VALIDITY_2026_09_21 §6).
+            target.setdefault("runner_observation", {
+                key: target.get(key)
+                for key in ("score", "flagged", "threshold", "status", "source")
+            })
             target["flagged"] = True
             target["status"] = "flagged" if target.get("available", True) else "unavailable"
+            target["score"] = warning.get("score")
+            target["threshold"] = warning.get("threshold")
+            target["measurement_source"] = warning.get("source")
+        elif warning.get("threshold") is not None and target.get("threshold") is None:
+            target["threshold"] = warning["threshold"]
         if warning.get("message"):
             target["message"] = warning["message"]
-        if warning.get("threshold") is not None:
-            target["threshold"] = warning["threshold"]
         if target.get("score") is None and warning.get("score") is not None:
             target["score"] = warning["score"]
         # Keep the actual ProcessingResult warning distinct from context/raw
@@ -698,6 +709,9 @@ def _extract_runtime_evidence(
     )
     parser_evidence = _extract_parser_evidence(engine, global_only=global_only)
     diagnostics = getattr(result, "runtime_diagnostics", {}) if result is not None else {}
+    qa_provenance = (
+        getattr(result, "qa_provenance", {}) if result is not None else {}
+    )
     face_aware_run = bool(
         not global_only
         and result is not None
@@ -718,6 +732,7 @@ def _extract_runtime_evidence(
         "parser": parser_evidence,
         "provider_evidence": parser_evidence.get("provider_evidence", {}),
         "runtime_diagnostics": _json_safe(diagnostics),
+        "qa_provenance": _json_safe(qa_provenance),
         "roi_provenance": _extract_roi_provenance(result),
     }
 
@@ -912,6 +927,7 @@ def run_sweep(args: argparse.Namespace) -> int:
                 "diagnostic_only": bool(args.global_only),
                 "qa": [],
                 "qa_warnings": [],
+                "qa_provenance": {},
                 "qa_evidence": {
                     "version": EVIDENCE_VERSION,
                     "status": "not_collected",
@@ -948,6 +964,7 @@ def run_sweep(args: argparse.Namespace) -> int:
                     "face_evidence": runtime_evidence["face"],
                     "parser_evidence": runtime_evidence["parser"],
                     "provider_evidence": runtime_evidence["provider_evidence"],
+                    "qa_provenance": runtime_evidence.get("qa_provenance", {}),
                     "roi_provenance": runtime_evidence["roi_provenance"],
                     "runtime_diagnostics": runtime_evidence["runtime_diagnostics"],
                     "face_count": runtime_evidence["face"].get("face_count"),
@@ -994,6 +1011,10 @@ def run_sweep(args: argparse.Namespace) -> int:
                 row.setdefault("face_evidence", row["runtime_evidence"]["face"])
                 row.setdefault("parser_evidence", row["runtime_evidence"]["parser"])
                 row.setdefault("provider_evidence", row["runtime_evidence"]["provider_evidence"])
+                row.setdefault(
+                    "qa_provenance",
+                    row["runtime_evidence"].get("qa_provenance", {}),
+                )
                 row.setdefault("roi_provenance", row["runtime_evidence"]["roi_provenance"])
                 row.setdefault("runtime_diagnostics", row["runtime_evidence"]["runtime_diagnostics"])
                 row.setdefault("face_count", row["face_evidence"].get("face_count"))

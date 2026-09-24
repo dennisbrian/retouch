@@ -2,6 +2,8 @@
 
 import argparse
 import atexit
+import multiprocessing
+import queue
 import re
 import signal
 import shutil
@@ -9,10 +11,11 @@ import sys
 import os
 import time
 import warnings
+import json
+import math
+import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional
-import multiprocessing
-import queue
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import cpu_count
 
@@ -36,6 +39,7 @@ from retouch.io import (
     IMAGE_EXTENSIONS,
     RAW_EXTENSIONS,
     _resolve_safe_path,
+    apply_raw_exposure_gain,
     color_context_for_path,
     imread_engine_with_context,
     imread_exif,
@@ -44,13 +48,25 @@ from retouch.io import (
     read_exif_bytes,
     read_c2pa_manifest,
     resize_for_processing,
+    raw_exposure_decode_info,
     write_image_with_color_context,
 )
-from retouch.recipes import CURATED_RECIPE_NAMES
+from retouch.recipes import CURATED_RECIPE_NAMES, RECIPES
 from retouch.params import PROCESSING_PARAMS, recipe_to_params
 from retouch.session import Session, create_session_from_params
 from retouch.recipe_cookbook import list_recipes, search_recipes
 from retouch.look_extractor import LookExtractor
+from retouch.cli_input import (
+    apply_resume_plan,
+    attach_destinations,
+    build_input_plan,
+    decode_plan_inputs,
+    inspect_plan_headers,
+    load_input_list,
+    print_input_plan,
+    sha256_file,
+    stable_fingerprint,
+)
 from retouch.review_page import (
     REVIEW_DIRNAME,
     ReviewRecord,
@@ -194,8 +210,6 @@ def _save_session(
 
 
 _worker_engine = None
-# Live-progress event queue shared with the parent's ProgressReporter; set by
-# _init_worker under --workers>1, None in the serial path and in tests.
 _worker_progress_q = None
 
 
@@ -203,58 +217,11 @@ def _init_worker(progress_q=None, with_engine=True):
     global _worker_engine, _worker_progress_q
     _worker_progress_q = progress_q
     if progress_q is not None:
-        # Progress events are best-effort: never let this worker block at exit
-        # flushing a queue nobody reads any more (see the batch-hang history
-        # in _process_single's finally block).
         progress_q.cancel_join_thread()
-    # Ctrl-C reaches every process in the terminal's process group. The
-    # parent owns shutdown (cancel queued images, then terminate workers), so
-    # workers ignore SIGINT instead of abandoning their image and pulling the
-    # next one off the queue; SIGTERM from the parent takes the inner face
-    # pool down with the worker so no grandchild is orphaned.
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, _terminate_worker)
-    if not with_engine:
-        return
-    _worker_engine = RetouchEngine()
-
-
-def _terminate_worker(signum, _frame):
-    for child in multiprocessing.active_children():
-        child.terminate()
-    os._exit(128 + signum)
-
-
-# Partial files from retouch.io's atomic writer: .<stem>.tmp-<pid>-<hex><ext>
-_ATOMIC_TEMP_RE = re.compile(r"^\..+\.tmp-\d+-[0-9a-f]{8}\.[A-Za-z0-9]+$")
-
-
-def _stop_pool(pool):
-    """Stop a batch pool now: drop queued images, end in-flight ones.
-
-    In-flight images are lost, but outputs are written atomically, so none
-    is left half-written and a rerun redoes exactly those images.
-    """
-    # shutdown() drops the executor's process table, so grab it first.
-    procs = list((getattr(pool, "_processes", None) or {}).values())
-    pool.shutdown(wait=False, cancel_futures=True)
-    for p in procs:
-        if p.is_alive():
-            p.terminate()
-    for p in procs:
-        p.join(timeout=10)
-
-
-def _remove_partial_outputs(output_dir):
-    """Delete atomic-write temps left by workers terminated mid-write."""
-    if output_dir is None or not Path(output_dir).is_dir():
-        return
-    for tmp in Path(output_dir).rglob(".*.tmp-*"):
-        if _ATOMIC_TEMP_RE.match(tmp.name) and tmp.is_file():
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
+    if with_engine:
+        _worker_engine = RetouchEngine()
     # Each pool worker owns a RetouchEngine, which owns its own internal
     # FaceProcessorPool (a nested ProcessPoolExecutor, up to 4 more
     # processes). This atexit hook is a backstop for the single-face case
@@ -264,6 +231,36 @@ def _remove_partial_outputs(output_dir):
     # cli-batch-hangs-on-exit-after-done for why atexit alone cannot reach
     # RetouchEngine.close() once the inner pool's grandchildren are alive.
     atexit.register(_close_worker_engine)
+
+
+def _terminate_worker(signum, _frame):
+    for child in multiprocessing.active_children():
+        child.terminate()
+    os._exit(128 + signum)
+
+
+_ATOMIC_TEMP_RE = re.compile(r"^\..+\.tmp-\d+-[0-9a-f]{8}\.[A-Za-z0-9]+$")
+
+
+def _stop_pool(pool):
+    procs = list((getattr(pool, "_processes", None) or {}).values())
+    pool.shutdown(wait=False, cancel_futures=True)
+    for proc in procs:
+        if proc.is_alive():
+            proc.terminate()
+    for proc in procs:
+        proc.join(timeout=10)
+
+
+def _remove_partial_outputs(output_dir):
+    if output_dir is None or not Path(output_dir).is_dir():
+        return
+    for tmp in Path(output_dir).rglob(".*.tmp-*"):
+        if _ATOMIC_TEMP_RE.match(tmp.name) and tmp.is_file():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
 
 def _close_worker_engine():
@@ -324,12 +321,26 @@ def _maybe_write_skip_record(review_root, img_path, out_path, input_root, recipe
         print(f"  ⚠ review record (skip) failed for {img_path}: {e}")
 
 
-def _linear_raw_to_engine_bgr(path, exposure: float = 0.0, contrast: float = 1.0):
+def _linear_raw_to_engine_bgr(
+    path,
+    exposure: float = 0.0,
+    contrast: float = 1.0,
+    *,
+    apply_exposure_bias: bool = True,
+    decode_info: Optional[Dict[str, Any]] = None,
+):
     """T5 path: linear decode → develop → gamma-encode → float32 BGR [0,255]."""
     from retouch.raw_develop import RAWDeveloper
 
     dev = RAWDeveloper()
     linear_rgb, _meta = dev.load_raw(path)
+    exposure_info = raw_exposure_decode_info(path, apply_exposure_bias)
+    gain_ev = float(exposure_info["raw_exposure_gain_ev"] or 0.0)
+    if decode_info is not None:
+        decode_info.clear()
+        decode_info.update(exposure_info)
+    if gain_ev > 0.0:
+        linear_rgb = apply_raw_exposure_gain(linear_rgb, gain_ev)
     linear_rgb = dev.develop(
         linear_rgb, exposure=exposure, contrast=contrast,
     )
@@ -339,12 +350,204 @@ def _linear_raw_to_engine_bgr(path, exposure: float = 0.0, contrast: float = 1.0
     return bgr
 
 
-def _progress_key(img_path, input_root=None):
-    """Stable per-image key for progress events and the progress file.
+def _evidence_scalar(value):
+    """Return one bounded JSON scalar, excluding non-finite/path-like text."""
+    if isinstance(value, np.generic):
+        value = value.item()
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float):
+        return float(value) if math.isfinite(value) else None
+    if isinstance(value, str):
+        value = value.strip()
+        if (
+            value
+            and len(value) <= 128
+            and "/" not in value
+            and "\\" not in value
+            and "\n" not in value
+            and "\r" not in value
+        ):
+            return value
+    return None
 
-    Recursive batches can hold the same file name in several folders, so the
-    key is the path relative to the input root when there is one.
+
+def _evidence_fields(value, allowed):
+    if not isinstance(value, dict):
+        return {}
+    compact = {}
+    for key in allowed:
+        if key not in value:
+            continue
+        item = value[key]
+        if isinstance(item, (list, tuple)):
+            compact[key] = [
+                normalized
+                for normalized in (_evidence_scalar(child) for child in item[:32])
+                if normalized is not None
+            ]
+        else:
+            normalized = _evidence_scalar(item)
+            if normalized is not None:
+                compact[key] = normalized
+    return compact
+
+
+def _processing_evidence(result, *, global_only=False, color_context=None):
+    """Capture a small, versioned per-image diagnostic envelope.
+
+    Only selected scalar diagnostics cross the CLI/ProcessPool boundary. No
+    pixels, masks, face crops, raw exception text, or arbitrary engine attrs
+    are persisted in the input-plan ledger.
     """
+    face_count = getattr(result, "face_count", None) if result is not None else None
+    if isinstance(face_count, np.generic):
+        face_count = face_count.item()
+    if not isinstance(face_count, int) or isinstance(face_count, bool) or face_count < 0:
+        face_count = None
+
+    runtime = getattr(result, "runtime_diagnostics", {}) if result is not None else {}
+    runtime = runtime if isinstance(runtime, dict) else {}
+    detector_raw = runtime.get("face_detection", {})
+    detector = _evidence_fields(
+        detector_raw,
+        ("mode", "available", "backend", "probe_state", "reason"),
+    )
+    detector_mode = detector.get("mode")
+    if global_only:
+        detector = {"mode": "not_run_global_only"}
+        detector_mode = "global_only"
+    runtime_summary = {}
+    for name in ("denoise", "super_resolution", "body_reshape"):
+        summary = _evidence_fields(
+            runtime.get(name),
+            (
+                "backend", "providers", "provider_order", "fallback_chain",
+                "available", "stage", "action", "status", "fallback_reason",
+                "reason", "confidence", "scale",
+            ),
+        )
+        if summary:
+            runtime_summary[name] = summary
+    healing = runtime.get("healing")
+    if isinstance(healing, list):
+        runtime_summary["healing"] = [
+            _evidence_fields(
+                item,
+                (
+                    "index", "status", "requested", "executed", "reason",
+                    "error_type", "valid_source_centres", "permitted_donor_pixels",
+                    "fallback_pixels", "source_map_available",
+                ),
+            )
+            for item in healing[:32]
+            if isinstance(item, dict)
+        ]
+
+    qa_evidence = getattr(result, "qa_evidence", {}) if result is not None else {}
+    detectors = {}
+    if isinstance(qa_evidence, dict):
+        for name, item in sorted(qa_evidence.items(), key=lambda pair: str(pair[0]))[:32]:
+            if not isinstance(name, str) or not isinstance(item, dict):
+                continue
+            summary = _evidence_fields(item, ("status", "score", "flagged", "available"))
+            if summary:
+                detectors[name[:64]] = summary
+    if global_only:
+        qa = {"status": "not_applicable_global_only", "detectors": {}}
+    elif detectors:
+        qa = {"status": "captured", "detectors": detectors}
+    else:
+        qa = {"status": "not_captured", "detectors": {}}
+
+    safe_auto = []
+    decisions = getattr(result, "safe_auto_decisions", []) if result is not None else []
+    if isinstance(decisions, (list, tuple)):
+        for decision in decisions[:32]:
+            compact = _evidence_fields(
+                decision,
+                ("stage", "action", "confidence", "reason", "strength_scale"),
+            )
+            if compact:
+                safe_auto.append(compact)
+
+    fa02 = []
+    fa02_values = getattr(result, "fa02_diagnostics", []) if result is not None else []
+    if isinstance(fa02_values, (list, tuple)):
+        for item in fa02_values[:32]:
+            if not isinstance(item, dict):
+                fa02.append({"status": "not_run"})
+                continue
+            fa02.append(
+                _evidence_fields(
+                    item,
+                    ("face_width_px", "mode", "eligible", "reason", "ran"),
+                )
+            )
+
+    timings = getattr(result, "timings", {}) if result is not None else {}
+    timing_summary = {}
+    if isinstance(timings, dict):
+        timing_summary = {
+            str(name)[:64]: number
+            for name, value in list(timings.items())[:64]
+            if (number := _evidence_scalar(value)) is not None
+            and isinstance(number, (int, float))
+        }
+    precision = getattr(result, "precision_metadata", {}) if result is not None else {}
+    precision_summary = _evidence_fields(
+        precision,
+        (
+            "source_dtype", "source_bit_depth", "storage_dtype", "storage_bit_depth",
+            "processed_precision", "processed_bit_depth", "precision_status",
+            "downgraded", "downgrade_reason", "is_true_16bit", "supports_16bit_export",
+        ),
+    )
+    color_summary = {}
+    to_dict = getattr(color_context, "to_dict", None)
+    if callable(to_dict):
+        color_summary = _evidence_fields(
+            to_dict(),
+            (
+                "schema", "working_space", "source_kind", "assumed_srgb",
+                "is_tagged", "conversion_applied", "source_profile_name",
+                "source_profile_sha256", "working_profile_sha256",
+                "source_bit_depth", "working_bit_depth", "transform_intent",
+                "black_point_compensation", "alpha_mode", "raw_exposure_bias_ev",
+                "raw_exposure_gain_ev",
+            ),
+        )
+
+    return {
+        "schema": "retouch.cli_processing_evidence",
+        "version": 1,
+        "capture_status": "captured",
+        "execution_mode": "global_only" if global_only else "engine",
+        "face_detection": detector or {"mode": "unknown"},
+        "face_count": face_count,
+        "face_aware_execution": (
+            False
+            if global_only
+            else (
+                detector_mode == "face_aware" and face_count > 0
+                if face_count is not None and detector_mode in ("face_aware", "global_only")
+                else None
+            )
+        ),
+        "qa": qa,
+        "runtime_diagnostics": runtime_summary,
+        "safe_auto_decisions": safe_auto,
+        "fa02_diagnostics": fa02,
+        "timings_ms": timing_summary,
+        "precision": precision_summary,
+        "color_context": color_summary,
+    }
+
+
+def _progress_key(img_path, input_root=None):
+    """Stable per-image progress key, relative to a recursive input root."""
     path = Path(img_path)
     if input_root is not None:
         try:
@@ -355,59 +558,64 @@ def _progress_key(img_path, input_root=None):
 
 
 def _result_info(result, info):
-    """Copy picklable per-image metadata off a ProcessingResult into *info*.
-
-    Must run before the upscale ``cv2.resize``, which returns a plain ndarray
-    and drops these attributes.
-    """
+    """Copy small picklable result details before ndarray conversions drop them."""
     faces = getattr(result, "face_count", None)
     if faces is not None:
         info["faces"] = int(faces)
     timings = getattr(result, "timings", None)
     if timings:
         info["timings"] = {
-            str(k): round(float(v), 1) for k, v in dict(timings).items()
-            if isinstance(v, (int, float))
+            str(key): round(float(value), 1)
+            for key, value in dict(timings).items()
+            if isinstance(value, (int, float))
         }
     qa = getattr(result, "qa", None) or []
     info["qa"] = [
         {
-            "detector": w.detector,
-            "score": round(float(w.score), 4),
-            "threshold": None if w.threshold is None else float(w.threshold),
-            "flagged": bool(w.flagged),
-            "message": w.message,
+            "detector": warning.detector,
+            "score": round(float(warning.score), 4),
+            "threshold": None if warning.threshold is None else float(warning.threshold),
+            "flagged": bool(warning.flagged),
+            "message": warning.message,
         }
-        for w in qa
+        for warning in qa
     ]
 
 
 def _process_single(args):
-    """Pool entry point: render one image, streaming progress to the parent.
-
-    Returns ``(name, status, info)`` where *info* is a plain dict (faces,
-    seconds, timings, qa, out_path, compare_path) for the progress file.
-    """
+    """Pool entry point: process one image and stream stage progress."""
+    # Keep compatibility with the 25-item worker tuple used by callers/tests
+    # predating branch-specific destination stems and RAF exposure metadata.
+    if len(args) == 25:
+        args = (*args[:23], None, True, *args[23:])
+    supplied_key = args[27] if len(args) > 27 else None
+    if len(args) > 27:
+        args = args[:27]
     img_path, input_root = args[0], args[22]
-    key = _progress_key(img_path, input_root)
+    key = supplied_key or _progress_key(img_path, input_root)
     q = _worker_progress_q
     sink = make_event_sink(q, key) if q is not None else None
     if q is not None:
         emit(q, key, "start", worker=os.getpid())
     info: Dict[str, Any] = {}
     t_start = time.time()
-    name, status = _process_single_impl(args, info, sink)
+    name, status, evidence = _process_single_with_evidence(args, info, sink)
     info["seconds"] = round(time.time() - t_start, 3)
-    return (name, status, info)
+    if evidence is not None:
+        info["_processing_evidence"] = evidence
+    return Path(name).name, status, info
 
 
-def _process_single_impl(args, info, sink=None):
+def _process_single_with_evidence(args, info=None, sink=None):
+    if info is None:
+        info = {}
     stage = sink if sink is not None else (lambda *_a, **_k: None)
     (img_path, output_dir, params, format_arg, quality, force, copy_exif_flag,
      max_dim, compare_flag, global_only, bit_depth, fail_on_qa, save_session,
      smart, linear_raw, raw_exposure, raw_contrast, raf_decoder,
      raf2jpeg_path, raf2jpeg_quality, fuji_match_strength, optical_correction,
-     input_root, review_root, review) = args
+     input_root, destination_stem, raf_exposure_bias, review_root, review) = args
+    processing_evidence = None
     t_start = time.time()
     try:
         fmt = output_format(img_path, format_arg)
@@ -416,23 +624,36 @@ def _process_single_impl(args, info, sink=None):
             fmt = "png"
 
         out_path = _destination_for_image(
-            img_path, output_dir, fmt, input_root=input_root,
+            img_path,
+            output_dir,
+            fmt,
+            input_root=input_root,
+            output_stem=destination_stem,
         )
         _assert_safe_destination(img_path, out_path)
 
-        if out_path.exists() and not force:
+        if os.path.lexists(os.fspath(out_path)) and not force:
             if review:
                 _maybe_write_skip_record(
                     review_root, img_path, out_path, input_root, params.get("recipe"),
                 )
-            return (img_path.name, "skipped")
+            return (str(img_path), "skipped", None)
 
         stage("stage", {"stage": "decode"})
         if linear_raw and Path(img_path).suffix.lower() in RAW_EXTENSIONS:
+            decode_info = {}
             img_bgr = _linear_raw_to_engine_bgr(
-                img_path, exposure=raw_exposure, contrast=raw_contrast,
+                img_path,
+                exposure=raw_exposure,
+                contrast=raw_contrast,
+                apply_exposure_bias=raf_exposure_bias,
+                decode_info=decode_info,
             )
-            color_context = color_context_for_path(img_path)
+            color_context = color_context_for_path(
+                img_path,
+                apply_exposure_bias=raf_exposure_bias,
+                raw_exposure_info=decode_info,
+            )
         else:
             correction_status = {}
             img_bgr, color_context = imread_engine_with_context(
@@ -443,6 +664,7 @@ def _process_single_impl(args, info, sink=None):
                 fuji_match_strength=fuji_match_strength,
                 optical_correction=optical_correction,
                 correction_status=correction_status,
+                apply_exposure_bias=raf_exposure_bias,
             )
             if optical_correction:
                 print(f"  ℹ {img_path.name}: Lensfun {correction_status.get('reason') or correction_status.get('applied', ())}")
@@ -472,7 +694,12 @@ def _process_single_impl(args, info, sink=None):
 
         review_meta = {"faces": [], "qa": []}
         if global_only:
+            stage("stage", {"stage": "global_finish"})
             result = _apply_global_finish(img_bgr, dict(effective_params))
+            _result_info(result, info)
+            processing_evidence = _processing_evidence(
+                result, global_only=True, color_context=color_context
+            )
         else:
             global _worker_engine
             if _worker_engine is not None:
@@ -487,6 +714,9 @@ def _process_single_impl(args, info, sink=None):
                     img_bgr, progress_cb=sink, **dict(effective_params)
                 )
                 _result_info(result, info)
+                processing_evidence = _processing_evidence(
+                    result, color_context=color_context
+                )
                 if review:
                     review_meta = result_review_meta(result, _scale)
                 if fail_on_qa:
@@ -505,7 +735,7 @@ def _process_single_impl(args, info, sink=None):
                                     relative=_review_relative(img_path, input_root),
                                     elapsed_s=time.time() - t_start,
                                 ))
-                            return (img_path.name, f"QA_FAIL: {reasons}")
+                            return (str(img_path), f"QA_FAIL: {reasons}", processing_evidence)
             finally:
                 if should_close:
                     engine.close()
@@ -538,6 +768,7 @@ def _process_single_impl(args, info, sink=None):
         exif_bytes = read_exif_bytes(img_path) if copy_exif_flag else None
         c2pa_manifest = read_c2pa_manifest(img_path) if copy_exif_flag else None
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        _assert_safe_destination(img_path, out_path)
         write_image_with_color_context(
             str(out_path),
             result,
@@ -561,7 +792,11 @@ def _process_single_impl(args, info, sink=None):
             try:
                 _save_session(effective_params, img_path, out_path, save_path)
             except (OSError, ValueError) as e:
-                return (img_path.name, f"saved_image_but_session_failed: {e}")
+                return (
+                    str(img_path),
+                    f"saved_image_but_session_failed: {e}",
+                    processing_evidence,
+                )
 
         if review:
             _safe_write_review_record(review_root, ReviewRecord(
@@ -576,7 +811,7 @@ def _process_single_impl(args, info, sink=None):
                 elapsed_s=time.time() - t_start,
             ))
 
-        return (img_path.name, "done")
+        return (str(img_path), "done", processing_evidence)
     except Exception as e:
         from retouch.utils import log_crash
         log_crash(e, {
@@ -599,7 +834,7 @@ def _process_single_impl(args, info, sink=None):
                 relative=_review_relative(img_path, input_root),
                 elapsed_s=time.time() - t_start,
             ))
-        return (img_path.name, f"failed: {e}")
+        return (str(img_path), f"failed: {e}", processing_evidence)
 
 
 def _recipe_defaults(recipe_name):
@@ -666,8 +901,6 @@ def find_images(input_path: str, recursive: bool) -> list[Path]:
     pattern = "**/*" if recursive else "*"
     files = []
     for f in path.glob(pattern):
-        # Hidden files include the ``.<stem>.tmp-*`` partial writes that
-        # retouch.io's atomic writer leaves only after a hard kill.
         if f.name.startswith("."):
             continue
         if f.suffix.lower() in IMAGE_EXTENSIONS:
@@ -681,10 +914,12 @@ def _destination_for_image(
     fmt: str,
     *,
     input_root: Optional[Path] = None,
+    output_stem: Optional[str] = None,
 ) -> Path:
     """Build one deterministic destination without flattening recursive input."""
+    stem = output_stem or image_path.stem
     if output_dir is None:
-        return image_path.with_suffix(f".{fmt}")
+        return image_path.with_name(f"{stem}.{fmt}")
     if input_root is not None:
         try:
             relative = image_path.resolve().relative_to(Path(input_root).resolve())
@@ -694,7 +929,7 @@ def _destination_for_image(
             ) from exc
     else:
         relative = Path(image_path.name)
-    return output_dir / relative.parent / f"{relative.stem}.{fmt}"
+    return output_dir / relative.parent / f"{output_stem or relative.stem}.{fmt}"
 
 
 def _path_key(path: Path) -> str:
@@ -707,11 +942,18 @@ def _path_key(path: Path) -> str:
 
 
 def _assert_safe_destination(source: Path, destination: Path) -> None:
+    # Path.exists() follows a symlink and returns False for a dangling one.
+    # Writers may then follow that link and create an external target, so
+    # output leaf symlinks are never valid CLI destinations.
+    if os.path.islink(os.fspath(destination)):
+        raise ValueError(
+            f"Refusing to write through symlink destination {destination}"
+        )
     if _path_key(source) == _path_key(destination):
         raise ValueError(
             f"Refusing to overwrite source image {source} with its own output"
         )
-    if source.exists() and destination.exists():
+    if os.path.lexists(os.fspath(source)) and os.path.lexists(os.fspath(destination)):
         try:
             aliases_source = os.path.samefile(str(source), str(destination))
         except OSError:
@@ -731,6 +973,7 @@ def _preflight_destinations(
     recursive_root: Optional[Path],
     compare: bool,
     save_session: Any,
+    output_stems: Optional[Dict[str, str]] = None,
 ) -> None:
     """Reject source overwrites and any duplicate artifact before processing."""
     if output_dir is not None and recursive_root is not None:
@@ -751,7 +994,11 @@ def _preflight_destinations(
         if bit_depth == 16 and fmt not in ("png", "tif", "tiff"):
             fmt = "png"
         output_path = _destination_for_image(
-            image_path, output_dir, fmt, input_root=recursive_root,
+            image_path,
+            output_dir,
+            fmt,
+            input_root=recursive_root,
+            output_stem=(output_stems or {}).get(_path_key(image_path)),
         )
         artifacts = [output_path]
         if compare:
@@ -767,7 +1014,7 @@ def _preflight_destinations(
 
         for destination in artifacts:
             _assert_safe_destination(image_path, destination)
-            if destination.exists():
+            if os.path.lexists(os.fspath(destination)):
                 for source_path in files:
                     try:
                         aliases_input = os.path.samefile(
@@ -794,17 +1041,8 @@ def _preflight_destinations(
             destinations[key] = image_path
 
 
-# Measured from a real 5-image / 44MB "Priority for Printing" batch vs. its
-# `--compare` fullres output (84MB, 10 files: image + compare pair per input)
-# on 2026-09-05/06 renders -- ratio ~1.9. Rounded up to 2.0 since this has no
-# visibility into recipe-specific output format/bit-depth/compression choices
-# and is meant to warn before the estimate itself runs low, not fit tightly.
 _ESTIMATED_OUTPUT_BYTES_PER_INPUT_BYTE = 2.0
-
-# Minimum free space to leave after the estimated run, so an unrelated
-# concurrent process (or the estimate itself running low) doesn't drive the
-# volume to 0 bytes free.
-_MIN_FREE_BYTES_AFTER_RUN = 5 * 1024 * 1024 * 1024  # 5 GiB
+_MIN_FREE_BYTES_AFTER_RUN = 5 * 1024 * 1024 * 1024
 
 
 def _export_social_crops(files, output_dir, args, recursive_root, formats) -> None:
@@ -833,56 +1071,48 @@ def _export_social_crops(files, output_dir, args, recursive_root, formats) -> No
 
 
 def _nearest_existing_ancestor(path: Path) -> Path:
-    """Return the nearest existing ancestor for a possibly-new output path."""
-    probe_dir = Path(path)
-    while not probe_dir.exists():
-        parent = probe_dir.parent
-        if parent == probe_dir:
+    """Find a real directory for disk-usage checks before output creation."""
+    probe = Path(path)
+    while not probe.exists():
+        parent = probe.parent
+        if parent == probe:
             break
-        probe_dir = parent
-    return probe_dir
+        probe = parent
+    return probe
 
 
-def _check_disk_space(files: list[Path], output_dir: Optional[Path], compare: bool) -> None:
-    """Warn if the destination volume(s) likely cannot hold this run.
+def _check_disk_space(
+    files: list[Path],
+    output_dir: Optional[Path],
+    compare: bool,
+    *,
+    enforce: bool = True,
+) -> list[str]:
+    """Estimate destination capacity without confusing compressed size for RAM.
 
-    Estimates output size from total input bytes, a measured output/input
-    ratio, and whether `--compare` doubles the per-image artifact count.
-    This is a warn-only heuristic (no recipe/format/bit-depth visibility),
-    not a hard guarantee — see `_ESTIMATED_OUTPUT_BYTES_PER_INPUT_BYTE`.
-
-    With an explicit output directory, every render targets its volume.  With
-    no ``--output``, the CLI writes each converted file next to its source, so
-    inputs on separate volumes must be estimated independently rather than
-    against the caller's current working directory.
+    The estimate is intentionally conservative and warn-oriented. Explicit
+    output paths use their nearest existing ancestor; in-place exports are
+    grouped by device because each source directory is a destination volume.
     """
     try:
         if output_dir is not None:
-            target_dir = output_dir
+            probe = _nearest_existing_ancestor(output_dir)
             volume_checks = [
-                (
-                    target_dir,
-                    _nearest_existing_ancestor(target_dir),
-                    sum(f.stat().st_size for f in files),
-                    len(files),
-                )
+                (output_dir, probe, sum(path.stat().st_size for path in files), len(files))
             ]
         else:
-            # Group by device so multiple source folders on one volume share
-            # one free-space estimate, while sources on different volumes are
-            # assessed against their own destination capacity.
             grouped: dict[int, tuple[Path, Path, int, int]] = {}
             for image_path in files:
-                target_dir = image_path.parent
-                probe_dir = _nearest_existing_ancestor(target_dir)
-                volume_key = probe_dir.stat().st_dev
-                prior = grouped.get(volume_key)
+                target = image_path.parent
+                probe = _nearest_existing_ancestor(target)
+                device = probe.stat().st_dev
+                prior = grouped.get(device)
                 size = image_path.stat().st_size
                 if prior is None:
-                    grouped[volume_key] = (target_dir, probe_dir, size, 1)
+                    grouped[device] = (target, probe, size, 1)
                 else:
                     first_target, first_probe, total, count = prior
-                    grouped[volume_key] = (
+                    grouped[device] = (
                         first_target,
                         first_probe,
                         total + size,
@@ -890,35 +1120,34 @@ def _check_disk_space(files: list[Path], output_dir: Optional[Path], compare: bo
                     )
             volume_checks = list(grouped.values())
     except OSError:
-        return  # Can't stat input/output volume — don't block on a guess.
+        return []
 
-    def _gb(n: float) -> str:
-        return f"{n / (1024 ** 3):.1f} GB"
-
-    for target_dir, probe_dir, total_input_bytes, input_count in volume_checks:
+    warnings_found: list[str] = []
+    for target, probe, total_input, count in volume_checks:
         try:
-            free_bytes = shutil.disk_usage(probe_dir).free
+            free_bytes = shutil.disk_usage(probe).free
         except OSError:
-            continue  # Can't stat this volume — don't block on a guess.
-
-        estimated_output_bytes = total_input_bytes * _ESTIMATED_OUTPUT_BYTES_PER_INPUT_BYTE
-        if compare:
-            estimated_output_bytes *= 2
-
-        projected_free = free_bytes - estimated_output_bytes
-        if projected_free >= _MIN_FREE_BYTES_AFTER_RUN:
             continue
-
-        print(
-            f"⚠ Disk space warning: {input_count} input file(s) total "
-            f"{_gb(total_input_bytes)}; estimated output ~{_gb(estimated_output_bytes)}. "
-            f"{_gb(free_bytes)} free on {target_dir}'s volume — after this run, "
-            f"only ~{_gb(max(projected_free, 0))} would remain "
-            f"(want at least {_gb(_MIN_FREE_BYTES_AFTER_RUN)}). "
-            f"This is an estimate, not exact. Free up space, target a different "
-            f"volume, or pass --skip-disk-check to proceed anyway."
+        estimated = total_input * _ESTIMATED_OUTPUT_BYTES_PER_INPUT_BYTE
+        if compare:
+            estimated *= 2
+        projected = free_bytes - estimated
+        if projected >= _MIN_FREE_BYTES_AFTER_RUN:
+            continue
+        message = (
+            f"{count} input file(s), estimated output ~{estimated / (1024 ** 3):.1f} GiB; "
+            f"{free_bytes / (1024 ** 3):.1f} GiB free on {target}'s volume, "
+            f"projected remainder ~{max(projected, 0) / (1024 ** 3):.1f} GiB "
+            f"(want at least {_MIN_FREE_BYTES_AFTER_RUN / (1024 ** 3):.1f} GiB)"
         )
-        sys.exit(1)
+        warnings_found.append(message)
+        if enforce:
+            print(
+                f"⚠ Disk space warning: {message}. Free space, choose another "
+                "volume, or pass --skip-disk-check to proceed."
+            )
+            sys.exit(1)
+    return warnings_found
 
 
 def _add_processing_arg(parser, spec):
@@ -1055,7 +1284,76 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Professional batch face retouching tool"
     )
-    parser.add_argument("input", nargs="?", help="Image file or directory")
+    parser.add_argument(
+        "input",
+        nargs="*",
+        help="One or more image files/directories (quote paths containing spaces)",
+    )
+    parser.add_argument(
+        "--input-list",
+        type=str,
+        default=None,
+        metavar="PATH.json",
+        help="Load literal input paths from a versioned JSON list",
+    )
+    parser.add_argument(
+        "--input-plan",
+        type=str,
+        default=None,
+        metavar="PATH.json",
+        help="Write the input selection/preflight plan and update per-file results",
+    )
+    parser.add_argument(
+        "--resume-plan",
+        type=str,
+        default=None,
+        metavar="PATH.json",
+        help="Reuse only rows whose prior source/output hashes and settings match",
+    )
+    parser.add_argument(
+        "--include",
+        action="append",
+        default=[],
+        metavar="PATTERN",
+        help="Include discovered paths matching PATTERN (repeatable)",
+    )
+    parser.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="PATTERN",
+        help="Exclude discovered paths matching PATTERN (repeatable)",
+    )
+    parser.add_argument(
+        "--include-hidden",
+        action="store_true",
+        help="Include hidden files/directories during folder discovery",
+    )
+    parser.add_argument(
+        "--raw-jpeg-policy",
+        choices=["error", "raw-only", "jpeg-only", "suffix"],
+        default="error",
+        help="Handle same-basename RAW+JPEG pairs (default: error)",
+    )
+    parser.add_argument(
+        "--input-check",
+        choices=["paths", "headers", "decode"],
+        default="paths",
+        help="Input validation level: paths, container headers, or full decode",
+    )
+    parser.add_argument(
+        "--max-input-pixels",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Reject header-checked images larger than N pixels (opt-in safety cap)",
+    )
+    parser.add_argument(
+        "--multi-frame-policy",
+        choices=["error", "first"],
+        default="error",
+        help="Header-check policy for multi-frame images (default: error)",
+    )
     parser.add_argument("-o", "--output", help="Output directory")
     parser.add_argument("-q", "--quality", type=int, default=95,
                         help="Output quality 1-100 (default: 95)")
@@ -1075,8 +1373,6 @@ def main() -> None:
                         help="Skip face detection and apply only global color/impact retouch")
     parser.add_argument("--optical-correction", action="store_true",
                         help="Apply verified Lensfun distortion/TCA/vignetting from EXIF; reports unavailable, unmatched, or precision-preserving skips")
-    parser.add_argument("--skip-disk-check", action="store_true",
-                        help="Skip the pre-run disk space estimate/warning")
     parser.add_argument("--preflight-check", action="store_true",
                         help="Run system pre-flight integrity checks (color "
                              "science, QA detectors, acceleration layer) and "
@@ -1115,14 +1411,28 @@ def main() -> None:
     # Batch
     parser.add_argument("--workers", type=int, default=max(1, cpu_count() // 2),
                         help="Parallel workers (default: CPU count / 2)")
+    parser.add_argument(
+        "--ram-budget-gib",
+        type=float,
+        default=None,
+        metavar="GIB",
+        help="Cap workers from the input-plan working-memory estimate (opt-in)",
+    )
+    parser.add_argument(
+        "--skip-disk-check",
+        action="store_true",
+        help="Skip the destination-volume free-space estimate",
+    )
+    parser.add_argument(
+        "--progress-file", type=str, default=None,
+        help="Write live batch progress JSON (default: <output>/.retouch-progress.json)",
+    )
+    parser.add_argument(
+        "--no-progress-file", action="store_true",
+        help="Disable the live progress JSON file",
+    )
     parser.add_argument("--no-compare", action="store_false", dest="compare",
                         help="Skip side-by-side comparison output")
-    parser.add_argument("--progress-file", type=str, default=None,
-                        metavar="PATH",
-                        help="Where to write the live progress JSON (default: "
-                             ".retouch-progress.json in the output folder)")
-    parser.add_argument("--no-progress-file", action="store_true",
-                        help="Do not write the live progress JSON")
     parser.add_argument("--no-exif", action="store_true",
                         help="Skip EXIF metadata copying")
     parser.add_argument("--fail-on-qa", action="store_true",
@@ -1190,7 +1500,7 @@ def main() -> None:
                         help="For RAW inputs: decode linear (gamma=1,1), optional "
                              "exposure/contrast develop, then gamma-encode into engine.")
     parser.add_argument("--raw-exposure", type=float, default=0.0,
-                        help="With --linear-raw: exposure stops (default 0)")
+                        help="With --linear-raw: additional exposure stops after RAF bias (default 0)")
     parser.add_argument("--raw-contrast", type=float, default=1.0,
                         help="With --linear-raw: linear contrast factor (default 1)")
     parser.add_argument(
@@ -1222,11 +1532,23 @@ def main() -> None:
         metavar="0-1",
         help="Camera-preview calibration strength with --raf-decoder rawpy-fuji-match (default: 0.85)",
     )
+    parser.add_argument(
+        "--no-raf-exposure-bias",
+        action="store_true",
+        help="With --raf-decoder rawpy (default): do not undo the RAF's recorded "
+             "RawExposureBias at decode, including --linear-raw",
+    )
 
     args = parser.parse_args()
 
     if not 0.0 <= args.fuji_match_strength <= 1.0:
         parser.error("--fuji-match-strength must be between 0 and 1")
+    if args.workers < 1:
+        parser.error("--workers must be at least 1")
+    if args.ram_budget_gib is not None and args.ram_budget_gib <= 0:
+        parser.error("--ram-budget-gib must be greater than 0")
+    if args.max_input_pixels is not None and args.max_input_pixels <= 0:
+        parser.error("--max-input-pixels must be greater than 0")
     social_formats = None
     if args.social_crops is not None:
         from retouch.social_crops import parse_formats
@@ -1301,14 +1623,87 @@ def main() -> None:
             sys.exit(1)
         return
 
-    input_path = Path(args.input)
+    input_tokens = list(args.input or [])
+    if args.input_list:
+        try:
+            input_tokens.extend(load_input_list(Path(args.input_list)))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f"✖ Could not load input list: {exc}")
+            sys.exit(1)
+    if args.input_plan and args.resume_plan:
+        if _path_key(Path(args.input_plan)) == _path_key(Path(args.resume_plan)):
+            print("✖ --input-plan and --resume-plan must be different files")
+            sys.exit(1)
+    if not input_tokens and args.resume_plan:
+        try:
+            resume_payload = json.loads(
+                Path(args.resume_plan).expanduser().read_text(encoding="utf-8")
+            )
+            input_tokens.extend(resume_payload.get("input_tokens", []))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f"✖ Could not load resume plan inputs: {exc}")
+            sys.exit(1)
+    if not input_tokens:
+        parser.error("an input file/directory or --input-list is required")
 
-    if not input_path.exists():
-        print(f"✖ Input not found: {input_path}")
+    try:
+        input_plan = build_input_plan(
+            input_tokens,
+            recursive=args.recursive,
+            include=args.include,
+            exclude=args.exclude,
+            include_hidden=args.include_hidden,
+            raw_jpeg_policy=args.raw_jpeg_policy,
+        )
+    except (OSError, ValueError) as exc:
+        print(f"✖ Input planning failed: {exc}")
         sys.exit(1)
 
-    files = find_images(args.input, args.recursive)
+    for row in input_plan.selected_records:
+        row.decoder_requested = (
+            args.raf_decoder
+            if row.source_kind == "raw"
+            else "pillow/opencv"
+        )
+
+    input_path = Path(input_tokens[0]).expanduser()
+    output_dir = Path(args.output).expanduser().resolve() if args.output else None
+    recursive_root = (
+        input_path.resolve()
+        if len(input_tokens) == 1 and input_path.is_dir() and args.recursive
+        else None
+    )
+
+    if args.input_check in ("headers", "decode"):
+        inspect_plan_headers(
+            input_plan,
+            max_pixels=args.max_input_pixels,
+            multi_frame_policy=args.multi_frame_policy,
+            raw_decoder=args.raf_decoder,
+            raf2jpeg_path=args.raf2jpeg_path,
+        )
+    if args.input_check == "decode":
+        decode_plan_inputs(
+            input_plan,
+            raw_decoder=args.raf_decoder,
+            raf2jpeg_path=args.raf2jpeg_path,
+            raf2jpeg_quality=args.raf2jpeg_quality,
+            fuji_match_strength=args.fuji_match_strength,
+            optical_correction=args.optical_correction,
+            apply_exposure_bias=not args.no_raf_exposure_bias,
+        )
+
+    files = input_plan.selected_paths
     if not files:
+        print_input_plan(input_plan)
+        if args.input_plan:
+            input_plan.write(Path(args.input_plan))
+        hard_input_failure = any(
+            row.status in {"missing", "rejected_not_regular_file"}
+            for row in input_plan.rows
+        )
+        if args.dry_run and not hard_input_failure:
+            return
         print("✖ No image files found")
         sys.exit(1)
 
@@ -1359,22 +1754,103 @@ def main() -> None:
             print(f"✖ Look extraction failed: {e}")
             sys.exit(1)
 
-    if args.dry_run:
-        print(f"Dry run — {len(files)} image(s) found:\n")
-        for f in files:
-            print(f"  {f}")
-        print(f"\nSettings: {params}")
-        print(f"Workers: {args.workers}")
+    output_stems = {
+        _path_key(Path(row.path)): row.output_stem
+        for row in input_plan.selected_records
+        if row.path and row.output_stem
+    }
+    attach_destinations(
+        input_plan,
+        output_dir=output_dir,
+        format_arg=args.format,
+        bit_depth=args.bit_depth,
+        compare=args.compare,
+        save_session=args.save_session,
+        recursive_root=recursive_root,
+        destination_builder=_destination_for_image,
+        output_format_resolver=output_format,
+    )
+    input_plan.config_fingerprint = stable_fingerprint({
+        "params": params,
+        "format": args.format,
+        "quality": args.quality,
+        "bit_depth": args.bit_depth,
+        "compare": args.compare,
+        "global_only": args.global_only,
+        "max_dim": args.max_dim,
+        "max_input_pixels": args.max_input_pixels,
+        "multi_frame_policy": args.multi_frame_policy,
+        "raw_decoder": args.raf_decoder,
+        "raf_exposure_bias": not args.no_raf_exposure_bias,
+        "raw_jpeg_policy": args.raw_jpeg_policy,
+    })
+    if args.resume_plan:
+        apply_resume_plan(
+            input_plan,
+            Path(args.resume_plan),
+            input_plan.config_fingerprint,
+            force=args.force,
+        )
+        verified = [
+            row for row in input_plan.selected_records
+            if row.status == "resume_verified"
+        ]
+        rerender = [
+            row for row in input_plan.selected_records
+            if row.status != "resume_verified"
+        ]
+        reasons: Dict[str, int] = {}
+        for row in rerender:
+            key = row.resume_reason or "not in resume plan"
+            reasons[key] = reasons.get(key, 0) + 1
+        reason_text = ", ".join(f"{count} {why}" for why, count in reasons.items())
+        print(
+            f"↺ Resume plan: {len(verified)} verified (skipped), "
+            f"{len(rerender)} to re-render"
+            + (f" ({reason_text})" if reason_text else "")
+        )
+    files = input_plan.execution_paths
+    # Rows the resume plan authorized to replace their own hash-verified prior
+    # output (see apply_resume_plan). Everything else keeps the global
+    # --force policy: an existing output is skipped unless -f is given.
+    replace_keys = {
+        _path_key(Path(row.path))
+        for row in input_plan.selected_records
+        if row.path and row.replace_prior_output
+    }
+
+    def _force_for(path: Path) -> bool:
+        return bool(args.force) or _path_key(path) in replace_keys
+
+    if args.ram_budget_gib is not None and files:
+        selected_sizes = [
+            row.estimated_working_bytes or 24 * 1024 * 1024
+            for row in input_plan.selected_records
+            if row.status != "resume_verified"
+        ]
+        largest_input = max(selected_sizes, default=24 * 1024 * 1024)
+        worker_cap = max(
+            1,
+            int((args.ram_budget_gib * (1024 ** 3)) // largest_input),
+        )
+        if worker_cap < args.workers:
+            print(
+                f"⚠ RAM budget caps workers from {args.workers} to {worker_cap} "
+                f"(largest estimated input {largest_input / (1024 ** 3):.2f} GiB)"
+            )
+            args.workers = worker_cap
+
+    if not files:
+        print_input_plan(input_plan)
+        if args.input_plan:
+            input_plan.write(Path(args.input_plan))
+        if input_plan.blocking_issues:
+            sys.exit(1)
+        print("✓ All selected inputs are already verified in the resume plan")
         return
 
-    params = _finalize_params(params)
-
-    output_dir = Path(args.output).expanduser().resolve() if args.output else None
-    recursive_root = (
-        input_path.expanduser().resolve()
-        if input_path.is_dir() and args.recursive
-        else None
-    )
+    validation_errors = [issue["message"] for issue in input_plan.blocking_issues]
+    preflight_error = "; ".join(validation_errors) if validation_errors else None
     try:
         _preflight_destinations(
             files,
@@ -1384,12 +1860,42 @@ def main() -> None:
             recursive_root=recursive_root,
             compare=args.compare,
             save_session=args.save_session,
+            output_stems=output_stems,
         )
     except (OSError, ValueError) as exc:
-        print(f"✖ Output preflight failed: {exc}")
-        sys.exit(1)
+        destination_error = str(exc)
+        preflight_error = "; ".join(
+            item for item in (preflight_error, destination_error) if item
+        )
+        # Record only the new destination problem; the plan's own blocking
+        # issues are already listed individually.
+        input_plan.add_issue("destination_preflight", destination_error)
+
     if not args.skip_disk_check:
-        _check_disk_space(files, output_dir, args.compare)
+        for warning in _check_disk_space(
+            files,
+            output_dir,
+            args.compare,
+            enforce=not args.dry_run,
+        ):
+            input_plan.add_issue("disk_space_estimate", warning, severity="warning")
+
+    if args.input_plan:
+        input_plan.write(Path(args.input_plan))
+
+    if args.dry_run:
+        print_input_plan(input_plan)
+        print(f"\nSettings: {params}")
+        print(f"Workers: {args.workers}")
+        if preflight_error:
+            print(f"⚠ Output preflight would block execution: {preflight_error}")
+        return
+
+    if preflight_error:
+        print(f"✖ Output preflight failed: {preflight_error}")
+        sys.exit(1)
+
+    params = _finalize_params(params)
     if output_dir:
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1397,10 +1903,21 @@ def main() -> None:
 
     t0 = time.time()
     done = skipped = failed = 0
-
-    progress_keys = {f: _progress_key(f, recursive_root) for f in files}
+    use_pool = args.workers > 1 and len(files) > 1
+    progress_keys = {}
+    used_progress_keys = set()
+    for index, path in enumerate(files):
+        key = _progress_key(path, recursive_root)
+        if key in used_progress_keys:
+            key = f"{index + 1}:{key}"
+            suffix = 2
+            while key in used_progress_keys:
+                key = f"{index + 1}.{suffix}:{_progress_key(path, recursive_root)}"
+                suffix += 1
+        used_progress_keys.add(key)
+        progress_keys[path] = key
     progress = BatchProgress(
-        [(progress_keys[f], image_megapixels(f)) for f in files]
+        [(progress_keys[path], image_megapixels(path)) for path in files]
     )
     if args.no_progress_file:
         progress_path = None
@@ -1410,281 +1927,375 @@ def main() -> None:
         progress_path = output_dir / ".retouch-progress.json"
     else:
         progress_path = None
-    use_pool = args.workers > 1 and len(files) > 1
-    # Worker processes need a multiprocessing queue; the serial path feeds
-    # the reporter thread through a plain in-process queue.
     progress_q = multiprocessing.Queue() if use_pool else queue.Queue()
     reporter = ProgressReporter(progress, progress_q, progress_path)
+    reporter.__enter__()
     interrupted = False
+    active_progress = {
+        "path": None, "key": None, "info": {}, "started": None, "finished": False,
+    }
 
-    try:
-        if use_pool:
-            pool_args = [
-                (f, output_dir, params, args.format, args.quality, args.force,
-                 not args.no_exif, args.max_dim, args.compare, args.global_only,
-                 args.bit_depth, args.fail_on_qa, args.save_session, args.smart,
-                 args.linear_raw, args.raw_exposure, args.raw_contrast,
-                 args.raf_decoder, args.raf2jpeg_path, args.raf2jpeg_quality,
-                 args.fuji_match_strength, args.optical_correction,
-                 recursive_root, review_root, args.review)
-                for f in files
-            ]
-            pool = ProcessPoolExecutor(
-                max_workers=args.workers,
-                initializer=_init_worker,
-                initargs=(progress_q, not args.global_only),
+    def _record_result(
+        path_value: str,
+        status: str,
+        processing_evidence: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        # In serial mode the input-plan write is the common completion path
+        # for successful, skipped, and rejected images. Use it to guarantee a
+        # finish event on every ordinary exit path without duplicating logic.
+        path_key = _path_key(Path(path_value))
+        if (
+            not use_pool
+            and active_progress["key"] is not None
+            and not active_progress["finished"]
+            and path_key == active_progress["path"]
+        ):
+            info = active_progress["info"]
+            info["seconds"] = round(time.time() - active_progress["started"], 3)
+            emit(
+                progress_q, active_progress["key"], "finish",
+                status=status, **info,
             )
-            try:
-                futures = {pool.submit(_process_single, a): a[0] for a in pool_args}
-                for future in as_completed(futures):
-                    f = futures[future]
+            active_progress["finished"] = True
+        row = input_plan.row_for(Path(path_value))
+        if row is None:
+            return
+        if processing_evidence is not None:
+            row.processing_evidence = processing_evidence
+        row.result_status = "done" if status == "done" else (
+            "skipped_existing" if status == "skipped" else "failed"
+        )
+        if status not in ("done", "skipped"):
+            row.result_message = status
+        row.source_sha256 = sha256_file(Path(path_value))
+        if status == "done" and row.planned_output:
+            row.output_sha256 = sha256_file(Path(row.planned_output))
+            row.artifact_sha256 = {
+                artifact: digest
+                for artifact in row.planned_artifacts
+                if (digest := sha256_file(Path(artifact))) is not None
+            }
+
+    if args.workers > 1 and len(files) > 1:
+        pool_args = [
+            (f, output_dir, params, args.format, args.quality, _force_for(f),
+             not args.no_exif, args.max_dim, args.compare, args.global_only,
+             args.bit_depth, args.fail_on_qa, args.save_session, args.smart,
+             args.linear_raw, args.raw_exposure, args.raw_contrast,
+             args.raf_decoder, args.raf2jpeg_path, args.raf2jpeg_quality,
+             args.fuji_match_strength, args.optical_correction,
+             recursive_root, output_stems.get(_path_key(f)),
+             not args.no_raf_exposure_bias, review_root, args.review,
+             progress_keys[f])
+            for f in files
+        ]
+        pool = ProcessPoolExecutor(
+            max_workers=args.workers,
+            initializer=_init_worker,
+            initargs=(progress_q, not args.global_only),
+        )
+        try:
+            futures = {pool.submit(_process_single, a): a[0] for a in pool_args}
+            for future in as_completed(futures):
+                path = futures[future]
+                key = progress_keys[path]
+                try:
+                    name, status, info = future.result()
+                except Exception as exc:
+                    name, status, info = path.name, f"failed: {exc}", {}
+                processing_evidence = info.pop("_processing_evidence", None)
+                _record_result(str(path), status, processing_evidence)
+                emit(progress_q, key, "finish", status=status, **info)
+                if status == "done":
+                    done += 1
+                elif status == "skipped":
+                    skipped += 1
+                else:
+                    failed += 1
+                    tqdm.write(f"  ✖ {name}: {status}")
+        except KeyboardInterrupt:
+            interrupted = True
+            tqdm.write("\n  ■ Stopping: cancelling queued images and ending active workers…")
+            _stop_pool(pool)
+            _remove_partial_outputs(output_dir)
+        finally:
+            if not interrupted:
+                pool.shutdown(wait=True)
+    else:
+        engine = None if args.global_only else RetouchEngine()
+        try:
+            for f in files:
+                active_progress.update({
+                    "path": _path_key(f),
+                    "key": progress_keys[f],
+                    "info": {},
+                    "started": time.time(),
+                    "finished": False,
+                })
+                sink = make_event_sink(progress_q, progress_keys[f])
+                emit(progress_q, progress_keys[f], "start", worker=None)
+                img_t_start = active_progress["started"]
+                fmt = output_format(f, args.format)
+                # For 16-bit, force PNG or TIFF
+                if args.bit_depth == 16 and fmt not in ("png", "tif", "tiff"):
+                    fmt = "png"
+                out_path = _destination_for_image(
+                    f,
+                    output_dir,
+                    fmt,
+                    input_root=recursive_root,
+                    output_stem=output_stems.get(_path_key(f)),
+                )
+                try:
+                    _assert_safe_destination(f, out_path)
+                except Exception as e:
+                    failed += 1
+                    tqdm.write(f"  ✖ {f.name}: {e}")
+                    _record_result(str(f), f"failed: {e}")
+                    continue
+                if os.path.lexists(os.fspath(out_path)) and not _force_for(f):
+                    skipped += 1
+                    active_progress["info"]["out_path"] = str(out_path)
+                    _record_result(str(f), "skipped")
+                    if args.review:
+                        _maybe_write_skip_record(
+                            review_root, f, out_path, recursive_root, params.get("recipe"),
+                        )
+                    continue
+
+                processing_evidence = None
+                sink("stage", {"stage": "decode"})
+
+                if args.linear_raw and f.suffix.lower() in RAW_EXTENSIONS:
                     try:
-                        name, status, info = future.result()
-                    except Exception as e:  # e.g. BrokenProcessPool
-                        name, status, info = f.name, f"failed: {e}", {}
-                    emit(progress_q, progress_keys[f], "finish",
-                         status=status, **info)
-                    if status == "done":
-                        done += 1
-                    elif status == "skipped":
-                        skipped += 1
-                    else:
+                        decode_info = {}
+                        img_bgr = _linear_raw_to_engine_bgr(
+                            f,
+                            exposure=args.raw_exposure,
+                            contrast=args.raw_contrast,
+                            apply_exposure_bias=not args.no_raf_exposure_bias,
+                            decode_info=decode_info,
+                        )
+                        color_context = color_context_for_path(
+                            f,
+                            apply_exposure_bias=not args.no_raf_exposure_bias,
+                            raw_exposure_info=decode_info,
+                        )
+                    except Exception as e:
                         failed += 1
-                        tqdm.write(f"  ✖ {name}: {status}")
-            except KeyboardInterrupt:
-                interrupted = True
-                tqdm.write("\n  ■ Stopping: cancelling queued images and "
-                           "ending the ones in progress…")
-                _stop_pool(pool)
-                _remove_partial_outputs(output_dir)
-            finally:
-                if not interrupted:
-                    pool.shutdown(wait=True)
-        else:
-            engine = None if args.global_only else RetouchEngine()
-            try:
-                for f in files:
-                    key = progress_keys[f]
-                    sink = make_event_sink(progress_q, key)
-                    info: Dict[str, Any] = {}
-                    status = "failed"
-                    t_img = time.time()
-                    emit(progress_q, key, "start", worker=None)
-                    img_t_start = t_img
-                    try:
-                        fmt = output_format(f, args.format)
-                        # For 16-bit, force PNG or TIFF
-                        if args.bit_depth == 16 and fmt not in ("png", "tif", "tiff"):
-                            fmt = "png"
-                        out_path = _destination_for_image(
-                            f, output_dir, fmt, input_root=recursive_root,
-                        )
-                        _assert_safe_destination(f, out_path)
-
-                        # Skip before decoding: a resumed batch should not pay a
-                        # full 26 MP decode for every image it already rendered.
-                        if out_path.exists() and not args.force:
-                            skipped += 1
-                            status = "skipped"
-                            if args.review:
-                                _maybe_write_skip_record(
-                                    review_root, f, out_path, recursive_root, params.get("recipe"),
-                                )
-                            continue
-
-                        sink("stage", {"stage": "decode"})
-                        if args.linear_raw and f.suffix.lower() in RAW_EXTENSIONS:
-                            try:
-                                img_bgr = _linear_raw_to_engine_bgr(
-                                    f, exposure=args.raw_exposure, contrast=args.raw_contrast,
-                                )
-                                color_context = color_context_for_path(f)
-                            except Exception as e:
-                                failed += 1
-                                status = f"failed: linear-raw {e}"
-                                tqdm.write(f"  ✖ {f.name}: linear-raw {e}")
-                                if args.review:
-                                    _safe_write_review_record(review_root, ReviewRecord(
-                                        source=str(f.resolve()), status="failed", error=str(e),
-                                        recipe=params.get("recipe"),
-                                        relative=_review_relative(f, recursive_root),
-                                        elapsed_s=time.time() - img_t_start,
-                                    ))
-                                continue
-                        else:
-                            correction_status = {}
-                            try:
-                                img_bgr, color_context = imread_engine_with_context(
-                                    f,
-                                    raw_decoder=args.raf_decoder,
-                                    raf2jpeg_path=args.raf2jpeg_path,
-                                    raf2jpeg_quality=args.raf2jpeg_quality,
-                                    fuji_match_strength=args.fuji_match_strength,
-                                    optical_correction=args.optical_correction,
-                                    correction_status=correction_status,
-                                )
-                            except (OSError, ValueError, RuntimeError) as e:
-                                failed += 1
-                                status = f"failed: {e}"
-                                tqdm.write(f"  ✖ {f.name}: {e}")
-                                if args.review:
-                                    _safe_write_review_record(review_root, ReviewRecord(
-                                        source=str(f.resolve()), status="failed", error=str(e),
-                                        recipe=params.get("recipe"),
-                                        relative=_review_relative(f, recursive_root),
-                                        elapsed_s=time.time() - img_t_start,
-                                    ))
-                                continue
-                            if args.optical_correction:
-                                tqdm.write(
-                                    f"  ℹ {f.name}: Lensfun "
-                                    f"{correction_status.get('reason') or correction_status.get('applied', ())}"
-                                )
-                        if img_bgr is None:
-                            failed += 1
-                            status = "failed: failed to read"
-                            tqdm.write(f"  ✖ {f.name}: failed to read")
-                            if args.review:
-                                _safe_write_review_record(review_root, ReviewRecord(
-                                    source=str(f.resolve()), status="failed", error="failed to read",
-                                    recipe=params.get("recipe"),
-                                    relative=_review_relative(f, recursive_root),
-                                    elapsed_s=time.time() - img_t_start,
-                                ))
-                            continue
-
-                        orig_shape = img_bgr.shape[:2]
-                        original_full = img_bgr.copy() if args.compare else None
-                        img_bgr, _scale = resize_for_processing(img_bgr, args.max_dim)
-
-                        # F10: --smart — per-image analysis overrides recipe/params.
-                        effective_params = params
-                        if args.smart:
-                            try:
-                                effective_params, suggestion = _smart_params_for_image(
-                                    img_bgr, params
-                                )
-                                tqdm.write(
-                                    f"  🧠 {f.name}: {suggestion.recipe} "
-                                    f"({len(suggestion.params)} overrides)"
-                                )
-                            except (ValueError, RuntimeError) as e:
-                                tqdm.write(
-                                    f"  ⚠ {f.name}: smart analysis failed ({e}), "
-                                    f"using base params"
-                                )
-
-                        review_meta = {"faces": [], "qa": []}
-                        if args.global_only:
-                            result = _apply_global_finish(img_bgr, dict(effective_params))
-                        else:
-                            result = engine.process(
-                                img_bgr, progress_cb=sink, **dict(effective_params)
-                            )
-                            _result_info(result, info)
-                            if args.review:
-                                review_meta = result_review_meta(result, _scale)
-                            if args.fail_on_qa:
-                                qa = getattr(result, 'qa', [])
-                                if qa:
-                                    flagged = [w for w in qa if w.flagged]
-                                    if flagged:
-                                        reasons = "; ".join(f"{w.detector}={w.score:.2f}" for w in flagged)
-                                        tqdm.write(f"  ✖ {f.name}: QA_FAIL: {reasons}")
-                                        failed += 1
-                                        status = f"QA_FAIL: {reasons}"
-                                        if args.review:
-                                            _safe_write_review_record(review_root, ReviewRecord(
-                                                source=str(f.resolve()), status="qa_fail",
-                                                recipe=params.get("recipe"),
-                                                faces=review_meta.get("faces", []),
-                                                qa=review_meta.get("qa", []),
-                                                relative=_review_relative(f, recursive_root),
-                                                elapsed_s=time.time() - img_t_start,
-                                            ))
-                                        continue
-
-                        if _scale < 1.0:
-                            result = cv2.resize(result, (orig_shape[1], orig_shape[0]),
-                                                interpolation=cv2.INTER_LINEAR)
-                
-                        # Embed the working-space ICC selected by ColorContext. The
-                        # source ICC is never reattached to already-converted pixels.
-                        sink("stage", {"stage": "write"})
-                        from retouch.io import read_exif_bytes
-                        exif_bytes = read_exif_bytes(f) if not args.no_exif else None
-                        c2pa_manifest = read_c2pa_manifest(f) if not args.no_exif else None
-                        out_path.parent.mkdir(parents=True, exist_ok=True)
-                        write_image_with_color_context(
-                            str(out_path),
-                            result,
-                            color_context,
-                            bit_depth=args.bit_depth,
-                            quality=args.quality,
-                            exif=exif_bytes,
-                            c2pa_manifest=c2pa_manifest,
-                        )
-                        info["out_path"] = str(out_path)
-
-                        if args.compare:
-                            sink("stage", {"stage": "compare"})
-                            compare_path = out_path.with_name(
-                                f"{out_path.stem}_compare{out_path.suffix}"
-                            )
-                            _assert_safe_destination(f, compare_path)
-                            make_comparison(original_full, result, compare_path, fmt, args.quality)
-                            info["compare_path"] = str(compare_path)
-
-                        if args.save_session is not None:
-                            save_path = None if args.save_session is True else args.save_session
-                            try:
-                                written = _save_session(effective_params, f, out_path, save_path)
-                            except (OSError, ValueError) as e:
-                                tqdm.write(f"  ⚠ {f.name}: could not save session: {e}")
-                            else:
-                                tqdm.write(f"  💾 session → {written}")
+                        tqdm.write(f"  ✖ {f.name}: linear-raw {e}")
+                        _record_result(str(f), f"linear-raw {e}")
                         if args.review:
                             _safe_write_review_record(review_root, ReviewRecord(
-                                source=str(f.resolve()),
-                                output=str(out_path),
-                                compare=str(compare_path) if args.compare else None,
-                                status="done",
+                                source=str(f.resolve()), status="failed", error=str(e),
                                 recipe=params.get("recipe"),
-                                faces=review_meta.get("faces", []),
-                                qa=review_meta.get("qa", []),
                                 relative=_review_relative(f, recursive_root),
                                 elapsed_s=time.time() - img_t_start,
                             ))
-                        done += 1
-                        status = "done"
-                    finally:
-                        info["seconds"] = round(time.time() - t_img, 3)
-                        emit(progress_q, key, "finish", status=status, **info)
-            except KeyboardInterrupt:
-                interrupted = True
-                tqdm.write("\n  ■ Stopped.")
-            finally:
-                if engine is not None:
-                    engine.close()
-    finally:
-        summary = reporter.close()
-        if use_pool:
-            # Nothing reads the queue any more; don't block exit flushing it.
-            progress_q.cancel_join_thread()
-            progress_q.close()
+                        continue
+                else:
+                    correction_status = {}
+                    try:
+                        img_bgr, color_context = imread_engine_with_context(
+                            f,
+                            raw_decoder=args.raf_decoder,
+                            raf2jpeg_path=args.raf2jpeg_path,
+                            raf2jpeg_quality=args.raf2jpeg_quality,
+                            fuji_match_strength=args.fuji_match_strength,
+                            optical_correction=args.optical_correction,
+                            correction_status=correction_status,
+                            apply_exposure_bias=not args.no_raf_exposure_bias,
+                        )
+                    except (OSError, ValueError, RuntimeError) as e:
+                        failed += 1
+                        tqdm.write(f"  ✖ {f.name}: {e}")
+                        _record_result(str(f), str(e))
+                        if args.review:
+                            _safe_write_review_record(review_root, ReviewRecord(
+                                source=str(f.resolve()), status="failed", error=str(e),
+                                recipe=params.get("recipe"),
+                                relative=_review_relative(f, recursive_root),
+                                elapsed_s=time.time() - img_t_start,
+                            ))
+                        continue
+                    if args.optical_correction:
+                        tqdm.write(
+                            f"  ℹ {f.name}: Lensfun "
+                            f"{correction_status.get('reason') or correction_status.get('applied', ())}"
+                        )
+                if img_bgr is None:
+                    failed += 1
+                    tqdm.write(f"  ✖ {f.name}: failed to read")
+                    _record_result(str(f), "failed to read")
+                    if args.review:
+                        _safe_write_review_record(review_root, ReviewRecord(
+                            source=str(f.resolve()), status="failed", error="failed to read",
+                            recipe=params.get("recipe"),
+                            relative=_review_relative(f, recursive_root),
+                            elapsed_s=time.time() - img_t_start,
+                        ))
+                    continue
 
+                orig_shape = img_bgr.shape[:2]
+                original_full = img_bgr.copy() if args.compare else None
+                img_bgr, _scale = resize_for_processing(img_bgr, args.max_dim)
+
+                # F10: --smart — per-image analysis overrides recipe/params.
+                effective_params = params
+                if args.smart:
+                    try:
+                        effective_params, suggestion = _smart_params_for_image(
+                            img_bgr, params
+                        )
+                        tqdm.write(
+                            f"  🧠 {f.name}: {suggestion.recipe} "
+                            f"({len(suggestion.params)} overrides)"
+                        )
+                    except (ValueError, RuntimeError) as e:
+                        tqdm.write(
+                            f"  ⚠ {f.name}: smart analysis failed ({e}), "
+                            f"using base params"
+                        )
+
+                review_meta = {"faces": [], "qa": []}
+                if args.global_only:
+                    sink("stage", {"stage": "global_finish"})
+                    result = _apply_global_finish(img_bgr, dict(effective_params))
+                    _result_info(result, active_progress["info"])
+                    processing_evidence = _processing_evidence(
+                        result, global_only=True, color_context=color_context
+                    )
+                else:
+                    result = engine.process(
+                        img_bgr, progress_cb=sink, **dict(effective_params)
+                    )
+                    _result_info(result, active_progress["info"])
+                    processing_evidence = _processing_evidence(
+                        result, color_context=color_context
+                    )
+                    if args.review:
+                        review_meta = result_review_meta(result, _scale)
+                    if args.fail_on_qa:
+                        qa = getattr(result, 'qa', [])
+                        if qa:
+                            flagged = [w for w in qa if w.flagged]
+                            if flagged:
+                                reasons = "; ".join(f"{w.detector}={w.score:.2f}" for w in flagged)
+                                print(f"  ✖ {f.name}: QA_FAIL: {reasons}")
+                                failed += 1
+                                _record_result(
+                                    str(f), f"QA_FAIL: {reasons}", processing_evidence
+                                )
+                                if args.review:
+                                    _safe_write_review_record(review_root, ReviewRecord(
+                                        source=str(f.resolve()), status="qa_fail",
+                                        recipe=params.get("recipe"),
+                                        faces=review_meta.get("faces", []),
+                                        qa=review_meta.get("qa", []),
+                                        relative=_review_relative(f, recursive_root),
+                                        elapsed_s=time.time() - img_t_start,
+                                    ))
+                                continue
+
+                if _scale < 1.0:
+                    result = cv2.resize(result, (orig_shape[1], orig_shape[0]),
+                                        interpolation=cv2.INTER_LINEAR)
+
+                try:
+                    # Embed the working-space ICC selected by ColorContext.
+                    # The source ICC is never reattached to converted pixels.
+                    from retouch.io import read_exif_bytes
+                    exif_bytes = read_exif_bytes(f) if not args.no_exif else None
+                    c2pa_manifest = read_c2pa_manifest(f) if not args.no_exif else None
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    _assert_safe_destination(f, out_path)
+                    sink("stage", {"stage": "write"})
+                    write_image_with_color_context(
+                        str(out_path),
+                        result,
+                        color_context,
+                        bit_depth=args.bit_depth,
+                        quality=args.quality,
+                        exif=exif_bytes,
+                        c2pa_manifest=c2pa_manifest,
+                    )
+                    active_progress["info"]["out_path"] = str(out_path)
+
+                    if args.compare:
+                        sink("stage", {"stage": "compare"})
+                        compare_path = out_path.with_name(
+                            f"{out_path.stem}_compare{out_path.suffix}"
+                        )
+                        _assert_safe_destination(f, compare_path)
+                        make_comparison(
+                            original_full, result, compare_path, fmt, args.quality
+                        )
+                        active_progress["info"]["compare_path"] = str(compare_path)
+                except Exception as e:
+                    failed += 1
+                    tqdm.write(f"  ✖ {f.name}: export failed: {e}")
+                    _record_result(str(f), f"failed: {e}", processing_evidence)
+                    continue
+
+                if args.save_session is not None:
+                    save_path = None if args.save_session is True else args.save_session
+                    try:
+                        written = _save_session(effective_params, f, out_path, save_path)
+                    except (OSError, ValueError) as e:
+                        tqdm.write(f"  ⚠ {f.name}: could not save session: {e}")
+                        _record_result(
+                            str(f),
+                            f"saved_image_but_session_failed: {e}",
+                            processing_evidence,
+                        )
+                        failed += 1
+                        continue
+                    else:
+                        tqdm.write(f"  💾 session → {written}")
+                if args.review:
+                    _safe_write_review_record(review_root, ReviewRecord(
+                        source=str(f.resolve()),
+                        output=str(out_path),
+                        compare=str(compare_path) if args.compare else None,
+                        status="done",
+                        recipe=params.get("recipe"),
+                        faces=review_meta.get("faces", []),
+                        qa=review_meta.get("qa", []),
+                        relative=_review_relative(f, recursive_root),
+                        elapsed_s=time.time() - img_t_start,
+                    ))
+                done += 1
+                _record_result(str(f), "done", processing_evidence)
+        except KeyboardInterrupt:
+            interrupted = True
+            if active_progress["key"] is not None and not active_progress["finished"]:
+                info = active_progress["info"]
+                info["seconds"] = round(time.time() - active_progress["started"], 3)
+                emit(
+                    progress_q, active_progress["key"], "finish",
+                    status="failed: interrupted", **info,
+                )
+                active_progress["finished"] = True
+            tqdm.write("\n  ■ Stopped.")
+        finally:
+            if engine is not None:
+                engine.close()
+
+    summary = reporter.close()
+    if use_pool:
+        progress_q.cancel_join_thread()
+        progress_q.close()
     elapsed = time.time() - t0
     heading = "Stopped" if interrupted else "Done"
     print(f"\n{heading} — {done} processed, {skipped} skipped, {failed} failed"
           f"  ({elapsed:.1f}s)")
-    # The first summary line repeats the counts above, except that after a
-    # stop it also names the unfinished and not-started images.
     for line in (summary if interrupted else summary[1:]):
         print(line)
     if progress_path is not None:
         print(f"Progress file: {progress_path}")
+    if args.input_plan:
+        input_plan.write(Path(args.input_plan))
 
-    # After a Ctrl-C these still cover the images that finished.
     if social_formats:
         _export_social_crops(
             files, output_dir, args, recursive_root, social_formats,
@@ -1700,6 +2311,8 @@ def main() -> None:
         print("Run the same command again to continue: finished images are "
               "skipped and the rest are rendered.")
         sys.exit(130)
+    if failed:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

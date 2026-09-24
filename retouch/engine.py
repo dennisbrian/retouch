@@ -77,10 +77,11 @@ from __future__ import annotations
 import copy
 import functools
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import cv2
 import numpy as np
@@ -89,6 +90,7 @@ import logging
 from contextvars import ContextVar
 
 logger = logging.getLogger(__name__)
+
 
 # ----------------------------------------------------------------------------
 # Live progress reporting (``RetouchEngine.process(progress_cb=...)``).
@@ -200,6 +202,12 @@ class _ProgressStageProxy:
     def __getattr__(self, attr: str) -> Any:
         return getattr(self._stage, attr)
 
+
+# Some tests and lightweight integrations construct an engine with ``__new__``
+# and initialize only the components they exercise.  Guard lazy per-instance
+# lock creation so those engines still get the same diagnostic isolation.
+_ENGINE_LOCK_INIT_GUARD = threading.Lock()
+
 from .detection import FaceDetector, FaceData, FaceContext
 from .lighting import LightDirection, estimate_light_direction
 from .parsing import FaceParser, FaceRegions
@@ -209,7 +217,7 @@ from .makeup_v2 import MakeupEngineV2
 from .frequency import FrequencySeparator, _texture_adaptation_factor
 from .perf_optimizations import (
     FaceProcessorPool,
-    _accum,  # noqa: F401  re-exported; tests import it from retouch.engine
+    _accum,
     _FaceResult,
     _norm_mask,
     _process_face_core,
@@ -225,7 +233,6 @@ from .harmonizer import BackgroundHarmonizer
 from .background import BackgroundReplacer
 from . import grain, highlight, tonal, qa_detectors
 from .qa_detectors import QAWarning
-from .qa_backoff import QABackoff
 from .hair import HairEnhancer
 from .relight import Relighter
 from .enhance import AIEnhancer
@@ -816,6 +823,8 @@ class ProcessingResult(np.ndarray):
     can treat it directly as a standard BGR image array.  ``precision`` and
     ``precision_metadata`` state what precision the returned pixels actually
     carry; they do not infer 16-bit quality from a container name.
+    ``qa_provenance`` identifies the reference and comparison stages used by
+    the built-in QA evidence.
     """
 
     def __new__(
@@ -837,6 +846,7 @@ class ProcessingResult(np.ndarray):
         fa02_diagnostics: Optional[List[Optional[Dict[str, Any]]]] = None,
         precision: Optional[ProcessingPrecision] = None,
         source_dtype: Optional[Any] = None,
+        qa_provenance: Optional[Dict[str, Any]] = None,
         # Appended to preserve positional construction of this ndarray
         # subclass; P7 diagnostics are optional metadata only.
         p7_diagnostics: Optional[Dict[str, Any]] = None,
@@ -857,6 +867,7 @@ class ProcessingResult(np.ndarray):
         obj.safe_auto_decisions = list(safe_auto_decisions or [])
         obj.runtime_diagnostics = dict(runtime_diagnostics or {})
         obj.fa02_diagnostics = list(fa02_diagnostics or [])
+        obj.qa_provenance = dict(qa_provenance or {})
         obj.p7_diagnostics = dict(p7_diagnostics or {})
         obj.precision = precision or ProcessingPrecision.from_output(
             np.asarray(image), source_dtype=source_dtype
@@ -882,6 +893,7 @@ class ProcessingResult(np.ndarray):
         self.safe_auto_decisions = getattr(obj, "safe_auto_decisions", [])
         self.runtime_diagnostics = getattr(obj, "runtime_diagnostics", {})
         self.fa02_diagnostics = getattr(obj, "fa02_diagnostics", [])
+        self.qa_provenance = getattr(obj, "qa_provenance", {})
         self.p7_diagnostics = getattr(obj, "p7_diagnostics", {})
         self.precision = getattr(obj, "precision", None)
         self.precision_metadata = getattr(obj, "precision_metadata", {})
@@ -1155,10 +1167,79 @@ def build_context(
 # ---------------------------------------------------------------------------
 
 
+QA_REFERENCE_SCHEMA = "retouch_qa_reference_v1"
+
+
+def _resolve_qa_reference(
+    ctx: ProcessingContext,
+    comparison_img_bgr: np.ndarray,
+    *,
+    comparison_stage: str,
+    qa_ran: bool,
+) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Return the explicit QA reference and its stage/coverage metadata.
+
+    ``_run_global_phases`` receives an image after face processing.  Passing
+    that image back to reference-based detectors makes the face edit invisible
+    to preservation checks.  ``process`` captures a copy before entering the
+    face pipeline; this helper selects that copy and records a conservative
+    fallback when a direct/private caller did not provide one.
+    """
+    captured = getattr(ctx, "_qa_reference_img_bgr", None)
+    comparison = np.asarray(comparison_img_bgr)
+    captured_is_valid = (
+        isinstance(captured, np.ndarray)
+        and captured.ndim == comparison.ndim
+        and captured.shape == comparison.shape
+    )
+    if captured_is_valid:
+        reference = captured
+        reference_stage = "pre_face_post_input_preprocess"
+        reference_source = "process_capture"
+        fallback_reason = None
+    else:
+        # A fallback keeps direct/private callers functional, but it must not
+        # be represented as a genuine pre-face preservation reference.
+        reference = comparison
+        reference_stage = "post_face_pre_global_fallback"
+        reference_source = "comparison_input_fallback"
+        if captured is None:
+            fallback_reason = "pre-face reference was not captured"
+        else:
+            fallback_reason = (
+                "pre-face reference shape did not match comparison shape: "
+                f"reference={getattr(captured, 'shape', None)} "
+                f"comparison={comparison.shape}"
+            )
+
+    provenance: Dict[str, Any] = {
+        "schema": QA_REFERENCE_SCHEMA,
+        "reference_stage": reference_stage,
+        "comparison_stage": comparison_stage,
+        "reference_source": reference_source,
+        "reference_available": bool(captured_is_valid),
+        "reference_is_pre_face": bool(captured_is_valid),
+        "reference_shape": [int(value) for value in reference.shape],
+        "reference_dtype": str(reference.dtype),
+        "comparison_shape": [int(value) for value in comparison.shape],
+        "comparison_dtype": str(comparison.dtype),
+        "qa_ran": bool(qa_ran),
+        # Neural boosters currently run after this QA stage. Keeping this
+        # explicit prevents a future consumer from treating QA as final-output
+        # evidence without checking the stage order.
+        "qa_covers_post_qa_stages": False,
+        "post_qa_stage": "neural_boosters",
+    }
+    if fallback_reason is not None:
+        provenance["fallback_reason"] = fallback_reason
+    return reference, provenance
+
+
 @dataclass
 class _CoreResult:
-    """Output of the core pipeline (stages 0–6), returned by
-    ``_run_core_pipeline`` and upscaled by ``_process_with_proxy``."""
+    """Output of the core pipeline (stages 0–6), produced by
+    ``_run_detection_and_faces`` (stages 0–2) and ``_run_global_phases``
+    (stages 3–6), combined by ``_process_with_proxy``."""
     result: np.ndarray
     acc_skin: Optional[np.ndarray]
     acc_skin_hair: Optional[np.ndarray]
@@ -1171,6 +1252,7 @@ class _CoreResult:
     face_contexts: Optional[List["FaceContext"]] = None
     qa: List[QAWarning] = field(default_factory=list)
     qa_evidence: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    qa_provenance: Dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -1217,6 +1299,8 @@ class RetouchEngine:
         self._hair = HairEnhancer()
         self._relighter = Relighter()
         self._enhancer: Optional[AIEnhancer] = None
+        self._enhancer_lock = threading.Lock()
+        self._reshape_lock = threading.Lock()
         self._harmonizer = BackgroundHarmonizer()
         self._background_replacer = BackgroundReplacer()
 
@@ -1248,13 +1332,28 @@ class RetouchEngine:
         from .stage_wrappers import build_global_registry
         self._global_registry = build_global_registry(self)
 
-        # A5: QA auto-back-off. Conservative param reduction driven by QA
-        # flags (plastic-skin). Lazily reusable; stateless per image.
-        self._qa_backoff = QABackoff()
-
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def _get_enhancer(self) -> AIEnhancer:
+        """Return the shared enhancer, initializing it exactly once."""
+        with self._enhancer_lock:
+            if self._enhancer is None:
+                self._enhancer = AIEnhancer()
+            return self._enhancer
+
+    def _get_reshape_lock(self) -> Any:
+        """Return the per-engine lock protecting reshape diagnostics."""
+        lock = getattr(self, "_reshape_lock", None)
+        if lock is not None:
+            return lock
+        with _ENGINE_LOCK_INIT_GUARD:
+            lock = getattr(self, "_reshape_lock", None)
+            if lock is None:
+                lock = threading.Lock()
+                self._reshape_lock = lock
+        return lock
 
     def invalidate_lut_cache(self, name: Optional[str] = None) -> None:
         """Invalidate LUTs cached by the live render-path ColorGrader."""
@@ -1317,6 +1416,50 @@ class RetouchEngine:
         return self._grader.apply_self_blend_tone(
             img_bgr, mode=mode, amount=amount, domain=domain,
         )
+
+    @staticmethod
+    def _apply_manual_heals(
+        img_bgr: np.ndarray,
+        heals: Sequence[Dict[str, Any]],
+    ) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
+        """Apply serialized manual heals and retain backend/abstention evidence."""
+        from .heal import heal_region, b64_to_mask
+
+        diagnostics: List[Dict[str, Any]] = []
+        for index, heal_entry in enumerate(heals):
+            mask_b64 = heal_entry.get("mask_png_b64", "")
+            method = heal_entry.get("method", "telea")
+            if not mask_b64:
+                diagnostics.append({
+                    "index": index,
+                    "status": "skipped",
+                    "requested": method,
+                    "reason": "missing_mask",
+                })
+                continue
+            report: Dict[str, Any] = {}
+            try:
+                heal_mask = b64_to_mask(mask_b64, img_bgr.shape)
+                img_bgr = heal_region(
+                    img_bgr, heal_mask, method=method, report=report
+                )
+                diagnostics.append({
+                    "index": index,
+                    "status": (
+                        "skipped" if report.get("executed") == "none" else "done"
+                    ),
+                    **report,
+                })
+            except Exception as exc:
+                logger.warning("Heal failed: %s", exc)
+                diagnostics.append({
+                    "index": index,
+                    "status": "failed",
+                    "requested": method,
+                    "error_type": type(exc).__name__,
+                    "reason": "heal_exception",
+                })
+        return img_bgr, diagnostics
 
     @staticmethod
     def apply_cross_region_skin(
@@ -1599,10 +1742,6 @@ class RetouchEngine:
         cross_region_skin: Optional[float] = None,
         cross_region_skin_mask: Optional[np.ndarray] = None,
         cross_region_protect_mask: Optional[np.ndarray] = None,
-        *,
-        # Live progress reporting. Keyword-only and NOT a processing
-        # parameter: it is scoped by ``_scoped_progress_cb`` and never
-        # reaches ``overrides`` / ProcessingContext / result.params.
         progress_cb: Optional[Callable[[str, dict], None]] = None,
         **kwargs: Any,
     ) -> ProcessingResult:
@@ -1610,15 +1749,10 @@ class RetouchEngine:
 
         Returns a ProcessingResult. Access ``.image`` for the BGR ndarray, or
         use the result directly as an ndarray (legacy-compatible).
-
-        ``progress_cb(kind, payload)``, when given, is called from the calling
-        process only: ``("stage", {"stage": name})`` as each pipeline stage
-        starts and ``("face", {"index": i, "total": n})`` as each face
-        finishes (``i`` = faces completed so far, 1-based). Exceptions raised
-        by the callback are logged and ignored; output is byte-identical with
-        or without it.
         """
-        del progress_cb  # installed into _PROGRESS_CB by the decorator
+        # Installed in the scoped ContextVar by the decorator. Keeping it out
+        # of overrides ensures it never reaches ProcessingContext or sessions.
+        del progress_cb
         timings: Dict[str, float] = {}
         if (
             not isinstance(img_bgr, np.ndarray)
@@ -1903,6 +2037,13 @@ class RetouchEngine:
         overrides.update(kwargs)
 
         ctx = build_context(active_recipe, rec, overrides)
+        # Expose whether this render's engine had a face-aware detector
+        # available. A zero face count is still distinct from global-only:
+        # the detector may have run successfully and found no face.
+        detector_status = getattr(getattr(self, "_detector", None), "runtime_status", None)
+        ctx._runtime_diagnostics["face_detection"] = (
+            detector_status() if callable(detector_status) else {"mode": "unknown"}
+        )
         if safe_auto is not None:
             ctx.safe_auto = bool(safe_auto)
         ctx.hi_ref = hi_ref
@@ -1969,17 +2110,19 @@ class RetouchEngine:
         # blend between the original and the denoised image.
         # ------------------------------------------------------------------
         if ctx.ai_denoise and ctx.ai_denoise > 0.0:
-            if self._enhancer is None:
-                self._enhancer = AIEnhancer()
             _emit_stage("ai_denoise")
+            enhancer = self._get_enhancer()
             t_dn = time.perf_counter()
             strength = float(ctx.ai_denoise) / 100.0
             before_denoise = img_bgr.copy()
-            img_bgr = self._enhancer.denoise(img_bgr, strength=strength)
-            ctx._runtime_diagnostics.update(getattr(self._enhancer, "last_runtime", {}))
+            img_bgr = enhancer.denoise(img_bgr, strength=strength)
+            enhancer_runtime = getattr(enhancer, "last_runtime", {})
+            denoise_runtime = enhancer_runtime.get("denoise", {})
+            if isinstance(denoise_runtime, dict):
+                ctx._runtime_diagnostics["denoise"] = dict(denoise_runtime)
             if bool(getattr(ctx, "safe_auto", True)):
                 from .safe_auto import apply_decision, decide
-                runtime = getattr(self._enhancer, "last_runtime", {}).get("denoise", {})
+                runtime = denoise_runtime
                 backend = runtime.get("backend", "unknown") if isinstance(runtime, dict) else "unknown"
                 confidence = 0.95 if backend == "onnx" else 0.50
                 decision = decide(
@@ -2007,20 +2150,21 @@ class RetouchEngine:
         # F4: Pre-pipeline heal hook — heals run BEFORE retouch/grade
         # ------------------------------------------------------------------
         if ctx.heals:
-            from .heal import heal_region, b64_to_mask
             _emit_stage("heal")
             t_heal = time.perf_counter()
-            for heal_entry in ctx.heals:
-                mask_b64 = heal_entry.get("mask_png_b64", "")
-                method = heal_entry.get("method", "telea")
-                if not mask_b64:
-                    continue
-                try:
-                    heal_mask = b64_to_mask(mask_b64, img_bgr.shape)
-                    img_bgr = heal_region(img_bgr, heal_mask, method=method)
-                except Exception as e:
-                    logger.warning("Heal failed: %s", e)
+            img_bgr, heal_diagnostics = self._apply_manual_heals(
+                img_bgr, ctx.heals
+            )
+            ctx._runtime_diagnostics["healing"] = heal_diagnostics
             timings["heal"] = (time.perf_counter() - t_heal) * 1000
+
+        # QA-REF: preserve the image after input preprocessing but before any
+        # face detection/reshape/per-face work.  The global QA phase receives
+        # a post-face image as its main input; without this snapshot, the
+        # reference-based detectors cannot measure preservation across the
+        # face edit itself.  Keep the copy explicit so later in-place changes
+        # cannot silently change the reference.
+        ctx._qa_reference_img_bgr = np.array(img_bgr, copy=True)
 
         # ------------------------------------------------------------------
         # Core pipeline (stages 0–6) with automatic proxy down/upscaling
@@ -2040,6 +2184,19 @@ class RetouchEngine:
         person_mask = core.person_mask
         built_contexts = core.face_contexts
 
+        # No-face branches intentionally skip the detector run.  Still expose
+        # whether a pre-face reference was available so manifests can
+        # distinguish a deliberate not-run result from a missing QA record.
+        if core.no_face and not core.qa_provenance:
+            _, core.qa_provenance = _resolve_qa_reference(
+                ctx,
+                core.result,
+                comparison_stage="not_run_no_face",
+                qa_ran=False,
+            )
+        if core.qa_provenance:
+            ctx._qa_provenance = core.qa_provenance
+
         # ------------------------------------------------------------------
         # No-face fallback: minimal global processing
         # ------------------------------------------------------------------
@@ -2048,6 +2205,11 @@ class RetouchEngine:
                 result = cv2.resize(result, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
             result = self._apply_sr_export(result, ctx, timings)
             timings["total"] = sum(timings.values())
+            # The reference is needed only while the pipeline and any QA
+            # back-off iterations are running. Do not retain a second full
+            # image inside the returned ProcessingContext.
+            ctx._qa_reference_img_bgr = None
+            ctx._qa_geometry_reference_img_bgr = None
             return ProcessingResult(
                 image=result,
                 face_count=0,
@@ -2056,6 +2218,7 @@ class RetouchEngine:
                 face_contexts=built_contexts,
                 qa=core.qa,
                 qa_evidence=core.qa_evidence,
+                qa_provenance=core.qa_provenance,
                 safe_auto_decisions=getattr(ctx, "_safe_auto_decisions", []),
                 runtime_diagnostics=getattr(ctx, "_runtime_diagnostics", {}),
                 fa02_diagnostics=getattr(ctx, "_fa02_diagnostics", []),
@@ -2126,6 +2289,11 @@ class RetouchEngine:
                 for i in range(len(faces))
                 if i in ctx.face_params
             }
+        # The reference is needed only while the pipeline and any QA
+        # back-off iterations are running. Do not retain a second full image
+        # inside the returned ProcessingContext.
+        ctx._qa_reference_img_bgr = None
+        ctx._qa_geometry_reference_img_bgr = None
         return ProcessingResult(
             image=result,
             skin_mask=acc_skin,
@@ -2138,6 +2306,7 @@ class RetouchEngine:
             face_contexts=built_contexts,
             qa=core.qa,
             qa_evidence=core.qa_evidence,
+            qa_provenance=core.qa_provenance,
             face_recipes=face_recipes or None,
             safe_auto_decisions=getattr(ctx, "_safe_auto_decisions", []),
             runtime_diagnostics=getattr(ctx, "_runtime_diagnostics", {}),
@@ -2159,16 +2328,18 @@ class RetouchEngine:
         """F7 export-time super-resolution. No-op when ``ai_sr_scale <= 1``."""
         if not ctx.ai_sr_scale or ctx.ai_sr_scale <= 1:
             return result
-        if self._enhancer is None:
-            self._enhancer = AIEnhancer()
         _emit_stage("ai_sr")
+        enhancer = self._get_enhancer()
         t_sr = time.perf_counter()
         before_sr = result.copy()
-        out = self._enhancer.super_resolve(result, scale=int(ctx.ai_sr_scale))
-        ctx._runtime_diagnostics.update(getattr(self._enhancer, "last_runtime", {}))
+        out = enhancer.super_resolve(result, scale=int(ctx.ai_sr_scale))
+        enhancer_runtime = getattr(enhancer, "last_runtime", {})
+        sr_runtime = enhancer_runtime.get("super_resolution", {})
+        if isinstance(sr_runtime, dict):
+            ctx._runtime_diagnostics["super_resolution"] = dict(sr_runtime)
         if bool(getattr(ctx, "safe_auto", True)):
             from .safe_auto import apply_decision, decide
-            runtime = getattr(self._enhancer, "last_runtime", {}).get("super_resolution", {})
+            runtime = sr_runtime
             backend = runtime.get("backend", "unknown") if isinstance(runtime, dict) else "unknown"
             confidence = 0.95 if backend == "onnx" else 0.50
             decision = decide(
@@ -2252,6 +2423,12 @@ class RetouchEngine:
             # Upscale face-region result + masks back to native resolution
             _emit_stage("proxy_upscale")
             upscaled_core = self._upscale_core_result(core, h, w, native_guide=native_img_bgr)
+            # AA6 displacement vectors are expressed in proxy pixels. The
+            # downstream comparison runs against native-resolution frames,
+            # so resample the field and scale each vector axis accordingly.
+            ctx._aa6_warp_field = self._upscale_warp_field(
+                getattr(ctx, "_aa6_warp_field", None), h, w
+            )
 
             # The P7 reference is captured at the proxy resolution in this
             # legacy/draft path. Keep it aligned with the upscaled masks and
@@ -2323,7 +2500,6 @@ class RetouchEngine:
 
         # Handle no-face case: run minimal global processing if needed
         if core.no_face:
-            _emit_stage("no_face_fallback")
             result = self._no_face_fallback(native_img_bgr if proxy_scale < 1.0 else proxy_img_bgr, ctx, core.person_mask)
             h_img, w_img = result.shape[:2]
             return _CoreResult(
@@ -2378,7 +2554,34 @@ class RetouchEngine:
         and pore detail are never resampled through the proxy.
         """
         h_native, w_native = native_img_bgr.shape[:2]
+        h_proxy, w_proxy = proxy_img_bgr.shape[:2]
         scale_up = 1.0 / proxy_scale  # proxy → native multiplier
+
+        def _rescale_face(face: FaceData, factor: float) -> FaceData:
+            if factor == 1.0:
+                return face
+            x, y, bw, bh = face.bbox
+            return FaceData(
+                landmarks=face.landmarks,  # normalized [0,1] — resolution-independent
+                bbox=(
+                    int(round(x * factor)),
+                    int(round(y * factor)),
+                    int(round(bw * factor)),
+                    int(round(bh * factor)),
+                ),
+                ied=face.ied * factor,
+                confidence=face.confidence,
+            )
+
+        def _cached_face_in(fc: "FaceContext", target_w: int) -> FaceData:
+            # Convert from the context's declared frame exactly once.  Contexts
+            # returned by this method carry native boxes; treating them as
+            # proxy boxes re-applied ``scale_up`` and pushed faces off-image.
+            # Legacy contexts without a declared frame keep the historical
+            # proxy-frame assumption.
+            frame = getattr(fc, "frame_size", None)
+            src_w = frame[0] if frame else w_proxy
+            return _rescale_face(fc.face_data, target_w / float(src_w))
 
         # ------------------------------------------------------------------
         # Stage 0 — Detection + segmentation at proxy resolution
@@ -2386,8 +2589,12 @@ class RetouchEngine:
         _emit_stage("detection")
         t0 = time.perf_counter()
         cached_contexts = ctx.face_contexts
+        faces_native_cached: Optional[List[FaceData]] = None
         if cached_contexts is not None:
-            faces_proxy = [fc.face_data for fc in cached_contexts]
+            faces_proxy = [_cached_face_in(fc, w_proxy) for fc in cached_contexts]
+            faces_native_cached = [
+                _cached_face_in(fc, w_native) for fc in cached_contexts
+            ]
             if ctx.auto_exposure:
                 bboxes = [f.bbox for f in faces_proxy] if faces_proxy else None
                 proxy_img_bgr, corrected = correct_exposure(proxy_img_bgr, face_bboxes=bboxes)
@@ -2395,6 +2602,7 @@ class RetouchEngine:
                 if corrected:
                     faces_proxy = self._detector.detect(proxy_img_bgr)
                     cached_contexts = None  # cache stale after re-detect
+                    faces_native_cached = None
         else:
             if ctx.auto_exposure:
                 faces_proxy = self._detector.detect(proxy_img_bgr)
@@ -2449,21 +2657,10 @@ class RetouchEngine:
         # ------------------------------------------------------------------
         # Scale face bboxes + ied to native (landmarks stay normalized [0,1])
         # ------------------------------------------------------------------
-        def _scale_face(face: FaceData) -> FaceData:
-            x, y, bw, bh = face.bbox
-            return FaceData(
-                landmarks=face.landmarks,  # normalized [0,1] — resolution-independent
-                bbox=(
-                    int(round(x * scale_up)),
-                    int(round(y * scale_up)),
-                    int(round(bw * scale_up)),
-                    int(round(bh * scale_up)),
-                ),
-                ied=face.ied * scale_up,
-                confidence=face.confidence,
-            )
-
-        faces_native = [_scale_face(f) for f in faces_proxy]
+        if faces_native_cached is not None:
+            faces_native = faces_native_cached
+        else:
+            faces_native = [_rescale_face(f, scale_up) for f in faces_proxy]
 
         # Upscale person mask to native (smooth, so INTER_LINEAR is fine)
         person_mask_native = (
@@ -2498,8 +2695,8 @@ class RetouchEngine:
             # automatic mode a true no-op so it cannot alter a person's
             # treatment based on guessed age, sex, or appearance.
             ctx.face_params = None
+        self._bind_face_targets(ctx, faces_native, (w_native, h_native))
 
-        _emit_stage("reshape")
         t1 = time.perf_counter()
         result_native = self._stage_reshape(native_img_bgr, faces_native, ctx)
         timings["reshape"] = (time.perf_counter() - t1) * 1000
@@ -2511,7 +2708,6 @@ class RetouchEngine:
                 * (1.0 / 255.0)
             )
 
-        _emit_stage("per_face")
         t2 = time.perf_counter()
         h_img, w_img = result_native.shape[:2]
         face_results, built_contexts = self._stage_per_face(
@@ -2528,7 +2724,9 @@ class RetouchEngine:
             acc_hair_only,
         ) = self._composite_faces(
             result_native, face_results, h_img, w_img,
+            face_boxes=[f.bbox for f in faces_native],
         )
+        _emit_stage("proxy_upscale")
 
         core = _CoreResult(
             result=result_native,
@@ -2606,6 +2804,28 @@ class RetouchEngine:
                     up_m = guided_filter(up_m.astype(np.float32), radius=4, eps=1e-3, guide=guide_gray)
                 setattr(core, attr, up_m)
         return core
+
+    @staticmethod
+    def _upscale_warp_field(
+        warp_field: Optional[np.ndarray], target_h: int, target_w: int
+    ) -> Optional[np.ndarray]:
+        """Resize proxy AA6 displacement vectors into target-image pixels."""
+        if warp_field is None:
+            return None
+        field = np.asarray(warp_field, dtype=np.float32)
+        if field.ndim != 3 or field.shape[2] != 2:
+            raise ValueError("AA6 warp_field must have shape (H, W, 2)")
+        source_h, source_w = field.shape[:2]
+        if source_h <= 0 or source_w <= 0:
+            raise ValueError("AA6 warp_field dimensions must be positive")
+        if (source_h, source_w) == (target_h, target_w):
+            return field.copy()
+        resized = cv2.resize(
+            field, (target_w, target_h), interpolation=cv2.INTER_LINEAR
+        )
+        resized[:, :, 0] *= target_w / float(source_w)
+        resized[:, :, 1] *= target_h / float(source_h)
+        return resized.astype(np.float32, copy=False)
 
     @staticmethod
     def _composite_upscaled_faces_onto_native(
@@ -2716,8 +2936,8 @@ class RetouchEngine:
             # is intentionally neutral. Users may still assign a recipe to a
             # specific face explicitly through the face_params API or GUI.
             ctx.face_params = None
+        self._bind_face_targets(ctx, faces, (img_bgr.shape[1], img_bgr.shape[0]))
 
-        _emit_stage("reshape")
         t1 = time.perf_counter()
         result = self._stage_reshape(img_bgr, faces, ctx)
         timings["reshape"] = (time.perf_counter() - t1) * 1000
@@ -2732,7 +2952,6 @@ class RetouchEngine:
         # ------------------------------------------------------------------
         # Stage 2 — Per-face processing (parallel when >1 face)
         # ------------------------------------------------------------------
-        _emit_stage("per_face")
         t2 = time.perf_counter()
         h_img, w_img = result.shape[:2]
         face_results, built_contexts = self._stage_per_face(
@@ -2749,7 +2968,8 @@ class RetouchEngine:
             acc_sharpen,
             acc_hair_only,
         ) = self._composite_faces(
-            result, face_results, h_img, w_img
+            result, face_results, h_img, w_img,
+            face_boxes=[f.bbox for f in faces],
         )
 
         final_contexts = built_contexts if built_contexts is not None else cached_contexts
@@ -2838,13 +3058,10 @@ class RetouchEngine:
         )
         registry = self._global_registry
         if _PROGRESS_CB.get() is not None:
-            # Report each registry stage as it starts. The throwaway registry
-            # wraps the same stage objects, so enable/bypass/timing semantics
-            # (and the output) are exactly those of the real runner.
-            from .stages import StageRegistry as _SR
-            registry = _SR()
-            for _stage in self._global_registry:
-                registry.add(_ProgressStageProxy(_stage))
+            from .stages import StageRegistry as _StageRegistry
+            registry = _StageRegistry()
+            for stage in self._global_registry:
+                registry.add(_ProgressStageProxy(stage))
         state = registry.run(state)
         result = state.img
         timings.update(state.timings)
@@ -2892,22 +3109,55 @@ class RetouchEngine:
         # QA detectors
         # ------------------------------------------------------------------
         _emit_stage("qa")
+        qa_reference, qa_provenance = _resolve_qa_reference(
+            ctx,
+            img_bgr,
+            comparison_stage="post_global_pre_neural",
+            qa_ran=True,
+        )
+        geometry_reference = getattr(ctx, "_qa_geometry_reference_img_bgr", None)
+        geometry_reference_reason = None
+        if geometry_reference is not None:
+            if geometry_reference.shape != result.shape:
+                geometry_reference = None
+                geometry_reference_reason = (
+                    "geometry-only reference shape mismatch after proxy scaling"
+                )
+                geometry_stage = "unavailable"
+            else:
+                geometry_stage = "post_reshape_pre_face"
+        elif getattr(ctx, "_qa_geometry_changed", False):
+            geometry_reference_reason = (
+                "reshape was applied but its geometry-only reference is unavailable"
+            )
+            geometry_stage = "unavailable"
+        else:
+            geometry_stage = qa_provenance.get(
+                "reference_stage", "pre_face_post_input_preprocess"
+            )
+        qa_provenance["photometric_reference_stage"] = geometry_stage
+        qa_provenance["photometric_reference_available"] = (
+            geometry_reference_reason is None
+        )
+        if geometry_reference_reason is not None:
+            qa_provenance["photometric_reference_reason"] = geometry_reference_reason
         qa_warnings, qa_evidence = self._run_qa_with_evidence(
-            result, person_mask, img_bgr,
+            result, person_mask, qa_reference,
             face_skin_mask=acc_skin,
             mark_policy=ctx.mark_policy,
             warp_field=getattr(ctx, "_aa6_warp_field", None),
+            geometry_reference_img_bgr=geometry_reference,
+            geometry_reference_reason=geometry_reference_reason,
         )
         # Complete per-detector evidence (checked-pass / checked-flagged /
         # unavailable / not-run for every detector), not just the flagged
         # subset — see qa_detectors.run_qa_with_evidence.
         ctx._qa_results = qa_evidence
+        ctx._qa_provenance = qa_provenance
 
         # ------------------------------------------------------------------
         # A4: Neural boosters (PARKED — runs only if enabled, after QA)
         # ------------------------------------------------------------------
-        if (ctx.neural_stray_hair_boost or 0) > 0 or (ctx.neural_defect_boost or 0) > 0:
-            _emit_stage("neural_boosters")
         t_neural = time.perf_counter()
         result = self._stage_neural_boosters(result, ctx, person_mask)
         timings["neural_boosters"] = (time.perf_counter() - t_neural) * 1000
@@ -2925,6 +3175,7 @@ class RetouchEngine:
             face_contexts=face_contexts,
             qa=qa_warnings,
             qa_evidence=qa_evidence,
+            qa_provenance=qa_provenance,
         )
 
     @staticmethod
@@ -2935,14 +3186,16 @@ class RetouchEngine:
         face_skin_mask: Optional[np.ndarray] = None,
         mark_policy: Optional[Mapping[str, Any]] = None,
         warp_field: Optional[np.ndarray] = None,
+        geometry_reference_img_bgr: Optional[np.ndarray] = None,
+        geometry_reference_reason: Optional[str] = None,
     ) -> List[QAWarning]:
         """Run QA detectors on a processed uint8 BGR image.
 
-        Thin wrapper over :func:`retouch.qa_detectors.run_qa`; kept as a
-        method so :meth:`_run_core_pipeline` can re-run QA after a
-        back-off iteration without re-entering :meth:`_run_global_phases`.
-        Returns only the flagged-detector list; see :meth:`_run_qa_with_evidence`
-        for the complete pass/flagged/unavailable/not-run picture.
+        Thin wrapper over :func:`retouch.qa_detectors.run_qa`. Returns only
+        the flagged-detector list; see :meth:`_run_qa_with_evidence` for the
+        complete pass/flagged/unavailable/not-run picture. Currently unused
+        directly in the render pipeline; :meth:`_run_qa_with_evidence` is the
+        primary method called from :meth:`_run_global_phases`.
         """
         return qa_detectors.run_qa(
             result,
@@ -2951,6 +3204,8 @@ class RetouchEngine:
             face_skin_mask=face_skin_mask,
             mark_policy=mark_policy,
             warp_field=warp_field,
+            geometry_reference_img_bgr=geometry_reference_img_bgr,
+            geometry_reference_reason=geometry_reference_reason,
         )
 
     @staticmethod
@@ -2961,6 +3216,8 @@ class RetouchEngine:
         face_skin_mask: Optional[np.ndarray] = None,
         mark_policy: Optional[Mapping[str, Any]] = None,
         warp_field: Optional[np.ndarray] = None,
+        geometry_reference_img_bgr: Optional[np.ndarray] = None,
+        geometry_reference_reason: Optional[str] = None,
     ) -> "tuple[List[QAWarning], Dict[str, Dict[str, Any]]]":
         """Run QA detectors, returning flagged warnings AND complete evidence.
 
@@ -2976,131 +3233,9 @@ class RetouchEngine:
             face_skin_mask=face_skin_mask,
             mark_policy=mark_policy,
             warp_field=warp_field,
+            geometry_reference_img_bgr=geometry_reference_img_bgr,
+            geometry_reference_reason=geometry_reference_reason,
         )
-
-    def _run_core_pipeline(
-        self,
-        img_bgr: np.ndarray,
-        ctx: ProcessingContext,
-        style_ref: Optional[np.ndarray],
-        timings: Dict[str, float],
-    ) -> _CoreResult:
-        """F8.1: Wrapper that runs the full pipeline (stages 0–6).
-
-        For backward compatibility, this delegates to the split methods:
-        _run_detection_and_faces() for stages 0-2, then handles no-face
-        fallback OR runs _run_global_phases() for stages 3+.
-
-        Honours ``ctx.face_contexts``: when provided, detection and parsing
-        are skipped and the cached face data / regions are reused. Otherwise
-        detection + parsing run normally and ``FaceContext`` objects are
-        built and returned for caller caching.
-        """
-        # Stages 0-2: detection + reshape + per-face
-        core = self._run_detection_and_faces(img_bgr, ctx, timings)
-
-        # No-face fallback: run minimal global processing
-        if core.no_face:
-            result = self._no_face_fallback(img_bgr, ctx, core.person_mask)
-            h_img, w_img = result.shape[:2]
-            return _CoreResult(
-                result=result,
-                acc_skin=np.zeros((h_img, w_img), dtype=np.float32),
-                acc_skin_hair=np.zeros((h_img, w_img), dtype=np.float32),
-                acc_lips=np.zeros((h_img, w_img), dtype=np.float32),
-                acc_sharpen=np.zeros((h_img, w_img), dtype=np.float32),
-                faces=core.faces,
-                person_mask=core.person_mask,
-                acc_hair_only=core.acc_hair_only,
-                no_face=True,
-                face_contexts=core.face_contexts,
-                qa=core.qa,
-                qa_evidence=qa_detectors.not_run_evidence("no face detected"),
-            )
-
-        # Stages 3+: global phases (tonal, grading, finish)
-        core = self._run_global_phases(
-            core.result,
-            ctx, style_ref, timings,
-            acc_skin=core.acc_skin,
-            acc_skin_hair=core.acc_skin_hair,
-            acc_lips=core.acc_lips,
-            acc_sharpen=core.acc_sharpen,
-            faces=core.faces,
-            person_mask=core.person_mask,
-            acc_hair_only=core.acc_hair_only,
-            face_contexts=core.face_contexts,
-        )
-
-        # ------------------------------------------------------------------
-        # A5: "No plastic skin" guarantee — QA auto-back-off.
-        # If plastic-skin is flagged after the first pass, iteratively
-        # reduce smoothing-related params and re-process. Re-detection is
-        # skipped (face contexts are cached from pass 1) so only the
-        # per-face skin work + global phases re-run. We keep the best
-        # result: the first iteration that clears the flag wins; if none
-        # clear, the most-reduced (last) result ships since it is the
-        # least plastic.
-        # ------------------------------------------------------------------
-        backoff = getattr(self, "_qa_backoff", None)
-        if backoff is not None and core.face_contexts and not core.no_face:
-            best_core = core
-            for iteration in range(backoff.max_iterations):
-                plastic_flagged = any(
-                    w.detector == "plastic_skin" and w.flagged
-                    for w in best_core.qa
-                )
-                if not plastic_flagged:
-                    break  # flag cleared — ship this result
-
-                adjustments = backoff.check_and_backoff(
-                    best_core.result, ctx, best_core.qa
-                )
-                if not adjustments:
-                    break  # nothing to back off — give up
-
-                logger.info(
-                    "A5 back-off iteration %d: applying %s",
-                    iteration + 1, adjustments,
-                )
-                # Preserve original ctx values so we can revert if the
-                # back-off made things worse (e.g. a different artifact
-                # appeared). The last iteration's ctx is what ships.
-                QABackoff.apply_adjustments(ctx, adjustments)
-
-                # Re-use cached face contexts to skip re-detection /
-                # re-parsing — only the per-face skin work + global
-                # phases re-run with the adjusted params.
-                re_core = self._run_detection_and_faces(
-                    img_bgr, ctx, timings,
-                )
-                if re_core.no_face:
-                    break  # detection diverged — keep best_core
-                re_core = self._run_global_phases(
-                    re_core.result,
-                    ctx, style_ref, timings,
-                    acc_skin=re_core.acc_skin,
-                    acc_skin_hair=re_core.acc_skin_hair,
-                    acc_lips=re_core.acc_lips,
-                    acc_sharpen=re_core.acc_sharpen,
-                    faces=re_core.faces,
-                    person_mask=re_core.person_mask,
-                    face_contexts=re_core.face_contexts,
-                    acc_hair_only=re_core.acc_hair_only,
-                )
-                best_core = re_core
-
-                # If the flag cleared on this iteration, stop early.
-                still_plastic = any(
-                    w.detector == "plastic_skin" and w.flagged
-                    for w in best_core.qa
-                )
-                if not still_plastic:
-                    break
-
-            core = best_core
-
-        return core
 
     @staticmethod
     def _assemble_post_effects(ctx: ProcessingContext) -> Dict[str, Any]:
@@ -3131,6 +3266,7 @@ class RetouchEngine:
         migrated to match `_stage_grade`'s float-native versions of the
         same ops. See docs/plans/PLAN_TIERE_ENGINE_FIDELITY.md Sec 18 for the
         residual inventory."""
+        _emit_stage("no_face_fallback")
         from .precision import to_float, to_uint8
         # 16-bit ingest: no faces ⇒ nothing is edited, so start global grading
         # from the full-precision source when available (no banding on skies/
@@ -3335,6 +3471,21 @@ class RetouchEngine:
 
         return result_u8
 
+    @staticmethod
+    def _bind_face_targets(ctx: ProcessingContext, faces, frame_size: Tuple[int, int]) -> None:
+        """Re-key anchored per-face overrides to this render's detection order."""
+        if not ctx.face_params or ctx.face_params == "auto" or not faces:
+            return
+        from .face_params import bind_face_params
+        bound, report = bind_face_params(
+            ctx.face_params, [f.bbox for f in faces], frame_size,
+        )
+        ctx.face_params = bound
+        if report:
+            diagnostics = getattr(ctx, "_runtime_diagnostics", None)
+            if isinstance(diagnostics, dict):
+                diagnostics["face_param_binding"] = report
+
     def _ctx_for_face(self, ctx: ProcessingContext, face_index: int) -> ProcessingContext:
         """Resolve per-face overrides; identity when face_params empty/missing."""
         if not ctx.face_params or ctx.face_params == "auto":
@@ -3384,12 +3535,28 @@ class RetouchEngine:
         return [self._ctx_for_face(ctx, i) for i in range(n_faces)]
 
     def _stage_reshape(self, img: np.ndarray, faces, ctx: ProcessingContext) -> np.ndarray:
+        _emit_stage("reshape")
         face_ctxs = self._face_ctxs_for_reshape(ctx, len(faces) if faces else 0)
         if self._any_reshape_active(ctx, face_ctxs):
-            result = self._reshaper.reshape(img, faces, ctx, face_ctxs=face_ctxs)
-            ctx._aa6_warp_field = self._reshaper.last_displacement_field
+            # FaceReshaper retains its last displacement field on the shared
+            # instance. Keep the render and its diagnostic snapshot in one
+            # critical section so concurrent images cannot borrow one another's
+            # AA6 field. Copy it before releasing the lock; QA owns this image-
+            # specific snapshot from here on.
+            with self._get_reshape_lock():
+                result = self._reshaper.reshape(img, faces, ctx, face_ctxs=face_ctxs)
+                warp_field = self._reshaper.last_displacement_field
+                ctx._aa6_warp_field = (
+                    np.array(warp_field, dtype=np.float32, copy=True)
+                    if warp_field is not None
+                    else None
+                )
+            ctx._qa_geometry_changed = True
+            ctx._qa_geometry_reference_img_bgr = np.array(result, copy=True)
             return result
         ctx._aa6_warp_field = np.zeros((*img.shape[:2], 2), dtype=np.float32)
+        ctx._qa_geometry_changed = False
+        ctx._qa_geometry_reference_img_bgr = None
         return img.copy()
 
     @staticmethod
@@ -3428,6 +3595,28 @@ class RetouchEngine:
         return _active(ctx)
 
     @staticmethod
+    def _cached_regions_match(
+        cached_contexts: List["FaceContext"],
+        crop_list: List[np.ndarray],
+        ctx: ProcessingContext,
+    ) -> bool:
+        """True when cached parsed regions were built from these exact crops.
+
+        Contexts without a recorded parser input (``face_image``) or option
+        (``mask_feather_mode``) predate this check and are trusted as before.
+        """
+        if len(cached_contexts) != len(crop_list):
+            return False
+        for fc, crop in zip(cached_contexts, crop_list):
+            mode = getattr(fc, "mask_feather_mode", None)
+            if mode is not None and mode != ctx.mask_feather_mode:
+                return False
+            parsed = getattr(fc, "face_image", None)
+            if parsed is not None and not np.array_equal(parsed, crop):
+                return False
+        return True
+
+    @staticmethod
     def _compute_face_roi_padding(
         face_w: int, face_h: int
     ) -> Tuple[int, int, int, int]:
@@ -3457,6 +3646,7 @@ class RetouchEngine:
         Returns ``(face_results, built_contexts)`` where ``built_contexts``
         is the freshly-built ``FaceContext`` list, or ``None`` when cached
         contexts were supplied (reuse path)."""
+        _emit_stage("per_face")
         crop_list = []
         landmarks_compat_list = []
         face_bbox_list = []
@@ -3503,6 +3693,17 @@ class RetouchEngine:
 
         # Region parsing — or reuse cached regions from ctx.face_contexts
         cached_contexts = ctx.face_contexts
+        if cached_contexts is not None and not self._cached_regions_match(
+            cached_contexts, crop_list, ctx,
+        ):
+            # Parsed regions depend on the pixels the parser saw (after
+            # denoise/heals/exposure/reshape) and on mask_feather_mode, none of
+            # which are in the GUI cache key. Reuse only when they match.
+            logger.info(
+                "Cached face regions do not match current parser input; "
+                "re-parsing %d face(s)", len(faces),
+            )
+            cached_contexts = None
         if cached_contexts is not None:
             all_regions = [fc.regions for fc in cached_contexts]
             all_light_directions: List[Optional[LightDirection]] = [
@@ -3527,13 +3728,13 @@ class RetouchEngine:
                     index=i,
                     face_image=crop_list[i],
                     light_direction=all_light_directions[i],
+                    frame_size=(w_img, h_img),
+                    mask_feather_mode=ctx.mask_feather_mode,
                 )
                 for i in range(len(faces))
             ]
 
         results: List[Optional[_FaceResult]] = [None] * len(faces)
-        # Parent-side face-completion counter for progress_cb (never sent
-        # into pool workers; the callback is not picklable-safe).
         face_progress = _FaceProgress(len(faces))
         progress_active = _PROGRESS_CB.get() is not None
 
@@ -3600,8 +3801,6 @@ class RetouchEngine:
                 for i in range(len(faces))
             ]
             if progress_active:
-                # Pool calls this from the parent's as_completed loop as each
-                # worker future succeeds, so progress is live, not batched.
                 proc_results = self._face_pool.process_faces(
                     payloads, on_face_done=face_progress.done,
                 )
@@ -3752,6 +3951,7 @@ class RetouchEngine:
         face_results: List[_FaceResult],
         h_img: int,
         w_img: int,
+        face_boxes: Optional[Sequence[Tuple[int, int, int, int]]] = None,
     ) -> Tuple[
         np.ndarray,
         np.ndarray,
@@ -3760,7 +3960,19 @@ class RetouchEngine:
         np.ndarray,
         np.ndarray,
     ]:
-        """Merge face canvases and request-local masks into one output image."""
+        """Merge face canvases and request-local masks into one output image.
+
+        ``face_boxes`` (optional, one ``(x, y, w, h)`` per face result, same
+        coordinate space as ``roi_box``) enables overlap ownership: where two
+        faces' padded ROIs intersect, each face's composite alpha is
+        attenuated by the claim of any face that is nearer to the pixel (see
+        :meth:`_overlap_owned_alphas`). Without it, a later face's absolute
+        canvas -- which holds an un-retouched copy of its neighbour -- wins
+        wherever its own parse (e.g. a false-positive's "hair") covers the
+        neighbour, erasing the neighbour's retouch and leaking the later
+        face's per-face overrides onto it. Single-face and non-overlapping
+        ROIs are unaffected (identical arithmetic).
+        """
         acc_skin = np.zeros((h_img, w_img), dtype=np.float32)
         acc_skin_hair = np.zeros((h_img, w_img), dtype=np.float32)
         acc_lips = np.zeros((h_img, w_img), dtype=np.float32)
@@ -3769,16 +3981,23 @@ class RetouchEngine:
         # consumed by _stage_background for Z3 wisp recovery.
         acc_hair_only = np.zeros((h_img, w_img), dtype=np.float32)
 
+        owned_alphas = None
+        if face_boxes is not None and len(face_results) > 1:
+            owned_alphas = self._overlap_owned_alphas(face_results, face_boxes)
+
         result = base.copy()
-        for fr in face_results:
+        for idx, fr in enumerate(face_results):
             x1, y1, x2, y2 = fr.roi_box
-            edit_mask = np.maximum.reduce((
-                fr.skin_hair_mask,
-                fr.lips_mask,
-                fr.sharpen_mask,
-            ))
-            alpha = np.clip(edit_mask, 0.0, 1.0)[:, :, np.newaxis]
-            
+            if owned_alphas is not None and owned_alphas[idx] is not None:
+                alpha = owned_alphas[idx][:, :, np.newaxis]
+            else:
+                edit_mask = np.maximum.reduce((
+                    fr.skin_hair_mask,
+                    fr.lips_mask,
+                    fr.sharpen_mask,
+                ))
+                alpha = np.clip(edit_mask, 0.0, 1.0)[:, :, np.newaxis]
+
             # Blend cropped canvas back anywhere this face ROI was edited.
             roi_blend = np.clip(
                 fr.canvas.astype(np.float32) * alpha
@@ -3800,6 +4019,86 @@ class RetouchEngine:
             acc_sharpen[y1:y2, x1:x2] = np.maximum(acc_sharpen[y1:y2, x1:x2], fr.sharpen_mask)
 
         return result, acc_skin, acc_skin_hair, acc_lips, acc_sharpen, acc_hair_only
+
+    # Feather of a face's bbox claim, as a fraction of that face's own w/h.
+    _OWNERSHIP_BOX_FEATHER = 0.15
+    # Width (normalised face-size units) of the soft hand-over between faces.
+    _OWNERSHIP_PROXIMITY_BAND = 0.5
+
+    @classmethod
+    def _overlap_owned_alphas(
+        cls,
+        face_results: List[_FaceResult],
+        face_boxes: Sequence[Tuple[int, int, int, int]],
+    ) -> List[Optional[np.ndarray]]:
+        """Per-face composite alphas with overlapping ROIs resolved by proximity.
+
+        For face *i*, at every pixel inside another face *j*'s ROI, the alpha
+        is multiplied by ``1 - claim_j * near_j`` with
+        ``claim_j = max(alpha_j, feathered bbox_j)`` and ``near_j`` a
+        smoothstep of how much nearer *j*'s centre is than *i*'s (distances
+        normalised by each face's bbox w/h; 0.5 on the equidistant line,
+        saturating ``_OWNERSHIP_PROXIMITY_BAND`` either side). So a face
+        never composites over a clearly-nearer face's own edits or detected
+        face box, pixels the nearer face neither edits nor frames keep the
+        farther face's edit (no holes from feather tails), and the hand-over
+        through hair both faces edited is gradual, not a seam. Returns ``None``
+        for faces whose ROI intersects no other ROI (caller uses the
+        unmodified alpha, so their arithmetic is unchanged).
+        """
+        n = len(face_results)
+        raw = [
+            np.clip(
+                np.maximum.reduce((fr.skin_hair_mask, fr.lips_mask, fr.sharpen_mask)),
+                0.0, 1.0,
+            ).astype(np.float32)
+            for fr in face_results
+        ]
+        feather = cls._OWNERSHIP_BOX_FEATHER
+        band = cls._OWNERSHIP_PROXIMITY_BAND
+        out: List[Optional[np.ndarray]] = [None] * n
+        for i, fi in enumerate(face_results):
+            x1, y1, x2, y2 = fi.roi_box
+            overlaps = []
+            for j, fj in enumerate(face_results):
+                if j == i:
+                    continue
+                u1, v1, u2, v2 = fj.roi_box
+                ix1, iy1 = max(x1, u1), max(y1, v1)
+                ix2, iy2 = min(x2, u2), min(y2, v2)
+                if ix2 > ix1 and iy2 > iy1:
+                    overlaps.append((j, ix1, iy1, ix2, iy2))
+            if not overlaps:
+                continue
+            alpha = raw[i].copy()
+            bx_i, by_i, bw_i, bh_i = face_boxes[i]
+            for j, ix1, iy1, ix2, iy2 in overlaps:
+                u1, v1 = face_results[j].roi_box[:2]
+                yy, xx = np.mgrid[iy1:iy2, ix1:ix2].astype(np.float32)
+                d_i = np.hypot(
+                    (xx - (bx_i + bw_i / 2.0)) / max(bw_i, 1),
+                    (yy - (by_i + bh_i / 2.0)) / max(bh_i, 1),
+                )
+                bx, by, bw, bh = face_boxes[j]
+                bw, bh = max(bw, 1), max(bh, 1)
+                d_j = np.hypot(
+                    (xx - (bx + bw / 2.0)) / bw, (yy - (by + bh / 2.0)) / bh,
+                )
+                dx = np.maximum(np.maximum(bx - xx, xx - (bx + bw)), 0.0) / (feather * bw)
+                dy = np.maximum(np.maximum(by - yy, yy - (by + bh)), 0.0) / (feather * bh)
+                box_claim = np.clip(1.0 - np.hypot(dx, dy), 0.0, 1.0)
+                claim = np.maximum(
+                    raw[j][iy1 - v1:iy2 - v1, ix1 - u1:ix2 - u1], box_claim,
+                )
+                # Soft proximity weight: 0.5 on the equidistant line, 1 where
+                # j is clearly nearer, 0 where i is -- a hard Voronoi switch
+                # draws a visible seam through hair both faces edited.
+                t = np.clip(0.5 + (d_i - d_j) / (2.0 * band), 0.0, 1.0)
+                near_w = t * t * (3.0 - 2.0 * t)
+                sub = alpha[iy1 - y1:iy2 - y1, ix1 - x1:ix2 - x1]
+                sub *= 1.0 - claim * near_w
+            out[i] = alpha
+        return out
 
     def _stage_subject_separation(
         self,
@@ -5405,6 +5704,7 @@ class RetouchEngine:
         if stray_hair_strength <= 0 and defect_strength <= 0:
             return img
 
+        _emit_stage("neural_boosters")
         # Currently disabled: placeholders return empty masks
         from .neural_boosters import StrayHairSegmenter, DefectSegmenter
         from .safe_auto import decide

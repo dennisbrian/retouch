@@ -6,7 +6,7 @@ Uses Telea or Navier-Stokes inpainting with automatic radius scaling.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import cv2
 import numpy as np
@@ -26,6 +26,7 @@ def heal_region(
     iterations: int = 5,
     seed: int = 0,
     seamless: bool = True,
+    report: Optional[Dict[str, Any]] = None,
 ) -> np.ndarray:
     """Heal a masked region using inpainting.
 
@@ -39,12 +40,27 @@ def heal_region(
         iterations: Deterministic PatchMatch proposal passes.
         seed: Fixed PatchMatch random proposal seed.
         seamless: Blend the PatchMatch result in its local repair ROI.
+        report: Optional dict filled in place with the backend actually
+            executed and why (see :func:`retouch.patchmatch.patchmatch_fill`).
+            For ``"patchmatch"`` a degenerate donor region may execute a
+            donor-constrained Telea fallback or abstain (image returned
+            unchanged).
 
     Returns:
         (H, W, 3) image matching input dtype. The uint8 path is byte-identical
         to the legacy implementation; the float32 path returns float32 [0, 255].
     """
-    if mask.sum() == 0:
+    def _report_empty_mask() -> None:
+        if report is not None:
+            requested = method.lower() if isinstance(method, str) else str(method)
+            report.update(
+                requested=requested,
+                executed="none",
+                reason="empty_mask",
+            )
+
+    if mask.size == 0 or mask.sum() == 0:
+        _report_empty_mask()
         return img_bgr
 
     if mask.dtype == np.float32 or mask.max() <= 1.0:
@@ -52,8 +68,16 @@ def heal_region(
     else:
         mask_uint8 = mask.astype(np.uint8)
 
+    # Supported float masks may contain positive values too small to survive
+    # the conversion to the uint8 inpaint mask. Treat that quantized-empty
+    # case as a no-op too, so runtime evidence does not claim a backend ran.
+    if not np.any(mask_uint8):
+        _report_empty_mask()
+        return img_bgr
+
     method_key = method.lower()
     if method_key == "patchmatch":
+        fill_report: Dict[str, Any] = report if report is not None else {}
         filled = patchmatch_fill(
             img_bgr,
             mask_uint8,
@@ -61,10 +85,17 @@ def heal_region(
             patch_size=patch_size,
             iterations=iterations,
             seed=seed,
+            report=fill_report,
         )
+        if fill_report.get("executed") == "abstain":
+            # No permitted donor: leave the image untouched (a seamless
+            # blend of an unchanged fill could still perturb the hole).
+            return img_bgr
         return seamless_blend_roi(img_bgr, filled, mask_uint8) if seamless else filled
     if method_key not in ("telea", "ns"):
         raise ValueError("method must be 'telea', 'ns', or 'patchmatch'")
+    if report is not None:
+        report.update(requested=method_key, executed=method_key, reason=None)
 
     if radius is None:
         radius = _auto_radius(mask_uint8)

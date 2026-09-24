@@ -6,6 +6,8 @@ import pytest
 
 from retouch.heal import heal_region
 from retouch.patchmatch import patchmatch_fill, seamless_blend_roi
+from retouch.engine import RetouchEngine
+from retouch.heal import mask_to_b64
 
 
 def _periodic_texture(height: int = 112, width: int = 112) -> np.ndarray:
@@ -32,6 +34,22 @@ class TestPatchmatchFill:
         result, source_map = patchmatch_fill(image, empty, return_source_map=True)
         assert np.array_equal(result, image)
         assert np.all(source_map == -1)
+
+    def test_float_mask_quantized_to_empty_reports_noop(self) -> None:
+        image = _periodic_texture(32, 32)
+        # Positive in float space, but every value truncates to zero in the
+        # uint8 inpaint mask.
+        mask = np.full(image.shape[:2], 0.001, dtype=np.float32)
+        report = {}
+
+        result = heal_region(image, mask, method="telea", report=report)
+
+        assert result is image
+        assert report == {
+            "requested": "telea",
+            "executed": "none",
+            "reason": "empty_mask",
+        }
 
     def test_is_deterministic_and_honours_source_mask(self) -> None:
         image = _periodic_texture()
@@ -85,6 +103,158 @@ class TestPatchmatchFill:
         assert result.dtype == np.float32
         assert result.shape == image.shape
         assert np.all(source_map[hole > 0] == -1)
+
+
+_SKIN_BGR = np.array([150, 170, 210], dtype=np.float32)
+_PROTECTED_BGR = np.array([30, 30, 200], dtype=np.float32)
+
+
+def _protected_neighbour_scene(dtype):
+    """Skin with a repair hole abutting a strongly coloured protected region.
+
+    The permitted donor mask is a 2x2 skin speck, so no 7x7 PatchMatch
+    source patch fits and the degenerate-source fallback is exercised.
+    """
+    image = np.empty((64, 64, 3), dtype=np.float32)
+    image[:] = _SKIN_BGR
+    image[:, 34:] = _PROTECTED_BGR
+    hole = np.zeros((64, 64), dtype=np.uint8)
+    hole[22:42, 26:34] = 255
+    donor = np.zeros_like(hole)
+    donor[2:4, 2:4] = 255
+    return image.astype(dtype), hole, donor
+
+
+class TestDegenerateSourceFallbackHonoursDonors:
+    """P2 (RESEARCH_RETOUCH_PROTECTION_LIFECYCLE_2026_09_22 §4): the fallback
+    used to call unconstrained Telea, pulling protected pixels into the fill."""
+
+    @staticmethod
+    def _recoloured(image: np.ndarray, hole: np.ndarray, donor: np.ndarray) -> np.ndarray:
+        # Repaint every forbidden pixel (neither donor nor hole) a different
+        # colour. A donor-constrained fill cannot depend on them.
+        other = image.copy()
+        forbidden = (donor == 0) & (hole == 0)
+        other[forbidden] = np.array([200, 40, 20], dtype=np.float32).astype(image.dtype)
+        return other
+
+    @pytest.mark.parametrize("dtype", [np.uint8, np.float32])
+    def test_fallback_never_reads_forbidden_pixels(self, dtype) -> None:
+        image, hole, donor = _protected_neighbour_scene(dtype)
+        result = patchmatch_fill(image, hole, source_mask=donor)
+        recoloured = patchmatch_fill(self._recoloured(image, hole, donor), hole, source_mask=donor)
+        # Invariance: forbidden content must not influence the repair.
+        assert np.array_equal(result[hole > 0], recoloured[hole > 0])
+        # And no repaired pixel is pulled toward the protected red (the old
+        # unconstrained Telea fallback put ~1/3 of them closer to it).
+        repaired = result[hole > 0].astype(np.float32)
+        d_skin = np.linalg.norm(repaired - _SKIN_BGR, axis=1)
+        d_prot = np.linalg.norm(repaired - _PROTECTED_BGR, axis=1)
+        assert not np.any(d_prot < d_skin)
+
+    def test_heal_region_fallback_never_reads_forbidden_pixels(self) -> None:
+        image, hole, donor = _protected_neighbour_scene(np.uint8)
+        result = heal_region(image, hole, method="patchmatch", source_mask=donor, seamless=False)
+        recoloured = heal_region(
+            self._recoloured(image, hole, donor), hole, method="patchmatch",
+            source_mask=donor, seamless=False,
+        )
+        assert np.array_equal(result[hole > 0], recoloured[hole > 0])
+
+    def test_fallback_reports_executed_backend_and_reason(self) -> None:
+        image, hole, donor = _protected_neighbour_scene(np.uint8)
+        report: dict = {}
+        heal_region(
+            image, hole, method="patchmatch", source_mask=donor, seamless=False, report=report
+        )
+        assert report["requested"] == "patchmatch"
+        assert report["executed"] == "telea_donor_constrained"
+        assert report["reason"] == "no_full_source_patch"
+        assert report["valid_source_centres"] == 0
+        assert report["permitted_donor_pixels"] == 4
+        assert report["fallback_pixels"] == int(np.count_nonzero(hole))
+        assert report["source_map_available"] is False
+
+    @pytest.mark.parametrize("seamless", [False, True])
+    def test_abstains_when_no_permitted_donor_exists(self, seamless) -> None:
+        image, hole, _ = _protected_neighbour_scene(np.uint8)
+        image[hole > 0] = (0, 255, 0)  # a visible defect that must stay put
+        donor = hole.copy()  # every permitted pixel is inside the hole
+        report: dict = {}
+        result = heal_region(
+            image, hole, method="patchmatch", source_mask=donor,
+            seamless=seamless, report=report,
+        )
+        assert np.array_equal(result, image)
+        assert report["executed"] == "abstain"
+        assert report["reason"] == "no_permitted_donor"
+
+    def test_engine_manual_heal_exposes_fallback_in_runtime_diagnostics(self):
+        image = _periodic_texture(24, 24)
+        full_mask = np.full(image.shape[:2], 255, dtype=np.uint8)
+        result, diagnostics = RetouchEngine._apply_manual_heals(
+            image,
+            [{"mask_png_b64": mask_to_b64(full_mask), "method": "patchmatch"}],
+        )
+
+        assert np.array_equal(result, image)
+        assert diagnostics == [{
+            "index": 0,
+            "status": "done",
+            "requested": "patchmatch",
+            "executed": "abstain",
+            "reason": "no_permitted_donor",
+            "valid_source_centres": 0,
+            "permitted_donor_pixels": 0,
+            "fallback_pixels": 0,
+            "source_map_available": False,
+        }]
+
+    def test_engine_manual_empty_heal_is_reported_as_skipped_noop(self):
+        image = _periodic_texture(24, 24)
+        empty_mask = np.zeros(image.shape[:2], dtype=np.uint8)
+        result, diagnostics = RetouchEngine._apply_manual_heals(
+            image,
+            [{"mask_png_b64": mask_to_b64(empty_mask), "method": "telea"}],
+        )
+
+        assert np.array_equal(result, image)
+        assert diagnostics == [{
+            "index": 0,
+            "status": "skipped",
+            "requested": "telea",
+            "executed": "none",
+            "reason": "empty_mask",
+        }]
+
+    def test_patchmatch_success_reports_patchmatch(self) -> None:
+        image = _periodic_texture(56, 56)
+        hole = np.zeros(image.shape[:2], dtype=np.uint8)
+        hole[20:36, 20:36] = 255
+        report: dict = {}
+        patchmatch_fill(image, hole, seed=5, report=report)
+        assert report["executed"] == "patchmatch"
+        assert report["reason"] is None
+        assert report["fallback_pixels"] == 0
+        assert report["source_map_available"] is True
+        assert report["valid_source_centres"] > 0
+
+    @pytest.mark.parametrize("dtype", [np.uint8, np.float32])
+    def test_unconstrained_fallback_matches_legacy_telea(self, dtype) -> None:
+        # source_mask=None keeps the legacy fallback byte-identical: every
+        # non-hole pixel is a permitted donor.
+        image = _periodic_texture(12, 12).astype(dtype)
+        hole = np.zeros(image.shape[:2], dtype=np.uint8)
+        hole[3:9, 3:9] = 255
+        result = patchmatch_fill(image, hole)
+        if dtype == np.uint8:
+            expected = cv2.inpaint(image, hole, 3, cv2.INPAINT_TELEA)
+        else:
+            expected = np.stack(
+                [cv2.inpaint(image[..., c], hole, 3, cv2.INPAINT_TELEA) for c in range(3)],
+                axis=-1,
+            )
+        assert np.array_equal(result, expected)
 
 
 class TestSeamlessBlendRoi:

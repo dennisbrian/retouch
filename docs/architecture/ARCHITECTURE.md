@@ -20,9 +20,9 @@ The core pipeline is split into two phases by F8.1/F8.2:
 | Detection + faces | `_run_detection_and_faces` (`engine.py:1428`) or `_process_native_faces` (`engine.py:1205`) | 0, 1, 2, 2.5 | proxy (F8.1) or native (F8.2) |
 | Global | `_run_global_phases` (`engine.py:1520`) | 3, 3.5, 4, 5, 6, QA | native (always) |
 
-`_run_core_pipeline` (`engine.py:1641`) is a thin legacy wrapper that
-calls both phases in sequence at one resolution (used when no proxy
-scaling is needed).
+The pipeline combines both phases via `_process_with_proxy` / `_process_native_faces`,
+which call the phases in sequence at appropriate resolutions (proxy for F8.1
+legacy / detection only, native for faces and global stages).
 
 ### Stage sequence
 
