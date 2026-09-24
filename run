@@ -5,7 +5,7 @@
 #   ./run web              open the app in your browser
 #   ./run batch ARGS...    run the batch CLI (same options as cli.py)
 #   ./run crops FOLDER     make 4:5 / 9:16 / 1:1 social crops of retouched photos
-#   ./run recipes          list the built-in recipes
+#   ./run recipes          list the recipe names --recipe accepts
 #   ./run update           pull the latest code and refresh dependencies
 set -euo pipefail
 
@@ -42,7 +42,25 @@ case "$cmd" in
         exec "$PYTHON" -m retouch.social_crops "$@"
         ;;
     recipes)
-        exec "$PYTHON" cli.py --list-recipes "$@"
+        # cli.py --list-recipes shows every recipe in the cookbook, including
+        # archive looks that --recipe rejects. List only the curated names.
+        exec "$PYTHON" - <<'PY'
+from retouch.recipe_cookbook import list_recipes
+from retouch.recipes import CURATED_RECIPE_NAMES, RECOMMENDED_RECIPE_NAMES
+
+info = {r.name: r for r in list_recipes()}
+for title, names in (
+    ("Recommended", RECOMMENDED_RECIPE_NAMES),
+    ("Scene / creative (use with matching light or intent)",
+     [n for n in CURATED_RECIPE_NAMES if n not in RECOMMENDED_RECIPE_NAMES]),
+):
+    print(f"{title}:")
+    for name in names:
+        desc = info[name].description if name in info else ""
+        print(f"  {name:34} {desc}")
+    print()
+print("Use one with: ./run batch <folder> -o <output> --recipe NAME")
+PY
         ;;
     update)
         git pull --ff-only
