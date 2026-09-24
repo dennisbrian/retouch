@@ -17,6 +17,7 @@ import cv2
 import logging
 import numpy as np
 import os
+import threading
 import onnxruntime as ort
 from .model_fetch import model_status
 from .utils import create_polygon_mask, feather_mask, get_points, normalize_mask
@@ -38,6 +39,19 @@ _BISENET_SPATIAL = (512, 512)
 # smaller, less lossy choice. Keep in sync with any call site that overrides
 # ring_px.
 _BOUNDARY_RING_PX = 2
+
+# MediaPipe multiclass selfie segmenter (``selfie_multiclass_256x256``,
+# Apache-2.0 per its model card). Confidence-mask channel order from the
+# model card appendix. Used only on the landmark-fallback path, i.e. when
+# BiSeNet is not installed, to give hair/neck/bangs a real per-pixel signal.
+_MC_HAIR, _MC_BODY_SKIN, _MC_FACE_SKIN, _MC_CLOTHES, _MC_OTHERS = 1, 2, 3, 4, 5
+_MC_NUM_CLASSES = 6
+# If removing segmenter hair/clothes/accessories from the landmark skin would
+# drop more than this share of it, the segmenter is disagreeing with the
+# landmarks (face paint, heavy makeup, a mask) rather than finding bangs; keep
+# the landmark skin instead of gutting it.
+_MC_MAX_SKIN_LOSS = 0.4
+_MC_DISABLE_ENV = "RETOUCH_CLASS_SEGMENTER"
 
 
 def _sanitize_bisenet_logits(logits: np.ndarray, source: str) -> np.ndarray:
@@ -420,6 +434,11 @@ class FaceParser:
     def __init__(self) -> None:
         self._model_path = None
         self._sess = None
+        # Lazily-built MediaPipe multiclass segmenter for the landmark
+        # fallback path (see _get_class_segmenter). Never pickled.
+        self._class_segmenter = None
+        self._class_segmenter_failed = False
+        self._class_segmenter_lock = threading.Lock()
         try:
             status = model_status("resnet18_bisenet")
             if status.get("available"):
@@ -555,7 +574,7 @@ class FaceParser:
         # _landmark_fallback_only sets its own parse_confidence={} sentinel
         # (no BiSeNet involved on that path).
         if regions.skin is None or regions.skin.max() < 0.01:
-            regions = self._landmark_fallback_only(landmarks, img_bgr, person_mask, ied)
+            regions = self._landmark_fallback(landmarks, img_bgr, person_mask, ied)
         else:
             self._add_landmark_subregions(regions, landmarks, h_img, w_img, ied, feather)
 
@@ -681,7 +700,7 @@ class FaceParser:
                     crop_coords.append((cx1, cy1, cx2, cy2, cw, ch, h_img, w_img))
                     valid_indices.append(i)
                 else:
-                    results[i] = self._landmark_fallback_only(
+                    results[i] = self._landmark_fallback(
                         landmarks_compat_list[i], img_bgr, person_masks[i], ieds[i]
                     )
             except Exception as e:
@@ -690,7 +709,7 @@ class FaceParser:
                     "BiSeNet preprocessing failed for face index=%d (face_bbox=%s, crop_shape=%s, model=%s): %s. Using landmark fallback.",
                     i, face_bbox, crop_shape, self._model_path, e
                 )
-                results[i] = self._landmark_fallback_only(
+                results[i] = self._landmark_fallback(
                     landmarks_compat_list[i], img_bgr, person_masks[i], ieds[i]
                 )
 
@@ -769,7 +788,7 @@ class FaceParser:
                 # Handle fallback if skin is empty. _landmark_fallback_only
                 # sets its own parse_confidence={} sentinel.
                 if regions.skin is None or regions.skin.max() < 0.01:
-                    regions = self._landmark_fallback_only(
+                    regions = self._landmark_fallback(
                         landmarks_compat_list[idx_face], crop_list[idx_face], person_masks[idx_face], ieds[idx_face]
                     )
                 else:
@@ -796,11 +815,122 @@ class FaceParser:
                         "Sequential single-face fallback also failed for face %d/%d (face_bbox=%s, crop_shape=%s, model=%s): %s. Using landmark fallback.",
                         i, num_faces, face_bbox_list[i], crop_shape, self._model_path, parse_err
                     )
-                    results[i] = self._landmark_fallback_only(
+                    results[i] = self._landmark_fallback(
                         landmarks_compat_list[i], crop_list[i], person_masks[i], ieds[i]
                     )
 
         return results
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["_class_segmenter"] = None
+        state["_class_segmenter_failed"] = False
+        state["_class_segmenter_lock"] = None
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._class_segmenter_lock = threading.Lock()
+
+    def close(self) -> None:
+        """Release the multiclass segmenter, if one was built.
+
+        Like ``FaceDetector.close`` this must run on the main thread while the
+        MediaPipe dispatcher is alive; leaving tasks to the garbage collector
+        can hang interpreter shutdown. Idempotent.
+        """
+        seg = getattr(self, "_class_segmenter", None)
+        self._class_segmenter = None
+        if seg is not None:
+            try:
+                seg.close()
+            except Exception as exc:
+                logger.debug("Multiclass segmenter close raised: %s", exc)
+
+    def _get_class_segmenter(self):
+        """Return the multiclass segmenter, building it on first use.
+
+        Resolves ``selfie_multiclass`` through the verified model cache
+        (downloading it on first use unless offline mode is on). Any failure
+        is logged once and remembered, and the caller falls back to
+        landmark-only masks. ``RETOUCH_CLASS_SEGMENTER=0`` disables it.
+        """
+        if self._class_segmenter is not None or self._class_segmenter_failed:
+            return self._class_segmenter
+        with self._class_segmenter_lock:
+            if self._class_segmenter is not None or self._class_segmenter_failed:
+                return self._class_segmenter
+            if os.environ.get(_MC_DISABLE_ENV, "1").strip().lower() in {"0", "false", "no", "off"}:
+                self._class_segmenter_failed = True
+                return None
+            try:
+                import mediapipe as mp
+                from .model_fetch import get_model_path
+
+                path = get_model_path("selfie_multiclass")
+                vision = mp.tasks.vision
+                base = mp.tasks.BaseOptions
+                self._class_segmenter = vision.ImageSegmenter.create_from_options(
+                    vision.ImageSegmenterOptions(
+                        base_options=base(model_asset_path=path, delegate=base.Delegate.CPU),
+                        running_mode=vision.RunningMode.IMAGE,
+                        output_category_mask=False,
+                        output_confidence_masks=True,
+                    )
+                )
+                logger.info("Face parsing: BiSeNet absent, using MediaPipe multiclass segmenter for hair/neck masks")
+            except Exception as exc:
+                self._class_segmenter_failed = True
+                logger.info(
+                    "Multiclass segmenter unavailable; using landmark-only hair/neck masks: %s", exc
+                )
+        return self._class_segmenter
+
+    def _segment_classes(self, img_bgr: np.ndarray) -> Optional[np.ndarray]:
+        """Per-pixel class confidences ``(H, W, 6)`` float32, or None.
+
+        Channels follow the model card: background, hair, body-skin,
+        face-skin, clothes, others (accessories).
+        """
+        seg = self._get_class_segmenter()
+        if seg is None or img_bgr is None or img_bgr.ndim != 3 or min(img_bgr.shape[:2]) < 8:
+            return None
+        try:
+            import mediapipe as mp
+
+            img_u8 = img_bgr
+            if img_u8.dtype != np.uint8:
+                img_u8 = np.clip(img_u8, 0, 255).astype(np.uint8)
+            rgb = np.ascontiguousarray(cv2.cvtColor(img_u8, cv2.COLOR_BGR2RGB))
+            with self._class_segmenter_lock:
+                result = seg.segment(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
+            masks = result.confidence_masks or []
+            if len(masks) != _MC_NUM_CLASSES:
+                return None
+            h, w = img_bgr.shape[:2]
+            probs = np.empty((h, w, _MC_NUM_CLASSES), dtype=np.float32)
+            for i, m in enumerate(masks):
+                arr = np.squeeze(np.asarray(m.numpy_view(), dtype=np.float32))
+                if arr.shape != (h, w):
+                    arr = cv2.resize(arr, (w, h), interpolation=cv2.INTER_LINEAR)
+                probs[:, :, i] = arr
+            return np.clip(probs, 0.0, 1.0)
+        except Exception as exc:
+            logger.warning("Multiclass segmentation failed on shape=%s: %s", img_bgr.shape, exc)
+            return None
+
+    def _landmark_fallback(
+        self,
+        landmarks: Any,
+        img_bgr: np.ndarray,
+        person_mask: Optional[np.ndarray],
+        ied: float,
+    ) -> "FaceRegions":
+        """Landmark fallback, refined by the multiclass segmenter when available."""
+        return self._landmark_fallback_only(
+            landmarks, img_bgr, person_mask, ied,
+            class_probs=self._segment_classes(img_bgr),
+        )
 
     def _clip_bisenet_skin_to_landmark_oval(
         self,
@@ -838,8 +968,15 @@ class FaceParser:
         img_bgr: np.ndarray,
         person_mask: Optional[np.ndarray],
         ied: float,
+        class_probs: Optional[np.ndarray] = None,
     ) -> "FaceRegions":
-        """Construct face region masks using landmarks when BiSeNet fails or is bypassed."""
+        """Construct face region masks using landmarks when BiSeNet fails or is bypassed.
+
+        ``class_probs`` is the optional ``(H, W, 6)`` output of
+        ``_segment_classes``. With it, hair and neck come from the segmenter
+        and bangs/accessories are cut out of skin. Without it, hair is a
+        head-hugging band inside the person mask and neck stays empty.
+        """
         h_img, w_img = img_bgr.shape[:2]
         feather = max(int(ied * 0.08), 3)
         regions = FaceRegions()
@@ -872,11 +1009,114 @@ class FaceParser:
             pm = squeeze_mask(pm)
             skin *= pm
         regions.skin = skin
-        regions.hair = np.clip(person_mask - regions.face_oval, 0, 1) if person_mask is not None else np.zeros((h_img, w_img), dtype=np.float32)
         regions.neck = np.zeros((h_img, w_img), dtype=np.float32)
+        if person_mask is not None:
+            regions.hair = self._landmark_hair_band(regions.face_oval, pm)
+        else:
+            regions.hair = np.zeros((h_img, w_img), dtype=np.float32)
+
+        if class_probs is not None and class_probs.shape[:2] == (h_img, w_img):
+            self._refine_fallback_with_classes(regions, class_probs, img_bgr, feather)
 
         self._add_landmark_subregions(regions, landmarks, h_img, w_img, ied, feather)
         return regions
+
+    @staticmethod
+    def _face_oval_extent(face_oval: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
+        ys, xs = np.nonzero(face_oval > 0.5)
+        if ys.size == 0:
+            return None
+        return int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
+
+    def _landmark_hair_band(self, face_oval: np.ndarray, person_mask: np.ndarray) -> np.ndarray:
+        """Model-free hair estimate: person pixels in a band around the head.
+
+        The old fallback used ``person_mask - face_oval``, which is the whole
+        body (clothes, hands, props) and 10-20x BiSeNet's hair area. This keeps
+        only the part of the person within ~0.35 face widths of the face oval
+        and above the chin, which is where hair almost always is. Long hair
+        below the chin is missed; that is the safe direction to be wrong.
+        """
+        h, w = face_oval.shape[:2]
+        ext = self._face_oval_extent(face_oval)
+        if ext is None:
+            return np.zeros((h, w), dtype=np.float32)
+        x0, _y0, x1, y1 = ext
+        r = max(int(0.35 * (x1 - x0 + 1)), 3)
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
+        oval_bin = (face_oval > 0.5).astype(np.uint8)
+        band = cv2.dilate(oval_bin, k).astype(np.float32) - oval_bin.astype(np.float32)
+        band[y1:, :] = 0.0
+        band = feather_mask(band, radius=max(r // 4, 3))
+        return np.clip(band * person_mask, 0.0, 1.0).astype(np.float32)
+
+    def _refine_fallback_with_classes(
+        self,
+        regions: "FaceRegions",
+        class_probs: np.ndarray,
+        img_bgr: np.ndarray,
+        feather: int,
+    ) -> None:
+        """Replace landmark hair/neck with segmenter output and cut bangs out of skin."""
+        h, w = class_probs.shape[:2]
+        hair_p = class_probs[:, :, _MC_HAIR]
+        body_p = class_probs[:, :, _MC_BODY_SKIN]
+
+        # Hair: segmenter confidence, edges snapped to the image with a
+        # guided filter (the model runs at 256 px, so raw edges are soft).
+        guide = img_bgr.astype(np.float32)
+        if guide.max() > 1.5:
+            guide = guide / 255.0
+        guide = cv2.cvtColor(guide, cv2.COLOR_BGR2GRAY) if guide.ndim == 3 else guide
+        r = max(int(feather), 2)
+        try:
+            import cv2.ximgproc as xp
+            hair = xp.guidedFilter(guide, hair_p, radius=r, eps=1e-3)
+        except (ImportError, AttributeError, cv2.error):
+            from .utils import guided_filter
+            hair = guided_filter(hair_p, radius=r, eps=1e-3, guide=guide)
+        regions.hair = np.clip(hair, 0.0, 1.0).astype(np.float32)
+
+        # Skin: remove what the segmenter says is hair (bangs, fringe),
+        # clothes (masks, high collars) or accessories (glasses, headdress)
+        # inside the landmark face oval, unless that would gut the skin.
+        skin = regions.skin
+        occluder = np.clip(
+            hair_p + class_probs[:, :, _MC_CLOTHES] + class_probs[:, :, _MC_OTHERS], 0.0, 1.0
+        )
+        refined = np.clip(skin * (1.0 - occluder), 0.0, 1.0)
+        before = float(skin.sum())
+        if before > 0 and float(refined.sum()) >= (1.0 - _MC_MAX_SKIN_LOSS) * before:
+            regions.skin = refined.astype(np.float32)
+        elif before > 0:
+            logger.info(
+                "Multiclass segmenter would remove %.0f%% of landmark skin; keeping landmark skin",
+                100.0 * (1.0 - float(refined.sum()) / before),
+            )
+
+        # Neck: body-skin in a band under the jaw, no wider than the face
+        # (keeps chest, shoulders and hands out, like BiSeNet's neck label).
+        ext = self._face_oval_extent(regions.face_oval)
+        if ext is not None:
+            x0, y0, x1, y1 = ext
+            fw, fh = x1 - x0 + 1, y1 - y0 + 1
+            band = np.zeros((h, w), dtype=np.float32)
+            bx0 = max(0, int(x0 + 0.05 * fw))
+            bx1 = min(w, int(x1 - 0.05 * fw) + 1)
+            by0 = max(0, int(y1 - 0.25 * fh))
+            by1 = min(h, int(y1 + 0.5 * fh) + 1)
+            band[by0:by1, bx0:bx1] = 1.0
+            band = feather_mask(band, radius=max(int(0.08 * fw), 3))
+            neck = body_p * band * (1.0 - np.clip(regions.face_oval, 0.0, 1.0))
+            # A hand raised to the chin is body-skin too; keep only the blobs
+            # that reach up to the jaw.
+            n_lbl, lbl = cv2.connectedComponents((neck > 0.5).astype(np.uint8))
+            if n_lbl > 1:
+                jaw_rows = lbl[by0:min(h, y1 + 1)]
+                keep = np.isin(lbl, np.unique(jaw_rows[jaw_rows > 0]))
+                keep = feather_mask(keep.astype(np.float32), radius=max(int(0.03 * fw), 2))
+                neck = neck * np.clip(keep, 0.0, 1.0)
+            regions.neck = np.clip(neck, 0.0, 1.0).astype(np.float32)
 
     def _add_landmark_subregions(
         self,

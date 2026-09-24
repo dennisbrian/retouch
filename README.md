@@ -69,13 +69,19 @@ curl -L -o models/face_landmarker.task \
 curl -L -o models/selfie_segmenter.tflite \
   "https://storage.googleapis.com/download/storage/v1/b/mediapipe-models/o/image_segmenter%2Fselfie_segmenter%2Ffloat16%2Flatest%2Fselfie_segmenter.tflite?alt=media&generation=1683436453600523"
 
+# MediaPipe multiclass selfie segmenter (downloaded on demand for hair/neck
+# masks when BiSeNet is not installed; Apache-2.0)
+curl -L -o models/selfie_multiclass_256x256.tflite \
+  "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite?generation=1682480017063560"
+
 # MediaPipe Pose Landmarker Full (downloaded on demand for body reshape)
 curl -L -o models/pose_landmarker_full.task \
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task?generation=1682642785209422"
 
 # Verify every downloaded artifact against models/manifest.json.
 python scripts/qa/verify_models.py \
-  --model face_landmarker --model selfie_segmenter --model pose_landmarker_full
+  --model face_landmarker --model selfie_segmenter --model selfie_multiclass \
+  --model pose_landmarker_full
 
 # Optional local BiSeNet face parsing ONNX (not distributed by the wheel)
 # Place a manifest-matching resnet18.onnx export at:
@@ -85,6 +91,11 @@ python scripts/qa/verify_models.py \
 The engine falls back to landmark-based masks if `resnet18.onnx` is missing.
 The manifest reports this model as unavailable until a verified release URL is
 provided; local binaries are accepted only when their SHA-256 and size match.
+BiSeNet's weights are trained on CelebAMask-HQ, which is non-commercial, so
+they are not shipped. On that fallback path the MediaPipe multiclass segmenter
+supplies the hair and neck masks and cuts bangs and accessories out of the skin
+mask. Without it (offline, or `RETOUCH_CLASS_SEGMENTER=0`) hair is a band of
+the person mask around the head and there is no neck mask.
 
 Set `RETOUCH_OFFLINE=1` before launching the GUI to disable update checks and
 prevent model downloads; the Advanced Retouch status panel shows the mode.

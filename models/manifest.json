@@ -19,6 +19,15 @@
       "availability": "downloadable",
       "description": "MediaPipe Selfie Segmenter (TFLite) — downloaded on demand into the verified user model cache for person/hair segmentation."
     },
+    "selfie_multiclass": {
+      "filename": "selfie_multiclass_256x256.tflite",
+      "url": "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite?generation=1682480017063560",
+      "sha256": "c6748b1253a99067ef71f7e26ca71096cd449baefa8f101900ea23016507e0e0",
+      "size_bytes": 16371837,
+      "license": "Apache-2.0",
+      "availability": "downloadable",
+      "description": "MediaPipe Multi-class Selfie Segmenter (256x256; background, hair, body-skin, face-skin, clothes, accessories). Apache-2.0 per the Google model card. Downloaded on demand and used for hair/neck masks when BiSeNet face parsing is not installed."
+    },
     "pose_landmarker_full": {
       "filename": "pose_landmarker_full.task",
       "url": "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task?generation=1682642785209422",
