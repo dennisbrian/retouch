@@ -35,6 +35,9 @@ output verification.
 
 ## Plans (`docs/plans/`)
 - `MASTER_PLAN.md` — Overall roadmap
+- [Feature scan: what to build next — 2026-09-24](plans/RESEARCH_FEATURE_SCAN_2026_09_24.md)
+  — Outward research (competitors, cosplay needs, social output, culling, local
+  models and licenses, labeling rules, video) ranked into 18 candidate features
 - [Proposed P9: support usability and selective retouch research — 2026-09-11](plans/RESEARCH_P9_SELECTIVE_RETOUCH_PROPOSAL_2026_09_11.md)
   — Provisional topic after P8; current-code and six-primary-source review of
   evidence calibration, accepted-region errors, coverage, and abstention
