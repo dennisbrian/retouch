@@ -109,6 +109,16 @@ python3 cli.py /path/to/photos -o /path/to/output --recipe cosplay_clear_v1 --wo
 
 See [BATCH_GUIDE.md](docs/guides/BATCH_GUIDE.md) for full CLI options.
 
+### Split a shoot by capture time
+
+```bash
+./run split ~/shoots/2026-09-20            # preview the sets
+./run split ~/shoots/2026-09-20 --move     # one folder per set; RAF+JPG pairs stay together
+```
+
+A new set starts after a 15-minute pause (`--gap`), or use `--by hour` / `--by day`.
+See [SPLIT_SHOOT.md](docs/guides/SPLIT_SHOOT.md).
+
 ### Recipe QA
 
 Compare recipes on one photo or sweep selected recipes across a folder before
@@ -197,6 +207,7 @@ This restarts the Gradio GUI whenever a file under `.` or `retouch/` changes.
 - [API.md](docs/architecture/API.md) — Python API reference and parameter list
 - [ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) — pipeline design and module breakdown
 - [BATCH_GUIDE.md](docs/guides/BATCH_GUIDE.md) — batch processing examples
+- [SPLIT_SHOOT.md](docs/guides/SPLIT_SHOOT.md) — split a shoot into folders by capture time
 - [RECIPE_SWEEP.md](docs/RECIPE_SWEEP.md) — recipe comparisons and folder visual QA
 - [GUI.md](docs/guides/GUI.md) — Gradio web UI layout, components, and styling
 - [RECIPE_GUIDE.md](docs/guides/RECIPE_GUIDE.md) — recipe authoring reference
