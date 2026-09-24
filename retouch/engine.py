@@ -209,6 +209,7 @@ from .makeup_v2 import MakeupEngineV2
 from .frequency import FrequencySeparator, _texture_adaptation_factor
 from .perf_optimizations import (
     FaceProcessorPool,
+    _accum,  # noqa: F401  re-exported; tests import it from retouch.engine
     _FaceResult,
     _norm_mask,
     _process_face_core,
