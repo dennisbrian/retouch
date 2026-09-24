@@ -2,6 +2,8 @@
 
 import argparse
 import atexit
+import re
+import signal
 import shutil
 import sys
 import os
@@ -9,6 +11,8 @@ import time
 import warnings
 from pathlib import Path
 from typing import Any, Dict, Optional
+import multiprocessing
+import queue
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import cpu_count
 
@@ -19,6 +23,13 @@ from tqdm import tqdm
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from retouch import RetouchEngine
+from retouch.batch_progress import (
+    BatchProgress,
+    ProgressReporter,
+    emit,
+    image_megapixels,
+    make_event_sink,
+)
 from retouch.engine import _adjust_contrast
 from retouch.grading import PRESETS, ColorGrader
 from retouch.io import (
@@ -35,7 +46,7 @@ from retouch.io import (
     resize_for_processing,
     write_image_with_color_context,
 )
-from retouch.recipes import CURATED_RECIPE_NAMES, RECIPES
+from retouch.recipes import CURATED_RECIPE_NAMES
 from retouch.params import PROCESSING_PARAMS, recipe_to_params
 from retouch.session import Session, create_session_from_params
 from retouch.recipe_cookbook import list_recipes, search_recipes
@@ -183,11 +194,67 @@ def _save_session(
 
 
 _worker_engine = None
+# Live-progress event queue shared with the parent's ProgressReporter; set by
+# _init_worker under --workers>1, None in the serial path and in tests.
+_worker_progress_q = None
 
 
-def _init_worker():
-    global _worker_engine
+def _init_worker(progress_q=None, with_engine=True):
+    global _worker_engine, _worker_progress_q
+    _worker_progress_q = progress_q
+    if progress_q is not None:
+        # Progress events are best-effort: never let this worker block at exit
+        # flushing a queue nobody reads any more (see the batch-hang history
+        # in _process_single's finally block).
+        progress_q.cancel_join_thread()
+    # Ctrl-C reaches every process in the terminal's process group. The
+    # parent owns shutdown (cancel queued images, then terminate workers), so
+    # workers ignore SIGINT instead of abandoning their image and pulling the
+    # next one off the queue; SIGTERM from the parent takes the inner face
+    # pool down with the worker so no grandchild is orphaned.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, _terminate_worker)
+    if not with_engine:
+        return
     _worker_engine = RetouchEngine()
+
+
+def _terminate_worker(signum, _frame):
+    for child in multiprocessing.active_children():
+        child.terminate()
+    os._exit(128 + signum)
+
+
+# Partial files from retouch.io's atomic writer: .<stem>.tmp-<pid>-<hex><ext>
+_ATOMIC_TEMP_RE = re.compile(r"^\..+\.tmp-\d+-[0-9a-f]{8}\.[A-Za-z0-9]+$")
+
+
+def _stop_pool(pool):
+    """Stop a batch pool now: drop queued images, end in-flight ones.
+
+    In-flight images are lost, but outputs are written atomically, so none
+    is left half-written and a rerun redoes exactly those images.
+    """
+    # shutdown() drops the executor's process table, so grab it first.
+    procs = list((getattr(pool, "_processes", None) or {}).values())
+    pool.shutdown(wait=False, cancel_futures=True)
+    for p in procs:
+        if p.is_alive():
+            p.terminate()
+    for p in procs:
+        p.join(timeout=10)
+
+
+def _remove_partial_outputs(output_dir):
+    """Delete atomic-write temps left by workers terminated mid-write."""
+    if output_dir is None or not Path(output_dir).is_dir():
+        return
+    for tmp in Path(output_dir).rglob(".*.tmp-*"):
+        if _ATOMIC_TEMP_RE.match(tmp.name) and tmp.is_file():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
     # Each pool worker owns a RetouchEngine, which owns its own internal
     # FaceProcessorPool (a nested ProcessPoolExecutor, up to 4 more
     # processes). This atexit hook is a backstop for the single-face case
@@ -272,7 +339,70 @@ def _linear_raw_to_engine_bgr(path, exposure: float = 0.0, contrast: float = 1.0
     return bgr
 
 
+def _progress_key(img_path, input_root=None):
+    """Stable per-image key for progress events and the progress file.
+
+    Recursive batches can hold the same file name in several folders, so the
+    key is the path relative to the input root when there is one.
+    """
+    path = Path(img_path)
+    if input_root is not None:
+        try:
+            return path.resolve().relative_to(Path(input_root)).as_posix()
+        except ValueError:
+            pass
+    return path.name
+
+
+def _result_info(result, info):
+    """Copy picklable per-image metadata off a ProcessingResult into *info*.
+
+    Must run before the upscale ``cv2.resize``, which returns a plain ndarray
+    and drops these attributes.
+    """
+    faces = getattr(result, "face_count", None)
+    if faces is not None:
+        info["faces"] = int(faces)
+    timings = getattr(result, "timings", None)
+    if timings:
+        info["timings"] = {
+            str(k): round(float(v), 1) for k, v in dict(timings).items()
+            if isinstance(v, (int, float))
+        }
+    qa = getattr(result, "qa", None) or []
+    info["qa"] = [
+        {
+            "detector": w.detector,
+            "score": round(float(w.score), 4),
+            "threshold": None if w.threshold is None else float(w.threshold),
+            "flagged": bool(w.flagged),
+            "message": w.message,
+        }
+        for w in qa
+    ]
+
+
 def _process_single(args):
+    """Pool entry point: render one image, streaming progress to the parent.
+
+    Returns ``(name, status, info)`` where *info* is a plain dict (faces,
+    seconds, timings, qa, out_path, compare_path) for the progress file.
+    """
+    img_path, input_root = args[0], args[22]
+    key = _progress_key(img_path, input_root)
+    q = _worker_progress_q
+    sink = make_event_sink(q, key) if q is not None else None
+    if q is not None:
+        emit(q, key, "start", worker=os.getpid())
+    info: Dict[str, Any] = {}
+    t_start = time.time()
+    name, status = _process_single_impl(args, info, sink)
+    info["seconds"] = round(time.time() - t_start, 3)
+    return (name, status, info)
+
+
+def _process_single_impl(args, info, sink=None):
+    stage = sink if sink is not None else (lambda *_a, **_k: None)
     (img_path, output_dir, params, format_arg, quality, force, copy_exif_flag,
      max_dim, compare_flag, global_only, bit_depth, fail_on_qa, save_session,
      smart, linear_raw, raw_exposure, raw_contrast, raf_decoder,
@@ -297,6 +427,7 @@ def _process_single(args):
                 )
             return (img_path.name, "skipped")
 
+        stage("stage", {"stage": "decode"})
         if linear_raw and Path(img_path).suffix.lower() in RAW_EXTENSIONS:
             img_bgr = _linear_raw_to_engine_bgr(
                 img_path, exposure=raw_exposure, contrast=raw_contrast,
@@ -352,7 +483,10 @@ def _process_single(args):
                 should_close = True
 
             try:
-                result = engine.process(img_bgr, **dict(effective_params))
+                result = engine.process(
+                    img_bgr, progress_cb=sink, **dict(effective_params)
+                )
+                _result_info(result, info)
                 if review:
                     review_meta = result_review_meta(result, _scale)
                 if fail_on_qa:
@@ -400,6 +534,7 @@ def _process_single(args):
 
         # Embed the context-selected ICC at write time so the working profile,
         # bit depth, quality, and metadata survive the delivery boundary.
+        stage("stage", {"stage": "write"})
         exif_bytes = read_exif_bytes(img_path) if copy_exif_flag else None
         c2pa_manifest = read_c2pa_manifest(img_path) if copy_exif_flag else None
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -412,11 +547,14 @@ def _process_single(args):
             exif=exif_bytes,
             c2pa_manifest=c2pa_manifest,
         )
+        info["out_path"] = str(out_path)
 
         if compare_flag:
+            stage("stage", {"stage": "compare"})
             compare_path = out_path.with_name(f"{out_path.stem}_compare{out_path.suffix}")
             _assert_safe_destination(img_path, compare_path)
             make_comparison(original_full, result, compare_path, fmt, quality)
+            info["compare_path"] = str(compare_path)
 
         if save_session is not None:
             save_path = None if save_session is True else save_session
@@ -528,6 +666,10 @@ def find_images(input_path: str, recursive: bool) -> list[Path]:
     pattern = "**/*" if recursive else "*"
     files = []
     for f in path.glob(pattern):
+        # Hidden files include the ``.<stem>.tmp-*`` partial writes that
+        # retouch.io's atomic writer leaves only after a hard kill.
+        if f.name.startswith("."):
+            continue
         if f.suffix.lower() in IMAGE_EXTENSIONS:
             files.append(f)
     return sorted(files)
@@ -975,6 +1117,12 @@ def main() -> None:
                         help="Parallel workers (default: CPU count / 2)")
     parser.add_argument("--no-compare", action="store_false", dest="compare",
                         help="Skip side-by-side comparison output")
+    parser.add_argument("--progress-file", type=str, default=None,
+                        metavar="PATH",
+                        help="Where to write the live progress JSON (default: "
+                             ".retouch-progress.json in the output folder)")
+    parser.add_argument("--no-progress-file", action="store_true",
+                        help="Do not write the live progress JSON")
     parser.add_argument("--no-exif", action="store_true",
                         help="Skip EXIF metadata copying")
     parser.add_argument("--fail-on-qa", action="store_true",
@@ -1250,214 +1398,293 @@ def main() -> None:
     t0 = time.time()
     done = skipped = failed = 0
 
-    if args.workers > 1 and len(files) > 1:
-        pool_args = [
-            (f, output_dir, params, args.format, args.quality, args.force,
-             not args.no_exif, args.max_dim, args.compare, args.global_only,
-             args.bit_depth, args.fail_on_qa, args.save_session, args.smart,
-             args.linear_raw, args.raw_exposure, args.raw_contrast,
-             args.raf_decoder, args.raf2jpeg_path, args.raf2jpeg_quality,
-             args.fuji_match_strength, args.optical_correction,
-             recursive_root, review_root, args.review)
-            for f in files
-        ]
-        with ProcessPoolExecutor(
-            max_workers=args.workers,
-            initializer=None if args.global_only else _init_worker,
-        ) as pool:
-            futures = {pool.submit(_process_single, a): a[0] for a in pool_args}
-            for future in tqdm(as_completed(futures), total=len(files),
-                               desc="Retouching", unit="img"):
-                name, status = future.result()
-                if status == "done":
-                    done += 1
-                elif status == "skipped":
-                    skipped += 1
-                else:
-                    failed += 1
-                    tqdm.write(f"  ✖ {name}: {status}")
+    progress_keys = {f: _progress_key(f, recursive_root) for f in files}
+    progress = BatchProgress(
+        [(progress_keys[f], image_megapixels(f)) for f in files]
+    )
+    if args.no_progress_file:
+        progress_path = None
+    elif args.progress_file:
+        progress_path = Path(args.progress_file).expanduser()
+    elif output_dir:
+        progress_path = output_dir / ".retouch-progress.json"
     else:
-        engine = None if args.global_only else RetouchEngine()
-        try:
-            for f in tqdm(files, desc="Retouching", unit="img"):
-                img_t_start = time.time()
-                if args.linear_raw and f.suffix.lower() in RAW_EXTENSIONS:
+        progress_path = None
+    use_pool = args.workers > 1 and len(files) > 1
+    # Worker processes need a multiprocessing queue; the serial path feeds
+    # the reporter thread through a plain in-process queue.
+    progress_q = multiprocessing.Queue() if use_pool else queue.Queue()
+    reporter = ProgressReporter(progress, progress_q, progress_path)
+    interrupted = False
+
+    try:
+        if use_pool:
+            pool_args = [
+                (f, output_dir, params, args.format, args.quality, args.force,
+                 not args.no_exif, args.max_dim, args.compare, args.global_only,
+                 args.bit_depth, args.fail_on_qa, args.save_session, args.smart,
+                 args.linear_raw, args.raw_exposure, args.raw_contrast,
+                 args.raf_decoder, args.raf2jpeg_path, args.raf2jpeg_quality,
+                 args.fuji_match_strength, args.optical_correction,
+                 recursive_root, review_root, args.review)
+                for f in files
+            ]
+            pool = ProcessPoolExecutor(
+                max_workers=args.workers,
+                initializer=_init_worker,
+                initargs=(progress_q, not args.global_only),
+            )
+            try:
+                futures = {pool.submit(_process_single, a): a[0] for a in pool_args}
+                for future in as_completed(futures):
+                    f = futures[future]
                     try:
-                        img_bgr = _linear_raw_to_engine_bgr(
-                            f, exposure=args.raw_exposure, contrast=args.raw_contrast,
-                        )
-                        color_context = color_context_for_path(f)
-                    except Exception as e:
+                        name, status, info = future.result()
+                    except Exception as e:  # e.g. BrokenProcessPool
+                        name, status, info = f.name, f"failed: {e}", {}
+                    emit(progress_q, progress_keys[f], "finish",
+                         status=status, **info)
+                    if status == "done":
+                        done += 1
+                    elif status == "skipped":
+                        skipped += 1
+                    else:
                         failed += 1
-                        tqdm.write(f"  ✖ {f.name}: linear-raw {e}")
-                        if args.review:
-                            _safe_write_review_record(review_root, ReviewRecord(
-                                source=str(f.resolve()), status="failed", error=str(e),
-                                recipe=params.get("recipe"),
-                                relative=_review_relative(f, recursive_root),
-                                elapsed_s=time.time() - img_t_start,
-                            ))
-                        continue
-                else:
-                    correction_status = {}
+                        tqdm.write(f"  ✖ {name}: {status}")
+            except KeyboardInterrupt:
+                interrupted = True
+                tqdm.write("\n  ■ Stopping: cancelling queued images and "
+                           "ending the ones in progress…")
+                _stop_pool(pool)
+                _remove_partial_outputs(output_dir)
+            finally:
+                if not interrupted:
+                    pool.shutdown(wait=True)
+        else:
+            engine = None if args.global_only else RetouchEngine()
+            try:
+                for f in files:
+                    key = progress_keys[f]
+                    sink = make_event_sink(progress_q, key)
+                    info: Dict[str, Any] = {}
+                    status = "failed"
+                    t_img = time.time()
+                    emit(progress_q, key, "start", worker=None)
+                    img_t_start = t_img
                     try:
-                        img_bgr, color_context = imread_engine_with_context(
-                            f,
-                            raw_decoder=args.raf_decoder,
-                            raf2jpeg_path=args.raf2jpeg_path,
-                            raf2jpeg_quality=args.raf2jpeg_quality,
-                            fuji_match_strength=args.fuji_match_strength,
-                            optical_correction=args.optical_correction,
-                            correction_status=correction_status,
+                        fmt = output_format(f, args.format)
+                        # For 16-bit, force PNG or TIFF
+                        if args.bit_depth == 16 and fmt not in ("png", "tif", "tiff"):
+                            fmt = "png"
+                        out_path = _destination_for_image(
+                            f, output_dir, fmt, input_root=recursive_root,
                         )
-                    except (OSError, ValueError, RuntimeError) as e:
-                        failed += 1
-                        tqdm.write(f"  ✖ {f.name}: {e}")
-                        if args.review:
-                            _safe_write_review_record(review_root, ReviewRecord(
-                                source=str(f.resolve()), status="failed", error=str(e),
-                                recipe=params.get("recipe"),
-                                relative=_review_relative(f, recursive_root),
-                                elapsed_s=time.time() - img_t_start,
-                            ))
-                        continue
-                    if args.optical_correction:
-                        tqdm.write(
-                            f"  ℹ {f.name}: Lensfun "
-                            f"{correction_status.get('reason') or correction_status.get('applied', ())}"
-                        )
-                if img_bgr is None:
-                    failed += 1
-                    tqdm.write(f"  ✖ {f.name}: failed to read")
-                    if args.review:
-                        _safe_write_review_record(review_root, ReviewRecord(
-                            source=str(f.resolve()), status="failed", error="failed to read",
-                            recipe=params.get("recipe"),
-                            relative=_review_relative(f, recursive_root),
-                            elapsed_s=time.time() - img_t_start,
-                        ))
-                    continue
+                        _assert_safe_destination(f, out_path)
 
-                fmt = output_format(f, args.format)
-                # For 16-bit, force PNG or TIFF
-                if args.bit_depth == 16 and fmt not in ("png", "tif", "tiff"):
-                    fmt = "png"
-                out_path = _destination_for_image(
-                    f, output_dir, fmt, input_root=recursive_root,
-                )
-                _assert_safe_destination(f, out_path)
+                        # Skip before decoding: a resumed batch should not pay a
+                        # full 26 MP decode for every image it already rendered.
+                        if out_path.exists() and not args.force:
+                            skipped += 1
+                            status = "skipped"
+                            if args.review:
+                                _maybe_write_skip_record(
+                                    review_root, f, out_path, recursive_root, params.get("recipe"),
+                                )
+                            continue
 
-                if out_path.exists() and not args.force:
-                    skipped += 1
-                    if args.review:
-                        _maybe_write_skip_record(
-                            review_root, f, out_path, recursive_root, params.get("recipe"),
-                        )
-                    continue
-
-                orig_shape = img_bgr.shape[:2]
-                original_full = img_bgr.copy() if args.compare else None
-                img_bgr, _scale = resize_for_processing(img_bgr, args.max_dim)
-
-                # F10: --smart — per-image analysis overrides recipe/params.
-                effective_params = params
-                if args.smart:
-                    try:
-                        effective_params, suggestion = _smart_params_for_image(
-                            img_bgr, params
-                        )
-                        tqdm.write(
-                            f"  🧠 {f.name}: {suggestion.recipe} "
-                            f"({len(suggestion.params)} overrides)"
-                        )
-                    except (ValueError, RuntimeError) as e:
-                        tqdm.write(
-                            f"  ⚠ {f.name}: smart analysis failed ({e}), "
-                            f"using base params"
-                        )
-
-                review_meta = {"faces": [], "qa": []}
-                if args.global_only:
-                    result = _apply_global_finish(img_bgr, dict(effective_params))
-                else:
-                    result = engine.process(img_bgr, **dict(effective_params))
-                    if args.review:
-                        review_meta = result_review_meta(result, _scale)
-                    if args.fail_on_qa:
-                        qa = getattr(result, 'qa', [])
-                        if qa:
-                            flagged = [w for w in qa if w.flagged]
-                            if flagged:
-                                reasons = "; ".join(f"{w.detector}={w.score:.2f}" for w in flagged)
-                                print(f"  ✖ {f.name}: QA_FAIL: {reasons}")
+                        sink("stage", {"stage": "decode"})
+                        if args.linear_raw and f.suffix.lower() in RAW_EXTENSIONS:
+                            try:
+                                img_bgr = _linear_raw_to_engine_bgr(
+                                    f, exposure=args.raw_exposure, contrast=args.raw_contrast,
+                                )
+                                color_context = color_context_for_path(f)
+                            except Exception as e:
                                 failed += 1
+                                status = f"failed: linear-raw {e}"
+                                tqdm.write(f"  ✖ {f.name}: linear-raw {e}")
                                 if args.review:
                                     _safe_write_review_record(review_root, ReviewRecord(
-                                        source=str(f.resolve()), status="qa_fail",
+                                        source=str(f.resolve()), status="failed", error=str(e),
                                         recipe=params.get("recipe"),
-                                        faces=review_meta.get("faces", []),
-                                        qa=review_meta.get("qa", []),
                                         relative=_review_relative(f, recursive_root),
                                         elapsed_s=time.time() - img_t_start,
                                     ))
                                 continue
+                        else:
+                            correction_status = {}
+                            try:
+                                img_bgr, color_context = imread_engine_with_context(
+                                    f,
+                                    raw_decoder=args.raf_decoder,
+                                    raf2jpeg_path=args.raf2jpeg_path,
+                                    raf2jpeg_quality=args.raf2jpeg_quality,
+                                    fuji_match_strength=args.fuji_match_strength,
+                                    optical_correction=args.optical_correction,
+                                    correction_status=correction_status,
+                                )
+                            except (OSError, ValueError, RuntimeError) as e:
+                                failed += 1
+                                status = f"failed: {e}"
+                                tqdm.write(f"  ✖ {f.name}: {e}")
+                                if args.review:
+                                    _safe_write_review_record(review_root, ReviewRecord(
+                                        source=str(f.resolve()), status="failed", error=str(e),
+                                        recipe=params.get("recipe"),
+                                        relative=_review_relative(f, recursive_root),
+                                        elapsed_s=time.time() - img_t_start,
+                                    ))
+                                continue
+                            if args.optical_correction:
+                                tqdm.write(
+                                    f"  ℹ {f.name}: Lensfun "
+                                    f"{correction_status.get('reason') or correction_status.get('applied', ())}"
+                                )
+                        if img_bgr is None:
+                            failed += 1
+                            status = "failed: failed to read"
+                            tqdm.write(f"  ✖ {f.name}: failed to read")
+                            if args.review:
+                                _safe_write_review_record(review_root, ReviewRecord(
+                                    source=str(f.resolve()), status="failed", error="failed to read",
+                                    recipe=params.get("recipe"),
+                                    relative=_review_relative(f, recursive_root),
+                                    elapsed_s=time.time() - img_t_start,
+                                ))
+                            continue
 
-                if _scale < 1.0:
-                    result = cv2.resize(result, (orig_shape[1], orig_shape[0]),
-                                        interpolation=cv2.INTER_LINEAR)
+                        orig_shape = img_bgr.shape[:2]
+                        original_full = img_bgr.copy() if args.compare else None
+                        img_bgr, _scale = resize_for_processing(img_bgr, args.max_dim)
+
+                        # F10: --smart — per-image analysis overrides recipe/params.
+                        effective_params = params
+                        if args.smart:
+                            try:
+                                effective_params, suggestion = _smart_params_for_image(
+                                    img_bgr, params
+                                )
+                                tqdm.write(
+                                    f"  🧠 {f.name}: {suggestion.recipe} "
+                                    f"({len(suggestion.params)} overrides)"
+                                )
+                            except (ValueError, RuntimeError) as e:
+                                tqdm.write(
+                                    f"  ⚠ {f.name}: smart analysis failed ({e}), "
+                                    f"using base params"
+                                )
+
+                        review_meta = {"faces": [], "qa": []}
+                        if args.global_only:
+                            result = _apply_global_finish(img_bgr, dict(effective_params))
+                        else:
+                            result = engine.process(
+                                img_bgr, progress_cb=sink, **dict(effective_params)
+                            )
+                            _result_info(result, info)
+                            if args.review:
+                                review_meta = result_review_meta(result, _scale)
+                            if args.fail_on_qa:
+                                qa = getattr(result, 'qa', [])
+                                if qa:
+                                    flagged = [w for w in qa if w.flagged]
+                                    if flagged:
+                                        reasons = "; ".join(f"{w.detector}={w.score:.2f}" for w in flagged)
+                                        tqdm.write(f"  ✖ {f.name}: QA_FAIL: {reasons}")
+                                        failed += 1
+                                        status = f"QA_FAIL: {reasons}"
+                                        if args.review:
+                                            _safe_write_review_record(review_root, ReviewRecord(
+                                                source=str(f.resolve()), status="qa_fail",
+                                                recipe=params.get("recipe"),
+                                                faces=review_meta.get("faces", []),
+                                                qa=review_meta.get("qa", []),
+                                                relative=_review_relative(f, recursive_root),
+                                                elapsed_s=time.time() - img_t_start,
+                                            ))
+                                        continue
+
+                        if _scale < 1.0:
+                            result = cv2.resize(result, (orig_shape[1], orig_shape[0]),
+                                                interpolation=cv2.INTER_LINEAR)
                 
-                # Embed the working-space ICC selected by ColorContext. The
-                # source ICC is never reattached to already-converted pixels.
-                from retouch.io import read_exif_bytes
-                exif_bytes = read_exif_bytes(f) if not args.no_exif else None
-                c2pa_manifest = read_c2pa_manifest(f) if not args.no_exif else None
-                out_path.parent.mkdir(parents=True, exist_ok=True)
-                write_image_with_color_context(
-                    str(out_path),
-                    result,
-                    color_context,
-                    bit_depth=args.bit_depth,
-                    quality=args.quality,
-                    exif=exif_bytes,
-                    c2pa_manifest=c2pa_manifest,
-                )
+                        # Embed the working-space ICC selected by ColorContext. The
+                        # source ICC is never reattached to already-converted pixels.
+                        sink("stage", {"stage": "write"})
+                        from retouch.io import read_exif_bytes
+                        exif_bytes = read_exif_bytes(f) if not args.no_exif else None
+                        c2pa_manifest = read_c2pa_manifest(f) if not args.no_exif else None
+                        out_path.parent.mkdir(parents=True, exist_ok=True)
+                        write_image_with_color_context(
+                            str(out_path),
+                            result,
+                            color_context,
+                            bit_depth=args.bit_depth,
+                            quality=args.quality,
+                            exif=exif_bytes,
+                            c2pa_manifest=c2pa_manifest,
+                        )
+                        info["out_path"] = str(out_path)
 
-                if args.compare:
-                    compare_path = out_path.with_name(
-                        f"{out_path.stem}_compare{out_path.suffix}"
-                    )
-                    _assert_safe_destination(f, compare_path)
-                    make_comparison(original_full, result, compare_path, fmt, args.quality)
+                        if args.compare:
+                            sink("stage", {"stage": "compare"})
+                            compare_path = out_path.with_name(
+                                f"{out_path.stem}_compare{out_path.suffix}"
+                            )
+                            _assert_safe_destination(f, compare_path)
+                            make_comparison(original_full, result, compare_path, fmt, args.quality)
+                            info["compare_path"] = str(compare_path)
 
-                if args.save_session is not None:
-                    save_path = None if args.save_session is True else args.save_session
-                    try:
-                        written = _save_session(effective_params, f, out_path, save_path)
-                    except (OSError, ValueError) as e:
-                        tqdm.write(f"  ⚠ {f.name}: could not save session: {e}")
-                    else:
-                        tqdm.write(f"  💾 session → {written}")
-                if args.review:
-                    _safe_write_review_record(review_root, ReviewRecord(
-                        source=str(f.resolve()),
-                        output=str(out_path),
-                        compare=str(compare_path) if args.compare else None,
-                        status="done",
-                        recipe=params.get("recipe"),
-                        faces=review_meta.get("faces", []),
-                        qa=review_meta.get("qa", []),
-                        relative=_review_relative(f, recursive_root),
-                        elapsed_s=time.time() - img_t_start,
-                    ))
-                done += 1
-        finally:
-            if engine is not None:
-                engine.close()
+                        if args.save_session is not None:
+                            save_path = None if args.save_session is True else args.save_session
+                            try:
+                                written = _save_session(effective_params, f, out_path, save_path)
+                            except (OSError, ValueError) as e:
+                                tqdm.write(f"  ⚠ {f.name}: could not save session: {e}")
+                            else:
+                                tqdm.write(f"  💾 session → {written}")
+                        if args.review:
+                            _safe_write_review_record(review_root, ReviewRecord(
+                                source=str(f.resolve()),
+                                output=str(out_path),
+                                compare=str(compare_path) if args.compare else None,
+                                status="done",
+                                recipe=params.get("recipe"),
+                                faces=review_meta.get("faces", []),
+                                qa=review_meta.get("qa", []),
+                                relative=_review_relative(f, recursive_root),
+                                elapsed_s=time.time() - img_t_start,
+                            ))
+                        done += 1
+                        status = "done"
+                    finally:
+                        info["seconds"] = round(time.time() - t_img, 3)
+                        emit(progress_q, key, "finish", status=status, **info)
+            except KeyboardInterrupt:
+                interrupted = True
+                tqdm.write("\n  ■ Stopped.")
+            finally:
+                if engine is not None:
+                    engine.close()
+    finally:
+        summary = reporter.close()
+        if use_pool:
+            # Nothing reads the queue any more; don't block exit flushing it.
+            progress_q.cancel_join_thread()
+            progress_q.close()
 
     elapsed = time.time() - t0
-    print(f"\nDone — {done} processed, {skipped} skipped, {failed} failed"
+    heading = "Stopped" if interrupted else "Done"
+    print(f"\n{heading} — {done} processed, {skipped} skipped, {failed} failed"
           f"  ({elapsed:.1f}s)")
+    # The first summary line repeats the counts above, except that after a
+    # stop it also names the unfinished and not-started images.
+    for line in (summary if interrupted else summary[1:]):
+        print(line)
+    if progress_path is not None:
+        print(f"Progress file: {progress_path}")
 
+    # After a Ctrl-C these still cover the images that finished.
     if social_formats:
         _export_social_crops(
             files, output_dir, args, recursive_root, social_formats,
@@ -1468,6 +1695,11 @@ def main() -> None:
             print(f"Review page → {page}")
         except Exception as e:
             print(f"⚠ Review page failed: {e}")
+
+    if interrupted:
+        print("Run the same command again to continue: finished images are "
+              "skipped and the rest are rendered.")
+        sys.exit(130)
 
 
 if __name__ == "__main__":

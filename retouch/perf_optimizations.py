@@ -19,7 +19,7 @@ import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -1625,6 +1625,7 @@ class FaceProcessorPool:
     def process_faces(
         self,
         payloads: List[Tuple[Any, ...]],
+        on_face_done: Optional[Callable[[int], None]] = None,
     ) -> List[Optional[Dict[str, Any]]]:
         """
         Process all face crops in parallel. Falls back to sequential on error.
@@ -1635,13 +1636,21 @@ class FaceProcessorPool:
         The caller is responsible for reconstructing ``_FaceResult`` objects
         and for falling back to in-process processing when an entry is
         ``None``.
+
+        *on_face_done*, if given, is called with the face index in THIS
+        (parent) process each time a face's worker finishes successfully —
+        never for a failed face (the caller re-runs and reports those). It is
+        never sent to workers.
         """
         n = len(payloads)
 
         # ── fast path: single face — no IPC overhead ─────────────────────────
         if n == 1:
             logger.debug("Single face: bypassing IPC, processing inline")
-            return [_process_single_face_worker(payloads[0])]
+            single = _process_single_face_worker(payloads[0])
+            if on_face_done is not None and single is not None:
+                on_face_done(0)
+            return [single]
 
         # ── multi-face: dispatch to worker pool ───────────────────────────────
         if self._executor is None:
@@ -1666,6 +1675,9 @@ class FaceProcessorPool:
                     face_idx,
                 )
                 processed_crops[face_idx] = None
+                continue
+            if on_face_done is not None:
+                on_face_done(face_idx)
 
         return processed_crops
 
