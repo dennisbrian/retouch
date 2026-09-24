@@ -552,7 +552,10 @@ if __name__ == "__main__":
 
     # gui.py only sets up its log file when run as a script; the desktop
     # app imports it as a module, so do it here.
-    from retouch.diagnostics import setup_file_logging
+    from retouch.diagnostics import enable_native_crash_log, setup_file_logging
+    from retouch.update_check import start_background_check
 
     setup_file_logging()
+    enable_native_crash_log()
+    start_background_check()
     run_desktop()

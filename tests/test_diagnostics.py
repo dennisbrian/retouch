@@ -69,3 +69,62 @@ def test_clear_diagnostics_removes_crash_files(tmp_path, monkeypatch):
     result = clear_diagnostics()
     assert "Cleared" in result
     assert not (tmp_path / "cache" / "crash.log").exists()
+
+
+def test_enable_native_crash_log_points_faulthandler_at_log_dir(tmp_path, monkeypatch):
+    import faulthandler
+
+    import retouch.diagnostics as diagnostics
+
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    monkeypatch.setattr(diagnostics, "_native_crash_stream", None)
+    calls = []
+    # Don't hijack pytest's own faulthandler; just record the call.
+    monkeypatch.setattr(faulthandler, "enable", lambda **kw: calls.append(kw))
+
+    path = diagnostics.enable_native_crash_log()
+    try:
+        assert path == log_dir() / "native-crash.log"
+        assert "retouch started" in path.read_text(encoding="utf-8")
+        assert calls and calls[0]["file"].name == str(path)
+        assert calls[0]["all_threads"] is True
+        # Idempotent: a second call does not reopen or re-register.
+        assert diagnostics.enable_native_crash_log() == path
+        assert len(calls) == 1
+    finally:
+        diagnostics._native_crash_stream.close()
+
+
+def test_native_crash_leaves_a_traceback_on_disk(tmp_path):
+    """A real segfault in a child process must end up in native-crash.log."""
+    import os
+    import subprocess
+    import sys
+
+    env = dict(os.environ, HOME=str(tmp_path), LOCALAPPDATA=str(tmp_path))
+    code = (
+        "from retouch.diagnostics import enable_native_crash_log; "
+        "p = enable_native_crash_log(); print(p, flush=True); "
+        "import ctypes; ctypes.string_at(0)"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode != 0
+    log_path = proc.stdout.strip().splitlines()[0]
+    text = open(log_path, encoding="utf-8").read()
+    assert "Fatal Python error" in text
+    assert "string_at" in text or "<string>" in text
+
+
+def test_clear_diagnostics_removes_native_crash_log(tmp_path, monkeypatch):
+    monkeypatch.setenv("RETOUCH_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    native = log_dir() / "native-crash.log"
+    native.write_text("Fatal Python error", encoding="utf-8")
+    clear_diagnostics()
+    assert not native.exists()
+
+
+def test_diagnostics_report_names_native_crash_log():
+    assert "native crash log:" in diagnostics_report()

@@ -1503,3 +1503,35 @@ class TestJobDashboard:
         assert result == "ok"
         assert captured["only_files"] is not None
         assert {p.name for p in captured["only_files"]} == {"a.jpg"}
+
+
+class TestUpdateNotice:
+    """The desktop app imports gui as a module, so the update toast must be
+    wired to page load rather than to gui.py's __main__ block."""
+
+    def test_notice_is_registered_on_page_load(self):
+        fns = gui.app.fns.values() if isinstance(gui.app.fns, dict) else gui.app.fns
+        assert any(getattr(f, "fn", None) is gui.notify_update_available for f in fns)
+
+    def test_notice_shows_found_release(self, monkeypatch):
+        import retouch.update_check as uc
+
+        shown = []
+        monkeypatch.setattr(uc, "_background_result", uc.UpdateInfo("v9.9.9", "https://example.com/r"))
+        monkeypatch.setattr(gui.gr, "Info", lambda msg, **kw: shown.append(msg))
+        gui.notify_update_available()
+        assert shown and "v9.9.9" in shown[0]
+
+    def test_no_notice_when_up_to_date(self, monkeypatch):
+        import retouch.update_check as uc
+
+        shown = []
+        monkeypatch.setattr(uc, "_background_result", None)
+        monkeypatch.setattr(gui.gr, "Info", lambda msg, **kw: shown.append(msg))
+        gui.notify_update_available()
+        assert shown == []
+
+
+def test_gui_import_turns_off_gradio_analytics():
+    # Set before gradio is imported by gui.py; see the comment there.
+    assert os.environ.get("GRADIO_ANALYTICS_ENABLED") == "False"

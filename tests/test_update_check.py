@@ -80,3 +80,26 @@ class TestCheckForUpdate:
         with mock.patch("urllib.request.urlopen", return_value=_mock_response("v2.0.0.1")):
             info = check_for_update()
         assert info is not None
+
+
+class TestBackgroundCheck:
+    def test_result_is_available_after_thread_finishes(self, monkeypatch):
+        import retouch.update_check as uc
+
+        monkeypatch.delenv("RETOUCH_OFFLINE", raising=False)
+        monkeypatch.setattr(uc, "_background_result", None)
+        with mock.patch("urllib.request.urlopen", return_value=_mock_response("v99.0.0")):
+            thread = uc.start_background_check()
+            assert thread is not None
+            thread.join(timeout=5)
+        assert uc.available_update() == UpdateInfo("v99.0.0", "https://example.com/rel")
+
+    def test_offline_mode_starts_nothing(self, monkeypatch):
+        import retouch.update_check as uc
+
+        monkeypatch.setenv("RETOUCH_OFFLINE", "1")
+        monkeypatch.setattr(uc, "_background_result", None)
+        with mock.patch("urllib.request.urlopen") as urlopen:
+            assert uc.start_background_check() is None
+        urlopen.assert_not_called()
+        assert uc.available_update() is None

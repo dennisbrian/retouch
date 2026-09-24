@@ -779,6 +779,9 @@ def build_params(args: argparse.Namespace) -> dict:
 
 
 def main() -> None:
+    from retouch.diagnostics import enable_native_crash_log
+
+    enable_native_crash_log()
     warnings.filterwarnings(
         "always",
         category=DeprecationWarning,

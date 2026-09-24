@@ -13,6 +13,14 @@ import threading
 import zipfile
 from pathlib import Path
 
+# Gradio 4 reports every launch to api.gradio.app and looks up the machine's
+# public IP via checkip.amazonaws.com unless analytics are off. Retouch
+# promises that nothing leaves the computer except model downloads and the
+# update check, so switch it off before Gradio reads the variable.
+# setdefault keeps an explicit user override working.
+os.environ.setdefault("GRADIO_ANALYTICS_ENABLED", "False")
+os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+
 import cv2
 import numpy as np
 import gradio as gr
@@ -344,6 +352,15 @@ def advanced_model_status_text():
         f"**Face-aware status:** {face}.  **Network:** "
         f"{'offline/privacy mode' if offline_mode_enabled() else 'update checks enabled'}."
     )
+
+
+def notify_update_available() -> None:
+    """Show a toast when the background update check found a newer release."""
+    from retouch.update_check import available_update
+
+    info = available_update()
+    if info is not None:
+        gr.Info(f"Update available: {info.latest_version} — {info.url}", duration=20)
 
 
 def runtime_doctor_text() -> str:
@@ -1364,6 +1381,7 @@ def process_image(
     debug_images = []
     capture_notes = []
     successful_count = 0
+    failures = []
 
     color_ref_bgr = None
     if color_ref_img is not None and color_ref_strength > 0:
@@ -1708,10 +1726,18 @@ def process_image(
             })
             if crash_path:
                 _logger.info("Crash details saved to: %s", crash_path)
+            failures.append(f"{Path(str(curr_path)).name}: {type(e).__name__}: {e}")
 
     if successful_count == 0:
-        gr.Warning("No images were successfully processed.")
-        return None, gr.update(visible=False), None, None, "Error: No images were successfully processed.", None, gr.update(visible=False), qa_html
+        # Name the actual cause (offline model download, unsupported file,
+        # ...) instead of a generic line the user can't act on.
+        reason = failures[0] if failures else "no images were provided"
+        if len(reason) > 300:
+            reason = reason[:297] + "..."
+        more = f" ({len(failures) - 1} more failed; see the log)" if len(failures) > 1 else ""
+        message = f"No images were processed. {reason}{more}"
+        gr.Warning(message)
+        return None, gr.update(visible=False), None, None, f"Error: {message}", None, gr.update(visible=False), qa_html
 
     preview = first_combined if show_compare else first_result_rgb
     debug_gallery = debug_images if debug_images else None
@@ -5397,22 +5423,14 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     if callable(getattr(app, "unload", None)):
         app.unload(fn=cleanup_gui_request)
 
+    # gr.Info only reaches the page from inside an event, so the update found
+    # by the entry point's background check is shown on page load.
+    app.load(fn=notify_update_available, show_progress="hidden")
+
 if __name__ == "__main__":
-    from retouch.diagnostics import setup_file_logging
+    from retouch.diagnostics import enable_native_crash_log, setup_file_logging
+    from retouch.update_check import start_background_check
     setup_file_logging()
-
-    # Non-blocking update check; surfaces a toast once the UI is up.
-    import threading
-    from retouch.update_check import check_for_update, offline_mode_enabled
-
-    def _bg_update_check():
-        info = check_for_update()
-        if info is not None:
-            try:
-                gr.Info(f"Update available: {info.latest_version} — {info.url}", duration=20)
-            except Exception:  # noqa: BLE001 — UI not ready yet; drop silently
-                pass
-
-    if not offline_mode_enabled():
-        threading.Thread(target=_bg_update_check, daemon=True).start()
+    enable_native_crash_log()
+    start_background_check()
     app.queue(default_concurrency_limit=1).launch(server_name="127.0.0.1", server_port=7860)
