@@ -14,7 +14,7 @@ from retouch.model_fetch import (
 
 def test_optional_onnx_models_are_not_claimed_as_wheel_bundled():
     manifest = json.loads(Path("models/manifest.json").read_text(encoding="utf-8"))
-    for name in ("resnet18_bisenet", "retinaface_mv1", "denoise_nafnet"):
+    for name in ("resnet18_bisenet", "retinaface_mv1"):
         entry = manifest["models"][name]
         assert entry["availability"] == "unavailable"
         assert not entry.get("url")
@@ -43,6 +43,21 @@ def test_downloadable_models_have_pinned_urls_and_integrity_metadata():
         assert "generation=" in entry["url"]
         assert len(entry["sha256"]) == 64
         assert entry["size_bytes"] > 0
+
+
+def test_nafnet_denoise_is_downloadable_from_this_repos_release():
+    entry = json.loads(Path("models/manifest.json").read_text(encoding="utf-8"))[
+        "models"
+    ]["denoise_nafnet"]
+    assert entry["availability"] == "downloadable"
+    assert entry["url"].startswith(
+        "https://github.com/dennisbrian/retouch/releases/download/models-nafnet-v1/"
+    )
+    assert entry["url"].endswith("/" + entry["filename"])
+    assert entry["license"] == "MIT"
+    assert len(entry["sha256"]) == 64
+    assert entry["size_bytes"] > 0
+    assert model_status("denoise_nafnet")["downloadable"] is True
 
 
 def test_verify_model_rejects_missing_integrity_metadata(tmp_path, monkeypatch):

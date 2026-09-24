@@ -17,6 +17,25 @@ def pytest_addoption(parser):
     )
 
 
+@pytest.fixture(autouse=True)
+def _no_nafnet_download(monkeypatch):
+    """Keep the suite offline: AI denoise would otherwise fetch 117 MB on first use.
+
+    A locally cached/bundled model is still used (the real-model tests in
+    test_enhance.py skip without it); only the network download is blocked.
+    """
+    from retouch import model_fetch
+
+    real_download = model_fetch.download_model
+
+    def _guarded(name, *args, **kwargs):
+        if name == "denoise_nafnet":
+            raise model_fetch.ModelFetchError("tests never download the NAFNet model")
+        return real_download(name, *args, **kwargs)
+
+    monkeypatch.setattr(model_fetch, "download_model", _guarded)
+
+
 # ---------------------------------------------------------------------------
 # Eye-visibility gate mutation harness
 # ---------------------------------------------------------------------------
