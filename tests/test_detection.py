@@ -897,20 +897,34 @@ class TestDelegateSelection:
             CPU = object()
             GPU = object()
 
+    @pytest.fixture(autouse=True)
+    def _clear_gpu_env(self, monkeypatch):
+        # CI exports RETOUCH_GPU=0; start every case from a clean slate.
+        monkeypatch.delenv("RETOUCH_GPU", raising=False)
+        monkeypatch.delenv("RETUCH_GPU", raising=False)
+
+    @pytest.mark.parametrize("name", ["RETOUCH_GPU", "RETUCH_GPU"])
     @pytest.mark.parametrize("value", [None, "", "0", "false", "False", "no", "off"])
-    def test_cpu_is_default_and_zero_is_not_gpu_opt_in(self, monkeypatch, value):
-        if value is None:
-            monkeypatch.delenv("RETUCH_GPU", raising=False)
-        else:
-            monkeypatch.setenv("RETUCH_GPU", value)
+    def test_cpu_is_default_and_zero_is_not_gpu_opt_in(self, monkeypatch, name, value):
+        if value is not None:
+            monkeypatch.setenv(name, value)
 
         assert FaceDetector._resolve_delegate(self._Base) is self._Base.Delegate.CPU
 
+    # RETOUCH_GPU is the documented name; RETUCH_GPU is the old misspelling
+    # the detector used to read, kept so existing setups keep working.
+    @pytest.mark.parametrize("name", ["RETOUCH_GPU", "RETUCH_GPU"])
     @pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on"])
-    def test_explicit_gpu_values_opt_in(self, monkeypatch, value):
-        monkeypatch.setenv("RETUCH_GPU", value)
+    def test_explicit_gpu_values_opt_in(self, monkeypatch, name, value):
+        monkeypatch.setenv(name, value)
 
         assert FaceDetector._resolve_delegate(self._Base) is self._Base.Delegate.GPU
+
+    def test_documented_name_wins_over_legacy_spelling(self, monkeypatch):
+        monkeypatch.setenv("RETOUCH_GPU", "0")
+        monkeypatch.setenv("RETUCH_GPU", "1")
+
+        assert FaceDetector._resolve_delegate(self._Base) is self._Base.Delegate.CPU
 
 
 # ---------------------------------------------------------------------------
