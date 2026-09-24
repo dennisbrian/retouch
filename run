@@ -4,6 +4,7 @@
 #   ./run                  open the app (native window on macOS, browser elsewhere)
 #   ./run web              open the app in your browser
 #   ./run batch ARGS...    run the batch CLI (same options as cli.py)
+#   ./run split FOLDER ... split a shoot into folders by capture time
 #   ./run recipes          list the recipe names --recipe accepts
 #   ./run review ARGS...   build/apply a batch review page (retouch.review_page)
 #   ./run update           pull the latest code and refresh dependencies
@@ -37,6 +38,9 @@ case "$cmd" in
         ;;
     batch|cli)
         exec "$PYTHON" cli.py "$@"
+        ;;
+    split)
+        exec "$PYTHON" split_shoot.py "$@"
         ;;
     recipes)
         # cli.py --list-recipes shows every recipe in the cookbook, including
