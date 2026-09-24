@@ -21,12 +21,19 @@ face-aware social crops.
    `retouch/shoot_intelligence.py` scores whole-frame sharpness only, so a sharp
    background can beat a sharp face, while per-eye sharpness already exists in
    `face_quality.py`.
-2. **Switch on object removal, AI upscaling and AI denoise** (models, S–M).
-   LaMa (`spot_heal.py::LamaHealer`), Real-ESRGAN and NAFNet (`enhance.py`) are
-   integrated, but `models/manifest.json` marks `lama_inpaint`, `sr_real_esrgan`
-   and `denoise_nafnet` as `"availability": "unavailable"` with no URL, so they fall
-   back to classical methods. Licenses (Apache-2.0, BSD-3-Clause, MIT) allow shipping.
-   The work is sourcing, hosting and checksumming the weights.
+2. **Switch on AI denoise now; clear object removal and AI upscaling first**
+   (models, S–M). LaMa (`spot_heal.py::LamaHealer`), Real-ESRGAN and NAFNet
+   (`enhance.py`) are integrated, but `models/manifest.json` marks `lama_inpaint`,
+   `sr_real_esrgan` and `denoise_nafnet` as `"availability": "unavailable"` with no
+   URL, so they fall back to classical methods. NAFNet is safe to ship (MIT code,
+   trained on SIDD). LaMa and Real-ESRGAN are not clearly safe for a paid build:
+   their code licenses (Apache-2.0, BSD-3-Clause) allow it, but the published
+   weights were trained on Places2 (non-commercial) and DIV2K (academic use). They
+   need the free-or-paid decision, a legal read, or differently trained weights
+   before they are switched on. The work is sourcing, hosting and checksumming the
+   weights. (Corrected 2026-09-24 from the launch-preflight research, which checked
+   training data; the first version of this doc rated all three safe from their
+   code licenses alone.)
 3. **Export a recipe as a `.cube` LUT** (output, S). Lets Reels graded in
    CapCut, Resolve or Premiere match the photo set. `retouch/lut.py` has
    `load_cube` only; there is no writer. Pure color math on the existing grading
@@ -41,7 +48,7 @@ M is one to two weeks, L is larger or needs a new model.
 | # | Feature | Area | Pain it fixes | What retouch has today | Effort |
 |---|---|---|---|---|---|
 | 1 | Closed-eye flag + face sharpness in burst picks | Culling | Manual blink checks; sharp background outranks sharp face | EAR gate exists; `eyes_open` hard-coded "uncertain"; whole-frame burst ranking | S |
-| 2 | Turn on LaMa, Real-ESRGAN, NAFNet | Models | Con clutter and props; soft crops; high-ISO hall shots | Integrations written; weights unavailable, classical fallback | S–M |
+| 2 | Turn on NAFNet; clear LaMa and Real-ESRGAN weights first | Models | Con clutter and props; soft crops; high-ISO hall shots | Integrations written; weights unavailable, classical fallback. LaMa/Real-ESRGAN weights trained on non-commercial / academic data | S–M |
 | 3 | Export a recipe as a `.cube` LUT | Output | Reels don't match the photo grade | `lut.py` reads `.cube` only | S |
 | 4 | Glasses, goggle and visor glare removal | Cosplay | Flash reflections on character eyewear | Nothing; Aftershoot and PortraitPro ship it. Wig deglare and `specular.py` are starting points | M |
 | 5 | Body paint support (blue, green, grey skin) | Cosplay | Patchy paint; grey paint pushed toward human skin | `skin_chromophore.py::paint_coverage_even()` has no callers; the paint-protection gate in `engine.py` is chroma-only (OKLCh C > 0.18), so desaturated paint slips through | S–M |
@@ -70,20 +77,30 @@ M is one to two weeks, L is larger or needs a new model.
   2026-07-03 classical-only decision. FLUX.1 Kontext dev is non-commercial for
   local use, and Qwen-Image-Edit is reported as research-licensed (not verified
   from its license file). Recommendation: keep it; LaMa (pick 2) covers most of
-  the benefit. Crowd removal waits.
+  the benefit once its weights are cleared for the build. Crowd removal waits.
 - **Let culling look at eyes?** `rank_burst_candidates` deliberately avoids eyes,
   expression and identity. Recommendation: allow a closed-eye flag the user
   reviews, never an automatic reject, matching the module's evidence-only design.
 
 ## Model licenses for the standalone build
 
-Several models have an Apache or MIT code repo but non-commercial weights. Check
-the checkpoint itself, not the repo badge.
+Several models have an Apache or MIT code repo but non-commercial weights or
+training data. Check the checkpoint and what it was trained on, not the repo badge.
+The launch-preflight research (`retouch/launch-preflight/` in the project files)
+covers the models already in `models/manifest.json` in more depth, including
+BiSeNet (weights trained on CelebAMask-HQ, non-commercial).
 
-Safe to ship: LaMa (Apache-2.0), Real-ESRGAN (BSD-3-Clause), NAFNet (MIT),
-MODNet (Apache-2.0), InSPyReNet (MIT), BiRefNet (MIT; its ONNX build is reported
-slow), SAM 2.1 (Apache-2.0), Depth Anything V2 **Small** (Apache-2.0), IC-Light
-(Apache-2.0, but diffusion is impractical on CPU).
+Safe to ship, training data checked: NAFNet (MIT, trained on SIDD).
+
+Not clearly safe for a paid build: LaMa (Apache-2.0 code, weights trained on
+Places2, non-commercial) and Real-ESRGAN (BSD-3-Clause code, weights trained on
+DIV2K, academic use).
+
+Code or weight license allows shipping, training data not yet checked: MODNet
+(Apache-2.0), InSPyReNet (MIT), BiRefNet (MIT; its ONNX build is reported slow),
+SAM 2.1 (Apache-2.0), Depth Anything V2 **Small** (Apache-2.0), IC-Light
+(Apache-2.0, but diffusion is impractical on CPU). Check each one's training data
+the same way before relying on it in a paid build.
 
 Traps: RMBG-2.0 (CC BY-NC), Depth Anything V2 Base/Large (CC BY-NC), CodeFormer
 (S-Lab, non-commercial), GFPGAN weights (depend on non-commercial StyleGAN2 /
@@ -93,7 +110,8 @@ AnimeGANv2 (non-commercial), Depth Pro (Apple custom license), FLUX.1 Kontext de
 
 ## Surprises
 
-- Three AI models are fully coded but never download: the cheapest upgrade here.
+- Three AI models are fully coded but never download. NAFNet is the cheapest upgrade here;
+  LaMa and Real-ESRGAN need their weights cleared first.
 - A body-paint evening function exists with no callers.
 - Lens blur uses a radial falloff, so it is not true depth, despite looking
   comparable to Lightroom's AI Lens Blur on paper.
