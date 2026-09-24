@@ -71,8 +71,8 @@ sort in shooting order.
 ## Then retouch each set
 
 ```bash
-./run batch ~/shoots/2026-09-20/01_2026-09-20_1402 -o ~/out/set01 --recipe cosplay
-./run batch ~/shoots/2026-09-20/02_2026-09-20_1431 -o ~/out/set02 --recipe anime_cosplay
+./run batch ~/shoots/2026-09-20/01_2026-09-20_1402 -o ~/out/set01 --recipe cosplay_clear_v1
+./run batch ~/shoots/2026-09-20/02_2026-09-20_1431 -o ~/out/set02 --recipe cosplay_portrait_polish_v1
 ```
 
 See [BATCH_GUIDE.md](BATCH_GUIDE.md) for the batch options.
