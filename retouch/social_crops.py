@@ -52,6 +52,10 @@ CHIN_ROOM = 0.25
 # Where the subject's face centre sits vertically within the crop.
 FACE_LINE = 1.0 / 3.0
 
+# Output subfolders that never hold retouched originals: earlier crops, the
+# review page's cache (dot folder) and its default picks/rejects copies.
+_SKIP_DIRS = {"social", "picks", "rejected"}
+
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"}
 
 
@@ -397,7 +401,8 @@ def find_crop_sources(input_path: Union[str, Path], recursive: bool = False) -> 
             continue
         if f.stem.endswith("_compare"):
             continue
-        if "social" in f.relative_to(p).parts[:-1]:
+        parents = f.relative_to(p).parts[:-1]
+        if any(d in _SKIP_DIRS or d.startswith(".") for d in parents):
             continue
         out.append(f)
     return out

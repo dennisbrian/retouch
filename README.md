@@ -25,6 +25,7 @@ commands:
 ./run web                                  # open the app in your browser
 ./run batch ~/photos -o ~/photos_out --recipe natural --workers 4
 ./run crops ~/photos_out --formats 4:5,9:16,1:1  # export face-aware crops for Instagram, TikTok, etc.
+./run review apply ~/photos_out decisions.json  # copy the picks you marked in review.html
 ./run recipes                              # list the recipe names --recipe accepts
 ./run update                               # git pull, then refresh dependencies
 ```
@@ -108,7 +109,17 @@ cv2.imwrite("portrait_retouched.jpg", result)
 python3 cli.py /path/to/photos -o /path/to/output --recipe cosplay_clear_v1 --workers 4
 ```
 
-See [BATCH_GUIDE.md](docs/guides/BATCH_GUIDE.md) for full CLI options.
+Each batch also writes `review.html` into the output folder: open it in a browser to check before/after, face close-ups and QA flags, mark picks and rejects from the keyboard, then export the decisions and apply them to copy the picks into a folder. See [BATCH_GUIDE.md](docs/guides/BATCH_GUIDE.md) for full CLI options and the review workflow.
+
+### Split a shoot by capture time
+
+```bash
+./run split ~/shoots/2026-09-20            # preview the sets
+./run split ~/shoots/2026-09-20 --move     # one folder per set; RAF+JPG pairs stay together
+```
+
+A new set starts after a 15-minute pause (`--gap`), or use `--by hour` / `--by day`.
+See [SPLIT_SHOOT.md](docs/guides/SPLIT_SHOOT.md).
 
 ### Recipe QA
 
@@ -198,6 +209,7 @@ This restarts the Gradio GUI whenever a file under `.` or `retouch/` changes.
 - [API.md](docs/architecture/API.md) — Python API reference and parameter list
 - [ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) — pipeline design and module breakdown
 - [BATCH_GUIDE.md](docs/guides/BATCH_GUIDE.md) — batch processing examples
+- [SPLIT_SHOOT.md](docs/guides/SPLIT_SHOOT.md) — split a shoot into folders by capture time
 - [RECIPE_SWEEP.md](docs/RECIPE_SWEEP.md) — recipe comparisons and folder visual QA
 - [GUI.md](docs/guides/GUI.md) — Gradio web UI layout, components, and styling
 - [RECIPE_GUIDE.md](docs/guides/RECIPE_GUIDE.md) — recipe authoring reference

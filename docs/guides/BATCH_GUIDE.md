@@ -187,10 +187,88 @@ if __name__ == "__main__":  # required: the engine starts worker processes
 
 Save it as a `.py` file and run it with `.venv/bin/python`; the engine's face
 workers cannot start from `python -` or an interactive paste.
+---
+
+## 4. Reviewing a Batch
+
+After a batch runs, the output folder contains `review.html` — an interactive page to review all processed images in your browser.
+
+### Opening the Review Page
+
+Open the review page from your file manager or browser: `<output-folder>/review.html`. It shows:
+
+- Before/after previews for each image (hold Space to flip)
+- Engine QA flags (if any were raised)
+- Close-up face crops (before vs after pairs)
+- Input filename and processing status
+- Links to full-resolution output and comparison images
+
+All data is embedded in the HTML file; no external network or server is needed. The hidden `.retouch-review/` folder next to it holds the previews and the per-image QA records the page is built from. Deleting it frees space and never touches your photos, but the page loses its images and QA results (rebuild with `./run review build`, which then shows QA as "not recorded").
+
+The CLI prints the page's path at the end of the batch (`Review page → …`). The app's Batch tab writes the same page and adds its path to the log.
+
+### Navigation & Decisions
+
+Use keyboard shortcuts to review images and mark them:
+
+- **J** / **K** — Next / Previous image (within current filter)
+- **←** / **→** — Same as J/K
+- **Enter** — Open the image in detail view
+- **Esc** — Back to grid
+- **P** — Mark as a pick (jumps to the next image)
+- **X** — Mark as rejected (jumps to the next image)
+- **U** — Clear the pick/reject decision
+- **F** — Cycle through filters (Shift+F goes back) (All → Flagged → Failed → Unreviewed → Picked → Rejected)
+- **Space** (hold) — Show the before image while viewing after
+- **C** — Toggle side-by-side before/after comparison
+- **?** — Show keyboard help overlay
+
+Your decisions are saved in this browser automatically (per batch), so you can close the page and come back. They stay in that browser only, so export them before switching machines. On touch devices, press-and-hold the image to show the before version.
+
+### Exporting Decisions
+
+After you've marked your picks and rejects:
+
+1. Click the **Export** button in the header
+2. A JSON file downloads, named like `3f2a9c1b04de-decisions.json`
+3. The dialog shows the exact `./run review apply …` command for this batch, with a Copy button
+
+The file contains your `pick` / `reject` decisions for the batch, keyed by image ID.
+
+### Applying Decisions
+
+Copy picks to a folder and optionally move rejects:
+
+```bash
+./run review apply /path/to/output decisions.json [--move-rejects]
+```
+
+This:
+- **Copies** all picked images to `/path/to/output/picks/` (preserving subdirectory structure)
+- **Moves** rejected images (and their comparisons) to `/path/to/output/rejected/` only if `--move-rejects` is passed
+- **Never** overwrites or deletes existing files — any collisions are skipped and reported
+
+### Building a Review Page for an Older Batch
+
+If you have an output folder from an earlier batch run without a `review.html`, generate one now:
+
+```bash
+./run review build /path/to/output --source /path/to/input
+```
+
+For an older batch, QA metrics are not available in the page (they are shown as "not recorded").
+
+### Skipping the Review Page
+
+To batch-process without generating a review page, add `--no-review`:
+
+```bash
+python3 cli.py "/path/to/input" -o "/path/to/output" --recipe cosplay_clear_v1 --no-review
+```
 
 ---
 
-## 4. Social Crops for Instagram, Reels & Stories
+## 5. Social Crops for Instagram, Reels & Stories
 
 Automatically export face-aware crops of your retouched photos in popular social media formats. The engine detects the subject's face, centers the crop on it, preserves headroom for wigs and headpieces, and ignores small background faces. Each crop is output as sRGB JPEG (quality 92, no EXIF), downscaled to `1080px` width with light sharpening, and never upscaled.
 

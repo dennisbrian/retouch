@@ -789,3 +789,16 @@ class TestSubjectTop:
         # the chin at 1850+ does not fit, so the face-only headroom wins.
         plan = plan_crop(2000, 3000, [face], fmt, subject_top=0)
         assert plan.y + plan.h >= face[1] + face[3]
+
+
+def test_find_crop_sources_skips_review_cache_and_pick_copies(tmp_path):
+    from retouch.social_crops import find_crop_sources
+    img = np.zeros((20, 20, 3), np.uint8)
+    for rel in ("a.jpg", ".retouch-review/thumbs/a.jpg", "picks/a.jpg",
+                "rejected/b.jpg", "set1/c.jpg"):
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(path), img)
+    names = sorted(p.relative_to(tmp_path).as_posix()
+                   for p in find_crop_sources(tmp_path, recursive=True))
+    assert names == ["a.jpg", "set1/c.jpg"]
