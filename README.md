@@ -219,6 +219,27 @@ older looks such as `cosplay`, `anime_v2` and the Fuji film sims. Those are not
 in the curated catalog, so `--recipe` rejects them with "invalid choice"; they
 still work through the Python API, e.g. `engine.process(img, recipe="anime_v2")`.
 
+### Recipe gallery
+
+Not sure which recipe suits a photo? In the app, upload the photo, open
+**🖼️ Recipe Gallery** in the left column, pick a group (Recommended, Scene /
+creative, a category such as Cosplay, or All curated) and press **Preview
+recipes**. Every recipe in the group renders on a small copy of your photo,
+about half a second each (all 65 curated recipes took 39 s on a laptop CPU).
+Click a thumbnail to see it next to the original and load that recipe; then
+press Render Preview for full quality.
+
+The same previews as one contact sheet image:
+
+```bash
+.venv/bin/python -m retouch.recipe_gallery photo.jpg -o gallery.jpg              # recommended recipes
+.venv/bin/python -m retouch.recipe_gallery photo.jpg -o gallery.jpg --group all  # all 65
+.venv/bin/python -m retouch.recipe_gallery photo.jpg --group cosplay --size 768
+```
+
+Previews run at 512 px on the long edge (`--size` changes it), so fine skin
+texture differs a little from a full-resolution render.
+
 ## Tests
 
 ```bash

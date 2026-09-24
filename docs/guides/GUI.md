@@ -20,7 +20,7 @@ graph TD
 
 ### 1.1 Column 1: Library & Presets (Left Column, `scale=1.5`)
 * **Inputs**: Image file upload zone (`img_input`) with multi-file and RAW support.
-* **Style Presets**: Vertical scrollable presets sidebar listing all built-in recipes (custom `gr.Radio` chips), plus the **Recipe Cookbook** search/category browser.
+* **Style Presets**: Vertical scrollable presets sidebar listing all built-in recipes (custom `gr.Radio` chips), plus the **Recipe Cookbook** search/category browser and the **Recipe Gallery** (`recipe_gallery`): pick a group, press **Preview recipes**, and every recipe in it renders on a 512 px copy of the first uploaded photo (face detection runs once, thumbnails are cached per photo). Clicking a thumbnail shows original | recipe side by side and loads that recipe into the preset list. Logic lives in `retouch/recipe_gallery.py`, which also has a contact-sheet command (`python -m retouch.recipe_gallery photo.jpg -o sheet.jpg --group all`).
 * **Library Styles**: Dropdown to load learned custom style profiles (`custom_style_preset`).
 * **Preferences**: Side-by-side comparison (`show_compare`), Smart Process, recipe-default reset, sessions, snapshots, undo, and redo. Slider edits remain interactive while a queued render runs; the active render uses its captured settings revision.
 * **Export Menu**: Compact options for format (JPEG, PNG, PNG-16, WebP), compression quality, resolution limits, and an explicit **Preserve source ICC profile on export** choice.
