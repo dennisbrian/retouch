@@ -545,6 +545,24 @@ def test_undo_moves_restores_files_and_removes_manifest(tmp_path):
     assert not manifest.exists()
 
 
+def test_undo_moves_never_overwrites_a_file_that_reappeared(tmp_path):
+    """A new file at the original path is kept; the moved one stays put."""
+    folder = tmp_path / "shoot"
+    folder.mkdir()
+    _write_jpeg_with_time(folder / "DSCF0001.JPG", "X-T5", datetime(2026, 9, 20, 14, 0))
+    assert main([str(folder), "--move"]) == 0
+    moved = next(folder.glob("*/DSCF0001.JPG"))
+    (folder / "DSCF0001.JPG").write_text("new card import")
+
+    restored, problems = undo_moves(folder / MANIFEST_NAME)
+
+    assert restored == 0
+    assert len(problems) == 1 and "exists again" in problems[0]
+    assert (folder / "DSCF0001.JPG").read_text() == "new card import"
+    assert moved.exists()
+    assert (folder / MANIFEST_NAME).exists()
+
+
 def test_undo_moves_rejects_copy_manifests(tmp_path):
     """undo_moves raises for --copy manifests."""
     manifest = tmp_path / MANIFEST_NAME
