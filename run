@@ -6,6 +6,7 @@
 #   ./run batch ARGS...    run the batch CLI (same options as cli.py)
 #   ./run split FOLDER ... split a shoot into folders by capture time
 #   ./run recipes          list the recipe names --recipe accepts
+#   ./run review ARGS...   build/apply a batch review page (retouch.review_page)
 #   ./run update           pull the latest code and refresh dependencies
 set -euo pipefail
 
@@ -61,6 +62,9 @@ for title, names in (
     print()
 print("Use one with: ./run batch <folder> -o <output> --recipe NAME")
 PY
+        ;;
+    review)
+        exec "$PYTHON" -m retouch.review_page "$@"
         ;;
     update)
         git pull --ff-only

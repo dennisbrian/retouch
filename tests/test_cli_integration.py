@@ -128,7 +128,8 @@ class TestBasicProcessing:
         assert {
             p.relative_to(output_dir).as_posix()
             for p in output_dir.rglob("*")
-            if p.is_file()
+            if p.is_file() and ".retouch-review" not in p.parts
+            and p.name != "review.html"
         } == {
             "top.jpg",
             "sub/nested.jpg",
@@ -287,7 +288,7 @@ class TestExportOptions:
             "--force",
         )
         assert rc == 0, f"CLI failed: {err}"
-        files = list(output_dir.iterdir())
+        files = [p for p in output_dir.iterdir() if p.suffix.lower() in (".jpg", ".jpeg", ".png")]
         assert files
         out_img = cv2.imread(str(files[0]))
         assert out_img is not None
