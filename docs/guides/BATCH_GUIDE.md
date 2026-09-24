@@ -62,10 +62,30 @@ condition is shown as a blocking execution warning.
 | **`--no-compare`** | | *Off* | Skip generating the `_compare` side-by-side comparison files. |
 | **`--no-exif`** | | *Off* | Skip copying EXIF metadata (orientation, camera tags, etc.) from the source image. |
 | **`--dry-run`** | | *Off* | Print the input plan, settings, and safety conditions without creating outputs or executing retouching. |
+| **`--progress-file`** | | `<output>/.retouch-progress.json` | Where to write the live progress JSON (see below). |
+| **`--no-progress-file`** | | *Off* | Do not write the progress JSON. |
 
 `--format same` preserves PNG and WebP. Other recognized source formats,
 including TIFF, BMP, RAW, and EXR, currently resolve to JPEG unless an explicit
 format is requested; a 16-bit request forces PNG/TIFF as documented by the CLI.
+
+### Live progress, stopping and resuming
+
+The progress bar measures work in megapixels and shows each active image's
+current stage and completed face count. If an image remains in one stage for
+90 seconds, the reporter prints a heartbeat line with the image, stage, and
+elapsed time.
+
+`<output>/.retouch-progress.json` is rewritten about once a second with the
+counts, ETA, per-image status, stage, elapsed time, face count, stage timings,
+and QA results. Use `--progress-file /path/to/progress.json` to choose another
+location, or `--no-progress-file` to disable the file. The run summary lists
+the slowest images and any failures or QA flags.
+
+Press Ctrl-C once to stop. Queued images are cancelled, active workers are
+ended, and partial atomic-write files are removed. Completed images remain
+available; rerunning the same command skips existing outputs and processes the
+rest. Use `-f/--force` to redo everything.
 
 ---
 

@@ -75,19 +75,133 @@ RECIPE-2  Recipes now support an optional "extends" key for single-level
 from __future__ import annotations
 
 import copy
+import functools
 import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import cv2
 import numpy as np
 
 import logging
+from contextvars import ContextVar
 
 logger = logging.getLogger(__name__)
+
+
+# ----------------------------------------------------------------------------
+# Live progress reporting (``RetouchEngine.process(progress_cb=...)``).
+#
+# The callback is deliberately NOT a processing parameter: it never enters
+# ``overrides`` / ``ProcessingContext`` / ``result.params`` / session files /
+# cache keys, and it is never pickled into FaceProcessorPool workers. It is
+# held in a ContextVar for the duration of one ``process()`` call so the
+# private stage helpers can report without threading a new argument through
+# every signature. A ContextVar is per-thread, so concurrent ``process()``
+# calls on one engine (GUI worker threads) never see each other's callback.
+# ----------------------------------------------------------------------------
+ProgressCallback = Callable[[str, Dict[str, Any]], None]
+_PROGRESS_CB: ContextVar[Optional[ProgressCallback]] = ContextVar(
+    "retouch_engine_progress_cb", default=None
+)
+
+
+def _emit_progress(kind: str, payload: Dict[str, Any]) -> None:
+    """Invoke the active progress callback, if any; never raises.
+
+    A failing callback must never break processing, so every exception is
+    caught and logged. No-op when no callback is active.
+    """
+    cb = _PROGRESS_CB.get()
+    if cb is None:
+        return
+    try:
+        cb(kind, payload)
+    except Exception:
+        logger.warning(
+            "progress_cb raised on %r event %r; ignoring", kind, payload,
+            exc_info=True,
+        )
+
+
+def _emit_stage(name: str) -> None:
+    """Report that pipeline stage ``name`` is starting."""
+    _emit_progress("stage", {"stage": name})
+
+
+class _FaceProgress:
+    """Counts completed faces for ``progress_cb("face", ...)`` events.
+
+    Parent-process only. Idempotent per face index, so a face first reported
+    by the process pool and then re-run by an in-process fallback is counted
+    once — the emitted ``index`` always climbs 1..total.
+    """
+
+    __slots__ = ("total", "_done")
+
+    def __init__(self, total: int) -> None:
+        self.total = int(total)
+        self._done: set = set()
+
+    def done(self, face_idx: int) -> None:
+        if face_idx in self._done:
+            return
+        self._done.add(face_idx)
+        _emit_progress("face", {"index": len(self._done), "total": self.total})
+
+
+def _scoped_progress_cb(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Install ``progress_cb`` into ``_PROGRESS_CB`` for one ``process()`` call.
+
+    Always resets in ``finally`` so a callback can never leak into a later
+    call (or into direct stage-method calls) on the same thread — including
+    when processing raises. A non-callable value (e.g. a stray key from a
+    session file, which ``batch_processor`` filters by signature) is ignored.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        cb = kwargs.get("progress_cb")
+        if cb is not None and not callable(cb):
+            logger.warning(
+                "progress_cb is not callable (%s); ignoring", type(cb).__name__
+            )
+            cb = None
+        token = _PROGRESS_CB.set(cb)
+        try:
+            return fn(self, *args, **kwargs)
+        finally:
+            _PROGRESS_CB.reset(token)
+
+    return wrapper
+
+
+class _ProgressStageProxy:
+    """Wraps a registry stage so its start is reported via ``_emit_stage``.
+
+    ``StageRegistry.run`` only calls ``run()`` for enabled, non-bypassed
+    stages, so events fire exactly for the stages that execute; enable /
+    bypass / timing / error semantics stay in the registry's own runner.
+    """
+
+    def __init__(self, stage: Any) -> None:
+        self._stage = stage
+        self.name = stage.name
+        self.phase = getattr(stage, "phase", None)
+
+    def enabled(self, state: Any) -> bool:
+        return self._stage.enabled(state)
+
+    def run(self, state: Any) -> Any:
+        _emit_stage(self.name)
+        return self._stage.run(state)
+
+    def __getattr__(self, attr: str) -> Any:
+        return getattr(self._stage, attr)
+
 
 # Some tests and lightweight integrations construct an engine with ``__new__``
 # and initialize only the components they exercise.  Guard lazy per-instance
@@ -1374,6 +1488,7 @@ class RetouchEngine:
             protect_mask=protect_mask,
         )
 
+    @_scoped_progress_cb
     def process(
         self,
         img_bgr: np.ndarray,
@@ -1627,6 +1742,7 @@ class RetouchEngine:
         cross_region_skin: Optional[float] = None,
         cross_region_skin_mask: Optional[np.ndarray] = None,
         cross_region_protect_mask: Optional[np.ndarray] = None,
+        progress_cb: Optional[Callable[[str, dict], None]] = None,
         **kwargs: Any,
     ) -> ProcessingResult:
         """Process a single image through the full Retouch pipeline.
@@ -1634,6 +1750,9 @@ class RetouchEngine:
         Returns a ProcessingResult. Access ``.image`` for the BGR ndarray, or
         use the result directly as an ndarray (legacy-compatible).
         """
+        # Installed in the scoped ContextVar by the decorator. Keeping it out
+        # of overrides ensures it never reaches ProcessingContext or sessions.
+        del progress_cb
         timings: Dict[str, float] = {}
         if (
             not isinstance(img_bgr, np.ndarray)
@@ -1991,6 +2110,7 @@ class RetouchEngine:
         # blend between the original and the denoised image.
         # ------------------------------------------------------------------
         if ctx.ai_denoise and ctx.ai_denoise > 0.0:
+            _emit_stage("ai_denoise")
             enhancer = self._get_enhancer()
             t_dn = time.perf_counter()
             strength = float(ctx.ai_denoise) / 100.0
@@ -2030,6 +2150,7 @@ class RetouchEngine:
         # F4: Pre-pipeline heal hook — heals run BEFORE retouch/grade
         # ------------------------------------------------------------------
         if ctx.heals:
+            _emit_stage("heal")
             t_heal = time.perf_counter()
             img_bgr, heal_diagnostics = self._apply_manual_heals(
                 img_bgr, ctx.heals
@@ -2207,6 +2328,7 @@ class RetouchEngine:
         """F7 export-time super-resolution. No-op when ``ai_sr_scale <= 1``."""
         if not ctx.ai_sr_scale or ctx.ai_sr_scale <= 1:
             return result
+        _emit_stage("ai_sr")
         enhancer = self._get_enhancer()
         t_sr = time.perf_counter()
         before_sr = result.copy()
@@ -2299,6 +2421,7 @@ class RetouchEngine:
 
         if proxy_scale < 1.0:
             # Upscale face-region result + masks back to native resolution
+            _emit_stage("proxy_upscale")
             upscaled_core = self._upscale_core_result(core, h, w, native_guide=native_img_bgr)
             # AA6 displacement vectors are expressed in proxy pixels. The
             # downstream comparison runs against native-resolution frames,
@@ -2463,6 +2586,7 @@ class RetouchEngine:
         # ------------------------------------------------------------------
         # Stage 0 — Detection + segmentation at proxy resolution
         # ------------------------------------------------------------------
+        _emit_stage("detection")
         t0 = time.perf_counter()
         cached_contexts = ctx.face_contexts
         faces_native_cached: Optional[List[FaceData]] = None
@@ -2495,6 +2619,7 @@ class RetouchEngine:
         # No-face fallback
         # ------------------------------------------------------------------
         if not faces_proxy:
+            _emit_stage("no_face_fallback")
             h_img, w_img = native_img_bgr.shape[:2]
             no_face_result = native_img_bgr.copy()
             # F8.2 historically returns a pristine no-face frame here, while
@@ -2601,6 +2726,7 @@ class RetouchEngine:
             result_native, face_results, h_img, w_img,
             face_boxes=[f.bbox for f in faces_native],
         )
+        _emit_stage("proxy_upscale")
 
         core = _CoreResult(
             result=result_native,
@@ -2762,6 +2888,7 @@ class RetouchEngine:
         # ------------------------------------------------------------------
         # Stage 0 — Detection + segmentation (with FaceContext caching)
         # ------------------------------------------------------------------
+        _emit_stage("detection")
         t0 = time.perf_counter()
         cached_contexts = ctx.face_contexts
         if cached_contexts is not None:
@@ -2929,7 +3056,13 @@ class RetouchEngine:
             faces=faces,
             style_ref=style_ref,
         )
-        state = self._global_registry.run(state)
+        registry = self._global_registry
+        if _PROGRESS_CB.get() is not None:
+            from .stages import StageRegistry as _StageRegistry
+            registry = _StageRegistry()
+            for stage in self._global_registry:
+                registry.add(_ProgressStageProxy(stage))
+        state = registry.run(state)
         result = state.img
         timings.update(state.timings)
 
@@ -2940,6 +3073,7 @@ class RetouchEngine:
         if ctx.backdrop_cleanup > 0 and person_mask is not None:
             from .backdrop import clean_backdrop
 
+            _emit_stage("backdrop_cleanup")
             t_bdc = time.perf_counter()
             result = clean_backdrop(result, person_mask, ctx.backdrop_cleanup)
             timings["backdrop_cleanup"] = (time.perf_counter() - t_bdc) * 1000
@@ -2958,6 +3092,7 @@ class RetouchEngine:
             if cloth_mask.max() > 0.01:
                 from .fabric import smooth_fabric_wrinkles
 
+                _emit_stage("fabric_wrinkle_smooth")
                 t_fab = time.perf_counter()
                 result = smooth_fabric_wrinkles(result, cloth_mask, ctx.fabric_wrinkle_smooth)
                 timings["fabric_wrinkle_smooth"] = (time.perf_counter() - t_fab) * 1000
@@ -2973,6 +3108,7 @@ class RetouchEngine:
         # ------------------------------------------------------------------
         # QA detectors
         # ------------------------------------------------------------------
+        _emit_stage("qa")
         qa_reference, qa_provenance = _resolve_qa_reference(
             ctx,
             img_bgr,
@@ -3130,6 +3266,7 @@ class RetouchEngine:
         migrated to match `_stage_grade`'s float-native versions of the
         same ops. See docs/plans/PLAN_TIERE_ENGINE_FIDELITY.md Sec 18 for the
         residual inventory."""
+        _emit_stage("no_face_fallback")
         from .precision import to_float, to_uint8
         # 16-bit ingest: no faces ⇒ nothing is edited, so start global grading
         # from the full-precision source when available (no banding on skies/
@@ -3398,6 +3535,7 @@ class RetouchEngine:
         return [self._ctx_for_face(ctx, i) for i in range(n_faces)]
 
     def _stage_reshape(self, img: np.ndarray, faces, ctx: ProcessingContext) -> np.ndarray:
+        _emit_stage("reshape")
         face_ctxs = self._face_ctxs_for_reshape(ctx, len(faces) if faces else 0)
         if self._any_reshape_active(ctx, face_ctxs):
             # FaceReshaper retains its last displacement field on the shared
@@ -3508,6 +3646,7 @@ class RetouchEngine:
         Returns ``(face_results, built_contexts)`` where ``built_contexts``
         is the freshly-built ``FaceContext`` list, or ``None`` when cached
         contexts were supplied (reuse path)."""
+        _emit_stage("per_face")
         crop_list = []
         landmarks_compat_list = []
         face_bbox_list = []
@@ -3596,6 +3735,8 @@ class RetouchEngine:
             ]
 
         results: List[Optional[_FaceResult]] = [None] * len(faces)
+        face_progress = _FaceProgress(len(faces))
+        progress_active = _PROGRESS_CB.get() is not None
 
         def _collect_safe_auto_decisions() -> None:
             decisions = getattr(ctx, "_safe_auto_decisions", None)
@@ -3627,6 +3768,7 @@ class RetouchEngine:
                 regions=all_regions[0], preprepared=prepared_faces[0],
                 light_direction=all_light_directions[0],
             )
+            face_progress.done(0)
             _collect_safe_auto_decisions()
             _collect_fa02_diagnostics()
             return results, built_contexts  # type: ignore[return-value]
@@ -3658,7 +3800,12 @@ class RetouchEngine:
                 )
                 for i in range(len(faces))
             ]
-            proc_results = self._face_pool.process_faces(payloads)
+            if progress_active:
+                proc_results = self._face_pool.process_faces(
+                    payloads, on_face_done=face_progress.done,
+                )
+            else:
+                proc_results = self._face_pool.process_faces(payloads)
         except Exception:
             logger.exception("FaceProcessorPool failed; falling back to ThreadPoolExecutor")
             proc_results = None
@@ -3672,6 +3819,7 @@ class RetouchEngine:
                         regions=all_regions[i], preprepared=prepared_faces[i],
                         light_direction=all_light_directions[i],
                     )
+                    face_progress.done(i)
                 else:
                     results[i] = _FaceResult(
                         canvas=pr['canvas'],
@@ -3703,6 +3851,7 @@ class RetouchEngine:
             for future in as_completed(future_to_idx):
                 idx = future_to_idx[future]
                 results[idx] = future.result()
+                face_progress.done(idx)
         _collect_safe_auto_decisions()
         _collect_fa02_diagnostics()
         return results, built_contexts  # type: ignore[return-value]
@@ -5555,6 +5704,7 @@ class RetouchEngine:
         if stray_hair_strength <= 0 and defect_strength <= 0:
             return img
 
+        _emit_stage("neural_boosters")
         # Currently disabled: placeholders return empty masks
         from .neural_boosters import StrayHairSegmenter, DefectSegmenter
         from .safe_auto import decide

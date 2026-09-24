@@ -715,6 +715,7 @@ def _cli_args(src, out, recipe, resume, plan, *extra, workers=1):
     return (
         src, "-o", out, "--global-only", "--no-compare", "--workers", workers,
         "--recipe", recipe, "--skip-disk-check", "--no-review",
+        "--no-progress-file",
         *(("--resume-plan", resume) if resume else ()),
         "--input-plan", plan, *extra,
     )

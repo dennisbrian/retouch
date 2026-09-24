@@ -2,6 +2,10 @@
 
 import argparse
 import atexit
+import multiprocessing
+import queue
+import re
+import signal
 import shutil
 import sys
 import os
@@ -22,6 +26,13 @@ from tqdm import tqdm
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from retouch import RetouchEngine
+from retouch.batch_progress import (
+    BatchProgress,
+    ProgressReporter,
+    emit,
+    image_megapixels,
+    make_event_sink,
+)
 from retouch.engine import _adjust_contrast
 from retouch.grading import PRESETS, ColorGrader
 from retouch.io import (
@@ -199,11 +210,18 @@ def _save_session(
 
 
 _worker_engine = None
+_worker_progress_q = None
 
 
-def _init_worker():
-    global _worker_engine
-    _worker_engine = RetouchEngine()
+def _init_worker(progress_q=None, with_engine=True):
+    global _worker_engine, _worker_progress_q
+    _worker_progress_q = progress_q
+    if progress_q is not None:
+        progress_q.cancel_join_thread()
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, _terminate_worker)
+    if with_engine:
+        _worker_engine = RetouchEngine()
     # Each pool worker owns a RetouchEngine, which owns its own internal
     # FaceProcessorPool (a nested ProcessPoolExecutor, up to 4 more
     # processes). This atexit hook is a backstop for the single-face case
@@ -213,6 +231,36 @@ def _init_worker():
     # cli-batch-hangs-on-exit-after-done for why atexit alone cannot reach
     # RetouchEngine.close() once the inner pool's grandchildren are alive.
     atexit.register(_close_worker_engine)
+
+
+def _terminate_worker(signum, _frame):
+    for child in multiprocessing.active_children():
+        child.terminate()
+    os._exit(128 + signum)
+
+
+_ATOMIC_TEMP_RE = re.compile(r"^\..+\.tmp-\d+-[0-9a-f]{8}\.[A-Za-z0-9]+$")
+
+
+def _stop_pool(pool):
+    procs = list((getattr(pool, "_processes", None) or {}).values())
+    pool.shutdown(wait=False, cancel_futures=True)
+    for proc in procs:
+        if proc.is_alive():
+            proc.terminate()
+    for proc in procs:
+        proc.join(timeout=10)
+
+
+def _remove_partial_outputs(output_dir):
+    if output_dir is None or not Path(output_dir).is_dir():
+        return
+    for tmp in Path(output_dir).rglob(".*.tmp-*"):
+        if _ATOMIC_TEMP_RE.match(tmp.name) and tmp.is_file():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
 
 def _close_worker_engine():
@@ -498,13 +546,70 @@ def _processing_evidence(result, *, global_only=False, color_context=None):
     }
 
 
+def _progress_key(img_path, input_root=None):
+    """Stable per-image progress key, relative to a recursive input root."""
+    path = Path(img_path)
+    if input_root is not None:
+        try:
+            return path.resolve().relative_to(Path(input_root)).as_posix()
+        except ValueError:
+            pass
+    return path.name
+
+
+def _result_info(result, info):
+    """Copy small picklable result details before ndarray conversions drop them."""
+    faces = getattr(result, "face_count", None)
+    if faces is not None:
+        info["faces"] = int(faces)
+    timings = getattr(result, "timings", None)
+    if timings:
+        info["timings"] = {
+            str(key): round(float(value), 1)
+            for key, value in dict(timings).items()
+            if isinstance(value, (int, float))
+        }
+    qa = getattr(result, "qa", None) or []
+    info["qa"] = [
+        {
+            "detector": warning.detector,
+            "score": round(float(warning.score), 4),
+            "threshold": None if warning.threshold is None else float(warning.threshold),
+            "flagged": bool(warning.flagged),
+            "message": warning.message,
+        }
+        for warning in qa
+    ]
+
+
 def _process_single(args):
-    """Compatibility wrapper retaining the original two-item worker result."""
-    path, status, _evidence = _process_single_with_evidence(args)
-    return path, status
+    """Pool entry point: process one image and stream stage progress."""
+    # Keep compatibility with the 25-item worker tuple used by callers/tests
+    # predating branch-specific destination stems and RAF exposure metadata.
+    if len(args) == 25:
+        args = (*args[:23], None, True, *args[23:])
+    supplied_key = args[27] if len(args) > 27 else None
+    if len(args) > 27:
+        args = args[:27]
+    img_path, input_root = args[0], args[22]
+    key = supplied_key or _progress_key(img_path, input_root)
+    q = _worker_progress_q
+    sink = make_event_sink(q, key) if q is not None else None
+    if q is not None:
+        emit(q, key, "start", worker=os.getpid())
+    info: Dict[str, Any] = {}
+    t_start = time.time()
+    name, status, evidence = _process_single_with_evidence(args, info, sink)
+    info["seconds"] = round(time.time() - t_start, 3)
+    if evidence is not None:
+        info["_processing_evidence"] = evidence
+    return Path(name).name, status, info
 
 
-def _process_single_with_evidence(args):
+def _process_single_with_evidence(args, info=None, sink=None):
+    if info is None:
+        info = {}
+    stage = sink if sink is not None else (lambda *_a, **_k: None)
     (img_path, output_dir, params, format_arg, quality, force, copy_exif_flag,
      max_dim, compare_flag, global_only, bit_depth, fail_on_qa, save_session,
      smart, linear_raw, raw_exposure, raw_contrast, raf_decoder,
@@ -534,6 +639,7 @@ def _process_single_with_evidence(args):
                 )
             return (str(img_path), "skipped", None)
 
+        stage("stage", {"stage": "decode"})
         if linear_raw and Path(img_path).suffix.lower() in RAW_EXTENSIONS:
             decode_info = {}
             img_bgr = _linear_raw_to_engine_bgr(
@@ -588,7 +694,9 @@ def _process_single_with_evidence(args):
 
         review_meta = {"faces": [], "qa": []}
         if global_only:
+            stage("stage", {"stage": "global_finish"})
             result = _apply_global_finish(img_bgr, dict(effective_params))
+            _result_info(result, info)
             processing_evidence = _processing_evidence(
                 result, global_only=True, color_context=color_context
             )
@@ -602,7 +710,10 @@ def _process_single_with_evidence(args):
                 should_close = True
 
             try:
-                result = engine.process(img_bgr, **dict(effective_params))
+                result = engine.process(
+                    img_bgr, progress_cb=sink, **dict(effective_params)
+                )
+                _result_info(result, info)
                 processing_evidence = _processing_evidence(
                     result, color_context=color_context
                 )
@@ -653,6 +764,7 @@ def _process_single_with_evidence(args):
 
         # Embed the context-selected ICC at write time so the working profile,
         # bit depth, quality, and metadata survive the delivery boundary.
+        stage("stage", {"stage": "write"})
         exif_bytes = read_exif_bytes(img_path) if copy_exif_flag else None
         c2pa_manifest = read_c2pa_manifest(img_path) if copy_exif_flag else None
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -666,11 +778,14 @@ def _process_single_with_evidence(args):
             exif=exif_bytes,
             c2pa_manifest=c2pa_manifest,
         )
+        info["out_path"] = str(out_path)
 
         if compare_flag:
+            stage("stage", {"stage": "compare"})
             compare_path = out_path.with_name(f"{out_path.stem}_compare{out_path.suffix}")
             _assert_safe_destination(img_path, compare_path)
             make_comparison(original_full, result, compare_path, fmt, quality)
+            info["compare_path"] = str(compare_path)
 
         if save_session is not None:
             save_path = None if save_session is True else save_session
@@ -786,6 +901,8 @@ def find_images(input_path: str, recursive: bool) -> list[Path]:
     pattern = "**/*" if recursive else "*"
     files = []
     for f in path.glob(pattern):
+        if f.name.startswith("."):
+            continue
         if f.suffix.lower() in IMAGE_EXTENSIONS:
             files.append(f)
     return sorted(files)
@@ -1306,6 +1423,14 @@ def main() -> None:
         action="store_true",
         help="Skip the destination-volume free-space estimate",
     )
+    parser.add_argument(
+        "--progress-file", type=str, default=None,
+        help="Write live batch progress JSON (default: <output>/.retouch-progress.json)",
+    )
+    parser.add_argument(
+        "--no-progress-file", action="store_true",
+        help="Disable the live progress JSON file",
+    )
     parser.add_argument("--no-compare", action="store_false", dest="compare",
                         help="Skip side-by-side comparison output")
     parser.add_argument("--no-exif", action="store_true",
@@ -1778,12 +1903,60 @@ def main() -> None:
 
     t0 = time.time()
     done = skipped = failed = 0
+    use_pool = args.workers > 1 and len(files) > 1
+    progress_keys = {}
+    used_progress_keys = set()
+    for index, path in enumerate(files):
+        key = _progress_key(path, recursive_root)
+        if key in used_progress_keys:
+            key = f"{index + 1}:{key}"
+            suffix = 2
+            while key in used_progress_keys:
+                key = f"{index + 1}.{suffix}:{_progress_key(path, recursive_root)}"
+                suffix += 1
+        used_progress_keys.add(key)
+        progress_keys[path] = key
+    progress = BatchProgress(
+        [(progress_keys[path], image_megapixels(path)) for path in files]
+    )
+    if args.no_progress_file:
+        progress_path = None
+    elif args.progress_file:
+        progress_path = Path(args.progress_file).expanduser()
+    elif output_dir:
+        progress_path = output_dir / ".retouch-progress.json"
+    else:
+        progress_path = None
+    progress_q = multiprocessing.Queue() if use_pool else queue.Queue()
+    reporter = ProgressReporter(progress, progress_q, progress_path)
+    reporter.__enter__()
+    interrupted = False
+    active_progress = {
+        "path": None, "key": None, "info": {}, "started": None, "finished": False,
+    }
 
     def _record_result(
         path_value: str,
         status: str,
         processing_evidence: Optional[Dict[str, Any]] = None,
     ) -> None:
+        # In serial mode the input-plan write is the common completion path
+        # for successful, skipped, and rejected images. Use it to guarantee a
+        # finish event on every ordinary exit path without duplicating logic.
+        path_key = _path_key(Path(path_value))
+        if (
+            not use_pool
+            and active_progress["key"] is not None
+            and not active_progress["finished"]
+            and path_key == active_progress["path"]
+        ):
+            info = active_progress["info"]
+            info["seconds"] = round(time.time() - active_progress["started"], 3)
+            emit(
+                progress_q, active_progress["key"], "finish",
+                status=status, **info,
+            )
+            active_progress["finished"] = True
         row = input_plan.row_for(Path(path_value))
         if row is None:
             return
@@ -1812,33 +1985,56 @@ def main() -> None:
              args.raf_decoder, args.raf2jpeg_path, args.raf2jpeg_quality,
              args.fuji_match_strength, args.optical_correction,
              recursive_root, output_stems.get(_path_key(f)),
-             not args.no_raf_exposure_bias, review_root, args.review)
+             not args.no_raf_exposure_bias, review_root, args.review,
+             progress_keys[f])
             for f in files
         ]
-        with ProcessPoolExecutor(
+        pool = ProcessPoolExecutor(
             max_workers=args.workers,
-            initializer=None if args.global_only else _init_worker,
-        ) as pool:
-            futures = {
-                pool.submit(_process_single_with_evidence, a): a[0]
-                for a in pool_args
-            }
-            for future in tqdm(as_completed(futures), total=len(files),
-                               desc="Retouching", unit="img"):
-                path_value, status, processing_evidence = future.result()
-                _record_result(path_value, status, processing_evidence)
+            initializer=_init_worker,
+            initargs=(progress_q, not args.global_only),
+        )
+        try:
+            futures = {pool.submit(_process_single, a): a[0] for a in pool_args}
+            for future in as_completed(futures):
+                path = futures[future]
+                key = progress_keys[path]
+                try:
+                    name, status, info = future.result()
+                except Exception as exc:
+                    name, status, info = path.name, f"failed: {exc}", {}
+                processing_evidence = info.pop("_processing_evidence", None)
+                _record_result(str(path), status, processing_evidence)
+                emit(progress_q, key, "finish", status=status, **info)
                 if status == "done":
                     done += 1
                 elif status == "skipped":
                     skipped += 1
                 else:
                     failed += 1
-                    tqdm.write(f"  ✖ {path_value}: {status}")
+                    tqdm.write(f"  ✖ {name}: {status}")
+        except KeyboardInterrupt:
+            interrupted = True
+            tqdm.write("\n  ■ Stopping: cancelling queued images and ending active workers…")
+            _stop_pool(pool)
+            _remove_partial_outputs(output_dir)
+        finally:
+            if not interrupted:
+                pool.shutdown(wait=True)
     else:
         engine = None if args.global_only else RetouchEngine()
         try:
-            for f in tqdm(files, desc="Retouching", unit="img"):
-                img_t_start = time.time()
+            for f in files:
+                active_progress.update({
+                    "path": _path_key(f),
+                    "key": progress_keys[f],
+                    "info": {},
+                    "started": time.time(),
+                    "finished": False,
+                })
+                sink = make_event_sink(progress_q, progress_keys[f])
+                emit(progress_q, progress_keys[f], "start", worker=None)
+                img_t_start = active_progress["started"]
                 fmt = output_format(f, args.format)
                 # For 16-bit, force PNG or TIFF
                 if args.bit_depth == 16 and fmt not in ("png", "tif", "tiff"):
@@ -1859,6 +2055,7 @@ def main() -> None:
                     continue
                 if os.path.lexists(os.fspath(out_path)) and not _force_for(f):
                     skipped += 1
+                    active_progress["info"]["out_path"] = str(out_path)
                     _record_result(str(f), "skipped")
                     if args.review:
                         _maybe_write_skip_record(
@@ -1867,6 +2064,7 @@ def main() -> None:
                     continue
 
                 processing_evidence = None
+                sink("stage", {"stage": "decode"})
 
                 if args.linear_raw and f.suffix.lower() in RAW_EXTENSIONS:
                     try:
@@ -1961,12 +2159,17 @@ def main() -> None:
 
                 review_meta = {"faces": [], "qa": []}
                 if args.global_only:
+                    sink("stage", {"stage": "global_finish"})
                     result = _apply_global_finish(img_bgr, dict(effective_params))
+                    _result_info(result, active_progress["info"])
                     processing_evidence = _processing_evidence(
                         result, global_only=True, color_context=color_context
                     )
                 else:
-                    result = engine.process(img_bgr, **dict(effective_params))
+                    result = engine.process(
+                        img_bgr, progress_cb=sink, **dict(effective_params)
+                    )
+                    _result_info(result, active_progress["info"])
                     processing_evidence = _processing_evidence(
                         result, color_context=color_context
                     )
@@ -2006,6 +2209,7 @@ def main() -> None:
                     c2pa_manifest = read_c2pa_manifest(f) if not args.no_exif else None
                     out_path.parent.mkdir(parents=True, exist_ok=True)
                     _assert_safe_destination(f, out_path)
+                    sink("stage", {"stage": "write"})
                     write_image_with_color_context(
                         str(out_path),
                         result,
@@ -2015,8 +2219,10 @@ def main() -> None:
                         exif=exif_bytes,
                         c2pa_manifest=c2pa_manifest,
                     )
+                    active_progress["info"]["out_path"] = str(out_path)
 
                     if args.compare:
+                        sink("stage", {"stage": "compare"})
                         compare_path = out_path.with_name(
                             f"{out_path.stem}_compare{out_path.suffix}"
                         )
@@ -2024,6 +2230,7 @@ def main() -> None:
                         make_comparison(
                             original_full, result, compare_path, fmt, args.quality
                         )
+                        active_progress["info"]["compare_path"] = str(compare_path)
                 except Exception as e:
                     failed += 1
                     tqdm.write(f"  ✖ {f.name}: export failed: {e}")
@@ -2059,17 +2266,35 @@ def main() -> None:
                     ))
                 done += 1
                 _record_result(str(f), "done", processing_evidence)
+        except KeyboardInterrupt:
+            interrupted = True
+            if active_progress["key"] is not None and not active_progress["finished"]:
+                info = active_progress["info"]
+                info["seconds"] = round(time.time() - active_progress["started"], 3)
+                emit(
+                    progress_q, active_progress["key"], "finish",
+                    status="failed: interrupted", **info,
+                )
+                active_progress["finished"] = True
+            tqdm.write("\n  ■ Stopped.")
         finally:
             if engine is not None:
                 engine.close()
 
+    summary = reporter.close()
+    if use_pool:
+        progress_q.cancel_join_thread()
+        progress_q.close()
     elapsed = time.time() - t0
-    print(f"\nDone — {done} processed, {skipped} skipped, {failed} failed"
+    heading = "Stopped" if interrupted else "Done"
+    print(f"\n{heading} — {done} processed, {skipped} skipped, {failed} failed"
           f"  ({elapsed:.1f}s)")
+    for line in (summary if interrupted else summary[1:]):
+        print(line)
+    if progress_path is not None:
+        print(f"Progress file: {progress_path}")
     if args.input_plan:
         input_plan.write(Path(args.input_plan))
-    if failed:
-        sys.exit(1)
 
     if social_formats:
         _export_social_crops(
@@ -2081,6 +2306,13 @@ def main() -> None:
             print(f"Review page → {page}")
         except Exception as e:
             print(f"⚠ Review page failed: {e}")
+
+    if interrupted:
+        print("Run the same command again to continue: finished images are "
+              "skipped and the rest are rendered.")
+        sys.exit(130)
+    if failed:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
