@@ -1,9 +1,10 @@
 """Transparent, non-decisional face-quality measurements.
 
-This module measures geometry and local focus evidence for faces already
-detected by :mod:`retouch.detection`. It deliberately does not identify a
-person, infer attractiveness/expression, decide whether eyes are open, or
-select/reject an image. Consumers must keep the resulting evidence reviewable.
+This module measures geometry, local focus and eyelid-aperture evidence for
+faces already detected by :mod:`retouch.detection`. It deliberately does not
+identify a person, infer attractiveness/expression, or select/reject an image.
+``eyes_open`` is a reviewable flag derived from the eyelid aspect ratio (EAR);
+consumers must keep the resulting evidence reviewable.
 """
 
 from __future__ import annotations
@@ -15,11 +16,30 @@ from typing import Any, Iterable, List, Mapping, Optional, Sequence, Tuple
 import cv2
 import numpy as np
 
+from .eye_visibility import _EAR_INDICES, _ear_for_side
 from .shoot_review import FaceQualityEvidence
 
 
-FACE_QUALITY_VERSION = "face-quality-v1"
+FACE_QUALITY_VERSION = "face-quality-v2"
 SHARPNESS_METHOD = "contrast-normalized-tenengrad-v1"
+EYE_APERTURE_METHOD = "mediapipe-6pt-ear-v1"
+
+# Eyes-open evidence bands on the smaller of the two eyelid aspect ratios.
+# Provisional, measured 2026-09-24 on 2,208 frames from 12 public talking-head
+# clips, 6 of them checked by eye on labelled eye crops: closed eyes read
+# 0.013-0.164, while one narrow-eyed subject's open eyes read 0.185-0.249
+# throughout. The enhancement
+# gate's _MIN_EAR (0.285) is tuned so no closed eye gets enhanced, so it would
+# flag that subject's whole shoot as blinking; culling needs the opposite
+# trade-off, a low false-"closed" rate. The band between the two values is
+# reported as "uncertain" rather than guessed; within a burst the ranker
+# compares each frame against the same person's other frames instead.
+EYES_CLOSED_BELOW = 0.15
+EYES_OPEN_FROM = 0.20
+
+# ``LEFT_EYE_INDICES`` below is the subject-anatomical left eye (the 263
+# cluster), which eye_visibility names "right" in camera-viewer convention.
+_APERTURE_INDICES = {"left": _EAR_INDICES["right"], "right": _EAR_INDICES["left"]}
 
 # Canonical MediaPipe face-mesh eye contours. These indices exist in the
 # 468-point mesh as well as the refined 478-point result, so iris refinement is
@@ -149,6 +169,24 @@ def _eye_crop(
     return gray[y1:y2, x1:x2], (x1, y1, x2 - x1, y2 - y1)
 
 
+def classify_eyes_open(
+    left_aperture: Optional[float], right_aperture: Optional[float],
+) -> Tuple[str, str]:
+    """Return ``(eyes_open, reason)`` from two eyelid aspect ratios.
+
+    A single closed eye (a wink or half-blink) counts as ``"no"``. The result
+    is review evidence only; it never rejects an image.
+    """
+    if left_aperture is None or right_aperture is None:
+        return "uncertain", "eye_aperture_unavailable"
+    smallest = min(left_aperture, right_aperture)
+    if smallest < EYES_CLOSED_BELOW:
+        return "no", "eye_aperture_below_closed_band"
+    if smallest >= EYES_OPEN_FROM:
+        return "yes", "eye_aperture_above_open_band"
+    return "uncertain", "eye_aperture_ambiguous"
+
+
 def _observation_id(bbox: Sequence[float]) -> str:
     geometry = ",".join(f"{float(value):.6f}" for value in bbox)
     return "observation-" + hashlib.sha256(geometry.encode("ascii")).hexdigest()[:16]
@@ -180,7 +218,7 @@ class FaceQualityAnalyzer:
         observations: List[FaceQualityEvidence] = []
 
         for face in faces:
-            uncertainty: List[str] = ["blink_analysis_deferred"]
+            uncertainty: List[str] = []
             x1, y1, x2, y2, clipped = _clip_bbox(face.bbox, image_width, image_height)
             pixel_width = x2 - x1
             pixel_height = y2 - y1
@@ -217,6 +255,16 @@ class FaceQualityAnalyzer:
                 if right_contrast <= 1e-6:
                     uncertainty.append("right_eye_local_contrast_unavailable")
 
+            left_aperture = _ear_for_side(face.landmarks, _APERTURE_INDICES["left"], image_width, image_height)
+            right_aperture = _ear_for_side(face.landmarks, _APERTURE_INDICES["right"], image_width, image_height)
+            if "face_crop_too_small" in uncertainty:
+                # Landmark jitter on a tiny face swamps the eyelid gap.
+                eyes_open, eyes_open_reason = "uncertain", "face_crop_too_small"
+            else:
+                eyes_open, eyes_open_reason = classify_eyes_open(left_aperture, right_aperture)
+            if eyes_open == "uncertain" and eyes_open_reason != "face_crop_too_small":
+                uncertainty.append(eyes_open_reason)
+
             confidence_source = str(getattr(face, "confidence_source", "unknown") or "unknown")
             confidence: Optional[float] = None
             raw_confidence = getattr(face, "confidence", None)
@@ -245,7 +293,7 @@ class FaceQualityAnalyzer:
                 face_sharpness=face_sharpness,
                 left_eye_sharpness=left_sharpness,
                 right_eye_sharpness=right_sharpness,
-                eyes_open="uncertain",
+                eyes_open=eyes_open,
                 measurement_version=FACE_QUALITY_VERSION,
                 sharpness_method=SHARPNESS_METHOD,
                 measurement_details={
@@ -259,6 +307,12 @@ class FaceQualityAnalyzer:
                     "left_eye_contrast_span": left_contrast,
                     "right_eye_bbox_pixels": list(right_box) if right_box else None,
                     "right_eye_contrast_span": right_contrast,
+                    "eye_aperture_method": EYE_APERTURE_METHOD,
+                    "left_eye_aperture": left_aperture,
+                    "right_eye_aperture": right_aperture,
+                    "eyes_open_reason": eyes_open_reason,
+                    "eyes_closed_below": EYES_CLOSED_BELOW,
+                    "eyes_open_from": EYES_OPEN_FROM,
                 },
                 uncertainty=sorted(set(uncertainty)),
             ))
@@ -274,9 +328,13 @@ class FaceQualityAnalyzer:
 
 
 __all__ = [
+    "EYE_APERTURE_METHOD",
+    "EYES_CLOSED_BELOW",
+    "EYES_OPEN_FROM",
     "FACE_QUALITY_VERSION",
     "SHARPNESS_METHOD",
     "LEFT_EYE_INDICES",
     "RIGHT_EYE_INDICES",
     "FaceQualityAnalyzer",
+    "classify_eyes_open",
 ]

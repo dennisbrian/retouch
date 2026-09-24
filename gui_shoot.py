@@ -100,10 +100,6 @@ def on_shoot_intelligence_scan(
             if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp"}
         ]
         bursts = group_bursts(assets)
-        candidates_by_group = {
-            burst.group_id: rank_burst_candidates(burst)
-            for burst in bursts
-        }
         face_evidence_by_path = None
         face_uncertainty_by_path = None
         face_status = "Face quality was not requested."
@@ -168,6 +164,12 @@ def on_shoot_intelligence_scan(
                         detector.close()
                     except Exception as exc:
                         _logger.warning("Face detector close failed after shoot scan: %s", exc)
+        # Rank after face analysis so burst picks can prefer the sharpest face
+        # with open eyes; without face evidence the ranking is capture-only.
+        candidates_by_group = {
+            burst.group_id: rank_burst_candidates(burst, face_evidence_by_path)
+            for burst in bursts
+        }
         manifest = build_review_manifest(
             root,
             assets,
@@ -214,6 +216,9 @@ def on_shoot_intelligence_scan(
                         f"eye_sharpness=L:{format_evidence_metric(face.left_eye_sharpness)} "
                         f"R:{format_evidence_metric(face.right_eye_sharpness)}; "
                         f"method={face.sharpness_method}; "
+                        f"eyes_open={face.eyes_open} "
+                        f"(aperture L:{format_evidence_metric(face.measurement_details.get('left_eye_aperture'))} "
+                        f"R:{format_evidence_metric(face.measurement_details.get('right_eye_aperture'))}); "
                         f"uncertainty={','.join(face.uncertainty) or 'none'}"
                     )
                     rows.append([
@@ -224,9 +229,10 @@ def on_shoot_intelligence_scan(
         for burst in bursts:
             candidates = candidates_by_group[burst.group_id]
             for candidate in candidates:
+                flags = candidate.evidence.get("flags") or []
                 rows.append([
                     "burst", burst.group_id, asset_ids_by_absolute_path.get(candidate.path, ""),
-                    candidate.path, round(candidate.score, 4), " / ".join(burst.reasons),
+                    candidate.path, round(candidate.score, 4), " / ".join([*burst.reasons, *flags]),
                     candidate.rank, "review required",
                 ])
         graph = ProjectGraph([
