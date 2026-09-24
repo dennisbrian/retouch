@@ -163,7 +163,7 @@ Total: ~20-25s interactive session
 
 ### Example 2: Batch Process 50 Portraits
 ```
-CLI: python3 cli.py ./batch/ -o ./out --workers 4 --recipe anime_v2
+CLI: python3 cli.py ./batch/ -o ./out --workers 4 --recipe cosplay_clear_v1
 → ~5-10min total (5-15s per image × 50 ÷ 4 workers)
 Memory: ~2.4 GB sustained
 ```
