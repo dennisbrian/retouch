@@ -36,6 +36,16 @@ output verification.
 
 ## Plans (`docs/plans/`)
 - `MASTER_PLAN.md` — Overall roadmap
+- [Cosplay tutorial batch review — 2026-09-24](plans/RESEARCH_COSPLAY_TUTORIAL_BATCH_REVIEW_2026_09_24.md)
+  — Documentation-only synthesis of 249 photographed Photoshop tutorial pages,
+  corrected cross-batch continuity, face-relevant evidence, and proposed
+  source/output preservation study
+- [Cosplay tutorial face evidence ledger — 2026-09-24](plans/RESEARCH_COSPLAY_TUTORIAL_FACE_EVIDENCE_LEDGER_2026_09_24.md)
+  — Working translations and confidence notes for face-related screenshots,
+  repeated-page grouping, and a proposed evidence gate; no photo experiment run
+- [Proposed cosplay tutorial transfer study — 2026-09-24](plans/PLAN_COSPLAY_TUTORIAL_TRANSFER_STUDY_2026_09_24.md)
+  — Documentation-only photo-pair protocol, separated edit intents, preservation
+  review sheet, and decision gates; no photos processed
 - [Retouch target identity and preview/export agreement — 2026-09-23](plans/RESEARCH_RETOUCH_TARGET_AND_PREVIEW_PARITY_2026_09_23.md)
   — Cache coordinate audit and follow-up fixes for preview inspection, per-face
   target association, and explicit manual rebase; full photo qualification pending
