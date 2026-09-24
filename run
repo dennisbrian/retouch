@@ -4,6 +4,7 @@
 #   ./run                  open the app (native window on macOS, browser elsewhere)
 #   ./run web              open the app in your browser
 #   ./run batch ARGS...    run the batch CLI (same options as cli.py)
+#   ./run split FOLDER ... split a shoot into folders by capture time
 #   ./run recipes          list the built-in recipes
 #   ./run update           pull the latest code and refresh dependencies
 set -euo pipefail
@@ -12,7 +13,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
 case "${1:-}" in
-    -h|--help|help) sed -n '2,8p' "$0"; exit 0 ;;
+    -h|--help|help) sed -n '2,9p' "$0"; exit 0 ;;
 esac
 
 PYTHON="$ROOT_DIR/.venv/bin/python"
@@ -37,6 +38,9 @@ case "$cmd" in
     batch|cli)
         exec "$PYTHON" cli.py "$@"
         ;;
+    split)
+        exec "$PYTHON" split_shoot.py "$@"
+        ;;
     recipes)
         exec "$PYTHON" cli.py --list-recipes "$@"
         ;;
@@ -46,7 +50,7 @@ case "$cmd" in
         ;;
     *)
         echo "Unknown command: $cmd" >&2
-        sed -n '2,8p' "$0" >&2
+        sed -n '2,9p' "$0" >&2
         exit 2
         ;;
 esac

@@ -17,6 +17,7 @@ output verification.
 - `RECIPE_GUIDE.md` — Creating custom presets
 - `GUI.md` — Gradio UI layout & components
 - `BATCH_GUIDE.md` — Batch processing via CLI
+- `SPLIT_SHOOT.md` — Split a shoot into folders by capture time before batching
 - `PERFORMANCE_TUNING.md` — Optimization tips
 - `COLOR_DELIVERY_TRUTH.md` — Working-space, precision, preview, and export contracts
 - `TROUBLESHOOTING.md` — Common issues & fixes
