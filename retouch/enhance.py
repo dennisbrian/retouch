@@ -19,8 +19,9 @@ Design notes
 * Model availability is checked via ``model_fetch.model_exists()``. The
   ``sr_real_esrgan`` entry is explicitly unavailable until a verified model
   and controlled release URL are supplied, so its fallback is standard
-  Lanczos resizing rather than an inaccurately named AI feature. The bundled
-  NAFNet denoise entry is consulted the same way.
+  Lanczos resizing rather than an inaccurately named AI feature. The NAFNet
+  denoise entry has a verified release URL, so it is downloaded into the
+  user cache the first time denoise runs.
 """
 
 from __future__ import annotations
@@ -182,7 +183,12 @@ class AIEnhancer:
         """
         try:
             if not model_fetch.model_exists(model_name):
-                return None
+                # First use: fetch the verified download when the manifest
+                # has one (NAFNet ships as a release asset); otherwise fall
+                # back without touching the network.
+                if not model_fetch.model_status(model_name).get("downloadable"):
+                    return None
+                logger.info("AIEnhancer: downloading %s on first use...", model_name)
             path = model_fetch.get_model_path(model_name)
         except model_fetch.ModelFetchError as e:
             logger.warning("AIEnhancer: model %s unavailable (%s); using fallback.", model_name, e)

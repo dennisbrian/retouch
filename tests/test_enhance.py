@@ -51,6 +51,7 @@ class TestDenoise:
         # Explicitly mock model_exists to force fallback, even if a real model is present
         from retouch import model_fetch
         monkeypatch.setattr(model_fetch, "model_exists", lambda name: False if name == "denoise_nafnet" else True)
+        monkeypatch.setattr(model_fetch, "model_status", lambda name: {"downloadable": False})
         enh = AIEnhancer()
         assert enh._denoise_model() is None, (
             "monkeypatched model_exists should force _denoise_model to return None"
@@ -58,6 +59,34 @@ class TestDenoise:
         out = enh.denoise(_make_noisy(64, 64), strength=0.5)
         assert out.shape == (64, 64, 3)
         assert out.dtype == np.float32
+
+    def test_downloads_model_on_first_use(self, monkeypatch) -> None:
+        from retouch import model_fetch
+        calls = []
+        monkeypatch.setattr(model_fetch, "model_exists", lambda name: False)
+        monkeypatch.setattr(model_fetch, "_candidate_paths", lambda name, entry: [])
+
+        def fake_download(name, *args, **kwargs):
+            calls.append(name)
+            raise model_fetch.ModelFetchError("offline in test")
+
+        monkeypatch.setattr(model_fetch, "download_model", fake_download)
+        enh = AIEnhancer()
+        assert enh._denoise_model() is None, "a failed download must fall back, not raise"
+        assert calls == ["denoise_nafnet"]
+
+    def test_no_download_attempt_without_manifest_url(self, monkeypatch) -> None:
+        from retouch import model_fetch
+        monkeypatch.setattr(model_fetch, "model_exists", lambda name: False)
+        monkeypatch.setattr(
+            model_fetch, "model_status", lambda name: {"downloadable": False}
+        )
+        monkeypatch.setattr(
+            model_fetch,
+            "download_model",
+            lambda *a, **k: pytest.fail("must not download a model without a URL"),
+        )
+        assert AIEnhancer()._denoise_model() is None
 
 
 class TestSuperResolve:

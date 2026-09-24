@@ -336,7 +336,12 @@ def advanced_model_status_text():
 
     lama = "available" if model_exists("lama_inpaint") else "unavailable — Telea fallback"
     sr = "available" if model_exists("sr_real_esrgan") else "unavailable — standard resize fallback"
-    nafnet = "verified local" if model_exists("denoise_nafnet") else "unavailable"
+    if model_exists("denoise_nafnet"):
+        nafnet = "verified local"
+    elif model_status("denoise_nafnet").get("downloadable"):
+        nafnet = "downloads on first use"
+    else:
+        nafnet = "unavailable"
     try:
         parsing_status = model_status("resnet18_bisenet")
         parsing = "verified local" if parsing_status.get("available") else "unavailable — landmark fallback"
@@ -3774,7 +3779,6 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         _cyan_midtone_grade_state = gr.State(value=0.0)
                         _subject_sharpen_state = gr.State(value=0.0)
                         _matte_black_state = gr.State(value=0.0)
-                        _ai_denoise_state = gr.State(value=0.0)
                         _ai_sr_scale_state = gr.State(value=1)
                         _mv2_eyeshadow_state = gr.State(value=0.0)
                         _mv2_eyeshadow_color_state = gr.State(value="brown")
@@ -3939,6 +3943,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 body_shadow_lift = gr.Slider(0, 100, 0, step=1, label="Body Shadow Lift", info="Brighten small localized shadows on body skin")
 
                         with gr.Accordion("Tone & Light", open=False):
+                            with gr.Accordion("🌙 AI Noise Reduction", open=False):
+                                ai_denoise = gr.Slider(0, 100, 0, step=1, label="AI Denoise (NAFNet)", info="Clean high-ISO grain and colour speckle before retouching. The model (117 MB) downloads the first time you use it; slow on large photos (CPU only).")
                             with gr.Accordion("📊 Basic Tone & Color", open=False):
                                 reset_basic_tone_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                                 contrast = gr.Slider(-50, 50, 0, step=1, label="Contrast", info="Adjust global image contrast")
@@ -4499,6 +4505,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "multi_illuminant_key_kelvin",
         "multi_illuminant_fill_kelvin",
         "multi_illuminant_mix",
+        # Visible AI denoise slider: con_high_iso_v1 / masterwork_v1 set it.
+        "ai_denoise",
     )
 
     # Name -> Gradio component map for the recipe-output tuple.  Mirrors the
@@ -4637,6 +4645,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "multi_illuminant_key_kelvin": multi_illuminant_key_kelvin,
         "multi_illuminant_fill_kelvin": multi_illuminant_fill_kelvin,
         "multi_illuminant_mix": multi_illuminant_mix,
+        "ai_denoise": ai_denoise,
     }
     _missing_outputs = set(RECIPE_OUTPUT_KEYS) - set(_recipe_output_components)
     _extra_outputs = set(_recipe_output_components) - set(RECIPE_OUTPUT_KEYS)
@@ -5442,7 +5451,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "hsl_hue_global": hsl_hue_global,
         "hsl_sat_global": hsl_sat_global,
         "hsl_lum_global": hsl_lum_global,
-        "ai_denoise": _ai_denoise_state,
+        "ai_denoise": ai_denoise,
         "ai_sr_scale": _ai_sr_scale_state,
         "mv2_eyeshadow": _mv2_eyeshadow_state,
         "mv2_eyeshadow_color": _mv2_eyeshadow_color_state,

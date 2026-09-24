@@ -24,6 +24,7 @@ commands:
 ```bash
 ./run web                                  # open the app in your browser
 ./run batch ~/photos -o ~/photos_out --recipe natural --workers 4
+./run batch ~/dim_shots -o ~/out --recipe con_high_iso_v1  # high-ISO: AI denoise first
 ./run crops ~/photos_out --formats 4:5,9:16,1:1  # export face-aware crops for Instagram, TikTok, etc.
 ./run review apply ~/photos_out decisions.json  # copy the picks you marked in review.html
 ./run recipes                              # list the recipe names --recipe accepts
@@ -78,10 +79,15 @@ curl -L -o models/selfie_multiclass_256x256.tflite \
 curl -L -o models/pose_landmarker_full.task \
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task?generation=1682642785209422"
 
+# NAFNet AI denoise (117 MB, MIT; downloaded on demand the first time
+# AI denoise is used; hosted on this repo's models-nafnet-v1 pre-release)
+curl -L -o models/nafnet_denoise.onnx \
+  "https://github.com/dennisbrian/retouch/releases/download/models-nafnet-v1/nafnet_denoise.onnx"
+
 # Verify every downloaded artifact against models/manifest.json.
 python scripts/qa/verify_models.py \
   --model face_landmarker --model selfie_segmenter --model selfie_multiclass \
-  --model pose_landmarker_full
+  --model pose_landmarker_full --model denoise_nafnet
 
 # Optional local BiSeNet face parsing ONNX (not distributed by the wheel)
 # Place a manifest-matching resnet18.onnx export at:
@@ -96,6 +102,13 @@ they are not shipped. On that fallback path the MediaPipe multiclass segmenter
 supplies the hair and neck masks and cuts bangs and accessories out of the skin
 mask. Without it (offline, or `RETOUCH_CLASS_SEGMENTER=0`) hair is a band of
 the person mask around the head and there is no neck mask.
+
+AI denoise (`--ai-denoise 0-100` in the CLI, the "AI Noise Reduction" slider
+under Tone & Light in the app, or recipes such as `con_high_iso_v1`) runs the
+NAFNet model before retouching. It is CPU-only and takes roughly 10 s per
+1.5 MP (about 80 s at 24 MP), so keep it for noisy high-ISO shots. If the model
+cannot be downloaded, a bilateral filter is used instead and the result is
+flagged for review.
 
 Set `RETOUCH_OFFLINE=1` before launching the GUI to disable update checks and
 prevent model downloads; the Advanced Retouch status panel shows the mode.

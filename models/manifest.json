@@ -75,12 +75,12 @@
     },
     "denoise_nafnet": {
       "filename": "nafnet_denoise.onnx",
-      "url": "",
-      "sha256": "a2b1aa5a5c9d901779948faad92930e13a25b314c89b12cbee4d1e1d9f6cbbf7",
+      "url": "https://github.com/dennisbrian/retouch/releases/download/models-nafnet-v1/nafnet_denoise.onnx",
+      "sha256": "4bab67c8618c722f57c90c0112f4ac57cfeea6dd83cbf5a7e8fbac5c0f995e65",
       "size_bytes": 117316673,
       "license": "MIT",
-      "availability": "unavailable",
-      "description": "NAFNet-SIDD-width32 denoise model (ONNX, opset 17, dynamic H/W, RGB [0,1] NCHW) — not shipped in the wheel and has no controlled download URL; denoise reports the unavailable model instead of claiming a bundle."
+      "availability": "downloadable",
+      "description": "NAFNet-SIDD-width32 denoise model (ONNX, opset 17, dynamic H/W, RGB [0,1] NCHW). Weights from megvii-research/NAFNet (MIT; trained on the SIDD smartphone-noise dataset). Built by .github/workflows/publish-models.yml and hosted on this repo's models-nafnet-v1 pre-release; downloaded into the verified user model cache the first time AI denoise runs."
     }
   }
 }
