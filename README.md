@@ -24,7 +24,7 @@ commands:
 ```bash
 ./run web                                  # open the app in your browser
 ./run batch ~/photos -o ~/photos_out --recipe natural --workers 4
-./run recipes                              # list the built-in recipes
+./run recipes                              # list the recipe names --recipe accepts
 ./run update                               # git pull, then refresh dependencies
 ```
 
@@ -104,7 +104,7 @@ cv2.imwrite("portrait_retouched.jpg", result)
 ### Batch CLI
 
 ```bash
-python3 cli.py /path/to/photos -o /path/to/output --recipe cosplay --workers 4
+python3 cli.py /path/to/photos -o /path/to/output --recipe cosplay_clear_v1 --workers 4
 ```
 
 See [BATCH_GUIDE.md](docs/guides/BATCH_GUIDE.md) for full CLI options.
@@ -170,11 +170,19 @@ Windows, Linux); the `Desktop builds` workflow produces all three. See
 
 ## Recipes
 
-Built-in recipes include `natural`, `portrait`, `cosplay`, `cyber_doll`, `pink_dream`, `meitu_clone`, and others. List all names:
+The CLI `--recipe` flag and the GUI dropdowns take names from the curated
+catalog (`CURATED_RECIPE_NAMES` in `retouch/recipes.py`), for example `natural`,
+`portrait`, `natural_polish_v1`, `cosplay_clear_v1`,
+`cosplay_character_showcase_v1`, `apex_cinema_v1` and `reala_ace`. List them all:
 
 ```bash
-python3 cli.py --help
+./run recipes
 ```
+
+`python3 cli.py --list-recipes` shows every recipe in the cookbook, including
+older looks such as `cosplay`, `anime_v2` and the Fuji film sims. Those are not
+in the curated catalog, so `--recipe` rejects them with "invalid choice"; they
+still work through the Python API, e.g. `engine.process(img, recipe="anime_v2")`.
 
 ## Tests
 

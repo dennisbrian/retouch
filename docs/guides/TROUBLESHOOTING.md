@@ -73,7 +73,7 @@ pip install onnxruntime-gpu
 
 **Example:**
 ```bash
-python3 cli.py distant_portrait.jpg -o out.jpg --global-only --recipe anime_v2
+python3 cli.py distant_portrait.jpg -o out.jpg --global-only --recipe natural
 # Applies grading even without face detection
 ```
 
@@ -84,8 +84,8 @@ python3 cli.py distant_portrait.jpg -o out.jpg --global-only --recipe anime_v2
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | Too soft/blurry | Using `fast=True` on high-res | Use `fast=False` for export, keep `fast=True` for GUI preview |
-| Color cast (too warm/cool) | Wrong recipe or white balance | Try different recipe: `--recipe anime_v2` vs `--recipe cosplay` |
-| Patchiness or halos | Frequency separation artifact | Use `--recipe classic_chrome` (less aggressive smoothing) |
+| Color cast (too warm/cool) | Wrong recipe or white balance | Try different recipe: `--recipe natural` vs `--recipe cosplay_clear_v1` |
+| Patchiness or halos | Frequency separation artifact | Use `--recipe documentary_preserve_v1` (less aggressive smoothing) |
 | Eyes look weird | Over-enhancement | Reduce `eye_brightening` slider in GUI or CLI |
 
 ---
@@ -165,6 +165,20 @@ top  # Watch %MEM column
 
 ## Recipes & Presets
 
+### `--recipe`: invalid choice
+**Symptom:** `cli.py: error: argument --recipe: invalid choice: 'cosplay'` (or
+`anime_v2`, `astia`, `cyber_doll`, ...).
+
+**Cause:** `--recipe` and the GUI dropdowns only take the curated catalog
+(`CURATED_RECIPE_NAMES` in `retouch/recipes.py`). `python3 cli.py --list-recipes`
+lists every recipe in the cookbook, including older looks that are not curated.
+
+**Fix:**
+- Run `./run recipes` for the names `--recipe` accepts. The closest curated
+  match for `cosplay` is `cosplay_clear_v1`, which extends it.
+- To use a non-curated look anyway, call the Python API:
+  `engine.process(img, recipe="anime_v2")`.
+
 ### Recipe not having any effect
 **Symptom:** Image looks identical before/after, wrong color, or recipe silently ignored.
 
@@ -173,8 +187,8 @@ top  # Watch %MEM column
 **Fix:**
 1. ✅ **Try a different recipe** to verify engine works
    ```bash
-   python3 cli.py image.jpg -o out1.jpg --recipe anime_v2
-   python3 cli.py image.jpg -o out2.jpg --recipe classic_chrome
+   python3 cli.py image.jpg -o out1.jpg --recipe natural
+   python3 cli.py image.jpg -o out2.jpg --recipe cosplay_clear_v1
    # Compare out1.jpg and out2.jpg — should look different
    ```
 
@@ -350,8 +364,8 @@ top  # Watch %MEM column
 
 2. ✅ **Try different recipe**
    ```bash
-   python3 cli.py image.jpg -o out1.jpg --recipe cosplay
-   python3 cli.py image.jpg -o out2.jpg --recipe anime_v2
+   python3 cli.py image.jpg -o out1.jpg --recipe natural
+   python3 cli.py image.jpg -o out2.jpg --recipe cosplay_clear_v1
    # Compare — one may look better
    ```
 
