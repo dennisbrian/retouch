@@ -40,6 +40,15 @@ from retouch.params import PROCESSING_PARAMS, recipe_to_params
 from retouch.session import Session, create_session_from_params
 from retouch.recipe_cookbook import list_recipes, search_recipes
 from retouch.look_extractor import LookExtractor
+from retouch.review_page import (
+    REVIEW_DIRNAME,
+    ReviewRecord,
+    build_review_page,
+    record_key,
+    result_review_meta,
+    review_root_for,
+    write_review_record,
+)
 
 
 class _DeprecatedAliasAction(argparse.Action):
@@ -200,6 +209,54 @@ def _close_worker_engine():
         _worker_engine = None
 
 
+def _review_relative(img_path, input_root):
+    """Display path for a review record: relative to the recursive input
+    root when batching recursively, else just the file name."""
+    if input_root is not None:
+        try:
+            return str(Path(img_path).resolve().relative_to(Path(input_root).resolve()))
+        except ValueError:
+            pass
+    return Path(img_path).name
+
+
+def _safe_write_review_record(review_root, record):
+    """Write a ReviewRecord, logging (never raising) on failure.
+
+    Record writing must never take down a batch: a bad path, a full disk,
+    or a permissions error here should surface as a warning, not a crash
+    partway through an image the engine already finished processing.
+    """
+    if review_root is None:
+        return
+    try:
+        write_review_record(review_root, record)
+    except Exception as e:
+        print(f"  ⚠ review record write failed for {record.source}: {e}")
+
+
+def _maybe_write_skip_record(review_root, img_path, out_path, input_root, recipe):
+    """On a skip (existing output, no --force), backfill a minimal record
+    only if this image has no review record yet, so a re-run doesn't
+    clobber a richer record from the run that actually processed it."""
+    if review_root is None:
+        return
+    try:
+        existing = Path(review_root) / REVIEW_DIRNAME / "records" / f"{record_key(img_path)}.json"
+        if existing.exists():
+            return
+        write_review_record(review_root, ReviewRecord(
+            source=str(Path(img_path).resolve()),
+            output=str(out_path),
+            status="done",
+            recipe=recipe,
+            relative=_review_relative(img_path, input_root),
+            qa_recorded=False,
+        ))
+    except Exception as e:
+        print(f"  ⚠ review record (skip) failed for {img_path}: {e}")
+
+
 def _linear_raw_to_engine_bgr(path, exposure: float = 0.0, contrast: float = 1.0):
     """T5 path: linear decode → develop → gamma-encode → float32 BGR [0,255]."""
     from retouch.raw_develop import RAWDeveloper
@@ -220,7 +277,8 @@ def _process_single(args):
      max_dim, compare_flag, global_only, bit_depth, fail_on_qa, save_session,
      smart, linear_raw, raw_exposure, raw_contrast, raf_decoder,
      raf2jpeg_path, raf2jpeg_quality, fuji_match_strength, optical_correction,
-     input_root) = args
+     input_root, review_root, review) = args
+    t_start = time.time()
     try:
         fmt = output_format(img_path, format_arg)
         # For 16-bit, force PNG or TIFF
@@ -233,6 +291,10 @@ def _process_single(args):
         _assert_safe_destination(img_path, out_path)
 
         if out_path.exists() and not force:
+            if review:
+                _maybe_write_skip_record(
+                    review_root, img_path, out_path, input_root, params.get("recipe"),
+                )
             return (img_path.name, "skipped")
 
         if linear_raw and Path(img_path).suffix.lower() in RAW_EXTENSIONS:
@@ -277,6 +339,7 @@ def _process_single(args):
                     f"using base params"
                 )
 
+        review_meta = {"faces": [], "qa": []}
         if global_only:
             result = _apply_global_finish(img_bgr, dict(effective_params))
         else:
@@ -290,12 +353,24 @@ def _process_single(args):
 
             try:
                 result = engine.process(img_bgr, **dict(effective_params))
+                if review:
+                    review_meta = result_review_meta(result, _scale)
                 if fail_on_qa:
                     qa = getattr(result, 'qa', [])
                     if qa:
                         flagged = [w for w in qa if w.flagged]
                         if flagged:
                             reasons = "; ".join(f"{w.detector}={w.score:.2f}" for w in flagged)
+                            if review:
+                                _safe_write_review_record(review_root, ReviewRecord(
+                                    source=str(Path(img_path).resolve()),
+                                    status="qa_fail",
+                                    recipe=params.get("recipe"),
+                                    faces=review_meta.get("faces", []),
+                                    qa=review_meta.get("qa", []),
+                                    relative=_review_relative(img_path, input_root),
+                                    elapsed_s=time.time() - t_start,
+                                ))
                             return (img_path.name, f"QA_FAIL: {reasons}")
             finally:
                 if should_close:
@@ -350,6 +425,19 @@ def _process_single(args):
             except (OSError, ValueError) as e:
                 return (img_path.name, f"saved_image_but_session_failed: {e}")
 
+        if review:
+            _safe_write_review_record(review_root, ReviewRecord(
+                source=str(Path(img_path).resolve()),
+                output=str(out_path),
+                compare=str(compare_path) if compare_flag else None,
+                status="done",
+                recipe=params.get("recipe"),
+                faces=review_meta.get("faces", []),
+                qa=review_meta.get("qa", []),
+                relative=_review_relative(img_path, input_root),
+                elapsed_s=time.time() - t_start,
+            ))
+
         return (img_path.name, "done")
     except Exception as e:
         from retouch.utils import log_crash
@@ -364,6 +452,15 @@ def _process_single(args):
             "global_only": global_only,
             "bit_depth": bit_depth,
         })
+        if review:
+            _safe_write_review_record(review_root, ReviewRecord(
+                source=str(Path(img_path).resolve()),
+                status="failed",
+                recipe=params.get("recipe") if isinstance(params, dict) else None,
+                error=str(e),
+                relative=_review_relative(img_path, input_root),
+                elapsed_s=time.time() - t_start,
+            ))
         return (img_path.name, f"failed: {e}")
 
 
@@ -854,6 +951,8 @@ def main() -> None:
                         help="Skip EXIF metadata copying")
     parser.add_argument("--fail-on-qa", action="store_true",
                         help="Exit with code 1 if any QA detector flags an artifact")
+    parser.add_argument("--no-review", action="store_false", dest="review", default=True,
+                        help="Skip writing review.html (per-batch review page)")
 
     # Session save/load (F2)
     parser.add_argument("--session", type=str, default=None,
@@ -1103,6 +1202,8 @@ def main() -> None:
     if output_dir:
         output_dir.mkdir(parents=True, exist_ok=True)
 
+    review_root = review_root_for(output_dir, input_path) if args.review else None
+
     t0 = time.time()
     done = skipped = failed = 0
 
@@ -1114,7 +1215,7 @@ def main() -> None:
              args.linear_raw, args.raw_exposure, args.raw_contrast,
              args.raf_decoder, args.raf2jpeg_path, args.raf2jpeg_quality,
              args.fuji_match_strength, args.optical_correction,
-             recursive_root)
+             recursive_root, review_root, args.review)
             for f in files
         ]
         with ProcessPoolExecutor(
@@ -1136,6 +1237,7 @@ def main() -> None:
         engine = None if args.global_only else RetouchEngine()
         try:
             for f in tqdm(files, desc="Retouching", unit="img"):
+                img_t_start = time.time()
                 if args.linear_raw and f.suffix.lower() in RAW_EXTENSIONS:
                     try:
                         img_bgr = _linear_raw_to_engine_bgr(
@@ -1145,6 +1247,13 @@ def main() -> None:
                     except Exception as e:
                         failed += 1
                         tqdm.write(f"  ✖ {f.name}: linear-raw {e}")
+                        if args.review:
+                            _safe_write_review_record(review_root, ReviewRecord(
+                                source=str(f.resolve()), status="failed", error=str(e),
+                                recipe=params.get("recipe"),
+                                relative=_review_relative(f, recursive_root),
+                                elapsed_s=time.time() - img_t_start,
+                            ))
                         continue
                 else:
                     correction_status = {}
@@ -1161,6 +1270,13 @@ def main() -> None:
                     except (OSError, ValueError, RuntimeError) as e:
                         failed += 1
                         tqdm.write(f"  ✖ {f.name}: {e}")
+                        if args.review:
+                            _safe_write_review_record(review_root, ReviewRecord(
+                                source=str(f.resolve()), status="failed", error=str(e),
+                                recipe=params.get("recipe"),
+                                relative=_review_relative(f, recursive_root),
+                                elapsed_s=time.time() - img_t_start,
+                            ))
                         continue
                     if args.optical_correction:
                         tqdm.write(
@@ -1170,6 +1286,13 @@ def main() -> None:
                 if img_bgr is None:
                     failed += 1
                     tqdm.write(f"  ✖ {f.name}: failed to read")
+                    if args.review:
+                        _safe_write_review_record(review_root, ReviewRecord(
+                            source=str(f.resolve()), status="failed", error="failed to read",
+                            recipe=params.get("recipe"),
+                            relative=_review_relative(f, recursive_root),
+                            elapsed_s=time.time() - img_t_start,
+                        ))
                     continue
 
                 fmt = output_format(f, args.format)
@@ -1183,6 +1306,10 @@ def main() -> None:
 
                 if out_path.exists() and not args.force:
                     skipped += 1
+                    if args.review:
+                        _maybe_write_skip_record(
+                            review_root, f, out_path, recursive_root, params.get("recipe"),
+                        )
                     continue
 
                 orig_shape = img_bgr.shape[:2]
@@ -1206,10 +1333,13 @@ def main() -> None:
                             f"using base params"
                         )
 
+                review_meta = {"faces": [], "qa": []}
                 if args.global_only:
                     result = _apply_global_finish(img_bgr, dict(effective_params))
                 else:
                     result = engine.process(img_bgr, **dict(effective_params))
+                    if args.review:
+                        review_meta = result_review_meta(result, _scale)
                     if args.fail_on_qa:
                         qa = getattr(result, 'qa', [])
                         if qa:
@@ -1218,6 +1348,15 @@ def main() -> None:
                                 reasons = "; ".join(f"{w.detector}={w.score:.2f}" for w in flagged)
                                 print(f"  ✖ {f.name}: QA_FAIL: {reasons}")
                                 failed += 1
+                                if args.review:
+                                    _safe_write_review_record(review_root, ReviewRecord(
+                                        source=str(f.resolve()), status="qa_fail",
+                                        recipe=params.get("recipe"),
+                                        faces=review_meta.get("faces", []),
+                                        qa=review_meta.get("qa", []),
+                                        relative=_review_relative(f, recursive_root),
+                                        elapsed_s=time.time() - img_t_start,
+                                    ))
                                 continue
 
                 if _scale < 1.0:
@@ -1255,6 +1394,18 @@ def main() -> None:
                         tqdm.write(f"  ⚠ {f.name}: could not save session: {e}")
                     else:
                         tqdm.write(f"  💾 session → {written}")
+                if args.review:
+                    _safe_write_review_record(review_root, ReviewRecord(
+                        source=str(f.resolve()),
+                        output=str(out_path),
+                        compare=str(compare_path) if args.compare else None,
+                        status="done",
+                        recipe=params.get("recipe"),
+                        faces=review_meta.get("faces", []),
+                        qa=review_meta.get("qa", []),
+                        relative=_review_relative(f, recursive_root),
+                        elapsed_s=time.time() - img_t_start,
+                    ))
                 done += 1
         finally:
             if engine is not None:
@@ -1263,6 +1414,13 @@ def main() -> None:
     elapsed = time.time() - t0
     print(f"\nDone — {done} processed, {skipped} skipped, {failed} failed"
           f"  ({elapsed:.1f}s)")
+
+    if args.review and not args.dry_run and len(files) > 0:
+        try:
+            page = build_review_page(review_root, workers=args.workers)
+            print(f"Review page → {page}")
+        except Exception as e:
+            print(f"⚠ Review page failed: {e}")
 
 
 if __name__ == "__main__":

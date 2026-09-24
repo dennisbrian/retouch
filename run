@@ -5,6 +5,7 @@
 #   ./run web              open the app in your browser
 #   ./run batch ARGS...    run the batch CLI (same options as cli.py)
 #   ./run recipes          list the recipe names --recipe accepts
+#   ./run review ARGS...   build/apply a batch review page (retouch.review_page)
 #   ./run update           pull the latest code and refresh dependencies
 set -euo pipefail
 
@@ -12,7 +13,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
 case "${1:-}" in
-    -h|--help|help) sed -n '2,8p' "$0"; exit 0 ;;
+    -h|--help|help) sed -n '2,9p' "$0"; exit 0 ;;
 esac
 
 PYTHON="$ROOT_DIR/.venv/bin/python"
@@ -58,13 +59,16 @@ for title, names in (
 print("Use one with: ./run batch <folder> -o <output> --recipe NAME")
 PY
         ;;
+    review)
+        exec "$PYTHON" -m retouch.review_page "$@"
+        ;;
     update)
         git pull --ff-only
         exec "$ROOT_DIR/setup" --no-models
         ;;
     *)
         echo "Unknown command: $cmd" >&2
-        sed -n '2,8p' "$0" >&2
+        sed -n '2,9p' "$0" >&2
         exit 2
         ;;
 esac
