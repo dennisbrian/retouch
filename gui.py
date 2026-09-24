@@ -2158,6 +2158,27 @@ def pick_folder_dialog(current_value=None):
         return gr.update()
 
 
+def _social_crop_format_choices():
+    """(label, key) choices for the batch tab's Social crops CheckboxGroup.
+
+    Imported lazily so gui.py's import never depends on retouch.social_crops
+    (developed concurrently and may not exist / may fail to import yet). Falls
+    back to a static list with the same keys until that module is available;
+    once it is, the real FORMATS labels are used automatically.
+    """
+    try:
+        from retouch.social_crops import FORMATS
+        return [(f"{key} {fmt.label}", key) for key, fmt in FORMATS.items()]
+    except Exception as e:
+        _logger.info("retouch.social_crops unavailable (%s); using static fallback choices.", e)
+        return [
+            ("4:5 Instagram feed", "4:5"),
+            ("9:16 Stories/Reels", "9:16"),
+            ("1:1 Square", "1:1"),
+            ("3:4 Portrait", "3:4"),
+        ]
+
+
 def on_reload_luts():
     """Clear LUT discovery and live render caches."""
     try:
@@ -3842,7 +3863,15 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         auto_group_toggle = gr.Checkbox(label="Enable Rule-Based Auto-Grouping", value=True, info="Group similar scenes to ensure visual coherence across outputs.")
                         sheet_toggle = gr.Checkbox(label="Generate Contact Sheet", value=True, info="Generate a printable contact grid sheet for all processed photos.")
                         zip_toggle = gr.Checkbox(label="Package into ZIP", value=True, info="Archive all output files into a single downloadable .zip file.")
-                        
+
+                    with gr.Row():
+                        batch_social_crops = gr.CheckboxGroup(
+                            choices=_social_crop_format_choices(),
+                            value=[],
+                            label="Social crops",
+                            info="After the batch finishes, also export face-aware crops for posting into <output>/social.",
+                        )
+
                     batch_btn = gr.Button("Process Entire Folder 🚀", variant="primary", size="lg", elem_classes=["primary-btn"])
                     
                 with gr.Column(scale=1):
@@ -4730,7 +4759,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     batch_btn.click(
         fn=on_process_folder,
         inputs=[folder_in, folder_out, batch_style_type, batch_custom_style, batch_recipe,
-                batch_fmt, batch_quality, batch_res, auto_group_toggle, sheet_toggle, zip_toggle],
+                batch_fmt, batch_quality, batch_res, auto_group_toggle, sheet_toggle, zip_toggle,
+                batch_social_crops],
         outputs=[batch_sheet_out, batch_zip_out, batch_status],
         concurrency_limit=1,
         concurrency_id=GUI_ENGINE_CONCURRENCY_ID,

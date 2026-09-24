@@ -265,3 +265,94 @@ To batch-process without generating a review page, add `--no-review`:
 ```bash
 python3 cli.py "/path/to/input" -o "/path/to/output" --recipe cosplay_clear_v1 --no-review
 ```
+
+---
+
+## 5. Social Crops for Instagram, Reels & Stories
+
+Automatically export face-aware crops of your retouched photos in popular social media formats. The engine detects the subject's face, centers the crop on it, preserves headroom for wigs and headpieces, and ignores small background faces. Each crop is output as sRGB JPEG (quality 92, no EXIF), downscaled to `1080px` width with light sharpening, and never upscaled.
+
+### Supported Formats
+
+| Format | Aspect Ratio | Output Size | Use Case |
+| :--- | :---: | :--- | :--- |
+| **`4:5`** | 4:5 | 1080×1350 | Instagram feed posts |
+| **`9:16`** | 9:16 | 1080×1920 | Reels, TikTok, Stories |
+| **`1:1`** | 1:1 | 1080×1080 | Instagram square, profile |
+| **`3:4`** | 3:4 | 1080×1440 | Instagram profile grid, Threads |
+
+### Method 1: During Batch Processing
+
+Add the `--social-crops` flag when running a batch to export crops alongside the retouched images:
+
+```bash
+# Export default formats (4:5, 9:16, 1:1)
+python3 cli.py "/path/to/input" -o "/path/to/output" --recipe natural --social-crops
+
+# Export specific formats
+python3 cli.py "/path/to/input" -o "/path/to/output" --recipe natural --social-crops 4:5,9:16
+
+# Export all formats
+python3 cli.py "/path/to/input" -o "/path/to/output" --recipe natural --social-crops all
+```
+
+Use the launcher for simplicity:
+
+```bash
+./run batch ~/photos -o ~/photos_out --recipe natural --social-crops
+```
+
+Crops are written to `<output>/social/<4x5|9x16|1x1|3x4>/<name>_<slug>.jpg`. Existing crops are skipped unless you pass `--force`. Add `--social-size full` to keep the native crop resolution instead of 1080 px wide.
+
+The top of the crop follows the person mask above the face, so tall wigs, ears and headpieces stay in frame whenever the shape allows it.
+
+### Method 2: On Already-Retouched Folders
+
+Process a folder of retouched images without re-running the full batch pipeline:
+
+```bash
+python3 -m retouch.social_crops ~/photos_out
+```
+
+Or use the launcher:
+
+```bash
+./run crops ~/photos_out
+```
+
+**Options:**
+
+| Option | Default | Description |
+| :--- | :--- | :--- |
+| `--formats` | `4:5,9:16,1:1` | Comma-separated list: `4:5`, `9:16`, `1:1`, `3:4`, or `all`. |
+| `--size` | `platform` | `platform` outputs at `1080px` width; `full` keeps native crop resolution. |
+| `--quality` | `92` | JPEG quality (1–100). |
+| `--force` | *Off* | Overwrite existing crop files. |
+| `-o` / `--output` | `<input>/social` | Output directory for the crop folder structure. |
+| `-r` / `--recursive` | *Off* | Recursively process subdirectories. |
+
+**Example:**
+
+```bash
+# Full-resolution crops with custom quality
+python3 -m retouch.social_crops ~/photos_out \
+  --formats 9:16,1:1 \
+  --size full \
+  --quality 95
+
+# Recursively process all subfolders
+python3 -m retouch.social_crops ~/batch_output \
+  -r --force --formats all
+```
+
+### Method 3: GUI Batch Tab
+
+When using the batch interface in the GUI, check the "Social crops" checkbox and select your desired formats (4:5, 9:16, 1:1, 3:4). Crops are exported to `<output>/social/` after the batch completes.
+
+### Behavior Details
+
+- **No faces detected:** Falls back to center-crop of the frame.
+- **Multiple faces:** Crops are centered on the largest face or group of similar-size faces; small background faces are ignored.
+- **EXIF stripped:** Geolocation and camera metadata are removed for privacy when posting.
+- **Skip rules:** Comparison images (`*_compare.*`) and anything already inside a `social/` folder are skipped.
+- **Platform downsample:** Output is always downscaled to `1080px` width (unless `--size full` is set) to match platform delivery specs, with light output sharpening applied.

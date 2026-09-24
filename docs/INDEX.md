@@ -16,7 +16,7 @@ output verification.
 - `GETTING_STARTED.md` — Desktop one-photo workflow, CLI basics, and result checks
 - `RECIPE_GUIDE.md` — Creating custom presets
 - `GUI.md` — Gradio UI layout & components
-- `BATCH_GUIDE.md` — Batch processing via CLI
+- `BATCH_GUIDE.md` — Batch processing via CLI, including social crops export
 - `SPLIT_SHOOT.md` — Split a shoot into folders by capture time before batching
 - `PERFORMANCE_TUNING.md` — Optimization tips
 - `COLOR_DELIVERY_TRUTH.md` — Working-space, precision, preview, and export contracts
