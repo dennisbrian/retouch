@@ -5787,6 +5787,9 @@ class RetouchEngine:
             self._face_pool.shutdown()
         except Exception:
             logger.warning("FaceProcessorPool shutdown raised", exc_info=True)
+        parser = getattr(self, "_parser", None)
+        if parser is not None and hasattr(parser, "close"):
+            parser.close()
         self._detector.close()
 
     def __enter__(self):

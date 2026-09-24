@@ -51,11 +51,15 @@ jobs:
             'https://storage.googleapis.com/download/storage/v1/b/mediapipe-models/o/image_segmenter%2Fselfie_segmenter%2Ffloat16%2Flatest%2Fselfie_segmenter.tflite?alt=media&generation=1683436453600523' \
             --output models/selfie_segmenter.tflite
           curl --fail --location --retry 3 --silent --show-error \
+            'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite?generation=1682480017063560' \
+            --output models/selfie_multiclass_256x256.tflite
+          curl --fail --location --retry 3 --silent --show-error \
             'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task?generation=1682642785209422' \
             --output models/pose_landmarker_full.task
           python scripts/qa/verify_models.py \
             --model face_landmarker \
             --model selfie_segmenter \
+            --model selfie_multiclass \
             --model pose_landmarker_full
 
       - name: Unit and integration tests

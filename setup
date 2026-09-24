@@ -41,7 +41,7 @@ if [ "$FETCH_MODELS" = "1" ]; then
     .venv/bin/python - <<'PY'
 from retouch import model_fetch
 
-for name in ("face_landmarker", "selfie_segmenter", "pose_landmarker_full"):
+for name in ("face_landmarker", "selfie_segmenter", "selfie_multiclass", "pose_landmarker_full"):
     status = model_fetch.model_status(name)
     if status["available"]:
         print(f"  {name}: ready")
