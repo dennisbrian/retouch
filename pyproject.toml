@@ -32,6 +32,9 @@ dependencies = [
 dev = [
     "gradio>=4.0.0,<5",
     "huggingface-hub>=0.19.3,<1",
+    # Starlette 1.0 removed the TemplateResponse(name, context) form Gradio 4 uses;
+    # every page load then fails with "unhashable type: 'dict'".
+    "starlette<1",
     "pytest>=7.0.0",
     "pytest-cov>=6.0.0",
     "pytest-timeout>=2.3.0,<3",
@@ -39,10 +42,16 @@ dev = [
 gui = [
     "gradio>=4.0.0,<5",
     "huggingface-hub>=0.19.3,<1",
+    # Starlette 1.0 removed the TemplateResponse(name, context) form Gradio 4 uses;
+    # every page load then fails with "unhashable type: 'dict'".
+    "starlette<1",
 ]
 desktop = [
     "gradio>=4.0.0,<5",
     "huggingface-hub>=0.19.3,<1",
+    # Starlette 1.0 removed the TemplateResponse(name, context) form Gradio 4 uses;
+    # every page load then fails with "unhashable type: 'dict'".
+    "starlette<1",
     "pywebview>=5.0.0,<7",
     "pyinstaller>=6.0.0,<7",
     "pyobjc-core<12; sys_platform == 'darwin' and python_version < '3.10'",

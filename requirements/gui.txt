@@ -2,3 +2,5 @@
 gradio>=4.0.0,<5
 # Gradio 4 imports HfFolder, which was removed in huggingface-hub 1.x.
 huggingface-hub>=0.19.3,<1
+# Starlette 1.0 removed the TemplateResponse(name, context) form Gradio 4 uses.
+starlette<1

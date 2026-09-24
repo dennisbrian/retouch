@@ -36,6 +36,10 @@ Task difficulty decides the model, not a flat cheapest-first cascade:
 
 ### Key Commands
 ```bash
+# One-command setup and launch (uv, .venv from uv.lock, core models)
+./setup
+./run                # app window on macOS, browser elsewhere; ./run batch ... wraps cli.py
+
 # Run full test suite
 python3 -m pytest tests/ -q
 
