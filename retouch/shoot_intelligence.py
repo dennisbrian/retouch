@@ -20,6 +20,7 @@ import numpy as np
 from PIL import Image
 
 from .capture_fidelity import CaptureMetadata, read_capture_metadata
+from .io import open_image
 
 
 GRAPH_STATUSES = {"pending", "ready", "running", "succeeded", "failed", "blocked", "skipped"}
@@ -187,7 +188,7 @@ class CullingCandidate:
 
 def _capture_timestamp(path: Path) -> Optional[float]:
     try:
-        with Image.open(path) as image:
+        with open_image(path) as image:
             exif = image.getexif()
             raw = exif.get(36867) or exif.get(306)
         if not raw:
@@ -199,7 +200,7 @@ def _capture_timestamp(path: Path) -> Optional[float]:
 
 
 def _fingerprint(path: Path) -> Tuple[int, int, str]:
-    with Image.open(path) as image:
+    with open_image(path) as image:
         width, height = image.size
         rgb = np.asarray(image.convert("L").resize((32, 32), Image.Resampling.BILINEAR), dtype=np.float32)
     small = cv2.resize(rgb, (8, 8), interpolation=cv2.INTER_AREA)
@@ -289,7 +290,7 @@ def group_bursts(
 
 def _frame_quality(path: str) -> Dict[str, float]:
     """Measure simple capture quality signals without face or identity inference."""
-    with Image.open(path) as image:
+    with open_image(path) as image:
         rgb = np.asarray(image.convert("RGB"), dtype=np.uint8)
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
     laplacian = cv2.Laplacian(gray, cv2.CV_32F)

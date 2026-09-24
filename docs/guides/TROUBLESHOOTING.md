@@ -417,14 +417,25 @@ python3 cli.py image.jpg -o out.jpg --verbose
 ```
 
 ### Where are crash logs?
-**Location:** Current working directory.
+Retouch keeps three local files. Nothing is uploaded.
 
-**Format:** `crash_YYYYMMDD_HHMMSS.log`
+| File | What it holds | Location |
+|---|---|---|
+| `crash.log` | Python errors caught while processing an image, with private file paths redacted. New entries are appended. | The cache folder: `$RETOUCH_CACHE_DIR`, else `$XDG_CACHE_HOME/retouch`, else `~/.cache/retouch` (all platforms) |
+| `native-crash.log` | Tracebacks written by Python's `faulthandler` when the app dies inside native code (MediaPipe, onnxruntime, OpenCV), plus one "retouch started" line per launch. Truncated once it passes 1 MB. | The log folder below |
+| `retouch.log` | The app's rotating log (1 MB × 3), written by the GUI and desktop app | The log folder below |
 
-**Example:**
+The log folder is `~/Library/Logs/ProMaxRetouch` on macOS,
+`%LOCALAPPDATA%\ProMaxRetouch\Logs` on Windows, and
+`~/.cache/promaxretouch/logs` elsewhere.
+
+If the desktop window closes without an error message, look at the end of
+`native-crash.log` first. The GUI's **Diagnostics** panel lists these
+paths and can clear them.
+
 ```bash
-ls -la crash_*.log
-tail -f crash_*.log  # Watch in real-time
+tail -n 50 ~/.cache/retouch/crash.log
+tail -n 50 ~/Library/Logs/ProMaxRetouch/native-crash.log   # macOS
 ```
 
 ### How to report a bug

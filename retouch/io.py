@@ -56,6 +56,25 @@ RAW_EXTENSIONS = {
     ".raf", ".cr2", ".cr3", ".nef", ".nrw", ".arw", ".dng", ".orf", ".rw2", ".pef", ".srw", ".x3f",
 }
 
+# Pillow decoders allowed for user-supplied files. Without this list Pillow
+# sniffs the file header and picks from ~40 decoders, so a crafted PSD or
+# other rare format renamed to .jpg reaches code with known memory-safety
+# advisories (the bundled Pillow is capped below 11 by Gradio 4). The JPEG
+# opener also returns camera MPO files (JPEGs with a multi-picture index).
+PIL_INPUT_FORMATS = ("JPEG", "PNG", "TIFF", "BMP", "WEBP")
+
+
+def open_image(path: Union[str, Path]) -> "Image.Image":
+    """Open a user-supplied image with Pillow, restricted to PIL_INPUT_FORMATS.
+
+    Raises ``PIL.UnidentifiedImageError`` for any other format, the same
+    error Pillow raises for unreadable files.
+    """
+    Image.init()  # registers every plugin once; a no-op afterwards
+    # Skip decoders this Pillow build lacks (e.g. WebP) instead of KeyError.
+    formats = [fmt for fmt in PIL_INPUT_FORMATS if fmt in Image.OPEN]
+    return Image.open(path, formats=formats)
+
 # ``raf2jpeg`` is maintained as a sibling checkout in this workspace.  Keep
 # discovery here (rather than baking the absolute workstation path into the
 # CLI) so API callers and worker processes resolve it consistently.
@@ -527,7 +546,7 @@ def _read_non_raw_with_color_context(
     """Decode one non-RAW image into BGR sRGB plus its color contract."""
     from PIL import ImageOps
 
-    with Image.open(path) as opened:
+    with open_image(path) as opened:
         embedded_icc = opened.info.get("icc_profile")
         source_icc = bytes(embedded_icc) if embedded_icc else None
         decoded, source_bits = _non_raw_8bit_samples(opened, path)
@@ -950,7 +969,7 @@ def copy_exif(src_path: Union[str, Path], dst_path: Union[str, Path]) -> None:
     try:
         from PIL.ExifTags import Base as ExifBase
 
-        src_img = Image.open(src_path)
+        src_img = open_image(src_path)
         exif = src_img.getexif()
         if not exif:
             return
@@ -1020,7 +1039,7 @@ def read_icc_profile(path: Union[str, Path]) -> Optional[bytes]:
         files, missing files, and corrupt images all yield ``None``.
     """
     try:
-        with Image.open(str(path)) as pil_img:
+        with open_image(str(path)) as pil_img:
             icc = pil_img.info.get("icc_profile")
     except (FileNotFoundError, OSError, Image.UnidentifiedImageError, Image.DecompressionBombError):
         return None
@@ -1053,7 +1072,7 @@ def image_has_icc(path: Union[str, Path]) -> bool:
 def read_exif_bytes(path: Union[str, Path]) -> Optional[bytes]:
     """Return the raw EXIF blob from *path*, or ``None`` if absent/unreadable."""
     try:
-        with Image.open(str(path)) as pil_img:
+        with open_image(str(path)) as pil_img:
             exif = pil_img.getexif()
     except (FileNotFoundError, OSError, Image.UnidentifiedImageError, Image.DecompressionBombError):
         return None
