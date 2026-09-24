@@ -24,6 +24,7 @@ commands:
 ```bash
 ./run web                                  # open the app in your browser
 ./run batch ~/photos -o ~/photos_out --recipe natural --workers 4
+./run crops ~/photos_out --formats 4:5,9:16,1:1  # export face-aware crops for Instagram, TikTok, etc.
 ./run recipes                              # list the built-in recipes
 ./run update                               # git pull, then refresh dependencies
 ```

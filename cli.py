@@ -568,6 +568,31 @@ _ESTIMATED_OUTPUT_BYTES_PER_INPUT_BYTE = 2.0
 _MIN_FREE_BYTES_AFTER_RUN = 5 * 1024 * 1024 * 1024  # 5 GiB
 
 
+def _export_social_crops(files, output_dir, args, recursive_root, formats) -> None:
+    """Post-batch: face-aware social crops of every written output."""
+    from retouch.social_crops import export_folder, format_summary
+
+    outputs = []
+    for f in files:
+        fmt = output_format(f, args.format)
+        if args.bit_depth == 16 and fmt not in ("png", "tif", "tiff"):
+            fmt = "png"
+        out_path = _destination_for_image(f, output_dir, fmt, input_root=recursive_root)
+        if out_path.exists():
+            outputs.append(out_path)
+    if not outputs:
+        print("Social crops: no retouched outputs to crop")
+        return
+    social_dir = (output_dir or outputs[0].parent) / "social"
+    summary = export_folder(
+        outputs, social_dir, formats, size=args.social_size, force=args.force,
+    )
+    for r in summary["results"]:
+        if r.status == "failed":
+            print(f"  ✖ {r.path.name}: {r.error}")
+    print(format_summary(summary, social_dir))
+
+
 def _nearest_existing_ancestor(path: Path) -> Path:
     """Return the nearest existing ancestor for a possibly-new output path."""
     probe_dir = Path(path)
@@ -854,6 +879,14 @@ def main() -> None:
                         help="Skip EXIF metadata copying")
     parser.add_argument("--fail-on-qa", action="store_true",
                         help="Exit with code 1 if any QA detector flags an artifact")
+    parser.add_argument("--social-crops", nargs="?", const="4:5,9:16,1:1", default=None,
+                        metavar="FORMATS",
+                        help="After the batch, export face-aware crops for posting into "
+                             "<output>/social/ (4:5, 9:16, 1:1, 3:4 or 'all'; "
+                             "default with no value: 4:5,9:16,1:1)")
+    parser.add_argument("--social-size", choices=["platform", "full"], default="platform",
+                        help="Social crop size: platform = 1080 px wide (default), "
+                             "full = native crop resolution")
 
     # Session save/load (F2)
     parser.add_argument("--session", type=str, default=None,
@@ -944,6 +977,13 @@ def main() -> None:
 
     if not 0.0 <= args.fuji_match_strength <= 1.0:
         parser.error("--fuji-match-strength must be between 0 and 1")
+    social_formats = None
+    if args.social_crops is not None:
+        from retouch.social_crops import parse_formats
+        try:
+            social_formats = parse_formats(args.social_crops)
+        except ValueError as exc:
+            parser.error(f"--social-crops: {exc}")
     if args.linear_raw and args.raf_decoder != "rawpy":
         parser.error("--linear-raw can only be combined with --raf-decoder rawpy")
 
@@ -1263,6 +1303,11 @@ def main() -> None:
     elapsed = time.time() - t0
     print(f"\nDone — {done} processed, {skipped} skipped, {failed} failed"
           f"  ({elapsed:.1f}s)")
+
+    if social_formats:
+        _export_social_crops(
+            files, output_dir, args, recursive_root, social_formats,
+        )
 
 
 if __name__ == "__main__":
