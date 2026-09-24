@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import io
 import logging
 import os
+import secrets
 
 # OpenCV's EXR codec must be enabled before cv2 is first imported anywhere in
 # the process; this module is the shared I/O entry point, so set it here at
@@ -990,6 +992,39 @@ def copy_exif(src_path: Union[str, Path], dst_path: Union[str, Path]) -> None:
         logger.warning("Failed to copy EXIF from %s to %s: %s", src_path, dst_path, exc)
 
 
+@contextlib.contextmanager
+def _atomic_output_path(final_path: Union[str, Path]):
+    """Yield a hidden temp path beside *final_path*; publish it atomically.
+
+    Batch resume (``cli.py``) treats any existing destination as done, so a
+    final image must never exist in a partially written state. Encoders and
+    metadata passes write to ``.<stem>.tmp-<pid>-<rand><suffix>`` in the same
+    directory (same filesystem, so ``os.replace`` is atomic); the real
+    extension stays last because ``cv2.imwrite`` picks the encoder from it.
+    On success the temp replaces *final_path*; on any exception, including
+    ``KeyboardInterrupt``, the temp is removed and *final_path* is left as it
+    was (absent, or the previous good output).
+
+    The temp is named, not created with ``tempfile.mkstemp``, so the output
+    keeps the normal umask-derived permissions rather than mkstemp's 0600.
+    """
+    final = Path(final_path)
+    tmp = final.with_name(
+        f".{final.stem}.tmp-{os.getpid()}-{secrets.token_hex(4)}{final.suffix}"
+    )
+    try:
+        yield tmp
+        os.replace(tmp, final)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:  # pragma: no cover - best-effort cleanup
+            logger.warning("Could not remove temp output %s: %s", tmp, exc)
+        raise
+
+
 def make_comparison(
     original: Optional[np.ndarray],
     retouched: Optional[np.ndarray],
@@ -1008,7 +1043,9 @@ def make_comparison(
         h = original.shape[0]
         separator = np.full((h, 4, 3), 200, dtype=np.uint8)
         combined = np.hstack([original, separator, retouched])
-        cv2.imwrite(str(compare_path), combined, encode_write_params(fmt, quality))
+        with _atomic_output_path(compare_path) as tmp_path:
+            if not cv2.imwrite(str(tmp_path), combined, encode_write_params(fmt, quality)):
+                raise cv2.error(f"cv2.imwrite returned False for comparison {compare_path}")
     except Exception as exc:
         logger.warning("Failed to write comparison image %s: %s", compare_path, exc)
 
@@ -1411,8 +1448,9 @@ def write_image_with_icc(
         unit = img.astype(np.float32, copy=False) / 255.0
         linear = srgb_to_linear(np.clip(unit, 0.0, 1.0))
         samples = linear_to_pq(linear) if pq_encode else linear
-        if not cv2.imwrite(str(path), np.ascontiguousarray(samples)):
-            raise cv2.error(f"cv2.imwrite returned False for EXR write to {path}")
+        with _atomic_output_path(path) as tmp_path:
+            if not cv2.imwrite(str(tmp_path), np.ascontiguousarray(samples)):
+                raise cv2.error(f"cv2.imwrite returned False for EXR write to {path}")
         if c2pa_manifest:
             logger.info("C2PA passthrough is not supported for EXR output; manifest dropped")
         return
@@ -1427,17 +1465,20 @@ def write_image_with_icc(
             bit_depth = 8
         else:
             img_16 = _to_uint16_delivery(img, float_range)
-            if ext in (".tif", ".tiff"):
-                _write_tiff_16bit(path, img_16, icc_profile, exif)
-            else:
-                # OpenCV is used only for the lossless pixel encoder. Metadata
-                # is inserted into the PNG container afterward without a
-                # decode/re-encode, so the 16-bit samples remain untouched.
-                if not cv2.imwrite(str(path), img_16):
-                    raise cv2.error(f"cv2.imwrite returned False for 16-bit write to {path}")
-                _embed_png_metadata(path, icc_profile, exif)
-                if c2pa_manifest:
-                    _embed_jpeg_c2pa_manifest(path, c2pa_manifest)
+            # Metadata passes re-open the written file, so they run on the
+            # temp before it is atomically published under the final name.
+            with _atomic_output_path(path) as tmp_path:
+                if ext in (".tif", ".tiff"):
+                    _write_tiff_16bit(tmp_path, img_16, icc_profile, exif)
+                else:
+                    # OpenCV is used only for the lossless pixel encoder. Metadata
+                    # is inserted into the PNG container afterward without a
+                    # decode/re-encode, so the 16-bit samples remain untouched.
+                    if not cv2.imwrite(str(tmp_path), img_16):
+                        raise cv2.error(f"cv2.imwrite returned False for 16-bit write to {path}")
+                    _embed_png_metadata(tmp_path, icc_profile, exif)
+                    if c2pa_manifest:
+                        _embed_jpeg_c2pa_manifest(tmp_path, c2pa_manifest)
             return
 
     # 8-bit delivery is the only place where blue-noise dither is allowed.
@@ -1449,9 +1490,11 @@ def write_image_with_icc(
                 "%s has no PIL writer mapping; falling back to cv2.imwrite, "
                 "which embeds neither ICC profile nor EXIF", path
             )
-        cv2.imwrite(str(path), img_u8, encode_write_params(ext.lstrip("."), quality))
-        if c2pa_manifest:
-            _embed_jpeg_c2pa_manifest(path, c2pa_manifest)
+        with _atomic_output_path(path) as tmp_path:
+            if not cv2.imwrite(str(tmp_path), img_u8, encode_write_params(ext.lstrip("."), quality)):
+                raise cv2.error(f"cv2.imwrite returned False for write to {path}")
+            if c2pa_manifest:
+                _embed_jpeg_c2pa_manifest(tmp_path, c2pa_manifest)
         return
 
     pil_img = _bgr_to_pil(img_u8)
@@ -1473,9 +1516,10 @@ def write_image_with_icc(
         except Exception as exc:
             logger.warning("Failed to embed EXIF into %s: %s", path, exc)
     save_kwargs_8.update(kwargs)
-    pil_img.save(str(path), **save_kwargs_8)
-    if c2pa_manifest:
-        _embed_jpeg_c2pa_manifest(path, c2pa_manifest)
+    with _atomic_output_path(path) as tmp_path:
+        pil_img.save(str(tmp_path), **save_kwargs_8)
+        if c2pa_manifest:
+            _embed_jpeg_c2pa_manifest(tmp_path, c2pa_manifest)
 
 
 def convert_image_colorspace(

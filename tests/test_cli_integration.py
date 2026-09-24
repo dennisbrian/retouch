@@ -63,7 +63,7 @@ class TestBasicProcessing:
             "--workers", "1",
         )
         assert rc == 0, f"CLI failed: {err}"
-        out_files = list(output_dir.iterdir())
+        out_files = [p for p in output_dir.iterdir() if not p.name.startswith(".")]
         assert len(out_files) >= 1
 
     def test_process_directory(self, tmp_path):
@@ -129,7 +129,7 @@ class TestBasicProcessing:
             p.relative_to(output_dir).as_posix()
             for p in output_dir.rglob("*")
             if p.is_file() and ".retouch-review" not in p.parts
-            and p.name != "review.html"
+            and p.name != "review.html" and not p.name.startswith(".")
         } == {
             "top.jpg",
             "sub/nested.jpg",
@@ -248,7 +248,7 @@ class TestExportOptions:
             "--force",
         )
         assert rc == 0, f"CLI failed: {err}"
-        files = list(output_dir.iterdir())
+        files = [p for p in output_dir.iterdir() if not p.name.startswith(".")]
         # The output should be a .webp file
         assert any(f.suffix == ".webp" for f in files)
 
@@ -268,7 +268,7 @@ class TestExportOptions:
             "--force",
         )
         assert rc == 0, f"CLI failed: {err}"
-        files = list(output_dir.iterdir())
+        files = [p for p in output_dir.iterdir() if not p.name.startswith(".")]
         assert any(f.suffix == ".png" for f in files)
 
     def test_max_dim_downscales(self, tmp_path):
@@ -332,7 +332,7 @@ class TestExportOptions:
             "--force",
         )
         assert rc == 0, f"CLI failed: {err}"
-        files = list(output_dir.iterdir())
+        files = [p for p in output_dir.iterdir() if not p.name.startswith(".")]
         # Either .png or upsampled .jpg depending on CLI behavior
         assert any(f.suffix in (".png", ".jpg") for f in files)
 
@@ -457,7 +457,7 @@ class TestErrorHandling:
         )
         assert rc == 0, f"dry-run should succeed: {err}"
         # No output files should have been written
-        files = list(output_dir.iterdir())
+        files = [p for p in output_dir.iterdir() if not p.name.startswith(".")]
         assert not any(
             f.suffix.lower() in (".jpg", ".png", ".webp") for f in files
         )

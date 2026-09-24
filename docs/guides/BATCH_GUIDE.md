@@ -45,6 +45,39 @@ By default, this will:
 | **`--no-compare`** | | *Off* | Skip generating the `_compare` side-by-side comparison files. |
 | **`--no-exif`** | | *Off* | Skip copying EXIF metadata (orientation, camera tags, etc.) from the source image. |
 | **`--dry-run`** | | *Off* | Scan the directories and print settings without executing any retouching. |
+| **`--progress-file`** | | `<output>/.retouch-progress.json` | Where to write the live progress JSON (see below). |
+| **`--no-progress-file`** | | *Off* | Do not write the progress JSON. |
+
+### Live progress, stopping and resuming
+
+A full-resolution image can take several minutes, so the progress bar shows
+what each worker is doing right now instead of only counting finished images:
+
+```
+Retouching 1/2 img ETA 58s:  12%|█▏        | 1/6 MP [00:38, portrait_06 per_face 39s]
+```
+
+- The bar is measured in **megapixels**, so a 26 MP frame moves it more than
+  a 6 MP crop, and the ETA accounts for how many workers run at once.
+- Each running image shows its current stage (`detection`, `per_face`,
+  `grading`, `write`, `compare`, ...) and how many of its faces are done.
+- If one image stays in the same stage for 90 s, a line such as
+  `… still working on DSCF4463.JPG: per_face (face 1/2) for 3m01s` is printed,
+  so a slow image is visibly alive rather than stuck.
+- `<output>/.retouch-progress.json` is rewritten about once a second with the
+  counts, ETA and per-image status, stage, seconds, face count, stage timings
+  and QA results. `cat` it from another terminal, or have a tool poll it.
+- The end of the run lists the slowest images and any failed or QA-flagged
+  ones (first 10; the rest are in the progress file).
+
+**Stopping:** press Ctrl-C once. Queued images are cancelled, the images in
+progress are ended within a second or two, and the summary prints. Outputs
+are written to a hidden temporary file and renamed into place only when
+complete, so a stopped (or crashed) batch never leaves a half-written JPEG.
+
+**Resuming:** run the same command again. Images whose output already exists
+are skipped without being decoded, and only the rest are rendered. Use
+`-f/--force` to redo everything.
 
 ---
 
