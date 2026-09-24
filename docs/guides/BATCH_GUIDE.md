@@ -6,11 +6,15 @@ This guide describes how to run the batch processing CLI tool for the **Pro Max 
 
 ## 1. Quick Start
 
-To run a batch of images with the stronger **`cyber_doll`** recipe for the pink/cyan high-impact cosplay look:
+To run a batch of images with the **`cosplay_character_showcase_v1`** recipe (dewy skin, vivid eyes, wig-lace blend):
 
 ```bash
-python3 cli.py "/path/to/input_folder" -o "/path/to/output_folder" --recipe cyber_doll --impact 70 --global-only
+python3 cli.py "/path/to/input_folder" -o "/path/to/output_folder" --recipe cosplay_character_showcase_v1
 ```
+
+`--recipe` only accepts the curated recipe names. Run `./run recipes` to list
+them; older looks such as `cyber_doll` or `anime_v2` are Python-API only (see
+Example F).
 
 By default, this will:
 *   Search the input folder for images (`.jpg`, `.jpeg`, `.png`, `.webp`, etc.).
@@ -24,7 +28,7 @@ By default, this will:
 
 | Option | Shorthand | Default | Description |
 | :--- | :--- | :--- | :--- |
-| **`--preset`** / `--recipe` | | `natural` | Choose the retouch recipe: `natural`, `portrait`, `beauty`, `cosplay`, `cosplay_3d`, `cosplay_no_eq`, `cyber_doll`, `scifi_cosplay`, `anime_cosplay`, `anime_cinematic_v1`, `anime_cinematic_soft`, `anime_cinematic_action`, `anime_crystal_void`, `anime_cinematic_fantasy`, `xiaohongshu`, `xhs_ultrasoft`, `pink_dream`, `blue_dream`, `fantasy_goddess`, `fuji_porcelain`, `dreamy`, `magazine`, `korean_beauty`, `idol`, `wedding`. |
+| **`--recipe`** / `--preset` | | `natural` | Choose the retouch recipe from the curated catalog, e.g. `natural`, `portrait`, `natural_polish_v1`, `cosplay_clear_v1`, `cosplay_character_showcase_v1`, `apex_cinema_v1`, `reala_ace`. Run `./run recipes` for the full list. |
 | **`--impact`** | | Recipe default | Global punch/finish intensity from `0` to `100`. Useful when a result feels too weak after normal retouching. |
 | **`--global-only`** | | *Off* | Skip face detection and local skin/eye/lip edits. Use this for fast color, contrast, glow, and impact retouching, or when MediaPipe cannot run in the current environment. |
 | **`-o`** / `--output` | | *None* | Directory where output images and comparisons are saved. |
@@ -73,8 +77,7 @@ If you have a large folder of images (e.g. 500+ photos) and want a fast preview 
 ```bash
 python3 cli.py "/Users/dennis/Pictures/Photoshoot" \
   -o "/Users/dennis/Desktop/Processed" \
-  --recipe cyber_doll \
-  --impact 70 \
+  --recipe cosplay_character_showcase_v1 \
   --global-only \
   --max-dim 2048 \
   --workers 8
@@ -86,7 +89,7 @@ To process raw-exported full-resolution JPEGs, preserve EXIF data, keep maximum 
 ```bash
 python3 cli.py "/Users/dennis/Pictures/Photoshoot" \
   -o "/Users/dennis/Desktop/Final_WebP" \
-  --preset cosplay_3d \
+  --recipe cosplay_clear_v1 \
   --format webp \
   -q 98
 ```
@@ -95,7 +98,7 @@ python3 cli.py "/Users/dennis/Pictures/Photoshoot" \
 Check how many images are in a folder and verify options before running:
 
 ```bash
-python3 cli.py "/Users/dennis/Pictures/Photoshoot" --preset cosplay_3d --dry-run
+python3 cli.py "/Users/dennis/Pictures/Photoshoot" --recipe cosplay_clear_v1 --dry-run
 ```
 
 ### Example D: RAF Through `raf2jpeg`
@@ -111,7 +114,7 @@ python3 cli.py "/Users/dennis/Pictures/Photoshoot/DSCF0001.RAF" \
   -o "/Users/dennis/Desktop/Retouched" \
   --raf-decoder raf2jpeg \
   --raf2jpeg-quality 100 \
-  --recipe fuji_porcelain \
+  --recipe reala_ace \
   --format png
 ```
 
@@ -135,40 +138,52 @@ the camera's proprietary local sharpening and noise reduction pixel-for-pixel.
 python3 cli.py DSCF0001.RAF -o retouched \
   --raf-decoder rawpy-fuji-match \
   --fuji-match-strength 0.85 \
-  --recipe fuji_porcelain \
+  --recipe reala_ace \
   --format png
 ```
 
 Use `0.65`–`0.75` for a more restrained camera match, or `1.0` for the
 strongest global match.
 
-### Example F: Anime Cinematic / Dreamy Recipes
-The engine ships with several specialised anime and dreamy recipes that work
-well on illustration-style or soft-light photoshoots. Pick one with
-`--recipe`/`--preset`:
+### Example F: Scene and Creative Looks
+The curated catalog includes scene and creative looks. They are tuned for
+matching light or intent, so check a few results before running a whole shoot:
 
 ```bash
-# Bright, glossy anime key visual look
-python3 cli.py "/path/to/input" -o "/path/to/output" --recipe anime_cinematic_v1 --workers 6
+# Cinematic film look: Eterna base, halation, grain, lens-blur separation
+python3 cli.py "/path/to/input" -o "/path/to/output" --recipe apex_cinema_v1 --workers 6
 
-# Soft, low-contrast anime variant
-python3 cli.py "/path/to/input" -o "/path/to/output" --recipe anime_cinematic_soft --workers 6
+# AAA game character: directional relight, micro-contrast
+python3 cli.py "/path/to/input" -o "/path/to/output" --recipe game_character_v1 --workers 6
 
-# High-contrast action shot
-python3 cli.py "/path/to/input" -o "/path/to/output" --recipe anime_cinematic_action --workers 6
+# Japanese transparent skin: airy haze, faded toe
+python3 cli.py "/path/to/input" -o "/path/to/output" --recipe jp_transparent_v1 --workers 6
 
-# Crystal-clear negative-space look
-python3 cli.py "/path/to/input" -o "/path/to/output" --recipe anime_crystal_void --workers 6
+# Cold, icy scene
+python3 cli.py "/path/to/input" -o "/path/to/output" --recipe cosplay_ice_cathedral_v1 --workers 6
 
-# Fantasy anime palette
-python3 cli.py "/path/to/input" -o "/path/to/output" --recipe anime_cinematic_fantasy --workers 6
-
-# Soft Fuji-style porcelain skin finish
-python3 cli.py "/path/to/input" -o "/path/to/output" --recipe fuji_porcelain --workers 6
-
-# Cool blue dreamy palette
-python3 cli.py "/path/to/input" -o "/path/to/output" --recipe blue_dream --workers 6
-
-# Xiaohongshu ultra-soft beauty look
-python3 cli.py "/path/to/input" -o "/path/to/output" --recipe xhs_ultrasoft --workers 6
+# Warm, heroic amber scene
+python3 cli.py "/path/to/input" -o "/path/to/output" --recipe cosplay_heroic_amber_v1 --workers 6
 ```
+
+The older anime and dreamy recipes (`anime_cinematic_v1`, `anime_cinematic_soft`,
+`anime_cinematic_action`, `anime_crystal_void`, `anime_cinematic_fantasy`,
+`fuji_porcelain`, `blue_dream`, `xhs_ultrasoft`, `cyber_doll`) are still in
+`retouch/recipes.py` but are not in the curated catalog, so the CLI and GUI
+reject them. Run them through the Python API:
+
+```python
+from pathlib import Path
+import cv2
+from retouch.engine import RetouchEngine
+
+if __name__ == "__main__":  # required: the engine starts worker processes
+    out = Path("/path/to/output"); out.mkdir(parents=True, exist_ok=True)
+    with RetouchEngine() as engine:
+        for src in sorted(Path("/path/to/input").glob("*.jpg")):
+            result = engine.process(cv2.imread(str(src)), recipe="anime_cinematic_v1")
+            cv2.imwrite(str(out / src.name), result.image)
+```
+
+Save it as a `.py` file and run it with `.venv/bin/python`; the engine's face
+workers cannot start from `python -` or an interactive paste.

@@ -53,7 +53,7 @@ python3 -c "from retouch import RetouchEngine; engine = RetouchEngine(); result 
 python3 gui.py  # Opens http://127.0.0.1:7860
 
 # CLI
-python3 cli.py /path/to/photos -o /out --recipe cosplay --workers 4
+python3 cli.py /path/to/photos -o /out --recipe cosplay_clear_v1 --workers 4   # --recipe takes curated names only: ./run recipes
 
 # Benchmarks
 python3 scripts/bench/benchmark.py
