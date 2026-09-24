@@ -290,15 +290,22 @@ def _face_bbox(face: Any) -> CropRect:
     return coerce_crop_rect(bbox)
 
 
-def _face_frame(face: Any) -> Optional[Tuple[int, int]]:
-    """Return the declared ``(width, height)`` frame of a face's bbox, if any."""
+def _face_frame(face: Any) -> Tuple[int, int]:
+    """Return the declared ``(width, height)`` frame of a face's bbox.
+
+    Inspection cannot infer whether an untagged box is proxy, preview, or
+    native geometry. Fail closed so a missing frame never crops an unrelated
+    part of the source image.
+    """
 
     if isinstance(face, Mapping):
         frame = face.get("frame_size")
     else:
         frame = getattr(face, "frame_size", None)
     if frame is None:
-        return None
+        raise InspectionContractError(
+            "face frame_size is missing; rerun detection or render before inspection"
+        )
     try:
         fw, fh = int(frame[0]), int(frame[1])
     except (TypeError, ValueError, IndexError):
@@ -316,8 +323,8 @@ class FaceCropSelection:
     source_bbox: CropRect
     crop: CropRect
     padding: int
-    # Frame ``source_bbox`` was expressed in; ``None`` = assumed native.
-    source_frame: Optional[Tuple[int, int]] = None
+    # Frame ``source_bbox`` was expressed in; inspection requires this value.
+    source_frame: Tuple[int, int]
     native_bbox: Optional[CropRect] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -325,7 +332,7 @@ class FaceCropSelection:
             "kind": "face",
             "index": self.index,
             "source_bbox": self.source_bbox.to_dict(),
-            "source_frame": list(self.source_frame) if self.source_frame else None,
+            "source_frame": list(self.source_frame),
             "native_bbox": (self.native_bbox or self.source_bbox).to_dict(),
             "crop": self.crop.to_dict(),
             "padding": self.padding,

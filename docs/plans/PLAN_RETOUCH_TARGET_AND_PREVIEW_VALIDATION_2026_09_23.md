@@ -1,11 +1,25 @@
 # Proposed target and preview/export validation — 2026-09-23
 
-Status: documentation-only proposal, not executed and not authorization for
-implementation, tests, model runs, or photo processing. Read the
+Status: proposed in a documentation-only pass. On 2026-09-24 the user asked to
+finish the work; focused contract validation and the bounded T6 behavior below
+were completed. Read the
 [source research](RESEARCH_RETOUCH_TARGET_AND_PREVIEW_PARITY_2026_09_23.md) first.
 This extends the existing [QA study](PLAN_RETOUCH_QA_VALIDATION_2026_09_21.md)
 and [protection study](RESEARCH_RETOUCH_PROTECTION_LIFECYCLE_2026_09_22.md);
 it does not introduce a new P/FA item or change recipes.
+
+**Execution update (2026-09-24):** missing face-frame metadata now fails closed;
+mask-only rebase displays its recorded support and gates further edits, session
+save, snapshot save, and export on acknowledgement while the overlay is visible
+at at least 20% opacity. Exact-base mask-session loads also show their support
+and require review, including v2 sessions replayed later after a source becomes
+available. This covers sessions saved before review provenance existed. Replay
+refuses missing, fractional, or inconsistent mask geometry instead of resizing.
+Reshape rebases that depend on detection order are refused. The focused
+regression selection passed 80 tests. The full public GUI-to-engine control
+matrix and independent photo qualification remain unexecuted. Photo use is
+deferred until corpus permissions and subject/event grouping are confirmed;
+the current development files do not establish either.
 
 ## 1. Questions to resolve before quality comparison
 

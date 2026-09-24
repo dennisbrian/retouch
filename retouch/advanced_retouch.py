@@ -364,17 +364,32 @@ def replay_advanced_edits(
     """Replay serialized Advanced Retouch edits against a source image."""
     current = _coerce_rgb(source_rgb)
     for edit in edits or ():
+        mode = str(edit.get("mode", "Adjust"))
         expected_shape = edit.get("image_shape")
-        if expected_shape and list(current.shape[:2]) != list(expected_shape):
+        if (
+            not isinstance(expected_shape, (list, tuple))
+            or len(expected_shape) != 2
+            or any(
+                isinstance(value, bool) or not isinstance(value, (int, np.integer))
+                for value in expected_shape
+            )
+        ):
+            raise ValueError("Advanced Retouch session is missing recorded image dimensions")
+        expected_shape = tuple(int(value) for value in expected_shape)
+        if expected_shape != tuple(current.shape[:2]):
             raise ValueError(
                 "Advanced Retouch session image dimensions do not match the loaded source "
                 f"({list(current.shape[:2])} vs {list(expected_shape)})."
             )
-        mode = str(edit.get("mode", "Adjust"))
         if mode == "Reshape":
             current, _ = apply_face_reshape(current, detector, edit.get("selection"), edit.get("reshape", {}))
             continue
-        mask = b64_to_mask(str(edit.get("mask_png_b64", "")), current.shape[:2])
+        mask = b64_to_mask(str(edit.get("mask_png_b64", "")))
+        if mask.shape != tuple(current.shape[:2]):
+            raise ValueError(
+                "Advanced Retouch session mask dimensions do not match its recorded image dimensions "
+                f"({list(current.shape[:2])} vs {list(mask.shape)})."
+            )
         editor = {"background": current, "layers": [mask]}
         # The stored mask is already the post-semantic-intersection mask (see
         # apply_advanced_edit below); re-passing edit["semantic"] here would

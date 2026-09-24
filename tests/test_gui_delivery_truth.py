@@ -38,7 +38,7 @@ def test_native_inspection_is_revision_gated_and_download_disabled():
             "render_revision": 4,
             "native": {"width": 12, "height": 10},
         },
-        face_contexts=[{"bbox": (2, 3, 4, 4)}],
+        face_contexts=[{"bbox": (2, 3, 4, 4), "frame_size": (12, 10)}],
     )
     image = np.zeros((10, 12, 3), dtype=np.uint8)
     snapshot = {"settings_revision": 4}
@@ -67,6 +67,30 @@ def test_native_inspection_is_revision_gated_and_download_disabled():
     )
     assert hidden["visible"] is False
     assert "stale" in stale_message.lower()
+
+
+def test_face_inspection_is_unavailable_when_frame_metadata_is_missing():
+    import gui
+    from retouch.gui_preview_cache import GuiPreviewCache
+
+    cache = GuiPreviewCache()
+    cache.set_latest_render(
+        {"render_revision": 4, "native": {"width": 12, "height": 10}},
+        face_contexts=[{"bbox": (2, 3, 4, 4)}],
+    )
+    hidden, status = gui.inspect_render_handler(
+        np.zeros((10, 12, 3), dtype=np.uint8),
+        {"settings_revision": 4},
+        4,
+        "face",
+        0,
+        "",
+        cache,
+    )
+
+    assert hidden["visible"] is False
+    assert "Inspection unavailable" in status
+    assert "frame_size is missing" in status
 
 
 def test_render_manifest_is_pixel_free_and_reports_precision_and_color():

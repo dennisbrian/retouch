@@ -181,6 +181,54 @@ def test_gui_advanced_snapshots_compare_and_export(tmp_path, monkeypatch):
     export_dir.mkdir()
     monkeypatch.setattr(gui.tempfile, "mkdtemp", lambda prefix: str(export_dir))
     base_contract = build_base_contract(image, kind=BASE_KIND_SOURCE)
+    blocked, blocked_status = gui.advanced_export_handler(
+        edited, "PNG", None, base_contract, True, False,
+    )
+    assert blocked["visible"] is False
+    assert "review the highlighted" in blocked_status.lower()
+
+    hidden_overlay_export, hidden_overlay_status = gui.advanced_export_handler(
+        edited, "PNG", None, base_contract, True, True, False, 42,
+    )
+    zero_opacity_export, zero_opacity_status = gui.advanced_export_handler(
+        edited, "PNG", None, base_contract, True, True, True, 0,
+    )
+    low_opacity_export, low_opacity_status = gui.advanced_export_handler(
+        edited, "PNG", None, base_contract, True, True, True, 1,
+    )
+    assert hidden_overlay_export["visible"] is False
+    assert zero_opacity_export["visible"] is False
+    assert low_opacity_export["visible"] is False
+    assert "review" in hidden_overlay_status.lower()
+    assert "review" in zero_opacity_status.lower()
+    assert "review" in low_opacity_status.lower()
+
+    _, unchanged_snapshots, snapshot_status = gui.advanced_save_snapshot_handler(
+        "unreviewed", edited, applied[3], {}, base_contract, True, True, False, 42,
+    )
+    assert unchanged_snapshots == {}
+    assert "not saved" in snapshot_status.lower()
+
+    regular_snapshot_args = [None] * len(gui.PROCESS_INPUT_KEYS) + [
+        applied[3], base_contract, applied[2], edited, {}, True, True, False, 42,
+    ]
+    regular_snapshot, saved_snapshots = gui.save_snapshot_handler(
+        "unreviewed", *regular_snapshot_args,
+    )
+    assert saved_snapshots == {}
+    assert "choices" not in regular_snapshot
+
+    session_args = [None] * len(gui.PROCESS_INPUT_KEYS) + [
+        applied[3], base_contract, applied[2], edited, True, False,
+    ]
+    not_saved = gui.save_session_handler(*session_args)
+    assert not_saved["visible"] is False
+    hidden_overlay_session_args = [None] * len(gui.PROCESS_INPUT_KEYS) + [
+        applied[3], base_contract, applied[2], edited, True, True, False, 42,
+    ]
+    hidden_overlay_session = gui.save_session_handler(*hidden_overlay_session_args)
+    assert hidden_overlay_session["visible"] is False
+
     exported, export_status = gui.advanced_export_handler(
         edited, "PNG", None, base_contract,
     )
@@ -269,7 +317,7 @@ def test_gui_advanced_event_graph_exposes_interactive_workspace():
         for dependency in config["dependencies"]
         if dependency.get("api_name") == "advanced_apply_handler"
     )
-    assert len(apply_dependency["inputs"]) == 31
+    assert len(apply_dependency["inputs"]) == 33
     assert len(apply_dependency["outputs"]) == 8
 
 
@@ -408,6 +456,26 @@ def test_legacy_advanced_session_requires_explicit_binding(tmp_path):
     assert not np.array_equal(bound[0], source)
     assert bound[5] == []
     assert "explicitly bound" in bound[6].lower()
+    assert bound[9] is True
+    assert bound[10]["visible"] is True
+    assert bound[11]["value"] is True
+
+
+def test_legacy_binding_refuses_reshape_edits_that_use_detection_order():
+    import gui
+
+    source, _editor = _canvas()
+    base = build_base_contract(source, kind=BASE_KIND_SOURCE)
+    pending = {
+        "version": 1,
+        "edits": [{"mode": "Reshape", "selection": "0", "reshape": {"eye_size": 15}}],
+    }
+
+    bound = gui.advanced_bind_legacy_handler(source, pending, base)
+
+    assert not isinstance(bound[0], np.ndarray)
+    assert bound[5]["__type__"] == "update"
+    assert "binding stopped" in bound[6].lower()
 
 
 def test_advanced_edit_rejects_history_truncation():
@@ -493,6 +561,259 @@ def test_explicit_rebase_warns_that_masks_keep_old_coordinates():
 
     fresh = gui.on_advanced_processed_result(processed, [], None, [])
     assert "rebase warning" not in fresh[8].lower()
+
+
+def test_mask_rebase_shows_old_support_and_requires_review():
+    import gui
+    from retouch.heal import mask_to_b64
+
+    mask = np.zeros((24, 32), dtype=np.float32)
+    mask[4:12, 6:18] = 1.0
+    edit = {
+        "version": 1,
+        "image_shape": [24, 32],
+        "mode": "Adjust",
+        "operation": "exposure",
+        "strength": 20.0,
+        "semantic": "None",
+        "selection": None,
+        "mask_png_b64": mask_to_b64(mask),
+    }
+    processed = np.full((24, 32, 3), 120, dtype=np.uint8)
+
+    rebased = gui.on_advanced_processed_result(processed, [], None, [edit])
+
+    assert rebased[11] is True
+    assert rebased[12]["visible"] is True
+    assert rebased[12]["value"] is False
+    assert rebased[13]["value"] is True
+    assert rebased[14]["value"] == 42
+    assert np.array_equal(rebased[7][6:12, 8:18], np.ones((6, 10), dtype=np.float32))
+    assert not np.array_equal(rebased[3][6, 8], rebased[1][6, 8])
+    assert np.array_equal(rebased[3][0, 0], rebased[1][0, 0])
+    assert "review the overlay" in rebased[8].lower()
+
+    blocked_apply = gui.advanced_apply_handler(
+        rebased[2], rebased[1], rebased[0], rebased[5], rebased[6],
+        "Adjust", "exposure", 20, "None", "All faces", "telea",
+        "Auto (LaMa if installed)", True, 42,
+        *([0] * 15), "Keep", 0, True, False,
+    )
+    assert not isinstance(blocked_apply[1], np.ndarray)
+    assert "review the highlighted" in blocked_apply[7].lower()
+
+    low_opacity_apply = gui.advanced_apply_handler(
+        rebased[2], rebased[1], rebased[0], rebased[5], rebased[6],
+        "Adjust", "exposure", 20, "None", "All faces", "telea",
+        "Auto (LaMa if installed)", True, 1,
+        *([0] * 15), "Keep", 0, True, True,
+    )
+    assert not isinstance(low_opacity_apply[1], np.ndarray)
+    assert "review the highlighted" in low_opacity_apply[7].lower()
+
+
+def test_rebase_overlay_visibility_and_opacity_clear_acknowledgement():
+    import gui
+
+    image = np.full((24, 32, 3), 120, dtype=np.uint8)
+    mask = np.zeros((24, 32), dtype=np.float32)
+    mask[4:12, 6:18] = 1.0
+
+    hidden_overlay, hidden_ack = gui.advanced_overlay_handler(
+        image, mask, False, 42, True,
+    )
+    assert np.array_equal(hidden_overlay, image)
+    assert hidden_ack["value"] is False
+    assert hidden_ack["interactive"] is False
+
+    transparent_overlay, transparent_ack = gui.advanced_overlay_handler(
+        image, mask, True, 0, True,
+    )
+    assert np.array_equal(transparent_overlay, image)
+    assert transparent_ack["value"] is False
+    assert transparent_ack["interactive"] is False
+
+    too_subtle_overlay, too_subtle_ack = gui.advanced_overlay_handler(
+        image, mask, True, 1, True,
+    )
+    assert not np.array_equal(too_subtle_overlay, image)
+    assert too_subtle_ack["value"] is False
+    assert too_subtle_ack["interactive"] is False
+
+    visible_overlay, visible_ack = gui.advanced_overlay_handler(
+        image, mask, True, 42, True,
+    )
+    assert not np.array_equal(visible_overlay, image)
+    assert visible_ack["interactive"] is True
+
+
+def test_exact_mask_session_load_requires_review_of_saved_support(tmp_path):
+    import gui
+
+    image, editor = _canvas()
+    result = apply_advanced_edit(
+        image, editor, "Adjust", "exposure", 20, "None", "All faces", {}, None, None,
+    )
+    base = build_base_contract(image, kind=BASE_KIND_SOURCE)
+    payload = build_session_payload(
+        [result.edit], base,
+        history_state={"base_cursor": 0, "cursor": 1},
+        result_rgb=result.image_rgb,
+    )
+    session_path = tmp_path / "masked-v2.session.json"
+    Session(advanced_retouch=payload).to_file(str(session_path))
+
+    loaded = gui.load_advanced_session_handler(str(session_path), image, base)
+
+    assert len(loaded) == 14
+    assert np.array_equal(loaded[2], result.image_rgb)
+    assert loaded[10] is True
+    assert loaded[11]["value"] is False
+    assert loaded[11]["visible"] is True
+    assert loaded[12]["value"] is True
+    assert loaded[13]["value"] == 42
+    assert not np.array_equal(loaded[4], loaded[2])
+    assert "support is highlighted" in loaded[9].lower()
+
+
+def test_pending_v2_mask_replay_requires_review_after_source_or_processed_load(tmp_path):
+    import gui
+
+    image, editor = _canvas()
+    result = apply_advanced_edit(
+        image, editor, "Adjust", "exposure", 20, "None", "All faces", {}, None, None,
+    )
+    source_path = tmp_path / "pending-source.png"
+    cv2.imwrite(str(source_path), cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+    source_base = build_base_contract(
+        image, kind=BASE_KIND_SOURCE, source_path=source_path,
+    )
+    source_payload = build_session_payload(
+        [result.edit], source_base,
+        history_state={"base_cursor": 0, "cursor": 1},
+        result_rgb=result.image_rgb,
+    )
+
+    loaded_source = gui.on_advanced_source_change([str(source_path)], source_payload)
+    assert loaded_source[11] is True
+    assert loaded_source[12]["visible"] is True
+    assert loaded_source[12]["value"] is False
+    assert loaded_source[13]["value"] is True
+    assert loaded_source[7] is not None
+
+    evidence = {
+        "render_mode": "export_full_quality",
+        "render_revision": 3,
+        "settings_sha256": "d" * 64,
+        "native": {"width": image.shape[1], "height": image.shape[0]},
+        "output": {"width": image.shape[1], "height": image.shape[0]},
+    }
+    processed_base = build_base_contract(
+        image, kind=BASE_KIND_PROCESSED, render_evidence=evidence,
+    )
+    processed_payload = build_session_payload(
+        [result.edit], processed_base,
+        history_state={"base_cursor": 0, "cursor": 1},
+        result_rgb=result.image_rgb,
+    )
+    loaded_processed = gui.on_advanced_processed_result(
+        image, processed_payload, evidence, [],
+    )
+    assert loaded_processed[11] is True
+    assert loaded_processed[12]["visible"] is True
+    assert loaded_processed[12]["value"] is False
+    assert loaded_processed[13]["value"] is True
+    assert loaded_processed[7] is not None
+
+
+def test_explicit_rebase_refuses_missing_or_mismatched_mask_geometry(monkeypatch):
+    import gui
+    from retouch.heal import mask_to_b64
+
+    processed = np.full((24, 32, 3), 120, dtype=np.uint8)
+    source_mask = np.ones((12, 16), dtype=np.float32)
+    edit = {
+        "version": 1,
+        "image_shape": [24, 32],
+        "mode": "Adjust",
+        "operation": "exposure",
+        "strength": 20.0,
+        "mask_png_b64": mask_to_b64(source_mask),
+    }
+    monkeypatch.setattr(
+        gui, "_replay_advanced_state",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("unsafe mask replay must not run")),
+    )
+
+    result = gui.on_advanced_processed_result(processed, [], None, [edit])
+    assert not isinstance(result[1], np.ndarray)
+    assert "geometry cannot be transferred safely" in result[8].lower()
+    assert isinstance(result[9], dict) and "__type__" in result[9]
+
+    edit["image_shape"] = [24.9, 32.9]
+    edit["mask_png_b64"] = mask_to_b64(np.ones((24, 32), dtype=np.float32))
+    result = gui.on_advanced_processed_result(processed, [], None, [edit])
+    assert not isinstance(result[1], np.ndarray)
+    assert "geometry cannot be transferred safely" in result[8].lower()
+
+    edit.pop("image_shape")
+    result = gui.on_advanced_processed_result(processed, [], None, [edit])
+    assert not isinstance(result[1], np.ndarray)
+    assert "geometry cannot be transferred safely" in result[8].lower()
+
+
+def test_edit_processed_without_result_preserves_advanced_workspace():
+    import gui
+
+    result = gui.on_advanced_processed_result(None, [], None, [])
+    assert len(result) == 15
+    assert not isinstance(result[0], np.ndarray)
+    assert "processed result is unavailable" in result[8].lower()
+    assert isinstance(result[9], dict) and "__type__" in result[9]
+
+
+def test_replay_rejects_missing_or_inconsistent_mask_geometry():
+    import pytest
+    from retouch.heal import mask_to_b64
+
+    image, _ = _canvas()
+    mask = np.ones((12, 16), dtype=np.float32)
+    edit = {
+        "mode": "Adjust",
+        "operation": "exposure",
+        "strength": 20.0,
+        "mask_png_b64": mask_to_b64(mask),
+    }
+    with pytest.raises(ValueError, match="missing recorded image dimensions"):
+        replay_advanced_edits(image, [edit], None, None)
+
+    edit["image_shape"] = [48, 64]
+    with pytest.raises(ValueError, match="mask dimensions do not match"):
+        replay_advanced_edits(image, [edit], None, None)
+
+    edit["image_shape"] = [48.9, 64.9]
+    edit["mask_png_b64"] = mask_to_b64(np.ones((48, 64), dtype=np.float32))
+    with pytest.raises(ValueError, match="missing recorded image dimensions"):
+        replay_advanced_edits(image, [edit], None, None)
+
+
+def test_rebase_refuses_reshape_edits_that_use_detection_order():
+    import gui
+
+    processed = np.full((24, 32, 3), 120, dtype=np.uint8)
+    edit = {
+        "version": 1,
+        "image_shape": [24, 32],
+        "mode": "Reshape",
+        "selection": "0",
+        "reshape": {"eye_size": 15},
+    }
+
+    rebased = gui.on_advanced_processed_result(processed, [], None, [edit])
+
+    assert not isinstance(rebased[1], np.ndarray)
+    assert "rebase stopped" in rebased[8].lower()
+    assert "detection-order" in rebased[8].lower()
 
 
 def test_malformed_face_selection_is_rejected_not_treated_as_all_faces():

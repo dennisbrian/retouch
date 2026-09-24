@@ -173,8 +173,10 @@ from gui_advanced import (
     _replay_advanced_state,
     _advanced_empty_state,
     _advanced_load_rgb_source,
+    _advanced_rebase_support_mask,
     on_advanced_source_change,
     on_advanced_processed_result,
+    advanced_rebase_overlay_is_reviewable,
     on_advanced_face_choices,
     advanced_bind_legacy_handler,
     advanced_apply_handler,
@@ -1167,6 +1169,16 @@ def save_session_handler(*args):
     advanced_base = args[len(PROCESS_INPUT_KEYS) + 1] if len(args) > len(PROCESS_INPUT_KEYS) + 1 else None
     advanced_history = args[len(PROCESS_INPUT_KEYS) + 2] if len(args) > len(PROCESS_INPUT_KEYS) + 2 else None
     advanced_current = args[len(PROCESS_INPUT_KEYS) + 3] if len(args) > len(PROCESS_INPUT_KEYS) + 3 else None
+    rebase_review_required = bool(args[len(PROCESS_INPUT_KEYS) + 4]) if len(args) > len(PROCESS_INPUT_KEYS) + 4 else False
+    rebase_review_acknowledged = bool(args[len(PROCESS_INPUT_KEYS) + 5]) if len(args) > len(PROCESS_INPUT_KEYS) + 5 else False
+    overlay_visible = bool(args[len(PROCESS_INPUT_KEYS) + 6]) if len(args) > len(PROCESS_INPUT_KEYS) + 6 else True
+    overlay_opacity = args[len(PROCESS_INPUT_KEYS) + 7] if len(args) > len(PROCESS_INPUT_KEYS) + 7 else 42
+    if rebase_review_required and (
+        not rebase_review_acknowledged
+        or not advanced_rebase_overlay_is_reviewable(overlay_visible, overlay_opacity)
+    ):
+        gr.Warning("Session was not saved: review the highlighted rebase support and result first.")
+        return gr.update(value=None, visible=False)
     params = dict(zip(PROCESS_INPUT_KEYS, process_args))
     img_paths = params.get("img_paths")
     image_path = None
@@ -1237,8 +1249,27 @@ def load_advanced_session_handler(session_file, source_rgb, base_contract=None):
     """Restore serialized Advanced Retouch edits when a source is available."""
     from retouch.session import Session
 
+    def _finish(values, review_support=None):
+        values = list(values)
+        if review_support is not None:
+            values[4] = mask_overlay(values[2], review_support, 0.42)
+            values[8] = review_support
+            values[9] += " The saved effective-mask support is highlighted; review it before continuing or exporting."
+            return tuple(values) + (
+                True,
+                gr.update(value=False, visible=True, interactive=True),
+                gr.update(value=True),
+                gr.update(value=42),
+            )
+        return tuple(values) + (
+            False,
+            gr.update(value=False, visible=False, interactive=True),
+            gr.update(),
+            gr.update(),
+        )
+
     if session_file is None:
-        return (
+        return _finish((
             source_rgb,
             [],
             source_rgb,
@@ -1249,13 +1280,13 @@ def load_advanced_session_handler(session_file, source_rgb, base_contract=None):
             [],
             None,
             "",
-        )
+        ))
     try:
         path = session_file.name if hasattr(session_file, "name") else str(session_file)
         session = Session.from_file(path)
         raw_advanced = session.advanced_retouch or {}
         if not raw_advanced:
-            return (
+            return _finish((
                 source_rgb,
                 [],
                 source_rgb,
@@ -1266,12 +1297,12 @@ def load_advanced_session_handler(session_file, source_rgb, base_contract=None):
                 [],
                 None,
                 "Session contains no Advanced Retouch edits.",
-            )
+            ))
         advanced = parse_advanced_session_payload(raw_advanced)
         edits = list(advanced.get("edits") or [])
     except Exception as exc:
         _logger.warning("Failed to load Advanced Retouch session data: %s", exc)
-        return (
+        return _finish((
             source_rgb,
             [],
             source_rgb,
@@ -1282,10 +1313,10 @@ def load_advanced_session_handler(session_file, source_rgb, base_contract=None):
             [],
             None,
             f"Advanced Retouch session data unavailable: {exc}",
-        )
+        ))
 
     if advanced.get("legacy_unverified"):
-        return (
+        return _finish((
             source_rgb,
             advanced,
             source_rgb,
@@ -1297,9 +1328,9 @@ def load_advanced_session_handler(session_file, source_rgb, base_contract=None):
             None,
             f"Loaded {len(edits)} legacy Advanced Retouch edit(s) as pending. "
             "Legacy sessions have no base hash; use Bind legacy session edits to apply them explicitly.",
-        )
+        ))
     if source_rgb is None or base_contract is None:
-        return (
+        return _finish((
             source_rgb,
             advanced,
             source_rgb,
@@ -1311,10 +1342,10 @@ def load_advanced_session_handler(session_file, source_rgb, base_contract=None):
             None,
             f"Loaded {len(edits)} Advanced Retouch edit(s) as pending. "
             "Load the exact recorded base to verify and replay them.",
-        )
+        ))
     comparison = compare_base_contracts(advanced.get("base"), base_contract)
     if not comparison["matches"]:
-        return (
+        return _finish((
             source_rgb,
             advanced,
             source_rgb,
@@ -1327,7 +1358,22 @@ def load_advanced_session_handler(session_file, source_rgb, base_contract=None):
             "Advanced Retouch session base mismatch; edits remain pending ({}).".format(
                 ", ".join(comparison["reasons"])
             ),
-        )
+        ))
+    try:
+        review_support = _advanced_rebase_support_mask(edits, np.asarray(source_rgb).shape)
+    except Exception as exc:
+        return _finish((
+            source_rgb,
+            advanced,
+            source_rgb,
+            source_rgb,
+            None,
+            before_after(source_rgb, source_rgb),
+            AdvancedHistory().to_state(),
+            [],
+            None,
+            f"Could not verify Advanced Retouch mask geometry; edits remain pending: {exc}",
+        ))
     try:
         current = _replay_advanced_state(source_rgb, edits)
         replay_check = replay_result_matches(advanced, current)
@@ -1335,7 +1381,7 @@ def load_advanced_session_handler(session_file, source_rgb, base_contract=None):
             raise AdvancedContractError(
                 "replay result mismatch: %s" % ", ".join(replay_check["reasons"])
             )
-        return (
+        return _finish((
             source_rgb,
             [],
             current,
@@ -1346,10 +1392,10 @@ def load_advanced_session_handler(session_file, source_rgb, base_contract=None):
             edits,
             None,
             f"Verified and replayed {len(edits)} Advanced Retouch edit(s) on the recorded base.",
-        )
+        ), review_support=review_support)
     except Exception as exc:
         _logger.warning("Failed to replay Advanced Retouch session data: %s", exc)
-        return (
+        return _finish((
             source_rgb,
             advanced,
             source_rgb,
@@ -1360,7 +1406,7 @@ def load_advanced_session_handler(session_file, source_rgb, base_contract=None):
             [],
             None,
             f"Could not verify Advanced Retouch replay; edits remain pending: {exc}",
-        )
+        ))
 
 
 def _history_button_updates(undo_stack):
@@ -1471,6 +1517,16 @@ def save_snapshot_handler(name, *args, snapshots=None):
     advanced_current = args[len(PROCESS_INPUT_KEYS) + 3] if len(args) > len(PROCESS_INPUT_KEYS) + 3 else None
     if snapshots is None and len(args) > len(PROCESS_INPUT_KEYS) + 4:
         snapshots = args[len(PROCESS_INPUT_KEYS) + 4]
+    rebase_review_required = bool(args[len(PROCESS_INPUT_KEYS) + 5]) if len(args) > len(PROCESS_INPUT_KEYS) + 5 else False
+    rebase_review_acknowledged = bool(args[len(PROCESS_INPUT_KEYS) + 6]) if len(args) > len(PROCESS_INPUT_KEYS) + 6 else False
+    overlay_visible = bool(args[len(PROCESS_INPUT_KEYS) + 7]) if len(args) > len(PROCESS_INPUT_KEYS) + 7 else True
+    overlay_opacity = args[len(PROCESS_INPUT_KEYS) + 8] if len(args) > len(PROCESS_INPUT_KEYS) + 8 else 42
+    if rebase_review_required and (
+        not rebase_review_acknowledged
+        or not advanced_rebase_overlay_is_reviewable(overlay_visible, overlay_opacity)
+    ):
+        gr.Warning("Snapshot was not saved: review the highlighted rebase support and result first.")
+        return gr.update(), snapshots or {}
     params = dict(zip(PROCESS_INPUT_KEYS, process_args))
     recipe = params.get("recipe", "natural")
     session = Session(recipe=recipe, params=params)
@@ -2222,10 +2278,27 @@ def on_img_change_clear_faces():
     return {}, [], gr.update(choices=[], value=None), "Image changed — re-detect faces."
 
 
-def advanced_export_handler(current_rgb, export_fmt, source_paths=None, base_contract=None):
+def advanced_export_handler(
+    current_rgb,
+    export_fmt,
+    source_paths=None,
+    base_contract=None,
+    rebase_review_required=False,
+    rebase_review_acknowledged=False,
+    overlay_visible=True,
+    overlay_opacity=42,
+):
     """Export the full-resolution canvas with context-aware metadata."""
     if current_rgb is None:
         return gr.update(visible=False), "Load an image first."
+    if rebase_review_required and (
+        not rebase_review_acknowledged
+        or not advanced_rebase_overlay_is_reviewable(overlay_visible, overlay_opacity)
+    ):
+        return (
+            gr.update(value=None, visible=False),
+            "Advanced Retouch export blocked: review the highlighted old-coordinate mask support and result first.",
+        )
     delivery = advanced_delivery_decision(base_contract)
     if not delivery["allowed"]:
         return (
@@ -3535,7 +3608,10 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 advanced_reset_btn = gr.Button("Reset", variant="secondary")
                             with gr.Row():
                                 advanced_overlay_visible = gr.Checkbox(label="Show mask overlay", value=True)
-                                advanced_overlay_opacity = gr.Slider(0, 100, 42, step=1, label="Overlay opacity")
+                                advanced_overlay_opacity = gr.Slider(
+                                    0, 100, 42, step=1, label="Overlay opacity",
+                                    info="Rebase review requires at least 20% opacity.",
+                                )
                             advanced_mask_overlay = gr.Image(label="Mask overlay", show_label=True, height=260)
                             advanced_before_after = gr.Image(label="Before / after", show_label=True, height=260)
                             with gr.Row():
@@ -3548,6 +3624,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 advanced_export_btn = gr.Button("Download current canvas", size="sm", variant="secondary", scale=1)
                                 advanced_export_file = gr.File(label="Advanced export", visible=False, scale=2)
                             advanced_status = gr.Markdown("Advanced Retouch is ready.")
+                            advanced_rebase_ack = gr.Checkbox(
+                                label="I reviewed the highlighted rebase support and result (20%+ opacity)",
+                                value=False,
+                                visible=False,
+                            )
                             _advanced_source_state = gr.State(value=None)
                             _advanced_current_state = gr.State(value=None)
                             _advanced_history_state = gr.State(value=AdvancedHistory().to_state())
@@ -3556,6 +3637,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             _advanced_snapshots_state = gr.State(value={})
                             _advanced_pending_session_state = gr.State(value=[])
                             _advanced_base_contract_state = gr.State(value=None)
+                            _advanced_rebase_review_required = gr.State(value=False)
                         # Hidden state variables for newly-added parameters (skin_hue_unify, skin_chroma_even)
                         # These maintain alignment with PROCESS_INPUT_KEYS but don't have visible UI yet.
                         _skin_hue_unify_state = gr.State(value=0)
@@ -4717,6 +4799,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
             advanced_mask_overlay, advanced_before_after, _advanced_history_state,
             _advanced_edit_log_state, _advanced_mask_state, advanced_status,
             _advanced_pending_session_state, _advanced_base_contract_state,
+            _advanced_rebase_review_required, advanced_rebase_ack, advanced_overlay_visible,
+            advanced_overlay_opacity,
         ],
         show_progress="minimal",
         concurrency_limit=1,
@@ -4733,6 +4817,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
             advanced_mask_overlay, advanced_before_after, _advanced_history_state,
             _advanced_edit_log_state, _advanced_mask_state, advanced_status,
             _advanced_pending_session_state, _advanced_base_contract_state,
+            _advanced_rebase_review_required, advanced_rebase_ack, advanced_overlay_visible,
+            advanced_overlay_opacity,
         ],
         show_progress="minimal",
         concurrency_limit=1,
@@ -4747,7 +4833,9 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         outputs=[
             _advanced_current_state, advanced_editor, advanced_before_after,
             _advanced_history_state, _advanced_edit_log_state,
-            _advanced_pending_session_state, advanced_status,
+            _advanced_pending_session_state, advanced_status, _advanced_mask_state,
+            advanced_mask_overlay, _advanced_rebase_review_required,
+            advanced_rebase_ack, advanced_overlay_visible, advanced_overlay_opacity,
         ],
         concurrency_limit=1,
         concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
@@ -4776,6 +4864,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
             advanced_nose_width_l, advanced_nose_width_r,
             advanced_jaw_width_l, advanced_jaw_width_r,
             advanced_mask_action, advanced_mask_feather,
+            _advanced_rebase_review_required, advanced_rebase_ack,
         ],
         outputs=[
             advanced_editor, _advanced_current_state, _advanced_history_state,
@@ -4788,7 +4877,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     )
     advanced_undo_btn.click(
         fn=advanced_undo_handler,
-        inputs=[_advanced_current_state, _advanced_source_state, _advanced_history_state, _advanced_edit_log_state],
+        inputs=[
+            _advanced_current_state, _advanced_source_state, _advanced_history_state,
+            _advanced_edit_log_state, _advanced_rebase_review_required, advanced_rebase_ack,
+            advanced_overlay_visible, advanced_overlay_opacity,
+        ],
         outputs=[advanced_editor, _advanced_current_state, _advanced_history_state, _advanced_edit_log_state, _advanced_mask_state, advanced_mask_overlay, advanced_before_after, advanced_status],
         concurrency_limit=1,
         concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
@@ -4796,7 +4889,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     )
     advanced_redo_btn.click(
         fn=advanced_redo_handler,
-        inputs=[_advanced_current_state, _advanced_source_state, _advanced_history_state, _advanced_edit_log_state],
+        inputs=[
+            _advanced_current_state, _advanced_source_state, _advanced_history_state,
+            _advanced_edit_log_state, _advanced_rebase_review_required, advanced_rebase_ack,
+            advanced_overlay_visible, advanced_overlay_opacity,
+        ],
         outputs=[advanced_editor, _advanced_current_state, _advanced_history_state, _advanced_edit_log_state, _advanced_mask_state, advanced_mask_overlay, advanced_before_after, advanced_status],
         concurrency_limit=1,
         concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
@@ -4805,23 +4902,31 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     advanced_reset_btn.click(
         fn=advanced_reset_handler,
         inputs=[_advanced_source_state],
-        outputs=[_advanced_current_state, advanced_editor, advanced_mask_overlay, advanced_before_after, _advanced_history_state, _advanced_edit_log_state, _advanced_mask_state, advanced_status],
+        outputs=[
+            _advanced_current_state, advanced_editor, advanced_mask_overlay, advanced_before_after,
+            _advanced_history_state, _advanced_edit_log_state, _advanced_mask_state, advanced_status,
+            _advanced_rebase_review_required, advanced_rebase_ack,
+        ],
         queue=False,
         show_progress="hidden",
     )
     advanced_overlay_visible.change(
         fn=advanced_overlay_handler,
-        inputs=[_advanced_current_state, _advanced_mask_state, advanced_overlay_visible, advanced_overlay_opacity],
-        outputs=[advanced_mask_overlay],
+        inputs=[_advanced_current_state, _advanced_mask_state, advanced_overlay_visible, advanced_overlay_opacity, _advanced_rebase_review_required],
+        outputs=[advanced_mask_overlay, advanced_rebase_ack],
     )
     advanced_overlay_opacity.change(
         fn=advanced_overlay_handler,
-        inputs=[_advanced_current_state, _advanced_mask_state, advanced_overlay_visible, advanced_overlay_opacity],
-        outputs=[advanced_mask_overlay],
+        inputs=[_advanced_current_state, _advanced_mask_state, advanced_overlay_visible, advanced_overlay_opacity, _advanced_rebase_review_required],
+        outputs=[advanced_mask_overlay, advanced_rebase_ack],
     )
     advanced_clear_mask_btn.click(
         fn=advanced_clear_mask_handler,
-        inputs=[advanced_editor, _advanced_current_state, _advanced_source_state],
+        inputs=[
+            advanced_editor, _advanced_current_state, _advanced_source_state,
+            _advanced_rebase_review_required, advanced_rebase_ack,
+            advanced_overlay_visible, advanced_overlay_opacity,
+        ],
         outputs=[advanced_editor, _advanced_mask_state, advanced_mask_overlay, advanced_before_after, advanced_status],
     )
     advanced_save_snapshot_btn.click(
@@ -4830,6 +4935,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
             advanced_snapshot_name, _advanced_current_state,
             _advanced_edit_log_state, _advanced_snapshots_state,
             _advanced_base_contract_state,
+            _advanced_rebase_review_required, advanced_rebase_ack,
+            advanced_overlay_visible, advanced_overlay_opacity,
         ],
         outputs=[advanced_snapshot_dropdown, _advanced_snapshots_state, advanced_status],
     )
@@ -4842,7 +4949,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         fn=advanced_export_handler,
         inputs=[
             _advanced_current_state, advanced_export_fmt, img_input,
-            _advanced_base_contract_state,
+            _advanced_base_contract_state, _advanced_rebase_review_required, advanced_rebase_ack,
+            advanced_overlay_visible, advanced_overlay_opacity,
         ],
         outputs=[advanced_export_file, advanced_status],
         concurrency_limit=1,
@@ -5490,6 +5598,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         inputs=_process_inputs + [
             _advanced_edit_log_state, _advanced_base_contract_state,
             _advanced_history_state, _advanced_current_state,
+            _advanced_rebase_review_required, advanced_rebase_ack,
+            advanced_overlay_visible, advanced_overlay_opacity,
         ],
         outputs=[session_download],
     )
@@ -5514,20 +5624,20 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         queue=False,
     )
 
-    load_session_file.change(
+    _advanced_session_load_event = load_session_file.change(
         fn=load_advanced_session_handler,
         inputs=[load_session_file, _advanced_source_state, _advanced_base_contract_state],
         outputs=[
             _advanced_source_state, _advanced_pending_session_state, _advanced_current_state,
             advanced_editor, advanced_mask_overlay, advanced_before_after,
             _advanced_history_state, _advanced_edit_log_state, _advanced_mask_state,
-            advanced_status,
+            advanced_status, _advanced_rebase_review_required, advanced_rebase_ack,
+            advanced_overlay_visible, advanced_overlay_opacity,
         ],
         show_progress="minimal",
         concurrency_limit=1,
         concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
     )
-
     _undo_event = undo_btn.click(
         fn=undo_handler,
         inputs=[_undo_stack_state],
@@ -5563,6 +5673,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         inputs=[snapshot_name] + _process_inputs + [
             _advanced_edit_log_state, _advanced_base_contract_state,
             _advanced_history_state, _advanced_current_state, _snapshot_state,
+            _advanced_rebase_review_required, advanced_rebase_ack,
+            advanced_overlay_visible, advanced_overlay_opacity,
         ],
         outputs=[snapshot_dropdown, _snapshot_state],
     )

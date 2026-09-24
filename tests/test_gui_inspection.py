@@ -81,8 +81,8 @@ def test_native_crop_bounds_clamp_and_never_resize():
 
 def test_face_selection_uses_bbox_and_clamps_padding_to_native_bounds():
     faces = [
-        {"bbox": (90, 70, 30, 30)},
-        {"face_data": {"bbox": (10, 20, 40, 50)}},
+        {"bbox": (90, 70, 30, 30), "frame_size": (100, 80)},
+        {"face_data": {"bbox": (10, 20, 40, 50)}, "frame_size": (100, 80)},
     ]
     selected = select_face_crop(faces, 0, (100, 80), padding=10)
     assert selected.source_bbox.to_tuple() == (90, 70, 30, 30)
@@ -121,6 +121,13 @@ def test_face_selection_converts_declared_processing_frame_to_native():
 
     same = {"bbox": (10, 20, 30, 40), "frame_size": (100, 80)}
     assert select_face_crop([same], 0, (100, 80)).crop.to_tuple() == (10, 20, 30, 40)
+
+
+def test_face_selection_rejects_missing_coordinate_frame():
+    from retouch.gui_inspection import InspectionContractError
+
+    with pytest.raises(InspectionContractError, match="frame_size is missing"):
+        select_face_crop([{"bbox": (10, 20, 30, 40)}], 0, (100, 80))
 
 
 def test_roi_selection_accepts_native_pixel_mapping_and_clamps():

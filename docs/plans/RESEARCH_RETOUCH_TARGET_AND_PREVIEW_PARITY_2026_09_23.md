@@ -18,14 +18,30 @@ specifies future checks; it is not authorization to execute them.
 **Status update (2026-09-23, later same day):** the three "First" rows were checked
 on a real photo (DSCF4463, 6240×4160). §3 double scaling: reproduced and fixed
 (`17377c8`). §4 preview face coordinates: reproduced and fixed (`bf70524`); the
-`native_one_to_one` detail label remains open. §4 "cache hit removes inspection
+inspection contract separately records effective native/proxy/unverified detail
+after `2cf91fd`. §4 "cache hit removes inspection
 evidence": not reproduced on fast, small full-quality or draft paths, because
 `_run_detection_and_faces` returns the supplied contexts when none are rebuilt.
 Remaining rows: §7 parser-dependency cache reuse reproduced and fixed
 (`3e5d071`); §5 detection-order targeting reproduced on DSCF4599 and fixed with
-position anchors (`db8ae05`); §6 explicit rebase now warns (`3c09e28`) but the
-rebase design choice remains open.
+position anchors (`db8ae05`); §6 explicit rebase warns (`3c09e28`), with its
+policy decision recorded in the later update below.
 Detail: [TODO_WEEK_2026_09_21.md](TODO_WEEK_2026_09_21.md).
+
+**Status update (2026-09-24):** selected literal support for mask-only explicit
+rebase. The app now shows the old effective-mask support over the rebased result
+and requires acknowledgement before further edits, session or snapshot save, or
+export while the overlay is visible at 20% opacity or higher. Exact-base loads
+of mask sessions, including v2 sessions replayed later after a source becomes
+available, also show the stored support and require review. This covers old
+sessions without review provenance. Rebase and legacy binding refuse reshape
+edits because they identify a face by detection order, and replay rejects masks
+with missing, fractional, or inconsistent pixel geometry instead of resizing. Face
+inspection now reports unavailable when `frame_size` is missing instead of
+assuming native coordinates. Focused validation passed 80 tests. Full
+public-route cache/preview coverage and independent photo qualification remain
+open; no new photo processing was performed because this checkout has no
+approved subject/event grouping or permission record.
 
 ## 1. Recommendation
 
@@ -270,7 +286,9 @@ and resolves the stored ordinal selection again. A newly recorded base digest
 establishes which pixels were used; it does not prove the transferred edit still
 expresses the intended target.
 
-Proposed rebase choices to study, without selecting a default here:
+The initial pass listed these choices without selecting a default. The
+2026-09-24 follow-up selected option 1 for mask-only edits and refused rebase
+when reshape edits use detection-order selection:
 
 1. Retain literal image-coordinate support and require review of its overlay on
    the new base. Appropriate only when that is the user's intended operation.
@@ -282,6 +300,11 @@ Proposed rebase choices to study, without selecting a default here:
 Current records retain the effective mask, not the original brush and semantic
 support as separately replayable inputs. Therefore option 3 is a schema/design
 study, not a behavior available merely by toggling the replay function.
+
+Implemented behavior keeps the effective mask at its recorded pixel positions,
+shows the union of those supports as a visible overlay, and blocks further edits,
+session save, and export until the user acknowledges review. A reshape rebase
+is refused; the user must load the intended base and recreate those edits.
 
 ## 7. Cache validity includes appearance and parser dependencies
 
@@ -319,5 +342,7 @@ real photos and decoded delivery. Keep protection-lifecycle and measurement
 validity work as prerequisites, not competing roadmaps. External documentation
 and literature provide contracts/motivation; none establishes Retouch quality.
 
-This pass can close as a documented investigation. Preview/export agreement and
-photo-quality qualification remain open until the proposed evidence exists.
+The source investigation and the documented T1–T6 fixes are complete. Full
+end-to-end cache/preview/target qualification and independent photo-quality
+qualification remain open until the evidence described by the execution plan
+exists.
