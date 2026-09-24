@@ -207,7 +207,10 @@ def test_gui_face_quality_scan_is_opt_in_and_persists_evidence(monkeypatch, tmp_
     assert rows[0][-1] == "1 face evidence record(s); review required"
     assert rows[1][0] == "face"
     assert "confidence=0.93 (retinaface)" in rows[1][5]
-    assert "blink_analysis_deferred" in rows[1][5]
+    # The fake landmarks give an eyelid aperture between the closed and open
+    # bands, so the flag stays uncertain for a person to check.
+    assert "eyes_open=uncertain" in rows[1][5]
+    assert "eye_aperture_ambiguous" in rows[1][5]
     assert rows[1][-1] == "evidence only; human review required"
     assert "Face quality measured for 1 asset(s): 1 face(s)" in status
     assert len(payload["assets"][0]["faces"]) == 1
@@ -239,3 +242,45 @@ def test_gui_face_quality_unavailable_does_not_block_manifest_scan(monkeypatch, 
     assert "Face quality unavailable: unsupported test runtime" in status
     assert "face_detector_unavailable" in payload["assets"][0]["uncertainty"]
     assert payload["assets"][0]["decision"] == "hold"
+
+
+def test_gui_face_scan_ranks_bursts_with_face_evidence(monkeypatch, tmp_path: Path):
+    import json
+    import gui
+    from retouch.detection import FaceData, _Landmark, _LandmarkCompat
+
+    for second, name in ((1, "first.jpg"), (2, "second.jpg")):
+        image = Image.new("RGB", (128, 128), (100 + second, 100, 100))
+        exif = image.getexif()
+        exif[306] = f"2026:08:12 10:00:{second:02d}"
+        exif[271] = "Acme"
+        exif[272] = "Camera"
+        image.save(tmp_path / name, exif=exif.tobytes())
+    points = [_Landmark(0.5, 0.5) for _ in range(468)]
+
+    class FakeDetector:
+        available = True
+        unavailable_reason = None
+
+        def __init__(self, allow_unavailable=False):
+            pass
+
+        def detect(self, image_bgr):
+            return [FaceData(
+                landmarks=_LandmarkCompat(points), bbox=(20, 12, 88, 105), ied=40.0,
+                confidence=0.93, confidence_source="retinaface",
+            )]
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(gui, "FaceDetector", FakeDetector)
+    rows, _, _ = gui.on_shoot_intelligence_scan(str(tmp_path), False, None, True)
+
+    payload = json.loads((tmp_path / ".retouch-shoot-review.json").read_text(encoding="utf-8"))
+    burst_rows = [row for row in rows if row[0] == "burst"]
+    assert len(burst_rows) == 2
+    for asset in payload["assets"]:
+        evidence = asset["culling_evidence"]
+        assert evidence["policy"].startswith("face-aware")
+        assert evidence["candidate"]["evidence"]["faces_detected"] == 1

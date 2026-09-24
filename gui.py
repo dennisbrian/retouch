@@ -3887,9 +3887,9 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                 )
                 shoot_recursive = gr.Checkbox(label="Scan subfolders", value=True)
                 shoot_face_quality = gr.Checkbox(
-                    label="Measure face/eye sharpness",
+                    label="Check faces and closed eyes",
                     value=False,
-                    info="Optional evidence only; blink analysis remains unavailable.",
+                    info="Burst picks prefer the sharpest face with open eyes; closed eyes are flagged, never removed.",
                 )
                 shoot_scan_btn = gr.Button("Scan shoot", variant="primary")
             shoot_status = gr.Markdown("No shoot scanned yet.")

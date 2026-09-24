@@ -7,18 +7,37 @@ import numpy as np
 from PIL import Image
 
 from retouch.detection import FaceData, _LandmarkCompat
+import pytest
+
+from retouch.eye_visibility import _EAR_INDICES
 from retouch.face_quality import (
+    EYES_CLOSED_BELOW,
+    EYES_OPEN_FROM,
     FACE_QUALITY_VERSION,
     SHARPNESS_METHOD,
     LEFT_EYE_INDICES,
     RIGHT_EYE_INDICES,
     FaceQualityAnalyzer,
+    classify_eyes_open,
 )
 from retouch.shoot_intelligence import inspect_asset
 from retouch.shoot_review import FaceQualityEvidence, build_review_manifest
 
 
-def _landmarks():
+def _place_eyelids(points, indices, center_x, aperture):
+    """Put one eye's six EAR landmarks so its eyelid aspect ratio is ``aperture``."""
+    outer, inner, upper1, upper2, lower1, lower2 = indices
+    half_width, center_y = 0.065, 0.43
+    half_height = aperture * half_width
+    points[outer] = SimpleNamespace(x=center_x - half_width, y=center_y, z=0.0)
+    points[inner] = SimpleNamespace(x=center_x + half_width, y=center_y, z=0.0)
+    for index, dx in ((upper1, -0.02), (upper2, 0.02)):
+        points[index] = SimpleNamespace(x=center_x + dx, y=center_y - half_height, z=0.0)
+    for index, dx in ((lower1, -0.02), (lower2, 0.02)):
+        points[index] = SimpleNamespace(x=center_x + dx, y=center_y + half_height, z=0.0)
+
+
+def _landmarks(apertures=None):
     points = [SimpleNamespace(x=0.5, y=0.5, z=0.0) for _ in range(468)]
     for center_x, indices in ((0.65, LEFT_EYE_INDICES), (0.35, RIGHT_EYE_INDICES)):
         for position, index in enumerate(indices):
@@ -28,12 +47,18 @@ def _landmarks():
                 y=0.43 + 0.028 * float(np.sin(angle)),
                 z=0.0,
             )
+    if apertures is not None:
+        # face_quality's "left" is the subject's left eye (image right, the
+        # 263 cluster); eye_visibility's "left" is the 33 cluster.
+        left, right = apertures
+        _place_eyelids(points, _EAR_INDICES["right"], 0.65, left)
+        _place_eyelids(points, _EAR_INDICES["left"], 0.35, right)
     return _LandmarkCompat(points)
 
 
-def _face(*, confidence=0.91, source="retinaface", bbox=(16, 10, 96, 108)):
+def _face(*, confidence=0.91, source="retinaface", bbox=(16, 10, 96, 108), apertures=None):
     return FaceData(
-        landmarks=_landmarks(),
+        landmarks=_landmarks(apertures),
         bbox=bbox,
         ied=38.0,
         confidence=confidence,
@@ -57,9 +82,53 @@ def test_face_quality_records_versioned_geometry_focus_and_provenance():
     assert evidence.face_sharpness > 0.0
     assert evidence.left_eye_sharpness > 0.0
     assert evidence.right_eye_sharpness > 0.0
-    assert evidence.eyes_open == "uncertain"
-    assert "blink_analysis_deferred" in evidence.uncertainty
+    assert evidence.eyes_open in {"yes", "no", "uncertain"}
+    assert "blink_analysis_deferred" not in evidence.uncertainty
+    assert evidence.measurement_details["left_eye_aperture"] is not None
+    assert evidence.measurement_details["right_eye_aperture"] is not None
     assert evidence.measurement_details["face_bbox_pixels"] == [16, 10, 96, 108]
+
+
+@pytest.mark.parametrize(
+    ("left", "right", "expected"),
+    [
+        (0.30, 0.28, ("yes", "eye_aperture_above_open_band")),
+        (EYES_OPEN_FROM, 0.40, ("yes", "eye_aperture_above_open_band")),
+        (0.05, 0.04, ("no", "eye_aperture_below_closed_band")),
+        (0.30, 0.05, ("no", "eye_aperture_below_closed_band")),
+        (0.17, 0.30, ("uncertain", "eye_aperture_ambiguous")),
+        (EYES_CLOSED_BELOW, 0.30, ("uncertain", "eye_aperture_ambiguous")),
+        (None, 0.30, ("uncertain", "eye_aperture_unavailable")),
+    ],
+)
+def test_classify_eyes_open_uses_the_narrower_eye(left, right, expected):
+    assert classify_eyes_open(left, right) == expected
+
+
+@pytest.mark.parametrize(
+    ("apertures", "eyes_open"),
+    [
+        ((0.30, 0.30), "yes"),
+        # A narrow-eyed subject whose open eyes read 0.19-0.25 on real clips
+        # stays open or uncertain, never closed.
+        ((0.21, 0.22), "yes"),
+        ((0.05, 0.05), "no"),
+        ((0.30, 0.04), "no"),
+        ((0.17, 0.18), "uncertain"),
+    ],
+)
+def test_face_quality_reads_eyes_open_from_eyelid_aperture(apertures, eyes_open):
+    image = np.full((128, 128, 3), 120, dtype=np.uint8)
+
+    evidence = FaceQualityAnalyzer().analyze(image, [_face(apertures=apertures)])[0]
+
+    assert evidence.eyes_open == eyes_open
+    details = evidence.measurement_details
+    assert details["left_eye_aperture"] == pytest.approx(apertures[0], abs=1e-3)
+    assert details["right_eye_aperture"] == pytest.approx(apertures[1], abs=1e-3)
+    assert details["eyes_closed_below"] == EYES_CLOSED_BELOW
+    assert details["eyes_open_from"] == EYES_OPEN_FROM
+    assert ("eye_aperture_ambiguous" in evidence.uncertainty) == (eyes_open == "uncertain")
 
 
 def test_face_quality_sharpness_decreases_under_strong_blur():
