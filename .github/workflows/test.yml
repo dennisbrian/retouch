@@ -18,6 +18,8 @@ jobs:
     env:
       RETOUCH_MEDIAPIPE_BACKEND: legacy
       RETOUCH_GPU: "0"
+      # .python-version pins 3.11 for local setup; keep each matrix leg on its own version.
+      UV_PYTHON: ${{ matrix.python-version }}
 
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2

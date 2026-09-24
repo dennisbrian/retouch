@@ -75,6 +75,7 @@ def test_global_registry_routes_all_stages_in_order_and_applies_gates():
 
     ctx = SimpleNamespace(
         subject_separation=0.0, background_harmonize=0.0,
+        cross_region_skin=0.0,
         _local_adjustments=[{"kind": "brush"}],
     )
     state = PipelineState(

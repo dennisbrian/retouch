@@ -89,6 +89,7 @@ def process(
     body_equalize: Optional[float] = None,
     body_whiten: Optional[float] = None,
     body_match_face: Optional[float] = None,
+    cross_region_skin: Optional[float] = None,
     body_relight: Optional[float] = None,
     body_dodge_burn: Optional[float] = None,
     shadow_lift: Optional[float] = None,
@@ -193,6 +194,7 @@ def process(
     grain_strength: Optional[float] = None,
     highlight_rolloff_strength: Optional[float] = None,
     gamut_compress: Optional[bool] = None,
+    gamut_target: Optional[str] = None,
     saturation_mode: Optional[str] = None,
     hsl_hue_red: Optional[float] = None,
     hsl_sat_red: Optional[float] = None,
@@ -262,6 +264,9 @@ def process(
     highlight_sat: Optional[float] = None,
     white_balance_kelvin: Optional[int] = None,
     white_balance_tint: Optional[float] = None,
+    multi_illuminant_key_kelvin: Optional[int] = None,
+    multi_illuminant_fill_kelvin: Optional[int] = None,
+    multi_illuminant_mix: Optional[float] = None,
     bw_channel_mixer_r: Optional[int] = None,
     bw_channel_mixer_g: Optional[int] = None,
     bw_channel_mixer_b: Optional[int] = None,
@@ -470,6 +475,7 @@ Passing an explicit value override to these parameters takes precedence over the
 *   **`grade_intensity`** (Type: `float`, Default: `0.0`, Range: None, Recipe key: `color_harmony.amount`): Adjusts the grade intensity parameter.
 *   **`lut`** (Type: `str`, Default: `none`, Range: None, Recipe key: `lut`): Adjusts the lut parameter.
 *   **`gamut_compress`** (Type: `bool`, Default: `True`, Range: None, Recipe key: `gamut_compress`): Boolean flag to toggle gamut compress.
+*   **`gamut_target`** (Type: `str`, Default: `srgb`, Range: None, Recipe key: `gamut_target`): Output gamut for the K3 chroma-compression knee (`srgb`/`p3`/`rec2020`).
 *   **`saturation_mode`** (Type: `str`, Default: `additive`, Range: None, Recipe key: `saturation_mode`): Adjusts the saturation mode parameter.
 
 ##### **Film Density & Simulation**
@@ -532,6 +538,9 @@ Passing an explicit value override to these parameters takes precedence over the
 
 *   **`white_balance_kelvin`** (Type: `int`, Default: `6500`, Range: `2000` to `12000`, Recipe key: `white_balance_kelvin`): Adjusts the white balance kelvin parameter.
 *   **`white_balance_tint`** (Type: `float`, Default: `0.0`, Range: `-100.0` to `100.0`, Recipe key: `white_balance_tint`): Adjusts the white balance tint parameter.
+*   **`multi_illuminant_key_kelvin`** (Type: `int`, Default: `6500`, Range: `2000` to `12000`, Recipe key: `white_balance.multi_illuminant_key_kelvin`): Key-light color temperature for K6 multi-illuminant skin adaptation.
+*   **`multi_illuminant_fill_kelvin`** (Type: `int`, Default: `6500`, Range: `2000` to `12000`, Recipe key: `white_balance.multi_illuminant_fill_kelvin`): Fill-light color temperature for K6 multi-illuminant skin adaptation.
+*   **`multi_illuminant_mix`** (Type: `float`, Default: `0.0`, Range: `0.0` to `100.0`, Recipe key: `white_balance.multi_illuminant_mix`): Key/fill CAT16 blend weight for skin adaptation (no-op when key==fill or 0).
 *   **`bw_channel_mixer_r`** (Type: `int`, Default: `30`, Range: `-100` to `200`, Recipe key: `bw_channel_mixer_r`): Adjusts the bw channel mixer r parameter.
 *   **`bw_channel_mixer_g`** (Type: `int`, Default: `59`, Range: `-100` to `200`, Recipe key: `bw_channel_mixer_g`): Adjusts the bw channel mixer g parameter.
 *   **`bw_channel_mixer_b`** (Type: `int`, Default: `11`, Range: `-100` to `200`, Recipe key: `bw_channel_mixer_b`): Adjusts the bw channel mixer b parameter.
@@ -579,6 +588,7 @@ Passing an explicit value override to these parameters takes precedence over the
 *   **`body_equalize`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `body_skin.equalize`): Adjusts the body equalize parameter.
 *   **`body_whiten`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `body_skin.whiten`): Adjusts the body whiten parameter.
 *   **`body_match_face`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `body_skin.match_face`): Adjusts the body match face parameter.
+*   **`cross_region_skin`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: none): Explicit opt-in P7 control that propagates the approved face-edit LAB delta to same-person exposed skin. It is limited to one detected face, abstains on ambiguous ownership, and remains disabled by every recipe. Keep `body_match_face=0` when using it; a reviewed `cross_region_skin_mask` may be supplied through the Python API.
 *   **`body_relight`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `body_skin.relight`): Adjusts the body relight parameter.
 *   **`body_dodge_burn`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `body_skin.dodge_burn`): Adjusts the body dodge burn parameter.
 *   **`body_shadow_lift`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `body_skin.shadow_lift`): Adjusts the body shadow lift parameter.
@@ -752,6 +762,26 @@ is explicitly `encoded` or `linear`; uint8/uint16 and float image contracts
 are supported. These are analytical operators, not a
 Photoshop pixel-parity or Fill implementation. Existing Retouch recipes do
 not call them automatically.
+
+### Observable appearance cues (P8 R1)
+
+```python
+from retouch import measure_p8_cues
+
+# `regions` is a reviewed FaceRegions-like support object for this face.
+readout = measure_p8_cues(image_bgr, regions)
+print(readout.to_dict())
+```
+
+The P8 readout measures signed LAB contrast for eyes, lips, and brows against
+nearby skin plus face-scaled skin chroma variation. It retains support counts,
+units, confidence-as-support metadata, and explicit unavailable states. It is
+an observable-appearance measurement only: it does not estimate chronological
+or apparent age, recover translucency/volume, fit an aging vector, or edit
+pixels. Missing support is returned as `values=None`, not as a zero score.
+The implementation is a standalone leaf in `retouch/aging_cues.py`; the
+diagnostic command `scripts/qa/p8_cue_readout.py` performs detection/parsing
+and emits JSON without calling `RetouchEngine.process()`.
 
 ## 6. Style Library & Machine Learning APIs
 

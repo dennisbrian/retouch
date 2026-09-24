@@ -85,8 +85,12 @@ Ranked by how unresolved the underlying problem is, not by priority:
    exist but aren't wired into `skin.py`; several R13/R14 sub-slices
    (multi-band pyramid, self-donor synthesis, per-subject profile,
    occlusion guard) never built.
-8. **Eye-v0 uint8 ROI roundtrip** — flagged open since the 2026-08-31
-   audit closeout, still not resolved.
+8. ✅ **Eye-v0 uint8 ROI roundtrip** — fixed 2026-09-14: `perf_optimizations.py`'s
+   eye-v0 dispatch no longer wraps the whole canvas in a `float→uint8→float`
+   cast; `EyeEnhancerV0.enhance()` already dispatches on dtype internally
+   (same pattern as `eyes.enhance`), so passing float32 straight through
+   confines quantization to the masked sclera/iris pixels instead of
+   dithering the whole ROI (wig/hand/background).
 9. **Near-eye genuine-mark safety (FA-03)** — established only on
    synthetic marks; the report's own corpus has zero confirmed real moles
    near an eye/brow, so this safety claim cannot be made on real photos

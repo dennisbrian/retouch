@@ -714,10 +714,29 @@ def _resume_fixture(tmp_path):
 def _cli_args(src, out, recipe, resume, plan, *extra, workers=1):
     return (
         src, "-o", out, "--global-only", "--no-compare", "--workers", workers,
-        "--recipe", recipe, "--skip-disk-check",
+        "--recipe", recipe, "--skip-disk-check", "--no-review",
         *(("--resume-plan", resume) if resume else ()),
         "--input-plan", plan, *extra,
     )
+
+
+def test_cli_input_plan_writes_default_review_page(tmp_path):
+    from retouch.review_page import load_review_records
+
+    src, out = _resume_fixture(tmp_path)
+    plan = tmp_path / "plan.json"
+    result = _run_cli(
+        src, "-o", out, "--global-only", "--no-compare",
+        "--skip-disk-check", "--input-plan", plan,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (out / "review.html").is_file()
+    assert {record.status for record in load_review_records(out)} == {"done"}
+    payload = json.loads(plan.read_text(encoding="utf-8"))
+    rows = [row for row in payload["rows"] if row["selected"]]
+    assert len(rows) == 2
+    assert {row["result_status"] for row in rows} == {"done"}
 
 
 def _hashes(out):

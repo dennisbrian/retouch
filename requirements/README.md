@@ -36,6 +36,11 @@ pip install -r requirements/raw.txt
 
 ## Installation
 
+The quickest path is `./setup` in the repository root: it installs the locked
+`uv.lock` environment (with the desktop extra) on Python 3.11 and fetches the
+core models. The pip commands below remain for manual installs, which need
+Python 3.9–3.11.
+
 ### Recommended: All-in-one
 ```bash
 pip install -r requirements/base.txt -r requirements/gui.txt -r requirements/dev.txt

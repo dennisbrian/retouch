@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# Launcher for the environment built by ./setup.
+#
+#   ./run                  open the app (native window on macOS, browser elsewhere)
+#   ./run web              open the app in your browser
+#   ./run batch ARGS...    run the batch CLI (same options as cli.py)
+#   ./run crops FOLDER     make 4:5 / 9:16 / 1:1 social crops of retouched photos
+#   ./run split FOLDER ... split a shoot into folders by capture time
+#   ./run recipes          list the recipe names --recipe accepts
+#   ./run review ARGS...   build/apply a batch review page (retouch.review_page)
+#   ./run update           pull the latest code and refresh dependencies
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT_DIR"
+
+case "${1:-}" in
+    -h|--help|help) sed -n '2,11p' "$0"; exit 0 ;;
+esac
+
+PYTHON="$ROOT_DIR/.venv/bin/python"
+if [ ! -x "$PYTHON" ]; then
+    echo "No environment found. Run ./setup first." >&2
+    exit 1
+fi
+
+cmd="${1:-app}"
+[ $# -gt 0 ] && shift
+
+case "$cmd" in
+    app)
+        if [ "$(uname -s)" = "Darwin" ]; then
+            exec "$PYTHON" desktop.py "$@"
+        fi
+        exec "$PYTHON" gui.py "$@"
+        ;;
+    web|gui)
+        exec "$PYTHON" gui.py "$@"
+        ;;
+    batch|cli)
+        exec "$PYTHON" cli.py "$@"
+        ;;
+    crops)
+        exec "$PYTHON" -m retouch.social_crops "$@"
+        ;;
+    split)
+        exec "$PYTHON" split_shoot.py "$@"
+        ;;
+    recipes)
+        # cli.py --list-recipes shows every recipe in the cookbook, including
+        # archive looks that --recipe rejects. List only the curated names.
+        exec "$PYTHON" - <<'PY'
+from retouch.recipe_cookbook import list_recipes
+from retouch.recipes import CURATED_RECIPE_NAMES, RECOMMENDED_RECIPE_NAMES
+
+info = {r.name: r for r in list_recipes()}
+for title, names in (
+    ("Recommended", RECOMMENDED_RECIPE_NAMES),
+    ("Scene / creative (use with matching light or intent)",
+     [n for n in CURATED_RECIPE_NAMES if n not in RECOMMENDED_RECIPE_NAMES]),
+):
+    print(f"{title}:")
+    for name in names:
+        desc = info[name].description if name in info else ""
+        print(f"  {name:34} {desc}")
+    print()
+print("Use one with: ./run batch <folder> -o <output> --recipe NAME")
+PY
+        ;;
+    review)
+        exec "$PYTHON" -m retouch.review_page "$@"
+        ;;
+    update)
+        git pull --ff-only
+        exec "$ROOT_DIR/setup" --no-models
+        ;;
+    *)
+        echo "Unknown command: $cmd" >&2
+        sed -n '2,11p' "$0" >&2
+        exit 2
+        ;;
+esac

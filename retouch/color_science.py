@@ -630,7 +630,12 @@ def find_gamut_intersection(oklab: np.ndarray, eps: float = 1e-6, max_iter: int 
     return lo.astype(np.float32)
 
 
-def gamut_compress(oklch: np.ndarray, thr: float = 0.8, power: float = 0.6) -> np.ndarray:
+def gamut_compress(
+    oklch: np.ndarray,
+    thr: float = 0.8,
+    power: float = 0.6,
+    target: str = "srgb",
+) -> np.ndarray:
     """Gamut-aware chroma compression in OKLCh (preserves hue & lightness).
 
     For in-gamut colors (C <= C_max) this is the exact identity — no change —
@@ -643,6 +648,11 @@ def gamut_compress(oklch: np.ndarray, thr: float = 0.8, power: float = 0.6) -> n
         oklch: (H, W, 3) float32 OKLCh (L, C, h).
         thr: Knee sharpness (larger = less compression).
         power: Rolloff softness (larger = softer near the boundary).
+        target: Output gamut — ``"srgb"`` (default), ``"p3"`` (Display P3),
+            or ``"rec2020"``. Wider targets allow more chroma before the
+            knee engages (K5: P3 ≈ 1.25x, Rec.2020 ≈ 1.40x the sRGB
+            boundary, matching :func:`find_gamut_intersection_p3` /
+            :func:`find_gamut_intersection_rec2020`).
 
     Returns:
         (H, W, 3) float32 OKLCh with compressed chroma.
@@ -652,6 +662,13 @@ def gamut_compress(oklch: np.ndarray, thr: float = 0.8, power: float = 0.6) -> n
     h = oklch[..., 2]
     oklab = oklch_to_oklab(oklch)
     Cmax = find_gamut_intersection(oklab)
+    if target == "p3":
+        Cmax = Cmax * 1.25
+    elif target == "rec2020":
+        Cmax = Cmax * 1.40
+    elif target != "srgb":
+        raise ValueError(f"gamut_compress: unknown target {target!r} "
+                         "(expected 'srgb', 'p3', or 'rec2020')")
     Cmax_safe = np.where(Cmax > 1e-6, Cmax, 1.0)
     t = C / Cmax_safe
     # In-gamut (t <= 1): exact identity (no hue/L/C change).

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import urllib.request
 from dataclasses import dataclass
 from typing import Optional, Tuple
@@ -89,3 +90,30 @@ def check_for_update(timeout: float = 3.0) -> Optional[UpdateInfo]:
         logger.info("update_check: update available: %s -> %s", __version__, tag)
         return UpdateInfo(latest_version=tag, url=url)
     return None
+
+
+_background_result: Optional[UpdateInfo] = None
+
+
+def start_background_check(timeout: float = 3.0) -> Optional[threading.Thread]:
+    """Run :func:`check_for_update` on a daemon thread; read it via :func:`available_update`.
+
+    Entry points (the desktop app, ``gui.py``) call this before the UI
+    starts, so the result is usually ready by the first page load. Returns
+    the thread, or ``None`` in offline mode.
+    """
+    if offline_mode_enabled():
+        return None
+
+    def _run() -> None:
+        global _background_result
+        _background_result = check_for_update(timeout=timeout)
+
+    thread = threading.Thread(target=_run, name="retouch-update-check", daemon=True)
+    thread.start()
+    return thread
+
+
+def available_update() -> Optional[UpdateInfo]:
+    """Return the newer release found by :func:`start_background_check`, if any."""
+    return _background_result

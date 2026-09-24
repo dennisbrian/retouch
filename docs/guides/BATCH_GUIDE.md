@@ -6,11 +6,15 @@ This guide describes how to run the batch processing CLI tool for the **Pro Max 
 
 ## 1. Quick Start
 
-To run a batch of images with the stronger **`cyber_doll`** recipe for the pink/cyan high-impact cosplay look:
+To run a batch of images with the **`cosplay_character_showcase_v1`** recipe (dewy skin, vivid eyes, wig-lace blend):
 
 ```bash
-python3 cli.py "/path/to/input_folder" -o "/path/to/output_folder" --recipe cyber_doll --impact 70 --global-only
+python3 cli.py "/path/to/input_folder" -o "/path/to/output_folder" --recipe cosplay_character_showcase_v1
 ```
+
+`--recipe` only accepts the curated recipe names. Run `./run recipes` to list
+them; older looks such as `cyber_doll` or `anime_v2` are Python-API only (see
+Example F).
 
 By default, this will:
 *   Search the input folder for images (`.jpg`, `.jpeg`, `.png`, `.webp`, etc.).
@@ -29,7 +33,7 @@ condition is shown as a blocking execution warning.
 
 | Option | Shorthand | Default | Description |
 | :--- | :--- | :--- | :--- |
-| **`--preset`** / `--recipe` | | `natural` | Choose the retouch recipe: `natural`, `portrait`, `beauty`, `cosplay`, `cosplay_3d`, `cosplay_no_eq`, `cyber_doll`, `scifi_cosplay`, `anime_cosplay`, `anime_cinematic_v1`, `anime_cinematic_soft`, `anime_cinematic_action`, `anime_crystal_void`, `anime_cinematic_fantasy`, `xiaohongshu`, `xhs_ultrasoft`, `pink_dream`, `blue_dream`, `fantasy_goddess`, `fuji_porcelain`, `dreamy`, `magazine`, `korean_beauty`, `idol`, `wedding`. |
+| **`--recipe`** / `--preset` | | `natural` | Choose the retouch recipe from the curated catalog, e.g. `natural`, `portrait`, `natural_polish_v1`, `cosplay_clear_v1`, `cosplay_character_showcase_v1`, `apex_cinema_v1`, `reala_ace`. Run `./run recipes` for the full list. |
 | **`--impact`** | | Recipe default | Global punch/finish intensity from `0` to `100`. Useful when a result feels too weak after normal retouching. |
 | **`--global-only`** | | *Off* | Skip face detection and local skin/eye/lip edits. Use this for fast color, contrast, glow, and impact retouching, or when MediaPipe cannot run in the current environment. |
 | **`-o`** / `--output` | | *None* | Directory where output images and comparisons are saved. |
@@ -94,8 +98,7 @@ If you have a large folder of images (e.g. 500+ photos) and want a fast preview 
 ```bash
 python3 cli.py "/Users/dennis/Pictures/Photoshoot" \
   -o "/Users/dennis/Desktop/Processed" \
-  --recipe cyber_doll \
-  --impact 70 \
+  --recipe cosplay_character_showcase_v1 \
   --global-only \
   --max-dim 2048 \
   --workers 8
@@ -107,7 +110,7 @@ To process raw-exported full-resolution JPEGs, preserve EXIF data, keep maximum 
 ```bash
 python3 cli.py "/Users/dennis/Pictures/Photoshoot" \
   -o "/Users/dennis/Desktop/Final_WebP" \
-  --preset cosplay_3d \
+  --recipe cosplay_clear_v1 \
   --format webp \
   -q 98
 ```
@@ -116,7 +119,7 @@ python3 cli.py "/Users/dennis/Pictures/Photoshoot" \
 Check how many images are in a folder and verify options before running:
 
 ```bash
-python3 cli.py "/Users/dennis/Pictures/Photoshoot" --preset cosplay_3d --dry-run
+python3 cli.py "/Users/dennis/Pictures/Photoshoot" --recipe cosplay_clear_v1 --dry-run
 ```
 
 ### Example D: RAF Through `raf2jpeg`
@@ -132,7 +135,7 @@ python3 cli.py "/Users/dennis/Pictures/Photoshoot/DSCF0001.RAF" \
   -o "/Users/dennis/Desktop/Retouched" \
   --raf-decoder raf2jpeg \
   --raf2jpeg-quality 100 \
-  --recipe fuji_porcelain \
+  --recipe reala_ace \
   --format png
 ```
 
@@ -156,40 +159,221 @@ the camera's proprietary local sharpening and noise reduction pixel-for-pixel.
 python3 cli.py DSCF0001.RAF -o retouched \
   --raf-decoder rawpy-fuji-match \
   --fuji-match-strength 0.85 \
-  --recipe fuji_porcelain \
+  --recipe reala_ace \
   --format png
 ```
 
 Use `0.65`–`0.75` for a more restrained camera match, or `1.0` for the
 strongest global match.
 
-### Example F: Anime Cinematic / Dreamy Recipes
-The engine ships with several specialised anime and dreamy recipes that work
-well on illustration-style or soft-light photoshoots. Pick one with
-`--recipe`/`--preset`:
+### Example F: Scene and Creative Looks
+The curated catalog includes scene and creative looks. They are tuned for
+matching light or intent, so check a few results before running a whole shoot:
 
 ```bash
-# Bright, glossy anime key visual look
-python3 cli.py "/path/to/input" -o "/path/to/output" --recipe anime_cinematic_v1 --workers 6
+# Cinematic film look: Eterna base, halation, grain, lens-blur separation
+python3 cli.py "/path/to/input" -o "/path/to/output" --recipe apex_cinema_v1 --workers 6
 
-# Soft, low-contrast anime variant
-python3 cli.py "/path/to/input" -o "/path/to/output" --recipe anime_cinematic_soft --workers 6
+# AAA game character: directional relight, micro-contrast
+python3 cli.py "/path/to/input" -o "/path/to/output" --recipe game_character_v1 --workers 6
 
-# High-contrast action shot
-python3 cli.py "/path/to/input" -o "/path/to/output" --recipe anime_cinematic_action --workers 6
+# Japanese transparent skin: airy haze, faded toe
+python3 cli.py "/path/to/input" -o "/path/to/output" --recipe jp_transparent_v1 --workers 6
 
-# Crystal-clear negative-space look
-python3 cli.py "/path/to/input" -o "/path/to/output" --recipe anime_crystal_void --workers 6
+# Cold, icy scene
+python3 cli.py "/path/to/input" -o "/path/to/output" --recipe cosplay_ice_cathedral_v1 --workers 6
 
-# Fantasy anime palette
-python3 cli.py "/path/to/input" -o "/path/to/output" --recipe anime_cinematic_fantasy --workers 6
-
-# Soft Fuji-style porcelain skin finish
-python3 cli.py "/path/to/input" -o "/path/to/output" --recipe fuji_porcelain --workers 6
-
-# Cool blue dreamy palette
-python3 cli.py "/path/to/input" -o "/path/to/output" --recipe blue_dream --workers 6
-
-# Xiaohongshu ultra-soft beauty look
-python3 cli.py "/path/to/input" -o "/path/to/output" --recipe xhs_ultrasoft --workers 6
+# Warm, heroic amber scene
+python3 cli.py "/path/to/input" -o "/path/to/output" --recipe cosplay_heroic_amber_v1 --workers 6
 ```
+
+The older anime and dreamy recipes (`anime_cinematic_v1`, `anime_cinematic_soft`,
+`anime_cinematic_action`, `anime_crystal_void`, `anime_cinematic_fantasy`,
+`fuji_porcelain`, `blue_dream`, `xhs_ultrasoft`, `cyber_doll`) are still in
+`retouch/recipes.py` but are not in the curated catalog, so the CLI and GUI
+reject them. Run them through the Python API:
+
+```python
+from pathlib import Path
+import cv2
+from retouch.engine import RetouchEngine
+
+if __name__ == "__main__":  # required: the engine starts worker processes
+    out = Path("/path/to/output"); out.mkdir(parents=True, exist_ok=True)
+    with RetouchEngine() as engine:
+        for src in sorted(Path("/path/to/input").glob("*.jpg")):
+            result = engine.process(cv2.imread(str(src)), recipe="anime_cinematic_v1")
+            cv2.imwrite(str(out / src.name), result.image)
+```
+
+Save it as a `.py` file and run it with `.venv/bin/python`; the engine's face
+workers cannot start from `python -` or an interactive paste.
+---
+
+## 4. Reviewing a Batch
+
+After a batch runs, the output folder contains `review.html` — an interactive page to review all processed images in your browser.
+
+### Opening the Review Page
+
+Open the review page from your file manager or browser: `<output-folder>/review.html`. It shows:
+
+- Before/after previews for each image (hold Space to flip)
+- Engine QA flags (if any were raised)
+- Close-up face crops (before vs after pairs)
+- Input filename and processing status
+- Links to full-resolution output and comparison images
+
+All data is embedded in the HTML file; no external network or server is needed. The hidden `.retouch-review/` folder next to it holds the previews and the per-image QA records the page is built from. Deleting it frees space and never touches your photos, but the page loses its images and QA results (rebuild with `./run review build`, which then shows QA as "not recorded").
+
+The CLI prints the page's path at the end of the batch (`Review page → …`). The app's Batch tab writes the same page and adds its path to the log.
+
+### Navigation & Decisions
+
+Use keyboard shortcuts to review images and mark them:
+
+- **J** / **K** — Next / Previous image (within current filter)
+- **←** / **→** — Same as J/K
+- **Enter** — Open the image in detail view
+- **Esc** — Back to grid
+- **P** — Mark as a pick (jumps to the next image)
+- **X** — Mark as rejected (jumps to the next image)
+- **U** — Clear the pick/reject decision
+- **F** — Cycle through filters (Shift+F goes back) (All → Flagged → Failed → Unreviewed → Picked → Rejected)
+- **Space** (hold) — Show the before image while viewing after
+- **C** — Toggle side-by-side before/after comparison
+- **?** — Show keyboard help overlay
+
+Your decisions are saved in this browser automatically (per batch), so you can close the page and come back. They stay in that browser only, so export them before switching machines. On touch devices, press-and-hold the image to show the before version.
+
+### Exporting Decisions
+
+After you've marked your picks and rejects:
+
+1. Click the **Export** button in the header
+2. A JSON file downloads, named like `3f2a9c1b04de-decisions.json`
+3. The dialog shows the exact `./run review apply …` command for this batch, with a Copy button
+
+The file contains your `pick` / `reject` decisions for the batch, keyed by image ID.
+
+### Applying Decisions
+
+Copy picks to a folder and optionally move rejects:
+
+```bash
+./run review apply /path/to/output decisions.json [--move-rejects]
+```
+
+This:
+- **Copies** all picked images to `/path/to/output/picks/` (preserving subdirectory structure)
+- **Moves** rejected images (and their comparisons) to `/path/to/output/rejected/` only if `--move-rejects` is passed
+- **Never** overwrites or deletes existing files — any collisions are skipped and reported
+
+### Building a Review Page for an Older Batch
+
+If you have an output folder from an earlier batch run without a `review.html`, generate one now:
+
+```bash
+./run review build /path/to/output --source /path/to/input
+```
+
+For an older batch, QA metrics are not available in the page (they are shown as "not recorded").
+
+### Skipping the Review Page
+
+To batch-process without generating a review page, add `--no-review`:
+
+```bash
+python3 cli.py "/path/to/input" -o "/path/to/output" --recipe cosplay_clear_v1 --no-review
+```
+
+---
+
+## 5. Social Crops for Instagram, Reels & Stories
+
+Automatically export face-aware crops of your retouched photos in popular social media formats. The engine detects the subject's face, centers the crop on it, preserves headroom for wigs and headpieces, and ignores small background faces. Each crop is output as sRGB JPEG (quality 92, no EXIF), downscaled to `1080px` width with light sharpening, and never upscaled.
+
+### Supported Formats
+
+| Format | Aspect Ratio | Output Size | Use Case |
+| :--- | :---: | :--- | :--- |
+| **`4:5`** | 4:5 | 1080×1350 | Instagram feed posts |
+| **`9:16`** | 9:16 | 1080×1920 | Reels, TikTok, Stories |
+| **`1:1`** | 1:1 | 1080×1080 | Instagram square, profile |
+| **`3:4`** | 3:4 | 1080×1440 | Instagram profile grid, Threads |
+
+### Method 1: During Batch Processing
+
+Add the `--social-crops` flag when running a batch to export crops alongside the retouched images:
+
+```bash
+# Export default formats (4:5, 9:16, 1:1)
+python3 cli.py "/path/to/input" -o "/path/to/output" --recipe natural --social-crops
+
+# Export specific formats
+python3 cli.py "/path/to/input" -o "/path/to/output" --recipe natural --social-crops 4:5,9:16
+
+# Export all formats
+python3 cli.py "/path/to/input" -o "/path/to/output" --recipe natural --social-crops all
+```
+
+Use the launcher for simplicity:
+
+```bash
+./run batch ~/photos -o ~/photos_out --recipe natural --social-crops
+```
+
+Crops are written to `<output>/social/<4x5|9x16|1x1|3x4>/<name>_<slug>.jpg`. Existing crops are skipped unless you pass `--force`. Add `--social-size full` to keep the native crop resolution instead of 1080 px wide.
+
+The top of the crop follows the person mask above the face, so tall wigs, ears and headpieces stay in frame whenever the shape allows it.
+
+### Method 2: On Already-Retouched Folders
+
+Process a folder of retouched images without re-running the full batch pipeline:
+
+```bash
+python3 -m retouch.social_crops ~/photos_out
+```
+
+Or use the launcher:
+
+```bash
+./run crops ~/photos_out
+```
+
+**Options:**
+
+| Option | Default | Description |
+| :--- | :--- | :--- |
+| `--formats` | `4:5,9:16,1:1` | Comma-separated list: `4:5`, `9:16`, `1:1`, `3:4`, or `all`. |
+| `--size` | `platform` | `platform` outputs at `1080px` width; `full` keeps native crop resolution. |
+| `--quality` | `92` | JPEG quality (1–100). |
+| `--force` | *Off* | Overwrite existing crop files. |
+| `-o` / `--output` | `<input>/social` | Output directory for the crop folder structure. |
+| `-r` / `--recursive` | *Off* | Recursively process subdirectories. |
+
+**Example:**
+
+```bash
+# Full-resolution crops with custom quality
+python3 -m retouch.social_crops ~/photos_out \
+  --formats 9:16,1:1 \
+  --size full \
+  --quality 95
+
+# Recursively process all subfolders
+python3 -m retouch.social_crops ~/batch_output \
+  -r --force --formats all
+```
+
+### Method 3: GUI Batch Tab
+
+When using the batch interface in the GUI, check the "Social crops" checkbox and select your desired formats (4:5, 9:16, 1:1, 3:4). Crops are exported to `<output>/social/` after the batch completes.
+
+### Behavior Details
+
+- **No faces detected:** Falls back to center-crop of the frame.
+- **Multiple faces:** Crops are centered on the largest face or group of similar-size faces; small background faces are ignored.
+- **EXIF stripped:** Geolocation and camera metadata are removed for privacy when posting.
+- **Skip rules:** Comparison images (`*_compare.*`) and anything already inside a `social/` folder are skipped.
+- **Platform downsample:** Output is always downscaled to `1080px` width (unless `--size full` is set) to match platform delivery specs, with light output sharpening applied.

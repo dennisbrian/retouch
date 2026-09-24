@@ -129,6 +129,11 @@ from .style_transfer import subject_aware_transfer
 from .utils import correct_exposure, apply_global_bloom, apply_skin_diffusion, vibrance as _vibrance_fn, squeeze_mask, feather_mask, guided_filter, normalize_mask, blend_masked, bgr_f32_to_lab_f32, lab_f32_to_bgr_f32
 from .color_space import bgr_to_lch, skin_mask_lch
 from .color_science import bgr_to_oklab, oklab_to_oklch
+from .cross_region_skin import (
+    CrossRegionSkinResult,
+    infer_same_person_skin_support,
+    propagate_face_edit_delta,
+)
 from .params import resolve_recipe, _deep_merge, PROCESSING_PARAMS  # noqa: F401  (re-export for backward compat)
 
 
@@ -326,6 +331,8 @@ class ProcessingContext:
     # is a no-op on in-gamut colors (golden path byte-identical); additive is the
     # legacy saturation mode.
     gamut_compress: bool = True
+    # K5: target gamut for the K3 compression knee ("srgb"/"p3"/"rec2020").
+    gamut_target: str = "srgb"
     saturation_mode: str = "additive"
     auto_exposure: bool = _DEFAULTS["auto_exposure"]
 
@@ -375,6 +382,10 @@ class ProcessingContext:
     # --- White balance / B&W mixer ---
     white_balance_kelvin: int = _DEFAULTS["white_balance_kelvin"]
     white_balance_tint: float = _DEFAULTS["white_balance_tint"]
+    # K6: multi-illuminant skin adaptation (key/fill Kelvin + mix weight).
+    multi_illuminant_key_kelvin: int = _DEFAULTS["multi_illuminant_key_kelvin"]
+    multi_illuminant_fill_kelvin: int = _DEFAULTS["multi_illuminant_fill_kelvin"]
+    multi_illuminant_mix: float = _DEFAULTS["multi_illuminant_mix"]
     bw_channel_mixer_r: int = _DEFAULTS["bw_channel_mixer_r"]
     bw_channel_mixer_g: int = _DEFAULTS["bw_channel_mixer_g"]
     bw_channel_mixer_b: int = _DEFAULTS["bw_channel_mixer_b"]
@@ -557,6 +568,15 @@ class ProcessingContext:
     self_blend_mode: Optional[str] = None
     self_blend_amount: Optional[float] = None
     self_blend_domain: str = "encoded"
+    # P7 opt-in cross-region appearance propagation.  These are appended to
+    # preserve positional construction of the long-lived context dataclass.
+    # No recipe enables this; API, CLI, and GUI callers may provide a reviewed
+    # support or let the stage form a conservative LCH/person-component
+    # candidate.
+    cross_region_skin: float = 0.0
+    cross_region_skin_mask: Optional[np.ndarray] = None
+    cross_region_protect_mask: Optional[np.ndarray] = None
+    _p7_diagnostics: Dict[str, Any] = field(default_factory=dict, repr=False)
 
 
 # ---------------------------------------------------------------------------
@@ -713,6 +733,9 @@ class ProcessingResult(np.ndarray):
         precision: Optional[ProcessingPrecision] = None,
         source_dtype: Optional[Any] = None,
         qa_provenance: Optional[Dict[str, Any]] = None,
+        # Appended to preserve positional construction of this ndarray
+        # subclass; P7 diagnostics are optional metadata only.
+        p7_diagnostics: Optional[Dict[str, Any]] = None,
     ):
         obj = np.asarray(image).view(cls)
         obj.image = image
@@ -731,6 +754,7 @@ class ProcessingResult(np.ndarray):
         obj.runtime_diagnostics = dict(runtime_diagnostics or {})
         obj.fa02_diagnostics = list(fa02_diagnostics or [])
         obj.qa_provenance = dict(qa_provenance or {})
+        obj.p7_diagnostics = dict(p7_diagnostics or {})
         obj.precision = precision or ProcessingPrecision.from_output(
             np.asarray(image), source_dtype=source_dtype
         )
@@ -756,6 +780,7 @@ class ProcessingResult(np.ndarray):
         self.runtime_diagnostics = getattr(obj, "runtime_diagnostics", {})
         self.fa02_diagnostics = getattr(obj, "fa02_diagnostics", [])
         self.qa_provenance = getattr(obj, "qa_provenance", {})
+        self.p7_diagnostics = getattr(obj, "p7_diagnostics", {})
         self.precision = getattr(obj, "precision", None)
         self.precision_metadata = getattr(obj, "precision_metadata", {})
 
@@ -910,6 +935,10 @@ def build_context(
         "color_transfer_intensity",
         "skin_locus",
         "smooth_exposure_lock",
+        # P7 is hand-wired below because its masks are caller-owned and must
+        # never be sourced from a recipe, even though its scalar control is
+        # registered for CLI/GUI exposure.
+        "cross_region_skin",
     }
     spec_kwargs = {
         spec.name: resolved[spec.name]
@@ -978,6 +1007,16 @@ def build_context(
             if overrides.get("self_blend_domain") is not None
             else "encoded"
         ),
+        # Explicit opt-in P7 cross-region appearance propagation.  The
+        # support/protection masks are caller-owned and never come from a
+        # recipe; omission lets the stage form a conservative candidate.
+        cross_region_skin=(
+            float(overrides.get("cross_region_skin"))
+            if overrides.get("cross_region_skin") is not None
+            else 0.0
+        ),
+        cross_region_skin_mask=overrides.get("cross_region_skin_mask"),
+        cross_region_protect_mask=overrides.get("cross_region_protect_mask"),
         # ``nose_smooth`` reads the caller override first, then the recipe's
         # ``frequency.nose_smooth`` (0-1 fraction, converted to 0-100 like
         # ``frequency.smooth``); absent → None (nose smoothed with the face).
@@ -1308,6 +1347,33 @@ class RetouchEngine:
                 })
         return img_bgr, diagnostics
 
+    @staticmethod
+    def apply_cross_region_skin(
+        source_bgr: np.ndarray,
+        edited_bgr: np.ndarray,
+        face_mask: np.ndarray,
+        target_mask: Optional[np.ndarray],
+        *,
+        strength: float = 1.0,
+        protect_mask: Optional[np.ndarray] = None,
+    ) -> CrossRegionSkinResult:
+        """Apply the isolated P7 face-delta propagation primitive.
+
+        ``source_bgr`` must be the image before the face edit and
+        ``edited_bgr`` the current image.  The caller supplies a reviewed
+        same-person target mask; a missing target deliberately abstains.  This
+        leaf API is separate from recipe processing and returns diagnostics,
+        including exact abstention reasons and bounded LAB deltas.
+        """
+        return propagate_face_edit_delta(
+            source_bgr,
+            edited_bgr,
+            face_mask,
+            target_mask,
+            strength=strength,
+            protect_mask=protect_mask,
+        )
+
     def process(
         self,
         img_bgr: np.ndarray,
@@ -1555,6 +1621,12 @@ class RetouchEngine:
         self_blend_mode: Optional[str] = None,
         self_blend_amount: Optional[float] = None,
         self_blend_domain: Optional[str] = None,
+        # Explicit opt-in P7 cross-region appearance propagation.  The
+        # support/protection masks are reviewed caller inputs; recipes never
+        # enable this path.
+        cross_region_skin: Optional[float] = None,
+        cross_region_skin_mask: Optional[np.ndarray] = None,
+        cross_region_protect_mask: Optional[np.ndarray] = None,
         **kwargs: Any,
     ) -> ProcessingResult:
         """Process a single image through the full Retouch pipeline.
@@ -1789,6 +1861,9 @@ class RetouchEngine:
             "self_blend_mode": self_blend_mode,
             "self_blend_amount": self_blend_amount,
             "self_blend_domain": self_blend_domain,
+            "cross_region_skin": cross_region_skin,
+            "cross_region_skin_mask": cross_region_skin_mask,
+            "cross_region_protect_mask": cross_region_protect_mask,
             "vibrance": vibrance,
             "saturation": saturation,
             "glow": glow,
@@ -1846,7 +1921,7 @@ class RetouchEngine:
         # Expose whether this render's engine had a face-aware detector
         # available. A zero face count is still distinct from global-only:
         # the detector may have run successfully and found no face.
-        detector_status = getattr(self._detector, "runtime_status", None)
+        detector_status = getattr(getattr(self, "_detector", None), "runtime_status", None)
         ctx._runtime_diagnostics["face_detection"] = (
             detector_status() if callable(detector_status) else {"mode": "unknown"}
         )
@@ -1866,6 +1941,26 @@ class RetouchEngine:
         if face_params is not None:
             from .face_params import coerce_face_params
             ctx.face_params = coerce_face_params(face_params)
+
+        # The preview path runs the face/global stages on a downscaled frame.
+        # Keep caller-reviewed P7 masks aligned with that frame while leaving
+        # masks at native resolution for the normal and legacy proxy paths.
+        if fast and scale < 1.0:
+            preview_shape = img_bgr.shape[:2]
+            for mask_name in ("cross_region_skin_mask", "cross_region_protect_mask"):
+                mask_value = getattr(ctx, mask_name, None)
+                if (
+                    isinstance(mask_value, np.ndarray)
+                    and mask_value.ndim >= 2
+                    and mask_value.shape[:2] == (orig_h, orig_w)
+                    and preview_shape != (orig_h, orig_w)
+                ):
+                    resized_mask = cv2.resize(
+                        mask_value.astype(np.float32, copy=False),
+                        (preview_shape[1], preview_shape[0]),
+                        interpolation=cv2.INTER_LINEAR,
+                    )
+                    setattr(ctx, mask_name, resized_mask.astype(np.float32, copy=False))
 
         if style_profile is not None:
             if overrides["contrast"] is None:
@@ -2006,6 +2101,7 @@ class RetouchEngine:
                 safe_auto_decisions=getattr(ctx, "_safe_auto_decisions", []),
                 runtime_diagnostics=getattr(ctx, "_runtime_diagnostics", {}),
                 fa02_diagnostics=getattr(ctx, "_fa02_diagnostics", []),
+                p7_diagnostics=getattr(ctx, "_p7_diagnostics", {}),
                 source_dtype=source_dtype,
             )
 
@@ -2094,6 +2190,7 @@ class RetouchEngine:
             safe_auto_decisions=getattr(ctx, "_safe_auto_decisions", []),
             runtime_diagnostics=getattr(ctx, "_runtime_diagnostics", {}),
             fa02_diagnostics=getattr(ctx, "_fa02_diagnostics", []),
+            p7_diagnostics=getattr(ctx, "_p7_diagnostics", {}),
             source_dtype=source_dtype,
         )
 
@@ -2209,6 +2306,17 @@ class RetouchEngine:
             ctx._aa6_warp_field = self._upscale_warp_field(
                 getattr(ctx, "_aa6_warp_field", None), h, w
             )
+
+            # The P7 reference is captured at the proxy resolution in this
+            # legacy/draft path. Keep it aligned with the upscaled masks and
+            # image before the global registry runs.
+            p7_source = getattr(ctx, "_p7_source", None)
+            if p7_source is not None and p7_source.shape[:2] != (h, w):
+                ctx._p7_source = cv2.resize(
+                    p7_source,
+                    (w, h),
+                    interpolation=cv2.INTER_LINEAR,
+                ).astype(np.float32, copy=False)
 
             # F8.1: Composite upscaled face edits onto native image
             # Only paste the face ROIs that were actually retouched
@@ -2467,6 +2575,13 @@ class RetouchEngine:
         t1 = time.perf_counter()
         result_native = self._stage_reshape(native_img_bgr, faces_native, ctx)
         timings["reshape"] = (time.perf_counter() - t1) * 1000
+        if ctx.cross_region_skin > 0.0:
+            # Capture the post-reshape, pre-face-edit reference so geometry
+            # changes are not mistaken for a tone edit to propagate.
+            ctx._p7_source = (
+                np.clip(result_native.astype(np.float32), 0.0, 255.0)
+                * (1.0 / 255.0)
+            )
 
         t2 = time.perf_counter()
         h_img, w_img = result_native.shape[:2]
@@ -2699,6 +2814,13 @@ class RetouchEngine:
         t1 = time.perf_counter()
         result = self._stage_reshape(img_bgr, faces, ctx)
         timings["reshape"] = (time.perf_counter() - t1) * 1000
+        if ctx.cross_region_skin > 0.0:
+            # Capture the post-reshape, pre-face-edit reference so geometry
+            # changes are not mistaken for a tone edit to propagate.
+            ctx._p7_source = (
+                np.clip(result.astype(np.float32), 0.0, 255.0)
+                * (1.0 / 255.0)
+            )
 
         # ------------------------------------------------------------------
         # Stage 2 — Per-face processing (parallel when >1 face)
@@ -3088,6 +3210,7 @@ class RetouchEngine:
                 if k in settings and k not in post_effects:
                     post_effects[k] = settings[k]
             settings["gamut_compress"] = ctx.gamut_compress
+            settings["gamut_target"] = getattr(ctx, "gamut_target", "srgb")
             settings["saturation_mode"] = ctx.saturation_mode
 
             h_adj = {}
@@ -4064,6 +4187,138 @@ class RetouchEngine:
             return np.clip(out / 255.0, 0.0, 1.0).astype(np.float32)
         return out
 
+    def _stage_cross_region_skin(
+        self,
+        img: np.ndarray,
+        ctx: ProcessingContext,
+        person_mask: Optional[np.ndarray],
+        acc_skin: Optional[np.ndarray],
+        acc_skin_hair: Optional[np.ndarray],
+        acc_lips: Optional[np.ndarray],
+        faces: Optional[list],
+    ) -> np.ndarray:
+        """P7: propagate one face's approved appearance delta to body skin.
+
+        The stage is caller-only and opt-in. It captures its reference before
+        face edits in ``ctx._p7_source`` and only permits a single detected
+        face, because the current face accumulator cannot identify which body
+        region belongs to which person in a group shot. A reviewed target mask
+        may be supplied through ``cross_region_skin_mask``; otherwise a
+        conservative person-component/LCH candidate is inferred.
+
+        Mutually exclusive with ``body_match_face``: both apply a face-to-
+        body-skin LAB correction to the same LCH skin-candidate region, and
+        this stage runs immediately after ``BodySkinStage`` in the global
+        registry, so enabling both would stack two corrections rather than
+        apply one. Abstains (does not raise) if both are enabled, matching
+        this stage's other abstention contracts.
+
+        ``img`` is float32 BGR [0, 1], as required by the global-stage
+        contract. The helper performs LAB arithmetic and restores pixels
+        outside the final support exactly.
+        """
+        strength = float(getattr(ctx, "cross_region_skin", 0.0))
+        if (
+            not np.isfinite(strength)
+            or strength < 0.0
+            or strength > 100.0
+        ):
+            raise ValueError("cross_region_skin must be finite and in [0, 100]")
+        if strength <= 0.0:
+            return img
+
+        def _record(reason: str, **extra: Any) -> np.ndarray:
+            diagnostics = CrossRegionSkinResult(
+                image=img,
+                applied=False,
+                abstained=True,
+                reason=reason,
+                **extra,
+            )
+            ctx._p7_diagnostics = diagnostics.to_dict()
+            return img
+
+        if float(getattr(ctx, "body_match_face", 0.0)) > 0.0:
+            # Both stages independently compute a face-to-body-skin LAB
+            # correction over the same LCH skin-candidate region, and this
+            # stage runs immediately after BodySkinStage in the global
+            # registry, so enabling both would stack two corrections on the
+            # same pixels instead of applying one. Same failure shape as the
+            # undereye dark_circles/undereye_darken_removal double-apply
+            # (e73d3ba). Abstain rather than silently compounding the edit.
+            return _record("body_match_face_conflict")
+
+        source = getattr(ctx, "_p7_source", None)
+        if source is None:
+            return _record("face_reference_unavailable")
+        if source.shape != img.shape:
+            return _record("face_reference_shape_mismatch")
+        if faces is None or len(faces) != 1:
+            return _record(
+                "single_face_required",
+                face_pixels=0,
+                target_pixels=0,
+            )
+        if acc_skin is None:
+            return _record("face_skin_support_unavailable")
+
+        face = normalize_mask(acc_skin)
+        if face is None:
+            return _record("face_skin_support_unavailable")
+        face = squeeze_mask(face)
+        if face.shape != img.shape[:2]:
+            return _record("face_skin_support_shape_mismatch")
+
+        target = getattr(ctx, "cross_region_skin_mask", None)
+        if target is None:
+            target = infer_same_person_skin_support(
+                source,
+                person_mask,
+                face,
+                face_exclusion=acc_skin_hair,
+                lip_exclusion=acc_lips,
+            )
+        else:
+            target = normalize_mask(target)
+            if target is None:
+                return _record("target_support_required")
+            target = squeeze_mask(target)
+            if target.shape != img.shape[:2]:
+                return _record("target_support_shape_mismatch")
+            target = np.clip(target, 0.0, 1.0).astype(np.float32, copy=False)
+
+            # Even an explicitly reviewed target cannot escape the detected
+            # person's segmentation or re-enter face-owned regions.
+            if person_mask is not None:
+                person = normalize_mask(person_mask)
+                if person is not None:
+                    person = squeeze_mask(person)
+                    if person.shape != target.shape:
+                        return _record("person_support_shape_mismatch")
+                    target *= person
+
+            exclusion = face.copy()
+            for extra in (acc_skin_hair, acc_lips):
+                if extra is not None:
+                    extra_mask = normalize_mask(extra)
+                    if extra_mask is not None:
+                        extra_mask = squeeze_mask(extra_mask)
+                        if extra_mask.shape != target.shape:
+                            return _record("exclusion_support_shape_mismatch")
+                        exclusion = np.maximum(exclusion, extra_mask)
+            target *= np.clip(1.0 - exclusion, 0.0, 1.0)
+
+        result = propagate_face_edit_delta(
+            source,
+            img,
+            face,
+            target,
+            strength=strength / 100.0,
+            protect_mask=getattr(ctx, "cross_region_protect_mask", None),
+        )
+        ctx._p7_diagnostics = result.to_dict()
+        return result.image
+
     def _stage_body_skin(
         self,
         img: np.ndarray,
@@ -4641,6 +4896,37 @@ class RetouchEngine:
                     tint=ctx.white_balance_tint,
                 )
 
+        # --- K6: Multi-illuminant skin adaptation (key/fill CAT16 blend) ---
+        # Adapts skin pixels toward D65 under a key/fill illuminant mix, so
+        # mixed-lighting portraits (warm key + cool fill) get consistent
+        # skin chroma instead of a split cast. Skin-only via acc_skin.
+        mi_key = getattr(ctx, "multi_illuminant_key_kelvin", 6500)
+        mi_fill = getattr(ctx, "multi_illuminant_fill_kelvin", 6500)
+        mi_mix = getattr(ctx, "multi_illuminant_mix", 0.0)
+        if mi_key != mi_fill and mi_mix > 0.0:
+            from .color_science import adapt_multi_illuminant_skin
+            from .white_balance import source_white_xyz
+            if acc_skin is not None and acc_skin.shape[:2] == result.shape[:2]:
+                skin_m = np.clip(acc_skin.astype(np.float32), 0.0, 1.0)
+                if is_float:
+                    mi_in = np.clip(result * 255.0, 0.0, 255.0).astype(np.float32)
+                    mi_out = adapt_multi_illuminant_skin(
+                        mi_in,
+                        skin_mask=skin_m,
+                        key_wp=tuple(source_white_xyz(float(mi_key))),
+                        fill_wp=tuple(source_white_xyz(float(mi_fill))),
+                        mix_factor=float(np.clip(mi_mix / 100.0, 0.0, 1.0)),
+                    )
+                    result = np.clip(mi_out / 255.0, 0.0, 1.0).astype(np.float32)
+                else:
+                    result = adapt_multi_illuminant_skin(
+                        result,
+                        skin_mask=skin_m,
+                        key_wp=tuple(source_white_xyz(float(mi_key))),
+                        fill_wp=tuple(source_white_xyz(float(mi_fill))),
+                        mix_factor=float(np.clip(mi_mix / 100.0, 0.0, 1.0)),
+                    )
+
         # --- Master HSL (Phase 1.d) — global LCH adjustments ---
         if ctx.hsl_hue_global != 0 or ctx.hsl_sat_global != 0 or ctx.hsl_lum_global != 0:
             # adjust_hsl_lch runs through bgr_f32_to_lch_f32, which expects float
@@ -4716,6 +5002,7 @@ class RetouchEngine:
                 if k in settings and k not in post_effects:
                     post_effects[k] = settings[k]
             settings["gamut_compress"] = ctx.gamut_compress
+            settings["gamut_target"] = getattr(ctx, "gamut_target", "srgb")
             settings["saturation_mode"] = ctx.saturation_mode
 
             result = self._grader.grade(
@@ -5272,10 +5559,11 @@ class RetouchEngine:
         from .neural_boosters import StrayHairSegmenter, DefectSegmenter
         from .safe_auto import decide
 
-        # Normalize to uint8 for processing (or use float if already float32)
+        # Neural booster inputs use the engine's float32 [0, 255] contract;
+        # convert that range directly for the uint8 segmenter interface.
         is_float = img.dtype == np.float32
         if is_float:
-            img_uint8 = to_uint8(img)
+            img_uint8 = np.clip(img, 0.0, 255.0).astype(np.uint8)
         else:
             img_uint8 = img
 

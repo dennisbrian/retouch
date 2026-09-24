@@ -1146,16 +1146,20 @@ def _process_face_core(
         canvas = _tr('eye_enhancement.enhance', canvas)
         from .eye_enhancement import EyeEnhancer as EyeEnhancerV0
         eye_enhancer_v0 = EyeEnhancerV0()
-        canvas_uint8 = np.clip(canvas, 0, 255).astype(np.uint8)
-        canvas_uint8 = eye_enhancer_v0.enhance(
-            canvas_uint8, regions,
+        # EyeEnhancerV0 dispatches on dtype internally (bgr_to_lab_f32 /
+        # lab_f32_to_bgr both support float32 in/out) — no uint8 roundtrip
+        # needed here. A whole-canvas float->uint8->float cast used to dither
+        # every pixel in the ROI (wig, hand, background) even though the edit
+        # itself is masked to sclera/iris. See RESEARCH_FACEOP_VISUAL_AUDIT_2026_08_31.md
+        # finding 3 (eye-v0 dispatch).
+        canvas = eye_enhancer_v0.enhance(
+            canvas, regions,
             sclera_brighten=ctx.eye_sclera_brighten,
             iris_saturate=ctx.eye_iris_saturate,
             iris_hue_shift=ctx.eye_iris_hue_shift,
             iris_brightness=ctx.eye_iris_brightness,
             eye_scales=eye_artifact_scales,
         )
-        canvas = canvas_uint8.astype(np.float32)
 
     # ---- Teeth whitening ----
     if ctx.teeth_whiten > 0:

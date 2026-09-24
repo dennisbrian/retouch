@@ -61,6 +61,7 @@ EXPECTED_RECIPE_KEYS = [
     "body_whiten", "brightness", "bw_channel_mixer_b", "bw_channel_mixer_g", "bw_channel_mixer_r",
     "catchlight", "chromatic_aberration", "clarity", "clarity_split_neg", "clarity_split_pos",
     "color_grade", "color_transfer_intensity", "contrast", "cosplay_consistency_strength", "cosplay_stockings_smooth",
+    "cross_region_skin",
     "cosplay_wig_lace_blend", "cyan_midtone_grade", "dark_circles", "dodge_burn", "equalize",
     "eye_enhance", "eye_gate", "eye_iris_brightness", "eye_iris_hue_shift", "eye_iris_saturate", "eye_sclera_brighten",
     "eye_sclera_vessel_remove", "fabric_wrinkle_smooth", "face_exposure", "fade_toe", "film_crosstalk_cy_mg",
@@ -99,6 +100,11 @@ EXPECTED_RECIPE_KEYS = [
     # FA-02 opt-in texture-restoration mode (default "legacy" = today's
     # behaviour). No recipe sets it; see tests/test_fa02_production_eligibility.py.
     "fa02_texture_mode",
+    # K6 multi-illuminant skin adaptation (key/fill Kelvin + mix).
+    "multi_illuminant_key_kelvin", "multi_illuminant_fill_kelvin",
+    "multi_illuminant_mix",
+    # K5 output-gamut selection for the K3 chroma-compression knee.
+    "gamut_target",
 ]
 
 # Add new HSL / Calibration / lens_blur keys dynamically
@@ -108,7 +114,7 @@ for color in ["red", "green", "blue"]:
     EXPECTED_RECIPE_KEYS.extend([f"calibration_{color}_hue", f"calibration_{color}_sat", f"calibration_{color}_lum"])
 EXPECTED_RECIPE_KEYS.append("lens_blur")
 
-EXPECTED_RECIPE_KEY_COUNT = 253
+EXPECTED_RECIPE_KEY_COUNT = 258
 # Self-updating: the recipe/smart-style slider tuple length is the contract
 # defined by RECIPE_OUTPUT_KEYS, so this constant can never go stale.
 EXPECTED_UI_OUTPUT_COUNT = len(gui.RECIPE_OUTPUT_KEYS)
@@ -148,6 +154,7 @@ class TestRecipeDefaults:
         assert d["clarity"] == 0
         assert d["glow"] == 0
         assert d["vignette"] == 0
+        assert d["cross_region_skin"] == 0.0
         # natural recipe gives eye_enhance=5 and catchlight falls back to iris (=5)
         assert d["catchlight"] == 5
 
@@ -171,7 +178,7 @@ class TestRecipeDefaults:
         string_fields = {
             "lip_tint", "whiten_tone", "lip_finish", "specular_bloom_tone", "color_grade", "lut", "mask_feather_mode",
             "background_harmonize_mode", "saturation_mode", "smooth_engine", "specular_finish", "mark_policy", "heal_engine",
-            "fa02_texture_mode",
+            "fa02_texture_mode", "gamut_target",
             "mv2_brows_color", "mv2_eyeliner_color", "mv2_eyeliner_style",
             "mv2_eyeshadow_color", "mv2_eyeshadow_style", "mv2_ombre_color1", "mv2_ombre_color2"
         }
@@ -629,9 +636,11 @@ class TestProcessInputKeys:
     def test_count_matches_process_image_arity(self):
         """PROCESS_INPUT_KEYS length must equal the arity of process_image."""
         from retouch.params import param_names
-        # 2 leading + registry (minus 2 excluded) + 13 trailing transport keys
-        # (look_params + face_params State + face_params_json).
-        expected = 2 + (len(param_names()) - 2) + 13
+        # 2 leading + registry (minus 2 excluded) + 12 trailing transport keys
+        # (look_params + face_params State + face_params_json). The dead
+        # "fast" checkbox was removed (render mode already fully determines
+        # it); this was 13 before that removal.
+        expected = 2 + (len(param_names()) - 2) + 12
         assert len(gui.PROCESS_INPUT_KEYS) == expected
 
     def test_first_key_is_img_paths(self):
@@ -844,6 +853,12 @@ class TestResetFunctions:
         assert isinstance(result, tuple)
         assert len(result) == 3
 
+    def test_reset_body_skin_returns_eight_values_with_p7_off(self):
+        result = gui.reset_body_skin("natural")
+        assert isinstance(result, tuple)
+        assert len(result) == 8
+        assert result[4] == 0.0
+
     def test_reset_eyes_lips_returns_seventeen_values(self):
         result = gui.reset_eyes_lips("natural")
         assert isinstance(result, tuple)
@@ -905,6 +920,83 @@ class TestResetFunctions:
         a = gui.reset_skin_smoothing("not_a_recipe_xyz")
         b = gui.reset_skin_smoothing("natural")
         assert a == b
+
+    # --- reset_* / .click(outputs=[...]) drift guard ------------------------
+    #
+    # Each reset_* body builds its return tuple from name-keyed `d["..."]`
+    # lookups (safe by construction), but the `.click(outputs=[component, ...])`
+    # site pairs that tuple with a hand-typed, purely positional component
+    # list elsewhere in build_app(). If the two orderings ever diverge, a
+    # slider silently receives the wrong reset value with no error raised —
+    # the same footgun class closed for _process_inputs/_recipe_outputs (see
+    # TestProcessInputKeys). This statically compares source order instead of
+    # instantiating Gradio components.
+
+    @staticmethod
+    def _reset_func_key_order(src):
+        """AST: for every `def reset_*`, the `d["key"]` order in its return
+        statement. Functions with no dict-keyed return (reset_color_transfer,
+        reset_debug) are omitted."""
+        import ast
+        tree = ast.parse(src)
+        result = {}
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.FunctionDef) and node.name.startswith("reset_")):
+                continue
+            keys, saw_non_dict_elt = [], False
+            for n in ast.walk(node):
+                if isinstance(n, ast.Return) and n.value is not None:
+                    elts = n.value.elts if isinstance(n.value, ast.Tuple) else [n.value]
+                    for e in elts:
+                        if (isinstance(e, ast.Subscript) and isinstance(e.value, ast.Name)
+                                and e.value.id == "d" and isinstance(e.slice, ast.Constant)):
+                            keys.append(e.slice.value)
+                        else:
+                            saw_non_dict_elt = True
+            if keys and not saw_non_dict_elt:
+                result[node.name] = keys
+        return result
+
+    @staticmethod
+    def _click_output_order(src):
+        """Regex: for every `fn=reset_X, inputs=[...], outputs=[...]` click
+        wiring, the outputs component-name order."""
+        import re
+        pattern = r'fn=(reset_\w+),\s*\n\s*inputs=\[[^\]]*\],\s*\n\s*outputs=\[([^\]]*)\]'
+        result = {}
+        for m in re.finditer(pattern, src):
+            fname, outs_src = m.group(1), m.group(2)
+            result[fname] = [x.strip() for x in outs_src.split(",") if x.strip()]
+        return result
+
+    def test_reset_function_key_order_matches_click_output_order(self):
+        """The d["key"] order inside each reset_* return must match the
+        component order in its .click(outputs=[...]) wiring, key-for-key.
+        Component variable names are expected to equal their param key
+        (e.g. `smooth` -> smooth, `face_exposure` -> face_exposure)."""
+        src = open(gui.__file__).read()
+        func_keys = self._reset_func_key_order(src)
+        click_outs = self._click_output_order(src)
+
+        assert func_keys, "no reset_* dict-keyed functions found — extraction broke"
+        for fname, keys in func_keys.items():
+            outs = click_outs.get(fname)
+            assert outs is not None, f"{fname}: no matching .click(outputs=[...]) site found"
+            assert len(outs) == len(keys), (
+                f"{fname}: return tuple has {len(keys)} values but "
+                f"outputs=[...] has {len(outs)} components"
+            )
+            assert outs == keys, (
+                f"{fname}: order drift between return tuple {keys} "
+                f"and outputs=[...] {outs}"
+            )
+
+    def test_reset_function_click_sites_are_declared(self):
+        """Every reset_* function referenced by a .click(fn=...) call must
+        actually exist on gui (catches renamed/removed handlers)."""
+        src = open(gui.__file__).read()
+        for fname in self._click_output_order(src):
+            assert hasattr(gui, fname), f"{fname} wired via .click() but not defined in gui.py"
 
 
 # ---------------------------------------------------------------------------
@@ -1128,7 +1220,7 @@ class TestProcessImageValidation:
             "contrast": 0, "brightness": 0,
             "highlights": 0, "shadows": 0, "whites": 0, "blacks": 0,
             "color_ref_img": None, "color_ref_strength": 0.0,
-            "show_compare": False, "fast": True,
+            "show_compare": False,
             "export_fmt": "JPEG", "export_quality": 95, "export_res": "Original",
             "blemish": 0, "dark_circles": 0, "catchlight": 0,
             "whiten_tone": "rosy", "auto_exposure": False,
@@ -1411,3 +1503,35 @@ class TestJobDashboard:
         assert result == "ok"
         assert captured["only_files"] is not None
         assert {p.name for p in captured["only_files"]} == {"a.jpg"}
+
+
+class TestUpdateNotice:
+    """The desktop app imports gui as a module, so the update toast must be
+    wired to page load rather than to gui.py's __main__ block."""
+
+    def test_notice_is_registered_on_page_load(self):
+        fns = gui.app.fns.values() if isinstance(gui.app.fns, dict) else gui.app.fns
+        assert any(getattr(f, "fn", None) is gui.notify_update_available for f in fns)
+
+    def test_notice_shows_found_release(self, monkeypatch):
+        import retouch.update_check as uc
+
+        shown = []
+        monkeypatch.setattr(uc, "_background_result", uc.UpdateInfo("v9.9.9", "https://example.com/r"))
+        monkeypatch.setattr(gui.gr, "Info", lambda msg, **kw: shown.append(msg))
+        gui.notify_update_available()
+        assert shown and "v9.9.9" in shown[0]
+
+    def test_no_notice_when_up_to_date(self, monkeypatch):
+        import retouch.update_check as uc
+
+        shown = []
+        monkeypatch.setattr(uc, "_background_result", None)
+        monkeypatch.setattr(gui.gr, "Info", lambda msg, **kw: shown.append(msg))
+        gui.notify_update_available()
+        assert shown == []
+
+
+def test_gui_import_turns_off_gradio_analytics():
+    # Set before gradio is imported by gui.py; see the comment there.
+    assert os.environ.get("GRADIO_ANALYTICS_ENABLED") == "False"

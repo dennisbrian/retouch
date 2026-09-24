@@ -241,51 +241,38 @@ where you want the skin-flattering warm treatment (use Astia).
 
 ## How to Use
 
-### GUI (Gradio)
+The GUI dropdowns and the CLI `--recipe` flag only offer the curated
+catalog (`CURATED_RECIPE_NAMES` in `retouch/recipes.py`). Classic Chrome,
+Astia and Provia are not in it, so today they run through the Python API
+only. The one Fuji look in the curated catalog is `reala_ace`
+(Fuji Reala Ace), which works everywhere.
 
-1. Launch with `python3 gui.py` (or open the desktop build).
-2. In the **Recipe** dropdown, select one of:
-   - `Classic Chrome`
-   - `Astia`
-   - `Provia`
-3. Tweak any slider you want. The sim is a recipe, not a sealed
-   preset — every parameter is exposed.
-4. Process. Save the recipe as JSON if you want to keep your tweaks.
-
-### CLI (single image)
+### GUI and CLI
 
 ```bash
-python3 cli.py photo.jpg -o photo_out.jpg --recipe classic_chrome
-python3 cli.py photo.jpg -o photo_out.jpg --recipe astia
-python3 cli.py photo.jpg -o photo_out.jpg --recipe provia
+./run                                                   # pick "reala_ace" in the Recipe dropdown
+python3 cli.py photo.jpg -o photo_out.jpg --recipe reala_ace
+python3 cli.py /path/to/input_dir -o /path/to/output_dir --recipe reala_ace --workers 6
 ```
 
-`--recipe` accepts any of the three sim names, plus the older
-presets (`natural`, `cosplay`, `fuji_porcelain`, etc.). See
-`guides/RECIPE_GUIDE.md` for the full list.
+`--recipe classic_chrome`, `astia` or `provia` is rejected with
+"invalid choice". Run `./run recipes` for the names the CLI accepts.
 
-### CLI (batch)
-
-```bash
-python3 cli.py /path/to/input_dir -o /path/to/output_dir \
-  --recipe astia --workers 6
-```
-
-The batch processor honours `--recipe` exactly the same way — pick
-a sim, point it at a directory, and process everything in parallel.
-See `guides/BATCH_GUIDE.md` for full batch options.
-
-### Python API
+### Python API (Classic Chrome, Astia, Provia)
 
 ```python
+import cv2
 from retouch.engine import RetouchEngine
 
-engine = RetouchEngine()
-result = engine.process(image_bgr, recipe="astia")
+if __name__ == "__main__":  # required: the engine starts worker processes
+    with RetouchEngine() as engine:
+        result = engine.process(cv2.imread("photo.jpg"), recipe="astia")
+    cv2.imwrite("photo_out.jpg", result.image)
 ```
 
 `recipe` can be the string name (`"classic_chrome"`, `"astia"`,
-`"provia"`) or a dict with custom parameter overrides.
+`"provia"`) or a dict with custom parameter overrides. For a folder,
+loop over the files and call `engine.process` on each one.
 
 ### Editing the sim
 
@@ -297,8 +284,7 @@ see `guides/RECIPE_GUIDE.md`.
 # Edit Astia
 $EDITOR presets/astia.json
 
-# Re-run
-python3 cli.py photo.jpg -o out.jpg --recipe astia
+# Re-run through the Python API (see above)
 ```
 
 ---

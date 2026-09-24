@@ -7,12 +7,35 @@ Professional automated face retouching for portraits, cosplay, and batch workflo
 
 ## Requirements
 
-- Python 3.9+
+- Python 3.9–3.11 (3.11 recommended). MediaPipe 0.10.5 has no wheels for 3.12+.
 - macOS, Linux, or Windows
 
-## Install
+## Quick setup (macOS and Linux)
 
 ```bash
+./setup        # installs uv if needed, builds .venv from uv.lock, fetches the core models
+./run          # opens the app: a native window on macOS, your browser elsewhere
+```
+
+`./setup` is safe to re-run. `.python-version` pins Python 3.11, and uv
+downloads that interpreter if your system does not have it. Other launcher
+commands:
+
+```bash
+./run web                                  # open the app in your browser
+./run batch ~/photos -o ~/photos_out --recipe natural --workers 4
+./run crops ~/photos_out --formats 4:5,9:16,1:1  # export face-aware crops for Instagram, TikTok, etc.
+./run review apply ~/photos_out decisions.json  # copy the picks you marked in review.html
+./run recipes                              # list the recipe names --recipe accepts
+./run update                               # git pull, then refresh dependencies
+```
+
+## Manual install
+
+On Windows, or if you prefer pip:
+
+```bash
+python -m venv .venv          # use Python 3.9–3.11
 pip install -r requirements/base.txt
 ```
 
@@ -22,12 +45,18 @@ Optional extras:
 pip install -r requirements/dev.txt   # pytest
 pip install -r requirements/gui.txt   # Gradio web UI
 pip install -r requirements/raw.txt   # RAW camera file support
-pip install retinaface                # improved face detection (optional)
 ```
+
+RetinaFace is not supported: its dependencies conflict with the pinned
+MediaPipe runtime, so MediaPipe is the only detection path.
 
 ## Model files
 
-Create a `models/` directory and download these files before running the full pipeline:
+The three core MediaPipe models (about 13 MB together) download automatically,
+verified against `models/manifest.json`, into `~/.cache/retouch/models` the
+first time they are needed; `./setup` fetches them up front. Set
+`RETOUCH_CACHE_DIR` to use another location. To place them in `models/`
+by hand instead (for example on an offline machine):
 
 ```bash
 mkdir -p models
@@ -77,10 +106,20 @@ cv2.imwrite("portrait_retouched.jpg", result)
 ### Batch CLI
 
 ```bash
-python3 cli.py /path/to/photos -o /path/to/output --recipe cosplay --workers 4
+python3 cli.py /path/to/photos -o /path/to/output --recipe cosplay_clear_v1 --workers 4
 ```
 
-See [BATCH_GUIDE.md](docs/guides/BATCH_GUIDE.md) for full CLI options.
+Each batch also writes `review.html` into the output folder: open it in a browser to check before/after, face close-ups and QA flags, mark picks and rejects from the keyboard, then export the decisions and apply them to copy the picks into a folder. See [BATCH_GUIDE.md](docs/guides/BATCH_GUIDE.md) for full CLI options and the review workflow.
+
+### Split a shoot by capture time
+
+```bash
+./run split ~/shoots/2026-09-20            # preview the sets
+./run split ~/shoots/2026-09-20 --move     # one folder per set; RAF+JPG pairs stay together
+```
+
+A new set starts after a 15-minute pause (`--gap`), or use `--by hour` / `--by day`.
+See [SPLIT_SHOOT.md](docs/guides/SPLIT_SHOOT.md).
 
 The CLI also accepts several literal input paths and can save a deterministic
 selection/output plan before rendering:
@@ -127,47 +166,59 @@ For a quick local smoke test without face-model initialization, add
 ### Web GUI
 
 ```bash
-pip install -r requirements/gui.txt
-python3 gui.py
+./run web            # or, in a manual install: python3 gui.py
 ```
 
-Opens at `http://127.0.0.1:7860`. Restart after updating:
+Opens at `http://127.0.0.1:7860`. Press Ctrl+C in the terminal to stop it,
+and start it again after updating.
 
-```bash
-pkill -f "python3 -u gui.py" && python3 gui.py
-```
+### Standalone app
+
+`scripts/build/retouch_app.spec` builds a self-contained desktop app with
+PyInstaller, so end users need no Python. Builds are per platform (macOS,
+Windows, Linux); the `Desktop builds` workflow produces all three. See
+[BUILD.md](BUILD.md).
 
 ## Recipes
 
-Built-in recipes include `natural`, `portrait`, `cosplay`, `cyber_doll`, `pink_dream`, `meitu_clone`, and others. List all names:
+The CLI `--recipe` flag and the GUI dropdowns take names from the curated
+catalog (`CURATED_RECIPE_NAMES` in `retouch/recipes.py`), for example `natural`,
+`portrait`, `natural_polish_v1`, `cosplay_clear_v1`,
+`cosplay_character_showcase_v1`, `apex_cinema_v1` and `reala_ace`. List them all:
 
 ```bash
-python3 cli.py --help
+./run recipes
 ```
+
+`python3 cli.py --list-recipes` shows every recipe in the cookbook, including
+older looks such as `cosplay`, `anime_v2` and the Fuji film sims. Those are not
+in the curated catalog, so `--recipe` rejects them with "invalid choice"; they
+still work through the Python API, e.g. `engine.process(img, recipe="anime_v2")`.
 
 ## Tests
 
 ```bash
-pip install -r requirements/dev.txt
+uv sync --locked --extra desktop --extra dev   # or: pip install -r requirements/dev.txt
 scripts/dev/test tests/ -v
 ```
 
 ## Development
 
-Auto-reload on file changes (requires `watchfiles`):
+Auto-reload the GUI on file changes (requires `watchfiles`):
 
 ```bash
 pip install watchfiles
-./dev.sh
+watchfiles "python3 gui.py" . retouch
 ```
 
-The dev server watches `.` and `retouch/` for `.py` changes and restarts the Gradio GUI automatically.
+This restarts the Gradio GUI whenever a file under `.` or `retouch/` changes.
 
 ## Documentation
 
 - [API.md](docs/architecture/API.md) — Python API reference and parameter list
 - [ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) — pipeline design and module breakdown
 - [BATCH_GUIDE.md](docs/guides/BATCH_GUIDE.md) — batch processing examples
+- [SPLIT_SHOOT.md](docs/guides/SPLIT_SHOOT.md) — split a shoot into folders by capture time
 - [RECIPE_SWEEP.md](docs/RECIPE_SWEEP.md) — recipe comparisons and folder visual QA
 - [GUI.md](docs/guides/GUI.md) — Gradio web UI layout, components, and styling
 - [RECIPE_GUIDE.md](docs/guides/RECIPE_GUIDE.md) — recipe authoring reference

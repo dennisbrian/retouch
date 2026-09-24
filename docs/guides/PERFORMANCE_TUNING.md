@@ -1,6 +1,36 @@
 # Performance Tuning Guide
 
-**Quick answer:** Use the GUI's **Render Preview** for interactive work; it uses `fast=True` and never exports. Use **Export Full Quality** for one final image; it forces `fast=False` and the Full quality tier. Use **Export All → Batch** for shoots. Batch processing? Use `--workers 4-8`.
+**Quick answer:** Use the GUI's **Render Preview** for interactive work; it uses `fast=True` and never exports. Use **Export Full Quality** for one final image; it forces `fast=False` and the Full quality tier. Use **Export All → Batch** for shoots. Batch processing? Size `--workers` from free RAM, not CPU count (see below).
+
+> **Measured 2026-09-24 — these numbers replace the older figures below.**
+> The per-mode speed and memory figures further down (including "7.5 GB →
+> 1.84 GB, 15.3 s → 3.09 s" for the proxy) describe an older build and do not
+> reproduce. In the default `quality="full"` mode only detection runs at the
+> 2048 px proxy; everything else runs at native resolution, so cost grows with
+> megapixels.
+>
+> Setup: 4 vCPU Xeon, 15 GB RAM, Linux, `natural` recipe, one face, no BiSeNet
+> (the landmark-fallback masks a fresh install uses), `RETOUCH_GPU=0`. Input
+> was a real cosplay face upscaled with added grain, so real camera files may
+> be slower. One run per cell (±10–20 %). Wall time is `engine.process()` only;
+> peak RAM includes child processes.
+>
+> | Input | Preview (`fast=True`) | `--max-dim 2048` | `quality="draft"` | `quality="full"` (default) |
+> |---|---:|---:|---:|---:|
+> | 12 MP | 1.0 s · 0.35 GB | 7.2 s · 0.80 GB | 34 s · 2.4 GB | 58 s · 2.4 GB |
+> | 24 MP | 1.7 s · 0.40 GB | 8.7 s · 0.79 GB | 70 s · 4.5 GB | 89 s · 4.6 GB |
+> | 45 MP | 1.1 s · 0.52 GB | 5.4 s · 0.84 GB | 154 s · 8.2 GB | not measured |
+>
+> - Memory grows at roughly **0.2 GB per megapixel** in both full and draft;
+>   draft saves some time but no memory.
+> - Only pre-shrinking (`--max-dim 2048`) bounds both time and memory.
+> - Plan RAM per concurrent worker from that rate: a 24 MP batch needs about
+>   5 GB per worker, so `--workers 2` wants 10 GB free. On an 8 GB machine use
+>   one worker, or `--max-dim 2048`.
+> - `result.timings` currently under-reports: at 24 MP full it summed to 37 s
+>   of an 89 s run.
+> - The owner's corpus of real 26 MP files takes 27–325 s per image depending on
+>   recipe and face count (M3 Pro; see CLAUDE.md).
 
 ---
 
@@ -163,7 +193,7 @@ Total: ~20-25s interactive session
 
 ### Example 2: Batch Process 50 Portraits
 ```
-CLI: python3 cli.py ./batch/ -o ./out --workers 4 --recipe anime_v2
+CLI: python3 cli.py ./batch/ -o ./out --workers 4 --recipe cosplay_clear_v1
 → ~5-10min total (5-15s per image × 50 ÷ 4 workers)
 Memory: ~2.4 GB sustained
 ```

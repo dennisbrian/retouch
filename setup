@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# One-command setup for macOS and Linux.
+#
+#   ./setup            install uv if needed, build .venv from uv.lock, fetch core models
+#   ./setup --no-models   skip the model pre-download (models then download on first use)
+#
+# Safe to re-run: it only installs what is missing or out of date.
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT_DIR"
+
+FETCH_MODELS=1
+for arg in "$@"; do
+    case "$arg" in
+        --no-models) FETCH_MODELS=0 ;;
+        -h|--help) sed -n '2,7p' "$0"; exit 0 ;;
+        *) echo "Unknown option: $arg" >&2; exit 2 ;;
+    esac
+done
+
+echo "=== 1. Checking for uv ==="
+if ! command -v uv >/dev/null 2>&1; then
+    if [ -x "$HOME/.local/bin/uv" ]; then
+        export PATH="$HOME/.local/bin:$PATH"
+    else
+        echo "Installing uv (https://docs.astral.sh/uv/)"
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        export PATH="$HOME/.local/bin:$PATH"
+    fi
+fi
+uv --version
+
+echo "=== 2. Installing Python and dependencies into .venv ==="
+# .python-version pins 3.11: MediaPipe 0.10.5 has no wheels for 3.12+.
+# uv downloads that Python itself if the system does not have it.
+uv sync --locked --extra desktop
+
+if [ "$FETCH_MODELS" = "1" ]; then
+    echo "=== 3. Downloading core models into the user cache ==="
+    .venv/bin/python - <<'PY'
+from retouch import model_fetch
+
+for name in ("face_landmarker", "selfie_segmenter", "pose_landmarker_full"):
+    status = model_fetch.model_status(name)
+    if status["available"]:
+        print(f"  {name}: ready")
+        continue
+    if not status["downloadable"]:
+        print(f"  {name}: skipped (no verified download URL)")
+        continue
+    try:
+        print(f"  {name}: {model_fetch.download_model(name)}")
+    except model_fetch.ModelFetchError as exc:
+        print(f"  {name}: failed ({exc}); it will be retried on first use")
+PY
+fi
+
+echo
+echo "Done. Start retouch with:"
+echo "  ./run                 open the app"
+echo "  ./run batch <folder> -o <output> --recipe natural"

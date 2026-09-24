@@ -19,6 +19,21 @@ from retouch.style import StyleProfile
 
 _logger = logging.getLogger(__name__)
 
+# retouch/review_page.py is owned by another agent and may not exist yet in
+# this working tree. Import lazily/best-effort so gui_batch.py keeps working
+# (review wiring simply no-ops) whether or not it has landed.
+try:
+    from retouch.review_page import (
+        ReviewRecord,
+        build_review_page,
+        qa_entries as _review_qa_entries_impl,
+        review_root_for,
+        write_review_record,
+    )
+    _REVIEW_AVAILABLE = True
+except ImportError:
+    _REVIEW_AVAILABLE = False
+
 # Assigned by gui.py right after import (same pattern as
 # gui_advanced.get_engine). Handlers resolve patchable shared names through
 # this module reference at call time. Never import gui here.
@@ -98,7 +113,7 @@ def on_learn_style(orig_dir, edit_dir, style_name, author, tags_str, prg=gr.Prog
 
 def on_process_folder(input_dir, output_dir, style_type, custom_style_name, recipe_name,
                       export_fmt, export_quality, export_res, auto_group, generate_sheet, export_zip,
-                      prg=gr.Progress()):
+                      social_crop_formats=None, prg=gr.Progress()):
     if not input_dir or not output_dir:
         return None, None, "Error: Both Input and Output directories must be specified."
     try:
@@ -113,7 +128,8 @@ def on_process_folder(input_dir, output_dir, style_type, custom_style_name, reci
         return _run_batch(processor, input_dir, output_dir, style_type,
                           custom_style_name, recipe_name, export_fmt,
                           export_quality, export_res, auto_group,
-                          generate_sheet, export_zip, prg)
+                          generate_sheet, export_zip, prg,
+                          social_crop_formats=social_crop_formats)
     finally:
         # Release MediaPipe before the GC can finalize it — FaceLandmarker's
         # __del__ blocks forever on a serial-dispatcher future, which shows up
@@ -121,9 +137,41 @@ def on_process_folder(input_dir, output_dir, style_type, custom_style_name, reci
         processor.close()
 
 
+def _export_social_crops(job, output_dir, social_crop_formats):
+    """Export platform crops for the batch's outputs; returns a log line or "".
+
+    Imports retouch.social_crops lazily so gui.py's/gui_batch.py's own import
+    never depends on it. Prefers the output paths this batch actually wrote
+    (from on_file_result), falling back to scanning output_dir when none are
+    available (e.g. a rerun of only-flagged files with nothing newly written).
+    """
+    if not social_crop_formats:
+        return ""
+
+    try:
+        from retouch.social_crops import export_folder, find_crop_sources, format_summary, parse_formats
+    except Exception as e:
+        _logger.exception("Social crop export skipped: retouch.social_crops unavailable: %s", e)
+        return f"\nSocial crops: skipped (retouch.social_crops unavailable: {e})"
+
+    output_dir = Path(output_dir)
+    sources = [Path(f.output_path) for f in job.files if f.status == "done" and f.output_path]
+    if not sources:
+        sources = find_crop_sources(output_dir)
+
+    social_dir = output_dir / "social"
+    try:
+        formats = parse_formats(list(social_crop_formats))
+        result = export_folder(sources, social_dir, formats)
+        return "\n" + format_summary(result, social_dir)
+    except Exception as e:
+        _logger.exception("Social crop export failed: %s", e)
+        return f"\nSocial crops: failed ({e})"
+
+
 def _run_batch(processor, input_dir, output_dir, style_type, custom_style_name,
                recipe_name, export_fmt, export_quality, export_res, auto_group,
-               generate_sheet, export_zip, prg, only_files=None):
+               generate_sheet, export_zip, prg, only_files=None, social_crop_formats=None):
     from retouch.jobs import Job, FileRecord, JobStore, make_job_id, QA_STATE_UNKNOWN, QA_STATE_CLEAN, QA_STATE_FLAGGED, QA_STATE_ERROR
 
     profile = None
@@ -158,6 +206,17 @@ def _run_batch(processor, input_dir, output_dir, style_type, custom_style_name,
     )
     job_store.save(job)
 
+    recipe_label = custom_style_name if style_type == "Use Custom Style" else recipe_name
+    review_root = None
+    if _REVIEW_AVAILABLE:
+        try:
+            review_root = review_root_for(
+                Path(output_dir) if output_dir else None, Path(input_dir)
+            )
+        except Exception:
+            _logger.warning("Could not resolve review root for %s", input_dir, exc_info=True)
+            review_root = None
+
     def _qa_state_for(qa_list):
         if qa_list is None:
             return QA_STATE_UNKNOWN, []
@@ -183,6 +242,10 @@ def _run_batch(processor, input_dir, output_dir, style_type, custom_style_name,
         job.files.append(record)
         job_store.save(job)
 
+        _write_batch_review_record(
+            review_root, source_path, output_path, qa_list, error, input_dir, recipe_label,
+        )
+
     try:
         processed, sheet_path, zip_path, log = processor.process_folder(
             input_dir=input_dir,
@@ -207,6 +270,12 @@ def _run_batch(processor, input_dir, output_dir, style_type, custom_style_name,
             job.status = "partial"
         else:
             job.status = "failed"
+
+        log = log + _export_social_crops(job, output_dir, social_crop_formats)
+        review_page_path = _build_batch_review_page(review_root)
+        if review_page_path is not None:
+            log = f"{log}\nReview page: {review_page_path}"
+
         job.log = log
         job_store.save(job)
 
@@ -224,6 +293,67 @@ def _run_batch(processor, input_dir, output_dir, style_type, custom_style_name,
         job_store.save(job)
         gui.gr.Warning(f"Batch processing failed: {e}")
         return None, None, f"Exception during batch processing: {e}"
+
+
+# ---------------------------------------------------------------------------
+# Review page wiring (best-effort — never lets a review-page failure fail the
+# batch or drop a file result). See docs/plans or REVIEW_SPEC for the shared
+# retouch/review_page.py API this targets.
+# ---------------------------------------------------------------------------
+
+
+def _review_qa_entries(qa_list):
+    """Normalize a batch_processor qa_list (QAWarning objects or dicts,
+    or None) into the plain-dict shape ReviewRecord.qa expects, via
+    retouch.review_page's own normalizer so both call sites agree."""
+    if not _REVIEW_AVAILABLE:
+        return []
+    return _review_qa_entries_impl(qa_list)
+
+
+def _review_relative_name(source_path, input_dir):
+    src = Path(source_path)
+    try:
+        return src.resolve().relative_to(Path(input_dir).resolve()).as_posix()
+    except ValueError:
+        return src.name
+
+
+def _write_batch_review_record(review_root, source_path, output_path, qa_list, error,
+                                input_dir, recipe_label):
+    """Best-effort ReviewRecord write for one batch file. Never raises —
+    a review-page problem must not affect the batch's own result or the
+    Job Dashboard record it runs alongside."""
+    if not _REVIEW_AVAILABLE or review_root is None:
+        return
+    try:
+        src = Path(source_path)
+        record = ReviewRecord(
+            source=str(src.resolve()),
+            output=str(Path(output_path).resolve()) if output_path else None,
+            compare=None,  # gui_batch/batch_processor never writes *_compare files
+            status="failed" if error is not None else "done",
+            recipe=recipe_label or None,
+            faces=[],  # not available at this call site (no FaceContext here)
+            qa=[] if error is not None else _review_qa_entries(qa_list),
+            error=error,
+            elapsed_s=None,
+            relative=_review_relative_name(source_path, input_dir),
+        )
+        write_review_record(review_root, record)
+    except Exception:
+        _logger.warning("Failed to write review record for %s", source_path, exc_info=True)
+
+
+def _build_batch_review_page(review_root):
+    """Best-effort review.html (re)build; returns its path or None."""
+    if not _REVIEW_AVAILABLE or review_root is None:
+        return None
+    try:
+        return build_review_page(review_root)
+    except Exception:
+        _logger.warning("Failed to build review page at %s", review_root, exc_info=True)
+        return None
 
 
 # ---------------------------------------------------------------------------

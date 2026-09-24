@@ -542,4 +542,20 @@ def run_desktop(**runtime_kwargs: Any) -> bool:
 
 
 if __name__ == "__main__":
+    # The engine's FaceProcessorPool uses the "spawn" start method. In a
+    # frozen build each worker re-executes this binary, and without
+    # freeze_support() every worker boots the whole desktop app instead of
+    # running its task, so renders never finish.
+    import multiprocessing
+
+    multiprocessing.freeze_support()
+
+    # gui.py only sets up its log file when run as a script; the desktop
+    # app imports it as a module, so do it here.
+    from retouch.diagnostics import enable_native_crash_log, setup_file_logging
+    from retouch.update_check import start_background_check
+
+    setup_file_logging()
+    enable_native_crash_log()
+    start_background_check()
     run_desktop()

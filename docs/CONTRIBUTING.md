@@ -6,30 +6,28 @@ Welcome! This guide walks new contributors through setup, workflow, and best pra
 
 ## Setup (5 min)
 
-### 1. Clone & Virtual Environment
+### 1. Clone & Environment
 ```bash
 git clone https://github.com/dennisbrian/retouch.git
 cd retouch
-python3 -m venv venv
-source venv/bin/activate
+./setup                                         # .venv from uv.lock (Python 3.11) + core models
+uv sync --locked --extra desktop --extra dev    # add the test tools
+source .venv/bin/activate
 ```
 
-### 2. Install Dependencies
+### 2. Install Dependencies (pip alternative)
+Without uv, use Python 3.9–3.11:
 ```bash
+python3.11 -m venv .venv && source .venv/bin/activate
 pip install -r requirements/base.txt -r requirements/gui.txt -r requirements/dev.txt
 ```
 
 ### 3. Download Model Assets
-Models are large (~800 MB). They auto-download on first run:
-```bash
-python3 -c "from retouch import RetouchEngine; RetouchEngine()"
-```
-
-Or manually:
-```bash
-mkdir -p models
-# Download from S3 or local mirror (see docs/architecture/ARCHITECTURE.md for URLs)
-```
+The three core MediaPipe models (about 13 MB) download and verify themselves
+into `~/.cache/retouch/models` on first use; `./setup` already fetched them.
+To place them in `models/` by hand, use the `curl` commands in the
+[README](../README.md#model-files). The optional BiSeNet `models/resnet18.onnx`
+has no public download; without it, masks come from face landmarks.
 
 ### 4. Verify Setup
 ```bash
@@ -37,7 +35,7 @@ mkdir -p models
 for f in retouch/*.py gui.py cli.py; do python3 -m py_compile "$f"; done
 
 # Run tests
-python3 -m pytest tests/ -q
+scripts/dev/test tests/ -q
 ```
 
 ---

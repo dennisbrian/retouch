@@ -7,22 +7,30 @@ Quick fixes for common issues. If your problem isn't here, open an issue on GitH
 ## Installation & Setup
 
 ### ImportError: No module named 'retouch'
-**Cause:** Package not installed or venv not activated.
+**Cause:** Environment not set up, or a different Python is running.
 
-**Fix:**
+**Fix:** run `./setup` from the repository root and launch with `./run`, which
+always uses `.venv`. In a manual install:
 ```bash
-source venv/bin/activate
-python -m pip install --upgrade pip
+source .venv/bin/activate
 python -m pip install -e .  # Install in editable mode
 ```
 
-### Models downloading very slowly
-**Cause:** Large files (~800 MB). First run downloads all models.
+### MediaPipe or protobuf fails to install
+**Cause:** Python 3.12 or newer. MediaPipe 0.10.5 only has wheels up to 3.11.
+
+**Fix:** `./setup` uses the `.python-version` pin (3.11) automatically. For a
+manual install, create the venv with `python3.11 -m venv .venv`.
+
+### Models downloading slowly or failing
+**Cause:** The three core models (about 13 MB) download on first use into
+`~/.cache/retouch/models`. Offline mode (`RETOUCH_OFFLINE=1`) or a blocked
+network stops the download.
 
 **Fix:**
-1. ✅ Just wait (takes 5-15 min depending on connection)
-2. Or manually download from S3 (see docs/architecture/ARCHITECTURE.md for URLs)
-3. Place in `models/` directory
+1. ✅ Run `./setup` once while online; it pre-fetches and verifies them
+2. Or download them by hand with the `curl` commands in the [README](../../README.md#model-files) into `models/`
+3. Set `RETOUCH_CACHE_DIR` if the default cache location is not writable
 
 **Check status:**
 ```bash
@@ -65,7 +73,7 @@ pip install onnxruntime-gpu
 
 **Example:**
 ```bash
-python3 cli.py distant_portrait.jpg -o out.jpg --global-only --recipe anime_v2
+python3 cli.py distant_portrait.jpg -o out.jpg --global-only --recipe natural
 # Applies grading even without face detection
 ```
 
@@ -76,8 +84,8 @@ python3 cli.py distant_portrait.jpg -o out.jpg --global-only --recipe anime_v2
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | Too soft/blurry | Using `fast=True` on high-res | Use `fast=False` for export, keep `fast=True` for GUI preview |
-| Color cast (too warm/cool) | Wrong recipe or white balance | Try different recipe: `--recipe anime_v2` vs `--recipe cosplay` |
-| Patchiness or halos | Frequency separation artifact | Use `--recipe classic_chrome` (less aggressive smoothing) |
+| Color cast (too warm/cool) | Wrong recipe or white balance | Try different recipe: `--recipe natural` vs `--recipe cosplay_clear_v1` |
+| Patchiness or halos | Frequency separation artifact | Use `--recipe documentary_preserve_v1` (less aggressive smoothing) |
 | Eyes look weird | Over-enhancement | Reduce `eye_brightening` slider in GUI or CLI |
 
 ---
@@ -157,6 +165,20 @@ top  # Watch %MEM column
 
 ## Recipes & Presets
 
+### `--recipe`: invalid choice
+**Symptom:** `cli.py: error: argument --recipe: invalid choice: 'cosplay'` (or
+`anime_v2`, `astia`, `cyber_doll`, ...).
+
+**Cause:** `--recipe` and the GUI dropdowns only take the curated catalog
+(`CURATED_RECIPE_NAMES` in `retouch/recipes.py`). `python3 cli.py --list-recipes`
+lists every recipe in the cookbook, including older looks that are not curated.
+
+**Fix:**
+- Run `./run recipes` for the names `--recipe` accepts. The closest curated
+  match for `cosplay` is `cosplay_clear_v1`, which extends it.
+- To use a non-curated look anyway, call the Python API:
+  `engine.process(img, recipe="anime_v2")`.
+
 ### Recipe not having any effect
 **Symptom:** Image looks identical before/after, wrong color, or recipe silently ignored.
 
@@ -165,8 +187,8 @@ top  # Watch %MEM column
 **Fix:**
 1. ✅ **Try a different recipe** to verify engine works
    ```bash
-   python3 cli.py image.jpg -o out1.jpg --recipe anime_v2
-   python3 cli.py image.jpg -o out2.jpg --recipe classic_chrome
+   python3 cli.py image.jpg -o out1.jpg --recipe natural
+   python3 cli.py image.jpg -o out2.jpg --recipe cosplay_clear_v1
    # Compare out1.jpg and out2.jpg — should look different
    ```
 
@@ -229,15 +251,21 @@ top  # Watch %MEM column
 
 2. ✅ **Reinstall dependencies**
    ```bash
-   pip install --upgrade -r requirements/gui.txt
+   ./setup     # or, in a manual install: pip install --upgrade -r requirements/gui.txt
    ```
 
-3. ✅ **Download models**
+3. ✅ **"When localhost is not accessible, a shareable link must be created"**
+   Gradio raises this when its own page request fails. With Starlette 1.0 or
+   newer every page returns 500 (`unhashable type: 'dict'`), because Gradio 4
+   uses the older `TemplateResponse` call. The requirements cap Starlette
+   below 1.0; check with `pip show starlette` and re-run `./setup`.
+
+4. ✅ **Download models**
    ```bash
-   python3 -c "from retouch import RetouchEngine; RetouchEngine()"
+   ./setup     # re-fetches and verifies the core models
    ```
 
-4. ✅ **Check browser compatibility** (Chrome/Safari/Firefox all work)
+5. ✅ **Check browser compatibility** (Chrome/Safari/Firefox all work)
 
 ### GUI slider changes not applying
 **Symptom:** Move slider, but preview doesn't update.
@@ -336,8 +364,8 @@ top  # Watch %MEM column
 
 2. ✅ **Try different recipe**
    ```bash
-   python3 cli.py image.jpg -o out1.jpg --recipe cosplay
-   python3 cli.py image.jpg -o out2.jpg --recipe anime_v2
+   python3 cli.py image.jpg -o out1.jpg --recipe natural
+   python3 cli.py image.jpg -o out2.jpg --recipe cosplay_clear_v1
    # Compare — one may look better
    ```
 
@@ -389,14 +417,25 @@ python3 cli.py image.jpg -o out.jpg --verbose
 ```
 
 ### Where are crash logs?
-**Location:** Current working directory.
+Retouch keeps three local files. Nothing is uploaded.
 
-**Format:** `crash_YYYYMMDD_HHMMSS.log`
+| File | What it holds | Location |
+|---|---|---|
+| `crash.log` | Python errors caught while processing an image, with private file paths redacted. New entries are appended. | The cache folder: `$RETOUCH_CACHE_DIR`, else `$XDG_CACHE_HOME/retouch`, else `~/.cache/retouch` (all platforms) |
+| `native-crash.log` | Tracebacks written by Python's `faulthandler` when the app dies inside native code (MediaPipe, onnxruntime, OpenCV), plus one "retouch started" line per launch. Truncated once it passes 1 MB. | The log folder below |
+| `retouch.log` | The app's rotating log (1 MB × 3), written by the GUI and desktop app | The log folder below |
 
-**Example:**
+The log folder is `~/Library/Logs/ProMaxRetouch` on macOS,
+`%LOCALAPPDATA%\ProMaxRetouch\Logs` on Windows, and
+`~/.cache/promaxretouch/logs` elsewhere.
+
+If the desktop window closes without an error message, look at the end of
+`native-crash.log` first. The GUI's **Diagnostics** panel lists these
+paths and can clear them.
+
 ```bash
-ls -la crash_*.log
-tail -f crash_*.log  # Watch in real-time
+tail -n 50 ~/.cache/retouch/crash.log
+tail -n 50 ~/Library/Logs/ProMaxRetouch/native-crash.log   # macOS
 ```
 
 ### How to report a bug

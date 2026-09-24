@@ -49,6 +49,10 @@ Task difficulty decides the model, not a flat cheapest-first cascade:
 
 ### Key Commands
 ```bash
+# One-command setup and launch (uv, .venv from uv.lock, core models)
+./setup
+./run                # app window on macOS, browser elsewhere; ./run batch ... wraps cli.py
+
 # Run full test suite
 python3 -m pytest tests/ -q
 
@@ -62,7 +66,7 @@ python3 -c "from retouch import RetouchEngine; engine = RetouchEngine(); result 
 python3 gui.py  # Opens http://127.0.0.1:7860
 
 # CLI
-python3 cli.py /path/to/photos -o /out --recipe cosplay --workers 4
+python3 cli.py /path/to/photos -o /out --recipe cosplay_clear_v1 --workers 4   # --recipe takes curated names only: ./run recipes
 
 # Benchmarks
 python3 scripts/bench/benchmark.py
@@ -78,7 +82,7 @@ Every tunable parameter is registered in `PROCESSING_PARAMS` (a list of `ParamSp
 **When adding a new parameter:**
 1. Add one `ParamSpec` entry in `params.py` — CLI flag + engine defaults auto-wire.
 2. GUI does NOT auto-wire: add a matching entry to `_process_input_components` (name → Gradio component, or a `gr.State(...)` placeholder) in `gui.py`, keyed by name. Order is derived, not hand-placed — forgetting the entry raises an `AssertionError` at import time (see `tests/test_gui.py::TestProcessInputKeys`), not a silent slider mismatch.
-3. Same pattern applies to `_recipe_output_components` / `RECIPE_OUTPUT_KEYS` for recipe/reset-handler outputs (see `tests/test_gui.py`, `TestRecipeOutputKeys`-style tests). The 10 `reset_*` handlers are still hand-ordered pairs (latent, low-risk, not covered by the guard).
+3. Same pattern applies to `_recipe_output_components` / `RECIPE_OUTPUT_KEYS` for recipe/reset-handler outputs (see `tests/test_gui.py`, `TestRecipeOutputKeys`-style tests). The 15 `reset_*` handlers are still hand-ordered pairs (latent, low-risk), but `TestResetFunctions::test_reset_function_key_order_matches_click_output_order` in `tests/test_gui.py` statically compares each handler's return-tuple key order against its `.click(outputs=[...])` order and fails on drift — see the 2026-09-09 entry below.
 
 ### Modular Pipeline (7 Stages)
 ```
@@ -160,7 +164,7 @@ runs complete in roughly 27–325 s depending on recipe and face workload. The
 - ✅ 2026-07-13 `_process_inputs` argument-order footgun — name-keyed dict + import-time drift guard, see [Architecture Decisions](#single-source-of-truth-retouchparamspy) — `f0b656b`, `da1f8cb`
 - ✅ 2026-07-13 `_recipe_outputs` mirror-image footgun (same fix pattern; closed a live 107-vs-111 value drift) — see [Architecture Decisions](#single-source-of-truth-retouchparamspy)
 - ✅ 2026-07-21 LUT hot-reload wired: GUI watcher (gui.py) + CLI `--reload-luts` flag — `7c8d607`
-- MINOR, deferred: 10 `reset_*` handlers in gui.py remain hand-ordered positional pairs (latent, low-risk)
+- ✅ 2026-09-09 static drift guard added for the 15 `reset_*` handlers in gui.py: audited all 13 dict-keyed handlers (`reset_color_transfer`/`reset_debug` take no dict) — no live order drift found today. `tests/test_gui.py::TestResetFunctions::test_reset_function_key_order_matches_click_output_order` now statically compares each handler's `d["key"]` return order against its `.click(outputs=[...])` order via AST/regex (mirrors the `TestProcessInputKeys` pattern) and fails loudly on future drift. Handlers remain hand-ordered pairs — not converted to name-keyed dicts, since the static check already closes the silent-failure mode.
 - ✅ 2026-08-11 redundant `ci.yml` workflow removed — `7b97df9`
 - ✅ 2026-07-14 `tests/test_cosplay_moat.py` bare-`RetouchEngine()` → module `engine` fixture (same teardown pattern as skin_locus)
 - ✅ 2026-07-14 `test_ext_map_keys_match_radio_choices` — expect `PNG-16` (map already had it; test was stale)
@@ -177,6 +181,9 @@ runs complete in roughly 27–325 s depending on recipe and face workload. The
 - ✅ 2026-09-02 **neck "depth gate" was a guaranteed no-op on frontal faces**: `skin.harmonize_neck` kept pixels within 0.15·face_w of an eye-corner/nose-bridge plane measured in XY only; with z scaled by face width the plane tilts into the image and the metric is ~0.45× vertical distance below the eyes — 15/15 frontal corpus faces (ratio ≤ 1.3) lost 100% of the neck mask, turned faces skipped the gate. Gate removed; chroma gate (`max(10, 1.25·(σa+σb))`, provisional, 4 pale anchors) now applied to the BiSeNet neck path too (was painting hard patches on a collar/hand: DSCF4560/4463); LAB roundtrip contained via `restore_outside_support`. The old unit test asserted the no-op on a uniform grey image (vacuous) — replaced.
 - ✅ 2026-09-02 **dark-circle op was inert on every face (v1 → v2)**: the detector kept the darkest ≥100 px component of the landmark under-eye polygon ≥15 L below its surround — on real faces that is the lower lash line (the polygon's top edge *is* the lid contour), so 80% of the lift landed on lashes and 0.03 L on skin (146 corpus eyes, strength 100); the lift was also double-capped (≤9 L). 55/128 recipes set the key; none did anything. v2 (`retouch/undereye.py`): support extended 0.28·IED into the tear trough with the eye contour + lash margin excluded (feathered edge), masked low-pass darkness *relative* to a cheek-ring median (4→12% smoothstep, tone-invariant), low-frequency lift + 75% a/b pull, ROI-confined + `restore_outside_support`; dispatch passes IED / landmark eye hull / skin. Corpus: skin lift 9.3 L median at strength 1, 0 px in eye, 0 px outside support. Golden snapshots unchanged (`natural` sets no under-eye key). **Limitation:** under-eye contour makeup (aegyo-sal) reads as shadow at strength ≥0.45 — owner call on the 3 recipes that set it that high; no darker-skin sample in corpus. Study: `docs/plans/RESEARCH_DARK_CIRCLE_OP_2026_09_02.md`.
 - ⚠️ 2026-09-02 golden face hashes are interpreter-specific: bare `python3` (cv2 4.13) ≠ `.venv/bin/python` (cv2 4.11). Snapshots are pinned to `.venv`; run `RETOUCH_GPU=0 RETOUCH_MEDIAPIPE_BACKEND=legacy .venv/bin/python -m pytest …` — `efb17af`.
+- ✅ 2026-09-14 **eye-v0 uint8 ROI roundtrip fixed** (last open item from the 2026-08-31 audit's finding 3): `perf_optimizations.py`'s eye-v0 dispatch wrapped the *whole canvas* in `float→uint8→float` around `EyeEnhancerV0.enhance()`, dithering every pixel in the ROI (wig, hand, background) by ≤1 level even though the edit is masked to sclera/iris. `EyeEnhancerV0` already dispatches on dtype internally (`bgr_to_lab_f32`/`lab_f32_to_bgr` both support float32 in/out, same pattern as `eyes.enhance`), so the cast was unneeded — removed, canvas now passed through in native float32. Isolated repro confirmed 172,799/57,600×3 non-eye pixels changed before the fix, 0 after.
+- ✅ 2026-09-14 **`cli.py` disk-space preflight added**: `_check_disk_space` (new) estimates output size as `input_bytes × 2.0` (measured ~1.9× from a real 5-image/44MB→84MB `--compare` fullres run, rounded up) and warns + exits 1 if projected free space after the run would drop below 5 GiB; `--skip-disk-check` bypasses it. First implementation silently no-op'd on any not-yet-created `--output` path — `output_dir.mkdir()` runs *after* the check, so `shutil.disk_usage()` on a missing dir raises `FileNotFoundError`, caught by the same handler meant for "can't stat this volume, don't block on a guess" — found by testing against a real 10MB ramdisk rather than trusting mocked unit tests; fixed by walking up to the nearest existing ancestor dir before calling `disk_usage`. Regression test: `tests/test_cli_helpers.py::TestCheckDiskSpace::test_checks_volume_of_nearest_existing_ancestor`.
+- ✅ 2026-09-14/15 **`cli.py --workers>1` multi-face batch hang, actually fixed this time (`cef4eff`)**: `c8ddc6f`'s atexit hook never fires on a multi-face image — `RetouchEngine`'s inner `FaceProcessorPool` spawns its own non-daemon grandchild processes, and `multiprocessing`'s own exit handler joins all non-daemon children before the outer worker can reach interpreter shutdown, so the atexit callback (and `RetouchEngine.close()`) is structurally unreachable while any grandchild is alive — the outer `ProcessPoolExecutor.shutdown(wait=True)` in `cli.py` then hangs forever. Confirmed via direct `print(flush=True, file=sys.stderr)` instrumentation (no root/py-spy needed): zero output at the `close()`/atexit checkpoints after 11+ minutes on a real 2-image/16-18-face batch. Fixed by shutting the inner pool down inline, synchronously, at the end of each task (`_process_single`'s `finally`) instead of relying on atexit; the atexit hook remains as a single-face/abrupt-exit backstop only. Verified clean exit + zero orphaned processes on real single-face (`--workers 2/4`) and multi-face (`--workers 2`) batches.
 
 ---
 
@@ -207,7 +214,7 @@ runs complete in roughly 27–325 s depending on recipe and face workload. The
 - Vectorize with NumPy (no Python loops over pixels)
 - Cache pre-computed LUTs/matrices at class level
 - Use `cv2.LUT` for fast 1D LUT application
-- ThreadPoolExecutor (max 4 workers) for multi-face, ProcessPoolExecutor for heavy CPU workloads
+- Multi-face dispatch: `RetouchEngine`'s persistent `FaceProcessorPool` (a `ProcessPoolExecutor`, max 4 workers, `perf_optimizations.py`) is the primary path; `ThreadPoolExecutor` is only the fallback if that pool raises. `cli.py --workers>1` nests this pool inside its own outer `ProcessPoolExecutor` — see the batch-hang outstanding-fix entry below before changing either pool's shutdown/daemon behavior.
 
 ### Editing Conventions
 - When editing multiple files/locations that share identical comment or value patterns (e.g., repeated recipe literals across presets), anchor `old_string` on unique surrounding context (preceding key, function name, etc.) rather than the shared snippet alone — an ambiguous match fails instead of silently editing the wrong occurrence.

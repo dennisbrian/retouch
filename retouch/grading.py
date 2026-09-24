@@ -511,9 +511,11 @@ class ColorGrader:
 
         # K3 — gamut-aware chroma compression. No-op when the graded result is
         # fully in-gamut (byte-identical golden path); otherwise rolls over-saturated
-        # chroma back toward the sRGB boundary along a constant-hue, constant-L line.
+        # chroma back toward the target gamut boundary along a constant-hue,
+        # constant-L line. K5: the target gamut is selectable via
+        # settings["gamut_target"] ("srgb"/"p3"/"rec2020"); default sRGB.
         if settings.get("gamut_compress", True):
-            result = self._apply_gamut_compress(result)
+            result = self._apply_gamut_compress(result, target=str(settings.get("gamut_target", "srgb")))
 
         # Track if we need float output
         want_float = return_float or is_float_input
@@ -562,17 +564,20 @@ class ColorGrader:
 
         return result
 
-    def _apply_gamut_compress(self, img: np.ndarray) -> np.ndarray:
+    def _apply_gamut_compress(self, img: np.ndarray, target: str = "srgb") -> np.ndarray:
         """Apply :func:`color_science.gamut_compress` to a BGR image.
 
         Short-circuits to a true no-op (returns ``img`` untouched) when the
         image is fully in-gamut, guaranteeing byte-identical output on the
         golden path. Converts via Oklab/OKLCh and back; the round-trip is only
-        taken when at least one pixel is out of gamut.
+        taken when at least one pixel is out of gamut. ``target`` selects the
+        K5 output gamut (``"srgb"``/``"p3"``/``"rec2020"``).
         """
         from .color_science import (
             bgr_to_oklab,
             find_gamut_intersection,
+            find_gamut_intersection_p3,
+            find_gamut_intersection_rec2020,
             gamut_compress,
             oklab_to_bgr,
             oklab_to_oklch,
@@ -595,10 +600,15 @@ class ColorGrader:
         oklab = bgr_to_oklab(np.clip(img, 0.0, 1.0).astype(np.float32) * 255.0)
         oklch = oklab_to_oklch(oklab)
         C = oklch[..., 1]
-        Cmax = find_gamut_intersection(oklab)
+        if target == "p3":
+            Cmax = find_gamut_intersection_p3(oklab[..., 0], np.degrees(np.arctan2(oklab[..., 2], oklab[..., 1])))
+        elif target == "rec2020":
+            Cmax = find_gamut_intersection_rec2020(oklab[..., 0], np.degrees(np.arctan2(oklab[..., 2], oklab[..., 1])))
+        else:
+            Cmax = find_gamut_intersection(oklab)
         if bool(np.all(C <= Cmax + 1e-4)):
             return img
-        oklch = gamut_compress(oklch)
+        oklch = gamut_compress(oklch, target=target)
         oklab2 = oklch_to_oklab(oklch)
         out = oklab_to_bgr(oklab2, float32_out=is_float)
         return np.ascontiguousarray((out / 255.0).astype(np.float32))

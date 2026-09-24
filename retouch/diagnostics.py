@@ -12,10 +12,13 @@ providers, platform, last errors) suitable for pasting into a bug report.
 from __future__ import annotations
 
 import logging
+import os
 import platform
 import sys
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import IO, Optional
 
 
 def log_dir() -> Path:
@@ -51,6 +54,48 @@ def setup_file_logging(level: int = logging.INFO) -> Path:
     return path
 
 
+_native_crash_stream: Optional[IO[str]] = None
+
+
+def enable_native_crash_log(max_bytes: int = 1_000_000) -> Optional[Path]:
+    """Record Python tracebacks in ``native-crash.log`` if the process dies in native code.
+
+    A segfault or abort inside MediaPipe, onnxruntime or OpenCV kills the
+    process before any ``except`` block or :func:`retouch.utils.log_crash`
+    runs, so without this the window just disappears and nothing is left to
+    report. Uses :mod:`faulthandler`; idempotent. The file is truncated once
+    it passes ``max_bytes``. Returns the log path, or ``None`` if it cannot
+    be opened (faulthandler then stays on stderr).
+    """
+    import faulthandler
+
+    global _native_crash_stream
+    path = log_dir() / "native-crash.log"
+    if _native_crash_stream is not None:
+        return path
+    try:
+        mode = "w" if path.exists() and path.stat().st_size > max_bytes else "a"
+        stream = open(path, mode, encoding="utf-8")
+        stream.write(
+            f"--- retouch started {datetime.now().isoformat(timespec='seconds')} "
+            f"(pid {os.getpid()})\n"
+        )
+        stream.flush()
+    except OSError as exc:
+        logging.getLogger(__name__).warning("Could not open %s: %s", path, exc)
+        try:
+            faulthandler.enable()
+        except (OSError, ValueError, RuntimeError) as fallback_exc:
+            # Captured stderr may have no fileno (for example under pytest).
+            logging.getLogger(__name__).warning(
+                "Could not enable native crash logging on stderr: %s", fallback_exc
+            )
+        return None
+    faulthandler.enable(file=stream, all_threads=True)
+    _native_crash_stream = stream
+    return path
+
+
 def clear_diagnostics() -> str:
     """Remove Retouch log/crash artifacts from the user's diagnostic stores."""
     from .utils import get_cache_dir
@@ -60,7 +105,7 @@ def clear_diagnostics() -> str:
     for directory in targets:
         if not directory.exists():
             continue
-        for pattern in ("retouch.log*", "crash.log*"):
+        for pattern in ("retouch.log*", "crash.log*", "native-crash.log*"):
             for path in directory.glob(pattern):
                 try:
                     path.unlink()
@@ -131,6 +176,9 @@ def diagnostics_report() -> str:
         lines.append(f"body reshape: unavailable ({e})")
     try:
         lines.append(f"log file: {redact_diagnostics_text(log_dir() / 'retouch.log')}")
+        lines.append(
+            f"native crash log: {redact_diagnostics_text(log_dir() / 'native-crash.log')}"
+        )
     except Exception:  # noqa: BLE001
         pass
     return redact_diagnostics_text("\n".join(lines))

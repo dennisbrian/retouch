@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
 from uuid import uuid4
 
-from .shoot_intelligence import BurstGroup, CullingCandidate, ShootAsset
+from .shoot_intelligence import FACE_AWARE_POLICY, BurstGroup, CullingCandidate, ShootAsset
 
 
 DECISIONS = {"select", "reject", "hold"}
@@ -640,8 +640,14 @@ def build_review_manifest(
         relative = _relative_path(root, source)
         groups = group_by_path.get(str(source), [])
         candidate = candidate_by_path.get(str(source))
+        scoring_policy = candidate.evidence.get("scoring_policy") if candidate else None
+        policy = (
+            "face-aware (face focus, eyes open); human review required"
+            if scoring_policy == FACE_AWARE_POLICY
+            else "capture-quality-only; human review required"
+        )
         culling_evidence: Dict[str, Any] = {
-            "policy": "capture-quality-only; human review required",
+            "policy": policy,
             "burst_groups": [group.to_dict() for group in groups],
             "candidate": candidate.to_dict() if candidate else None,
         }

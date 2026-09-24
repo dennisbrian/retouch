@@ -3,8 +3,11 @@
 ## Root Level (Entry Points)
 ```
 ├── cli.py              # Command-line interface
+├── split_shoot.py      # Split a shoot into folders by capture time
 ├── gui.py              # Gradio web interface
 ├── desktop.py          # Desktop app entry
+├── setup               # One-command environment setup (uv + core models)
+├── run                 # Launcher: app, web GUI, batch CLI, shoot split
 ├── README.md           # Installation & quick start
 ├── CLAUDE.md           # Development guidelines
 └── test_visual_qa.py   # Visual QA testing

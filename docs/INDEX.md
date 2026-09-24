@@ -16,7 +16,8 @@ output verification.
 - `GETTING_STARTED.md` — Desktop one-photo workflow, CLI basics, and result checks
 - `RECIPE_GUIDE.md` — Creating custom presets
 - `GUI.md` — Gradio UI layout & components
-- `BATCH_GUIDE.md` — Batch processing via CLI
+- `BATCH_GUIDE.md` — Batch processing via CLI, including social crops export
+- `SPLIT_SHOOT.md` — Split a shoot into folders by capture time before batching
 - `PERFORMANCE_TUNING.md` — Optimization tips
 - `COLOR_DELIVERY_TRUTH.md` — Working-space, precision, preview, and export contracts
 - `TROUBLESHOOTING.md` — Common issues & fixes
@@ -36,11 +37,11 @@ output verification.
 ## Plans (`docs/plans/`)
 - `MASTER_PLAN.md` — Overall roadmap
 - [Retouch target identity and preview/export agreement — 2026-09-23](plans/RESEARCH_RETOUCH_TARGET_AND_PREVIEW_PARITY_2026_09_23.md)
-  — Documentation-only cache coordinate audit, preview inspection/detail limits,
-  per-face target association, and exact replay versus explicit manual rebase
+  — Cache coordinate audit and follow-up fixes for preview inspection, per-face
+  target association, and explicit manual rebase; full photo qualification pending
 - [Proposed target and preview/export validation — 2026-09-23](plans/PLAN_RETOUCH_TARGET_AND_PREVIEW_VALIDATION_2026_09_23.md)
-  — Future cold/warm cache, coordinate, target, rebase, and photo-delivery checks;
-  no implementation, tests, or image experiments performed
+  — Focused cold/warm cache, target, and rebase contract checks completed;
+  public GUI-to-engine controls and independent photo review remain pending
 - [CLI photo input research — 2026-09-22](plans/RESEARCH_CLI_PHOTO_INPUT_2026_09_22.md)
   — Input-selection and dry-run audit plus bounded implementation: shared input
   plan, multiple-photo/filtering workflow, decoder checks, RAW+JPEG policy,
@@ -61,6 +62,24 @@ output verification.
   — Research-only follow-up against newer local main: QA reference boundaries,
   EXR/color delivery findings, preservation evidence, additive correction-map
   literature, and proposed study order; no code changes or photo experiments
+- [Feature scan: what to build next — 2026-09-24](plans/RESEARCH_FEATURE_SCAN_2026_09_24.md)
+  — Outward research (competitors, cosplay needs, social output, culling, local
+  models and licenses, labeling rules, video) ranked into 18 candidate features
+- [Proposed P9: support usability and selective retouch research — 2026-09-11](plans/RESEARCH_P9_SELECTIVE_RETOUCH_PROPOSAL_2026_09_11.md)
+  — Provisional topic after P8; current-code and six-primary-source review of
+  evidence calibration, accepted-region errors, coverage, and abstention
+- [Proposed P9 research protocol — 2026-09-11](plans/PLAN_P9_SELECTIVE_RETOUCH_RESEARCH_2026_09_11.md)
+  — P8 support-usability pilot followed by independent policy qualification
+  and a separate P7 ownership/render study; no experiments run or roadmap adoption
+- [P8 apparent-age cue validity research — 2026-09-10](plans/RESEARCH_P8_CUE_VALIDITY_2026_09_10.md)
+  — Primary-source and current-code review correcting the earlier P8 drafts;
+  separates image descriptors, apparent-age associations and perceptual editing
+- [P8 revised research protocol — 2026-09-10](plans/PLAN_P8_CUE_VALIDITY_RESEARCH_2026_09_10.md)
+  — Proposed support, repeatability, labeling and intervention gates; research
+  only, with no code or photo experiments executed
+- P8 R1 implementation — `retouch/aging_cues.py` and
+  `scripts/qa/p8_cue_readout.py` provide measurement-only observable cue
+  readouts; no age slider or render-path coupling
 - [Face retouch algorithm research — 2026-09-05](plans/RESEARCH_FACE_RETOUCH_ALGORITHMS_2026_09_05.md)
   — Documentation-only current-code review, thirteen classical/learned algorithm
   comparisons, and seven proposed experiments for masks, blemish repair, texture,
