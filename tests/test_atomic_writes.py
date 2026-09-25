@@ -217,19 +217,11 @@ def test_16bit_png_metadata_failure_leaves_no_final(tmp_path, img_f32, monkeypat
     assert _dir_names(tmp_path) == set()
 
 
-def test_c2pa_embed_runs_on_temp_before_publish(tmp_path, img_u8, monkeypatch):
-    seen = []
-    real = rio._embed_jpeg_c2pa_manifest
-
-    def spy(path, manifest):
-        seen.append(Path(path))
-        assert not (tmp_path / "x.jpg").exists(), "final published before C2PA pass"
-        real(path, manifest)
-
-    monkeypatch.setattr(rio, "_embed_jpeg_c2pa_manifest", spy)
+def test_source_c2pa_manifest_is_not_copied_to_output(tmp_path, img_u8):
+    # A camera manifest hashes the unedited pixels; copying it onto a
+    # retouched image makes verifiers report the file as tampered.
     write_image_with_icc(tmp_path / "x.jpg", img_u8, c2pa_manifest=b"JUMBFc2pa-test")
-    assert len(seen) == 1 and seen[0].name.startswith(".x.tmp-")
-    assert b"JUMBFc2pa-test" in (tmp_path / "x.jpg").read_bytes()
+    assert b"JUMBFc2pa-test" not in (tmp_path / "x.jpg").read_bytes()
     assert _dir_names(tmp_path) == {"x.jpg"}
 
 

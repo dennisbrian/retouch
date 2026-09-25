@@ -133,53 +133,20 @@ def read_c2pa_manifest(path: Union[str, Path]) -> Optional[bytes]:
     return None
 
 
-def _embed_jpeg_c2pa_manifest(path: Union[str, Path], manifest: bytes) -> None:
-    """Preserve a raw C2PA/JUMBF APP11 block in a newly encoded JPEG.
+def _drop_source_c2pa_manifest(path: Union[str, Path], manifest: Optional[bytes]) -> None:
+    """Log that a source C2PA manifest is deliberately not copied to *path*.
 
-    This is byte-preserving passthrough, not creation of a new signed claim:
-    a downstream C2PA verifier must decide whether the source assertion still
-    applies to transformed pixels. PNG/TIFF/other formats are reported as
-    unsupported rather than silently dropping a requested manifest.
+    A camera's Content Credentials hash the exact pixels it captured, so on a
+    retouched image they fail verification (``assertion.dataHash.mismatch``)
+    and make the file look tampered with. Provenance is carried forward by
+    signing a new manifest instead (:mod:`retouch.content_credentials`).
     """
-    target = Path(path)
-    if target.suffix.lower() not in (".jpg", ".jpeg", ".jpe"):
-        logger.warning(
-            "C2PA manifest was supplied for %s, but passthrough currently supports JPEG APP11 only",
-            target,
+    if manifest:
+        logger.info(
+            "Source Content Credentials not copied to %s: they cover the unedited "
+            "pixels and would fail verification (sign the output to carry them forward)",
+            Path(path).name,
         )
-        return
-    payload = bytes(manifest)
-    if len(payload) + 2 > 0xFFFF:
-        raise ValueError("C2PA APP11 manifest is too large for a JPEG marker segment")
-    raw = target.read_bytes()
-    if not raw.startswith(b"\xff\xd8"):
-        raise ValueError(f"{target} is not a JPEG file")
-
-    output = bytearray(raw[:2])
-    idx = 2
-    inserted = False
-    while idx < len(raw) - 4 and raw[idx] == 0xFF:
-        marker = raw[idx + 1]
-        if marker in (0xD9, 0xDA):
-            break
-        length = (raw[idx + 2] << 8) + raw[idx + 3]
-        end = idx + 2 + length
-        if end > len(raw):
-            raise ValueError(f"truncated JPEG marker table in {target}")
-        segment = raw[idx + 4 : end]
-        if marker == 0xEB and (b"c2pa" in segment or b"jp2c" in segment or b"JUMBF" in segment):
-            if not inserted:
-                output.extend(b"\xff\xeb" + struct.pack(">H", len(payload) + 2) + payload)
-                inserted = True
-            idx = end
-            continue
-        output.extend(raw[idx:end])
-        idx = end
-    if not inserted:
-        output[2:2] = b"\xff\xeb" + struct.pack(">H", len(payload) + 2) + payload
-    output.extend(raw[idx:])
-    target.write_bytes(bytes(output))
-
 
 
 def _resolve_safe_path(path: Union[str, Path], base_dir: Optional[Union[str, Path]] = None) -> Path:
@@ -1582,10 +1549,11 @@ def write_image_with_icc(
             (1) before embedding so the engine output is not re-oriented by
             viewers. Passing EXIF here (rather than re-saving the destination
             afterward) preserves ICC profile, bit depth, and quality settings.
-        c2pa_manifest: Optional raw C2PA/JUMBF APP11 bytes read from the source
-            image. JPEG exports preserve this block byte-for-byte; other
-            formats log that passthrough is not supported. This does not create
-            a new signed assertion for transformed pixels.
+        c2pa_manifest: Optional raw C2PA/JUMBF bytes read from the source
+            image. Accepted for compatibility but never embedded: the source
+            manifest's hash covers the unedited pixels, so on a retouched image
+            it fails verification. Use :func:`retouch.content_credentials.sign_output`
+            to sign a new manifest that names the source as its parent.
         bit_depth: Output bit depth. ``8`` (default) for uint8, ``16`` for
             uint16 (PNG/TIFF only). PNG/TIFF 16-bit writes preserve the pixel
             depth and can embed ICC/EXIF in the same pass; JPEG/WebP always
@@ -1647,8 +1615,7 @@ def write_image_with_icc(
         with _atomic_output_path(path) as tmp_path:
             if not cv2.imwrite(str(tmp_path), np.ascontiguousarray(samples)):
                 raise cv2.error(f"cv2.imwrite returned False for EXR write to {path}")
-        if c2pa_manifest:
-            logger.info("C2PA passthrough is not supported for EXR output; manifest dropped")
+        _drop_source_c2pa_manifest(path, c2pa_manifest)
         return
 
     # 16-bit export: only PNG and TIFF support it
@@ -1673,8 +1640,7 @@ def write_image_with_icc(
                     if not cv2.imwrite(str(tmp_path), img_16):
                         raise cv2.error(f"cv2.imwrite returned False for 16-bit write to {path}")
                     _embed_png_metadata(tmp_path, icc_profile, exif)
-                    if c2pa_manifest:
-                        _embed_jpeg_c2pa_manifest(tmp_path, c2pa_manifest)
+            _drop_source_c2pa_manifest(path, c2pa_manifest)
             return
 
     # 8-bit delivery is the only place where blue-noise dither is allowed.
@@ -1689,8 +1655,7 @@ def write_image_with_icc(
         with _atomic_output_path(path) as tmp_path:
             if not cv2.imwrite(str(tmp_path), img_u8, encode_write_params(ext.lstrip("."), quality)):
                 raise cv2.error(f"cv2.imwrite returned False for write to {path}")
-            if c2pa_manifest:
-                _embed_jpeg_c2pa_manifest(tmp_path, c2pa_manifest)
+        _drop_source_c2pa_manifest(path, c2pa_manifest)
         return
 
     pil_img = _bgr_to_pil(img_u8)
@@ -1714,8 +1679,7 @@ def write_image_with_icc(
     save_kwargs_8.update(kwargs)
     with _atomic_output_path(path) as tmp_path:
         pil_img.save(str(tmp_path), **save_kwargs_8)
-        if c2pa_manifest:
-            _embed_jpeg_c2pa_manifest(tmp_path, c2pa_manifest)
+    _drop_source_c2pa_manifest(path, c2pa_manifest)
 
 
 def convert_image_colorspace(

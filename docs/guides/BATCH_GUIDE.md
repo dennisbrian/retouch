@@ -61,6 +61,8 @@ condition is shown as a blocking execution warning.
 | **`--fuji-match-strength`** | | `0.85` | Blend from the native RAW development (0) to the camera-preview calibration (1), used with `--raf-decoder rawpy-fuji-match`. |
 | **`--no-compare`** | | *Off* | Skip generating the `_compare` side-by-side comparison files. |
 | **`--no-exif`** | | *Off* | Skip copying EXIF metadata (orientation, camera tags, etc.) from the source image. |
+| **`--edit-report`** | | *Off* | Write a "what was changed" JSON report per photo to `edit-reports/` (active edits, whether face or body shape changed, AI use, share of the frame changed). See [CONTENT_CREDENTIALS.md](CONTENT_CREDENTIALS.md). |
+| **`--sign-cert`** / **`--sign-key`** | | *Off* | Sign each output with Content Credentials (C2PA) using your own certificate and key (PEM); needs the optional `credentials` extra. See [CONTENT_CREDENTIALS.md](CONTENT_CREDENTIALS.md). |
 | **`--dry-run`** | | *Off* | Print the input plan, settings, and safety conditions without creating outputs or executing retouching. |
 | **`--export-lut`** | | *None* | Save `--recipe`'s colour look as a `.cube` 3D LUT and exit (no photos needed). Takes a `.cube` path or a folder; with no value it writes `<recipe>.cube` into `-o` or the current folder. Only per-pixel colour and tone steps go in; see "Recipe looks as .cube LUTs" in the README. |
 | **`--lut-size`** | | `33` | Grid points per axis for `--export-lut`. |

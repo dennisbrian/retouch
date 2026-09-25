@@ -478,7 +478,8 @@ class TestC2PAManifestPreservation:
         assert manifest is not None
         assert b"c2pa" in manifest
 
-    def test_export_preserves_c2pa_app11_marker(self, tmp_path: Path) -> None:
+    def test_export_drops_source_c2pa_app11_marker(self, tmp_path: Path) -> None:
+        """The source manifest covers unedited pixels, so it is never copied."""
         source = tmp_path / "source.jpg"
         _write_jpeg_no_icc(source)
         manifest = b"c2pa_manifest_test_jumbf_block_data"
@@ -490,4 +491,5 @@ class TestC2PAManifestPreservation:
         image = np.zeros((20, 20, 3), dtype=np.uint8)
         write_image_with_icc(output, image, c2pa_manifest=read_c2pa_manifest(source))
 
-        assert read_c2pa_manifest(output) == manifest
+        assert read_c2pa_manifest(output) is None
+        assert manifest not in output.read_bytes()
