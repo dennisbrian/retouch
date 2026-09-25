@@ -2298,6 +2298,20 @@ _AI_ENHANCE_PARAMS = [
         min_val=1,
         max_val=4,
     ),
+    # Match a set to one hero frame (retouch/set_match.py): 0-100 strength of
+    # the exposure + white-balance shift toward the hero passed as the
+    # caller-only ``set_match_hero``. No-op without a hero. Not a recipe key:
+    # the hero belongs to a shoot, not a look.
+    ParamSpec(
+        name="set_match",
+        cli_flag="set-match",
+        cli_type=int,
+        default=0,
+        recipe_key=None,
+        conversion="gui_direct",
+        min_val=0,
+        max_val=100,
+    ),
 ]
 
 

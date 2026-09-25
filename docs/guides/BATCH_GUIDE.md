@@ -230,6 +230,39 @@ if __name__ == "__main__":  # required: the engine starts worker processes
 
 Save it as a `.py` file and run it with `.venv/bin/python`; the engine's face
 workers cannot start from `python -` or an interactive paste.
+
+### Example G: Match a Set to One Hero Frame
+Frames shot minutes apart drift: a cloud passes, auto white balance hunts, the
+cosplayer steps into warmer hall light. On a carousel those jumps show as the
+slides are swiped. Pick your best frame and pass it as the hero:
+
+```bash
+./run batch ~/shoots/2026-09-13/set1 -o ~/retouched/set1 \
+  --recipe cosplay_clear_v1 --match-hero ~/shoots/2026-09-13/set1/DSCF3773.JPG
+```
+
+Before the recipe runs, every photo gets the exposure and white-balance shift
+that brings the subject's face skin to the hero's, so the recipe lands the same
+way on every slide. The hero itself is left exactly as it was.
+
+- It is one global shift per photo, like changing exposure and white balance in
+  camera, so costume, wig and background colours keep their relationships.
+  It does not copy the hero's background or grade (that is `--color-ref`).
+- It is measured on the largest face's skin (the face oval without eyes, brows
+  and lips). Photos with no face, or a hero with no face, are matched on the
+  whole frame with smaller limits, since framing changes move whole-frame
+  averages. `--global-only` batches always use the whole frame.
+- Limits: up to ±1.5 EV and about half a stop per colour channel on skin
+  (±1 EV and about 0.15 stop on the whole frame). Blown highlights are left
+  alone, and brightened highlights roll off instead of clipping.
+- `--set-match 0-100` sets how far each photo moves (default 100 when
+  `--match-hero` is given).
+- Use it on one cosplayer's set. With a different person as the largest face,
+  their skin is matched to the hero's skin, which is rarely what you want.
+
+In the app, the same control is under Color Grading: "Match Set to Hero Frame",
+with a hero image slot and a Match Strength slider.
+
 ---
 
 ## 4. Reviewing a Batch

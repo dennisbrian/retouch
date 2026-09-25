@@ -1152,6 +1152,7 @@ PROCESS_INPUT_KEYS = (
     + [n for n in param_names() if n not in ("color_transfer_intensity", "freckle_preserve_mask")]
     + [
         "color_ref_img", "color_ref_strength",
+        "set_match_hero_img",
         "show_compare",
         "export_fmt", "export_quality", "export_res",
         "quality_tier",
@@ -1677,6 +1678,21 @@ def process_image(
     runtime_note = _face_runtime_label(getattr(engine, "_detector", None))
     start = time.time()
 
+    # Match a set to one hero frame: measure the hero once per render and hand
+    # every image the same few numbers (retouch/set_match.py).
+    set_match_hero = None
+    hero_img = params.get("set_match_hero_img")
+    if isinstance(hero_img, dict):
+        hero_img = hero_img.get("name") or hero_img.get("path")
+    if hero_img and _coerce_float(params.get("set_match")) > 0:
+        try:
+            from retouch.set_match import measure_frame
+            set_match_hero = measure_frame(
+                imread_exif(hero_img), detector=getattr(engine, "_detector", None)
+            )
+        except (TypeError, ValueError, OSError) as e:
+            _logger.warning("Failed to load hero frame: %s", e)
+
     # Legacy direct callers retain the old temporary fallback. GUI requests
     # use a session-owned request workspace so cleanup cannot touch another
     # browser session's files.
@@ -1712,6 +1728,7 @@ def process_image(
             "recipe": recipe,
             "color_ref": color_ref_bgr,
             "color_transfer_intensity": color_ref_strength,
+            "set_match_hero": set_match_hero,
             "fast": fast,
             "debug_dir": None,  # set per-image below
         },
@@ -4240,6 +4257,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 color_ref_img = gr.Image(type="filepath", label="Reference Image", show_label=True, height=160)
                                 color_ref_strength = gr.Slider(0.0, 1.0, 1.0, step=0.05, label="Transfer Strength", info="Mix ratio between original grade and matched reference grade (1.0 = full transfer, 0.0 = no transfer)")
 
+                            with gr.Accordion("📸 Match Set to Hero Frame", open=False):
+                                gr.Markdown("Pick your best frame from the set. Every photo you process gets its exposure and white balance matched to it (measured on the subject's skin), then the recipe runs, so a carousel reads as one set.")
+                                set_match_hero_img = gr.Image(type="filepath", label="Hero Frame", show_label=True, height=160)
+                                set_match = gr.Slider(0, 100, 100, step=1, label="Match Strength", info="How far each photo moves toward the hero's exposure and white balance (100 = fully). No effect until a hero frame is set.")
+
                             with gr.Accordion("🎨 Look Extractor (F6)", open=False):
                                 gr.Markdown("Upload a reference image to reverse-engineer an editable tone/color look. The extracted params are applied on the next Process (overriding recipe defaults).")
                                 look_ref_file = gr.File(label="Reference Image (look source)", file_types=["image", *sorted(RAW_EXTENSIONS)], file_count="single")
@@ -5611,6 +5633,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "hsl_lum_global": hsl_lum_global,
         "ai_denoise": ai_denoise,
         "ai_sr_scale": _ai_sr_scale_state,
+        "set_match": set_match,
         "mv2_eyeshadow": _mv2_eyeshadow_state,
         "mv2_eyeshadow_color": _mv2_eyeshadow_color_state,
         "mv2_eyeshadow_style": _mv2_eyeshadow_style_state,
@@ -5640,6 +5663,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "split_toning": _split_toning_state,
         "color_ref_img": color_ref_img,
         "color_ref_strength": color_ref_strength,
+        "set_match_hero_img": set_match_hero_img,
         "show_compare": show_compare,
         "export_fmt": export_fmt,
         "export_quality": export_quality,
