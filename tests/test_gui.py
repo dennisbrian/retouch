@@ -55,7 +55,7 @@ EXPECTED_RECIPE_KEYS = [
     "ai_denoise", "ai_sr_scale", "airy_haze", "albedo_even", "auto_body_reshape",
     "auto_exposure", "backdrop_cleanup", "background_blur", "background_desaturation", "background_harmonize",
     "background_harmonize_mode", "blacks", "blemish", "bloom", "bloom_softness",
-    "bloom_threshold", "blotch_reduction", "blue_shadow_grade", "blush", "body_dodge_burn",
+    "bloom_threshold", "blotch_reduction", "blue_shadow_grade", "blush", "body_dodge_burn", "body_paint",
     "body_equalize", "body_match_face", "body_relight", "body_reshape_arm_length", "body_reshape_hip_width",
     "body_reshape_leg_length", "body_reshape_shoulder_width", "body_reshape_torso_width", "body_shadow_lift", "body_smooth",
     "body_whiten", "brightness", "bw_channel_mixer_b", "bw_channel_mixer_g", "bw_channel_mixer_r",
@@ -114,7 +114,7 @@ for color in ["red", "green", "blue"]:
     EXPECTED_RECIPE_KEYS.extend([f"calibration_{color}_hue", f"calibration_{color}_sat", f"calibration_{color}_lum"])
 EXPECTED_RECIPE_KEYS.append("lens_blur")
 
-EXPECTED_RECIPE_KEY_COUNT = 258
+EXPECTED_RECIPE_KEY_COUNT = 259
 # Self-updating: the recipe/smart-style slider tuple length is the contract
 # defined by RECIPE_OUTPUT_KEYS, so this constant can never go stale.
 EXPECTED_UI_OUTPUT_COUNT = len(gui.RECIPE_OUTPUT_KEYS)

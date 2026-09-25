@@ -228,6 +228,27 @@ older looks such as `cosplay`, `anime_v2` and the Fuji film sims. Those are not
 in the curated catalog, so `--recipe` rejects them with "invalid choice"; they
 still work through the Python API, e.g. `engine.process(img, recipe="anime_v2")`.
 
+### Body paint
+
+For blue, green, grey or purple painted skin, add `--body-paint 0-100` to any
+recipe (or use the "Body Paint" slider under Cosplay & Body in the app). It is
+off by default. When it is on and a face's skin reads as paint, the paint keeps
+its own colour through skin retouching (without it, grey paint picks up a pink
+cast and blue or green paint drifts a few degrees toward skin tones), and the
+strength evens out patchy, thin or sponge-marked coverage, including warm skin
+showing through a thin coat. Painted neck, shoulders and arms that join the
+face in the same colour are included. Colour grading still applies on top.
+
+```bash
+python3 cli.py shoot/ -o out/ --recipe cosplay_clear_v1 --body-paint 60
+```
+
+Red, orange and tan paint look like skin, so they are not detected. A costume
+in exactly the paint's colour that touches painted skin is evened too. On a
+black-and-white photo grey skin is not treated as paint. It added about 10 s on
+a 45 MP test frame, and nothing on photos without paint. Details are in
+`retouch/body_paint.py`.
+
 ### Recipe gallery
 
 Not sure which recipe suits a photo? In the app, upload the photo, open
