@@ -1041,12 +1041,21 @@ def adapt_multi_illuminant_skin(
     img_key = chromatic_adapt_cat16(img_bgr, source_wp=key_wp, target_wp=(0.95047, 1.00000, 1.08883))
     img_fill = chromatic_adapt_cat16(img_bgr, source_wp=fill_wp, target_wp=(0.95047, 1.00000, 1.08883))
 
-    w = np.full(img_bgr.shape[:2], mix_factor, dtype=np.float32)
-    if skin_mask is not None:
-        w = w * skin_mask
-
-    m = w[:, :, np.newaxis]
-    adapted = img_key.astype(np.float32) * (1.0 - m) + img_fill.astype(np.float32) * m
+    # Fixed 2026-09-24: the key/fill blend below has no third "leave the
+    # pixel alone" state, so any pixel outside skin_mask previously still
+    # received the FULL key-illuminant CAT16 adaptation (m==0 fell back to
+    # img_key, not img_bgr) — a frame-wide color cast over hair/background/
+    # clothing on every render, confirmed with a fully-zero skin_mask that
+    # should be a no-op and wasn't. `s` (feathered by skin_mask, independent
+    # of mix_factor) now gates how much of the key/fill blend reaches the
+    # canvas at all; mix_factor only controls the blend ratio *within* that
+    # gated region, matching the pre-fix in-skin behavior exactly (skin_mask
+    # all-ones + mix_factor=0.5 still reproduces the old 50/50 blend).
+    s = skin_mask.astype(np.float32) if skin_mask is not None else np.ones(img_bgr.shape[:2], dtype=np.float32)
+    s3 = s[:, :, np.newaxis]
+    m = mix_factor
+    key_fill_blend = img_key.astype(np.float32) * (1.0 - m) + img_fill.astype(np.float32) * m
+    adapted = img_bgr.astype(np.float32) * (1.0 - s3) + key_fill_blend * s3
 
     if img_bgr.dtype == np.float32:
         return adapted.astype(np.float32)
