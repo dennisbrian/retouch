@@ -20,7 +20,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
-from .parsing import FaceRegions
+from .parsing import _MC_DISABLE_ENV, _MC_FACE_SKIN, FaceRegions
 from .lighting import LightDirection
 from .utils import inter_eye_distance
 
@@ -158,6 +158,10 @@ class FaceDetector:
         self._legacy_segmenter = None
         self._landmarker = None
         self._segmenter = None
+        # Lazily-built multiclass segmenter for the person gate's face-skin
+        # second opinion (see _face_skin_rescue). Never pickled.
+        self._face_skin_segmenter = None
+        self._face_skin_segmenter_failed = False
 
         backend = os.environ.get("RETOUCH_MEDIAPIPE_BACKEND", "auto").strip().lower()
         has_legacy_solutions = hasattr(mp, "solutions")
@@ -594,6 +598,123 @@ class FaceDetector:
             return None
         return float((region > 0.5).mean())
 
+    # Second opinion for a detection the full-frame person mask rejects. The
+    # selfie segmenter sees the whole frame at 256x144, and a near-white wig
+    # against a blown-out window can vanish from that mask entirely while the
+    # torso below stays confident (DSCF3773: coverage 0.000 on a sharp,
+    # frontal subject face; RESEARCH_PERSON_GATE_WIG_FALSENEG_2026_09_25).
+    # The rescue re-segments a square crop 1.5x the face box with the
+    # multiclass selfie segmenter and asks whether the box's central region is
+    # face SKIN, not merely "person": a crop around a background FP that sits
+    # next to the subject can pick up person pixels, but not face skin.
+    # Measured 2026-09-25 (k=1.5): 56 real faces min 0.478 (the two pilot
+    # frames 0.595 / 0.623); 931 background boxes (walls, sky, foliage,
+    # bokeh, clothes, a drawn face) max 0.302.
+    _FACE_SKIN_RESCUE_CROP = 1.5
+    _FACE_SKIN_RESCUE_COVERAGE = 0.45
+
+    def _face_skin_rescue(
+        self,
+        img_bgr: np.ndarray,
+        bbox: Tuple[int, int, int, int],
+        coverage: float,
+    ) -> bool:
+        """True when a person-gate reject is a real face on a person the
+        full-frame mask lost (face-skin coverage of a face-scale crop)."""
+        skin = self._face_skin_coverage(img_bgr, bbox)
+        if skin is None or skin < self._FACE_SKIN_RESCUE_COVERAGE:
+            return False
+        _logger.info(
+            "Person gate: kept detection bbox=%s despite person coverage %.3f "
+            "(face-skin coverage %.3f >= %.2f on a face crop)",
+            tuple(int(v) for v in bbox), coverage, skin,
+            self._FACE_SKIN_RESCUE_COVERAGE,
+        )
+        return True
+
+    def _face_skin_coverage(
+        self, img_bgr: np.ndarray, bbox: Tuple[int, int, int, int]
+    ) -> Optional[float]:
+        """Face-skin share of the bbox's central region, segmented on a
+        square crop around the box. None when the segmenter is unavailable."""
+        h, w = img_bgr.shape[:2]
+        x, y, bw, bh = (int(v) for v in bbox)
+        side = int(self._FACE_SKIN_RESCUE_CROP * max(bw, bh))
+        if side < 8:
+            return None
+        # Keep the crop square where the frame allows, so the segmenter's
+        # square input sees the face at a consistent scale near the edges.
+        x1 = int(np.clip(x + bw / 2 - side / 2, 0, max(0, w - side)))
+        y1 = int(np.clip(y + bh / 2 - side / 2, 0, max(0, h - side)))
+        crop = img_bgr[y1:min(h, y1 + side), x1:min(w, x1 + side)]
+        if crop.ndim != 3 or min(crop.shape[:2]) < 8:
+            return None
+        skin = self._segment_face_skin(crop)
+        if skin is None:
+            return None
+        return self._central_person_coverage(skin, (x - x1, y - y1, bw, bh))
+
+    def _segment_face_skin(self, crop_bgr: np.ndarray) -> Optional[np.ndarray]:
+        """Face-skin confidence (H, W) from the multiclass selfie segmenter,
+        or None when it is unavailable or fails."""
+        seg = self._get_face_skin_segmenter()
+        if seg is None:
+            return None
+        try:
+            img_u8 = crop_bgr
+            if img_u8.dtype != np.uint8:
+                img_u8 = np.clip(img_u8, 0, 255).astype(np.uint8)
+            rgb = np.ascontiguousarray(cv2.cvtColor(img_u8, cv2.COLOR_BGR2RGB))
+            result = seg.segment(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
+            masks = result.confidence_masks or []
+            if len(masks) <= _MC_FACE_SKIN:
+                return None
+            skin = np.squeeze(np.asarray(masks[_MC_FACE_SKIN].numpy_view(), dtype=np.float32))
+            ch, cw = crop_bgr.shape[:2]
+            if skin.shape != (ch, cw):
+                skin = cv2.resize(skin, (cw, ch), interpolation=cv2.INTER_LINEAR)
+            return skin
+        except Exception as exc:
+            _logger.warning("Person gate face-skin check failed: %s: %s", type(exc).__name__, exc)
+            return None
+
+    def _get_face_skin_segmenter(self) -> Any:
+        """Build the multiclass selfie segmenter on first use (same verified
+        model and ``RETOUCH_CLASS_SEGMENTER=0`` switch as the hair masks).
+        A failure is logged once and remembered; the gate then drops
+        low-coverage detections exactly as it did without the rescue."""
+        seg = getattr(self, "_face_skin_segmenter", None)
+        if seg is not None or getattr(self, "_face_skin_segmenter_failed", False):
+            return seg
+        if os.environ.get(_MC_DISABLE_ENV, "1").strip().lower() in {"0", "false", "no", "off"}:
+            self._face_skin_segmenter_failed = True
+            return None
+        try:
+            from .model_fetch import get_model_path
+
+            vision = mp.tasks.vision
+            base = mp.tasks.BaseOptions
+            seg = vision.ImageSegmenter.create_from_options(
+                vision.ImageSegmenterOptions(
+                    base_options=base(
+                        model_asset_path=get_model_path("selfie_multiclass"),
+                        delegate=base.Delegate.CPU,
+                    ),
+                    running_mode=vision.RunningMode.IMAGE,
+                    output_category_mask=False,
+                    output_confidence_masks=True,
+                )
+            )
+        except Exception as exc:
+            self._face_skin_segmenter_failed = True
+            _logger.warning(
+                "Person gate face-skin check unavailable (%s: %s); detections "
+                "the person mask misses will be dropped", type(exc).__name__, exc,
+            )
+            return None
+        self._face_skin_segmenter = seg
+        return seg
+
     def _person_gate(
         self,
         img_bgr: np.ndarray,
@@ -630,6 +751,8 @@ class FaceDetector:
         for face in faces:
             coverage = self._central_person_coverage(mask, face.bbox)
             if coverage is None or coverage >= self._MAIN_PERSON_GATE_COVERAGE:
+                kept.append(face)
+            elif self._face_skin_rescue(img_bgr, face.bbox, coverage):
                 kept.append(face)
             else:
                 _logger.info(
@@ -677,7 +800,10 @@ class FaceDetector:
         MediaPipe's own ``FaceLandmarker.__del__`` blocks forever on a pending
         serial-dispatcher future and hangs the process.
         """
-        for attr in ("_legacy_mesh", "_legacy_segmenter", "_landmarker", "_segmenter"):
+        for attr in (
+            "_legacy_mesh", "_legacy_segmenter", "_landmarker", "_segmenter",
+            "_face_skin_segmenter",
+        ):
             task = getattr(self, attr, None)
             if task is not None:
                 self._close_task(task)
@@ -890,6 +1016,10 @@ class FaceDetector:
             if any(_iou(cand.bbox, a.bbox) > 0.5 for a in additions):
                 continue
             coverage = self._central_person_coverage(mask, cand.bbox)
-            if coverage is not None and coverage >= self._PERSON_GATE_COVERAGE:
+            if coverage is None:
+                continue
+            if coverage >= self._PERSON_GATE_COVERAGE or self._face_skin_rescue(
+                img_bgr, cand.bbox, coverage
+            ):
                 additions.append(cand)
         return additions
