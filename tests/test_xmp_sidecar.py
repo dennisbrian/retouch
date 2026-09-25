@@ -373,3 +373,13 @@ def test_cli_xmp_requires_review(monkeypatch, capsys):
         cli.main()
     assert exc.value.code == 2
     assert "--xmp needs the review records" in capsys.readouterr().err
+
+
+def test_gui_batch_xmp_helper(tmp_path):
+    import gui_batch
+
+    _raw, _jpg_src, out1, _out2, root = _batch(tmp_path)
+    line = gui_batch._write_batch_xmp(root)
+    assert line.startswith("XMP: 2 sidecar(s) written, 2 JPEG output(s) tagged")
+    assert xs.read_jpeg_fields(out1)["keywords"] == ["retouch-recipe-cosplay-clear-v1"]
+    assert gui_batch._write_batch_xmp(None).startswith("XMP: skipped")
