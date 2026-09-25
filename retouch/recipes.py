@@ -2711,6 +2711,114 @@ RECIPES["cosplay_color_ref_v1"] = {
     "color_transfer_intensity": 0.85,
 }
 
+# ---------------------------------------------------------------------------
+# 2026-09-25 cosplay scene set: three looks the curated catalog had no answer
+# for. Night photowalks under neon/LED signage, dark/villain characters, and a
+# phone-feed finish for Instagram/Reels/TikTok uploads. All three keep real
+# face/body shape (slimming 0) and turn off the cosplay base's pink nose and
+# under-eye blush, which reads wrong under neon and on villain makeup.
+# Lesson carried over from studio_gel_color_v1: color_harmony grades the face
+# too, so neon and villain zero the cosplay base's harmony grade and take
+# their mood from the source lighting plus skin-masked split toning. Feed pop
+# keeps cosplay_clear_v1's light harmony grade unchanged.
+# ---------------------------------------------------------------------------
+
+RECIPES["cosplay_neon_night_v1"] = {
+    # Night shots under neon, LED signs or RGB stage light. The scene's
+    # magenta/cyan cast is the point of the photo, so it stays; hue_unify +
+    # chroma_even pull only the skin back toward its own locus so faces don't
+    # go purple. Shadows lifted a little for faces in dark streets, blacks kept
+    # deep, highlight rolloff + a high-threshold bloom make signs glow without
+    # blooming skin. Catchlights stay up: neon reflections in the eyes sell it.
+    "extends": "cosplay_clear_v1",
+    "skin": {
+        "hue_unify": 0.35,
+        "chroma_even": 0.20,
+        "whiten_hue_stable": 1,
+        "shine_removal": 0.25,
+        "rosy": 0.10,
+    },
+    "eyes": {"catchlight": 0.30},
+    "color_harmony": {"amount": 0.0},
+    "shadows": 12.0,
+    "blacks": -4.0,
+    "contrast": 6.0,
+    # Contrast alone took a white costume from 2.6% to 6.8% clipped pixels
+    # on a real cosplay photo; this highlight pull-back brings it to 0%.
+    "highlights": -10.0,
+    "clarity": 6.0,
+    "vibrance": 10.0,
+    "shadow_hue": 250.0,
+    "shadow_sat": 8.0,
+    "bloom": {"opacity": 0.08, "threshold": 215.0},
+    "highlight_rolloff": 0.40,
+    "blush": 10.0,
+    "nose_blush": False,
+    "under_eye_blush": False,
+    "slimming": 0.0,
+}
+
+RECIPES["cosplay_dark_villain_v1"] = {
+    # Low-key finish for villains, gothic, vampire and dark-fantasy
+    # characters. Built on the protected parent so drawn marks, contour and
+    # eyeliner wings survive the evening ops. Rosy/blush/lip tint off (dark
+    # lipstick and pale theatrical base are the character), dark-circle and
+    # under-eye repair kept light so smoky contour isn't erased. Contrast,
+    # clarity and crushed blacks give armour/leather detail; negative vibrance,
+    # cool skin-masked shadows and a vignette carry the mood without greying
+    # the face. background_desaturation was tried at 20 and left a saturated
+    # fringe around hair and collar on a real portrait (person-mask edge), so
+    # it is deliberately off.
+    "extends": "cosplay_clear_protected_v1",
+    "frequency": {"smooth": 0.45, "mid_reduction": 0.30},
+    "skin": {"rosy": 0.0, "equalize": 0.10},
+    "eyes": {
+        "dark_circles": 0.10,
+        "whites": 0.15,
+        "catchlight": 0.18,
+        "iris": 0.30,
+    },
+    "undereye": {"darken_removal": 0.10, "puffiness_reduction": 0.15},
+    "lips": {"tint": None, "gloss": 0.10},
+    "color_harmony": {"amount": 0.0},
+    "texture": {"opacity": 0.95},
+    "contrast": 14.0,
+    "clarity": 10.0,
+    "blacks": -10.0,
+    "highlights": -8.0,
+    "vibrance": -8.0,
+    "shadow_hue": 215.0,
+    "shadow_sat": 10.0,
+    "vignette": 12.0,
+    "bloom": {"opacity": 0.02},
+    "highlight_rolloff": 0.30,
+    "blush": 0.0,
+    "nose_blush": False,
+    "under_eye_blush": False,
+    "slimming": 0.0,
+}
+
+RECIPES["cosplay_feed_pop_v1"] = {
+    # Finish for phone feeds (Instagram, Reels covers, TikTok). Feed apps
+    # re-compress and show photos small and bright, so this adds midtone
+    # punch through vibrance + clarity (not saturation, which clips skin),
+    # a subject-only sharpen that survives downscaling, and strong highlight
+    # rolloff so white wigs and costumes keep detail after compression.
+    "extends": "cosplay_clear_v1",
+    "contrast": 8.0,
+    # Contrast alone took a white costume from 2.6% to 8.1% clipped pixels
+    # on a real cosplay photo; this highlight pull-back brings it to ~0%.
+    "highlights": -10.0,
+    "clarity": 8.0,
+    "vibrance": 12.0,
+    "background": {"subject_sharpen": 12.0},
+    "highlight_rolloff": 0.45,
+    "blush": 15.0,
+    "nose_blush": False,
+    "under_eye_blush": False,
+    "slimming": 0.0,
+}
+
 RECIPES["studio_porcelain_clear_v1"] = {
     # Studio portrait on the porcelain base + new primitives. The porcelain
     # base unifies skin tone; anisotropic + region-aware smooth then clean the
@@ -4403,6 +4511,9 @@ CURATED_RECIPE_NAMES: List[str] = [
     "cosplay_powder_v1",
     "cosplay_heroic_amber_v1",
     "cosplay_ice_cathedral_v1",
+    "cosplay_neon_night_v1",
+    "cosplay_dark_villain_v1",
+    "cosplay_feed_pop_v1",
     "game_character_v1",
     "game_character_v2",
     "game_character_v3",

@@ -214,6 +214,14 @@ catalog (`CURATED_RECIPE_NAMES` in `retouch/recipes.py`), for example `natural`,
 ./run recipes
 ```
 
+Cosplay looks for specific scenes (all under "Scene / creative" in the app):
+
+| Recipe | Use it for |
+|---|---|
+| `cosplay_neon_night_v1` | Night shots under neon, LED signs or RGB stage light. Keeps the scene's colour, pulls skin back to its own tone, makes signs glow. |
+| `cosplay_dark_villain_v1` | Villain, gothic and dark-fantasy characters. Low-key and cool, keeps dark lipstick, contour and drawn marks, no added blush. |
+| `cosplay_feed_pop_v1` | Posts for Instagram, Reels and TikTok. Extra punch and subject sharpness that survive the app's compression, highlights held for white wigs. |
+
 `python3 cli.py --list-recipes` shows every recipe in the cookbook, including
 older looks such as `cosplay`, `anime_v2` and the Fuji film sims. Those are not
 in the curated catalog, so `--recipe` rejects them with "invalid choice"; they

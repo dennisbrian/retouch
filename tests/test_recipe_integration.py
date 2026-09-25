@@ -167,7 +167,9 @@ class TestRecipeDefaults:
         # pinned color_transfer_intensity) and cosplay_kitsune_daylight_v1
         # (cosplay_clear_v1 + restrained outdoor-daylight grade, built for
         # the arisaff47/arisaedited shoot).
-        assert len(CURATED_RECIPE_NAMES) == 65
+        # 65 -> 68: 2026-09-25 added cosplay_neon_night_v1,
+        # cosplay_dark_villain_v1 and cosplay_feed_pop_v1 (cosplay scene set).
+        assert len(CURATED_RECIPE_NAMES) == 68
         assert set(RECOMMENDED_RECIPE_NAMES).isdisjoint(CONDITIONAL_RECIPE_NAMES)
         assert set(CURATED_RECIPE_NAMES) == (
             set(RECOMMENDED_RECIPE_NAMES) | set(CONDITIONAL_RECIPE_NAMES)
