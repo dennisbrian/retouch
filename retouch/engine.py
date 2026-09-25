@@ -323,6 +323,7 @@ class ProcessingContext:
     specular_recolor: float = _DEFAULTS["specular_recolor"]
     albedo_even: float = _DEFAULTS["albedo_even"]
     makeup_coverage_even: float = _DEFAULTS["makeup_coverage_even"]
+    body_paint: float = _DEFAULTS["body_paint"]
     makeup_cake_reduce: float = _DEFAULTS["makeup_cake_reduce"]
     hemoglobin_smooth: float = _DEFAULTS["hemoglobin_smooth"]
     mole_protect: float = _DEFAULTS["mole_protect"]
@@ -604,6 +605,8 @@ class ProcessingContext:
     # ai_sr_scale: export-time upscale factor (1=off, 2, 4).
     ai_denoise: float = 0.0
     ai_sr_scale: int = 1
+    # Glasses / goggle / visor glare removal, 0-100 (0 = off).
+    lens_glare: float = 0.0
 
     # Match a set to one hero frame: 0-100 strength (0 = no-op) and the hero's
     # measured FrameStats (caller-only; see retouch/set_match.py).
@@ -1588,6 +1591,7 @@ class RetouchEngine:
         specular_recolor: Optional[float] = None,
         albedo_even: Optional[float] = None,
         makeup_coverage_even: Optional[float] = None,
+        body_paint: Optional[float] = None,
         makeup_cake_reduce: Optional[float] = None,
         hemoglobin_smooth: Optional[float] = None,
         mole_protect: Optional[float] = None,
@@ -1693,6 +1697,7 @@ class RetouchEngine:
         ai_sr_scale: Optional[int] = None,
         set_match: Optional[float] = None,
         set_match_hero: Any = None,
+        lens_glare: Optional[float] = None,
         # --- C5: Skin-anchored background color harmonization ---
         background_harmonize: Optional[float] = None,
         background_harmonize_mode: Optional[str] = None,
@@ -1898,6 +1903,7 @@ class RetouchEngine:
             "specular_recolor": specular_recolor,
             "albedo_even": albedo_even,
             "makeup_coverage_even": makeup_coverage_even,
+            "body_paint": body_paint,
             "makeup_cake_reduce": makeup_cake_reduce,
             "hemoglobin_smooth": hemoglobin_smooth,
             "mole_protect": mole_protect,
@@ -2000,6 +2006,7 @@ class RetouchEngine:
             "ai_denoise": ai_denoise,
             "ai_sr_scale": ai_sr_scale,
             "set_match": set_match,
+            "lens_glare": lens_glare,
             "background_harmonize": background_harmonize,
             "background_harmonize_mode": background_harmonize_mode,
             "background_blur": background_blur,
@@ -2469,6 +2476,14 @@ class RetouchEngine:
                     interpolation=cv2.INTER_LINEAR,
                 ).astype(np.float32, copy=False)
 
+            paint_ref = getattr(ctx, "_paint_ref", None)
+            if paint_ref is not None and paint_ref.shape[:2] != (h, w):
+                ctx._paint_ref = cv2.resize(
+                    paint_ref,
+                    (w, h),
+                    interpolation=cv2.INTER_LINEAR,
+                ).astype(np.float32, copy=False)
+
             # F8.1: Composite upscaled face edits onto native image
             # Only paste the face ROIs that were actually retouched
             composite_result = self._composite_upscaled_faces_onto_native(
@@ -2725,6 +2740,7 @@ class RetouchEngine:
             ctx.face_params = None
         self._bind_face_targets(ctx, faces_native, (w_native, h_native))
 
+        native_img_bgr = self._stage_lens_glare(native_img_bgr, faces_native, ctx, timings)
         t1 = time.perf_counter()
         result_native = self._stage_reshape(native_img_bgr, faces_native, ctx)
         timings["reshape"] = (time.perf_counter() - t1) * 1000
@@ -2732,6 +2748,13 @@ class RetouchEngine:
             # Capture the post-reshape, pre-face-edit reference so geometry
             # changes are not mistaken for a tone edit to propagate.
             ctx._p7_source = (
+                np.clip(result_native.astype(np.float32), 0.0, 255.0)
+                * (1.0 / 255.0)
+            )
+        if ctx.body_paint > 0.0:
+            # Body paint: pre-face-edit reference whose paint colour is
+            # restored after the skin edits (see retouch/body_paint.py).
+            ctx._paint_ref = (
                 np.clip(result_native.astype(np.float32), 0.0, 255.0)
                 * (1.0 / 255.0)
             )
@@ -2966,6 +2989,7 @@ class RetouchEngine:
             ctx.face_params = None
         self._bind_face_targets(ctx, faces, (img_bgr.shape[1], img_bgr.shape[0]))
 
+        img_bgr = self._stage_lens_glare(img_bgr, faces, ctx, timings)
         t1 = time.perf_counter()
         result = self._stage_reshape(img_bgr, faces, ctx)
         timings["reshape"] = (time.perf_counter() - t1) * 1000
@@ -2973,6 +2997,13 @@ class RetouchEngine:
             # Capture the post-reshape, pre-face-edit reference so geometry
             # changes are not mistaken for a tone edit to propagate.
             ctx._p7_source = (
+                np.clip(result.astype(np.float32), 0.0, 255.0)
+                * (1.0 / 255.0)
+            )
+        if ctx.body_paint > 0.0:
+            # Body paint: pre-face-edit reference whose paint colour is
+            # restored after the skin edits (see retouch/body_paint.py).
+            ctx._paint_ref = (
                 np.clip(result.astype(np.float32), 0.0, 255.0)
                 * (1.0 / 255.0)
             )
@@ -3561,6 +3592,24 @@ class RetouchEngine:
         if not ctx.face_params or n_faces <= 0:
             return None
         return [self._ctx_for_face(ctx, i) for i in range(n_faces)]
+
+    def _stage_lens_glare(self, img: np.ndarray, faces, ctx: ProcessingContext, timings) -> np.ndarray:
+        """Remove glasses / goggle / visor glare before any face work.
+
+        Opt-in (``ctx.lens_glare`` 0 = off). Runs on the detection-frame image
+        so reshape, skin and eye ops all see the cleaned lenses.
+        """
+        strength = float(getattr(ctx, "lens_glare", 0.0) or 0.0)
+        if strength <= 0.0 or not faces:
+            return img
+        from .lens_glare import remove_lens_glare_faces
+
+        _emit_stage("lens_glare")
+        t = time.perf_counter()
+        out, diags = remove_lens_glare_faces(img, faces, strength)
+        ctx._runtime_diagnostics["lens_glare"] = diags
+        timings["lens_glare"] = (time.perf_counter() - t) * 1000
+        return out
 
     def _stage_reshape(self, img: np.ndarray, faces, ctx: ProcessingContext) -> np.ndarray:
         _emit_stage("reshape")
@@ -4841,6 +4890,53 @@ class RetouchEngine:
             ).astype(np.float32) / 255.0
 
         return result
+
+    def _stage_body_paint(
+        self,
+        img: np.ndarray,
+        ctx: ProcessingContext,
+        acc_skin: Optional[np.ndarray],
+        faces,
+        person_mask: Optional[np.ndarray],
+        acc_lips: Optional[np.ndarray] = None,
+        acc_hair_only: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """Body paint: keep painted skin's colour and even patchy coverage.
+
+        Opt-in (``ctx.body_paint`` 0-100). Compares against the pre-face-edit
+        reference captured in ``ctx._paint_ref``; see ``retouch/body_paint.py``.
+        """
+        from .body_paint import apply_body_paint
+
+        _emit_stage("body_paint")
+        ref = getattr(ctx, "_paint_ref", None)
+        h_img, w_img = img.shape[:2]
+        boxes = []
+        for face in faces or []:
+            x, y, fw, fh = (int(v) for v in face.bbox)
+            if fw > 0 and fh > 0 and x < w_img and y < h_img:
+                boxes.append((max(0, x), max(0, y), fw, fh))
+        exclude = None
+        for m in (acc_lips, acc_hair_only):
+            if m is not None and m.shape[:2] == (h_img, w_img):
+                m2 = normalize_mask(m)
+                m2 = squeeze_mask(m2)
+                exclude = m2 if exclude is None else np.maximum(exclude, m2)
+        skin = None
+        if acc_skin is not None:
+            skin = squeeze_mask(normalize_mask(acc_skin))
+        pm = squeeze_mask(normalize_mask(person_mask)) if person_mask is not None else None
+        out, diag = apply_body_paint(
+            img,
+            ref,
+            skin,
+            boxes,
+            float(ctx.body_paint) / 100.0,
+            person_mask=pm,
+            exclude=exclude,
+        )
+        ctx._runtime_diagnostics["body_paint"] = diag
+        return out
 
     def _stage_cosplay_moat(
         self,

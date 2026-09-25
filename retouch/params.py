@@ -787,6 +787,19 @@ _SKIN_PARAMS = [
         min_val=0.0,
         max_val=1.0,
     ),
+    # Body paint (blue, green, grey, purple skin): 0 = off. Above 0 the
+    # paint's colour is kept through skin edits and patchy coverage is
+    # evened by this strength. See retouch/body_paint.py.
+    ParamSpec(
+        name="body_paint",
+        cli_flag="body-paint",
+        cli_type=int,
+        default=0,
+        recipe_key="skin.body_paint",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
     ParamSpec(
         name="makeup_cake_reduce",
         cli_flag="makeup-cake-reduce",
@@ -2285,6 +2298,18 @@ _AI_ENHANCE_PARAMS = [
         default=0,
         recipe_key="ai.denoise",
         conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        # Glasses / goggle / visor glare removal (retouch/lens_glare.py).
+        # Opt-in: 0 = off. 0-100 raw pass-through like hair_deglare.
+        name="lens_glare",
+        cli_flag="lens-glare",
+        cli_type=int,
+        default=0,
+        recipe_key="glasses.deglare",
+        conversion="recipe_direct",
         min_val=0,
         max_val=100,
     ),

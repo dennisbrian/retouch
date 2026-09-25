@@ -156,6 +156,32 @@ class CosplayMoatStage(_EngineStage):
         )
 
 
+class BodyPaintStage(_EngineStage):
+    """Stage 3.7: body paint colour lock + patchy-coverage evening (opt-in).
+
+    Runs after every skin edit (face, body, cross-region, cosplay moat) and
+    before global tone and colour grading, so the grade still applies to
+    painted skin like the rest of the photo.
+    """
+
+    name = "body_paint"
+    phase = "global"
+
+    def enabled(self, state: PipelineState) -> bool:
+        return (getattr(state.ctx, "body_paint", 0.0) or 0.0) > 0 and bool(state.faces)
+
+    def _call(self, state: PipelineState) -> np.ndarray:
+        return self._engine._stage_body_paint(
+            state.img,
+            state.ctx,
+            state.acc_skin,
+            state.faces,
+            state.person_mask,
+            acc_lips=state.acc_lips,
+            acc_hair_only=state.acc_hair_only,
+        )
+
+
 class GlobalStage(_EngineStage):
     """Stage 4: Global tonal adjustments."""
 
@@ -266,6 +292,7 @@ def build_global_registry(engine: "RetouchEngine") -> "StageRegistry":
     registry.add(BodySkinStage(engine))
     registry.add(CrossRegionSkinStage(engine))
     registry.add(CosplayMoatStage(engine))
+    registry.add(BodyPaintStage(engine))
     registry.add(GlobalStage(engine))
     registry.add(GradeStage(engine))
     registry.add(LocalAdjustmentsStage(engine))

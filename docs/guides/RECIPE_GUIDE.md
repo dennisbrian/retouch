@@ -34,6 +34,7 @@ These keys are defined inside nested dictionary blocks inside a recipe.
 |---|---|---|---|---|
 | `ai` | `denoise` | 0 to 100 | `0` | `ai_denoise` |
 | `background` | `backdrop_cleanup` | 0 to 100 | `0` | `backdrop_cleanup` |
+| `glasses` | `deglare` | 0 to 100 | `0` | `lens_glare` |
 | `background` | `background_blur` | 0 to 100 | `0.0` | `background_blur` |
 | `background` | `background_desaturation` | 0 to 100 | `0.0` | `background_desaturation` |
 | `background` | `blue_shadow_grade` | 0 to 100 | `0.0` | `blue_shadow_grade` |
@@ -189,6 +190,7 @@ These keys are defined inside nested dictionary blocks inside a recipe.
 | `skin` | `hue_unify` | 0 to 100 | `0` | `skin_hue_unify` |
 | `skin` | `makeup_cake_reduce` | 0.0 to 1.0 | `0.0` | `makeup_cake_reduce` |
 | `skin` | `makeup_coverage_even` | 0.0 to 1.0 | `0.0` | `makeup_coverage_even` |
+| `skin` | `body_paint` | 0 to 100 | `0` | `body_paint` |
 | `skin` | `micro_db` | 0 to 100 | `0` | `micro_dodge_burn` |
 | `skin` | `mole_protect` | 0.0 to 1.0 | `0.0` | `mole_protect` |
 | `skin` | `nose_restore` | 0 to 100 | `0` | `nose_restore` |
@@ -477,6 +479,7 @@ and 0–360 for split-toning hue).
 | Lut | `lut` | direct |
 | Makeup Cake Reduce | `skin.makeup_cake_reduce` | direct |
 | Makeup Coverage Even | `skin.makeup_coverage_even` | direct |
+| Body Paint | `skin.body_paint` | ÷ 100 |
 | Mask Feather Mode | `mask.feather_mode` | direct |
 | Matte Black | `background.matte_black` | direct |
 | Micro Dodge Burn | `skin.micro_db` | ÷ 100 |

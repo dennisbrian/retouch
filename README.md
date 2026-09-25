@@ -111,6 +111,16 @@ NAFNet model before retouching. It is CPU-only and takes roughly 10 s per
 cannot be downloaded, a bilateral filter is used instead and the result is
 flagged for review.
 
+Glasses glare removal (`--lens-glare 0-100` in the CLI, the "Glasses Glare
+Removal" slider under Eyes & Lips in the app, or `glasses.deglare` in a recipe)
+lifts flash, softbox and window reflections off glasses, goggles and visors over
+the eyes. It is off by default and uses no model. It cannot recover detail that
+the glare blew out completely (those spots are refilled with the surrounding
+tone), leaves a reflection that sits only inside the eye opening alone (it looks
+like a catchlight), and does not reach glare below the eyes on a full visor. On
+faces without glasses it also softens shine around the eyes, so use it on
+photos with eyewear.
+
 Set `RETOUCH_OFFLINE=1` before launching the GUI to disable update checks and
 prevent model downloads; the Advanced Retouch status panel shows the mode.
 
@@ -232,6 +242,27 @@ Cosplay looks for specific scenes (all under "Scene / creative" in the app):
 older looks such as `cosplay`, `anime_v2` and the Fuji film sims. Those are not
 in the curated catalog, so `--recipe` rejects them with "invalid choice"; they
 still work through the Python API, e.g. `engine.process(img, recipe="anime_v2")`.
+
+### Body paint
+
+For blue, green, grey or purple painted skin, add `--body-paint 0-100` to any
+recipe (or use the "Body Paint" slider under Cosplay & Body in the app). It is
+off by default. When it is on and a face's skin reads as paint, the paint keeps
+its own colour through skin retouching (without it, grey paint picks up a pink
+cast and blue or green paint drifts a few degrees toward skin tones), and the
+strength evens out patchy, thin or sponge-marked coverage, including warm skin
+showing through a thin coat. Painted neck, shoulders and arms that join the
+face in the same colour are included. Colour grading still applies on top.
+
+```bash
+python3 cli.py shoot/ -o out/ --recipe cosplay_clear_v1 --body-paint 60
+```
+
+Red, orange and tan paint look like skin, so they are not detected. A costume
+in exactly the paint's colour that touches painted skin is evened too. On a
+black-and-white photo grey skin is not treated as paint. It added about 10 s on
+a 45 MP test frame, and nothing on photos without paint. Details are in
+`retouch/body_paint.py`.
 
 ### Recipe gallery
 
