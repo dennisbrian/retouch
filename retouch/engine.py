@@ -323,6 +323,7 @@ class ProcessingContext:
     specular_recolor: float = _DEFAULTS["specular_recolor"]
     albedo_even: float = _DEFAULTS["albedo_even"]
     makeup_coverage_even: float = _DEFAULTS["makeup_coverage_even"]
+    body_paint: float = _DEFAULTS["body_paint"]
     makeup_cake_reduce: float = _DEFAULTS["makeup_cake_reduce"]
     hemoglobin_smooth: float = _DEFAULTS["hemoglobin_smooth"]
     mole_protect: float = _DEFAULTS["mole_protect"]
@@ -1585,6 +1586,7 @@ class RetouchEngine:
         specular_recolor: Optional[float] = None,
         albedo_even: Optional[float] = None,
         makeup_coverage_even: Optional[float] = None,
+        body_paint: Optional[float] = None,
         makeup_cake_reduce: Optional[float] = None,
         hemoglobin_smooth: Optional[float] = None,
         mole_protect: Optional[float] = None,
@@ -1894,6 +1896,7 @@ class RetouchEngine:
             "specular_recolor": specular_recolor,
             "albedo_even": albedo_even,
             "makeup_coverage_even": makeup_coverage_even,
+            "body_paint": body_paint,
             "makeup_cake_reduce": makeup_cake_reduce,
             "hemoglobin_smooth": hemoglobin_smooth,
             "mole_protect": mole_protect,
@@ -2445,6 +2448,14 @@ class RetouchEngine:
                     interpolation=cv2.INTER_LINEAR,
                 ).astype(np.float32, copy=False)
 
+            paint_ref = getattr(ctx, "_paint_ref", None)
+            if paint_ref is not None and paint_ref.shape[:2] != (h, w):
+                ctx._paint_ref = cv2.resize(
+                    paint_ref,
+                    (w, h),
+                    interpolation=cv2.INTER_LINEAR,
+                ).astype(np.float32, copy=False)
+
             # F8.1: Composite upscaled face edits onto native image
             # Only paste the face ROIs that were actually retouched
             composite_result = self._composite_upscaled_faces_onto_native(
@@ -2712,6 +2723,13 @@ class RetouchEngine:
                 np.clip(result_native.astype(np.float32), 0.0, 255.0)
                 * (1.0 / 255.0)
             )
+        if ctx.body_paint > 0.0:
+            # Body paint: pre-face-edit reference whose paint colour is
+            # restored after the skin edits (see retouch/body_paint.py).
+            ctx._paint_ref = (
+                np.clip(result_native.astype(np.float32), 0.0, 255.0)
+                * (1.0 / 255.0)
+            )
 
         t2 = time.perf_counter()
         h_img, w_img = result_native.shape[:2]
@@ -2951,6 +2969,13 @@ class RetouchEngine:
             # Capture the post-reshape, pre-face-edit reference so geometry
             # changes are not mistaken for a tone edit to propagate.
             ctx._p7_source = (
+                np.clip(result.astype(np.float32), 0.0, 255.0)
+                * (1.0 / 255.0)
+            )
+        if ctx.body_paint > 0.0:
+            # Body paint: pre-face-edit reference whose paint colour is
+            # restored after the skin edits (see retouch/body_paint.py).
+            ctx._paint_ref = (
                 np.clip(result.astype(np.float32), 0.0, 255.0)
                 * (1.0 / 255.0)
             )
@@ -4837,6 +4862,53 @@ class RetouchEngine:
             ).astype(np.float32) / 255.0
 
         return result
+
+    def _stage_body_paint(
+        self,
+        img: np.ndarray,
+        ctx: ProcessingContext,
+        acc_skin: Optional[np.ndarray],
+        faces,
+        person_mask: Optional[np.ndarray],
+        acc_lips: Optional[np.ndarray] = None,
+        acc_hair_only: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """Body paint: keep painted skin's colour and even patchy coverage.
+
+        Opt-in (``ctx.body_paint`` 0-100). Compares against the pre-face-edit
+        reference captured in ``ctx._paint_ref``; see ``retouch/body_paint.py``.
+        """
+        from .body_paint import apply_body_paint
+
+        _emit_stage("body_paint")
+        ref = getattr(ctx, "_paint_ref", None)
+        h_img, w_img = img.shape[:2]
+        boxes = []
+        for face in faces or []:
+            x, y, fw, fh = (int(v) for v in face.bbox)
+            if fw > 0 and fh > 0 and x < w_img and y < h_img:
+                boxes.append((max(0, x), max(0, y), fw, fh))
+        exclude = None
+        for m in (acc_lips, acc_hair_only):
+            if m is not None and m.shape[:2] == (h_img, w_img):
+                m2 = normalize_mask(m)
+                m2 = squeeze_mask(m2)
+                exclude = m2 if exclude is None else np.maximum(exclude, m2)
+        skin = None
+        if acc_skin is not None:
+            skin = squeeze_mask(normalize_mask(acc_skin))
+        pm = squeeze_mask(normalize_mask(person_mask)) if person_mask is not None else None
+        out, diag = apply_body_paint(
+            img,
+            ref,
+            skin,
+            boxes,
+            float(ctx.body_paint) / 100.0,
+            person_mask=pm,
+            exclude=exclude,
+        )
+        ctx._runtime_diagnostics["body_paint"] = diag
+        return out
 
     def _stage_cosplay_moat(
         self,
