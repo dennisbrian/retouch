@@ -84,6 +84,13 @@ from retouch.batch_processor import BatchProcessor, validate_batch_roots
 from retouch.style import StyleProfile
 from retouch.look_extractor import LookExtractor
 from retouch.recipe_cookbook import search_recipes, list_recipes, list_categories
+from retouch.recipe_gallery import (
+    GROUP_RECOMMENDED as GALLERY_GROUP_DEFAULT,
+    RecipeGalleryRenderer,
+    before_after as gallery_before_after,
+    gallery_groups,
+    gallery_recipe_names,
+)
 from retouch.diagnostics import clear_diagnostics, diagnostics_report
 from retouch.runtime_doctor import (
     check_detector,
@@ -2465,6 +2472,70 @@ def on_select_cookbook(name):
     return gr.update(value=name), f"Selected recipe: {name}"
 
 
+_recipe_gallery = RecipeGalleryRenderer()
+
+
+def _first_upload_path(img_paths):
+    """Return the first uploaded file path from a gr.File value, or None."""
+    if not img_paths:
+        return None
+    first = img_paths[0] if isinstance(img_paths, (list, tuple)) else img_paths
+    if isinstance(first, dict):
+        return first.get("name") or first.get("path")
+    return getattr(first, "name", first)
+
+
+def on_recipe_gallery(img_paths, group, prg=gr.Progress()):
+    """Render every recipe in ``group`` on a small preview of the first photo.
+
+    Returns (gallery items, gallery state, before/after image, status).
+    """
+    path = _first_upload_path(img_paths)
+    if not path:
+        return [], None, None, "Upload a photo first, then press Preview recipes."
+    try:
+        img_bgr = imread_exif(path)
+    except (TypeError, FileNotFoundError, OSError, ValueError) as e:
+        _logger.warning("Recipe gallery: failed to load %s: %s", path, e)
+        return [], None, None, f"Could not read the photo: {e}"
+    if img_bgr is None:
+        return [], None, None, "Could not read the photo."
+    try:
+        names = gallery_recipe_names(group)
+    except ValueError as e:
+        return [], None, None, str(e)
+
+    def report(done, total, name):
+        prg((done, total), desc=f"Previewing {name}" if name else "Done")
+
+    start = time.perf_counter()
+    original, tiles = _recipe_gallery.render(img_bgr, names, get_engine(), progress=report)
+    items = [(original, "original")] + [(t.image_rgb, t.recipe) for t in tiles]
+    state = {"original": original, "recipes": [None] + [t.recipe for t in tiles],
+             "images": [original] + [t.image_rgb for t in tiles]}
+    failed = [t.recipe for t in tiles if not t.ok]
+    msg = (f"{len(tiles)} recipe(s) in {group} previewed in {time.perf_counter() - start:.0f}s. "
+           "Click a thumbnail to compare it with the original and load that recipe.")
+    if failed:
+        msg += " Preview failed for: " + ", ".join(failed) + "."
+    return items, state, None, msg
+
+
+def on_recipe_gallery_select(state, evt: gr.SelectData):
+    """Show before/after for the clicked thumbnail and load its recipe."""
+    if not state or evt is None or evt.index is None:
+        return gr.update(), None, gr.update()
+    idx = evt.index if isinstance(evt.index, int) else evt.index[0]
+    recipes = state.get("recipes") or []
+    if not 0 <= idx < len(recipes):
+        return gr.update(), None, gr.update()
+    name = recipes[idx]
+    if name is None:
+        return gr.update(), state["original"], "Original photo (no recipe)."
+    compare = gallery_before_after(state["original"], state["images"][idx])
+    return gr.update(value=name), compare, f"Loaded **{name}**: original on the left, recipe on the right. Press Render Preview for full quality."
+
+
 def on_browse_category(category):
     """T4 — List recipes in category (or all)."""
     return on_search_recipes("", category)
@@ -3471,6 +3542,33 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             cookbook_status = gr.Markdown(
                                 "Open accordion → pick category or search → select recipe."
                             )
+
+                        with gr.Accordion("🖼️ Recipe Gallery", open=False):
+                            gr.Markdown(
+                                "See each recipe on your own photo. Uses the first uploaded photo "
+                                "at preview size; about half a second per recipe."
+                            )
+                            with gr.Row():
+                                recipe_gallery_group = gr.Dropdown(
+                                    label="Recipes to preview",
+                                    choices=gallery_groups(),
+                                    value=GALLERY_GROUP_DEFAULT,
+                                    interactive=True,
+                                    scale=2,
+                                )
+                                recipe_gallery_btn = gr.Button(
+                                    "Preview recipes", variant="secondary", size="sm",
+                                    elem_classes=["secondary-btn"], scale=1,
+                                )
+                            recipe_gallery_status = gr.Markdown("")
+                            recipe_gallery_compare = gr.Image(
+                                label="Before | after", interactive=False, height=320,
+                            )
+                            recipe_gallery = gr.Gallery(
+                                label="Recipe previews", columns=2, height="auto",
+                                object_fit="contain", allow_preview=False,
+                            )
+                            recipe_gallery_state = gr.State(None)
 
                         show_compare = gr.Checkbox(label="Show side-by-side comparison screen", value=True, info="Split view: original | separator | retouched result")
 
@@ -5067,6 +5165,19 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         fn=on_select_cookbook,
         inputs=[cookbook_dropdown],
         outputs=[recipe, cookbook_status],
+    )
+
+    # Recipe gallery wiring
+    recipe_gallery_btn.click(
+        fn=on_recipe_gallery,
+        inputs=[img_input, recipe_gallery_group],
+        outputs=[recipe_gallery, recipe_gallery_state, recipe_gallery_compare, recipe_gallery_status],
+        concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
+    )
+    recipe_gallery.select(
+        fn=on_recipe_gallery_select,
+        inputs=[recipe_gallery_state],
+        outputs=[recipe, recipe_gallery_compare, recipe_gallery_status],
     )
 
     # Batch tab Recipe Cookbook wiring (same T4 handlers, targets batch_recipe)
