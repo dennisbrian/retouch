@@ -184,6 +184,7 @@ runs complete in roughly 27–325 s depending on recipe and face workload. The
 - ✅ 2026-09-25 **person gate dropped real faces under near-white wigs (P1)**: the full-frame selfie mask lost the head against a blown window (DSCF3773 coverage 0.000; 9/47 pilot faces dropped). Gate rejects now get a second opinion: multiclass face-skin coverage on a 1.5x face crop >= 0.45 keeps the face (56 real faces min 0.478, 931 background boxes max 0.302); model unavailable -> old behaviour. Tests: `tests/test_detection_person_gate.py::TestFaceSkinRescue`. Bug write-up: PR #17.
 
 - ✅ 2026-09-25 **glasses / goggle / visor glare removal** (opt-in `lens_glare` 0-100, `--lens-glare`, GUI Eyes & Lips): `retouch/lens_glare.py` subtracts an additive low-frequency veil measured above a closing+opening local reference (tone-invariant margin), runs before reshape. Planted glare on real faces: 40-70% lifted; glare wholly inside the eye opening is kept. Tests: `tests/test_lens_glare.py`.
+- ✅ 2026-09-25 **flash red-eye fix** (opt-in `red_eye` 0-100, `--red-eye`, GUI Eyes & Lips): `retouch/red_eye.py` finds the red pupil from the iris landmarks with a hue-gated red ratio measured against the face's own skin (tone-invariant), requires a red pupil *core* (red contact lenses keep a dark core) and a non-red surround, then neutralises it to a dark grey, catchlight kept. Public red-eye photos: 39/46 red eyes fixed, 0 changes on 11 control photos (incl. darker skin, Alex's wig uploads). Tests: `tests/test_red_eye.py`.
 ---
 
 ## Code Style & Conventions

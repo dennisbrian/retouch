@@ -114,8 +114,9 @@ for color in ["red", "green", "blue"]:
     EXPECTED_RECIPE_KEYS.extend([f"calibration_{color}_hue", f"calibration_{color}_sat", f"calibration_{color}_lum"])
 EXPECTED_RECIPE_KEYS.append("lens_blur")
 EXPECTED_RECIPE_KEYS.append("lens_glare")
+EXPECTED_RECIPE_KEYS.append("red_eye")
 
-EXPECTED_RECIPE_KEY_COUNT = 259
+EXPECTED_RECIPE_KEY_COUNT = 261
 # Self-updating: the recipe/smart-style slider tuple length is the contract
 # defined by RECIPE_OUTPUT_KEYS, so this constant can never go stale.
 EXPECTED_UI_OUTPUT_COUNT = len(gui.RECIPE_OUTPUT_KEYS)

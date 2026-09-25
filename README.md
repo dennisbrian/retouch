@@ -121,6 +121,16 @@ like a catchlight), and does not reach glare below the eyes on a full visor. On
 faces without glasses it also softens shine around the eyes, so use it on
 photos with eyewear.
 
+Red-eye fix (`--red-eye 0-100` in the CLI, the "Red-Eye Fix" slider under Eyes
+& Lips in the app, or `eyes.red_eye` in a recipe) turns pupils that glow red
+from an on-camera flash back to a dark pupil, keeping the catchlight and the
+iris colour. It is off by default and uses no model. It only acts when the
+middle of the pupil is red and clearly redder than the face's own skin, so red
+contact lenses (a dark pupil inside a red ring), red eyeliner and red wigs
+next to the eye are left alone. It skips very small faces (iris under about 4
+pixels across its radius), pale or pink "white-eye" glows only turn grey
+rather than black, and gold or green animal eye-shine is not touched.
+
 Set `RETOUCH_OFFLINE=1` before launching the GUI to disable update checks and
 prevent model downloads; the Advanced Retouch status panel shows the mode.
 

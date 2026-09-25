@@ -607,6 +607,8 @@ class ProcessingContext:
     ai_sr_scale: int = 1
     # Glasses / goggle / visor glare removal, 0-100 (0 = off).
     lens_glare: float = 0.0
+    # Flash red-eye removal, 0-100 (0 = off).
+    red_eye: float = 0.0
 
     # --- A4: Neural boosters (PARKED — await A1 evidence) ---
     # stray_hair_boost: 0-100 strength for flyaway hair detection/removal.
@@ -1691,6 +1693,7 @@ class RetouchEngine:
         ai_denoise: Optional[float] = None,
         ai_sr_scale: Optional[int] = None,
         lens_glare: Optional[float] = None,
+        red_eye: Optional[float] = None,
         # --- C5: Skin-anchored background color harmonization ---
         background_harmonize: Optional[float] = None,
         background_harmonize_mode: Optional[str] = None,
@@ -1999,6 +2002,7 @@ class RetouchEngine:
             "ai_denoise": ai_denoise,
             "ai_sr_scale": ai_sr_scale,
             "lens_glare": lens_glare,
+            "red_eye": red_eye,
             "background_harmonize": background_harmonize,
             "background_harmonize_mode": background_harmonize_mode,
             "background_blur": background_blur,
@@ -2713,6 +2717,7 @@ class RetouchEngine:
         self._bind_face_targets(ctx, faces_native, (w_native, h_native))
 
         native_img_bgr = self._stage_lens_glare(native_img_bgr, faces_native, ctx, timings)
+        native_img_bgr = self._stage_red_eye(native_img_bgr, faces_native, ctx, timings)
         t1 = time.perf_counter()
         result_native = self._stage_reshape(native_img_bgr, faces_native, ctx)
         timings["reshape"] = (time.perf_counter() - t1) * 1000
@@ -2962,6 +2967,7 @@ class RetouchEngine:
         self._bind_face_targets(ctx, faces, (img_bgr.shape[1], img_bgr.shape[0]))
 
         img_bgr = self._stage_lens_glare(img_bgr, faces, ctx, timings)
+        img_bgr = self._stage_red_eye(img_bgr, faces, ctx, timings)
         t1 = time.perf_counter()
         result = self._stage_reshape(img_bgr, faces, ctx)
         timings["reshape"] = (time.perf_counter() - t1) * 1000
@@ -3581,6 +3587,24 @@ class RetouchEngine:
         out, diags = remove_lens_glare_faces(img, faces, strength)
         ctx._runtime_diagnostics["lens_glare"] = diags
         timings["lens_glare"] = (time.perf_counter() - t) * 1000
+        return out
+
+    def _stage_red_eye(self, img: np.ndarray, faces, ctx: ProcessingContext, timings) -> np.ndarray:
+        """Remove flash red-eye before any face work.
+
+        Opt-in (``ctx.red_eye`` 0 = off). Runs on the detection-frame image so
+        the eye enhancements (catchlights, iris, sclera) see a dark pupil.
+        """
+        strength = float(getattr(ctx, "red_eye", 0.0) or 0.0)
+        if strength <= 0.0 or not faces:
+            return img
+        from .red_eye import remove_red_eye_faces
+
+        _emit_stage("red_eye")
+        t = time.perf_counter()
+        out, diags = remove_red_eye_faces(img, faces, strength)
+        ctx._runtime_diagnostics["red_eye"] = diags
+        timings["red_eye"] = (time.perf_counter() - t) * 1000
         return out
 
     def _stage_reshape(self, img: np.ndarray, faces, ctx: ProcessingContext) -> np.ndarray:
