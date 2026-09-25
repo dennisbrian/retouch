@@ -7,6 +7,7 @@
 #   ./run crops FOLDER     make 4:5 / 9:16 / 1:1 social crops of retouched photos
 #   ./run split FOLDER ... split a shoot into folders by capture time
 #   ./run recipes          list the recipe names --recipe accepts
+#   ./run lut RECIPE       save a recipe's colour look as a .cube LUT (-o PATH)
 #   ./run review ARGS...   build/apply a batch review page (retouch.review_page)
 #   ./run update           pull the latest code and refresh dependencies
 set -euo pipefail
@@ -15,7 +16,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
 case "${1:-}" in
-    -h|--help|help) sed -n '2,11p' "$0"; exit 0 ;;
+    -h|--help|help) sed -n '2,12p' "$0"; exit 0 ;;
 esac
 
 PYTHON="$ROOT_DIR/.venv/bin/python"
@@ -67,6 +68,9 @@ for title, names in (
 print("Use one with: ./run batch <folder> -o <output> --recipe NAME")
 PY
         ;;
+    lut)
+        exec "$PYTHON" -m retouch.lut_export "$@"
+        ;;
     review)
         exec "$PYTHON" -m retouch.review_page "$@"
         ;;
@@ -76,7 +80,7 @@ PY
         ;;
     *)
         echo "Unknown command: $cmd" >&2
-        sed -n '2,11p' "$0" >&2
+        sed -n '2,12p' "$0" >&2
         exit 2
         ;;
 esac

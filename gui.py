@@ -2485,6 +2485,34 @@ def _first_upload_path(img_paths):
     return getattr(first, "name", first)
 
 
+def on_export_recipe_lut(recipe_name):
+    """Bake the selected recipe's colour look into a downloadable .cube LUT.
+
+    Returns (file path or None, status markdown).
+    """
+    from retouch.lut_export import changes_colour, recipe_lut, skipped_steps, write_cube
+
+    if not recipe_name or recipe_name not in RECIPES:
+        return None, "Pick a recipe first."
+    try:
+        lut = recipe_lut(recipe_name)
+    except Exception as e:  # noqa: BLE001 — surface any engine error in the UI
+        _logger.warning("LUT export failed for %s: %s", recipe_name, e)
+        return None, f"Could not build the LUT: {e}"
+    if not changes_colour(lut):
+        return None, (
+            f"**{recipe_name}** has no colour look (it only retouches), "
+            "so there is nothing to put in a LUT."
+        )
+    out_dir = Path(tempfile.mkdtemp(prefix="retouch_lut_"))
+    path = write_cube(lut, out_dir / f"{recipe_name}.cube", title=recipe_name)
+    status = f"Saved **{recipe_name}.cube** (33-point). Load it in Photoshop, Premiere, Resolve or Final Cut."
+    skipped = skipped_steps(recipe_name)
+    if skipped:
+        status += " Not in the LUT: " + ", ".join(skipped) + "."
+    return str(path), status
+
+
 def on_recipe_gallery(img_paths, group, prg=gr.Progress()):
     """Render every recipe in ``group`` on a small preview of the first photo.
 
@@ -3569,6 +3597,20 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 object_fit="contain", allow_preview=False,
                             )
                             recipe_gallery_state = gr.State(None)
+
+                        with gr.Accordion("🎨 Save Look as LUT", open=False):
+                            gr.Markdown(
+                                "Save the selected recipe's colour look as a .cube file for "
+                                "Photoshop, Premiere, Resolve or Final Cut. Only colour and tone "
+                                "go in; face retouching, sharpening, vignette, glow and grain "
+                                "need the full app."
+                            )
+                            export_lut_btn = gr.Button(
+                                "Save .cube LUT", variant="secondary", size="sm",
+                                elem_classes=["secondary-btn"],
+                            )
+                            export_lut_status = gr.Markdown("")
+                            export_lut_file = gr.File(label="LUT file", interactive=False)
 
                         show_compare = gr.Checkbox(label="Show side-by-side comparison screen", value=True, info="Split view: original | separator | retouched result")
 
@@ -5168,6 +5210,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     )
 
     # Recipe gallery wiring
+    export_lut_btn.click(
+        fn=on_export_recipe_lut,
+        inputs=[recipe],
+        outputs=[export_lut_file, export_lut_status],
+    )
     recipe_gallery_btn.click(
         fn=on_recipe_gallery,
         inputs=[img_input, recipe_gallery_group],
