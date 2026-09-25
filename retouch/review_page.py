@@ -17,7 +17,7 @@ Command line::
     python -m retouch.review_page build ROOT [--source DIR] [--recursive]
                                              [--title T] [--workers N]
     python -m retouch.review_page apply ROOT DECISIONS.json
-                                             [--picks-dir D] [--move-rejects]
+                                             [--picks-dir D] [--move-rejects] [--xmp]
 """
 
 from __future__ import annotations
@@ -923,6 +923,9 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Also move rejected outputs + compares into --rejects-dir")
     a.add_argument("--rejects-dir", default=_DEFAULT_REJECTS_DIR,
                    help="Folder under ROOT for rejects (default: rejected)")
+    a.add_argument("--xmp", action="store_true",
+                   help="Also write picks/rejects and QA flags as XMP (colour labels, "
+                        "reject rating, keywords) for Lightroom, Capture One and Bridge")
     return parser
 
 
@@ -954,6 +957,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if not args.decisions.is_file():
         print(f"error: decisions file not found: {args.decisions}", file=sys.stderr)
         return 1
+    if args.xmp:
+        # Before apply: the copied picks and moved rejects then carry the tags.
+        from .xmp_sidecar import format_counts, write_review_xmp
+        try:
+            print(format_counts(write_review_xmp(root, args.decisions)))
+        except (OSError, ValueError) as exc:
+            print(f"error: XMP: {exc}", file=sys.stderr)
+            return 1
     try:
         counts = apply_decisions(root, args.decisions, picks_dir=args.picks_dir,
                                  move_rejects=args.move_rejects, rejects_dir=args.rejects_dir)

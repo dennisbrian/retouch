@@ -9,6 +9,7 @@
 #   ./run recipes          list the recipe names --recipe accepts
 #   ./run lut RECIPE       save a recipe's colour look as a .cube LUT (-o PATH)
 #   ./run review ARGS...   build/apply a batch review page (retouch.review_page)
+#   ./run xmp ARGS...      write ratings/picks/flags as XMP for Lightroom etc.
 #   ./run update           pull the latest code and refresh dependencies
 set -euo pipefail
 
@@ -16,7 +17,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
 case "${1:-}" in
-    -h|--help|help) sed -n '2,12p' "$0"; exit 0 ;;
+    -h|--help|help) sed -n '2,13p' "$0"; exit 0 ;;
 esac
 
 PYTHON="$ROOT_DIR/.venv/bin/python"
@@ -74,13 +75,16 @@ PY
     review)
         exec "$PYTHON" -m retouch.review_page "$@"
         ;;
+    xmp)
+        exec "$PYTHON" -m retouch.xmp_sidecar "$@"
+        ;;
     update)
         git pull --ff-only
         exec "$ROOT_DIR/setup" --no-models
         ;;
     *)
         echo "Unknown command: $cmd" >&2
-        sed -n '2,12p' "$0" >&2
+        sed -n '2,13p' "$0" >&2
         exit 2
         ;;
 esac

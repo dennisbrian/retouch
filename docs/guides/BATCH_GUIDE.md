@@ -307,13 +307,71 @@ The file contains your `pick` / `reject` decisions for the batch, keyed by image
 Copy picks to a folder and optionally move rejects:
 
 ```bash
-./run review apply /path/to/output decisions.json [--move-rejects]
+./run review apply /path/to/output decisions.json [--move-rejects] [--xmp]
 ```
 
 This:
 - **Copies** all picked images to `/path/to/output/picks/` (preserving subdirectory structure)
 - **Moves** rejected images (and their comparisons) to `/path/to/output/rejected/` only if `--move-rejects` is passed
 - **Never** overwrites or deletes existing files — any collisions are skipped and reported
+
+### Ratings and Picks in Lightroom and Capture One (XMP)
+
+Culling in retouch does not have to stay in retouch. With `--xmp`, the
+decisions and QA flags are written as standard XMP metadata, which Lightroom
+Classic, Capture One, Adobe Bridge and Photo Mechanic read on import (or with
+Lightroom's **Metadata > Read Metadata from Files**).
+
+```bash
+# during a batch: QA flags only (nothing is picked yet)
+./run batch ~/photos -o ~/photos_out --recipe cosplay_clear_v1 --xmp
+
+# after exporting decisions from review.html: picks and rejects too
+./run review apply ~/photos_out decisions.json --xmp
+
+# or on its own, any time (re-running is safe)
+./run xmp review ~/photos_out [decisions.json] [--no-sources] [--no-outputs]
+./run xmp shoot ~/shoot/.retouch-shoot-review.json
+```
+
+In the app: tick **Write XMP for Lightroom / Capture One** on the Batch tab, or
+press **Write XMP sidecars** under the Shoot Intelligence review.
+
+| retouch | XMP written | Shows in Lightroom as |
+|---|---|---|
+| Pick (review.html) / Select (Shoot tab) | `xmp:Label="Green"`, keyword `retouch-pick` | Green colour label |
+| Reject | `xmp:Label="Red"`, `xmp:Rating="-1"`, keyword `retouch-reject` | Red label (Bridge and Capture One also show a reject) |
+| Hold (Shoot tab, saved review) | `xmp:Label="Yellow"`, keyword `retouch-hold` | Yellow label |
+| QA flag in the batch | `xmp:Label="Yellow"`, keywords `retouch-qa-<flag>`, `retouch-qa-fail` | Yellow label + keywords |
+| Star rating (Shoot tab) | `xmp:Rating="0"`–`"5"` | Stars |
+| Shoot tab labels | the label text as a keyword | Keywords |
+| Best frame of a burst, closed/blinking eyes (Shoot tab, automatic) | keywords `retouch-burst-best`, `retouch-closed-eyes` only | Keywords (never a label or stars: they are suggestions) |
+| Recipe used | keyword `retouch-recipe-<name>` | Keyword |
+
+Where the metadata goes:
+
+- **Beside each source**: `DSCF1234.RAF` gets `DSCF1234.xmp`, the Adobe
+  convention every raw editor reads. A RAF+JPG pair shares one sidecar.
+  Lightroom ignores sidecars beside JPEG originals (it reads a JPEG's own
+  embedded metadata), and retouch never changes a source file, so for JPEG
+  originals use the tagged outputs below.
+- **Inside each retouched JPEG** in the output folder (pixels and EXIF are
+  untouched), so importing the outputs brings the labels with them. The copies
+  in `picks/` carry them too. PNG, TIFF and WebP outputs get a `.xmp` sidecar
+  instead.
+
+Safe with sidecars that already exist (from Lightroom, Capture One or a camera):
+everything else in them, including develop settings, is kept; a rating or label
+that someone set, or changed after retouch wrote it, is never overwritten (an
+Adobe rating of 0 means unrated and may be filled); only keywords starting with
+`retouch-` are replaced, so a pick flipped to a reject does not leave
+`retouch-pick` behind. Before retouch first changes a sidecar it did not create,
+it saves a one-time `<name>.xmp.orig` backup. A sidecar that is not valid XMP is
+left alone and counted as an error.
+
+Lightroom keeps its own pick flags (P / X) in the catalog, not in XMP, so
+retouch uses colour labels and keywords instead. Filter by the Green label in
+the Library filter bar to see your picks.
 
 ### Building a Review Page for an Older Batch
 
