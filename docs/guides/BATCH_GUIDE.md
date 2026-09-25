@@ -250,6 +250,30 @@ All data is embedded in the HTML file; no external network or server is needed. 
 
 The CLI prints the page's path at the end of the batch (`Review page → …`). The app's Batch tab writes the same page and adds its path to the log.
 
+### What the QA Flags Mean
+
+An image is **Flagged** when at least one of these checks fires. The checks
+compare the retouched image with the original photo, so a busy background,
+a dark suit or banding already in the camera JPEG does not flag.
+
+| Check | Flags when | Typical cause |
+|---|---|---|
+| Banding | More than 6% of the person, or of the face skin, shows new staircase bands (flat patches separated by 2+ level steps) that the original did not have | Heavy smoothing or a strong tone curve on 8-bit skin |
+| Plastic skin | The face skin keeps less than 60% of the fine texture it had in the original | Smoothing strong enough to wipe out pores |
+| Asymmetry | One part of the face keeps less than 60% of the texture the rest of the face kept | One cheek smoothed much more than the other |
+| Seam | The retouch adds more than 5 L-levels of edge contrast along the subject's outline | A visible line or halo where the subject meets the background |
+| Colour drift | Skin hue moves more than 6° on average, or 5% of it moves more than 20° | A grade that shifts the whole skin colour (for example `cinema_grade_v1`) |
+| Clipping | More than 8% of the image is blown to white or crushed to black in solid blobs | An exposure or contrast push that clips |
+| Harmony | Moles, freckles or other skin marks the retouch was meant to keep were removed | Blemish removal taking marks the mark policy protects |
+| Halo, pore spectrum, CAM16 ΔE | Sharpening overshoot, pore-level texture loss, or a large perceptual skin-colour shift | Over-sharpening, over-smoothing or a strong grade |
+
+Styled cosplay looks (for example `cosplay_clear_v1`, `cosplay_feed_pop_v1`,
+`cosplay_neon_night_v1`) do not flag on their own: on 7 real portraits and
+5 recipes, only `cinema_grade_v1` (colour drift, by design), three strong
+clipping cases and six mark-removal cases flagged. Calibration data:
+[RESEARCH_QA_FLAG_CALIBRATION_2026_09_25.md](../plans/RESEARCH_QA_FLAG_CALIBRATION_2026_09_25.md).
+With `--fail-on-qa`, a flagged image is not saved and shows as "Blocked by QA" on the page.
+
 ### Navigation & Decisions
 
 Use keyboard shortcuts to review images and mark them:

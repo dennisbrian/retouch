@@ -121,6 +121,42 @@ class TestMultiIlluminantParams:
         )
         assert np.array_equal(out, img)
 
+    def test_zero_skin_mask_is_identity(self):
+        """Regression for the 2026-09-24 fix: pixels outside skin_mask must
+        be left untouched. Before the fix, `adapted = img_key*(1-m) +
+        img_fill*m` had no third "leave alone" state, so m==0 fell back to
+        img_key (the FULL key-illuminant CAT16 adaptation), not the
+        original pixel — a frame-wide color cast over hair/background/
+        clothing on every render with a distinct key/fill kelvin, confirmed
+        visually (hard blue cast, DSCF8481 render, 2026-09-24)."""
+        from retouch.color_science import adapt_multi_illuminant_skin
+
+        img = np.full((8, 8, 3), 150, dtype=np.uint8)
+        out = adapt_multi_illuminant_skin(
+            img, skin_mask=np.zeros((8, 8), np.float32),
+            key_wp=(0.6, 1.0, 1.8),  # distinct key/fill, so the bug would fire
+            fill_wp=(0.95047, 1.0, 1.08883),
+            mix_factor=0.6,
+        )
+        assert np.array_equal(out, img)
+
+    def test_partial_skin_mask_leaves_outside_unchanged(self):
+        """Same regression, on a spatially partial mask (the realistic
+        case — acc_skin covers only part of the frame)."""
+        from retouch.color_science import adapt_multi_illuminant_skin
+
+        img = np.full((8, 8, 3), 150, dtype=np.uint8)
+        mask = np.zeros((8, 8), dtype=np.float32)
+        mask[:4, :4] = 1.0  # skin in the top-left quadrant only
+        out = adapt_multi_illuminant_skin(
+            img, skin_mask=mask,
+            key_wp=(0.6, 1.0, 1.8),
+            fill_wp=(0.95047, 1.0, 1.08883),
+            mix_factor=0.6,
+        )
+        assert np.array_equal(out[4:, 4:], img[4:, 4:])
+        assert not np.array_equal(out[:4, :4], img[:4, :4])
+
 
 class TestCam16DeltaEDetector:
     """K1: CAM16-UCS delta-E QA detector."""

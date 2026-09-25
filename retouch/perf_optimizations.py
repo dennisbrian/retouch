@@ -1246,7 +1246,21 @@ def _process_face_core(
     # isotropic path is kept as a fallback when no hair mask is available.
     hair_deglare_v = getattr(ctx, 'hair_deglare', 0) or 0
     hair_ring_strength = ctx.hair_enhance
-    hair_flyaway_v = getattr(ctx, 'hair_remove_flyaways', 0) or 0
+    # flyaway_cleanup aliases to the same H1 remove_flyaways() dispatch as
+    # hair_remove_flyaways, max-combined (e73d3ba pattern), rather than
+    # calling hair.py::cleanup_flyaway_strands directly. That function's
+    # "allowed zone" excludes only a ~41px ring around the hair silhouette —
+    # everywhere else (clothing embroidery, background texture) is fair game
+    # to it — so its former call site (deleted 2026-08-17 as believed-dead
+    # A/B residue, aaaa1e5) produced visible fabric/texture smearing when
+    # restored and tested 2026-09-24. hairwork.py::remove_flyaways here is
+    # the live, hair-mask-scoped, tested implementation 4 recipes already
+    # use via hair_remove_flyaways; flyaway_cleanup now reaches the same
+    # safe path instead of resurrecting the broken one.
+    hair_flyaway_v = max(
+        getattr(ctx, 'hair_remove_flyaways', 0) or 0,
+        getattr(ctx, 'flyaway_cleanup', 0) or 0,
+    )
     if hair_deglare_v > 0 or hair_ring_strength > 0 or hair_flyaway_v > 0:
         if regions.hair is not None and _norm_mask(regions.hair).max() > 0.01:
             from .hairwork import hair_flow, deglare_wig, add_angel_ring, remove_flyaways
