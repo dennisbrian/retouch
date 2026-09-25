@@ -66,6 +66,10 @@ def _legacy_detector(mesh_results, person_mask=None, segmenter_raises=False):
     detector.unavailable_reason = None
     detector._landmarker = None
     detector._segmenter = None
+    # No face-skin second opinion unless a test opts in: keeps the person
+    # gate deterministic and never loads the real multiclass model.
+    detector._face_skin_segmenter = None
+    detector._face_skin_segmenter_failed = True
 
     mesh = MagicMock()
     mesh.process.side_effect = mesh_results
