@@ -223,10 +223,11 @@ class TestApplyAdjustments:
 
 class TestIntegrationWithDetectors:
     def _plastic_image(self) -> np.ndarray:
-        """Build an image that detect_plastic_skin flags.
+        """Build an image that detect_plastic_skin flags against a textured input.
 
-        A near-flat skin-tone region has almost no high-frequency energy,
-        so hf_energy_ratio ≈ 0 < PLASTIC_SKIN_THRESHOLD → flagged.
+        A near-flat skin-tone region has almost no high-frequency energy, so
+        compared with :meth:`_textured_image` as the reference it keeps
+        ~0% of the input texture < PLASTIC_SKIN_THRESHOLD → flagged.
         """
         img = np.full((64, 64, 3), 160, dtype=np.uint8)  # flat skin-ish
         # Tiny tint so it isn't perfectly uniform
@@ -246,9 +247,11 @@ class TestIntegrationWithDetectors:
 
         img = self._plastic_image()
         mask = np.ones((64, 64), dtype=np.float32)
-        det = detect_plastic_skin(img, mask=mask)
+        det = detect_plastic_skin(
+            img, mask=mask, reference_img_bgr=self._textured_image()
+        )
         assert det["flagged"], "test image should be flagged as plastic"
-        assert det["hf_energy_ratio"] < PLASTIC_SKIN_THRESHOLD
+        assert det["texture_retention"] < PLASTIC_SKIN_THRESHOLD
 
         ctx = _ctx(smooth=80.0, whiten=40.0)
         warn = QAWarning(
@@ -268,7 +271,7 @@ class TestIntegrationWithDetectors:
 
         img = self._textured_image()
         mask = np.ones((64, 64), dtype=np.float32)
-        det = detect_plastic_skin(img, mask=mask)
+        det = detect_plastic_skin(img, mask=mask, reference_img_bgr=img)
         # Textured noise should not be flagged.
         if det["flagged"]:
             pytest.skip("random noise unexpectedly flagged — threshold tuning")

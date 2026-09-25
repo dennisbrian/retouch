@@ -123,11 +123,19 @@ def not_run_evidence(reason: str) -> Dict[str, Dict[str, Any]]:
 
 
 # Threshold constants — adjust based on tuning
-BANDING_THRESHOLD = 0.15  # Flag if >15% of smooth pixels on quantization step edges
+# Recalibrated 2026-09-25 (docs/plans/RESEARCH_QA_FLAG_CALIBRATION_2026_09_25.md):
+# banding, plastic_skin, seam and asymmetry used absolute measurements that
+# flagged 100% of real renders, so the review page's "Flagged" filter was
+# noise. They now measure what the retouch CHANGED against the input photo.
+BANDING_THRESHOLD = 0.06  # Flag if >6% of the person (or face skin) is newly banded
+BANDING_STEP_MIN = 2      # Smallest step (8-bit luma codes) that reads as a band
+BANDING_STEP_MAX = 16     # Larger jumps are real edges, not quantization
+BANDING_PLATEAU_PX = 3    # Flat run required on both sides of a step
+BANDING_MIN_FACE_PIXELS = 400  # Smaller face masks are not scored separately
 CLIPPING_THRESHOLD = 0.08  # Flag if clipped blob fraction >8% of image
-PLASTIC_SKIN_THRESHOLD = 0.60  # Flag if high-freq energy ratio falls below 60%
+PLASTIC_SKIN_THRESHOLD = 0.60  # Flag if skin keeps <60% of its fine texture vs input
 HALO_THRESHOLD = 15.0  # Flag if mean overshoot amplitude >15 levels
-SEAM_THRESHOLD = 5.0   # Flag if boundary gradient >5 L-levels above context
+SEAM_THRESHOLD = 5.0   # Flag if the retouch adds >5 L-levels of boundary gradient
 
 # K8 — color-fidelity (Δ-E / hue-drift) gate.
 # Skin hue should shift only a few degrees under a grade; beyond these the
@@ -137,13 +145,21 @@ SEAM_THRESHOLD = 5.0   # Flag if boundary gradient >5 L-levels above context
 # a relative floor, so it tracks each subject's skin chroma instead of an
 # absolute Lab number. Over that chroma-floored population:
 #   flag if mean Δh > COLOR_DRIFT_HUE_MEAN_THRESHOLD
-#        or 99th-percentile Δh > COLOR_DRIFT_HUE_P99_THRESHOLD.
+#        or 95th-percentile Δh > COLOR_DRIFT_HUE_P95_THRESHOLD.
 # Calibrated 2026-09-23 on real `natural` renders (7 images, p99 ≤ 7.2°,
 # floored mean ≤ 0.32°) vs uniform OKLCh skin-hue rotations (+8°: p99
 # 10.5–14.8°, +15°: 18.6–21.5°) — see detect_color_drift docstring.
+# Recalibrated 2026-09-25: the old p99 > 10° tail gate flagged 15/21 styled
+# cosplay renders whose mean moved only 1.4–3.7° — the tail is the person
+# mask's intentional lip/eye/makeup edits, not a skin cast. The tail gate is
+# now p95 > 20° (styled cosplay renders ≤ 11.8°; cinema_grade_v1's real
+# skin cast reads mean ≥ 21°, p95 ≥ 35° on all 7 photos).
 COLOR_DRIFT_HUE_MEAN_THRESHOLD = 6.0   # Flag if chroma-floored mean Δh > 6°
-COLOR_DRIFT_HUE_P99_THRESHOLD = 10.0   # Flag if chroma-floored p99 Δh > 10°
-COLOR_DRIFT_HUE_PERCENTILE = 99.0      # Percentile replacing the old max rule
+COLOR_DRIFT_HUE_P95_THRESHOLD = 20.0   # Flag if chroma-floored p95 Δh > 20°
+COLOR_DRIFT_HUE_GATE_PERCENTILE = 95.0
+# Still reported (``deltaH_p99_deg``) for compatibility; no longer gates.
+COLOR_DRIFT_HUE_P99_THRESHOLD = 10.0
+COLOR_DRIFT_HUE_PERCENTILE = 99.0
 COLOR_DRIFT_CHROMA_FLOOR_FRAC = 0.5    # Keep pixels with C ≥ 0.5·median(C_ref)
 # Numerical guard only: hue is undefined below ~1 ΔE of chroma (≈ one JND),
 # for ANY skin tone. Real skin chroma is ≥ ~5; this never binds on skin and
@@ -153,11 +169,12 @@ COLOR_DRIFT_MIN_HUE_PIXELS = 100       # Fewer kept pixels → hue gate not meas
 # Deprecated: the old single-pixel max rule (flagged plain `natural` renders
 # via one near-neutral pixel). Kept for import compatibility; not used.
 COLOR_DRIFT_HUE_MAX_THRESHOLD = 15.0
-COLOR_DRIFT_THRESHOLD = COLOR_DRIFT_HUE_P99_THRESHOLD  # Reported flag boundary (p99 Δh, deg)
+COLOR_DRIFT_THRESHOLD = COLOR_DRIFT_HUE_P95_THRESHOLD  # Reported flag boundary (p95 Δh, deg)
 
 # R15 — QA extensions (read-only analysis detectors).
 PORE_SPECTRUM_THRESHOLD = 0.50  # Flag if pore-energy loss ratio > 50%
-ASYMMETRY_THRESHOLD = 0.40      # Flag if a zone < 60% of face texture energy
+ASYMMETRY_THRESHOLD = 0.40      # Flag if a face zone keeps <60% of the face's average texture retention
+ASYMMETRY_MIN_ZONE_PIXELS = 64  # Relative mode ignores smaller grid-corner slivers
 SKIN_SCORE_FLOOR = 25.0         # Below this 0-100 skin score = clearly plastic
 
 # K1 — CAM16-UCS perceptual colour-difference gate. Mean skin ΔE above this
@@ -295,79 +312,148 @@ def perceived_retouching_vector(
     }
 
 
+def _banding_edges(gray: np.ndarray, step_min: int = 0) -> np.ndarray:
+    """Return a bool map of staircase-banding step pixels in a uint8 luma plane.
+
+    A banding step is a jump of ``BANDING_STEP_MIN``–``BANDING_STEP_MAX``
+    code values with a perfectly flat run of ``BANDING_PLATEAU_PX`` pixels on
+    BOTH sides, along either axis. Sensor noise, film grain and JPEG texture
+    dither real gradients, so flat runs next to a multi-level jump are rare in
+    photographs; posterized gradients (8-bit tone stretch, over-smoothed skin
+    re-quantized, heavy compression) are made of exactly these. One-level
+    steps are ignored: they are the unavoidable 8-bit quantization of any
+    gentle ramp and are not visible as bands. ``step_min`` overrides
+    ``BANDING_STEP_MIN`` (the reference side uses 1, see detect_banding).
+    """
+    step_min = step_min or BANDING_STEP_MIN
+    g = gray.astype(np.int16)
+    k = BANDING_PLATEAU_PX
+    edges = np.zeros(g.shape, dtype=bool)
+    for axis in (0, 1):
+        d = np.diff(g, axis=axis)
+        flat = d == 0
+        ok = (np.abs(d) >= step_min) & (np.abs(d) <= BANDING_STEP_MAX)
+        for s in range(1, k + 1):
+            before = np.zeros_like(flat)
+            after = np.zeros_like(flat)
+            if axis == 1:
+                before[:, s:] = flat[:, :-s]
+                after[:, :-s] = flat[:, s:]
+            else:
+                before[s:, :] = flat[:-s, :]
+                after[:-s, :] = flat[s:, :]
+            ok &= before & after
+        if axis == 1:
+            edges[:, 1:] |= ok
+        else:
+            edges[1:, :] |= ok
+    return edges
+
+
+def _banded_coverage(img_u8: np.ndarray, step_min: int = 0) -> np.ndarray:
+    """Bool map of pixels inside a banded plateau (step pixels + their runs)."""
+    gray = cv2.cvtColor(img_u8, cv2.COLOR_BGR2GRAY)
+    edges = _banding_edges(gray, step_min)
+    size = 2 * BANDING_PLATEAU_PX + 1
+    return cv2.dilate(edges.astype(np.uint8), np.ones((size, size), np.uint8)) > 0
+
+
+def _region(mask: Optional[np.ndarray], shape: tuple) -> Optional[np.ndarray]:
+    """Binarize an optional 0–1 or 0–255 mask at 0.5; ``None`` if empty."""
+    if mask is None:
+        return np.ones(shape, dtype=bool)
+    mask_f = mask.astype(np.float32)
+    if mask_f.max() > 1.5:
+        mask_f /= 255.0
+    region = mask_f > 0.5
+    return region if np.any(region) else None
+
+
 def detect_banding(
     img_bgr: np.ndarray,
     mask: Optional[np.ndarray] = None,
+    reference_img_bgr: Optional[np.ndarray] = None,
+    face_mask: Optional[np.ndarray] = None,
 ) -> dict:
-    """Detect quantization banding on smooth gradients.
+    """Detect staircase banding (posterized gradients) the retouch introduced.
 
-    Identifies regions of low local variance (smooth gradients) and measures
-    the fraction of pixels that lie on abrupt 1-level step contours in the
-    L channel, indicating posterization artifacts.
+    Measures the fraction of the region covered by banded plateaus: flat runs
+    separated by 2+ level steps (see :func:`_banding_edges`). With a
+    ``reference_img_bgr`` (the pipeline always passes the input photo) only
+    plateaus that are NOT already present in the reference count, so banding
+    baked into the source JPEG (flat walls, crushed shadows, poster art) does
+    not flag every render. The score is the larger of the new-banding
+    fraction over ``mask`` (person) and over ``face_mask`` (face skin), so a
+    banded face is not diluted by a large body/background mask.
+
+    Calibration (2026-09-25, 7 real photos × 5 recipes incl. cosplay and
+    cinema grades): score ≤ 0.026 on every render (the highest were a
+    bright, JPEG-blocky cheek). Face skin smoothed and posterized to 3-level
+    steps scores ≥ 0.095 on all 7 photos; the whole frame posterized to
+    8-level steps ≥ 0.099. Threshold 0.06. See
+    ``docs/plans/RESEARCH_QA_FLAG_CALIBRATION_2026_09_25.md``.
+
+    The previous measurement (Sobel > 0.8 L on 3×3 low-variance pixels) was
+    satisfied by every 1-level quantization step in any photo and flagged
+    100% of renders.
 
     Args:
         img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR image. Float input
-            is truncated to uint8 internally for analysis; the QA result is
-            identical to running on the uint8 snapshot.
+            is truncated to uint8 internally for analysis.
         mask: Optional (H, W) float mask [0, 1] to restrict analysis.
+        reference_img_bgr: Optional pre-retouch BGR image of the same shape;
+            makes the measurement differential.
+        face_mask: Optional (H, W) face-skin mask scored separately.
 
     Returns:
         dict with keys:
-            - "score": float, fraction of smooth-region pixels on step edges
+            - "score": float in [0, 1], banded-area fraction (new vs reference
+              when a reference is given)
             - "flagged": bool, True if score > BANDING_THRESHOLD
-            - "smooth_pixels": int, count of low-variance pixels
-            - "step_pixels": int, count of pixels on quantization steps
+            - "smooth_pixels": int, pixels in the analysed region
+            - "step_pixels": int, banded-plateau pixels in the region
+            - "face_score": float | None, the same fraction over face skin
+            - "differential": bool, True if measured against a reference
     """
+    empty = {"score": 0.0, "flagged": False, "smooth_pixels": 0, "step_pixels": 0,
+             "face_score": None, "differential": False}
     if img_bgr.shape[0] < 8 or img_bgr.shape[1] < 8:
         # Tiny image; cannot measure banding reliably
-        return {"score": 0.0, "flagged": False, "smooth_pixels": 0, "step_pixels": 0}
+        return empty
 
-    img_bgr = _to_u8_for_analysis(img_bgr)
-    # Convert to Lab and extract L channel
-    img_lab = _bgr_to_lab(img_bgr)
-    L = img_lab[:, :, 0]  # float32, [0, 100]
+    img_u8 = _to_u8_for_analysis(img_bgr)
+    region = _region(mask, img_u8.shape[:2])
+    if region is None:
+        return empty
 
-    # Identify smooth (low-variance) regions via 3x3 local std
-    # Compute local variance in sliding window
-    h, w = L.shape
-    local_mean = cv2.boxFilter(L, cv2.CV_32F, (3, 3))
-    local_sq_mean = cv2.boxFilter(L * L, cv2.CV_32F, (3, 3))
-    local_var = local_sq_mean - local_mean * local_mean
-    local_var = np.maximum(local_var, 0.0)
+    banded = _banded_coverage(img_u8)
+    differential = (
+        reference_img_bgr is not None and reference_img_bgr.shape == img_u8.shape
+    )
+    if differential:
+        # The reference side counts 1-level staircases too: flat JPEG blocks
+        # in the source whose 1-level steps a brightening curve turns into
+        # 2-level ones are the source's quantization, not retouch banding.
+        banded &= ~_banded_coverage(_to_u8_for_analysis(reference_img_bgr), 1)
 
-    # Smooth regions: local variance < 0.5 (threshold empirical)
-    smooth_mask = local_var < 0.5
+    region_count = int(region.sum())
+    banded_count = int((banded & region).sum())
+    score = banded_count / max(region_count, 1)
 
-    # Restrict to provided mask if given
-    if mask is not None:
-        mask_f = mask.astype(np.float32)
-        if mask_f.max() > 1.5:
-            mask_f /= 255.0
-        smooth_mask = smooth_mask & (mask_f > 0.5)
-
-    if smooth_mask.sum() == 0:
-        # No smooth regions found
-        return {"score": 0.0, "flagged": False, "smooth_pixels": 0, "step_pixels": 0}
-
-    # Measure gradient magnitude in L channel (Sobel)
-    grad_x = cv2.Sobel(L, cv2.CV_32F, 1, 0, ksize=3)
-    grad_y = cv2.Sobel(L, cv2.CV_32F, 0, 1, ksize=3)
-    grad_mag = np.sqrt(grad_x**2 + grad_y**2)
-
-    # In smooth regions, high gradient magnitude is suspicious (quantization step).
-    # Threshold: gradient > 0.8 (on 0-100 L scale)
-    step_mask = (grad_mag > 0.8) & smooth_mask
-
-    smooth_count = int(smooth_mask.sum())
-    step_count = int(step_mask.sum())
-    score = step_count / max(smooth_count, 1)
-    flagged = score > BANDING_THRESHOLD
+    face_score = None
+    if face_mask is not None:
+        face = _region(face_mask, img_u8.shape[:2])
+        if face is not None and int(face.sum()) >= BANDING_MIN_FACE_PIXELS:
+            face_score = float((banded & face).sum() / face.sum())
+            score = max(score, face_score)
 
     return {
         "score": min(1.0, float(score)),
-        "flagged": bool(flagged),
-        "smooth_pixels": smooth_count,
-        "step_pixels": step_count,
+        "flagged": bool(score > BANDING_THRESHOLD),
+        "smooth_pixels": region_count,
+        "step_pixels": banded_count,
+        "face_score": face_score,
+        "differential": bool(differential),
     }
 
 
@@ -450,10 +536,21 @@ def detect_plastic_skin(
 ) -> dict:
     """Detect over-smoothed skin (plastic/waxen appearance).
 
-    Within the mask, measures high-frequency energy as std of (L - gaussian_blur(L))
-    normalized by mid-frequency band. If energy is too low, skin texture is erased.
+    Measures how much fine skin texture (std of L − Gaussian(L, σ=2) inside
+    the mask) the output keeps relative to the reference (input) photo, and
+    flags when it keeps less than ``PLASTIC_SKIN_THRESHOLD`` (60%). The
+    pipeline passes the face-skin mask, so hair and clothes do not count.
 
-    Optionally compares before/after energy ratio if reference image is provided.
+    Without a reference there is nothing to compare against: the result is
+    ``not-run`` and never flagged (``hf_energy_ratio`` is still reported).
+    The old absolute rule (hf / mid-frequency ratio < 0.6 over the person
+    mask) flagged every portrait, edited or not, because clothes and hair
+    dominate the mid-frequency term.
+
+    Calibration (2026-09-25, 7 photos × 5 recipes, face-skin mask): every
+    render kept ≥ 0.89 of its input texture; a σ=1.5 Gaussian blur over the
+    face skin keeps 0.29–0.52 and flags on all 7 photos. See
+    ``docs/plans/RESEARCH_QA_FLAG_CALIBRATION_2026_09_25.md``.
 
     Args:
         img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR image (output).
@@ -464,9 +561,11 @@ def detect_plastic_skin(
 
     Returns:
         dict with keys:
-            - "score": float, energy ratio (0 = all texture erased, 1 = fully preserved)
-            - "flagged": bool, True if score < PLASTIC_SKIN_THRESHOLD
-            - "hf_energy_ratio": float, high-freq std / mid-freq std
+            - "score": float, texture retention vs reference clamped to [0, 1]
+              (0 = all texture erased, 1 = fully preserved); None if no reference
+            - "flagged": bool, True if retention < PLASTIC_SKIN_THRESHOLD
+            - "texture_retention": float or None, output / reference fine-texture std
+            - "hf_energy_ratio": float, high-freq std / mid-freq std (informational)
             - "energy_loss_vs_reference": float or None (if reference provided)
     """
     if img_bgr.shape[0] < 8 or img_bgr.shape[1] < 8:
@@ -475,6 +574,7 @@ def detect_plastic_skin(
             "score": 1.0,
             "flagged": False,
             "hf_energy_ratio": 1.0,
+            "texture_retention": None,
             "energy_loss_vs_reference": None,
         }
 
@@ -517,48 +617,45 @@ def detect_plastic_skin(
             if mf_energy > 1e-6:
                 energy_ratio = hf_energy / mf_energy
 
+    region = _region(mask, L.shape)
+    if region is None:
+        region = np.ones(L.shape, dtype=bool)
+    hf_out = float(np.std(L_hf[region]))
+
     # Compare with reference if provided
     energy_loss = None
+    retention = None
     if reference_img_bgr is not None and reference_img_bgr.shape == img_bgr.shape:
         ref_lab = _bgr_to_lab(_to_u8_for_analysis(reference_img_bgr))
         L_ref = ref_lab[:, :, 0]
         L_ref_blur = cv2.GaussianBlur(L_ref, (0, 0), 2.0)
         L_ref_hf = L_ref - L_ref_blur
-
-        ref_mf_energy = float(np.std(L_ref_blur))
+        ref_mf_energy = float(np.std(L_ref_blur[region]))
+        ref_hf_energy = float(np.std(L_ref_hf[region]))
         if ref_mf_energy > 1e-6:
-            ref_hf_energy = float(np.std(L_ref_hf))
             ref_energy_ratio = ref_hf_energy / ref_mf_energy
-
             # Energy loss is how much the ratio decreased
             energy_loss = max(0.0, ref_energy_ratio - energy_ratio) / max(ref_energy_ratio, 1e-6)
+        if ref_hf_energy > 1e-6:
+            retention = hf_out / ref_hf_energy
 
-        if mask is not None:
-            mask_f = mask.astype(np.float32)
-            if mask_f.max() > 1.5:
-                mask_f /= 255.0
-
-            L_ref_masked = L_ref[mask_f > 0.5]
-            L_ref_blur_masked = L_ref_blur[mask_f > 0.5]
-
-            if len(L_ref_masked) > 0:
-                L_ref_hf_masked = L_ref_masked - L_ref_blur_masked
-                ref_mf_energy = float(np.std(L_ref_blur_masked))
-                if ref_mf_energy > 1e-6:
-                    ref_hf_energy = float(np.std(L_ref_hf_masked))
-                    ref_energy_ratio = ref_hf_energy / ref_mf_energy
-                    energy_loss = max(0.0, ref_energy_ratio - energy_ratio) / max(ref_energy_ratio, 1e-6)
-
-    # Score is the energy ratio (lower = more plastic)
-    # Normalize to 0-1: score = 1 means full texture, 0 means erased
-    # For flagging: we flag when score < threshold (i.e., energy is too low)
-    score = min(1.0, max(0.0, energy_ratio / 1.5))  # Normalize assuming normal ~1.5
-    flagged = energy_ratio < PLASTIC_SKIN_THRESHOLD
+    if retention is None:
+        result = _not_measured(
+            "no reference supplied — plastic_skin compares skin texture "
+            "against the input photo",
+        )
+        result.update({
+            "hf_energy_ratio": float(energy_ratio),
+            "texture_retention": None,
+            "energy_loss_vs_reference": energy_loss,
+        })
+        return result
 
     return {
-        "score": float(score),
-        "flagged": bool(flagged),
+        "score": float(min(1.0, max(0.0, retention))),
+        "flagged": bool(retention < PLASTIC_SKIN_THRESHOLD),
         "hf_energy_ratio": float(energy_ratio),
+        "texture_retention": float(retention),
         "energy_loss_vs_reference": energy_loss,
     }
 
@@ -666,55 +763,97 @@ def detect_halo(
     }
 
 
+def _seam_excess(
+    L: np.ndarray, boundary: np.ndarray, interior: np.ndarray
+) -> Optional[tuple]:
+    """Return (boundary excess, context gradient) for the mask outline.
+
+    Excess = mean boundary gradient minus the context (mean of the interior
+    and exterior mean gradients); ``None`` when a region is empty.
+    """
+    grad_x = cv2.Sobel(L, cv2.CV_32F, 1, 0, ksize=3)
+    grad_y = cv2.Sobel(L, cv2.CV_32F, 0, 1, ksize=3)
+    grad_mag = np.sqrt(grad_x**2 + grad_y**2)
+    exterior = ~interior
+    if not (np.any(boundary) and np.any(interior) and np.any(exterior)):
+        return None
+    boundary_mean = float(np.mean(grad_mag[boundary]))
+    context_mean = float((np.mean(grad_mag[interior]) + np.mean(grad_mag[exterior])) / 2.0)
+    return boundary_mean - context_mean, context_mean
+
+
 def detect_seam(
     img_bgr: np.ndarray,
     person_mask: Optional[np.ndarray] = None,
+    reference_img_bgr: Optional[np.ndarray] = None,
 ) -> dict:
-    """Detect seam (gradient discontinuity) along a person-mask boundary.
+    """Detect a seam (gradient discontinuity) the retouch added along the person-mask boundary.
+
+    The excess gradient along the mask boundary (boundary mean minus the
+    average of interior and exterior means) is measured on the output. With
+    a ``reference_img_bgr`` (the pipeline passes the input photo) the same
+    excess is measured on the reference and only the INCREASE counts: the
+    person outline is a natural high-contrast edge (subject against
+    background), which on its own read 22–29 L-levels on every real photo and
+    flagged 100% of renders under the old absolute rule. The reference
+    excess is first scaled by how much the context gradient itself grew
+    (clarity/contrast looks sharpen every edge, the outline included, which
+    is not a seam). Without a reference the absolute excess is reported
+    (legacy behaviour).
+
+    Calibration (2026-09-25, 7 photos × 5 recipes): the retouch added at
+    most 1.4 L-levels. A 2-px line 10 L-levels brighter traced round the
+    whole outline adds 6.0–9.2 on all 7 photos (a 5-level line, 1.8–3.3,
+    does not flag). See
+    ``docs/plans/RESEARCH_QA_FLAG_CALIBRATION_2026_09_25.md``.
 
     Args:
         img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR image. Float input
             is truncated to uint8 internally for analysis.
         person_mask: Optional (H, W) float mask [0, 1] delimiting the subject.
+        reference_img_bgr: Optional pre-retouch BGR image of the same shape.
 
     Returns:
-        dict with keys ``score``, ``flagged``, ``seam_gradient``,
-        ``boundary_pixels``.
+        dict with keys ``score``, ``flagged``, ``seam_gradient`` (added
+        boundary gradient, L-levels), ``boundary_pixels``,
+        ``output_excess`` / ``reference_excess`` (absolute excesses; the
+        latter None without a reference) and ``differential``.
     """
-    if img_bgr.shape[0] < 16 or img_bgr.shape[1] < 16:
-        return {"score": 0.0, "flagged": False, "seam_gradient": 0.0, "boundary_pixels": 0}
+    empty = {"score": 0.0, "flagged": False, "seam_gradient": 0.0, "boundary_pixels": 0,
+             "output_excess": None, "reference_excess": None, "differential": False}
+    if img_bgr.shape[0] < 16 or img_bgr.shape[1] < 16 or person_mask is None:
+        return empty
     img_bgr = _to_u8_for_analysis(img_bgr)
-    img_lab = _bgr_to_lab(img_bgr)
-    L = img_lab[:, :, 0]
-    grad_x = cv2.Sobel(L, cv2.CV_32F, 1, 0, ksize=3)
-    grad_y = cv2.Sobel(L, cv2.CV_32F, 0, 1, ksize=3)
-    grad_mag = np.sqrt(grad_x**2 + grad_y**2)
-    if person_mask is not None:
-        mask_f = person_mask.astype(np.float32)
-        if mask_f.max() > 1.5:
-            mask_f /= 255.0
-        boundary = (cv2.dilate((mask_f > 0.5).astype(np.uint8), np.ones((5, 5), np.uint8)) ^
-                    cv2.erode((mask_f > 0.5).astype(np.uint8), np.ones((5, 5), np.uint8)))
-        if boundary.sum() == 0:
-            return {"score": 0.0, "flagged": False, "seam_gradient": 0.0, "boundary_pixels": 0}
-        interior = mask_f > 0.5
-        exterior = ~interior
-        boundary_grad = grad_mag[boundary > 0]
-        interior_grad = grad_mag[interior]
-        exterior_grad = grad_mag[exterior]
-        if len(boundary_grad) == 0 or len(interior_grad) == 0 or len(exterior_grad) == 0:
-            return {"score": 0.0, "flagged": False, "seam_gradient": 0.0, "boundary_pixels": 0}
-        boundary_mean = float(np.mean(boundary_grad))
-        context_mean = float((np.mean(interior_grad) + np.mean(exterior_grad)) / 2.0)
-        seam_gradient = max(0.0, boundary_mean - context_mean)
-        flagged = seam_gradient > SEAM_THRESHOLD
-        return {
-            "score": min(1.0, seam_gradient / 20.0),
-            "flagged": bool(flagged),
-            "seam_gradient": seam_gradient,
-            "boundary_pixels": int(boundary.sum()),
-        }
-    return {"score": 0.0, "flagged": False, "seam_gradient": 0.0, "boundary_pixels": 0}
+    mask_f = person_mask.astype(np.float32)
+    if mask_f.max() > 1.5:
+        mask_f /= 255.0
+    interior = mask_f > 0.5
+    kernel = np.ones((5, 5), np.uint8)
+    boundary = (cv2.dilate(interior.astype(np.uint8), kernel) ^
+                cv2.erode(interior.astype(np.uint8), kernel)) > 0
+    measured = _seam_excess(_bgr_to_lab(img_bgr)[:, :, 0], boundary, interior)
+    if measured is None:
+        return empty
+    out_excess, out_context = measured
+    ref_excess = None
+    base = 0.0
+    if reference_img_bgr is not None and reference_img_bgr.shape == img_bgr.shape:
+        ref_lab = _bgr_to_lab(_to_u8_for_analysis(reference_img_bgr))
+        ref_measured = _seam_excess(ref_lab[:, :, 0], boundary, interior)
+        if ref_measured is not None:
+            ref_excess, ref_context = ref_measured
+            gain = out_context / ref_context if ref_context > 1e-6 else 1.0
+            base = ref_excess * gain
+    seam_gradient = max(0.0, out_excess - base)
+    return {
+        "score": min(1.0, seam_gradient / 20.0),
+        "flagged": bool(seam_gradient > SEAM_THRESHOLD),
+        "seam_gradient": seam_gradient,
+        "boundary_pixels": int(boundary.sum()),
+        "output_excess": out_excess,
+        "reference_excess": ref_excess,
+        "differential": ref_excess is not None,
+    }
 
 
 def _bgr_to_lab_f(img_bgr: np.ndarray) -> np.ndarray:
@@ -826,8 +965,8 @@ def detect_color_drift(
     absolute chroma cut that behaves differently across skin tones; the tiny
     ``COLOR_DRIFT_CHROMA_EPS`` is a numerical "hue is defined" guard only).
     Over that population it flags if the mean Δh >
-    ``COLOR_DRIFT_HUE_MEAN_THRESHOLD`` (6°) or the 99th-percentile Δh >
-    ``COLOR_DRIFT_HUE_P99_THRESHOLD`` (10°). The old single-pixel max rule
+    ``COLOR_DRIFT_HUE_MEAN_THRESHOLD`` (6°) or the 95th-percentile Δh >
+    ``COLOR_DRIFT_HUE_P95_THRESHOLD`` (20°). The old single-pixel max rule
     is gone; if fewer than ``COLOR_DRIFT_MIN_HUE_PIXELS`` pixels clear the
     floor (e.g. a B&W grade) the hue gate is not evaluated: the result is
     ``not-run`` (never flagged) and still carries ``deltaE_mean``.
@@ -836,6 +975,14 @@ def detect_color_drift(
     ``natural`` renders of 7 real photos: p99 ≤ 7.2°, floored mean ≤ 0.32°.
     Uniform OKLCh hue rotation of the reference: +8° → p99 10.5–14.8°,
     +15° → 18.6–21.5°, +30° → 35.4–36.6° (all flag).
+
+    Recalibration (2026-09-25, 7 photos × 5 recipes): the p99 > 10° tail
+    gate flagged 15/21 styled cosplay renders (mean Δh 1.4–3.7°) because
+    the person mask also holds intentional lip/eye/makeup edits. The tail
+    gate is now p95 > 20°: styled cosplay renders read p95 ≤ 11.8°, while
+    ``cinema_grade_v1``'s skin cast reads mean ≥ 21° (7/7 flag). A cast
+    has to cover more than ~5% of the person to move p95, so a 25° cast on
+    only the lower half of a small face can pass (flagged 5/7 in the study).
 
     Args:
         img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR output image.
@@ -847,12 +994,14 @@ def detect_color_drift(
     Returns:
         dict with keys:
             - "score": float in [0, 1] (higher = worse); 0.5 sits at the flag
-              boundary (max of p99/(2·p99 threshold), mean/(2·mean threshold)).
+              boundary (max of p95/(2·p95 threshold), mean/(2·mean threshold)).
             - "flagged": bool, True if chroma-floored mean Δh > 6° or
-              chroma-floored p99 Δh > 10°.
+              chroma-floored p95 Δh > 20°.
+            - "deltaH_p95_deg": float | None, chroma-floored 95th-percentile
+              |Δh| (drives ``flagged``).
             - "deltaE_mean": float, mean ΔE2000 over (skin) region.
             - "deltaH_p99_deg": float | None, chroma-floored 99th-percentile
-              |Δh| (drives ``flagged``); None if too few pixels cleared the floor.
+              |Δh| (informational); None if too few pixels cleared the floor.
             - "deltaH_mean_chroma_floored_deg": float | None, chroma-floored
               mean |Δh| (drives ``flagged``).
             - "chroma_floor": float, the chroma floor used (Lab units).
@@ -865,7 +1014,8 @@ def detect_color_drift(
     """
     _none_fields = dict(
         deltaE_mean=None, deltaH_mean_deg=None, deltaH_max_deg=None,
-        deltaH_p99_deg=None, deltaH_mean_chroma_floored_deg=None,
+        deltaH_p99_deg=None, deltaH_p95_deg=None,
+        deltaH_mean_chroma_floored_deg=None,
         chroma_floor=None, hue_kept_fraction=None,
     )
     if reference_img_bgr is None:
@@ -939,6 +1089,7 @@ def detect_color_drift(
             deltaH_mean_deg=deltaH_mean_deg,
             deltaH_max_deg=deltaH_max_deg,
             deltaH_p99_deg=None,
+            deltaH_p95_deg=None,
             deltaH_mean_chroma_floored_deg=None,
             chroma_floor=float(chroma_floor),
             hue_kept_fraction=hue_kept_fraction,
@@ -946,14 +1097,15 @@ def detect_color_drift(
 
     dh_kept = delta_h[keep]
     deltaH_p99_deg = float(np.percentile(dh_kept, COLOR_DRIFT_HUE_PERCENTILE))
+    deltaH_p95_deg = float(np.percentile(dh_kept, COLOR_DRIFT_HUE_GATE_PERCENTILE))
     deltaH_mean_floored = float(np.mean(dh_kept))
 
     flagged = (
         deltaH_mean_floored > COLOR_DRIFT_HUE_MEAN_THRESHOLD
-        or deltaH_p99_deg > COLOR_DRIFT_HUE_P99_THRESHOLD
+        or deltaH_p95_deg > COLOR_DRIFT_HUE_P95_THRESHOLD
     )
     score = min(1.0, max(
-        deltaH_p99_deg / (2.0 * COLOR_DRIFT_HUE_P99_THRESHOLD),
+        deltaH_p95_deg / (2.0 * COLOR_DRIFT_HUE_P95_THRESHOLD),
         deltaH_mean_floored / (2.0 * COLOR_DRIFT_HUE_MEAN_THRESHOLD),
     ))
 
@@ -964,6 +1116,7 @@ def detect_color_drift(
         "deltaH_mean_deg": deltaH_mean_deg,
         "deltaH_max_deg": deltaH_max_deg,
         "deltaH_p99_deg": deltaH_p99_deg,
+        "deltaH_p95_deg": deltaH_p95_deg,
         "deltaH_mean_chroma_floored_deg": deltaH_mean_floored,
         "chroma_floor": float(chroma_floor),
         "hue_kept_fraction": hue_kept_fraction,
@@ -1081,18 +1234,37 @@ def detect_over_retouch_asymmetry(
     img_bgr: np.ndarray,
     skin_mask: Optional[np.ndarray] = None,
     zone_masks: Optional[Dict[str, np.ndarray]] = None,
+    reference_img_bgr: Optional[np.ndarray] = None,
 ) -> dict:
     """Detect the 'one perfect cheek' tell: one zone over-smoothed vs face average.
 
-    Computes per-zone texture-energy (mean Sobel-magnitude std on luminance) and
+    Computes per-zone texture-energy (mean Sobel magnitude on luminance) and
     reports the maximum drop below the face mean. Asymmetric over-smoothing is a
     classic over-retouch artifact. Pure analysis; never mutates input.
+
+    With a ``reference_img_bgr`` (the pipeline passes the input photo and the
+    face-skin mask) each zone's energy is divided by the same zone's energy
+    in the reference, so the check compares how much texture each zone KEPT.
+    Without it, raw energies are compared — which only makes sense when every
+    zone is the same kind of surface: over the person mask, a hair or dark
+    clothing zone is always "smoother" than the face, and the old run_all
+    wiring flagged 21/28 real renders that way. Zones form a 3×3 grid over
+    the mask's bounding box when a reference is given (over the whole frame
+    otherwise, the legacy layout).
+
+    Calibration (2026-09-25, face-skin mask, 7 photos × 5 recipes):
+    asymmetry ≤ 0.19 on every render. Blurring one cheek zone (σ=1.5)
+    flags on 4/7 photos (0.41–0.68); on very smooth or small faces the blur
+    removes too little measurable texture to register (0.15–0.21). See
+    ``docs/plans/RESEARCH_QA_FLAG_CALIBRATION_2026_09_25.md``.
 
     Args:
         img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR image.
         skin_mask: Optional (H, W) float mask [0, 1]; auto-partitioned into a
             3x3 grid of subregions when ``zone_masks`` is not supplied.
         zone_masks: Optional dict name -> (H, W) mask for explicit zones.
+        reference_img_bgr: Optional pre-retouch BGR image of the same shape;
+            makes zone energies relative (texture retention per zone).
 
     Returns:
         dict with keys:
@@ -1101,6 +1273,8 @@ def detect_over_retouch_asymmetry(
             - "zone_energies": dict name -> energy.
             - "face_mean_energy": float.
             - "min_zone_ratio": float, min zone/face_mean.
+            - "relative_to_reference": bool, zone energies are retention
+              ratios vs the reference (present on measured results).
     """
     if img_bgr.shape[0] < 8 or img_bgr.shape[1] < 8:
         return {
@@ -1111,10 +1285,16 @@ def detect_over_retouch_asymmetry(
             "min_zone_ratio": 1.0,
         }
 
-    gray = _gray_f32(img_bgr)
-    gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
-    gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
-    hf = np.sqrt(gx ** 2 + gy ** 2)  # high-frequency energy map
+    def _energy(image: np.ndarray) -> np.ndarray:
+        gray = _gray_f32(image)
+        gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+        gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+        return np.sqrt(gx ** 2 + gy ** 2)  # high-frequency energy map
+
+    hf = _energy(img_bgr)
+    hf_ref = None
+    if reference_img_bgr is not None and reference_img_bgr.shape[:2] == img_bgr.shape[:2]:
+        hf_ref = _energy(reference_img_bgr)
 
     if zone_masks is not None:
         zones = {name: (m.astype(np.float32)) for name, m in zone_masks.items()}
@@ -1131,13 +1311,17 @@ def detect_over_retouch_asymmetry(
                 "face_mean_energy": 0.0,
                 "min_zone_ratio": 1.0,
             }
-        h, w = sm.shape
+        y0, x0, y1, x1 = 0, 0, sm.shape[0], sm.shape[1]
+        if hf_ref is not None:
+            ys, xs = np.nonzero(sm)
+            y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+        h, w = y1 - y0, x1 - x0
         zones = {}
         for iy in range(3):
             for ix in range(3):
                 cell = np.zeros_like(sm)
-                r0, r1 = iy * h // 3, (iy + 1) * h // 3
-                c0, c1 = ix * w // 3, (ix + 1) * w // 3
+                r0, r1 = y0 + iy * h // 3, y0 + (iy + 1) * h // 3
+                c0, c1 = x0 + ix * w // 3, x0 + (ix + 1) * w // 3
                 cell[r0:r1, c0:c1] = True
                 zones[f"z{iy}{ix}"] = (cell & sm).astype(np.float32)
     else:
@@ -1157,7 +1341,12 @@ def detect_over_retouch_asymmetry(
         idx = m > 0.5
         if idx.sum() < 4:
             continue
-        zone_energies[name] = float(np.mean(hf[idx]))
+        energy = float(np.mean(hf[idx]))
+        if hf_ref is not None:
+            if idx.sum() < ASYMMETRY_MIN_ZONE_PIXELS:
+                continue  # sliver of mask in a grid corner: too noisy to compare
+            energy /= max(float(np.mean(hf_ref[idx])), 1e-6)
+        zone_energies[name] = energy
 
     if len(zone_energies) == 0:
         return {
@@ -1190,6 +1379,7 @@ def detect_over_retouch_asymmetry(
         "zone_energies": zone_energies,
         "face_mean_energy": face_mean,
         "min_zone_ratio": float(mins),
+        "relative_to_reference": hf_ref is not None,
     }
 
 
@@ -1428,7 +1618,9 @@ def run_all(
     if ref_before is None and geometry_reference_reason is None:
         ref_before = img_before if img_before is not None else reference_img_bgr
     try:
-        result["banding"] = detect_banding(img_bgr, skin_mask)
+        result["banding"] = detect_banding(
+            img_bgr, skin_mask, ref_before, face_mask=face_skin_mask
+        )
     except Exception as exc:
         result["banding"] = _detector_failure("banding", exc)
     try:
@@ -1436,7 +1628,11 @@ def run_all(
     except Exception as exc:
         result["clipping"] = _detector_failure("clipping", exc)
     try:
-        result["plastic_skin"] = detect_plastic_skin(img_bgr, skin_mask, photo_reference)
+        # Face skin when known: clothes/hair texture is not "skin texture".
+        texture_mask = face_skin_mask if face_skin_mask is not None else skin_mask
+        result["plastic_skin"] = detect_plastic_skin(
+            img_bgr, texture_mask, photo_reference
+        )
     except Exception as exc:
         result["plastic_skin"] = _detector_failure("plastic_skin", exc)
     try:
@@ -1450,7 +1646,7 @@ def run_all(
 
     try:
         pm = person_mask if person_mask is not None else skin_mask
-        result["seam"] = detect_seam(img_bgr, pm)
+        result["seam"] = detect_seam(img_bgr, pm, ref_before)
     except Exception as exc:
         result["seam"] = _detector_failure("seam", exc)
     try:
@@ -1466,7 +1662,11 @@ def run_all(
     except Exception as exc:
         result["pore_spectrum"] = _detector_failure("pore_spectrum", exc)
     try:
-        result["asymmetry"] = detect_over_retouch_asymmetry(img_bgr, skin_mask)
+        result["asymmetry"] = detect_over_retouch_asymmetry(
+            img_bgr,
+            face_skin_mask if face_skin_mask is not None else skin_mask,
+            reference_img_bgr=photo_reference,
+        )
     except Exception as exc:
         result["asymmetry"] = _detector_failure("asymmetry", exc)
     try:

@@ -5,9 +5,11 @@ aggressiveness when QA detectors flag plastic skin artifacts. As of 2026-09-23,
 this back-off loop is not wired into the render pipeline — the only caller
 (``_run_core_pipeline`` in engine.py) was unreachable and has been removed.
 
-The ``plastic_skin`` detector currently flags every portrait (absolute ratio
-over the person mask), so this module must not be wired without recalibration.
-See docs/plans/TODO_WEEK_2026_09_21.md, Q1 for the decision pending.
+``plastic_skin`` was recalibrated on 2026-09-25 (face-skin texture retention
+vs the input photo; 0/35 real renders flag, see
+docs/plans/RESEARCH_QA_FLAG_CALIBRATION_2026_09_25.md), so it no longer flags
+every portrait. Wiring this loop is still a separate decision: it changes
+rendered output. See docs/plans/TODO_WEEK_2026_09_21.md, Q1.
 
 Public API (not currently used):
     QABackoff.check_and_backoff(img, ctx, qa_warnings) -> Optional[Dict[str, float]]
