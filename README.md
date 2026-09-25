@@ -111,6 +111,16 @@ NAFNet model before retouching. It is CPU-only and takes roughly 10 s per
 cannot be downloaded, a bilateral filter is used instead and the result is
 flagged for review.
 
+Glasses glare removal (`--lens-glare 0-100` in the CLI, the "Glasses Glare
+Removal" slider under Eyes & Lips in the app, or `glasses.deglare` in a recipe)
+lifts flash, softbox and window reflections off glasses, goggles and visors over
+the eyes. It is off by default and uses no model. It cannot recover detail that
+the glare blew out completely (those spots are refilled with the surrounding
+tone), leaves a reflection that sits only inside the eye opening alone (it looks
+like a catchlight), and does not reach glare below the eyes on a full visor. On
+faces without glasses it also softens shine around the eyes, so use it on
+photos with eyewear.
+
 Set `RETOUCH_OFFLINE=1` before launching the GUI to disable update checks and
 prevent model downloads; the Advanced Retouch status panel shows the mode.
 
