@@ -28,6 +28,7 @@ commands:
 ./run crops ~/photos_out --formats 4:5,9:16,1:1  # export face-aware crops for Instagram, TikTok, etc.
 ./run review apply ~/photos_out decisions.json  # copy the picks you marked in review.html
 ./run recipes                              # list the recipe names --recipe accepts
+./run lut cosplay_feed_pop_v1 -o ~/luts    # save a recipe's colour look as a .cube LUT
 ./run update                               # git pull, then refresh dependencies
 ```
 
@@ -247,6 +248,44 @@ The same previews as one contact sheet image:
 
 Previews run at 512 px on the long edge (`--size` changes it), so fine skin
 texture differs a little from a full-resolution render.
+
+### Recipe looks as .cube LUTs
+
+Any recipe's colour look can be saved as a standard 33-point `.cube` 3D LUT, so
+the same grade can go on photos in Photoshop or Lightroom and on video in
+Premiere, DaVinci Resolve or Final Cut.
+
+```bash
+./run lut cosplay_feed_pop_v1 -o ~/luts           # writes ~/luts/cosplay_feed_pop_v1.cube
+./run lut apex_cinema_v1 -o ~/luts/cinema.cube    # pick the file name
+./run lut --all -o ~/luts                         # one file per curated recipe with a colour look
+./run batch --recipe apex_cinema_v1 --export-lut ~/luts   # same thing from the batch CLI
+```
+
+In the app, pick a recipe, open **🎨 Save Look as LUT** in the left column and
+press **Save .cube LUT** to download it. `--size` / `--lut-size` changes the
+grid (33 is what Photoshop, Premiere and Resolve use; 65 is finer and larger).
+
+A LUT only maps one colour to another, so it carries the recipe's per-pixel
+colour and tone steps and nothing else:
+
+- **In the LUT:** contrast, brightness, highlights/shadows/whites/blacks,
+  vibrance and saturation, white balance, tonal and film curves, the colour
+  grade preset, HSL and calibration, fade, highlight drift, film-look LUTs,
+  negative split tone, split toning and the B&W mixer.
+- **Not in the LUT (full app only):** all face and skin retouching, reshaping,
+  background and subject work, and anything that looks at neighbouring
+  pixels: clarity, glow and bloom, haze, vignette, grain, halation,
+  chromatic aberration, sharpening and the impact finish. Steps the recipe
+  applies only on skin (three-way split toning, fade toe, skin glow) are left
+  out too, so the LUT matches what the recipe does to everything outside the
+  face. The command lists which of these a recipe uses.
+
+Recipes that only retouch (such as `natural`) have no colour look, so the
+command says so and `--all` skips them. Across all 68 curated recipes the LUT
+matches the app's own colour steps to within one 8-bit level on average;
+strong curves (the `game_character` looks) differ by up to about 7 levels on
+1% of pixels, the usual interpolation limit of a 33-point LUT.
 
 ## Tests
 

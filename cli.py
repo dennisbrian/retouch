@@ -1474,6 +1474,15 @@ def main() -> None:
     parser.add_argument("--search-recipes", type=str, default=None,
                         metavar="QUERY",
                         help="Search recipes by name/description and exit")
+    parser.add_argument("--export-lut", nargs="?", const="", default=None,
+                        metavar="PATH",
+                        help="Save --recipe's colour look as a .cube 3D LUT "
+                             "(for Photoshop, Premiere, Resolve) and exit. "
+                             "PATH is a .cube file or folder; default is "
+                             "<recipe>.cube in -o or the current folder. "
+                             "Only per-pixel colour/tone steps are baked in.")
+    parser.add_argument("--lut-size", type=int, default=33,
+                        help="Points per axis for --export-lut (default 33)")
     parser.add_argument("--reload-luts", action="store_true",
                         help="Force-reload the 3D LUT registry (clears cache, "
                              "re-scans luts/) and exit. Symmetric with the GUI "
@@ -1575,6 +1584,24 @@ def main() -> None:
         print(f"Search '{args.search_recipes}' -> {len(infos)} match(es):")
         for info in infos:
             print(f"  [{info.category}] {info.name}: {info.description}")
+        return
+
+    if args.export_lut is not None:
+        if not args.recipe:
+            parser.error("--export-lut needs --recipe NAME")
+        from retouch.lut import load_cube
+        from retouch.lut_export import changes_colour, export_recipe_lut
+        target = args.export_lut or args.output or "."
+        try:
+            path, skipped = export_recipe_lut(args.recipe, target, args.lut_size)
+        except (KeyError, ValueError) as exc:
+            parser.error(f"--export-lut: {exc}")
+        print(f"✓ Wrote {path}")
+        if not changes_colour(load_cube(path)):
+            print(f"  Note: {args.recipe} has no colour look (it only "
+                  "retouches), so this LUT leaves colours unchanged.")
+        if skipped:
+            print("  Not in the LUT (needs the full app): " + ", ".join(skipped))
         return
 
     if args.reload_luts:

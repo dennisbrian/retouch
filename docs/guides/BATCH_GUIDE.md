@@ -62,6 +62,8 @@ condition is shown as a blocking execution warning.
 | **`--no-compare`** | | *Off* | Skip generating the `_compare` side-by-side comparison files. |
 | **`--no-exif`** | | *Off* | Skip copying EXIF metadata (orientation, camera tags, etc.) from the source image. |
 | **`--dry-run`** | | *Off* | Print the input plan, settings, and safety conditions without creating outputs or executing retouching. |
+| **`--export-lut`** | | *None* | Save `--recipe`'s colour look as a `.cube` 3D LUT and exit (no photos needed). Takes a `.cube` path or a folder; with no value it writes `<recipe>.cube` into `-o` or the current folder. Only per-pixel colour and tone steps go in; see "Recipe looks as .cube LUTs" in the README. |
+| **`--lut-size`** | | `33` | Grid points per axis for `--export-lut`. |
 | **`--progress-file`** | | `<output>/.retouch-progress.json` | Where to write the live progress JSON (see below). |
 | **`--no-progress-file`** | | *Off* | Do not write the progress JSON. |
 
