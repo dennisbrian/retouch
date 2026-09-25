@@ -53,8 +53,9 @@ CHIN_ROOM = 0.25
 FACE_LINE = 1.0 / 3.0
 
 # Output subfolders that never hold retouched originals: earlier crops, the
-# review page's cache (dot folder) and its default picks/rejects copies.
-_SKIP_DIRS = {"social", "picks", "rejected"}
+# review page's cache (dot folder), its default picks/rejects copies and
+# watermarked copies (retouch.watermark).
+_SKIP_DIRS = {"social", "picks", "rejected", "watermarked"}
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"}
 
@@ -346,8 +347,13 @@ def export_social_crops(
     size: str = "platform",
     quality: int = 92,
     force: bool = False,
+    watermark=None,
 ) -> List[CropResult]:
-    """Write one crop per format for ``image_path``."""
+    """Write one crop per format for ``image_path``.
+
+    ``watermark`` (a :class:`retouch.watermark.WatermarkSpec`) stamps each
+    crop after sizing, placed clear of the faces inside that crop.
+    """
     from retouch.io import imread_exif_with_context, write_image_with_color_context
 
     image_path = Path(image_path)
@@ -378,6 +384,8 @@ def export_social_crops(
         plan = plan_crop(w, h, boxes, fmt, subject_top=subject_top)
         try:
             out = render_crop(img, plan, fmt, size=size)
+            if watermark is not None and watermark.enabled:
+                out = _watermark_crop(out, plan, boxes, watermark)
             path.parent.mkdir(parents=True, exist_ok=True)
             write_image_with_color_context(
                 str(path), out, color_context, bit_depth=8, quality=quality,
@@ -387,6 +395,20 @@ def export_social_crops(
             _logger.warning("social crops: %s %s: %s", image_path.name, fmt.key, exc)
             results.append(CropResult(path, fmt.key, plan, "failed", str(exc)))
     return results
+
+
+def _watermark_crop(out: np.ndarray, plan: CropPlan, boxes: Sequence[Box], spec) -> np.ndarray:
+    """Stamp ``spec`` on a rendered crop, mapping face boxes into crop pixels."""
+    from retouch.watermark import apply_watermark
+
+    k = out.shape[1] / float(plan.w)
+    faces = [
+        (int(round((x - plan.x) * k)), int(round((y - plan.y) * k)),
+         int(round(w * k)), int(round(h * k)))
+        for x, y, w, h in boxes
+    ]
+    stamped, _ = apply_watermark(out, spec, faces)
+    return stamped
 
 
 def find_crop_sources(input_path: Union[str, Path], recursive: bool = False) -> List[Path]:
@@ -418,6 +440,7 @@ def export_folder(
     force: bool = False,
     detector=None,
     progress=None,
+    watermark=None,
 ) -> dict:
     """Export crops for every path; creates (and closes) a detector if needed."""
     own_detector = detector is None
@@ -433,7 +456,7 @@ def export_folder(
         for i, path in enumerate(paths):
             res = export_social_crops(
                 path, social_dir, formats, detector=detector,
-                size=size, quality=quality, force=force,
+                size=size, quality=quality, force=force, watermark=watermark,
             )
             for r in res:
                 summary[r.status] += 1

@@ -1045,10 +1045,8 @@ _ESTIMATED_OUTPUT_BYTES_PER_INPUT_BYTE = 2.0
 _MIN_FREE_BYTES_AFTER_RUN = 5 * 1024 * 1024 * 1024
 
 
-def _export_social_crops(files, output_dir, args, recursive_root, formats) -> None:
-    """Post-batch: face-aware social crops of every written output."""
-    from retouch.social_crops import export_folder, format_summary
-
+def _written_outputs(files, output_dir, args, recursive_root) -> list:
+    """Retouched output paths of ``files`` that exist on disk."""
     outputs = []
     for f in files:
         fmt = output_format(f, args.format)
@@ -1057,17 +1055,43 @@ def _export_social_crops(files, output_dir, args, recursive_root, formats) -> No
         out_path = _destination_for_image(f, output_dir, fmt, input_root=recursive_root)
         if out_path.exists():
             outputs.append(out_path)
+    return outputs
+
+
+def _export_social_crops(files, output_dir, args, recursive_root, formats,
+                         watermark=None) -> None:
+    """Post-batch: face-aware social crops of every written output."""
+    from retouch.social_crops import export_folder, format_summary
+
+    outputs = _written_outputs(files, output_dir, args, recursive_root)
     if not outputs:
         print("Social crops: no retouched outputs to crop")
         return
     social_dir = (output_dir or outputs[0].parent) / "social"
     summary = export_folder(
         outputs, social_dir, formats, size=args.social_size, force=args.force,
+        watermark=watermark,
     )
     for r in summary["results"]:
         if r.status == "failed":
             print(f"  ✖ {r.path.name}: {r.error}")
     print(format_summary(summary, social_dir))
+
+
+def _export_watermarked(files, output_dir, args, recursive_root, spec) -> None:
+    """Post-batch: watermarked copies of every written output (masters untouched)."""
+    from retouch.watermark import WATERMARK_DIRNAME, export_folder, format_summary
+
+    outputs = _written_outputs(files, output_dir, args, recursive_root)
+    if not outputs:
+        print("Watermark: no retouched outputs to stamp")
+        return
+    out_dir = (output_dir or outputs[0].parent) / WATERMARK_DIRNAME
+    summary = export_folder(outputs, out_dir, spec, force=args.force)
+    for r in summary["results"]:
+        if r.status == "failed":
+            print(f"  ✖ {r.path.name}: {r.error}")
+    print(format_summary(summary, out_dir))
 
 
 def _nearest_existing_ancestor(path: Path) -> Path:
@@ -1445,6 +1469,12 @@ def main() -> None:
     parser.add_argument("--social-size", choices=["platform", "full"], default="platform",
                         help="Social crop size: platform = 1080 px wide (default), "
                              "full = native crop resolution")
+    parser.add_argument("--watermark", default=None, metavar="TEXT",
+                        help="After the batch, write copies with this credit stamped on "
+                             "into <output>/watermarked/ (and on social crops); masters "
+                             'stay clean. e.g. "© Alex Studio {year}". Off by default')
+    from retouch.watermark import add_cli_args as _add_watermark_args
+    _add_watermark_args(parser, prefix="watermark-")
     parser.add_argument("--no-review", action="store_false", dest="review", default=True,
                         help="Skip writing review.html (per-batch review page)")
 
@@ -1558,6 +1588,15 @@ def main() -> None:
         parser.error("--ram-budget-gib must be greater than 0")
     if args.max_input_pixels is not None and args.max_input_pixels <= 0:
         parser.error("--max-input-pixels must be greater than 0")
+    watermark_spec = None
+    if args.watermark is not None or args.watermark_logo is not None:
+        from retouch.watermark import spec_from_args
+        try:
+            watermark_spec = spec_from_args(args.watermark or "", args, prefix="watermark-")
+        except ValueError as exc:
+            parser.error(f"--watermark: {exc}")
+        if not watermark_spec.enabled:
+            parser.error("--watermark: give a credit text and/or --watermark-logo")
     social_formats = None
     if args.social_crops is not None:
         from retouch.social_crops import parse_formats
@@ -2323,9 +2362,12 @@ def main() -> None:
     if args.input_plan:
         input_plan.write(Path(args.input_plan))
 
+    if watermark_spec is not None and not args.dry_run:
+        _export_watermarked(files, output_dir, args, recursive_root, watermark_spec)
     if social_formats:
         _export_social_crops(
             files, output_dir, args, recursive_root, social_formats,
+            watermark=watermark_spec,
         )
     if args.review and not args.dry_run and len(files) > 0:
         try:
