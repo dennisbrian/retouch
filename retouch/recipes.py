@@ -2743,6 +2743,9 @@ RECIPES["cosplay_neon_night_v1"] = {
     "shadows": 12.0,
     "blacks": -4.0,
     "contrast": 6.0,
+    # Contrast alone took a white costume from 2.6% to 6.8% clipped pixels
+    # on a real cosplay photo; this highlight pull-back brings it to 0%.
+    "highlights": -10.0,
     "clarity": 6.0,
     "vibrance": 10.0,
     "shadow_hue": 250.0,
@@ -2803,6 +2806,9 @@ RECIPES["cosplay_feed_pop_v1"] = {
     # rolloff so white wigs and costumes keep detail after compression.
     "extends": "cosplay_clear_v1",
     "contrast": 8.0,
+    # Contrast alone took a white costume from 2.6% to 8.1% clipped pixels
+    # on a real cosplay photo; this highlight pull-back brings it to ~0%.
+    "highlights": -10.0,
     "clarity": 8.0,
     "vibrance": 12.0,
     "background": {"subject_sharpen": 12.0},

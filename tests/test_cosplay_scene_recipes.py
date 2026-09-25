@@ -82,3 +82,12 @@ def test_feed_pop_uses_vibrance_not_saturation():
     assert not ctx.saturation
     assert ctx.subject_sharpen > 0
     assert ctx.highlight_rolloff_strength >= 0.40
+
+
+@pytest.mark.parametrize("name", SCENE_SET)
+def test_contrast_is_paired_with_a_highlight_pull_back(name):
+    # Contrast without a highlight pull-back clipped white costumes (8% of
+    # pixels on a real cosplay photo for feed pop).
+    ctx = _ctx(name)
+    assert ctx.contrast > 0
+    assert ctx.highlights <= -8.0
