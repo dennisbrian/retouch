@@ -34,6 +34,7 @@ These keys are defined inside nested dictionary blocks inside a recipe.
 |---|---|---|---|---|
 | `ai` | `denoise` | 0 to 100 | `0` | `ai_denoise` |
 | `background` | `backdrop_cleanup` | 0 to 100 | `0` | `backdrop_cleanup` |
+| `glasses` | `deglare` | 0 to 100 | `0` | `lens_glare` |
 | `background` | `background_blur` | 0 to 100 | `0.0` | `background_blur` |
 | `background` | `background_desaturation` | 0 to 100 | `0.0` | `background_desaturation` |
 | `background` | `blue_shadow_grade` | 0 to 100 | `0.0` | `blue_shadow_grade` |

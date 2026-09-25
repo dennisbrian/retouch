@@ -2289,6 +2289,18 @@ _AI_ENHANCE_PARAMS = [
         max_val=100,
     ),
     ParamSpec(
+        # Glasses / goggle / visor glare removal (retouch/lens_glare.py).
+        # Opt-in: 0 = off. 0-100 raw pass-through like hair_deglare.
+        name="lens_glare",
+        cli_flag="lens-glare",
+        cli_type=int,
+        default=0,
+        recipe_key="glasses.deglare",
+        conversion="recipe_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
         name="ai_sr_scale",
         cli_flag="ai-sr-scale",
         cli_type=int,

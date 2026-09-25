@@ -604,6 +604,8 @@ class ProcessingContext:
     # ai_sr_scale: export-time upscale factor (1=off, 2, 4).
     ai_denoise: float = 0.0
     ai_sr_scale: int = 1
+    # Glasses / goggle / visor glare removal, 0-100 (0 = off).
+    lens_glare: float = 0.0
 
     # --- A4: Neural boosters (PARKED — await A1 evidence) ---
     # stray_hair_boost: 0-100 strength for flyaway hair detection/removal.
@@ -1686,6 +1688,7 @@ class RetouchEngine:
         local_adjustments: Optional[List[Dict[str, Any]]] = None,
         ai_denoise: Optional[float] = None,
         ai_sr_scale: Optional[int] = None,
+        lens_glare: Optional[float] = None,
         # --- C5: Skin-anchored background color harmonization ---
         background_harmonize: Optional[float] = None,
         background_harmonize_mode: Optional[str] = None,
@@ -1992,6 +1995,7 @@ class RetouchEngine:
             "subject_separation": subject_separation,
             "ai_denoise": ai_denoise,
             "ai_sr_scale": ai_sr_scale,
+            "lens_glare": lens_glare,
             "background_harmonize": background_harmonize,
             "background_harmonize_mode": background_harmonize_mode,
             "background_blur": background_blur,
@@ -2697,6 +2701,7 @@ class RetouchEngine:
             ctx.face_params = None
         self._bind_face_targets(ctx, faces_native, (w_native, h_native))
 
+        native_img_bgr = self._stage_lens_glare(native_img_bgr, faces_native, ctx, timings)
         t1 = time.perf_counter()
         result_native = self._stage_reshape(native_img_bgr, faces_native, ctx)
         timings["reshape"] = (time.perf_counter() - t1) * 1000
@@ -2938,6 +2943,7 @@ class RetouchEngine:
             ctx.face_params = None
         self._bind_face_targets(ctx, faces, (img_bgr.shape[1], img_bgr.shape[0]))
 
+        img_bgr = self._stage_lens_glare(img_bgr, faces, ctx, timings)
         t1 = time.perf_counter()
         result = self._stage_reshape(img_bgr, faces, ctx)
         timings["reshape"] = (time.perf_counter() - t1) * 1000
@@ -3533,6 +3539,24 @@ class RetouchEngine:
         if not ctx.face_params or n_faces <= 0:
             return None
         return [self._ctx_for_face(ctx, i) for i in range(n_faces)]
+
+    def _stage_lens_glare(self, img: np.ndarray, faces, ctx: ProcessingContext, timings) -> np.ndarray:
+        """Remove glasses / goggle / visor glare before any face work.
+
+        Opt-in (``ctx.lens_glare`` 0 = off). Runs on the detection-frame image
+        so reshape, skin and eye ops all see the cleaned lenses.
+        """
+        strength = float(getattr(ctx, "lens_glare", 0.0) or 0.0)
+        if strength <= 0.0 or not faces:
+            return img
+        from .lens_glare import remove_lens_glare_faces
+
+        _emit_stage("lens_glare")
+        t = time.perf_counter()
+        out, diags = remove_lens_glare_faces(img, faces, strength)
+        ctx._runtime_diagnostics["lens_glare"] = diags
+        timings["lens_glare"] = (time.perf_counter() - t) * 1000
+        return out
 
     def _stage_reshape(self, img: np.ndarray, faces, ctx: ProcessingContext) -> np.ndarray:
         _emit_stage("reshape")

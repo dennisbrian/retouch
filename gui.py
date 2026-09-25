@@ -4133,6 +4133,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                     nose_blush = gr.Checkbox(label="Nose Blush", value=False, info="Add cosmetic pink tone to nose tip")
                                     under_eye_blush = gr.Checkbox(label="Under-Eye Blush", value=False, info="Apply soft under-eye blush for a fresh/cosplay look")
                                     eye_gate = gr.Checkbox(label="Eye Occlusion Gate", value=True, info="Skip enhancing eyes detected as closed/occluded (prevents painting an iris onto hair or a closed lid)")
+                                    lens_glare = gr.Slider(0, 100, 0, step=1, label="Glasses Glare Removal", info="Lift flash, softbox and window reflections off glasses, goggles and visors over the eyes. Off by default; on bare faces it also softens shine around the eyes.")
 
                             with gr.Accordion("🧬 Face Reshaping", open=False):
                                 reset_face_reshaping_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
@@ -5610,6 +5611,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "hsl_sat_global": hsl_sat_global,
         "hsl_lum_global": hsl_lum_global,
         "ai_denoise": ai_denoise,
+        "lens_glare": lens_glare,
         "ai_sr_scale": _ai_sr_scale_state,
         "mv2_eyeshadow": _mv2_eyeshadow_state,
         "mv2_eyeshadow_color": _mv2_eyeshadow_color_state,

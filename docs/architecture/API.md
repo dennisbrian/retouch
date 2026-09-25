@@ -277,6 +277,7 @@ def process(
     hsl_lum_global: Optional[int] = None,
     ai_denoise: Optional[int] = None,
     ai_sr_scale: Optional[int] = None,
+    lens_glare: Optional[int] = None,
     mv2_eyeshadow: Optional[float] = None,
     mv2_eyeshadow_color: Optional[str] = None,
     mv2_eyeshadow_style: Optional[str] = None,
@@ -552,6 +553,7 @@ Passing an explicit value override to these parameters takes precedence over the
 
 *   **`ai_denoise`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `ai.denoise`): Adjusts the ai denoise parameter.
 *   **`ai_sr_scale`** (Type: `int`, Default: `1`, Range: `1` to `4`, Recipe key: None): Adjusts the ai sr scale parameter.
+*   **`lens_glare`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `glasses.deglare`): Removes flash / softbox / window glare from glasses, goggles and visors over the eyes. Off by default.
 
 ##### **Makeup V2 Synthesis**
 
