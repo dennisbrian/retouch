@@ -27,6 +27,7 @@ commands:
 ./run batch ~/dim_shots -o ~/out --recipe con_high_iso_v1  # high-ISO: AI denoise first
 ./run crops ~/photos_out --formats 4:5,9:16,1:1  # export face-aware crops for Instagram, TikTok, etc.
 ./run review apply ~/photos_out decisions.json  # copy the picks you marked in review.html
+./run xmp review ~/photos_out decisions.json    # picks, rejects and QA flags as XMP for Lightroom
 ./run recipes                              # list the recipe names --recipe accepts
 ./run lut cosplay_feed_pop_v1 -o ~/luts    # save a recipe's colour look as a .cube LUT
 ./run watermark ~/photos_out --text "© Alex Studio {year}"  # credit on copies for posting
@@ -122,6 +123,16 @@ like a catchlight), and does not reach glare below the eyes on a full visor. On
 faces without glasses it also softens shine around the eyes, so use it on
 photos with eyewear.
 
+Red-eye fix (`--red-eye 0-100` in the CLI, the "Red-Eye Fix" slider under Eyes
+& Lips in the app, or `eyes.red_eye` in a recipe) turns pupils that glow red
+from an on-camera flash back to a dark pupil, keeping the catchlight and the
+iris colour. It is off by default and uses no model. It only acts when the
+middle of the pupil is red and clearly redder than the face's own skin, so red
+contact lenses (a dark pupil inside a red ring), red eyeliner and red wigs
+next to the eye are left alone. It skips very small faces (iris under about 4
+pixels across its radius), pale or pink "white-eye" glows only turn grey
+rather than black, and gold or green animal eye-shine is not touched.
+
 Set `RETOUCH_OFFLINE=1` before launching the GUI to disable update checks and
 prevent model downloads; the Advanced Retouch status panel shows the mode.
 
@@ -151,6 +162,18 @@ subject's skin before the recipe runs (see "Match a Set to One Hero Frame" in
 [BATCH_GUIDE.md](docs/guides/BATCH_GUIDE.md)).
 
 Each batch also writes `review.html` into the output folder: open it in a browser to check before/after, face close-ups and QA flags, mark picks and rejects from the keyboard, then export the decisions and apply them to copy the picks into a folder. See [BATCH_GUIDE.md](docs/guides/BATCH_GUIDE.md) for full CLI options and the review workflow.
+
+### Picks and flags in Lightroom and Capture One (XMP)
+
+Add `--xmp` to a batch, or to `./run review apply`, and retouch writes its
+decisions as standard XMP: picks get the Green label, rejects the Red label and
+a reject rating (-1), QA-flagged photos the Yellow label, and everything gets
+`retouch-…` keywords (`retouch-pick`, `retouch-qa-banding`, …). The tags go in a
+`<name>.xmp` sidecar beside each source photo (Lightroom reads these for RAW
+files) and inside each retouched JPEG. Existing sidecars are merged: a rating or
+label you set in Lightroom is never overwritten. The Shoot Intelligence tab's
+**Write XMP sidecars** button does the same for star ratings and
+select/reject/hold. See [BATCH_GUIDE.md](docs/guides/BATCH_GUIDE.md#ratings-and-picks-in-lightroom-and-capture-one-xmp).
 
 ### Edit reports and Content Credentials
 

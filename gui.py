@@ -261,6 +261,7 @@ from gui_shoot import (
     on_save_shoot_review,
     on_export_shoot_review_json,
     on_export_shoot_review_csv,
+    on_export_shoot_review_xmp,
     on_save_project_profile,
     on_save_look_board,
     on_apply_look_board,
@@ -4230,6 +4231,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                     under_eye_blush = gr.Checkbox(label="Under-Eye Blush", value=False, info="Apply soft under-eye blush for a fresh/cosplay look")
                                     eye_gate = gr.Checkbox(label="Eye Occlusion Gate", value=True, info="Skip enhancing eyes detected as closed/occluded (prevents painting an iris onto hair or a closed lid)")
                                     lens_glare = gr.Slider(0, 100, 0, step=1, label="Glasses Glare Removal", info="Lift flash, softbox and window reflections off glasses, goggles and visors over the eyes. Off by default; on bare faces it also softens shine around the eyes.")
+                                    red_eye = gr.Slider(0, 100, 0, step=1, label="Red-Eye Fix", info="Turn flash red pupils back to dark. Off by default; red contact lenses (dark pupil in the middle) are left alone.")
 
                             with gr.Accordion("🧬 Face Reshaping", open=False):
                                 reset_face_reshaping_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
@@ -4465,6 +4467,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             label="Social crops",
                             info="After the batch finishes, also export face-aware crops for posting into <output>/social.",
                         )
+                        batch_xmp = gr.Checkbox(
+                            label="Write XMP for Lightroom / Capture One",
+                            value=False,
+                            info="Tag QA-flagged photos (Yellow label + keywords) in a .xmp sidecar beside each source and inside JPEG outputs. Existing sidecars are merged, never replaced.",
+                        )
 
                     with gr.Row():
                         batch_watermark = gr.Textbox(
@@ -4566,6 +4573,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                 with gr.Row():
                     review_json_btn = gr.Button("Export JSON")
                     review_csv_btn = gr.Button("Export CSV")
+                    review_xmp_btn = gr.Button("Write XMP sidecars")
                 review_export_file = gr.File(label="Review export", interactive=False)
                 review_status = gr.Markdown("")
             with gr.Accordion("Subject-linked project profile", open=False):
@@ -5423,7 +5431,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         fn=on_process_folder,
         inputs=[folder_in, folder_out, batch_style_type, batch_custom_style, batch_recipe,
                 batch_fmt, batch_quality, batch_res, auto_group_toggle, sheet_toggle, zip_toggle,
-                batch_social_crops, batch_watermark, batch_watermark_position],
+                batch_social_crops, batch_watermark, batch_watermark_position, batch_xmp],
         outputs=[batch_sheet_out, batch_zip_out, batch_status],
         concurrency_limit=1,
         concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
@@ -5482,6 +5490,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         fn=on_export_shoot_review_csv,
         inputs=[shoot_manifest_path, review_export_selected],
         outputs=[review_export_file, review_status],
+    )
+    review_xmp_btn.click(
+        fn=on_export_shoot_review_xmp,
+        inputs=[shoot_manifest_path],
+        outputs=[review_status],
     )
     profile_save_btn.click(
         fn=on_save_project_profile,
@@ -5743,6 +5756,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "hsl_lum_global": hsl_lum_global,
         "ai_denoise": ai_denoise,
         "lens_glare": lens_glare,
+        "red_eye": red_eye,
         "ai_sr_scale": _ai_sr_scale_state,
         "set_match": set_match,
         "mv2_eyeshadow": _mv2_eyeshadow_state,

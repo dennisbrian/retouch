@@ -115,6 +115,7 @@ for color in ["red", "green", "blue"]:
 EXPECTED_RECIPE_KEYS.append("lens_blur")
 EXPECTED_RECIPE_KEYS.append("set_match")
 EXPECTED_RECIPE_KEYS.append("lens_glare")
+EXPECTED_RECIPE_KEYS.append("red_eye")
 
 EXPECTED_RECIPE_KEY_COUNT = 262
 # Self-updating: the recipe/smart-style slider tuple length is the contract
