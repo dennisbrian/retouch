@@ -609,6 +609,11 @@ class ProcessingContext:
     # Glasses / goggle / visor glare removal, 0-100 (0 = off).
     lens_glare: float = 0.0
 
+    # Match a set to one hero frame: 0-100 strength (0 = no-op) and the hero's
+    # measured FrameStats (caller-only; see retouch/set_match.py).
+    set_match: float = 0.0
+    set_match_hero: Any = None
+
     # --- A4: Neural boosters (PARKED — await A1 evidence) ---
     # stray_hair_boost: 0-100 strength for flyaway hair detection/removal.
     #   Runs after F11 QA, gated on enabled=False by default.
@@ -1692,6 +1697,8 @@ class RetouchEngine:
         local_adjustments: Optional[List[Dict[str, Any]]] = None,
         ai_denoise: Optional[float] = None,
         ai_sr_scale: Optional[int] = None,
+        set_match: Optional[float] = None,
+        set_match_hero: Any = None,
         lens_glare: Optional[float] = None,
         # --- C5: Skin-anchored background color harmonization ---
         background_harmonize: Optional[float] = None,
@@ -2001,6 +2008,7 @@ class RetouchEngine:
             "subject_separation": subject_separation,
             "ai_denoise": ai_denoise,
             "ai_sr_scale": ai_sr_scale,
+            "set_match": set_match,
             "lens_glare": lens_glare,
             "background_harmonize": background_harmonize,
             "background_harmonize_mode": background_harmonize_mode,
@@ -2061,6 +2069,9 @@ class RetouchEngine:
             ctx.face_contexts = face_contexts
         if heals is not None:
             ctx.heals = heals
+        if set_match_hero is not None:
+            from .set_match import coerce_hero
+            ctx.set_match_hero = coerce_hero(set_match_hero, detector=self._detector)
         if quality is not None:
             ctx.quality = quality
         if clarity_noise_aware is not None:
@@ -2155,6 +2166,23 @@ class RetouchEngine:
                 img_bgr = apply_decision(before_denoise, img_bgr, decision)
                 ctx._safe_auto_decisions.append(decision.to_dict())
             timings["ai_denoise"] = (time.perf_counter() - t_dn) * 1000
+
+        # ------------------------------------------------------------------
+        # Match a set to one hero frame: global exposure + white balance
+        # toward the hero, measured on the subject's skin, before detection
+        # and the recipe so the same recipe lands the same way on every frame.
+        # ------------------------------------------------------------------
+        if ctx.set_match_hero is not None and ctx.set_match and ctx.set_match > 0.0:
+            _emit_stage("set_match")
+            from .set_match import match_to_hero
+            t_sm = time.perf_counter()
+            img_bgr, sm_gains = match_to_hero(
+                img_bgr, ctx.set_match_hero,
+                strength=float(ctx.set_match) / 100.0,
+                detector=self._detector,
+            )
+            ctx._runtime_diagnostics["set_match"] = sm_gains.to_dict()
+            timings["set_match"] = (time.perf_counter() - t_sm) * 1000
 
         # ------------------------------------------------------------------
         # F4: Pre-pipeline heal hook — heals run BEFORE retouch/grade
