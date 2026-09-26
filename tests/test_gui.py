@@ -80,7 +80,7 @@ EXPECTED_RECIPE_KEYS = [
     "mv2_eyeliner_color", "mv2_eyeliner_style", "mv2_eyeshadow", "mv2_eyeshadow_color", "mv2_eyeshadow_style",
     "mv2_ombre", "mv2_ombre_color1", "mv2_ombre_color2", "negative_split_tone_highlight", "negative_split_tone_shadow",
     "neural_defect_boost", "neural_stray_hair_boost", "nose_blush", "nose_restore", "nose_smooth",
-    "pore_synthesis", "redness_even", "regional_modulation", "relight", "relight_azimuth",
+    "pore_synthesis", "prosthetic_blend", "redness_even", "regional_modulation", "relight", "relight_azimuth",
     "relight_elevation", "reshape_chin_length", "reshape_eye_distance", "reshape_eye_size", "reshape_eye_size_l",
     "reshape_eye_size_r", "reshape_forehead", "reshape_jaw_width", "reshape_jaw_width_l", "reshape_jaw_width_r",
     "reshape_mouth_size", "reshape_neck_length", "reshape_neck_width", "reshape_nose_length", "reshape_nose_width",

@@ -259,6 +259,28 @@ black-and-white photo grey skin is not treated as paint. It added about 10 s on
 a 45 MP test frame, and nothing on photos without paint. Details are in
 `retouch/body_paint.py`.
 
+### Prosthetic edges
+
+For elf-ear tips, forehead pieces and the skin-toned plates that hold horns,
+add `--prosthetic-blend 0-100` to any recipe (or use the "Prosthetic Edge
+Blend" slider under Cosplay & Body in the app). It is off by default. When it
+is on, it looks around the ears and the forehead for a long, sharp line where
+a skin-toned appliance meets real skin with a slight change of colour, and
+softens that line into a gentle blend while keeping skin texture. Horns,
+wigs and costume edges are left sharp.
+
+```bash
+python3 cli.py shoot/ -o out/ --recipe cosplay_clear_v1 --prosthetic-blend 80
+```
+
+It has only been tested on simulated appliances, not on a real prosthetic
+photo yet. Short seams (under about a third of the face width, such as one
+across a small ear) are not found, a long seam is sometimes found only in
+part, and an edge that is colour-matched perfectly and shows only as a thin
+ridge is not found. An appliance whose whole surface is a different tone
+keeps that tone; only the edge is blended. On photos without an appliance
+the output is unchanged. Details are in `retouch/prosthetic_blend.py`.
+
 ### Recipe gallery
 
 Not sure which recipe suits a photo? In the app, upload the photo, open
