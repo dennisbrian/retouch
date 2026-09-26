@@ -61,6 +61,8 @@ condition is shown as a blocking execution warning.
 | **`--fuji-match-strength`** | | `0.85` | Blend from the native RAW development (0) to the camera-preview calibration (1), used with `--raf-decoder rawpy-fuji-match`. |
 | **`--no-compare`** | | *Off* | Skip generating the `_compare` side-by-side comparison files. |
 | **`--no-exif`** | | *Off* | Skip copying EXIF metadata (orientation, camera tags, etc.) from the source image. |
+| **`--edit-report`** | | *Off* | Write a "what was changed" JSON report per photo to `edit-reports/` (active edits, whether face or body shape changed, AI use, share of the frame changed). See [CONTENT_CREDENTIALS.md](CONTENT_CREDENTIALS.md). |
+| **`--sign-cert`** / **`--sign-key`** | | *Off* | Sign each output with Content Credentials (C2PA) using your own certificate and key (PEM); needs the optional `credentials` extra. See [CONTENT_CREDENTIALS.md](CONTENT_CREDENTIALS.md). |
 | **`--dry-run`** | | *Off* | Print the input plan, settings, and safety conditions without creating outputs or executing retouching. |
 | **`--export-lut`** | | *None* | Save `--recipe`'s colour look as a `.cube` 3D LUT and exit (no photos needed). Takes a `.cube` path or a folder; with no value it writes `<recipe>.cube` into `-o` or the current folder. Only per-pixel colour and tone steps go in; see "Recipe looks as .cube LUTs" in the README. |
 | **`--lut-size`** | | `33` | Grid points per axis for `--export-lut`. |
@@ -230,6 +232,39 @@ if __name__ == "__main__":  # required: the engine starts worker processes
 
 Save it as a `.py` file and run it with `.venv/bin/python`; the engine's face
 workers cannot start from `python -` or an interactive paste.
+
+### Example G: Match a Set to One Hero Frame
+Frames shot minutes apart drift: a cloud passes, auto white balance hunts, the
+cosplayer steps into warmer hall light. On a carousel those jumps show as the
+slides are swiped. Pick your best frame and pass it as the hero:
+
+```bash
+./run batch ~/shoots/2026-09-13/set1 -o ~/retouched/set1 \
+  --recipe cosplay_clear_v1 --match-hero ~/shoots/2026-09-13/set1/DSCF3773.JPG
+```
+
+Before the recipe runs, every photo gets the exposure and white-balance shift
+that brings the subject's face skin to the hero's, so the recipe lands the same
+way on every slide. The hero itself is left exactly as it was.
+
+- It is one global shift per photo, like changing exposure and white balance in
+  camera, so costume, wig and background colours keep their relationships.
+  It does not copy the hero's background or grade (that is `--color-ref`).
+- It is measured on the largest face's skin (the face oval without eyes, brows
+  and lips). Photos with no face, or a hero with no face, are matched on the
+  whole frame with smaller limits, since framing changes move whole-frame
+  averages. `--global-only` batches always use the whole frame.
+- Limits: up to ±1.5 EV and about half a stop per colour channel on skin
+  (±1 EV and about 0.15 stop on the whole frame). Blown highlights are left
+  alone, and brightened highlights roll off instead of clipping.
+- `--set-match 0-100` sets how far each photo moves (default 100 when
+  `--match-hero` is given).
+- Use it on one cosplayer's set. With a different person as the largest face,
+  their skin is matched to the hero's skin, which is rarely what you want.
+
+In the app, the same control is under Color Grading: "Match Set to Hero Frame",
+with a hero image slot and a Match Strength slider.
+
 ---
 
 ## 4. Reviewing a Batch
@@ -423,3 +458,40 @@ When using the batch interface in the GUI, check the "Social crops" checkbox and
 - **EXIF stripped:** Geolocation and camera metadata are removed for privacy when posting.
 - **Skip rules:** Comparison images (`*_compare.*`) and anything already inside a `social/` folder are skipped.
 - **Platform downsample:** Output is always downscaled to `1080px` width (unless `--size full` is set) to match platform delivery specs, with light output sharpening applied.
+
+---
+
+## 6. Watermark / Credit Overlay
+
+Stamp a credit (and optionally a logo) on **copies** of your retouched photos for posting. The originals in `<output>/` stay clean; stamped copies go to `<output>/watermarked/<name>.jpg`. Off unless you pass `--watermark` or `--watermark-logo`.
+
+```bash
+./run batch ~/photos -o ~/out --recipe natural --watermark "© Alex Studio {year}"
+
+# Social crops get the credit too, placed clear of the faces in each crop
+./run batch ~/photos -o ~/out --recipe natural --watermark "@alexshoots" --social-crops
+
+# Stamp an existing output folder (no re-render)
+./run watermark ~/out --text "© Alex Studio" --logo logo.png
+```
+
+| Batch flag | `./run watermark` flag | Default | Description |
+|------|------|---------|-------------|
+| `--watermark TEXT` | `--text TEXT` | *off* | Credit text. `{year}` becomes the current year. |
+| `--watermark-logo PNG` | `--logo PNG` | none | Logo (PNG with transparency) before the text, or on its own. |
+| `--watermark-position` | `--position` | `auto` | `auto`, `bottom-right`, `bottom-left`, `top-right`, `top-left`, `bottom-center`. |
+| `--watermark-opacity` | `--opacity` | `70` | 0–100. |
+| `--watermark-size` | `--size` | `3` | Text size as % of the photo's short side. |
+| `--watermark-color` | `--color` | `auto` | `auto` (white on dark, black on light), `white`, `black`. |
+| `--watermark-font TTF` | `--font TTF` | built-in | Font file; needed for accented or CJK names. |
+
+`./run watermark` also takes `-o` (default `<input>/watermarked`), `--quality` (92), `--force` and `-r`.
+
+### Behavior Details
+
+- **Face-aware placement:** `auto` uses bottom-right unless a face (padded by half a face for wigs, headpieces and chin) is there, then tries bottom-left, top-right, top-left, bottom-centre; if every spot touches a face it takes the one with the least overlap.
+- **Legibility:** a soft shadow sits under the mark; text colour follows the median brightness of the background under it.
+- **Font licence:** the built-in font is Aileron Regular (CC0), embedded in Pillow, so it is safe to ship in a paid build. It has Latin letters, digits, `©`, `@`, `·`; other characters log a warning naming them.
+- **Metadata:** camera EXIF (GPS, serial numbers) is not copied; the credit goes into EXIF Copyright (`©` written as `(C)`; credits with other non-ASCII characters get no EXIF field).
+- **Skip rules:** existing copies are skipped unless `--force`; the `watermarked/` folder is ignored by social crops and the review page.
+- **GUI:** the Batch tab has a **Watermark / credit** box and position; the single-photo view has a **© Watermark / Credit** accordion that stamps the exported photo (or the preview) and returns the file.

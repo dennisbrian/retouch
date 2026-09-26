@@ -113,7 +113,8 @@ def on_learn_style(orig_dir, edit_dir, style_name, author, tags_str, prg=gr.Prog
 
 def on_process_folder(input_dir, output_dir, style_type, custom_style_name, recipe_name,
                       export_fmt, export_quality, export_res, auto_group, generate_sheet, export_zip,
-                      social_crop_formats=None, prg=gr.Progress()):
+                      social_crop_formats=None, watermark_text=None,
+                      watermark_position="auto", prg=gr.Progress()):
     if not input_dir or not output_dir:
         return None, None, "Error: Both Input and Output directories must be specified."
     try:
@@ -129,7 +130,9 @@ def on_process_folder(input_dir, output_dir, style_type, custom_style_name, reci
                           custom_style_name, recipe_name, export_fmt,
                           export_quality, export_res, auto_group,
                           generate_sheet, export_zip, prg,
-                          social_crop_formats=social_crop_formats)
+                          social_crop_formats=social_crop_formats,
+                          watermark_text=watermark_text,
+                          watermark_position=watermark_position)
     finally:
         # Release MediaPipe before the GC can finalize it — FaceLandmarker's
         # __del__ blocks forever on a serial-dispatcher future, which shows up
@@ -137,7 +140,39 @@ def on_process_folder(input_dir, output_dir, style_type, custom_style_name, reci
         processor.close()
 
 
-def _export_social_crops(job, output_dir, social_crop_formats):
+def _batch_watermark_spec(watermark_text, watermark_position):
+    """WatermarkSpec for the batch tab's credit box, or None when it is empty."""
+    if not (watermark_text or "").strip():
+        return None
+    from retouch.watermark import WatermarkSpec
+
+    return WatermarkSpec(text=watermark_text, position=watermark_position or "auto")
+
+
+def _export_watermarked(job, output_dir, spec):
+    """Write watermarked copies of the batch's outputs; returns a log line or ""."""
+    if spec is None:
+        return ""
+    try:
+        from retouch.social_crops import find_crop_sources
+        from retouch.watermark import WATERMARK_DIRNAME, export_folder, format_summary
+    except Exception as e:
+        _logger.exception("Watermark skipped: retouch.watermark unavailable: %s", e)
+        return f"\nWatermark: skipped (retouch.watermark unavailable: {e})"
+    output_dir = Path(output_dir)
+    sources = [Path(f.output_path) for f in job.files if f.status == "done" and f.output_path]
+    if not sources:
+        sources = find_crop_sources(output_dir)
+    out_dir = output_dir / WATERMARK_DIRNAME
+    try:
+        result = export_folder(sources, out_dir, spec)
+        return "\n" + format_summary(result, out_dir)
+    except Exception as e:
+        _logger.exception("Watermark export failed: %s", e)
+        return f"\nWatermark: failed ({e})"
+
+
+def _export_social_crops(job, output_dir, social_crop_formats, watermark=None):
     """Export platform crops for the batch's outputs; returns a log line or "".
 
     Imports retouch.social_crops lazily so gui.py's/gui_batch.py's own import
@@ -162,7 +197,7 @@ def _export_social_crops(job, output_dir, social_crop_formats):
     social_dir = output_dir / "social"
     try:
         formats = parse_formats(list(social_crop_formats))
-        result = export_folder(sources, social_dir, formats)
+        result = export_folder(sources, social_dir, formats, watermark=watermark)
         return "\n" + format_summary(result, social_dir)
     except Exception as e:
         _logger.exception("Social crop export failed: %s", e)
@@ -171,7 +206,8 @@ def _export_social_crops(job, output_dir, social_crop_formats):
 
 def _run_batch(processor, input_dir, output_dir, style_type, custom_style_name,
                recipe_name, export_fmt, export_quality, export_res, auto_group,
-               generate_sheet, export_zip, prg, only_files=None, social_crop_formats=None):
+               generate_sheet, export_zip, prg, only_files=None, social_crop_formats=None,
+               watermark_text=None, watermark_position="auto"):
     from retouch.jobs import Job, FileRecord, JobStore, make_job_id, QA_STATE_UNKNOWN, QA_STATE_CLEAN, QA_STATE_FLAGGED, QA_STATE_ERROR
 
     profile = None
@@ -271,7 +307,13 @@ def _run_batch(processor, input_dir, output_dir, style_type, custom_style_name,
         else:
             job.status = "failed"
 
-        log = log + _export_social_crops(job, output_dir, social_crop_formats)
+        try:
+            watermark = _batch_watermark_spec(watermark_text, watermark_position)
+        except ValueError as e:
+            watermark = None
+            log = log + f"\nWatermark: skipped ({e})"
+        log = log + _export_watermarked(job, output_dir, watermark)
+        log = log + _export_social_crops(job, output_dir, social_crop_formats, watermark=watermark)
         review_page_path = _build_batch_review_page(review_root)
         if review_page_path is not None:
             log = f"{log}\nReview page: {review_page_path}"
