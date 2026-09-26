@@ -2314,6 +2314,18 @@ _AI_ENHANCE_PARAMS = [
         max_val=100,
     ),
     ParamSpec(
+        # Flash red-eye removal (retouch/red_eye.py).
+        # Opt-in: 0 = off. 0-100 raw pass-through like lens_glare.
+        name="red_eye",
+        cli_flag="red-eye",
+        cli_type=int,
+        default=0,
+        recipe_key="eyes.red_eye",
+        conversion="recipe_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
         name="ai_sr_scale",
         cli_flag="ai-sr-scale",
         cli_type=int,
