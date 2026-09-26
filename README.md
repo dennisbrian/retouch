@@ -152,6 +152,23 @@ subject's skin before the recipe runs (see "Match a Set to One Hero Frame" in
 
 Each batch also writes `review.html` into the output folder: open it in a browser to check before/after, face close-ups and QA flags, mark picks and rejects from the keyboard, then export the decisions and apply them to copy the picks into a folder. See [BATCH_GUIDE.md](docs/guides/BATCH_GUIDE.md) for full CLI options and the review workflow.
 
+### Edit reports and Content Credentials
+
+```bash
+./run batch shoot/ -o out/ --recipe natural --edit-report
+./run batch shoot/ -o out/ --recipe natural --sign-cert chain.pem --sign-key signing.key
+```
+
+`--edit-report` writes `out/edit-reports/<photo>.json` for each photo: the
+recipe, every active edit grouped (skin, makeup, eyes, colour...), whether any
+face or body shape was changed, AI use, and how much of the frame changed.
+`--sign-cert`/`--sign-key` sign each retouched photo with Content Credentials
+(C2PA) using your own certificate, with that report inside and the original
+photo recorded as its parent (needs `uv sync --extra desktop --extra credentials`).
+A camera's own Content Credentials are no longer copied onto retouched
+photos, where they failed verification. See
+[CONTENT_CREDENTIALS.md](docs/guides/CONTENT_CREDENTIALS.md).
+
 ### Split a shoot by capture time
 
 ```bash
