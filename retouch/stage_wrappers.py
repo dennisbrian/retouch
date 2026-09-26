@@ -182,6 +182,30 @@ class BodyPaintStage(_EngineStage):
         )
 
 
+class ProstheticBlendStage(_EngineStage):
+    """Stage 3.8: prosthetic edge blending (opt-in).
+
+    Runs after every skin edit, so the seam is healed on the retouched skin,
+    and before global tone and colour grading.
+    """
+
+    name = "prosthetic_blend"
+    phase = "global"
+
+    def enabled(self, state: PipelineState) -> bool:
+        return (getattr(state.ctx, "prosthetic_blend", 0.0) or 0.0) > 0 and bool(state.faces)
+
+    def _call(self, state: PipelineState) -> np.ndarray:
+        return self._engine._stage_prosthetic_blend(
+            state.img,
+            state.ctx,
+            state.acc_skin,
+            state.faces,
+            state.person_mask,
+            acc_hair_only=state.acc_hair_only,
+        )
+
+
 class GlobalStage(_EngineStage):
     """Stage 4: Global tonal adjustments."""
 
@@ -293,6 +317,7 @@ def build_global_registry(engine: "RetouchEngine") -> "StageRegistry":
     registry.add(CrossRegionSkinStage(engine))
     registry.add(CosplayMoatStage(engine))
     registry.add(BodyPaintStage(engine))
+    registry.add(ProstheticBlendStage(engine))
     registry.add(GlobalStage(engine))
     registry.add(GradeStage(engine))
     registry.add(LocalAdjustmentsStage(engine))

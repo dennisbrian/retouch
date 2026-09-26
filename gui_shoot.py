@@ -473,6 +473,20 @@ def on_export_shoot_review_csv(manifest_path, selected_only=False):
         return None, f"CSV export failed: {exc}"
 
 
+def on_export_shoot_review_xmp(manifest_path):
+    """Write each asset's rating, decision and flags as a ``.xmp`` sidecar."""
+    try:
+        from retouch.xmp_sidecar import format_counts, write_shoot_xmp
+        store = _review_store(manifest_path)
+        counts = write_shoot_xmp(store.manifest)
+        return (
+            f"{format_counts(counts)}. Sidecars sit beside the source photos "
+            "(Green = selected, Red = rejected, Yellow = hold); source images were not changed."
+        )
+    except Exception as exc:
+        return f"XMP export failed: {exc}"
+
+
 def on_save_project_profile(profile_id, subject_key, display_name, recipe_name, style_name, preferred_json, marks_json):
     """Persist a subject-linked profile without storing image pixels."""
     if not profile_id or not subject_key or not display_name:

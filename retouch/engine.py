@@ -324,6 +324,7 @@ class ProcessingContext:
     albedo_even: float = _DEFAULTS["albedo_even"]
     makeup_coverage_even: float = _DEFAULTS["makeup_coverage_even"]
     body_paint: float = _DEFAULTS["body_paint"]
+    prosthetic_blend: float = _DEFAULTS["prosthetic_blend"]
     makeup_cake_reduce: float = _DEFAULTS["makeup_cake_reduce"]
     hemoglobin_smooth: float = _DEFAULTS["hemoglobin_smooth"]
     mole_protect: float = _DEFAULTS["mole_protect"]
@@ -607,6 +608,8 @@ class ProcessingContext:
     ai_sr_scale: int = 1
     # Glasses / goggle / visor glare removal, 0-100 (0 = off).
     lens_glare: float = 0.0
+    # Flash red-eye removal, 0-100 (0 = off).
+    red_eye: float = 0.0
 
     # Match a set to one hero frame: 0-100 strength (0 = no-op) and the hero's
     # measured FrameStats (caller-only; see retouch/set_match.py).
@@ -1592,6 +1595,7 @@ class RetouchEngine:
         albedo_even: Optional[float] = None,
         makeup_coverage_even: Optional[float] = None,
         body_paint: Optional[float] = None,
+        prosthetic_blend: Optional[float] = None,
         makeup_cake_reduce: Optional[float] = None,
         hemoglobin_smooth: Optional[float] = None,
         mole_protect: Optional[float] = None,
@@ -1698,6 +1702,7 @@ class RetouchEngine:
         set_match: Optional[float] = None,
         set_match_hero: Any = None,
         lens_glare: Optional[float] = None,
+        red_eye: Optional[float] = None,
         # --- C5: Skin-anchored background color harmonization ---
         background_harmonize: Optional[float] = None,
         background_harmonize_mode: Optional[str] = None,
@@ -1904,6 +1909,7 @@ class RetouchEngine:
             "albedo_even": albedo_even,
             "makeup_coverage_even": makeup_coverage_even,
             "body_paint": body_paint,
+            "prosthetic_blend": prosthetic_blend,
             "makeup_cake_reduce": makeup_cake_reduce,
             "hemoglobin_smooth": hemoglobin_smooth,
             "mole_protect": mole_protect,
@@ -2007,6 +2013,7 @@ class RetouchEngine:
             "ai_sr_scale": ai_sr_scale,
             "set_match": set_match,
             "lens_glare": lens_glare,
+            "red_eye": red_eye,
             "background_harmonize": background_harmonize,
             "background_harmonize_mode": background_harmonize_mode,
             "background_blur": background_blur,
@@ -2484,6 +2491,14 @@ class RetouchEngine:
                     interpolation=cv2.INTER_LINEAR,
                 ).astype(np.float32, copy=False)
 
+            prosthetic_ref = getattr(ctx, "_prosthetic_ref", None)
+            if prosthetic_ref is not None and prosthetic_ref.shape[:2] != (h, w):
+                ctx._prosthetic_ref = cv2.resize(
+                    prosthetic_ref,
+                    (w, h),
+                    interpolation=cv2.INTER_LINEAR,
+                ).astype(np.float32, copy=False)
+
             # F8.1: Composite upscaled face edits onto native image
             # Only paste the face ROIs that were actually retouched
             composite_result = self._composite_upscaled_faces_onto_native(
@@ -2741,6 +2756,7 @@ class RetouchEngine:
         self._bind_face_targets(ctx, faces_native, (w_native, h_native))
 
         native_img_bgr = self._stage_lens_glare(native_img_bgr, faces_native, ctx, timings)
+        native_img_bgr = self._stage_red_eye(native_img_bgr, faces_native, ctx, timings)
         t1 = time.perf_counter()
         result_native = self._stage_reshape(native_img_bgr, faces_native, ctx)
         timings["reshape"] = (time.perf_counter() - t1) * 1000
@@ -2758,6 +2774,15 @@ class RetouchEngine:
                 np.clip(result_native.astype(np.float32), 0.0, 255.0)
                 * (1.0 / 255.0)
             )
+        if ctx.prosthetic_blend > 0.0:
+            # Prosthetic edges: seams are found on this pre-face-edit frame,
+            # before skin smoothing softens them (retouch/prosthetic_blend.py).
+            ctx._prosthetic_ref = getattr(ctx, "_paint_ref", None)
+            if ctx._prosthetic_ref is None:
+                ctx._prosthetic_ref = (
+                    np.clip(result_native.astype(np.float32), 0.0, 255.0)
+                    * (1.0 / 255.0)
+                )
 
         t2 = time.perf_counter()
         h_img, w_img = result_native.shape[:2]
@@ -2990,6 +3015,7 @@ class RetouchEngine:
         self._bind_face_targets(ctx, faces, (img_bgr.shape[1], img_bgr.shape[0]))
 
         img_bgr = self._stage_lens_glare(img_bgr, faces, ctx, timings)
+        img_bgr = self._stage_red_eye(img_bgr, faces, ctx, timings)
         t1 = time.perf_counter()
         result = self._stage_reshape(img_bgr, faces, ctx)
         timings["reshape"] = (time.perf_counter() - t1) * 1000
@@ -3007,6 +3033,15 @@ class RetouchEngine:
                 np.clip(result.astype(np.float32), 0.0, 255.0)
                 * (1.0 / 255.0)
             )
+        if ctx.prosthetic_blend > 0.0:
+            # Prosthetic edges: seams are found on this pre-face-edit frame,
+            # before skin smoothing softens them (retouch/prosthetic_blend.py).
+            ctx._prosthetic_ref = getattr(ctx, "_paint_ref", None)
+            if ctx._prosthetic_ref is None:
+                ctx._prosthetic_ref = (
+                    np.clip(result.astype(np.float32), 0.0, 255.0)
+                    * (1.0 / 255.0)
+                )
 
         # ------------------------------------------------------------------
         # Stage 2 — Per-face processing (parallel when >1 face)
@@ -3609,6 +3644,24 @@ class RetouchEngine:
         out, diags = remove_lens_glare_faces(img, faces, strength)
         ctx._runtime_diagnostics["lens_glare"] = diags
         timings["lens_glare"] = (time.perf_counter() - t) * 1000
+        return out
+
+    def _stage_red_eye(self, img: np.ndarray, faces, ctx: ProcessingContext, timings) -> np.ndarray:
+        """Remove flash red-eye before any face work.
+
+        Opt-in (``ctx.red_eye`` 0 = off). Runs on the detection-frame image so
+        the eye enhancements (catchlights, iris, sclera) see a dark pupil.
+        """
+        strength = float(getattr(ctx, "red_eye", 0.0) or 0.0)
+        if strength <= 0.0 or not faces:
+            return img
+        from .red_eye import remove_red_eye_faces
+
+        _emit_stage("red_eye")
+        t = time.perf_counter()
+        out, diags = remove_red_eye_faces(img, faces, strength)
+        ctx._runtime_diagnostics["red_eye"] = diags
+        timings["red_eye"] = (time.perf_counter() - t) * 1000
         return out
 
     def _stage_reshape(self, img: np.ndarray, faces, ctx: ProcessingContext) -> np.ndarray:
@@ -4936,6 +4989,36 @@ class RetouchEngine:
             exclude=exclude,
         )
         ctx._runtime_diagnostics["body_paint"] = diag
+        return out
+
+    def _stage_prosthetic_blend(
+        self,
+        img: np.ndarray,
+        ctx: ProcessingContext,
+        acc_skin: Optional[np.ndarray],
+        faces,
+        person_mask: Optional[np.ndarray],
+        acc_hair_only: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """Prosthetic edge blending: hide appliance seams near ears and forehead.
+
+        Opt-in (``ctx.prosthetic_blend`` 0-100). Seams are found on the
+        pre-face-edit reference in ``ctx._prosthetic_ref`` and blended on the
+        retouched image; see ``retouch/prosthetic_blend.py``.
+        """
+        from .prosthetic_blend import apply_prosthetic_blend
+
+        _emit_stage("prosthetic_blend")
+        out, diag = apply_prosthetic_blend(
+            img,
+            faces,
+            acc_skin,
+            float(ctx.prosthetic_blend) / 100.0,
+            person_mask=person_mask,
+            hair_mask=acc_hair_only,
+            ref=getattr(ctx, "_prosthetic_ref", None),
+        )
+        ctx._runtime_diagnostics["prosthetic_blend"] = diag
         return out
 
     def _stage_cosplay_moat(
