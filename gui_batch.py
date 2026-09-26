@@ -114,7 +114,7 @@ def on_learn_style(orig_dir, edit_dir, style_name, author, tags_str, prg=gr.Prog
 def on_process_folder(input_dir, output_dir, style_type, custom_style_name, recipe_name,
                       export_fmt, export_quality, export_res, auto_group, generate_sheet, export_zip,
                       social_crop_formats=None, watermark_text=None,
-                      watermark_position="auto", prg=gr.Progress()):
+                      watermark_position="auto", write_xmp=False, prg=gr.Progress()):
     if not input_dir or not output_dir:
         return None, None, "Error: Both Input and Output directories must be specified."
     try:
@@ -132,7 +132,8 @@ def on_process_folder(input_dir, output_dir, style_type, custom_style_name, reci
                           generate_sheet, export_zip, prg,
                           social_crop_formats=social_crop_formats,
                           watermark_text=watermark_text,
-                          watermark_position=watermark_position)
+                          watermark_position=watermark_position,
+                          write_xmp=write_xmp)
     finally:
         # Release MediaPipe before the GC can finalize it — FaceLandmarker's
         # __del__ blocks forever on a serial-dispatcher future, which shows up
@@ -207,7 +208,7 @@ def _export_social_crops(job, output_dir, social_crop_formats, watermark=None):
 def _run_batch(processor, input_dir, output_dir, style_type, custom_style_name,
                recipe_name, export_fmt, export_quality, export_res, auto_group,
                generate_sheet, export_zip, prg, only_files=None, social_crop_formats=None,
-               watermark_text=None, watermark_position="auto"):
+               watermark_text=None, watermark_position="auto", write_xmp=False):
     from retouch.jobs import Job, FileRecord, JobStore, make_job_id, QA_STATE_UNKNOWN, QA_STATE_CLEAN, QA_STATE_FLAGGED, QA_STATE_ERROR
 
     profile = None
@@ -317,6 +318,8 @@ def _run_batch(processor, input_dir, output_dir, style_type, custom_style_name,
         review_page_path = _build_batch_review_page(review_root)
         if review_page_path is not None:
             log = f"{log}\nReview page: {review_page_path}"
+        if write_xmp:
+            log = f"{log}\n{_write_batch_xmp(review_root)}"
 
         job.log = log
         job_store.save(job)
@@ -396,6 +399,18 @@ def _build_batch_review_page(review_root):
     except Exception:
         _logger.warning("Failed to build review page at %s", review_root, exc_info=True)
         return None
+
+
+def _write_batch_xmp(review_root):
+    """Best-effort XMP export for a finished batch; returns one log line."""
+    if not _REVIEW_AVAILABLE or review_root is None:
+        return "XMP: skipped (no review records for this batch)"
+    try:
+        from retouch.xmp_sidecar import format_counts, write_review_xmp
+        return format_counts(write_review_xmp(review_root))
+    except Exception as e:
+        _logger.warning("XMP export failed at %s", review_root, exc_info=True)
+        return f"XMP: failed ({e})"
 
 
 # ---------------------------------------------------------------------------
