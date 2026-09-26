@@ -38,6 +38,13 @@ dev = [
     "pytest>=7.0.0",
     "pytest-cov>=6.0.0",
     "pytest-timeout>=2.3.0,<3",
+    # Exercises the optional Content Credentials signing path in tests.
+    "c2pa-python>=0.37,<0.38; python_version >= '3.10'",
+]
+# Optional: sign retouched photos with Content Credentials (C2PA) using your
+# own certificate (cli.py --sign-cert/--sign-key).
+credentials = [
+    "c2pa-python>=0.37,<0.38; python_version >= '3.10'",
 ]
 gui = [
     "gradio>=4.0.0,<5",

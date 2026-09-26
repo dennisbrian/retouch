@@ -34,8 +34,9 @@ converting the processed pixels back to the source profile. Re-embedding an
 ICC profile without that conversion is not a valid color-managed export.
 
 The context and its profile hashes are included in the pixel-free render
-manifest. An old C2PA APP11 payload remains a copied, unverified passthrough;
-it is not treated as a newly signed derived-work claim.
+manifest. A source photo's C2PA (Content Credentials) block is not copied to
+the export: it covers the unedited pixels and would fail verification. Signing
+a new manifest is opt-in; see [CONTENT_CREDENTIALS.md](CONTENT_CREDENTIALS.md).
 
 ## Precision contract
 
