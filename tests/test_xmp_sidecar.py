@@ -207,6 +207,17 @@ class TestJpegEmbed:
         with pytest.raises(xs.XmpError):
             xs.embed_in_jpeg(bad, xs.XmpFields(label="Red"))
 
+    def test_signed_jpeg_gets_sidecar_not_embed(self, tmp_path):
+        out = _jpeg(tmp_path / "signed.jpg")
+        data = out.read_bytes()
+        payload = b"JP\x00\x01jumb....c2pa manifest"
+        app11 = b"\xff\xeb" + len(payload + b"xx").to_bytes(2, "big") + payload
+        out.write_bytes(data[:2] + app11 + data[2:])
+        signed = out.read_bytes()
+        assert xs.has_content_credentials(out)
+        assert xs.write_output_metadata(out, xs.XmpFields(label="Green")) == tmp_path / "signed.xmp"
+        assert out.read_bytes() == signed, "a signed JPEG must not be modified"
+
     def test_output_metadata_png_gets_sidecar(self, tmp_path):
         out = tmp_path / "out.png"
         assert cv2.imwrite(str(out), np.zeros((8, 8, 3), np.uint8))

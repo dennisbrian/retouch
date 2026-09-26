@@ -392,8 +392,9 @@ Where the metadata goes:
   originals use the tagged outputs below.
 - **Inside each retouched JPEG** in the output folder (pixels and EXIF are
   untouched), so importing the outputs brings the labels with them. The copies
-  in `picks/` carry them too. PNG, TIFF and WebP outputs get a `.xmp` sidecar
-  instead.
+  in `picks/` carry them too. PNG, TIFF and WebP outputs, and JPEGs signed with
+  Content Credentials (`--sign-cert`, whose signature would break if the file
+  changed), get a `.xmp` sidecar instead.
 
 Safe with sidecars that already exist (from Lightroom, Capture One or a camera):
 everything else in them, including develop settings, is kept; a rating or label

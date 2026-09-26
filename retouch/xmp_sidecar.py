@@ -21,8 +21,9 @@ Where the metadata goes:
   Photo Mechanic read these for RAW files; Lightroom ignores sidecars beside
   JPEG originals.
 * inside each retouched **JPEG output** as an embedded XMP packet, because
-  that is where Lightroom looks for a JPEG's metadata. Non-JPEG outputs get a
-  ``<stem>.xmp`` sidecar instead. Sources are never modified.
+  that is where Lightroom looks for a JPEG's metadata. Non-JPEG outputs, and
+  JPEGs signed with Content Credentials (whose signature any byte change would
+  break), get a ``<stem>.xmp`` sidecar instead. Sources are never modified.
 
 Sidecars that already exist (written by Lightroom, Capture One or a camera) are
 merged, never replaced: everything else in them is kept, the reviewer's own
@@ -469,10 +470,28 @@ def read_jpeg_fields(path: PathLike) -> Optional[Dict[str, Any]]:
     return None
 
 
+def has_content_credentials(path: PathLike) -> bool:
+    """True when a JPEG carries a C2PA manifest (APP11 JUMBF segment)."""
+    try:
+        data = Path(path).read_bytes()
+        for marker, start, end in _jpeg_segments(data):
+            if marker == 0xEB:
+                segment = data[start:end]
+                if b"c2pa" in segment or b"jumb" in segment or b"JUMBF" in segment:
+                    return True
+    except (OSError, XmpError):
+        return False
+    return False
+
+
 def write_output_metadata(output: PathLike, fields: XmpFields) -> Optional[Path]:
-    """Embed into a JPEG output, or write a sidecar for any other format."""
+    """Embed into a JPEG output, or write a sidecar for any other format.
+
+    A JPEG signed with Content Credentials (``--sign-cert``) gets a sidecar
+    instead: changing its bytes would make the signature fail verification.
+    """
     output = Path(output)
-    if output.suffix.lower() in (".jpg", ".jpeg"):
+    if output.suffix.lower() in (".jpg", ".jpeg") and not has_content_credentials(output):
         return output if embed_in_jpeg(output, fields) else None
     return write_sidecar(output, fields)
 
@@ -603,7 +622,9 @@ def write_review_xmp(root: PathLike, decisions: Optional[Union[PathLike, Mapping
         if outputs and record.output:
             output = Path(record.output)
             if output.is_file():
-                kind = "embedded" if output.suffix.lower() in (".jpg", ".jpeg") else "sidecars"
+                embeddable = (output.suffix.lower() in (".jpg", ".jpeg")
+                              and not has_content_credentials(output))
+                kind = "embedded" if embeddable else "sidecars"
                 _write_one(counts, kind, write_output_metadata, output, fields)
             else:
                 counts["missing"] += 1
