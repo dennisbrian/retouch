@@ -18,6 +18,7 @@ output verification.
 - `GUI.md` — Gradio UI layout & components
 - `BATCH_GUIDE.md` — Batch processing via CLI, including social crops export
 - `SPLIT_SHOOT.md` — Split a shoot into folders by capture time before batching
+- `GROUP_BY_COSPLAYER.md` — Group a shoot by cosplayer (costume colours + capture time, no face recognition)
 - `DUPLICATES.md` — Find repeated shots of the same pose anywhere in a shoot and suggest keepers
 - `PERFORMANCE_TUNING.md` — Optimization tips
 - `COLOR_DELIVERY_TRUTH.md` — Working-space, precision, preview, and export contracts

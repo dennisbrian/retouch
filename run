@@ -6,6 +6,7 @@
 #   ./run batch ARGS...    run the batch CLI (same options as cli.py)
 #   ./run crops FOLDER     make 4:5 / 9:16 / 1:1 social crops of retouched photos
 #   ./run split FOLDER ... split a shoot into folders by capture time
+#   ./run people FOLDER    group a shoot by cosplayer (costume colours + time)
 #   ./run dupes FOLDER     find near-identical frames across a shoot (report only)
 #   ./run recipes          list the recipe names --recipe accepts
 #   ./run lut RECIPE       save a recipe's colour look as a .cube LUT (-o PATH)
@@ -50,6 +51,8 @@ case "$cmd" in
     split)
         exec "$PYTHON" split_shoot.py "$@"
         ;;
+    people)
+        exec "$PYTHON" -m retouch.cosplayer_groups "$@"
     dupes|duplicates)
         exec "$PYTHON" -m retouch.duplicates "$@"
         ;;
