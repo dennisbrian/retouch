@@ -144,6 +144,11 @@ cv2.imwrite("portrait_retouched.jpg", result)
 python3 cli.py /path/to/photos -o /path/to/output --recipe cosplay_clear_v1 --workers 4
 ```
 
+To keep a set consistent for a carousel, add `--match-hero path/to/best.jpg`:
+every photo's exposure and white balance is matched to that hero frame on the
+subject's skin before the recipe runs (see "Match a Set to One Hero Frame" in
+[BATCH_GUIDE.md](docs/guides/BATCH_GUIDE.md)).
+
 Each batch also writes `review.html` into the output folder: open it in a browser to check before/after, face close-ups and QA flags, mark picks and rejects from the keyboard, then export the decisions and apply them to copy the picks into a folder. See [BATCH_GUIDE.md](docs/guides/BATCH_GUIDE.md) for full CLI options and the review workflow.
 
 ### Split a shoot by capture time

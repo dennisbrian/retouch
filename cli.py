@@ -106,12 +106,37 @@ PRESET_CHOICES = RECIPE_CHOICES
 
 
 def _finalize_params(params):
-    """Load color reference once; safe to share read-only across batch jobs."""
+    """Load color reference once; safe to share read-only across batch jobs.
+
+    ``--match-hero`` is measured here, once, in the parent process: workers
+    receive the tiny :class:`retouch.set_match.FrameStats`, not the image.
+    """
     finalized = dict(params)
     ref_path = finalized.pop("color_ref_path", None)
     if ref_path is not None:
         finalized["color_ref"] = imread_exif(Path(ref_path))
+    hero_path = finalized.pop("set_match_hero_path", None)
+    if hero_path is not None:
+        finalized["set_match_hero"] = _measure_hero(Path(hero_path))
     return finalized
+
+
+def _measure_hero(hero_path: Path):
+    """Measure the ``--match-hero`` frame (skin anchor when it has a face)."""
+    from retouch.detection import FaceDetector
+    from retouch.set_match import measure_frame
+
+    hero_img, _ = imread_engine_with_context(hero_path)
+    detector = None
+    try:
+        detector = FaceDetector(allow_unavailable=True)
+        stats = measure_frame(hero_img, detector=detector)
+    finally:
+        if detector is not None:
+            detector.close()
+    anchor = "the subject's skin" if stats.skin_bgr is not None else "the whole frame (no face found)"
+    print(f"Matching the set to hero frame {hero_path.name}, measured on {anchor}")
+    return stats
 
 
 def _smart_params_for_image(img_bgr, base_params):
@@ -194,8 +219,13 @@ def _save_session(
     # cleanly through engine.process(**session.params).
     save_params = {
         k: v for k, v in params.items()
-        if k not in ("color_ref", "color_ref_path")
+        if k not in ("color_ref", "color_ref_path", "set_match_hero_path")
     }
+    # The measured hero is a few numbers; keep it so the session replays the
+    # same match (engine.process accepts the dict form).
+    hero = save_params.get("set_match_hero")
+    if hero is not None and hasattr(hero, "to_dict"):
+        save_params["set_match_hero"] = hero.to_dict()
     if save_path:
         resolved = _resolve_safe_path(save_path, base_dir=None)
         target = str(resolved)
@@ -858,6 +888,13 @@ def _recipe_defaults(recipe_name):
 def _apply_global_finish(img_bgr, params):
     """Fast retouch path that avoids face detection and local facial edits."""
     result = img_bgr.copy()
+    hero = params.get("set_match_hero")
+    if hero is not None and params.get("set_match"):
+        # No detector on this path, so frames are matched on the whole frame.
+        from retouch.set_match import coerce_hero, match_to_hero
+        result, _ = match_to_hero(
+            result, coerce_hero(hero), strength=float(params["set_match"]) / 100.0,
+        )
     defaults = _recipe_defaults(params.get("recipe"))
     grader = ColorGrader()
 
@@ -1262,6 +1299,11 @@ def build_params(args: argparse.Namespace) -> dict:
     if args.color_ref:
         params["color_ref_path"] = args.color_ref
 
+    match_hero = getattr(args, "match_hero", None)
+    if match_hero:
+        params["set_match_hero_path"] = match_hero
+        params.setdefault("set_match", 100)
+
     color_transfer_intensity = getattr(args, "color_transfer_intensity", None)
     if color_transfer_intensity is None:
         color_transfer_intensity = getattr(args, "color_ref_strength", None)
@@ -1385,6 +1427,11 @@ def main() -> None:
                         help="Quick parameter preset (legacy alias)")
     parser.add_argument("--color-ref", type=str, default=None,
                         help="Reference image path for colour transfer")
+    parser.add_argument("--match-hero", type=str, default=None, metavar="HERO",
+                        help="Match every photo's exposure and white balance "
+                             "to this hero frame before the recipe runs, so a "
+                             "set looks consistent (strength: --set-match, "
+                             "default 100)")
     parser.add_argument("--color-ref-strength", type=float, default=None,
                         action=_DeprecatedAliasAction,
                         deprecated_to="--color-transfer-intensity",
