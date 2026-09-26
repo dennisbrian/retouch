@@ -20,6 +20,7 @@ output verification.
 - `SPLIT_SHOOT.md` — Split a shoot into folders by capture time before batching
 - `PERFORMANCE_TUNING.md` — Optimization tips
 - `COLOR_DELIVERY_TRUTH.md` — Working-space, precision, preview, and export contracts
+- `CONTENT_CREDENTIALS.md` — Per-photo edit reports and signing outputs with Content Credentials (C2PA)
 - `TROUBLESHOOTING.md` — Common issues & fixes
 - `RECIPE_GENERATOR.md` — Recipe generation
 - `RUNTIME_RECOVERY.md` — Isolated legacy recovery and Python 3.12 migration gates

@@ -58,8 +58,11 @@ _THUMBS_SUBDIR = "thumbs"
 _DEFAULT_PICKS_DIR = "picks"
 _DEFAULT_REJECTS_DIR = "rejected"
 # Output-root subfolders that never hold batch outputs: the review cache,
-# face-aware social crops, and apply_decisions' default destinations.
-_BACKFILL_SKIP_DIRS = (REVIEW_DIRNAME, "social", _DEFAULT_PICKS_DIR, _DEFAULT_REJECTS_DIR)
+# face-aware social crops, watermarked copies, and apply_decisions' default
+# destinations.
+_BACKFILL_SKIP_DIRS = (
+    REVIEW_DIRNAME, "social", "watermarked", _DEFAULT_PICKS_DIR, _DEFAULT_REJECTS_DIR,
+)
 _FACE_EXPAND = 1.8
 _THUMB_JPEG_QUALITY = 85
 _SAFE_STEM_RE = re.compile(r"[^A-Za-z0-9._-]+")

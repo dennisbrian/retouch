@@ -106,12 +106,37 @@ PRESET_CHOICES = RECIPE_CHOICES
 
 
 def _finalize_params(params):
-    """Load color reference once; safe to share read-only across batch jobs."""
+    """Load color reference once; safe to share read-only across batch jobs.
+
+    ``--match-hero`` is measured here, once, in the parent process: workers
+    receive the tiny :class:`retouch.set_match.FrameStats`, not the image.
+    """
     finalized = dict(params)
     ref_path = finalized.pop("color_ref_path", None)
     if ref_path is not None:
         finalized["color_ref"] = imread_exif(Path(ref_path))
+    hero_path = finalized.pop("set_match_hero_path", None)
+    if hero_path is not None:
+        finalized["set_match_hero"] = _measure_hero(Path(hero_path))
     return finalized
+
+
+def _measure_hero(hero_path: Path):
+    """Measure the ``--match-hero`` frame (skin anchor when it has a face)."""
+    from retouch.detection import FaceDetector
+    from retouch.set_match import measure_frame
+
+    hero_img, _ = imread_engine_with_context(hero_path)
+    detector = None
+    try:
+        detector = FaceDetector(allow_unavailable=True)
+        stats = measure_frame(hero_img, detector=detector)
+    finally:
+        if detector is not None:
+            detector.close()
+    anchor = "the subject's skin" if stats.skin_bgr is not None else "the whole frame (no face found)"
+    print(f"Matching the set to hero frame {hero_path.name}, measured on {anchor}")
+    return stats
 
 
 def _smart_params_for_image(img_bgr, base_params):
@@ -194,8 +219,13 @@ def _save_session(
     # cleanly through engine.process(**session.params).
     save_params = {
         k: v for k, v in params.items()
-        if k not in ("color_ref", "color_ref_path")
+        if k not in ("color_ref", "color_ref_path", "set_match_hero_path")
     }
+    # The measured hero is a few numbers; keep it so the session replays the
+    # same match (engine.process accepts the dict form).
+    hero = save_params.get("set_match_hero")
+    if hero is not None and hasattr(hero, "to_dict"):
+        save_params["set_match_hero"] = hero.to_dict()
     if save_path:
         resolved = _resolve_safe_path(save_path, base_dir=None)
         target = str(resolved)
@@ -582,6 +612,74 @@ def _result_info(result, info):
     ]
 
 
+def _credentials_options(args):
+    """Per-run edit-report/signing options, picklable for pool workers."""
+    if not (getattr(args, "edit_report", False) or getattr(args, "signing", None)):
+        return None
+    return {"edit_report": bool(args.edit_report), "signing": args.signing}
+
+
+def _report_thumb(img, max_dim=1024):
+    """Small copy of the pre-retouch pixels for the edit report's change measure."""
+    h, w = img.shape[:2]
+    scale = min(1.0, max_dim / max(h, w))
+    if scale >= 1.0:
+        return np.array(img, copy=True)
+    return cv2.resize(img, (max(1, int(w * scale)), max(1, int(h * scale))),
+                      interpolation=cv2.INTER_AREA)
+
+
+def _write_credentials(options, src_path, out_path, processed, final, before_thumb,
+                       params, global_only=False):
+    """Write the edit report and/or sign *out_path* with Content Credentials.
+
+    *processed* is the engine's result (carries the resolved settings and
+    face count); *final* is the pixels as written. A signing failure removes
+    the unsigned output, so a re-run redoes the photo instead of skipping it.
+    """
+    from retouch.edit_report import build_edit_report, write_edit_report
+
+    info = {}
+    if not options:
+        return info
+    had_credentials = read_c2pa_manifest(src_path) is not None
+    recipe = params.get("recipe") if isinstance(params, dict) else None
+    common = dict(
+        params=getattr(processed, "params", None) or params,
+        source_path=src_path,
+        output_path=out_path,
+        recipe=recipe,
+        face_count=getattr(processed, "face_count", 0),
+        before=before_thumb,
+        after=final,
+        global_only=global_only,
+        source_had_credentials=had_credentials,
+    )
+    signing = options.get("signing")
+    signed = None
+    if signing is not None:
+        from retouch.content_credentials import CredentialsError, sign_output
+
+        embedded = build_edit_report(**common, signed=True, include_output_hash=False)
+        try:
+            signed = sign_output(out_path, embedded, signing, source_path=src_path,
+                                 source_preview=before_thumb)
+        except CredentialsError:
+            try:
+                os.remove(out_path)
+            except OSError:
+                pass
+            raise
+        info["signed"] = True
+    if options.get("edit_report"):
+        report = build_edit_report(**common, signed=signed is not None)
+        if signed is not None:
+            report["content_credentials"]["parent_attached"] = signed["parent"]
+            report["content_credentials"]["parent_note"] = signed["parent_note"]
+        info["edit_report"] = str(write_edit_report(report, out_path))
+    return info
+
+
 def _process_single(args):
     """Pool entry point: process one image and stream stage progress."""
     # Keep compatibility with the 25-item worker tuple used by callers/tests
@@ -589,6 +687,7 @@ def _process_single(args):
     if len(args) == 25:
         args = (*args[:23], None, True, *args[23:])
     supplied_key = args[27] if len(args) > 27 else None
+    credentials = args[28] if len(args) > 28 else None
     if len(args) > 27:
         args = args[:27]
     img_path, input_root = args[0], args[22]
@@ -599,14 +698,16 @@ def _process_single(args):
         emit(q, key, "start", worker=os.getpid())
     info: Dict[str, Any] = {}
     t_start = time.time()
-    name, status, evidence = _process_single_with_evidence(args, info, sink)
+    name, status, evidence = _process_single_with_evidence(
+        args, info, sink, credentials=credentials
+    )
     info["seconds"] = round(time.time() - t_start, 3)
     if evidence is not None:
         info["_processing_evidence"] = evidence
     return Path(name).name, status, info
 
 
-def _process_single_with_evidence(args, info=None, sink=None):
+def _process_single_with_evidence(args, info=None, sink=None, credentials=None):
     if info is None:
         info = {}
     stage = sink if sink is not None else (lambda *_a, **_k: None)
@@ -675,6 +776,7 @@ def _process_single_with_evidence(args, info=None, sink=None):
             (np.clip(img_bgr, 0, 255).astype(np.uint8) if img_bgr.dtype != np.uint8 else img_bgr.copy())
             if compare_flag else None
         )
+        before_thumb = _report_thumb(img_bgr) if credentials else None
         img_bgr, _scale = resize_for_processing(img_bgr, max_dim)
 
         # F10: --smart — per-image analysis overrides recipe/params.
@@ -757,6 +859,7 @@ def _process_single_with_evidence(args, info=None, sink=None):
                     # that cycle. See cli-batch-hangs-on-exit-after-done.
                     engine._face_pool.shutdown()
 
+        processed = result
         # Upscale back to original dimensions
         if _scale < 1.0:
             result = cv2.resize(result, (orig_shape[1], orig_shape[0]),
@@ -779,6 +882,12 @@ def _process_single_with_evidence(args, info=None, sink=None):
             c2pa_manifest=c2pa_manifest,
         )
         info["out_path"] = str(out_path)
+        if credentials:
+            stage("stage", {"stage": "credentials"})
+            info.update(_write_credentials(
+                credentials, img_path, out_path, processed, result, before_thumb,
+                effective_params, global_only=global_only,
+            ))
 
         if compare_flag:
             stage("stage", {"stage": "compare"})
@@ -858,6 +967,13 @@ def _recipe_defaults(recipe_name):
 def _apply_global_finish(img_bgr, params):
     """Fast retouch path that avoids face detection and local facial edits."""
     result = img_bgr.copy()
+    hero = params.get("set_match_hero")
+    if hero is not None and params.get("set_match"):
+        # No detector on this path, so frames are matched on the whole frame.
+        from retouch.set_match import coerce_hero, match_to_hero
+        result, _ = match_to_hero(
+            result, coerce_hero(hero), strength=float(params["set_match"]) / 100.0,
+        )
     defaults = _recipe_defaults(params.get("recipe"))
     grader = ColorGrader()
 
@@ -1045,10 +1161,8 @@ _ESTIMATED_OUTPUT_BYTES_PER_INPUT_BYTE = 2.0
 _MIN_FREE_BYTES_AFTER_RUN = 5 * 1024 * 1024 * 1024
 
 
-def _export_social_crops(files, output_dir, args, recursive_root, formats) -> None:
-    """Post-batch: face-aware social crops of every written output."""
-    from retouch.social_crops import export_folder, format_summary
-
+def _written_outputs(files, output_dir, args, recursive_root) -> list:
+    """Retouched output paths of ``files`` that exist on disk."""
     outputs = []
     for f in files:
         fmt = output_format(f, args.format)
@@ -1057,17 +1171,43 @@ def _export_social_crops(files, output_dir, args, recursive_root, formats) -> No
         out_path = _destination_for_image(f, output_dir, fmt, input_root=recursive_root)
         if out_path.exists():
             outputs.append(out_path)
+    return outputs
+
+
+def _export_social_crops(files, output_dir, args, recursive_root, formats,
+                         watermark=None) -> None:
+    """Post-batch: face-aware social crops of every written output."""
+    from retouch.social_crops import export_folder, format_summary
+
+    outputs = _written_outputs(files, output_dir, args, recursive_root)
     if not outputs:
         print("Social crops: no retouched outputs to crop")
         return
     social_dir = (output_dir or outputs[0].parent) / "social"
     summary = export_folder(
         outputs, social_dir, formats, size=args.social_size, force=args.force,
+        watermark=watermark,
     )
     for r in summary["results"]:
         if r.status == "failed":
             print(f"  ✖ {r.path.name}: {r.error}")
     print(format_summary(summary, social_dir))
+
+
+def _export_watermarked(files, output_dir, args, recursive_root, spec) -> None:
+    """Post-batch: watermarked copies of every written output (masters untouched)."""
+    from retouch.watermark import WATERMARK_DIRNAME, export_folder, format_summary
+
+    outputs = _written_outputs(files, output_dir, args, recursive_root)
+    if not outputs:
+        print("Watermark: no retouched outputs to stamp")
+        return
+    out_dir = (output_dir or outputs[0].parent) / WATERMARK_DIRNAME
+    summary = export_folder(outputs, out_dir, spec, force=args.force)
+    for r in summary["results"]:
+        if r.status == "failed":
+            print(f"  ✖ {r.path.name}: {r.error}")
+    print(format_summary(summary, out_dir))
 
 
 def _nearest_existing_ancestor(path: Path) -> Path:
@@ -1262,6 +1402,11 @@ def build_params(args: argparse.Namespace) -> dict:
     if args.color_ref:
         params["color_ref_path"] = args.color_ref
 
+    match_hero = getattr(args, "match_hero", None)
+    if match_hero:
+        params["set_match_hero_path"] = match_hero
+        params.setdefault("set_match", 100)
+
     color_transfer_intensity = getattr(args, "color_transfer_intensity", None)
     if color_transfer_intensity is None:
         color_transfer_intensity = getattr(args, "color_ref_strength", None)
@@ -1385,6 +1530,11 @@ def main() -> None:
                         help="Quick parameter preset (legacy alias)")
     parser.add_argument("--color-ref", type=str, default=None,
                         help="Reference image path for colour transfer")
+    parser.add_argument("--match-hero", type=str, default=None, metavar="HERO",
+                        help="Match every photo's exposure and white balance "
+                             "to this hero frame before the recipe runs, so a "
+                             "set looks consistent (strength: --set-match, "
+                             "default 100)")
     parser.add_argument("--color-ref-strength", type=float, default=None,
                         action=_DeprecatedAliasAction,
                         deprecated_to="--color-transfer-intensity",
@@ -1435,6 +1585,21 @@ def main() -> None:
                         help="Skip side-by-side comparison output")
     parser.add_argument("--no-exif", action="store_true",
                         help="Skip EXIF metadata copying")
+    parser.add_argument("--edit-report", action="store_true",
+                        help="Write a 'what was changed' JSON report per photo to "
+                             "<output>/edit-reports/ (recipe, active edits, whether face or "
+                             "body shape changed, AI use, how much of the frame changed)")
+    parser.add_argument("--sign-cert", default=None, metavar="PEM",
+                        help="Sign each output with Content Credentials (C2PA) using this "
+                             "certificate chain; needs --sign-key and the optional "
+                             "c2pa-python package. The edit report is embedded")
+    parser.add_argument("--sign-key", default=None, metavar="PEM",
+                        help="Private key matching --sign-cert")
+    parser.add_argument("--sign-alg", default="es256",
+                        choices=["es256", "es384", "es512", "ps256", "ps384", "ps512", "ed25519"],
+                        help="Signing algorithm of --sign-key (default es256)")
+    parser.add_argument("--sign-tsa", default=None, metavar="URL",
+                        help="Optional RFC 3161 timestamp server for signatures")
     parser.add_argument("--fail-on-qa", action="store_true",
                         help="Exit with code 1 if any QA detector flags an artifact")
     parser.add_argument("--social-crops", nargs="?", const="4:5,9:16,1:1", default=None,
@@ -1445,6 +1610,12 @@ def main() -> None:
     parser.add_argument("--social-size", choices=["platform", "full"], default="platform",
                         help="Social crop size: platform = 1080 px wide (default), "
                              "full = native crop resolution")
+    parser.add_argument("--watermark", default=None, metavar="TEXT",
+                        help="After the batch, write copies with this credit stamped on "
+                             "into <output>/watermarked/ (and on social crops); masters "
+                             'stay clean. e.g. "© Alex Studio {year}". Off by default')
+    from retouch.watermark import add_cli_args as _add_watermark_args
+    _add_watermark_args(parser, prefix="watermark-")
     parser.add_argument("--no-review", action="store_false", dest="review", default=True,
                         help="Skip writing review.html (per-batch review page)")
     parser.add_argument("--xmp", action="store_true",
@@ -1563,6 +1734,15 @@ def main() -> None:
         parser.error("--ram-budget-gib must be greater than 0")
     if args.max_input_pixels is not None and args.max_input_pixels <= 0:
         parser.error("--max-input-pixels must be greater than 0")
+    watermark_spec = None
+    if args.watermark is not None or args.watermark_logo is not None:
+        from retouch.watermark import spec_from_args
+        try:
+            watermark_spec = spec_from_args(args.watermark or "", args, prefix="watermark-")
+        except ValueError as exc:
+            parser.error(f"--watermark: {exc}")
+        if not watermark_spec.enabled:
+            parser.error("--watermark: give a credit text and/or --watermark-logo")
     social_formats = None
     if args.social_crops is not None:
         from retouch.social_crops import parse_formats
@@ -1593,6 +1773,22 @@ def main() -> None:
             print(f"  [{info.category}] {info.name}: {info.description}")
         return
 
+    args.signing = None
+    if args.sign_cert or args.sign_key:
+        if not (args.sign_cert and args.sign_key):
+            parser.error("--sign-cert and --sign-key must be given together")
+        from retouch.content_credentials import CredentialsError, SigningConfig, signing_available
+        if not signing_available():
+            parser.error(
+                "signing needs the optional c2pa-python package: "
+                "uv sync --extra desktop --extra credentials"
+            )
+        try:
+            args.signing = SigningConfig.from_paths(
+                args.sign_cert, args.sign_key, args.sign_alg, args.sign_tsa
+            )
+        except CredentialsError as exc:
+            parser.error(str(exc))
     if args.export_lut is not None:
         if not args.recipe:
             parser.error("--export-lut needs --recipe NAME")
@@ -2010,6 +2206,7 @@ def main() -> None:
                 if (digest := sha256_file(Path(artifact))) is not None
             }
 
+    credentials_options = _credentials_options(args)
     if args.workers > 1 and len(files) > 1:
         pool_args = [
             (f, output_dir, params, args.format, args.quality, _force_for(f),
@@ -2020,7 +2217,7 @@ def main() -> None:
              args.fuji_match_strength, args.optical_correction,
              recursive_root, output_stems.get(_path_key(f)),
              not args.no_raf_exposure_bias, review_root, args.review,
-             progress_keys[f])
+             progress_keys[f], credentials_options)
             for f in files
         ]
         pool = ProcessPoolExecutor(
@@ -2172,6 +2369,7 @@ def main() -> None:
 
                 orig_shape = img_bgr.shape[:2]
                 original_full = img_bgr.copy() if args.compare else None
+                before_thumb = _report_thumb(img_bgr) if credentials_options else None
                 img_bgr, _scale = resize_for_processing(img_bgr, args.max_dim)
 
                 # F10: --smart — per-image analysis overrides recipe/params.
@@ -2231,6 +2429,7 @@ def main() -> None:
                                     ))
                                 continue
 
+                processed = result
                 if _scale < 1.0:
                     result = cv2.resize(result, (orig_shape[1], orig_shape[0]),
                                         interpolation=cv2.INTER_LINEAR)
@@ -2254,6 +2453,13 @@ def main() -> None:
                         c2pa_manifest=c2pa_manifest,
                     )
                     active_progress["info"]["out_path"] = str(out_path)
+                    if credentials_options:
+                        sink("stage", {"stage": "credentials"})
+                        active_progress["info"].update(_write_credentials(
+                            credentials_options, f, out_path, processed, result,
+                            before_thumb, effective_params,
+                            global_only=args.global_only,
+                        ))
 
                     if args.compare:
                         sink("stage", {"stage": "compare"})
@@ -2330,9 +2536,12 @@ def main() -> None:
     if args.input_plan:
         input_plan.write(Path(args.input_plan))
 
+    if watermark_spec is not None and not args.dry_run:
+        _export_watermarked(files, output_dir, args, recursive_root, watermark_spec)
     if social_formats:
         _export_social_crops(
             files, output_dir, args, recursive_root, social_formats,
+            watermark=watermark_spec,
         )
     if args.review and not args.dry_run and len(files) > 0:
         try:

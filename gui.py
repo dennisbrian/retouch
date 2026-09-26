@@ -1153,6 +1153,7 @@ PROCESS_INPUT_KEYS = (
     + [n for n in param_names() if n not in ("color_transfer_intensity", "freckle_preserve_mask")]
     + [
         "color_ref_img", "color_ref_strength",
+        "set_match_hero_img",
         "show_compare",
         "export_fmt", "export_quality", "export_res",
         "quality_tier",
@@ -1678,6 +1679,21 @@ def process_image(
     runtime_note = _face_runtime_label(getattr(engine, "_detector", None))
     start = time.time()
 
+    # Match a set to one hero frame: measure the hero once per render and hand
+    # every image the same few numbers (retouch/set_match.py).
+    set_match_hero = None
+    hero_img = params.get("set_match_hero_img")
+    if isinstance(hero_img, dict):
+        hero_img = hero_img.get("name") or hero_img.get("path")
+    if hero_img and _coerce_float(params.get("set_match")) > 0:
+        try:
+            from retouch.set_match import measure_frame
+            set_match_hero = measure_frame(
+                imread_exif(hero_img), detector=getattr(engine, "_detector", None)
+            )
+        except (TypeError, ValueError, OSError) as e:
+            _logger.warning("Failed to load hero frame: %s", e)
+
     # Legacy direct callers retain the old temporary fallback. GUI requests
     # use a session-owned request workspace so cleanup cannot touch another
     # browser session's files.
@@ -1713,6 +1729,7 @@ def process_image(
             "recipe": recipe,
             "color_ref": color_ref_bgr,
             "color_transfer_intensity": color_ref_strength,
+            "set_match_hero": set_match_hero,
             "fast": fast,
             "debug_dir": None,  # set per-image below
         },
@@ -2512,6 +2529,62 @@ def on_export_recipe_lut(recipe_name):
     if skipped:
         status += " Not in the LUT: " + ", ".join(skipped) + "."
     return str(path), status
+
+
+def _watermark_position_choices():
+    """(label, key) choices for the watermark position dropdowns."""
+    return [
+        ("Auto (avoid faces)", "auto"),
+        ("Bottom right", "bottom-right"),
+        ("Bottom left", "bottom-left"),
+        ("Top right", "top-right"),
+        ("Top left", "top-left"),
+        ("Bottom centre", "bottom-center"),
+    ]
+
+
+def on_stamp_watermark(export_path, processed_rgb, text, position, opacity):
+    """Stamp a credit on a copy of the current photo.
+
+    Uses the exported full-quality file when there is one, else the processed
+    preview. Returns (file path or None, status markdown).
+    """
+    from retouch import watermark as wm
+
+    try:
+        spec = wm.WatermarkSpec(text=text or "", position=position or "auto",
+                                opacity=float(opacity) / 100.0)
+    except ValueError as e:
+        return None, f"Watermark: {e}"
+    if not spec.enabled:
+        return None, "Type the credit to stamp first, e.g. \u00a9 Alex Studio {year}."
+    src = _first_upload_path(export_path)
+    out_dir = Path(tempfile.mkdtemp(prefix="retouch_watermark_"))
+    detector = None
+    try:
+        if spec.position == "auto":
+            try:
+                detector = wm._make_detector()
+            except Exception as e:  # noqa: BLE001 — placement falls back to bottom right
+                _logger.info("Watermark face detection unavailable: %s", e)
+        if src and Path(src).suffix.lower() in (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"):
+            res = wm.export_watermarked(src, out_dir, spec, detector=detector, force=True)
+            if res.status != "done":
+                return None, f"Watermark failed: {res.error}"
+            return str(res.path), f"Stamped the exported photo ({res.spot})."
+        if processed_rgb is None:
+            return None, "Process a photo first."
+        bgr = cv2.cvtColor(np.asarray(processed_rgb, dtype=np.uint8), cv2.COLOR_RGB2BGR)
+        out, spot = wm.apply_watermark(bgr, spec, wm.detect_faces(bgr, detector))
+        path = out_dir / "retouch_watermarked.jpg"
+        cv2.imwrite(str(path), out, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        return str(path), (
+            f"Stamped the preview ({spot}). For a full-resolution copy, export "
+            "the photo first and stamp again."
+        )
+    finally:
+        if detector is not None and hasattr(detector, "close"):
+            detector.close()
 
 
 def on_recipe_gallery(img_paths, group, prg=gr.Progress()):
@@ -3613,6 +3686,29 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             export_lut_status = gr.Markdown("")
                             export_lut_file = gr.File(label="LUT file", interactive=False)
 
+                        with gr.Accordion("\u00a9 Watermark / Credit", open=False):
+                            gr.Markdown(
+                                "Stamp your credit on a copy of this photo for posting. "
+                                "The retouched original stays clean. `{year}` becomes this year."
+                            )
+                            watermark_text = gr.Textbox(
+                                label="Credit text", placeholder="\u00a9 Alex Studio {year}",
+                            )
+                            with gr.Row():
+                                watermark_position = gr.Dropdown(
+                                    choices=_watermark_position_choices(), value="auto",
+                                    label="Position",
+                                )
+                                watermark_opacity = gr.Slider(
+                                    10, 100, 70, step=5, label="Opacity",
+                                )
+                            watermark_btn = gr.Button(
+                                "Save Watermarked Copy", variant="secondary", size="sm",
+                                elem_classes=["secondary-btn"],
+                            )
+                            watermark_status = gr.Markdown("")
+                            watermark_file = gr.File(label="Watermarked copy", interactive=False)
+
                         show_compare = gr.Checkbox(label="Show side-by-side comparison screen", value=True, info="Split view: original | separator | retouched result")
 
                         with gr.Accordion("💾 Session & History", open=False):
@@ -4245,6 +4341,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 color_ref_img = gr.Image(type="filepath", label="Reference Image", show_label=True, height=160)
                                 color_ref_strength = gr.Slider(0.0, 1.0, 1.0, step=0.05, label="Transfer Strength", info="Mix ratio between original grade and matched reference grade (1.0 = full transfer, 0.0 = no transfer)")
 
+                            with gr.Accordion("📸 Match Set to Hero Frame", open=False):
+                                gr.Markdown("Pick your best frame from the set. Every photo you process gets its exposure and white balance matched to it (measured on the subject's skin), then the recipe runs, so a carousel reads as one set.")
+                                set_match_hero_img = gr.Image(type="filepath", label="Hero Frame", show_label=True, height=160)
+                                set_match = gr.Slider(0, 100, 100, step=1, label="Match Strength", info="How far each photo moves toward the hero's exposure and white balance (100 = fully). No effect until a hero frame is set.")
+
                             with gr.Accordion("🎨 Look Extractor (F6)", open=False):
                                 gr.Markdown("Upload a reference image to reverse-engineer an editable tone/color look. The extracted params are applied on the next Process (overriding recipe defaults).")
                                 look_ref_file = gr.File(label="Reference Image (look source)", file_types=["image", *sorted(RAW_EXTENSIONS)], file_count="single")
@@ -4366,6 +4467,18 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             label="Write XMP for Lightroom / Capture One",
                             value=False,
                             info="Tag QA-flagged photos (Yellow label + keywords) in a .xmp sidecar beside each source and inside JPEG outputs. Existing sidecars are merged, never replaced.",
+                        )
+
+                    with gr.Row():
+                        batch_watermark = gr.Textbox(
+                            label="Watermark / credit",
+                            placeholder="\u00a9 Alex Studio {year}",
+                            info="Leave empty for none. Writes stamped copies into <output>/watermarked and stamps social crops; originals stay clean.",
+                            scale=3,
+                        )
+                        batch_watermark_position = gr.Dropdown(
+                            choices=_watermark_position_choices(), value="auto",
+                            label="Watermark position", scale=2,
                         )
 
                     batch_btn = gr.Button("Process Entire Folder 🚀", variant="primary", size="lg", elem_classes=["primary-btn"])
@@ -5228,6 +5341,12 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         inputs=[recipe],
         outputs=[export_lut_file, export_lut_status],
     )
+    watermark_btn.click(
+        fn=on_stamp_watermark,
+        inputs=[export_file, _processed_result_state, watermark_text,
+                watermark_position, watermark_opacity],
+        outputs=[watermark_file, watermark_status],
+    )
     recipe_gallery_btn.click(
         fn=on_recipe_gallery,
         inputs=[img_input, recipe_gallery_group],
@@ -5306,7 +5425,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         fn=on_process_folder,
         inputs=[folder_in, folder_out, batch_style_type, batch_custom_style, batch_recipe,
                 batch_fmt, batch_quality, batch_res, auto_group_toggle, sheet_toggle, zip_toggle,
-                batch_social_crops, batch_xmp],
+                batch_social_crops, batch_watermark, batch_watermark_position, batch_xmp],
         outputs=[batch_sheet_out, batch_zip_out, batch_status],
         concurrency_limit=1,
         concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
@@ -5631,6 +5750,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "ai_denoise": ai_denoise,
         "lens_glare": lens_glare,
         "ai_sr_scale": _ai_sr_scale_state,
+        "set_match": set_match,
         "mv2_eyeshadow": _mv2_eyeshadow_state,
         "mv2_eyeshadow_color": _mv2_eyeshadow_color_state,
         "mv2_eyeshadow_style": _mv2_eyeshadow_style_state,
@@ -5660,6 +5780,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "split_toning": _split_toning_state,
         "color_ref_img": color_ref_img,
         "color_ref_strength": color_ref_strength,
+        "set_match_hero_img": set_match_hero_img,
         "show_compare": show_compare,
         "export_fmt": export_fmt,
         "export_quality": export_quality,

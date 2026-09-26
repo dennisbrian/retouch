@@ -113,9 +113,10 @@ for color in ["red", "orange", "yellow", "green", "cyan", "blue", "purple", "mag
 for color in ["red", "green", "blue"]:
     EXPECTED_RECIPE_KEYS.extend([f"calibration_{color}_hue", f"calibration_{color}_sat", f"calibration_{color}_lum"])
 EXPECTED_RECIPE_KEYS.append("lens_blur")
+EXPECTED_RECIPE_KEYS.append("set_match")
 EXPECTED_RECIPE_KEYS.append("lens_glare")
 
-EXPECTED_RECIPE_KEY_COUNT = 259
+EXPECTED_RECIPE_KEY_COUNT = 261
 # Self-updating: the recipe/smart-style slider tuple length is the contract
 # defined by RECIPE_OUTPUT_KEYS, so this constant can never go stale.
 EXPECTED_UI_OUTPUT_COUNT = len(gui.RECIPE_OUTPUT_KEYS)
@@ -637,11 +638,11 @@ class TestProcessInputKeys:
     def test_count_matches_process_image_arity(self):
         """PROCESS_INPUT_KEYS length must equal the arity of process_image."""
         from retouch.params import param_names
-        # 2 leading + registry (minus 2 excluded) + 12 trailing transport keys
-        # (look_params + face_params State + face_params_json). The dead
-        # "fast" checkbox was removed (render mode already fully determines
-        # it); this was 13 before that removal.
-        expected = 2 + (len(param_names()) - 2) + 12
+        # 2 leading + registry (minus 2 excluded) + 13 trailing transport keys
+        # (look_params + face_params State + face_params_json + the hero
+        # frame image for set matching). The dead "fast" checkbox was removed
+        # (render mode already fully determines it).
+        expected = 2 + (len(param_names()) - 2) + 13
         assert len(gui.PROCESS_INPUT_KEYS) == expected
 
     def test_first_key_is_img_paths(self):
@@ -1221,6 +1222,7 @@ class TestProcessImageValidation:
             "contrast": 0, "brightness": 0,
             "highlights": 0, "shadows": 0, "whites": 0, "blacks": 0,
             "color_ref_img": None, "color_ref_strength": 0.0,
+            "set_match_hero_img": None,
             "show_compare": False,
             "export_fmt": "JPEG", "export_quality": 95, "export_res": "Original",
             "blemish": 0, "dark_circles": 0, "catchlight": 0,
