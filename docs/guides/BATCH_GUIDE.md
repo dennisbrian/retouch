@@ -456,3 +456,40 @@ When using the batch interface in the GUI, check the "Social crops" checkbox and
 - **EXIF stripped:** Geolocation and camera metadata are removed for privacy when posting.
 - **Skip rules:** Comparison images (`*_compare.*`) and anything already inside a `social/` folder are skipped.
 - **Platform downsample:** Output is always downscaled to `1080px` width (unless `--size full` is set) to match platform delivery specs, with light output sharpening applied.
+
+---
+
+## 6. Watermark / Credit Overlay
+
+Stamp a credit (and optionally a logo) on **copies** of your retouched photos for posting. The originals in `<output>/` stay clean; stamped copies go to `<output>/watermarked/<name>.jpg`. Off unless you pass `--watermark` or `--watermark-logo`.
+
+```bash
+./run batch ~/photos -o ~/out --recipe natural --watermark "© Alex Studio {year}"
+
+# Social crops get the credit too, placed clear of the faces in each crop
+./run batch ~/photos -o ~/out --recipe natural --watermark "@alexshoots" --social-crops
+
+# Stamp an existing output folder (no re-render)
+./run watermark ~/out --text "© Alex Studio" --logo logo.png
+```
+
+| Batch flag | `./run watermark` flag | Default | Description |
+|------|------|---------|-------------|
+| `--watermark TEXT` | `--text TEXT` | *off* | Credit text. `{year}` becomes the current year. |
+| `--watermark-logo PNG` | `--logo PNG` | none | Logo (PNG with transparency) before the text, or on its own. |
+| `--watermark-position` | `--position` | `auto` | `auto`, `bottom-right`, `bottom-left`, `top-right`, `top-left`, `bottom-center`. |
+| `--watermark-opacity` | `--opacity` | `70` | 0–100. |
+| `--watermark-size` | `--size` | `3` | Text size as % of the photo's short side. |
+| `--watermark-color` | `--color` | `auto` | `auto` (white on dark, black on light), `white`, `black`. |
+| `--watermark-font TTF` | `--font TTF` | built-in | Font file; needed for accented or CJK names. |
+
+`./run watermark` also takes `-o` (default `<input>/watermarked`), `--quality` (92), `--force` and `-r`.
+
+### Behavior Details
+
+- **Face-aware placement:** `auto` uses bottom-right unless a face (padded by half a face for wigs, headpieces and chin) is there, then tries bottom-left, top-right, top-left, bottom-centre; if every spot touches a face it takes the one with the least overlap.
+- **Legibility:** a soft shadow sits under the mark; text colour follows the median brightness of the background under it.
+- **Font licence:** the built-in font is Aileron Regular (CC0), embedded in Pillow, so it is safe to ship in a paid build. It has Latin letters, digits, `©`, `@`, `·`; other characters log a warning naming them.
+- **Metadata:** camera EXIF (GPS, serial numbers) is not copied; the credit goes into EXIF Copyright (`©` written as `(C)`; credits with other non-ASCII characters get no EXIF field).
+- **Skip rules:** existing copies are skipped unless `--force`; the `watermarked/` folder is ignored by social crops and the review page.
+- **GUI:** the Batch tab has a **Watermark / credit** box and position; the single-photo view has a **© Watermark / Credit** accordion that stamps the exported photo (or the preview) and returns the file.

@@ -29,6 +29,7 @@ commands:
 ./run review apply ~/photos_out decisions.json  # copy the picks you marked in review.html
 ./run recipes                              # list the recipe names --recipe accepts
 ./run lut cosplay_feed_pop_v1 -o ~/luts    # save a recipe's colour look as a .cube LUT
+./run watermark ~/photos_out --text "© Alex Studio {year}"  # credit on copies for posting
 ./run update                               # git pull, then refresh dependencies
 ```
 
@@ -322,6 +323,39 @@ command says so and `--all` skips them. Across all 68 curated recipes the LUT
 matches the app's own colour steps to within one 8-bit level on average;
 strong curves (the `game_character` looks) differ by up to about 7 levels on
 1% of pixels, the usual interpolation limit of a 33-point LUT.
+
+### Watermark / credit on copies for posting
+
+Reposts drop names, so a small credit on the image itself helps. The
+watermark goes on **copies** in `<output>/watermarked/`; the retouched
+originals stay clean. It is off until you give a credit.
+
+```bash
+./run batch ~/photos -o ~/out --recipe natural --watermark "© Alex Studio {year}"
+./run batch ~/photos -o ~/out --recipe natural --watermark "@alexshoots" --social-crops
+./run watermark ~/out --text "© Alex Studio" --logo logo.png --position bottom-left
+```
+
+- **Placement:** `auto` (the default) uses the bottom-right corner unless a
+  face (plus room for wig and chin) is there, then tries bottom-left, top-right,
+  top-left and bottom-centre. `--watermark-position` / `--position` forces a spot.
+- **Look:** text size is 3% of the photo's short side (`--watermark-size`),
+  70% opacity (`--watermark-opacity 0-100`), white on dark backgrounds and black
+  on light ones with a soft shadow (`--watermark-color white|black` to force).
+  `{year}` becomes the current year. `--watermark-logo` adds a PNG logo, with
+  transparency, before the text (or on its own).
+- **Social crops:** with `--social-crops` each crop gets the credit too,
+  placed clear of the faces in that crop.
+- **Font:** the built-in font is Aileron Regular (CC0, embedded in Pillow). It
+  covers Latin letters, digits, `©`, `@` and `·` but not accented or CJK
+  characters; pass `--watermark-font your.ttf` for those (a warning names any
+  missing character).
+- **Files:** sRGB JPEG, quality 92. Camera EXIF (GPS, serial) is not carried
+  over; the credit is written to the EXIF Copyright field (`©` as `(C)`).
+
+In the app: the **© Watermark / Credit** accordion in the left column stamps
+the exported photo (or the preview, if nothing is exported yet) and gives you
+the file; the Batch tab has a **Watermark / credit** box and position.
 
 ## Tests
 
