@@ -20,7 +20,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
 case "${1:-}" in
-    -h|--help|help) sed -n '2,14p' "$0"; exit 0 ;;
+    -h|--help|help) sed -n '2,16p' "$0"; exit 0 ;;
 esac
 
 PYTHON="$ROOT_DIR/.venv/bin/python"
@@ -53,6 +53,7 @@ case "$cmd" in
         ;;
     people)
         exec "$PYTHON" -m retouch.cosplayer_groups "$@"
+        ;;
     dupes|duplicates)
         exec "$PYTHON" -m retouch.duplicates "$@"
         ;;
