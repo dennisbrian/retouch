@@ -800,6 +800,18 @@ _SKIN_PARAMS = [
         min_val=0,
         max_val=100,
     ),
+    # Prosthetic edge blending (elf ears, forehead pieces, horn plates):
+    # 0 = off. See retouch/prosthetic_blend.py.
+    ParamSpec(
+        name="prosthetic_blend",
+        cli_flag="prosthetic-blend",
+        cli_type=int,
+        default=0,
+        recipe_key="skin.prosthetic_blend",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
     ParamSpec(
         name="makeup_cake_reduce",
         cli_flag="makeup-cake-reduce",

@@ -104,6 +104,7 @@ def process(
     albedo_even: Optional[float] = None,
     makeup_coverage_even: Optional[float] = None,
     body_paint: Optional[float] = None,
+    prosthetic_blend: Optional[float] = None,
     makeup_cake_reduce: Optional[float] = None,
     hemoglobin_smooth: Optional[float] = None,
     mole_protect: Optional[float] = None,
@@ -565,6 +566,7 @@ Passing an explicit value override to these parameters takes precedence over the
 
 *   **`makeup_coverage_even`** (Type: `float`, Default: `0.0`, Range: `0.0` to `1.0`, Recipe key: `skin.makeup_coverage_even`): Adjusts the makeup coverage even parameter.
 *   **`body_paint`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.body_paint`): Body paint support (off at 0). For blue, green, grey or purple painted skin, keeps the paint's colour through skin edits and evens patchy coverage by this strength. See `retouch/body_paint.py`.
+*   **`prosthetic_blend`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.prosthetic_blend`): Prosthetic edge blending (off at 0). Softens the seam where a skin-toned appliance (elf-ear tips, forehead pieces, horn plates) meets skin around the ears and forehead. See `retouch/prosthetic_blend.py`.
 *   **`makeup_cake_reduce`** (Type: `float`, Default: `0.0`, Range: `0.0` to `1.0`, Recipe key: `skin.makeup_cake_reduce`): Adjusts the makeup cake reduce parameter.
 *   **`mv2_eyeshadow`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `makeup_v2.eyeshadow`): Adjusts the mv2 eyeshadow parameter.
 *   **`mv2_eyeshadow_color`** (Type: `float`, Default: `rose`, Range: None, Recipe key: `makeup_v2.eyeshadow_color`): Adjusts the mv2 eyeshadow color parameter.

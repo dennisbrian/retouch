@@ -4275,6 +4275,9 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             with gr.Accordion("🎨 Body Paint", open=False):
                                 body_paint = gr.Slider(0, 100, 0, step=1, label="Body Paint", info="For blue, green, grey or purple painted skin: keeps the paint's colour through skin retouching and evens out patchy, thin or sponge-marked paint. 0 = off. Red, orange and tan paint are not detected.")
 
+                            with gr.Accordion("🧝 Prosthetic Edges", open=False):
+                                prosthetic_blend = gr.Slider(0, 100, 0, step=1, label="Prosthetic Edge Blend", info="Hides the seam where a skin-toned appliance (elf-ear tips, forehead pieces, horn base plates) meets real skin, around the ears and forehead. 0 = off. Horns, wigs and costume edges are left sharp.")
+
                             with gr.Accordion("🦵 Body Reshape (T3)", open=False):
                                 gr.Markdown("Landmark-driven body reshape via MediaPipe Pose (±15% segment displacement at ±100). 50 = no change.")
                                 body_reshape_arm_length = gr.Slider(0, 100, 50, step=1, label="Arm Length", info="0 = shorter, 100 = longer arms")
@@ -4738,6 +4741,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
  "cosplay_stockings_smooth",
  "cosplay_consistency_strength",
         "body_paint",
+        "prosthetic_blend",
         "body_reshape_arm_length",
  "body_reshape_leg_length",
  "body_reshape_torso_width",
@@ -4889,6 +4893,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
  "cosplay_stockings_smooth": cosplay_stockings_smooth,
  "cosplay_consistency_strength": cosplay_consistency_strength,
         "body_paint": body_paint,
+        "prosthetic_blend": prosthetic_blend,
         "body_reshape_arm_length": body_reshape_arm_length,
  "body_reshape_leg_length": body_reshape_leg_length,
  "body_reshape_torso_width": body_reshape_torso_width,
@@ -5577,6 +5582,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "albedo_even": _albedo_even_state,
         "makeup_coverage_even": _makeup_coverage_even_state,
         "body_paint": body_paint,
+        "prosthetic_blend": prosthetic_blend,
         "makeup_cake_reduce": _makeup_cake_reduce_state,
         "hemoglobin_smooth": _hemoglobin_smooth_state,
         "mole_protect": mole_protect,
