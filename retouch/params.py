@@ -913,6 +913,20 @@ _SKIN_PARAMS = [
         max_val=100,
     ),
     ParamSpec(
+        # Porcelain "reference look" macro (perf_optimizations._face_polish_ctx).
+        # 0 = off. Raises the floor of shine_removal, shadow_lift,
+        # face_exposure, sculpt and eye_enhance together; an explicit higher
+        # value for any of those still wins.
+        name="face_polish",
+        cli_flag="face-polish",
+        cli_type=int,
+        default=0,
+        recipe_key="skin.face_polish",
+        conversion="recipe_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
         name="skin_glow",
         cli_flag="skin-glow",
         cli_type=int,
