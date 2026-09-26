@@ -4415,7 +4415,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
             shoot_rows = gr.Dataframe(
                 headers=["kind", "group", "asset ID", "path", "score", "evidence", "rank/time", "status"],
                 interactive=False,
-                label="Assets and burst candidates",
+                label="Assets, burst candidates and duplicates",
                 wrap=True,
             )
             shoot_graph_json = gr.Code(label="Dependency/status graph", language="json", interactive=False)

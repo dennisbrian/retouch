@@ -45,6 +45,28 @@ def test_gui_shoot_scan_is_non_native_and_explainable(tmp_path: Path):
     assert '"human_cull_review"' in graph
 
 
+def test_gui_shoot_scan_lists_repeated_poses_across_the_shoot(tmp_path: Path):
+    import sys
+
+    import gui
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from test_duplicates import _reframe, _scene
+
+    base = _scene()
+    Image.fromarray(base).save(tmp_path / "early.jpg", quality=92)
+    Image.fromarray(_reframe(base)).save(tmp_path / "later.jpg", quality=92)
+
+    rows, status, graph = gui.on_shoot_intelligence_scan(str(tmp_path), False)
+
+    dup_rows = [row for row in rows if row[0] == "duplicate"]
+    assert len(dup_rows) == 2
+    assert {row[1] for row in dup_rows} == {"dup-0001"}
+    assert sum("suggested keeper" in row[7] for row in dup_rows) == 1
+    assert "1 group(s) of repeated poses" in status
+    assert '"duplicate_grouping"' in graph
+
+
 def test_gui_watch_scan_does_not_mark_noop_processing_done(tmp_path: Path):
     import json
     import gui

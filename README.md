@@ -27,6 +27,7 @@ commands:
 ./run batch ~/dim_shots -o ~/out --recipe con_high_iso_v1  # high-ISO: AI denoise first
 ./run crops ~/photos_out --formats 4:5,9:16,1:1  # export face-aware crops for Instagram, TikTok, etc.
 ./run review apply ~/photos_out decisions.json  # copy the picks you marked in review.html
+./run dupes ~/shoots/2026-09-20            # find repeated shots of the same pose across a shoot
 ./run recipes                              # list the recipe names --recipe accepts
 ./run lut cosplay_feed_pop_v1 -o ~/luts    # save a recipe's colour look as a .cube LUT
 ./run update                               # git pull, then refresh dependencies
@@ -155,6 +156,18 @@ Each batch also writes `review.html` into the output folder: open it in a browse
 
 A new set starts after a 15-minute pause (`--gap`), or use `--by hour` / `--by day`.
 See [SPLIT_SHOOT.md](docs/guides/SPLIT_SHOOT.md).
+
+### Find duplicates across a shoot
+
+```bash
+./run dupes ~/shoots/2026-09-20                 # report only: duplicates-report/index.html
+./run dupes ~/shoots/2026-09-20 --faces         # keeper = sharpest face with open eyes (slower)
+./run dupes ~/shoots/2026-09-20 --move-extras   # move non-keepers into duplicates/
+```
+
+Groups frames with the same pose and framing wherever they fall in the shoot,
+including repeats shot minutes apart, and suggests one keeper per group. See
+[DUPLICATES.md](docs/guides/DUPLICATES.md).
 
 The CLI also accepts several literal input paths and can save a deterministic
 selection/output plan before rendering:
@@ -342,6 +355,7 @@ This restarts the Gradio GUI whenever a file under `.` or `retouch/` changes.
 - [ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) — pipeline design and module breakdown
 - [BATCH_GUIDE.md](docs/guides/BATCH_GUIDE.md) — batch processing examples
 - [SPLIT_SHOOT.md](docs/guides/SPLIT_SHOOT.md) — split a shoot into folders by capture time
+- [DUPLICATES.md](docs/guides/DUPLICATES.md) — find repeated shots of the same pose across a shoot
 - [RECIPE_SWEEP.md](docs/RECIPE_SWEEP.md) — recipe comparisons and folder visual QA
 - [GUI.md](docs/guides/GUI.md) — Gradio web UI layout, components, and styling
 - [RECIPE_GUIDE.md](docs/guides/RECIPE_GUIDE.md) — recipe authoring reference
