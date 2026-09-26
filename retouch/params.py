@@ -800,6 +800,18 @@ _SKIN_PARAMS = [
         min_val=0,
         max_val=100,
     ),
+    # Prosthetic edge blending (elf ears, forehead pieces, horn plates):
+    # 0 = off. See retouch/prosthetic_blend.py.
+    ParamSpec(
+        name="prosthetic_blend",
+        cli_flag="prosthetic-blend",
+        cli_type=int,
+        default=0,
+        recipe_key="skin.prosthetic_blend",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
     ParamSpec(
         name="makeup_cake_reduce",
         cli_flag="makeup-cake-reduce",
@@ -2309,6 +2321,18 @@ _AI_ENHANCE_PARAMS = [
         cli_type=int,
         default=0,
         recipe_key="glasses.deglare",
+        conversion="recipe_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        # Flash red-eye removal (retouch/red_eye.py).
+        # Opt-in: 0 = off. 0-100 raw pass-through like lens_glare.
+        name="red_eye",
+        cli_flag="red-eye",
+        cli_type=int,
+        default=0,
+        recipe_key="eyes.red_eye",
         conversion="recipe_direct",
         min_val=0,
         max_val=100,

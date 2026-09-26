@@ -27,6 +27,8 @@ commands:
 ./run batch ~/dim_shots -o ~/out --recipe con_high_iso_v1  # high-ISO: AI denoise first
 ./run crops ~/photos_out --formats 4:5,9:16,1:1  # export face-aware crops for Instagram, TikTok, etc.
 ./run review apply ~/photos_out decisions.json  # copy the picks you marked in review.html
+./run dupes ~/shoots/2026-09-20            # find repeated shots of the same pose across a shoot
+./run xmp review ~/photos_out decisions.json    # picks, rejects and QA flags as XMP for Lightroom
 ./run recipes                              # list the recipe names --recipe accepts
 ./run lut cosplay_feed_pop_v1 -o ~/luts    # save a recipe's colour look as a .cube LUT
 ./run watermark ~/photos_out --text "© Alex Studio {year}"  # credit on copies for posting
@@ -122,6 +124,16 @@ like a catchlight), and does not reach glare below the eyes on a full visor. On
 faces without glasses it also softens shine around the eyes, so use it on
 photos with eyewear.
 
+Red-eye fix (`--red-eye 0-100` in the CLI, the "Red-Eye Fix" slider under Eyes
+& Lips in the app, or `eyes.red_eye` in a recipe) turns pupils that glow red
+from an on-camera flash back to a dark pupil, keeping the catchlight and the
+iris colour. It is off by default and uses no model. It only acts when the
+middle of the pupil is red and clearly redder than the face's own skin, so red
+contact lenses (a dark pupil inside a red ring), red eyeliner and red wigs
+next to the eye are left alone. It skips very small faces (iris under about 4
+pixels across its radius), pale or pink "white-eye" glows only turn grey
+rather than black, and gold or green animal eye-shine is not touched.
+
 Set `RETOUCH_OFFLINE=1` before launching the GUI to disable update checks and
 prevent model downloads; the Advanced Retouch status panel shows the mode.
 
@@ -151,6 +163,18 @@ subject's skin before the recipe runs (see "Match a Set to One Hero Frame" in
 [BATCH_GUIDE.md](docs/guides/BATCH_GUIDE.md)).
 
 Each batch also writes `review.html` into the output folder: open it in a browser to check before/after, face close-ups and QA flags, mark picks and rejects from the keyboard, then export the decisions and apply them to copy the picks into a folder. See [BATCH_GUIDE.md](docs/guides/BATCH_GUIDE.md) for full CLI options and the review workflow.
+
+### Picks and flags in Lightroom and Capture One (XMP)
+
+Add `--xmp` to a batch, or to `./run review apply`, and retouch writes its
+decisions as standard XMP: picks get the Green label, rejects the Red label and
+a reject rating (-1), QA-flagged photos the Yellow label, and everything gets
+`retouch-…` keywords (`retouch-pick`, `retouch-qa-banding`, …). The tags go in a
+`<name>.xmp` sidecar beside each source photo (Lightroom reads these for RAW
+files) and inside each retouched JPEG. Existing sidecars are merged: a rating or
+label you set in Lightroom is never overwritten. The Shoot Intelligence tab's
+**Write XMP sidecars** button does the same for star ratings and
+select/reject/hold. See [BATCH_GUIDE.md](docs/guides/BATCH_GUIDE.md#ratings-and-picks-in-lightroom-and-capture-one-xmp).
 
 ### Edit reports and Content Credentials
 
@@ -190,6 +214,17 @@ Groups each cosplayer's photos, including a second session later in the day,
 from costume and wig colours plus capture time. No face recognition. People
 in matching colours can share a group, so check the report before handing
 photos over. See [GROUP_BY_COSPLAYER.md](docs/guides/GROUP_BY_COSPLAYER.md).
+### Find duplicates across a shoot
+
+```bash
+./run dupes ~/shoots/2026-09-20                 # report only: duplicates-report/index.html
+./run dupes ~/shoots/2026-09-20 --faces         # keeper = sharpest face with open eyes (slower)
+./run dupes ~/shoots/2026-09-20 --move-extras   # move non-keepers into duplicates/
+```
+
+Groups frames with the same pose and framing wherever they fall in the shoot,
+including repeats shot minutes apart, and suggests one keeper per group. See
+[DUPLICATES.md](docs/guides/DUPLICATES.md).
 
 The CLI also accepts several literal input paths and can save a deterministic
 selection/output plan before rendering:
@@ -293,6 +328,28 @@ in exactly the paint's colour that touches painted skin is evened too. On a
 black-and-white photo grey skin is not treated as paint. It added about 10 s on
 a 45 MP test frame, and nothing on photos without paint. Details are in
 `retouch/body_paint.py`.
+
+### Prosthetic edges
+
+For elf-ear tips, forehead pieces and the skin-toned plates that hold horns,
+add `--prosthetic-blend 0-100` to any recipe (or use the "Prosthetic Edge
+Blend" slider under Cosplay & Body in the app). It is off by default. When it
+is on, it looks around the ears and the forehead for a long, sharp line where
+a skin-toned appliance meets real skin with a slight change of colour, and
+softens that line into a gentle blend while keeping skin texture. Horns,
+wigs and costume edges are left sharp.
+
+```bash
+python3 cli.py shoot/ -o out/ --recipe cosplay_clear_v1 --prosthetic-blend 80
+```
+
+It has only been tested on simulated appliances, not on a real prosthetic
+photo yet. Short seams (under about a third of the face width, such as one
+across a small ear) are not found, a long seam is sometimes found only in
+part, and an edge that is colour-matched perfectly and shows only as a thin
+ridge is not found. An appliance whose whole surface is a different tone
+keeps that tone; only the edge is blended. On photos without an appliance
+the output is unchanged. Details are in `retouch/prosthetic_blend.py`.
 
 ### Recipe gallery
 
@@ -411,6 +468,7 @@ This restarts the Gradio GUI whenever a file under `.` or `retouch/` changes.
 - [BATCH_GUIDE.md](docs/guides/BATCH_GUIDE.md) — batch processing examples
 - [SPLIT_SHOOT.md](docs/guides/SPLIT_SHOOT.md) — split a shoot into folders by capture time
 - [GROUP_BY_COSPLAYER.md](docs/guides/GROUP_BY_COSPLAYER.md) — group a shoot by cosplayer
+- [DUPLICATES.md](docs/guides/DUPLICATES.md) — find repeated shots of the same pose across a shoot
 - [RECIPE_SWEEP.md](docs/RECIPE_SWEEP.md) — recipe comparisons and folder visual QA
 - [GUI.md](docs/guides/GUI.md) — Gradio web UI layout, components, and styling
 - [RECIPE_GUIDE.md](docs/guides/RECIPE_GUIDE.md) — recipe authoring reference
