@@ -31,6 +31,7 @@ from retouch.shoot_review import (
     build_review_manifest,
 )
 from retouch.face_quality import FaceQualityAnalyzer
+from retouch.duplicates import find_duplicates
 from retouch.watch_folder import WatchFolder
 from retouch.batch_processor import BatchProcessor
 from retouch.look_extractor import LookExtractor
@@ -170,6 +171,15 @@ def on_shoot_intelligence_scan(
             burst.group_id: rank_burst_candidates(burst, face_evidence_by_path)
             for burst in bursts
         }
+        # Shoot-wide repeats of the same pose, whatever the time gap. Keepers
+        # use the face evidence above when it was requested.
+        try:
+            duplicates = find_duplicates(
+                [asset.path for asset in assets], face_evidence_by_path=face_evidence_by_path
+            )
+        except Exception as exc:  # duplicate grouping is advisory; never fail the scan
+            _logger.warning("Duplicate grouping failed: %s", exc)
+            duplicates = []
         manifest = build_review_manifest(
             root,
             assets,
@@ -235,14 +245,26 @@ def on_shoot_intelligence_scan(
                     candidate.path, round(candidate.score, 4), " / ".join([*burst.reasons, *flags]),
                     candidate.rank, "review required",
                 ])
+        for group in duplicates:
+            ranking = {item["path"]: item for item in group.evidence.get("ranking", [])}
+            for path in group.asset_paths:
+                ranked = ranking.get(path, {})
+                role = "suggested keeper" if path == group.keeper else "extra"
+                rows.append([
+                    "duplicate", group.group_id, asset_ids_by_absolute_path.get(path, ""),
+                    path, ranked.get("score", ""), " / ".join([*group.reasons, *(ranked.get("flags") or [])]),
+                    ranked.get("rank", ""), f"{role}; review required",
+                ])
         graph = ProjectGraph([
             ProjectNode("ingest", "ingest", status="succeeded", outputs=[str(input_dir)]),
             ProjectNode("burst_grouping", "burst_grouping", dependencies=["ingest"], status="succeeded", outputs=[f"{len(bursts)} burst group(s)"]),
-            ProjectNode("human_cull_review", "human_cull_review", dependencies=["burst_grouping"]),
+            ProjectNode("duplicate_grouping", "duplicate_grouping", dependencies=["ingest"], status="succeeded", outputs=[f"{len(duplicates)} duplicate group(s)"]),
+            ProjectNode("human_cull_review", "human_cull_review", dependencies=["burst_grouping", "duplicate_grouping"]),
         ])
         graph.refresh_ready()
         status = (
-            f"Inspected {len(assets)} asset(s), found {len(bursts)} burst group(s). "
+            f"Inspected {len(assets)} asset(s), found {len(bursts)} burst group(s) "
+            f"and {len(duplicates)} group(s) of repeated poses across the shoot. "
             f"Review manifest saved to {resolved_manifest_path}. "
             f"{face_status} "
             "Candidate ranks and face evidence are recommendations; human review is required."
