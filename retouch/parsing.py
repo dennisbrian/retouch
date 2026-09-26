@@ -52,6 +52,130 @@ _MC_NUM_CLASSES = 6
 # the landmark skin instead of gutting it.
 _MC_MAX_SKIN_LOSS = 0.4
 _MC_DISABLE_ENV = "RETOUCH_CLASS_SEGMENTER"
+# Wig growth (see _grow_wig_hair). Lab histogram bins: 8 lightness x 16 x 16.
+_WIG_L_BIN, _WIG_AB_BIN = 32, 16
+# Need at least this many confident hair pixels to learn a wig colour from.
+_WIG_MIN_SEED_PX = 100
+# A colour bin counts as wig colour when it holds this share of the seed
+# pixels and at least this multiple of its share among costume pixels.
+_WIG_MIN_SEED_SHARE = 0.004
+_WIG_SEED_OVER_COSTUME = 2.0
+# Lighting spreads one wig colour across lightness; a wig chroma bin may
+# reach this many lightness bins either way while the costume barely has it.
+_WIG_L_SPREAD, _WIG_SPREAD_MAX_COSTUME = 2, 0.002
+# Accessory pixels within this many face widths of the face count as
+# possibly wig, not costume, when learning the costume colours.
+_WIG_HEAD_RADIUS_FW = 1.0
+# Growth larger than this multiple of the face oval means the colour model
+# matched something that is not a wig (a same-coloured wall or outfit).
+_WIG_MAX_FACE_MULTIPLE = 5.0
+# Working size for the whole-frame hair pass (parse_hair_full_image fallback).
+_FULL_HAIR_WORK_DIM = 2048
+
+
+def _smooth_hist3(h: np.ndarray) -> np.ndarray:
+    """[1, 2, 1] / 4 smoothing along each axis of a 3-D histogram (wrapping)."""
+    for ax in range(3):
+        h = 0.5 * h + 0.25 * np.roll(h, 1, ax) + 0.25 * np.roll(h, -1, ax)
+    return h
+
+
+def _grow_wig_hair(
+    img_bgr: np.ndarray,
+    class_probs: np.ndarray,
+    face_oval: np.ndarray,
+    face_width: int,
+) -> np.ndarray:
+    """Hair confidence with wig pixels the segmenter mislabelled added back.
+
+    The multiclass selfie segmenter was trained on natural hair. On pale,
+    long or brightly coloured cosplay wigs it calls most of the wig an
+    accessory ("others") or clothing and keeps the hair class for a patch of
+    fringe, so hair ops and the hair exclusions miss the rest of the wig.
+
+    The pixels it did call hair tell us what this wig looks like. This learns
+    their colours (a Lab histogram) and compares them with the costume's
+    colours (clothes pixels, plus accessory pixels away from the head). An
+    accessory or clothes pixel joins the hair when its colour is common in
+    the hair and rare in the costume, and when it is connected to the
+    confident hair. So the white wig grows back while the black hat, the red
+    collar and a white prop held away from the head stay out. Everything is
+    relative to the photo's own hair and costume colours, so it does not
+    depend on skin tone or exposure. When the hair and costume share a
+    colour (dark hair, dark outfit), nothing grows and the segmenter's hair
+    is returned unchanged.
+
+    Args:
+        img_bgr: (H, W, 3) BGR image, uint8 or float in [0, 1] / [0, 255].
+        class_probs: (H, W, 6) multiclass confidences.
+        face_oval: (H, W) bool face-oval mask.
+        face_width: face width in pixels.
+
+    Returns:
+        (H, W) float32 hair confidence in [0, 1], never below the segmenter's.
+    """
+    hair_p = class_probs[:, :, _MC_HAIR]
+    seeds = hair_p > 0.5
+    n_seed = int(seeds.sum())
+    if n_seed < _WIG_MIN_SEED_PX:
+        return hair_p
+    img_u8 = img_bgr
+    if img_u8.dtype != np.uint8:
+        scale = 255.0 if float(np.max(img_u8)) <= 1.5 else 1.0
+        img_u8 = np.clip(img_u8.astype(np.float32) * scale, 0, 255).astype(np.uint8)
+    lab = cv2.cvtColor(np.ascontiguousarray(img_u8), cv2.COLOR_BGR2LAB)
+    n_l, n_ab = 256 // _WIG_L_BIN, 256 // _WIG_AB_BIN
+    idx = (
+        (lab[:, :, 0] // _WIG_L_BIN).astype(np.int32) * (n_ab * n_ab)
+        + (lab[:, :, 1] // _WIG_AB_BIN).astype(np.int32) * n_ab
+        + (lab[:, :, 2] // _WIG_AB_BIN).astype(np.int32)
+    )
+    n_bins = n_l * n_ab * n_ab
+
+    label = class_probs.argmax(axis=2)
+    candidate = np.isin(label, (_MC_HAIR, _MC_CLOTHES, _MC_OTHERS)) & ~seeds
+    r = max(int(_WIG_HEAD_RADIUS_FW * face_width), 3)
+    # Distance transform, not a dilation: a face-width elliptical kernel on
+    # a full frame costs seconds.
+    near_head = cv2.distanceTransform(
+        (~face_oval).astype(np.uint8), cv2.DIST_L2, 5
+    ) <= r
+    costume = ((label == _MC_CLOTHES) | ((label == _MC_OTHERS) & ~near_head)) & ~seeds
+
+    def _hist(sel: np.ndarray) -> np.ndarray:
+        n = max(int(sel.sum()), 1)
+        h = np.bincount(idx[sel], minlength=n_bins).reshape(n_l, n_ab, n_ab)
+        return _smooth_hist3(h.astype(np.float64)) / n
+
+    h_seed, h_costume = _hist(seeds), _hist(costume)
+    wig = (h_seed >= _WIG_MIN_SEED_SHARE) & (h_seed >= _WIG_SEED_OVER_COSTUME * h_costume)
+    spread = wig.copy()
+    for d in range(1, _WIG_L_SPREAD + 1):
+        spread[d:] |= wig[:-d]
+        spread[:-d] |= wig[d:]
+    wig |= spread & (h_costume < _WIG_SPREAD_MAX_COSTUME)
+
+    match = candidate & wig.reshape(-1)[idx]
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    match = cv2.morphologyEx(match.astype(np.uint8), cv2.MORPH_OPEN, k) > 0
+    _, lbl = cv2.connectedComponents((match | seeds).astype(np.uint8))
+    keep = np.unique(lbl[seeds])
+    grown = np.isin(lbl, keep[keep > 0]) & match
+    n_grown = int(grown.sum())
+    if n_grown == 0:
+        return hair_p
+    if n_grown > _WIG_MAX_FACE_MULTIPLE * max(int(face_oval.sum()), 1):
+        logger.info(
+            "Wig growth would add %d px (%.1fx the face); keeping segmenter hair",
+            n_grown, n_grown / max(int(face_oval.sum()), 1),
+        )
+        return hair_p
+    not_hair = (
+        class_probs[:, :, 0] + class_probs[:, :, _MC_FACE_SKIN] + class_probs[:, :, _MC_BODY_SKIN]
+    )
+    grown_p = grown.astype(np.float32) * np.clip(1.0 - not_hair, 0.0, 1.0)
+    logger.debug("Wig growth: %d seed px, %d px added", n_seed, n_grown)
+    return np.maximum(hair_p, grown_p).astype(np.float32)
 
 
 def _sanitize_bisenet_logits(logits: np.ndarray, source: str) -> np.ndarray:
@@ -595,11 +719,15 @@ class FaceParser:
         Args:
             img_bgr: (H, W, 3) uint8 BGR image, full frame.
 
+        Without BiSeNet (fresh installs cannot ship it) the multiclass selfie
+        segmenter stands in, with wig growth (``_grow_wig_hair``) so a long
+        pale or coloured wig over the chest is still excluded from body skin.
+
         Returns:
-            (H, W) float32 mask in [0, 1], or None if BiSeNet is unavailable.
+            (H, W) float32 mask in [0, 1], or None if neither model is available.
         """
         if self._sess is None:
-            return None
+            return self._class_hair_full_image(img_bgr)
 
         h_img, w_img = img_bgr.shape[:2]
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
@@ -627,6 +755,36 @@ class FaceParser:
         )
         hair_full = cv2.resize(hair_512, (w_img, h_img), interpolation=cv2.INTER_LINEAR)
         return np.clip(hair_full, 0.0, 1.0).astype(np.float32)
+
+    def _class_hair_full_image(self, img_bgr: np.ndarray) -> Optional[np.ndarray]:
+        """Whole-frame hair confidence from the multiclass segmenter, or None.
+
+        The segmenter sees 256 px, so the wig growth runs on a copy no larger
+        than ``_FULL_HAIR_WORK_DIM`` and is upsampled: at 26 MP it would
+        otherwise take seconds for no extra detail.
+        """
+        h, w = img_bgr.shape[:2]
+        work = img_bgr
+        scale = _FULL_HAIR_WORK_DIM / max(h, w)
+        if scale < 1.0:
+            work = cv2.resize(
+                img_bgr, (max(1, round(w * scale)), max(1, round(h * scale))),
+                interpolation=cv2.INTER_AREA,
+            )
+        probs = self._segment_classes(work)
+        if probs is None:
+            return None
+        face = (probs.argmax(axis=2) == _MC_FACE_SKIN).astype(np.uint8)
+        n_lbl, _lbl, stats, _c = cv2.connectedComponentsWithStats(face)
+        if n_lbl <= 1:
+            hair = probs[:, :, _MC_HAIR].copy()
+        else:
+            # Scale the head neighbourhood by the largest face in frame.
+            face_width = int(stats[1:, cv2.CC_STAT_WIDTH][np.argmax(stats[1:, cv2.CC_STAT_AREA])])
+            hair = _grow_wig_hair(work, probs, face > 0, max(face_width, 1))
+        if hair.shape != (h, w):
+            hair = cv2.resize(hair, (w, h), interpolation=cv2.INTER_LINEAR)
+        return np.clip(hair, 0.0, 1.0).astype(np.float32)
 
     def parse_batch(
         self,
@@ -1003,11 +1161,19 @@ class FaceParser:
         ]:
             skin = np.clip(skin - exclusion, 0, 1)
 
+        have_classes = class_probs is not None and class_probs.shape[:2] == (h_img, w_img)
         if person_mask is not None:
             pm = normalize_mask(person_mask)
             from .utils import squeeze_mask
             pm = squeeze_mask(pm)
-            skin *= pm
+            skin_gate = pm
+            if have_classes:
+                # The person segmenter loses heads under pale wigs against
+                # bright windows (the same failure the detection person gate
+                # works around), which zeroed all face skin. The multiclass
+                # face-skin class sees the face itself, so let it vouch.
+                skin_gate = np.maximum(pm, class_probs[:, :, _MC_FACE_SKIN])
+            skin *= skin_gate
         regions.skin = skin
         regions.neck = np.zeros((h_img, w_img), dtype=np.float32)
         if person_mask is not None:
@@ -1015,7 +1181,7 @@ class FaceParser:
         else:
             regions.hair = np.zeros((h_img, w_img), dtype=np.float32)
 
-        if class_probs is not None and class_probs.shape[:2] == (h_img, w_img):
+        if have_classes:
             self._refine_fallback_with_classes(regions, class_probs, img_bgr, feather)
 
         self._add_landmark_subregions(regions, landmarks, h_img, w_img, ied, feather)
@@ -1059,8 +1225,13 @@ class FaceParser:
     ) -> None:
         """Replace landmark hair/neck with segmenter output and cut bangs out of skin."""
         h, w = class_probs.shape[:2]
-        hair_p = class_probs[:, :, _MC_HAIR]
         body_p = class_probs[:, :, _MC_BODY_SKIN]
+        ext = self._face_oval_extent(regions.face_oval)
+        hair_p = class_probs[:, :, _MC_HAIR]
+        if ext is not None:
+            hair_p = _grow_wig_hair(
+                img_bgr, class_probs, regions.face_oval > 0.5, ext[2] - ext[0] + 1
+            )
 
         # Hair: segmenter confidence, edges snapped to the image with a
         # guided filter (the model runs at 256 px, so raw edges are soft).
@@ -1096,7 +1267,6 @@ class FaceParser:
 
         # Neck: body-skin in a band under the jaw, no wider than the face
         # (keeps chest, shoulders and hands out, like BiSeNet's neck label).
-        ext = self._face_oval_extent(regions.face_oval)
         if ext is not None:
             x0, y0, x1, y1 = ext
             fw, fh = x1 - x0 + 1, y1 - y0 + 1

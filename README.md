@@ -104,8 +104,15 @@ provided; local binaries are accepted only when their SHA-256 and size match.
 BiSeNet's weights are trained on CelebAMask-HQ, which is non-commercial, so
 they are not shipped. On that fallback path the MediaPipe multiclass segmenter
 supplies the hair and neck masks and cuts bangs and accessories out of the skin
-mask. Without it (offline, or `RETOUCH_CLASS_SEGMENTER=0`) hair is a band of
-the person mask around the head and there is no neck mask.
+mask. The segmenter was trained on natural hair and calls most of a pale or
+brightly coloured cosplay wig an accessory, so the hair mask then grows from the
+part it did call hair into connected pixels of the same colours, as long as the
+costume doesn't share them (a black hat or red collar stays out). A whole-frame
+pass does the same so a long wig over the chest isn't smoothed as body skin.
+It can't separate hair from a hat or outfit of the same colour; there the
+segmenter's own hair mask is used. Without it (offline, or
+`RETOUCH_CLASS_SEGMENTER=0`) hair is a band of the person mask around the head
+and there is no neck mask.
 
 AI denoise (`--ai-denoise 0-100` in the CLI, the "AI Noise Reduction" slider
 under Tone & Light in the app, or recipes such as `con_high_iso_v1`) runs the

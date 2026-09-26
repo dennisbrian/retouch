@@ -12,6 +12,7 @@ import pytest
 from retouch.detection import _Landmark, _LandmarkCompat
 from retouch.parsing import (
     _MC_BODY_SKIN,
+    _MC_FACE_SKIN,
     _MC_HAIR,
     _MC_NUM_CLASSES,
     FACE_OVAL,
@@ -153,3 +154,26 @@ def test_manifest_pins_multiclass_segmenter():
     assert entry["license"] == "Apache-2.0"
     assert "generation=" in entry["url"]
     assert len(entry["sha256"]) == 64 and entry["size_bytes"] > 0
+
+
+class TestSkinGateUnderPaleWig:
+    def test_face_skin_class_vouches_for_a_lost_head(self, parser, img):
+        # Person segmenter lost the head (pale wig against a window): the
+        # old gate zeroed all fallback skin.
+        person = np.zeros((H, W), dtype=np.float32)
+        lm = _oval_landmarks()
+        no_classes = parser._landmark_fallback_only(lm, img, person, 60.0)
+        assert no_classes.skin.max() == 0.0
+        p = _probs()
+        _set(p, _MC_FACE_SKIN, slice(0, H), slice(0, W))
+        r = parser._landmark_fallback_only(lm, img, person, 60.0, class_probs=p)
+        ungated = parser._landmark_fallback_only(lm, img, None, 60.0, class_probs=p)
+        assert r.skin.max() > 0.9
+        np.testing.assert_allclose(r.skin, ungated.skin, atol=1e-6)
+
+    def test_background_inside_oval_still_gated(self, parser, img):
+        person = np.zeros((H, W), dtype=np.float32)
+        r = parser._landmark_fallback_only(
+            _oval_landmarks(), img, person, 60.0, class_probs=_probs()
+        )
+        assert r.skin.max() == 0.0
