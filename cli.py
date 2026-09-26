@@ -1618,6 +1618,11 @@ def main() -> None:
     _add_watermark_args(parser, prefix="watermark-")
     parser.add_argument("--no-review", action="store_false", dest="review", default=True,
                         help="Skip writing review.html (per-batch review page)")
+    parser.add_argument("--xmp", action="store_true",
+                        help="After the batch, write QA flags as XMP for Lightroom, "
+                             "Capture One and Bridge: a <name>.xmp sidecar beside "
+                             "each source, embedded in JPEG outputs. Existing "
+                             "sidecars are merged, never replaced.")
 
     # Session save/load (F2)
     parser.add_argument("--session", type=str, default=None,
@@ -1745,6 +1750,8 @@ def main() -> None:
             social_formats = parse_formats(args.social_crops)
         except ValueError as exc:
             parser.error(f"--social-crops: {exc}")
+    if args.xmp and not args.review:
+        parser.error("--xmp needs the review records; drop --no-review")
     if args.linear_raw and args.raf_decoder != "rawpy":
         parser.error("--linear-raw can only be combined with --raf-decoder rawpy")
 
@@ -2542,6 +2549,12 @@ def main() -> None:
             print(f"Review page → {page}")
         except Exception as e:
             print(f"⚠ Review page failed: {e}")
+    if args.xmp and not args.dry_run and len(files) > 0:
+        from retouch.xmp_sidecar import format_counts, write_review_xmp
+        try:
+            print(format_counts(write_review_xmp(review_root)))
+        except Exception as e:
+            print(f"⚠ XMP export failed: {e}")
 
     if interrupted:
         print("Run the same command again to continue: finished images are "
