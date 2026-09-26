@@ -6,6 +6,7 @@
 #   ./run batch ARGS...    run the batch CLI (same options as cli.py)
 #   ./run crops FOLDER     make 4:5 / 9:16 / 1:1 social crops of retouched photos
 #   ./run split FOLDER ... split a shoot into folders by capture time
+#   ./run people FOLDER    group a shoot by cosplayer (costume colours + time)
 #   ./run recipes          list the recipe names --recipe accepts
 #   ./run lut RECIPE       save a recipe's colour look as a .cube LUT (-o PATH)
 #   ./run watermark FOLDER --text "(c) Name"   stamp a credit on copies of photos
@@ -17,7 +18,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
 case "${1:-}" in
-    -h|--help|help) sed -n '2,13p' "$0"; exit 0 ;;
+    -h|--help|help) sed -n '2,14p' "$0"; exit 0 ;;
 esac
 
 PYTHON="$ROOT_DIR/.venv/bin/python"
@@ -47,6 +48,9 @@ case "$cmd" in
         ;;
     split)
         exec "$PYTHON" split_shoot.py "$@"
+        ;;
+    people)
+        exec "$PYTHON" -m retouch.cosplayer_groups "$@"
         ;;
     recipes)
         # cli.py --list-recipes shows every recipe in the cookbook, including
@@ -84,7 +88,7 @@ PY
         ;;
     *)
         echo "Unknown command: $cmd" >&2
-        sed -n '2,13p' "$0" >&2
+        sed -n '2,14p' "$0" >&2
         exit 2
         ;;
 esac

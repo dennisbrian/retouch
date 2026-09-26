@@ -179,6 +179,18 @@ photos, where they failed verification. See
 A new set starts after a 15-minute pause (`--gap`), or use `--by hour` / `--by day`.
 See [SPLIT_SHOOT.md](docs/guides/SPLIT_SHOOT.md).
 
+### Group a shoot by cosplayer
+
+```bash
+./run people ~/shoots/con-day1             # preview + people-report/index.html
+./run people ~/shoots/con-day1 --move      # by-person/person-01, person-02, ...
+```
+
+Groups each cosplayer's photos, including a second session later in the day,
+from costume and wig colours plus capture time. No face recognition. People
+in matching colours can share a group, so check the report before handing
+photos over. See [GROUP_BY_COSPLAYER.md](docs/guides/GROUP_BY_COSPLAYER.md).
+
 The CLI also accepts several literal input paths and can save a deterministic
 selection/output plan before rendering:
 
@@ -398,6 +410,7 @@ This restarts the Gradio GUI whenever a file under `.` or `retouch/` changes.
 - [ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) — pipeline design and module breakdown
 - [BATCH_GUIDE.md](docs/guides/BATCH_GUIDE.md) — batch processing examples
 - [SPLIT_SHOOT.md](docs/guides/SPLIT_SHOOT.md) — split a shoot into folders by capture time
+- [GROUP_BY_COSPLAYER.md](docs/guides/GROUP_BY_COSPLAYER.md) — group a shoot by cosplayer
 - [RECIPE_SWEEP.md](docs/RECIPE_SWEEP.md) — recipe comparisons and folder visual QA
 - [GUI.md](docs/guides/GUI.md) — Gradio web UI layout, components, and styling
 - [RECIPE_GUIDE.md](docs/guides/RECIPE_GUIDE.md) — recipe authoring reference
