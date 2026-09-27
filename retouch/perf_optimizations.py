@@ -248,6 +248,13 @@ def _tr(op: str, canvas: np.ndarray) -> np.ndarray:
     return canvas
 
 
+def _ctx_get(ctx: Any, name: str, default: Any = None) -> Any:
+    """Read a field from a ProcessingContext or its pickled dict form."""
+    if isinstance(ctx, dict):
+        return ctx.get(name, default)
+    return getattr(ctx, name, default)
+
+
 # Face polish (``face_polish`` 0-100): the porcelain "reference look" as one
 # control. Each entry is the component strength at face_polish=100, in the
 # component's own engine units; at lower settings they scale linearly. Tuned
@@ -335,6 +342,14 @@ def _process_face_core(
     # EAR requires landmarks + image dims; contrast requires the ROI canvas.
     # Both degrade gracefully (fail-open) when unavailable.  ParamSpec
     # ``eye_gate`` (default on) lets a user disable the guard entirely.
+    # Spot healing keeps clear of the facial features. Taken before the eye
+    # gate, which can blank an eye's masks.
+    spot_feature_mask = None
+    if float(_ctx_get(ctx, "spot_heal", 0.0) or 0.0) > 0:
+        from .spot_heal_auto import feature_mask_from_regions
+
+        spot_feature_mask = feature_mask_from_regions(regions)
+
     if getattr(ctx, "eye_gate", True):
         regions = gate_occluded_eye_regions(
             regions,
@@ -481,6 +496,22 @@ def _process_face_core(
         # re-grow right back across the boundary it was just clipped to.
         _policy_preserve = _policy_preserve * skin_n
         skin_n_marks_protected = np.clip(skin_n - _policy_preserve, 0.0, 1.0)
+
+    # ---- Spot healing (opt-in, before any smoothing) ----
+    # Heals each detected pimple / small spot on its own from the skin around
+    # it, leaving every other pixel untouched. Runs on the pristine crop so
+    # detection sees the camera's own texture; marks a mark policy preserves
+    # are excluded. See retouch/spot_heal_auto.py.
+    _spot = float(getattr(ctx, "spot_heal", 0.0) or 0.0)
+    if _spot > 0 and skin_n is not None:
+        canvas = _tr('spot_heal', canvas)
+        from .spot_heal_auto import heal_spots
+
+        canvas, _spot_diags = heal_spots(
+            canvas, skin_n, face_width, _spot, protect_mask=mark_protect_mask,
+            feature_mask=spot_feature_mask,
+        )
+        logger.debug("spot_heal: %s", _spot_diags)
 
     # ---- P4: Makeup unmix (before albedo_even so paint ≠ blotch) ----
     _mce = float(getattr(ctx, "makeup_coverage_even", 0.0) or 0.0)

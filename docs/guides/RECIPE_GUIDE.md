@@ -36,6 +36,7 @@ These keys are defined inside nested dictionary blocks inside a recipe.
 | `background` | `backdrop_cleanup` | 0 to 100 | `0` | `backdrop_cleanup` |
 | `glasses` | `deglare` | 0 to 100 | `0` | `lens_glare` |
 | `eyes` | `red_eye` | 0 to 100 | `0` | `red_eye` |
+| `skin` | `spot_heal` | 0 to 100 | `0` | `spot_heal` |
 | `background` | `background_blur` | 0 to 100 | `0.0` | `background_blur` |
 | `background` | `background_desaturation` | 0 to 100 | `0.0` | `background_desaturation` |
 | `background` | `blue_shadow_grade` | 0 to 100 | `0.0` | `blue_shadow_grade` |
