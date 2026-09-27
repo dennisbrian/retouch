@@ -666,7 +666,15 @@ h1 {
     var m = Math.floor(s / 60), r = Math.round(s - m * 60);
     return m + ':' + (r < 10 ? '0' : '') + r + ' min';
   }
+  // Plain names for the checks a reviewer meets most; others are derived.
+  var CHECK_NAMES = {
+    plastic_skin: 'Waxy skin',
+    color_drift: 'Skin colour shift',
+    asymmetry: 'Uneven smoothing',
+    pore_spectrum: 'Pore loss'
+  };
   function human(det) {
+    if (Object.prototype.hasOwnProperty.call(CHECK_NAMES, det)) return CHECK_NAMES[det];
     var s = str(det).replace(/[_\-]+/g, ' ').trim();
     return s ? s.charAt(0).toUpperCase() + s.slice(1) : 'Check';
   }

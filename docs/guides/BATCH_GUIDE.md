@@ -294,10 +294,10 @@ a dark suit or banding already in the camera JPEG does not flag.
 | Check | Flags when | Typical cause |
 |---|---|---|
 | Banding | More than 6% of the person, or of the face skin, shows new staircase bands (flat patches separated by 2+ level steps) that the original did not have | Heavy smoothing or a strong tone curve on 8-bit skin |
-| Plastic skin | The face skin keeps less than 60% of the fine texture it had in the original | Smoothing strong enough to wipe out pores |
-| Asymmetry | One part of the face keeps less than 60% of the texture the rest of the face kept | One cheek smoothed much more than the other |
+| Waxy skin (`plastic_skin`) | The face skin keeps less than 60% of the fine texture it had in the original, or one cheek-sized patch of a face (200 px or larger) does | Smoothing strong enough to wipe out pores, all over or in one spot |
+| Uneven smoothing (`asymmetry`) | One part of the face keeps less than 60% of the texture the rest of the face kept | One cheek smoothed much more than the other |
 | Seam | The retouch adds more than 5 L-levels of edge contrast along the subject's outline | A visible line or halo where the subject meets the background |
-| Colour drift | Skin hue moves more than 6° on average, or 5% of it moves more than 20° | A grade that shifts the whole skin colour (for example `cinema_grade_v1`) |
+| Skin colour shift (`color_drift`) | Skin hue moves more than 6° on average, or 5% of it moves more than 20°, or one cheek-sized patch of a face shifts colour by more than 6 ΔE beyond the rest of that face | A grade that shifts the whole skin colour (for example `cinema_grade_v1`), or a cast on part of the face |
 | Clipping | More than 8% of the image is blown to white or crushed to black in solid blobs | An exposure or contrast push that clips |
 | Harmony | Moles, freckles or other skin marks the retouch was meant to keep were removed | Blemish removal taking marks the mark policy protects |
 | Halo, pore spectrum, CAM16 ΔE | Sharpening overshoot, pore-level texture loss, or a large perceptual skin-colour shift | Over-sharpening, over-smoothing or a strong grade |
@@ -307,6 +307,17 @@ Styled cosplay looks (for example `cosplay_clear_v1`, `cosplay_feed_pop_v1`,
 5 recipes, only `cinema_grade_v1` (colour drift, by design), three strong
 clipping cases and six mark-removal cases flagged. Calibration data:
 [RESEARCH_QA_FLAG_CALIBRATION_2026_09_25.md](../plans/RESEARCH_QA_FLAG_CALIBRATION_2026_09_25.md).
+The patch checks name the spot in the check's message, for example
+"Waxy patch on the cheek on the left of the photo: it keeps 42% of its skin
+texture, the rest of the face keeps 93%". Left and right are as seen in the
+photo. Faces under 200 px tall only get the whole-face texture check, and the
+nose is left out of the patch scan because shine removal flattens it on
+purpose. Heavy anime and porcelain looks (`zzz_anime_v1`/`v2`,
+`scifi_cosplay`, `fantasy_goddess`, `xhs_soft_glow`, `pink_dream`) can flag
+Waxy skin, because they really do wipe a forehead or cheek flat. A recipe
+blush does not read as a colour cast, but a pink patch stronger than the
+strongest recipe blush would. Calibration data:
+[RESEARCH_OVER_SMOOTHING_CHECK_2026_09_27.md](../plans/RESEARCH_OVER_SMOOTHING_CHECK_2026_09_27.md).
 With `--fail-on-qa`, a flagged image is not saved and shows as "Blocked by QA" on the page.
 
 ### Navigation & Decisions

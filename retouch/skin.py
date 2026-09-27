@@ -1533,16 +1533,21 @@ class SkinProcessor:
         Returns:
             (H, W, 3) uint8 or float32 BGR image, matching input dtype.
 
-        Algorithm:
-        1. Detect shine: pixels with L > adaptive_threshold AND low chroma (desaturated)
-           within skin_mask. Feather the mask with Gaussian blur for soft edges.
-        2. Exclude eyes: subtract dilated eyes_mask from shine mask to protect catchlights.
-        3. Reconstruct chroma: guided-filter a/b channels to inpaint plausible chroma
-           in shine regions, pulling from surrounding skin.
-        4. Compress L: compute per-pixel targets as local non-shine L median (via
-           guided filter), then apply soft exponential compression toward the target,
-           scaled by strength. Over-removal guard ensures residual shine (≥30% prominence).
+        Algorithm (v2, 2026-09-26):
+        1. Local diffuse baseline: a masked blur of the skin's L (and a/b,
+           chroma), in two passes so pixels already standing out, or already
+           clearly grey next to this face's skin chroma, don't vote.
+        2. Detect shine: L 6-16+ levels above that local baseline (soft
+           ramp), weighted by a soft chroma drop relative to the local skin
+           (a highlight adds white). The lit side of a face rises with the
+           baseline, so it isn't counted. Feathered.
+        3. Exclude eyes: subtract dilated eyes_mask to protect catchlights.
+        4. Pull L toward the local baseline and a/b toward the local skin
+           colour by up to 70% at strength 100, leaving a satin residue.
         5. Blend into skin_mask to avoid edge artifacts.
+
+        Highlights much wider than ~5% of the crop read as lit form, not
+        shine, and are left alone.
         """
         if strength <= 0 or skin_mask is None:
             return img_bgr
@@ -1566,33 +1571,61 @@ class SkinProcessor:
         # swamping real skin-vs-shine chroma differences (~10-40 units).
         chroma = np.sqrt((a - 128.0) ** 2 + (b - 128.0) ** 2)
 
-        # --- Detect shine: L > adaptive_threshold AND low chroma ---
-        # Adaptive threshold based on local context: median L in skin region
-        skin_indices = skin_mask > 0.3
-        if np.any(skin_indices):
-            median_L_skin = np.median(L[skin_indices])
-            median_chroma_skin = np.median(chroma[skin_indices])
-        else:
+        skin_f = normalize_mask(
+            skin_mask.astype(np.float32, copy=False)
+            if skin_mask.dtype != np.float32
+            else skin_mask
+        )
+        skin_indices = skin_f > 0.3
+        if not np.any(skin_indices):
             return img_bgr
+        median_L_skin = float(np.median(L[skin_indices]))
+        median_chroma_skin = float(np.median(chroma[skin_indices]))
 
-        # Shine threshold: adaptive, typically median_L + 20-30 L levels (oily shine usually 180-230 range)
-        # This is relative to actual skin L, not a fixed value
-        shine_L_threshold = median_L_skin + 20.0
+        # --- Local diffuse baseline (v2, 2026-09-26) ---
+        # v1 gated on L > (global skin median + 20) AND chroma < 40% of the
+        # skin median. On real portraits that never fired: measured on 6
+        # faces, oily highlights sit 15-25 L above their *local* skin and
+        # keep 75-90% of the surrounding chroma, while the lit side of a
+        # face clears a global median threshold. v2 compares each pixel to a
+        # masked blur of the skin around it. Pixels that are already clearly
+        # grey next to this face's own skin chroma (additive white
+        # highlight) don't vote for the baseline, so a broad highlight
+        # doesn't become its own reference. Everything is relative to the
+        # face's own L and chroma (tone-invariant).
+        sigma = max(3.0, 0.025 * min(h_img, w_img))
+        skin_w = (skin_f > 0.3).astype(np.float32)
+        grey_ratio = chroma / max(median_chroma_skin, 2.0)
+        diffuse_w = skin_w * np.clip((grey_ratio - 0.3) / 0.4, 0.0, 1.0)
 
-        # Chroma threshold: use the median chroma of normal skin as reference
-        # Shine is detected where chroma << normal skin chroma (e.g., < 40% of normal)
-        # This accounts for the fact that normal skin has color and shine doesn't
-        chroma_threshold_for_shine = max(5.0, median_chroma_skin * 0.4)
+        def _local(x: np.ndarray, fallback: float, w: np.ndarray, sg: float) -> np.ndarray:
+            num = cv2.GaussianBlur(x * w, (0, 0), sg)
+            den = cv2.GaussianBlur(w, (0, 0), sg)
+            return np.where(den > 1e-3, num / np.maximum(den, 1e-3), fallback).astype(np.float32)
 
-        # Luminance gate: soft ramp for pixels above shine_L_threshold
-        L_gate = np.clip((L - shine_L_threshold) / 15.0, 0.0, 1.0)  # Smooth ramp over 15 L units
+        # Two passes: pixels that already stand out above the first
+        # baseline stop voting, so a broad highlight doesn't lift its own
+        # reference and hide itself.
+        L_base1 = _local(L, median_L_skin, diffuse_w, sigma)
+        diffuse_w = diffuse_w * (1.0 - np.clip((L - L_base1 - 4.0) / 8.0, 0.0, 1.0))
+        sigma = sigma * 1.5
+        L_base = _local(L, median_L_skin, diffuse_w, sigma)
+        C_base = _local(chroma, median_chroma_skin, diffuse_w, sigma)
+        a_base = _local(a, float(np.median(a[skin_indices])), diffuse_w, sigma)
+        b_base = _local(b, float(np.median(b[skin_indices])), diffuse_w, sigma)
 
-        # Chroma gate: soft ramp for pixels below chroma_threshold (low chroma = likely shine)
-        # Gate is 1.0 when chroma is low, 0.0 when chroma is high
-        chroma_gate = 1.0 - np.clip(chroma / chroma_threshold_for_shine, 0.0, 1.0)
+        L_excess = np.maximum(L - L_base, 0.0)
+        # Luminance gate: ramps in from 6 to 16 L (uint8 scale) above the
+        # local skin; the measured highlights sit 15-25 L above it.
+        L_gate = np.clip((L_excess - 6.0) / 10.0, 0.0, 1.0)
+        # Chroma gate: a specular highlight adds white, so it is less
+        # saturated than the skin around it. Soft, because on pale or
+        # low-chroma skin the drop is small (ratio ~0.9); a bright spot that
+        # keeps its full chroma still gets 40%.
+        local_ratio = chroma / np.maximum(C_base, 2.0)
+        chroma_gate = np.clip(0.4 + (1.0 - local_ratio) / 0.25, 0.0, 1.0)
 
-        # Combine gates: both conditions must be met
-        shine_mask = L_gate * chroma_gate * skin_mask
+        shine_mask = L_gate * chroma_gate * skin_f
 
         # Feather shine mask with Gaussian blur for soft edges
         shine_mask = cv2.GaussianBlur(shine_mask, (11, 11), 0)
@@ -1610,56 +1643,16 @@ class SkinProcessor:
         if shine_mask.max() < 0.01:
             return img_bgr
 
-        # --- Compute local non-shine median as per-pixel target ---
-        # Compute a smooth baseline L by filtering only non-shine pixels
-        # Use a large-radius Gaussian blur of L masked to non-shine regions
-        non_shine_mask = 1.0 - shine_mask
-
-        # Create masked version: set shine regions to a neutral value that won't affect blur
-        L_masked = L * non_shine_mask + np.median(L[skin_indices]) * shine_mask
-
-        # Blur the masked image to get a smooth local baseline
-        # Large radius so the target is a local average of surrounding non-shine L
-        L_target_smooth = cv2.GaussianBlur(L_masked, (31, 31), 0)
-
-        # In shine regions, use the smoothed target; elsewhere use original L
-        # This ensures shine pixels are pulled toward their local non-shine neighbors
-        L_target = L * (1.0 - shine_mask) + L_target_smooth * shine_mask
-
-        # --- Reconstruct chroma via guided filtering ---
-        # Guided-filter a and b channels to inpaint plausible color in shine regions
-        # Use L as the guide so the filter preserves luminance structure
-        a_inpainted = guided_filter(a, radius=30, eps=100.0, guide=None)
-        b_inpainted = guided_filter(b, radius=30, eps=100.0, guide=None)
-
-        # Blend inpainted chroma into shine regions
-        a_new = a * (1.0 - shine_mask) + a_inpainted * shine_mask
-        b_new = b * (1.0 - shine_mask) + b_inpainted * shine_mask
-
-        # --- Compress L toward local target using soft exponential rolloff ---
-        # Adapted from soft_clip_highlights: instead of compressing toward a fixed
-        # ceiling, we compress each pixel toward its per-pixel target.
-        # Formula: out = current + (target - current) * (1 - exp(-k * excess))
-        # where excess = max(current - target, 0) normalized.
-
+        # --- Pull L toward the local diffuse skin, keep a satin residue ---
+        # Over-removal guard: at most 70% of the excess goes at strength 100,
+        # so highlights read as a soft satin sheen rather than flat paint.
         s = strength / 100.0
+        amount = np.clip(shine_mask * s * 0.70, 0.0, 0.70)
+        L_new = L - L_excess * amount
 
-        # For pixels where current L > target L, apply soft compression downward
-        L_excess = np.maximum(L - L_target, 0.0)
-        L_excess_max = np.max(L_excess) if np.max(L_excess) > 0 else 1.0
-        normalized_excess = L_excess / (L_excess_max + 1e-6)
-
-        # Exponential approach: compress down by a fraction dependent on normalized excess
-        # k chosen so the curve is smooth and the reduction tops out around 70% at strength=100
-        k_rolloff = 1.5  # Controls curvature; higher = more aggressive compression
-        compression_factor = 1.0 - np.exp(-k_rolloff * normalized_excess)
-
-        # Over-removal guard: never reduce more than ~70% of the way to target at full strength
-        max_reduction = 0.70
-        compression_factor = np.clip(compression_factor * s, 0.0, max_reduction)
-
-        # Apply compression only in shine regions
-        L_new = L - L_excess * compression_factor * shine_mask
+        # --- Reconstruct chroma from the surrounding diffuse skin ---
+        a_new = a + (a_base - a) * amount
+        b_new = b + (b_base - b) * amount
 
         # --- Assemble result ---
         lab[:, :, 0] = np.clip(L_new, 0, 255)
@@ -1707,16 +1700,22 @@ class SkinProcessor:
         is_float = img_bgr.dtype == np.float32
         work = img_bgr.astype(np.float32) if not is_float else img_bgr
 
-        spec = extract_specular(work)
-        out = render_finish(
-            work, spec, mode, strength, recolor_strength=recolor
-        )
-
         m = normalize_mask(
             skin_mask.astype(np.float32, copy=False)
             if skin_mask.dtype != np.float32
             else skin_mask
         )
+        # The baseline must come from this face's skin. Without the mask
+        # extract_specular falls back to the median of the whole face crop,
+        # which on a real ROI is pulled down by hair and background, so
+        # ordinary lit skin read as "specular" (spec ~95-107 on skin on
+        # real portraits vs ~1 with the mask) and matte/powder at 0.5
+        # darkened the whole face.
+        spec = extract_specular(work, skin_mask=m)
+        out = render_finish(
+            work, spec, mode, strength, recolor_strength=recolor
+        )
+
         result = blend_masked(work, out, m)
 
         if is_float:
