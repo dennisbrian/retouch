@@ -283,6 +283,7 @@ def process(
     set_match_hero: Any = None,
     lens_glare: Optional[int] = None,
     red_eye: Optional[int] = None,
+    spot_heal: Optional[int] = None,
     mv2_eyeshadow: Optional[float] = None,
     mv2_eyeshadow_color: Optional[str] = None,
     mv2_eyeshadow_style: Optional[str] = None,
@@ -561,6 +562,7 @@ Passing an explicit value override to these parameters takes precedence over the
 *   **`set_match`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: None): Strength of the match to a hero frame. Needs the caller-only `set_match_hero`: a `retouch.set_match.FrameStats` from `measure_frame(hero_img, detector=engine._detector)`, its `to_dict()` form, or the hero image itself (measured on each call). Before detection, the frame gets the exposure + white-balance gain that moves its largest face's skin to the hero's (whole frame when either has no face). The applied gains are reported in `result.runtime_diagnostics["set_match"]` when present.
 *   **`lens_glare`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `glasses.deglare`): Removes flash / softbox / window glare from glasses, goggles and visors over the eyes. Off by default.
 *   **`red_eye`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `eyes.red_eye`): Turns flash red pupils back to a dark pupil, keeping the catchlight and iris; red contact lenses with a dark pupil are left alone. Off by default.
+*   **`spot_heal`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.spot_heal`): Heals each pimple and small red or dark spot on the face on its own (skin level from the ring around it plus texture from a clean neighbouring patch), leaving other pixels untouched; moles, piercings and anything next to the eyes, brows, lips or hairline are kept. Runs before smoothing. Off by default.
 
 ##### **Makeup V2 Synthesis**
 

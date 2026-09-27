@@ -2338,6 +2338,18 @@ _AI_ENHANCE_PARAMS = [
         max_val=100,
     ),
     ParamSpec(
+        # Automatic spot / pimple healing (retouch/spot_heal_auto.py).
+        # Opt-in: 0 = off. 0-100 raw pass-through like red_eye.
+        name="spot_heal",
+        cli_flag="spot-heal",
+        cli_type=int,
+        default=0,
+        recipe_key="skin.spot_heal",
+        conversion="recipe_direct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
         name="ai_sr_scale",
         cli_flag="ai-sr-scale",
         cli_type=int,

@@ -610,6 +610,8 @@ class ProcessingContext:
     lens_glare: float = 0.0
     # Flash red-eye removal, 0-100 (0 = off).
     red_eye: float = 0.0
+    # Automatic spot / pimple healing, 0-100 (0 = off). See spot_heal_auto.py.
+    spot_heal: float = 0.0
 
     # Match a set to one hero frame: 0-100 strength (0 = no-op) and the hero's
     # measured FrameStats (caller-only; see retouch/set_match.py).
@@ -1703,6 +1705,7 @@ class RetouchEngine:
         set_match_hero: Any = None,
         lens_glare: Optional[float] = None,
         red_eye: Optional[float] = None,
+        spot_heal: Optional[float] = None,
         # --- C5: Skin-anchored background color harmonization ---
         background_harmonize: Optional[float] = None,
         background_harmonize_mode: Optional[str] = None,
@@ -2014,6 +2017,7 @@ class RetouchEngine:
             "set_match": set_match,
             "lens_glare": lens_glare,
             "red_eye": red_eye,
+            "spot_heal": spot_heal,
             "background_harmonize": background_harmonize,
             "background_harmonize_mode": background_harmonize_mode,
             "background_blur": background_blur,

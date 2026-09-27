@@ -141,6 +141,20 @@ next to the eye are left alone. It skips very small faces (iris under about 4
 pixels across its radius), pale or pink "white-eye" glows only turn grey
 rather than black, and gold or green animal eye-shine is not touched.
 
+Spot healing (`--spot-heal 0-100` in the CLI, the "Spot Healing" slider under
+Skin Smoothing & Texture in the app, or `skin.spot_heal` in a recipe) finds pimples and
+small red or dark spots on the face and heals each one on its own, the way a
+healing brush does: the spot is rebuilt from the skin level around it plus pore
+texture borrowed from clean skin next to it, and every other pixel is left
+untouched. It is off by default and uses no model; start near 60. Moles and
+beauty marks (dark and not red, wider or much darker than a small mark) are
+kept, and so are piercings, catchlights and anything next to the eyes, brows,
+lips or hairline. It runs before smoothing, so it can be used with smoothing at
+0. Limits: faint brown marks are mostly left alone, a spot on a sharp edge
+(a nostril rim, a face-paint border) is skipped rather than smeared, and it
+works on the face only, not body skin. The older "Blemish Removal" slider is a
+separate pass that follows the recipe's smoothing strength.
+
 Set `RETOUCH_OFFLINE=1` before launching the GUI to disable update checks and
 prevent model downloads; the Advanced Retouch status panel shows the mode.
 
