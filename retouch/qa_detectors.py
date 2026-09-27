@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import logging
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -166,6 +166,34 @@ COLOR_DRIFT_CHROMA_FLOOR_FRAC = 0.5    # Keep pixels with C ≥ 0.5·median(C_re
 # exists so a neutral-grey reference region can't admit pure hue noise.
 COLOR_DRIFT_CHROMA_EPS = 1.0
 COLOR_DRIFT_MIN_HUE_PIXELS = 100       # Fewer kept pixels → hue gate not measured
+
+# Patch-scale checks (2026-09-27, docs/plans/RESEARCH_OVER_SMOOTHING_CHECK_2026_09_27.md).
+# Whole-face averages hide a local defect: one waxy cheek or a cast on the
+# chin is a small share of the face (and a smaller share of the person), so
+# plastic_skin and color_drift also look at cheek-sized patches of each face.
+# A patch is a Gaussian window whose sigma is a fraction of that face's size,
+# so the check scales with the face instead of with the frame.
+PATCH_MIN_FACE_PIXELS = 400        # Smaller face-skin blobs are not faces
+PATCH_MIN_FACE_SHARE = 0.02        # ...nor blobs under 2% of the largest (mask slivers)
+PATCH_MIN_COVERAGE = 0.6           # A patch must be mostly face skin
+# Below this face-box size (longer side, px) the fine-texture band holds the
+# nose wings and eyelid creases rather than pores, and ordinary smoothing
+# reads as a waxy patch (a 146-px face flagged on 5 of 8 clean recipes).
+# Such faces still get the whole-face texture check.
+PLASTIC_SKIN_PATCH_MIN_FACE_SIDE = 200
+# plastic_skin: fine-texture energy kept inside one patch (output / input).
+# Patches whose input texture is under this share of the face's median patch
+# texture are skipped (too little texture to measure a loss against).
+PLASTIC_SKIN_PATCH_SIGMA_FRAC = 0.05
+PLASTIC_SKIN_PATCH_TEXTURE_FLOOR = 0.35
+PLASTIC_SKIN_PATCH_THRESHOLD = PLASTIC_SKIN_THRESHOLD
+# color_drift: chroma shift (Lab a/b, ΔE units) of one patch beyond the face's
+# own median shift. A grade that moves the whole face evenly scores ~0 here
+# (the global gate covers it); only an uneven, local cast counts. A recipe
+# blush is a deliberate pink cheek patch: the strongest (blush 40,
+# zzz_anime_v2) reads up to 5.6, so the limit sits just above it.
+COLOR_DRIFT_PATCH_SIGMA_FRAC = 0.08
+COLOR_DRIFT_PATCH_THRESHOLD = 6.0
 # Deprecated: the old single-pixel max rule (flagged plain `natural` renders
 # via one near-neutral pixel). Kept for import compatibility; not used.
 COLOR_DRIFT_HUE_MAX_THRESHOLD = 15.0
@@ -369,6 +397,173 @@ def _region(mask: Optional[np.ndarray], shape: tuple) -> Optional[np.ndarray]:
     return region if np.any(region) else None
 
 
+def _face_windows(mask: Optional[np.ndarray], sigma_frac: float):
+    """Yield ``(slices, region, sigma, bbox)`` for each face in a face-skin mask.
+
+    Each connected blob of the mask is a face, unless it is under
+    ``PATCH_MIN_FACE_PIXELS`` or under ``PATCH_MIN_FACE_SHARE`` of the
+    largest blob (a sliver of skin between strands of hair, say).
+    ``slices`` crop the frame to the face plus a 3-sigma margin, ``region``
+    is that face's boolean mask inside the crop, ``sigma`` is the patch
+    window (``sigma_frac`` × the face's longer side) and ``bbox`` is the
+    face's ``(x, y, w, h)`` in frame coordinates.
+    """
+    region_full = _region(mask, mask.shape[:2]) if mask is not None else None
+    if region_full is None:
+        return
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(
+        region_full.astype(np.uint8), connectivity=8
+    )
+    H, W = region_full.shape
+    largest = int(stats[1:, cv2.CC_STAT_AREA].max()) if n > 1 else 0
+    min_area = max(PATCH_MIN_FACE_PIXELS, PATCH_MIN_FACE_SHARE * largest)
+    for i in range(1, n):
+        x, y, w, h, area = (int(v) for v in stats[i])
+        if area < min_area:
+            continue
+        sigma = max(2.0, sigma_frac * max(w, h))
+        pad = int(3 * sigma) + 2
+        y0, y1 = max(0, y - pad), min(H, y + h + pad)
+        x0, x1 = max(0, x - pad), min(W, x + w + pad)
+        region = labels[y0:y1, x0:x1] == i
+        yield (slice(y0, y1), slice(x0, x1)), region, sigma, (x, y, w, h)
+
+
+def face_zone_name(point: Tuple[int, int], bbox: Tuple[int, int, int, int]) -> str:
+    """Name where ``point`` (x, y) sits on a face box, as seen in the photo.
+
+    Left and right are the photo's, not the subject's, so the name matches
+    what a reviewer sees on screen.
+    """
+    x, y, w, h = bbox
+    fx = (point[0] - x) / max(w, 1)
+    fy = (point[1] - y) / max(h, 1)
+    side = "left" if fx < 0.33 else "right" if fx > 0.67 else ""
+    if fy < 0.33:
+        part = "forehead"
+    elif fy < 0.72:
+        part = "cheek" if side else "nose"
+    else:
+        part = "jaw" if side else "chin"
+    if side:
+        return f"{part} on the {side} of the photo"
+    return part
+
+
+def _nose_zone(shape: Tuple[int, int], sy: slice, sx: slice, bbox: Tuple[int, int, int, int]) -> np.ndarray:
+    """Boolean mask (crop coordinates) of the nose zone of a face box.
+
+    Shine removal and nose highlights legitimately flatten the nose's fine
+    detail (on a small face the nostril and bridge edges fall in the
+    fine-texture band), so a patch centred there is not scored as waxy.
+    Same zone :func:`face_zone_name` calls "nose".
+    """
+    x, y, w, h = bbox
+    zone = np.zeros(shape, dtype=bool)
+    r0 = int(y + 0.33 * h) - sy.start
+    r1 = int(y + 0.72 * h) - sy.start
+    c0 = int(x + 0.33 * w) - sx.start
+    c1 = int(x + 0.67 * w) - sx.start
+    zone[max(0, r0):max(0, r1), max(0, c0):max(0, c1)] = True
+    return zone
+
+
+def _patch_texture_retention(
+    L_hf_out: np.ndarray,
+    L_hf_ref: np.ndarray,
+    mask: Optional[np.ndarray],
+) -> Optional[Dict[str, Any]]:
+    """Worst cheek-sized patch of fine-texture retention over every face.
+
+    Retention of a patch = sqrt(Gσ(hf_out²·m) / Gσ(hf_ref²·m)): the ratio of
+    fine-texture energy the output keeps inside a Gaussian window. Windows
+    that are mostly outside the face skin, or whose input texture is below
+    ``PLASTIC_SKIN_PATCH_TEXTURE_FLOOR`` × the face's median, are skipped.
+    Returns ``None`` when no face has a measurable patch.
+    """
+    worst: Optional[Dict[str, Any]] = None
+    for (sy, sx), region, sigma, bbox in _face_windows(mask, PLASTIC_SKIN_PATCH_SIGMA_FRAC):
+        if max(bbox[2], bbox[3]) < PLASTIC_SKIN_PATCH_MIN_FACE_SIDE:
+            continue
+        m = region.astype(np.float32)
+        e_out = cv2.GaussianBlur(L_hf_out[sy, sx] ** 2 * m, (0, 0), sigma)
+        e_ref = cv2.GaussianBlur(L_hf_ref[sy, sx] ** 2 * m, (0, 0), sigma)
+        cover = cv2.GaussianBlur(m, (0, 0), sigma)
+        ok = region & (cover > PATCH_MIN_COVERAGE)
+        if not np.any(ok):
+            continue
+        ref_density = e_ref / np.maximum(cover, 1e-6)
+        median_density = float(np.median(ref_density[ok]))
+        ok &= ref_density > (PLASTIC_SKIN_PATCH_TEXTURE_FLOOR ** 2) * median_density
+        ok &= ~_nose_zone(region.shape, sy, sx, bbox)
+        if median_density <= 1e-9 or not np.any(ok):
+            continue
+        retention = np.sqrt(e_out / np.maximum(e_ref, 1e-12))
+        idx = int(np.argmin(np.where(ok, retention, np.inf)))
+        py, px = np.unravel_index(idx, retention.shape)
+        value = float(retention[py, px])
+        if worst is None or value < worst["retention"]:
+            point = (int(sx.start + px), int(sy.start + py))
+            worst = {
+                "retention": value,
+                "point": list(point),
+                "face_bbox": list(bbox),
+                "zone": face_zone_name(point, bbox),
+            }
+    return worst
+
+
+def _patch_chroma_cast(
+    out_lab: np.ndarray,
+    ref_lab: np.ndarray,
+    mask: Optional[np.ndarray],
+) -> Optional[Dict[str, Any]]:
+    """Worst patch-scale chroma shift beyond each face's own median shift.
+
+    Per pixel, the shift is the output's (a, b) minus the input's. Each face's
+    median shift is subtracted (an even grade is the global gate's job), the
+    remainder is averaged in a Gaussian window, and the largest window
+    magnitude (ΔE units in the a/b plane) is returned. ``None`` when no face
+    has a measurable patch.
+    """
+    worst: Optional[Dict[str, Any]] = None
+    for (sy, sx), region, sigma, bbox in _face_windows(mask, COLOR_DRIFT_PATCH_SIGMA_FRAC):
+        d = out_lab[sy, sx, 1:] - ref_lab[sy, sx, 1:]
+        median_shift = np.median(d[region], axis=0)
+        m = region.astype(np.float32)
+        cover = cv2.GaussianBlur(m, (0, 0), sigma)
+        ok = region & (cover > PATCH_MIN_COVERAGE)
+        if not np.any(ok):
+            continue
+        dev = (d - median_shift) * m[..., None]
+        norm = np.maximum(cover, 1e-6)
+        da = cv2.GaussianBlur(dev[..., 0], (0, 0), sigma) / norm
+        db = cv2.GaussianBlur(dev[..., 1], (0, 0), sigma) / norm
+        magnitude = np.hypot(da, db)
+        idx = int(np.argmax(np.where(ok, magnitude, -1.0)))
+        py, px = np.unravel_index(idx, magnitude.shape)
+        value = float(magnitude[py, px])
+        # When a cast covers about half the face the median follows the
+        # cast, and the most deviant patch is the untouched part. If that
+        # patch moved less than the face's median shift, point at the patch
+        # that moved most instead, so the zone names where the cast is.
+        shift_a = da + float(median_shift[0])
+        shift_b = db + float(median_shift[1])
+        moved = np.hypot(shift_a, shift_b)
+        if moved[py, px] < float(np.hypot(*median_shift)):
+            idx = int(np.argmax(np.where(ok, moved, -1.0)))
+            py, px = np.unravel_index(idx, moved.shape)
+        if worst is None or value > worst["delta_ab"]:
+            point = (int(sx.start + px), int(sy.start + py))
+            worst = {
+                "delta_ab": value,
+                "point": list(point),
+                "face_bbox": list(bbox),
+                "zone": face_zone_name(point, bbox),
+            }
+    return worst
+
+
 def detect_banding(
     img_bgr: np.ndarray,
     mask: Optional[np.ndarray] = None,
@@ -552,6 +747,19 @@ def detect_plastic_skin(
     face skin keeps 0.29–0.52 and flags on all 7 photos. See
     ``docs/plans/RESEARCH_QA_FLAG_CALIBRATION_2026_09_25.md``.
 
+    Patch check (2026-09-27): a whole-face average hides one waxy cheek, so
+    each face of 200 px or more is also scanned with cheek-sized windows
+    (Gaussian σ = 5% of the face box), nose excluded, and the worst window's
+    retention is reported as ``patch_retention`` with ``patch_zone`` naming
+    where it is. It flags below ``PLASTIC_SKIN_PATCH_THRESHOLD``. On 127
+    renders (9 photos, 18 recipes) the ordinary looks kept ≥ 0.62 per patch;
+    the new flags all came from heavy anime/porcelain looks (``zzz_anime``,
+    ``scifi_cosplay``, ``fantasy_goddess``, ``xhs_soft_glow``,
+    ``pink_dream``, 0.37–0.59), whose foreheads or cheeks really are wiped
+    flat. A σ=1.5 blur of one cheek reads 0.30–0.54 and flags on every face
+    scanned (12/12). See
+    ``docs/plans/RESEARCH_OVER_SMOOTHING_CHECK_2026_09_27.md``.
+
     Args:
         img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR image (output).
             Float input is truncated to uint8 internally for analysis.
@@ -561,12 +769,17 @@ def detect_plastic_skin(
 
     Returns:
         dict with keys:
-            - "score": float, texture retention vs reference clamped to [0, 1]
-              (0 = all texture erased, 1 = fully preserved); None if no reference
-            - "flagged": bool, True if retention < PLASTIC_SKIN_THRESHOLD
+            - "score": float, the lower of whole-face and worst-patch texture
+              retention vs reference, clamped to [0, 1] (0 = all texture
+              erased, 1 = fully preserved); None if no reference
+            - "flagged": bool, True if retention < PLASTIC_SKIN_THRESHOLD or
+              patch retention < PLASTIC_SKIN_PATCH_THRESHOLD
             - "texture_retention": float or None, output / reference fine-texture std
             - "hf_energy_ratio": float, high-freq std / mid-freq std (informational)
             - "energy_loss_vs_reference": float or None (if reference provided)
+            - "patch_retention", "patch_zone", "patch_point",
+              "patch_face_bbox": worst patch (None when no face was scanned)
+            - "finding": plain-language message when flagged
     """
     if img_bgr.shape[0] < 8 or img_bgr.shape[1] < 8:
         # Tiny image
@@ -651,13 +864,34 @@ def detect_plastic_skin(
         })
         return result
 
-    return {
-        "score": float(min(1.0, max(0.0, retention))),
-        "flagged": bool(retention < PLASTIC_SKIN_THRESHOLD),
+    patch = None
+    if mask is not None:
+        patch = _patch_texture_retention(L_hf, L_ref_hf, mask)
+    whole_flag = retention < PLASTIC_SKIN_THRESHOLD
+    patch_flag = patch is not None and patch["retention"] < PLASTIC_SKIN_PATCH_THRESHOLD
+    worst = retention if patch is None else min(retention, patch["retention"])
+    result = {
+        "score": float(min(1.0, max(0.0, worst))),
+        "flagged": bool(whole_flag or patch_flag),
         "hf_energy_ratio": float(energy_ratio),
         "texture_retention": float(retention),
         "energy_loss_vs_reference": energy_loss,
+        "patch_retention": None if patch is None else patch["retention"],
+        "patch_zone": None if patch is None else patch["zone"],
+        "patch_point": None if patch is None else patch["point"],
+        "patch_face_bbox": None if patch is None else patch["face_bbox"],
     }
+    if patch_flag and not whole_flag:
+        result["finding"] = (
+            f"Waxy patch on the {patch['zone']}: it keeps "
+            f"{patch['retention']:.0%} of its skin texture, the rest of the "
+            f"face keeps {retention:.0%}"
+        )
+    elif whole_flag:
+        result["finding"] = (
+            f"Waxy skin: the face keeps {retention:.0%} of its skin texture"
+        )
+    return result
 
 
 def detect_halo(
@@ -948,6 +1182,7 @@ def detect_color_drift(
     img_bgr: np.ndarray,
     skin_mask: Optional[np.ndarray] = None,
     reference_img_bgr: Optional[np.ndarray] = None,
+    face_mask: Optional[np.ndarray] = None,
 ) -> dict:
     """Color-fidelity gate: measure skin hue/ΔE drift between reference and output.
 
@@ -982,7 +1217,14 @@ def detect_color_drift(
     gate is now p95 > 20°: styled cosplay renders read p95 ≤ 11.8°, while
     ``cinema_grade_v1``'s skin cast reads mean ≥ 21° (7/7 flag). A cast
     has to cover more than ~5% of the person to move p95, so a 25° cast on
-    only the lower half of a small face can pass (flagged 5/7 in the study).
+    only the lower half of a small face could pass (flagged 5/7 in the study).
+
+    Patch gate (2026-09-27): with a ``face_mask`` (the pipeline passes the
+    face-skin mask) each face is also scanned for a cheek-sized patch whose
+    a/b shift differs from the rest of that face by more than
+    ``COLOR_DRIFT_PATCH_THRESHOLD`` ΔE (``patch_delta_ab``). An even grade
+    scores ~0 here, so only an uneven, local cast counts. See
+    ``docs/plans/RESEARCH_OVER_SMOOTHING_CHECK_2026_09_27.md``.
 
     Args:
         img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR output image.
@@ -990,6 +1232,7 @@ def detect_color_drift(
             masked pixels when a reference is supplied.
         reference_img_bgr: Optional pre-grade reference (uint8 or float32
             [0, 255]) BGR image of the same shape.
+        face_mask: Optional (H, W) face-skin mask [0, 1] for the patch gate.
 
     Returns:
         dict with keys:
@@ -1100,7 +1343,7 @@ def detect_color_drift(
     deltaH_p95_deg = float(np.percentile(dh_kept, COLOR_DRIFT_HUE_GATE_PERCENTILE))
     deltaH_mean_floored = float(np.mean(dh_kept))
 
-    flagged = (
+    hue_flag = (
         deltaH_mean_floored > COLOR_DRIFT_HUE_MEAN_THRESHOLD
         or deltaH_p95_deg > COLOR_DRIFT_HUE_P95_THRESHOLD
     )
@@ -1109,7 +1352,27 @@ def detect_color_drift(
         deltaH_mean_floored / (2.0 * COLOR_DRIFT_HUE_MEAN_THRESHOLD),
     ))
 
+    patch = None
+    if face_mask is not None and face_mask.shape[:2] == out_lab.shape[:2]:
+        patch = _patch_chroma_cast(out_lab, ref_lab, face_mask)
+    patch_flag = patch is not None and patch["delta_ab"] > COLOR_DRIFT_PATCH_THRESHOLD
+    if patch is not None:
+        score = min(1.0, max(score, patch["delta_ab"] / (2.0 * COLOR_DRIFT_PATCH_THRESHOLD)))
+    flagged = hue_flag or patch_flag
+    extra: Dict[str, Any] = {
+        "patch_delta_ab": None if patch is None else patch["delta_ab"],
+        "patch_zone": None if patch is None else patch["zone"],
+        "patch_point": None if patch is None else patch["point"],
+        "patch_face_bbox": None if patch is None else patch["face_bbox"],
+    }
+    if patch_flag and not hue_flag:
+        extra["finding"] = (
+            f"Colour cast on the {patch['zone']}: it shifted "
+            f"{patch['delta_ab']:.1f} ΔE more than the rest of the face"
+        )
+
     return {
+        **extra,
         "score": float(score),
         "flagged": bool(flagged),
         "deltaE_mean": deltaE_mean,
@@ -1651,7 +1914,7 @@ def run_all(
         result["seam"] = _detector_failure("seam", exc)
     try:
         result["color_drift"] = detect_color_drift(
-            img_bgr, skin_mask, photo_reference
+            img_bgr, skin_mask, photo_reference, face_mask=face_skin_mask
         )
     except Exception as exc:
         result["color_drift"] = _detector_failure("color_drift", exc)
@@ -1851,7 +2114,9 @@ def run_qa_with_evidence(
                 "output could not be validated"
             )
         else:
-            msg = _QA_MESSAGES.get(detector_name, f"{detector_name} artifact detected")
+            msg = det_result.get("finding") or _QA_MESSAGES.get(
+                detector_name, f"{detector_name} artifact detected"
+            )
         qa_warnings.append(QAWarning(
             detector=detector_name,
             score=det_result.get("score", 0.0),
