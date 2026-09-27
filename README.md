@@ -141,6 +141,17 @@ next to the eye are left alone. It skips very small faces (iris under about 4
 pixels across its radius), pale or pink "white-eye" glows only turn grey
 rather than black, and gold or green animal eye-shine is not touched.
 
+Keep Nose Shape (`--nose-shape 0-100` in the CLI, the "Keep Nose Shape" slider
+under Skin Tone in the app, or `skin.nose_shape` in a recipe, where 0.5 = 50)
+puts back the broad nose shading that skin smoothing flattens, so the nose
+keeps its rounded tip and shaded sides instead of reading as a flat, painted
+patch. It is most visible on white face paint with a bare nose. Fine texture
+on the nose stays smoothed, and whitening, shine removal and every later tone
+edit still reach the nose. It is off by default and uses no model; it follows
+the face landmarks, so hair or glasses over the nose are left as they are.
+Unlike Nose Restore, which blends the untouched original nose back in, it
+keeps the retouch and only undoes the flattening.
+
 Set `RETOUCH_OFFLINE=1` before launching the GUI to disable update checks and
 prevent model downloads; the Advanced Retouch status panel shows the mode.
 

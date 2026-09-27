@@ -591,6 +591,20 @@ def _process_face_core(
             mark_protect=mark_protect_mask,
             )
 
+    # ---- Keep nose shape (opt-in) ----
+    # Puts back the broad nose shading the smoothing above flattened, so
+    # the nose keeps its form instead of reading as a flat painted patch.
+    # Runs here, not with nose_restore at the end, so later tone ops still
+    # reach the nose. See retouch/nose_shape.py.
+    _nose_shape = float(getattr(ctx, 'nose_shape', 0) or 0)
+    if _nose_shape > 0 and regions.nose is not None:
+        canvas = _tr('nose_shape', canvas)
+        from .nose_shape import keep_nose_shape
+        canvas = keep_nose_shape(
+            canvas, pre_smooth_canvas, regions.nose, _nose_shape,
+            ied=shifted_face.ied, skin_mask=skin_n,
+        )
+
     # ---- Selective under-eye shadow smoothing (S5.5) ----
     # Conservative, region-limited; no-op when strength <= 0.
     _undereye_strength = getattr(ctx, 'undereye_shadow_strength', 0.0) or 0.0

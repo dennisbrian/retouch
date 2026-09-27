@@ -2198,7 +2198,7 @@ def reset_skin_smoothing(recipe_name):
 
 def reset_skin_tone(recipe_name):
     d = recipe_defaults(recipe_name)
-    return d["whiten"], d["whiten_tone"], d["equalize"], d["shadow_lift"], d["nose_restore"], d["skin_sss"], d["skin_unify"], d["skin_unify_hue"], d["auto_exposure"], d["white_costume_lift"], d["face_exposure"]
+    return d["whiten"], d["whiten_tone"], d["equalize"], d["shadow_lift"], d["nose_restore"], d["nose_shape"], d["skin_sss"], d["skin_unify"], d["skin_unify_hue"], d["auto_exposure"], d["white_costume_lift"], d["face_exposure"]
 
 def reset_basic_tone(recipe_name):
     d = recipe_defaults(recipe_name)
@@ -4157,6 +4157,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 equalize = gr.Slider(0, 100, 20, step=1, label="Equalize", info="Even out skin redness and regional color inconsistencies")
                                 shadow_lift = gr.Slider(0, 100, 0, step=1, label="Shadow Lift", info="Brighten small localized face shadows relative to local neighborhood")
                                 nose_restore = gr.Slider(0, 100, 0, step=1, label="Nose Restore", info="Blend original (pre-retouch) nose pixels back in, to preserve natural nose shading")
+                                nose_shape = gr.Slider(0, 100, 0, step=1, label="Keep Nose Shape", info="Put back the nose shading that skin smoothing flattens, so the nose keeps its form instead of looking painted on. Texture stays smoothed and later tone edits still apply. Off by default.")
                                 skin_sss = gr.Slider(0, 100, 0, step=1, label="Subsurface Scatter", info="Game-render skin translucency: red-weighted shading diffusion + warm shadow terminators (pores stay crisp)")
                                 skin_unify = gr.Slider(0, 100, 0, step=1, label="Skin Hue Unify (Anime)", info="Pull skin hues toward a single cel color · 0=off, 60=strong unified look")
                                 skin_unify_hue = gr.Slider(-1.0, 360.0, -1.0, step=1.0, label="Target Hue (Anime)", info="Target skin hue angle · -1=auto (detect from face), 0=red, 50=orange, 180=cyan")
@@ -4777,6 +4778,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "multi_illuminant_mix",
         # Visible AI denoise slider: con_high_iso_v1 / masterwork_v1 set it.
         "ai_denoise",
+        # Visible opt-in nose slider; a recipe may set skin.nose_shape.
+        "nose_shape",
     )
 
     # Name -> Gradio component map for the recipe-output tuple.  Mirrors the
@@ -4918,6 +4921,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "multi_illuminant_fill_kelvin": multi_illuminant_fill_kelvin,
         "multi_illuminant_mix": multi_illuminant_mix,
         "ai_denoise": ai_denoise,
+        "nose_shape": nose_shape,
     }
     _missing_outputs = set(RECIPE_OUTPUT_KEYS) - set(_recipe_output_components)
     _extra_outputs = set(_recipe_output_components) - set(RECIPE_OUTPUT_KEYS)
@@ -4999,7 +5003,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     _track_reset_event(reset_skin_tone_btn.click(
         fn=reset_skin_tone,
         inputs=[recipe],
-        outputs=[whiten, whiten_tone, equalize, shadow_lift, nose_restore, skin_sss, skin_unify, skin_unify_hue, auto_exposure, white_costume_lift, face_exposure],
+        outputs=[whiten, whiten_tone, equalize, shadow_lift, nose_restore, nose_shape, skin_sss, skin_unify, skin_unify_hue, auto_exposure, white_costume_lift, face_exposure],
         queue=False,
         show_progress="hidden",
     ))
@@ -5573,6 +5577,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "face_exposure": face_exposure,
         "body_shadow_lift": body_shadow_lift,
         "nose_restore": nose_restore,
+        "nose_shape": nose_shape,
         "skin_sss": skin_sss,
         "specular_bloom": specular_bloom,
         "specular_bloom_tone": specular_bloom_tone,
