@@ -177,3 +177,57 @@ class TestSkinGateUnderPaleWig:
             _oval_landmarks(), img, person, 60.0, class_probs=_probs()
         )
         assert r.skin.max() == 0.0
+
+
+class TestSkinMaskV2:
+    """Soft confidences, full bangs and blocky segmenter edges (2026-09-26)."""
+
+    def test_soft_confidences_reach_full_strength(self, parser, img):
+        # Real segmenter output: ~0.9 face-skin with a couple of percent of
+        # every other class leaking everywhere; used to cap skin at ~0.87.
+        lm = _oval_landmarks()
+        base = parser._landmark_fallback_only(lm, img, None, 60.0)
+        p = np.full((H, W, _MC_NUM_CLASSES), 0.02, dtype=np.float32)
+        p[..., _MC_FACE_SKIN] = 0.9
+        person = np.full((H, W), 0.9, dtype=np.float32)
+        r = parser._landmark_fallback_only(lm, img, person, 60.0, class_probs=p)
+        c = (int((CY + RY / 2) * H), int(CX * W))
+        assert base.skin[c] > 0.99
+        assert r.skin[c] > 0.99
+
+    def test_full_bangs_above_eye_line_are_cut_not_ignored(self, parser, img):
+        # Hair over the whole upper half of the face is over the old 40% loss
+        # guard, which used to keep the bangs as skin.
+        lm = _oval_landmarks()
+        base = parser._landmark_fallback_only(lm, img, None, 60.0)
+        p = _probs()
+        _set(p, _MC_HAIR, slice(0, int(CY * H) - 2), slice(0, W))
+        r = parser._landmark_fallback_only(lm, img, None, 60.0, class_probs=p)
+        upper = int((CY - RY / 2) * H)
+        lower = int((CY + RY / 2) * H)
+        assert base.skin[upper, 150] > 0.5
+        assert r.skin[upper, 150] < 0.1
+        assert r.skin[lower, 150] == pytest.approx(base.skin[lower, 150], abs=1e-3)
+
+    def test_clothes_over_the_face_keep_landmark_skin(self, parser, img):
+        # Face paint or a mask read as clothes: the segmenter disagrees with
+        # the landmarks, so the landmark skin is kept.
+        lm = _oval_landmarks()
+        base = parser._landmark_fallback_only(lm, img, None, 60.0)
+        p = _probs()
+        _set(p, 4, slice(0, H), slice(0, W))  # clothes channel
+        r = parser._landmark_fallback_only(lm, img, None, 60.0, class_probs=p)
+        np.testing.assert_allclose(r.skin, base.skin, atol=1e-5)
+
+    def test_blocky_segmenter_edge_is_smoothed(self, parser, img):
+        # 256 px segmenter cells upscale to hard 8 px blocks; the mask must
+        # not step by a whole block from one pixel to the next.
+        lm = _oval_landmarks()
+        p = _probs()
+        yy, xx = np.mgrid[0:H, 0:W]
+        blocks = ((yy // 8 + xx // 8) % 2 == 0) & (yy > int(CY * H))
+        p[blocks, :] = 0.0
+        p[blocks, 4] = 1.0  # clothes blocks on the lower face
+        r = parser._landmark_fallback_only(lm, img, None, 60.0, class_probs=p)
+        step = np.abs(np.diff(r.skin, axis=1))
+        assert step.max() < 0.5

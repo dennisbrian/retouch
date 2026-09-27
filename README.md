@@ -141,6 +141,15 @@ next to the eye are left alone. It skips very small faces (iris under about 4
 pixels across its radius), pale or pink "white-eye" glows only turn grey
 rather than black, and gold or green animal eye-shine is not touched.
 
+Face polish (`--face-polish 0-100` in the CLI, the "Face Polish" slider under
+the skin tone controls in the app, or `skin.face_polish` in a recipe) is the
+porcelain cosplay finish in one control: it tones oily hot spots down to a
+satin sheen, lifts under-eye and smile-line shadows and brightens the face a
+little. It is off by default and works on top of any recipe; a stronger value
+you set for shine removal, shadow lift or face exposure still wins. Start
+around 50. It leaves highlights wider than about a twentieth of the face alone
+(they read as lit form, not shine) and does not add blush or reshape anything.
+
 Set `RETOUCH_OFFLINE=1` before launching the GUI to disable update checks and
 prevent model downloads; the Advanced Retouch status panel shows the mode.
 
