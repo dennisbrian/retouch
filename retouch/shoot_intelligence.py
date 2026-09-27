@@ -321,6 +321,20 @@ def _frame_quality(path: str) -> Dict[str, float]:
 # or downward looks when checked by eye.
 BLINK_RELATIVE_APERTURE = 0.55
 
+# The relative check only applies below this absolute aperture. Checked
+# 2026-09-27 on the same clips: a subject whose eyes widen (raised brows,
+# surprise) to 0.45-0.50 made a plainly open 0.27 frame read as a blink, while
+# every closed or half-closed eye the relative check caught read 0.15-0.25
+# (closed eyes read at most 0.164). Above this value the eyes are open whatever
+# the rest of the burst looks like.
+BLINK_RELATIVE_CEILING = 0.25
+
+# A face is the same person across a burst's frames only if its centre moved
+# less than this many face widths. The relative blink check compares each face
+# with its own track, so a two-person shot where the bigger face swaps between
+# frames never compares one person's eyes with another's.
+SUBJECT_TRACK_MAX_SHIFT = 0.5
+
 # Faces at least this fraction of the main face's area count as subjects whose
 # closed eyes should flag the frame (a group shot), not background people.
 SUBJECT_FACE_AREA_FRACTION = 0.25
@@ -359,6 +373,17 @@ def _face_aperture(face: Any) -> Optional[float]:
     return float(min(values))
 
 
+def _face_centre(face: Any) -> Optional[Tuple[float, float, float]]:
+    """Return ``(centre_x, centre_y, width)`` of a normalized face bbox."""
+    bbox = _face_value(face, "bbox")
+    if bbox is None or len(bbox) != 4:
+        return None
+    x, y, width, height = (float(value) for value in bbox)
+    if not all(np.isfinite((x, y, width, height))) or width <= 0.0 or height <= 0.0:
+        return None
+    return x + width / 2.0, y + height / 2.0, width
+
+
 def _frame_face_evidence(faces: Sequence[Any]) -> Dict[str, Any]:
     """Summarize one frame's face evidence: main subject focus and eye state."""
     faces = [face for face in faces if _face_value(face, "coverage") is not None]
@@ -370,6 +395,8 @@ def _frame_face_evidence(faces: Sequence[Any]) -> Dict[str, Any]:
         face for face in faces
         if float(_face_value(face, "coverage")) >= SUBJECT_FACE_AREA_FRACTION * main_area
     ]
+    # The main face first, so subject index 0 is always the main face.
+    subjects.sort(key=lambda face: face is not main)
     states = [str(_face_value(face, "eyes_open") or "uncertain") for face in subjects]
     return {
         "faces_detected": len(faces),
@@ -377,7 +404,49 @@ def _frame_face_evidence(faces: Sequence[Any]) -> Dict[str, Any]:
         "face_focus": _face_focus(main),
         "eye_aperture": _face_aperture(main),
         "subject_eyes_open": states,
+        "subject_apertures": [_face_aperture(face) for face in subjects],
+        "subject_centres": [_face_centre(face) for face in subjects],
     }
+
+
+def _assign_subject_tracks(frames: Sequence[Dict[str, Any]]) -> None:
+    """Label each subject face with a track id shared by the same person.
+
+    Faces are matched frame to frame by bbox centre: a face joins the nearest
+    track whose last centre lies within ``SUBJECT_TRACK_MAX_SHIFT`` face widths,
+    else it starts a new track. Without bboxes only the main faces share one
+    track (the pre-tracking behaviour); other faces get their own.
+    """
+    tracks: List[Tuple[float, float, float]] = []
+    next_untracked = -1
+    for frame in frames:
+        centres = frame.get("subject_centres") or []
+        ids: List[int] = []
+        taken: set = set()
+        for index, centre in enumerate(centres):
+            if centre is None:
+                if index == 0:
+                    ids.append(-1)
+                else:
+                    next_untracked -= 1
+                    ids.append(next_untracked)
+                continue
+            cx, cy, width = centre
+            best, best_distance = None, None
+            for track_id, (tx, ty, tw) in enumerate(tracks):
+                if track_id in taken:
+                    continue
+                distance = float(np.hypot(cx - tx, cy - ty)) / max(width, tw)
+                if distance <= SUBJECT_TRACK_MAX_SHIFT and (best_distance is None or distance < best_distance):
+                    best, best_distance = track_id, distance
+            if best is None:
+                tracks.append(centre)
+                best = len(tracks) - 1
+            else:
+                tracks[best] = centre
+            taken.add(best)
+            ids.append(best)
+        frame["subject_tracks"] = ids
 
 
 def rank_burst_candidates(
@@ -421,8 +490,16 @@ def rank_burst_candidates(
     focus_values = [item["face_focus"] for item in face_by_path.values() if item.get("face_focus") is not None]
     face_aware = bool(focus_values)
     best_focus = max(focus_values) if focus_values else 0.0
-    apertures = [item["eye_aperture"] for item in face_by_path.values() if item.get("eye_aperture") is not None]
-    baseline_aperture = max(apertures) if len(apertures) >= 2 else None
+    _assign_subject_tracks([face_by_path[path] for path, _ in measurements if path in face_by_path])
+    track_apertures: Dict[int, List[float]] = {}
+    for item in face_by_path.values():
+        for track_id, aperture in zip(item.get("subject_tracks", []), item.get("subject_apertures", [])):
+            if aperture is not None:
+                track_apertures.setdefault(track_id, []).append(float(aperture))
+    # A person's widest eyes in the burst, once they appear in two frames.
+    track_baseline = {
+        track_id: max(values) for track_id, values in track_apertures.items() if len(values) >= 2
+    }
 
     scored: List[Tuple[str, float, Dict[str, Any]]] = []
     for path, evidence in measurements:
@@ -453,13 +530,21 @@ def rank_burst_candidates(
         if not face.get("faces_detected"):
             flags.append("no_face_detected")
         aperture = face.get("eye_aperture")
-        aperture_ratio = (
-            float(aperture) / baseline_aperture
-            if aperture is not None and baseline_aperture and baseline_aperture > 0.0
-            else None
-        )
+        ratios: List[Optional[float]] = []
+        for track_id, value in zip(face.get("subject_tracks", []), face.get("subject_apertures", [])):
+            baseline = track_baseline.get(track_id)
+            ratios.append(
+                float(value) / baseline if value is not None and baseline and baseline > 0.0 else None
+            )
+        aperture_ratio = ratios[0] if ratios else None
+        baseline_aperture = track_baseline.get(face["subject_tracks"][0]) if face.get("subject_tracks") else None
         states = face.get("subject_eyes_open", [])
-        closed = "no" in states or (aperture_ratio is not None and aperture_ratio < BLINK_RELATIVE_APERTURE)
+        relative_blink = any(
+            ratio is not None and ratio < BLINK_RELATIVE_APERTURE
+            and value is not None and float(value) < BLINK_RELATIVE_CEILING
+            for ratio, value in zip(ratios, face.get("subject_apertures", []))
+        )
+        closed = "no" in states or relative_blink
         if closed:
             flags.append("eyes_closed")
             eyes_term = 0.0
@@ -485,6 +570,7 @@ def rank_burst_candidates(
             "eye_aperture": aperture,
             "eye_aperture_burst_max": baseline_aperture,
             "eye_aperture_relative": aperture_ratio,
+            "subject_eye_aperture_relative": ratios,
             "subject_eyes_open": list(states),
             "eyes_term": eyes_term,
             "flags": flags,
