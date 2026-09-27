@@ -13,6 +13,7 @@ Proposals:
 
 from __future__ import annotations
 
+import copy
 import logging
 import multiprocessing as mp
 import os
@@ -247,6 +248,44 @@ def _tr(op: str, canvas: np.ndarray) -> np.ndarray:
     return canvas
 
 
+# Face polish (``face_polish`` 0-100): the porcelain "reference look" as one
+# control. Each entry is the component strength at face_polish=100, in the
+# component's own engine units; at lower settings they scale linearly. Tuned
+# 2026-09-26 against 13 finished cosplay edits the owner supplied (measured
+# only, never stored) on 4 of the owner's photos plus 2 darker-skin versions:
+# hot spots toned to a satin sheen, under-eye and smile-line shadows lifted,
+# and the face a touch brighter. face_exposure is a flat L lift, so it stays
+# small. Measured and left out: sculpt (did not brighten the nose bridge on
+# these faces), eye_enhance (iris crispness already matched the references)
+# and the "powder" specular finish (subtracts equal B/G/R, so broad lit
+# cheeks went grey on pale skin, and it barely acted on darker skin).
+_FACE_POLISH_COMPONENTS: Tuple[Tuple[str, float], ...] = (
+    ("shine_removal", 100.0),
+    ("shadow_lift", 60.0),
+    ("face_exposure", 8.0),
+)
+
+
+def _face_polish_ctx(ctx: "Any") -> "Any":
+    """Return ``ctx`` with the face-polish component floors applied.
+
+    The macro only raises a component: an explicitly stronger value (from a
+    recipe or its own slider) is kept. ``ctx`` itself is never mutated, so a
+    context shared across faces stays unchanged.
+    """
+    polish = float(getattr(ctx, "face_polish", 0) or 0)
+    if polish <= 0:
+        return ctx
+    t = min(polish, 100.0) / 100.0
+    out = copy.copy(ctx)
+    for name, full in _FACE_POLISH_COMPONENTS:
+        cur = getattr(ctx, name, 0) or 0
+        target = full * t
+        if target > float(cur):
+            setattr(out, name, int(round(target)) if isinstance(cur, int) else target)
+    return out
+
+
 def _process_face_core(
     canvas: np.ndarray,
     regions: "Any",
@@ -285,6 +324,9 @@ def _process_face_core(
     # but it must not erase/dampen these user-requested pixels. A future
     # inferred automatic delta must carry its own baseline and decision.
     safe_auto_decisions: list[Dict[str, Any]] = []
+
+    # One-control porcelain look; raises component floors only (see helper).
+    ctx = _face_polish_ctx(ctx)
 
     # Gate once at the per-face pipeline boundary so every downstream
     # consumer—including the selective-sharpening mask built near the end—

@@ -185,6 +185,7 @@ These keys are defined inside nested dictionary blocks inside a recipe.
 | `skin` | `chroma_even` | 0 to 100 | `0` | `skin_chroma_even` |
 | `skin` | `equalize` | 0 to 100 | `0` | `equalize` |
 | `skin` | `face_exposure` | 0 to 100 | `0` | `face_exposure` |
+| `skin` | `face_polish` | 0 to 100 | `0` | `face_polish` |
 | `skin` | `flatten` | 0 to 100 | `0` | `skin_flatten` |
 | `skin` | `glow` | 0 to 100 | `0` | `skin_glow` |
 | `skin` | `hemoglobin_smooth` | 0.0 to 1.0 | `0.0` | `hemoglobin_smooth` |
