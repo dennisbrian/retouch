@@ -939,6 +939,18 @@ _SKIN_PARAMS = [
         max_val=100,
     ),
     ParamSpec(
+        # Powder finish in the skin's own tone (retouch/powder_finish.py).
+        # Opt-in: 0 = off, so recipes render as before.
+        name="powder_finish",
+        cli_flag="powder-finish",
+        cli_type=int,
+        default=0,
+        recipe_key="skin.powder_finish",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
         name="skin_glow",
         cli_flag="skin-glow",
         cli_type=int,

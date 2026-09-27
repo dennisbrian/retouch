@@ -1056,6 +1056,25 @@ def _process_face_core(
             recolor=ctx.specular_recolor,
         )
 
+    # ---- Powder finish in the skin's own tone (opt-in) ----
+    # Mattes shine toward the local skin colour instead of subtracting grey,
+    # and also acts on white face paint, where shine keeps the paint's
+    # chroma and shine_removal's chroma gate lets it through. Before relight
+    # so intentional glow isn't matted away. See retouch/powder_finish.py.
+    _powder = float(getattr(ctx, 'powder_finish', 0) or 0)
+    if _powder > 0 and regions.skin is not None:
+        canvas = _tr('powder_finish', canvas)
+        from .powder_finish import powder_finish
+        _pf_eyes = None
+        if regions.left_eye is not None or regions.right_eye is not None:
+            _pf_eyes = np.maximum(
+                _norm_mask(regions.left_eye) if regions.left_eye is not None else np.zeros((roi_h, roi_w), dtype=np.float32),
+                _norm_mask(regions.right_eye) if regions.right_eye is not None else np.zeros((roi_h, roi_w), dtype=np.float32),
+            )
+        canvas = powder_finish(
+            canvas, regions.skin, _powder, ied=shifted_face.ied, eyes_mask=_pf_eyes,
+        )
+
     # ---- Virtual studio relighting ----
     if ctx.relight > 0:
         canvas = _tr('relight', canvas)

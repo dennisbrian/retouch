@@ -98,6 +98,7 @@ def process(
     body_shadow_lift: Optional[float] = None,
     nose_restore: Optional[float] = None,
     nose_shape: Optional[int] = None,
+    powder_finish: Optional[int] = None,
     specular_bloom: Optional[int] = None,
     specular_bloom_tone: Optional[str] = None,
     specular_finish: Optional[str] = None,
@@ -440,6 +441,7 @@ Passing an explicit value override to these parameters takes precedence over the
 
 *   **`shadow_lift`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.shadow_lift`): Adjusts the shadow lift parameter.
 *   **`face_exposure`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.face_exposure`): Adjusts the face exposure parameter.
+*   **`powder_finish`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.powder_finish`): Powder Finish. Evens shine into the skin's own colour (not grey), works on white face paint, keeps broad lit areas and overall brightness. Off by default.
 *   **`face_polish`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.face_polish`): Porcelain finish in one control. Raises the floor of `shine_removal`, `shadow_lift` and `face_exposure` together; a stronger value you set for any of those still wins. Off by default.
 *   **`contrast`** (Type: `int`, Default: `0.0`, Range: `-50` to `50`, Recipe key: `contrast`): Adjusts the contrast parameter.
 *   **`brightness`** (Type: `int`, Default: `None`, Range: `-50` to `50`, Recipe key: `brightness`): Adjusts the brightness parameter.
