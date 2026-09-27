@@ -136,8 +136,8 @@ def _burst(tmp_path: Path, names, sharp_name=None):
     return group, dict(zip(names, paths))
 
 
-def _face(focus, eyes_open="yes", apertures=(0.30, 0.30), coverage=0.2):
-    return {
+def _face(focus, eyes_open="yes", apertures=(0.30, 0.30), coverage=0.2, bbox=None):
+    face = {
         "coverage": coverage,
         "left_eye_sharpness": focus,
         "right_eye_sharpness": focus * 0.8,
@@ -147,6 +147,9 @@ def _face(focus, eyes_open="yes", apertures=(0.30, 0.30), coverage=0.2):
             "left_eye_aperture": apertures[0], "right_eye_aperture": apertures[1],
         },
     }
+    if bbox is not None:
+        face["bbox"] = bbox
+    return face
 
 
 def test_sharp_face_outranks_sharp_background(tmp_path: Path):
@@ -205,6 +208,66 @@ def test_narrow_eyed_subject_is_not_flagged_in_every_frame(tmp_path: Path):
     ranked = rank_burst_candidates(group, faces)
 
     assert all("eyes_closed" not in candidate.evidence["flags"] for candidate in ranked)
+
+
+def test_open_eyes_are_not_a_blink_next_to_a_wide_eyed_frame(tmp_path: Path):
+    # Raised brows widen this subject's eyes to 0.49, but 0.26 is still plainly
+    # open (a real clip, 2026-09-27), so the relative check must not fire above
+    # the absolute ceiling.
+    group, paths = _burst(tmp_path, ["normal", "surprised", "half"])
+    faces = {
+        paths["normal"]: [_face(1.0, "yes", (0.26, 0.28))],
+        paths["surprised"]: [_face(0.9, "yes", (0.49, 0.50))],
+        paths["half"]: [_face(0.9, "yes", (0.20, 0.21))],
+    }
+
+    ranked = {candidate.path: candidate for candidate in rank_burst_candidates(group, faces)}
+
+    assert ranked[paths["normal"]].evidence["eye_aperture_relative"] == pytest.approx(0.26 / 0.49)
+    assert ranked[paths["normal"]].evidence["flags"] == []
+    assert ranked[paths["half"]].evidence["flags"] == ["eyes_closed"]
+
+
+def test_blink_check_never_compares_two_different_people(tmp_path: Path):
+    # Two cosplayers side by side; the bigger face swaps between frames. The
+    # narrow-eyed person on the right must be compared with their own eyes,
+    # not with the wide-eyed person on the left.
+    left, right = (0.10, 0.30, 0.20, 0.25), (0.60, 0.30, 0.20, 0.25)
+    group, paths = _burst(tmp_path, ["left_big", "right_big"])
+    faces = {
+        paths["left_big"]: [
+            _face(1.0, "yes", (0.44, 0.45), coverage=0.06, bbox=left),
+            _face(0.9, "yes", (0.22, 0.23), coverage=0.05, bbox=right),
+        ],
+        paths["right_big"]: [
+            _face(0.9, "yes", (0.44, 0.46), coverage=0.05, bbox=left),
+            _face(1.0, "yes", (0.21, 0.21), coverage=0.06, bbox=right),
+        ],
+    }
+
+    ranked = rank_burst_candidates(group, faces)
+
+    assert all(candidate.evidence["flags"] == [] for candidate in ranked)
+    right_big = next(candidate for candidate in ranked if candidate.path == paths["right_big"])
+    assert right_big.evidence["eye_aperture"] == pytest.approx(0.21)
+    assert right_big.evidence["eye_aperture_burst_max"] == pytest.approx(0.22)
+
+
+def test_second_subjects_half_blink_is_judged_against_their_own_eyes(tmp_path: Path):
+    left, right = (0.10, 0.30, 0.20, 0.25), (0.60, 0.30, 0.20, 0.25)
+    group, paths = _burst(tmp_path, ["a", "b", "c"])
+    faces = {
+        paths["a"]: [_face(1.0, bbox=left, coverage=0.06), _face(0.9, "yes", (0.38, 0.40), bbox=right, coverage=0.05)],
+        paths["b"]: [_face(1.0, bbox=left, coverage=0.06), _face(0.9, "yes", (0.18, 0.19), bbox=right, coverage=0.05)],
+        paths["c"]: [_face(1.0, bbox=left, coverage=0.06), _face(0.9, "yes", (0.39, 0.40), bbox=right, coverage=0.05)],
+    }
+
+    ranked = {candidate.path: candidate for candidate in rank_burst_candidates(group, faces)}
+
+    assert ranked[paths["b"]].evidence["flags"] == ["eyes_closed"]
+    assert ranked[paths["b"]].evidence["subject_eye_aperture_relative"][1] == pytest.approx(0.18 / 0.39)
+    assert ranked[paths["a"]].evidence["flags"] == []
+    assert ranked[paths["b"]].rank == 3
 
 
 def test_background_persons_closed_eyes_do_not_flag_the_frame(tmp_path: Path):
