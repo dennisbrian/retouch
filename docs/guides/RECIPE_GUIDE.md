@@ -198,6 +198,7 @@ These keys are defined inside nested dictionary blocks inside a recipe.
 | `skin` | `micro_db` | 0 to 100 | `0` | `micro_dodge_burn` |
 | `skin` | `mole_protect` | 0.0 to 1.0 | `0.0` | `mole_protect` |
 | `skin` | `nose_restore` | 0 to 100 | `0` | `nose_restore` |
+| `skin` | `nose_shape` | 0.0 to 1.0 | `0` | `nose_shape` |
 | `skin` | `porcelain` | 0.0 to 1.0 | `rosy` | `whiten_tone` |
 | `skin` | `quantize` | 0 to 100 | `0` | `skin_quantize` |
 | `skin` | `redness_even` | 0 to 100 | `0` | `redness_even` |
@@ -512,6 +513,7 @@ and 0–360 for split-toning hue).
 | Neural Stray Hair Boost | `neural.stray_hair_boost` | ÷ 100 |
 | Nose Blush | `nose_blush` | direct |
 | Nose Restore | `skin.nose_restore` | ÷ 100 |
+| Keep Nose Shape | `skin.nose_shape` | ÷ 100 |
 | Nose Smooth | `frequency.nose_smooth` | direct |
 | Pore Synthesis | `texture.pore_synthesis` | ÷ 100 |
 | Redness Even | `skin.redness_even` | ÷ 100 |

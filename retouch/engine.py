@@ -363,6 +363,7 @@ class ProcessingContext:
     body_shadow_lift: float = 0.0
     shadow_lift: float = 0.0
     nose_restore: float = 0.0
+    nose_shape: float = 0.0
     skin_sss: float = 0.0
     freckle_removal: float = 0.0
     heal_engine: str = "telea"
@@ -1640,6 +1641,7 @@ class RetouchEngine:
         body_shadow_lift: Optional[float] = None,
         shadow_lift: Optional[float] = None,
         nose_restore: Optional[float] = None,
+        nose_shape: Optional[float] = None,
         skin_sss: Optional[float] = None,
         regional_modulation: Optional[float] = None,
         smooth_engine: Optional[str] = None,
@@ -1956,6 +1958,7 @@ class RetouchEngine:
             "body_shadow_lift": body_shadow_lift,
             "shadow_lift": shadow_lift,
             "nose_restore": nose_restore,
+            "nose_shape": nose_shape,
             "skin_sss": skin_sss,
             "lut": lut,
             "skin_locus": skin_locus,

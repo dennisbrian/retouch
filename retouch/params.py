@@ -710,6 +710,18 @@ _SKIN_PARAMS = [
         max_val=100,
     ),
     ParamSpec(
+        # Keep the nose's broad shading through skin smoothing
+        # (retouch/nose_shape.py). Opt-in: 0 = off, so recipes render as before.
+        name="nose_shape",
+        cli_flag="nose-shape",
+        cli_type=int,
+        default=0,
+        recipe_key="skin.nose_shape",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
         name="skin_sss",
         cli_flag="skin-sss",
         cli_type=float,
