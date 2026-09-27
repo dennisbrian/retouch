@@ -4164,6 +4164,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 auto_exposure = gr.Checkbox(label="Auto Exposure Correction", value=False, info="Automatically correct under/over-exposed images before processing")
                                 white_costume_lift = gr.Checkbox(label="White Costume Lift", value=False, info="Selectively boost bright clothing to create separation")
                                 face_exposure = gr.Slider(0, 100, 0, step=1, label="Face Exposure Lift", info="Brighten/darken the exposed face relative to the body (skin.face_exposure) · 0 = off")
+                                face_polish = gr.Slider(0, 100, 0, step=1, label="Face Polish", info="Porcelain finish in one control: tones oily hot spots to a satin sheen, lifts under-eye and smile-line shadows, brightens the face a little, adds soft nose and cheekbone highlights and crisper irises · 0 = off")
 
                             with gr.Accordion("🦵 Body Skin", open=False):
                                 reset_body_skin_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
@@ -5594,6 +5595,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "skin_unify_hue": skin_unify_hue,
         "skin_hue_unify": _skin_hue_unify_state,
         "skin_chroma_even": _skin_chroma_even_state,
+        "face_polish": face_polish,
         "skin_glow": skin_glow,
         "mask_feather_mode": mask_feather_mode,
         "eye_enhance": eye_enhance,

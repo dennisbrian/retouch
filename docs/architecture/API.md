@@ -94,6 +94,7 @@ def process(
     body_dodge_burn: Optional[float] = None,
     shadow_lift: Optional[float] = None,
     face_exposure: Optional[float] = None,
+    face_polish: Optional[int] = None,
     body_shadow_lift: Optional[float] = None,
     nose_restore: Optional[float] = None,
     specular_bloom: Optional[int] = None,
@@ -437,6 +438,7 @@ Passing an explicit value override to these parameters takes precedence over the
 
 *   **`shadow_lift`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.shadow_lift`): Adjusts the shadow lift parameter.
 *   **`face_exposure`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.face_exposure`): Adjusts the face exposure parameter.
+*   **`face_polish`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.face_polish`): Porcelain finish in one control. Raises the floor of `shine_removal`, `shadow_lift` and `face_exposure` together; a stronger value you set for any of those still wins. Off by default.
 *   **`contrast`** (Type: `int`, Default: `0.0`, Range: `-50` to `50`, Recipe key: `contrast`): Adjusts the contrast parameter.
 *   **`brightness`** (Type: `int`, Default: `None`, Range: `-50` to `50`, Recipe key: `brightness`): Adjusts the brightness parameter.
 *   **`highlights`** (Type: `int`, Default: `None`, Range: `-100` to `100`, Recipe key: `highlights`): Adjusts the highlights parameter.

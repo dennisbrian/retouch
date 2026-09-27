@@ -73,6 +73,17 @@ _WIG_MAX_FACE_MULTIPLE = 5.0
 _FULL_HAIR_WORK_DIM = 2048
 
 
+# Segmenter confidences below/above these count as absent/present (a few
+# percent of every class leaks everywhere; true regions sit near 0.9).
+_MC_RAMP_LO, _MC_RAMP_HI = 0.2, 0.6
+
+
+def _confidence_ramp(p: np.ndarray) -> np.ndarray:
+    """Smoothstep a soft class confidence to a 0-1 presence map."""
+    t = np.clip((p.astype(np.float32) - _MC_RAMP_LO) / (_MC_RAMP_HI - _MC_RAMP_LO), 0.0, 1.0)
+    return (t * t * (3.0 - 2.0 * t)).astype(np.float32)
+
+
 def _smooth_hist3(h: np.ndarray) -> np.ndarray:
     """[1, 2, 1] / 4 smoothing along each axis of a 3-D histogram (wrapping)."""
     for ax in range(3):
@@ -1162,18 +1173,15 @@ class FaceParser:
             skin = np.clip(skin - exclusion, 0, 1)
 
         have_classes = class_probs is not None and class_probs.shape[:2] == (h_img, w_img)
+        pm = None
         if person_mask is not None:
             pm = normalize_mask(person_mask)
             from .utils import squeeze_mask
             pm = squeeze_mask(pm)
-            skin_gate = pm
-            if have_classes:
-                # The person segmenter loses heads under pale wigs against
-                # bright windows (the same failure the detection person gate
-                # works around), which zeroed all face skin. The multiclass
-                # face-skin class sees the face itself, so let it vouch.
-                skin_gate = np.maximum(pm, class_probs[:, :, _MC_FACE_SKIN])
-            skin *= skin_gate
+            if not have_classes:
+                skin *= pm
+            # With classes, _refine_fallback_with_classes applies the person
+            # gate together with the segmenter's own face-skin vote.
         regions.skin = skin
         regions.neck = np.zeros((h_img, w_img), dtype=np.float32)
         if person_mask is not None:
@@ -1182,7 +1190,7 @@ class FaceParser:
             regions.hair = np.zeros((h_img, w_img), dtype=np.float32)
 
         if have_classes:
-            self._refine_fallback_with_classes(regions, class_probs, img_bgr, feather)
+            self._refine_fallback_with_classes(regions, class_probs, img_bgr, feather, person_mask=pm)
 
         self._add_landmark_subregions(regions, landmarks, h_img, w_img, ied, feather)
         return regions
@@ -1222,8 +1230,14 @@ class FaceParser:
         class_probs: np.ndarray,
         img_bgr: np.ndarray,
         feather: int,
+        person_mask: Optional[np.ndarray] = None,
     ) -> None:
-        """Replace landmark hair/neck with segmenter output and cut bangs out of skin."""
+        """Replace landmark hair/neck with segmenter output and cut bangs out of skin.
+
+        ``person_mask`` (already normalised) gates skin together with the
+        segmenter's face-skin class, which vouches for heads the person
+        segmenter loses under pale wigs against bright windows.
+        """
         h, w = class_probs.shape[:2]
         body_p = class_probs[:, :, _MC_BODY_SKIN]
         ext = self._face_oval_extent(regions.face_oval)
@@ -1250,20 +1264,54 @@ class FaceParser:
 
         # Skin: remove what the segmenter says is hair (bangs, fringe),
         # clothes (masks, high collars) or accessories (glasses, headdress)
-        # inside the landmark face oval, unless that would gut the skin.
+        # inside the landmark face oval, and gate by person / face-skin
+        # presence. The segmenter's confidences are soft (a few percent of
+        # every class leaks everywhere), so multiplying them in raw capped
+        # confident skin at ~0.87-0.95; ramp them to hard 0/1 instead.
         skin = regions.skin
-        occluder = np.clip(
-            hair_p + class_probs[:, :, _MC_CLOTHES] + class_probs[:, :, _MC_OTHERS], 0.0, 1.0
+        if person_mask is not None:
+            gate = _confidence_ramp(np.maximum(person_mask, class_probs[:, :, _MC_FACE_SKIN]))
+        else:
+            gate = np.ones((h, w), dtype=np.float32)
+        hair_cut = _confidence_ramp(hair_p)
+        other_cut = _confidence_ramp(
+            np.clip(class_probs[:, :, _MC_CLOTHES] + class_probs[:, :, _MC_OTHERS], 0.0, 1.0)
         )
-        refined = np.clip(skin * (1.0 - occluder), 0.0, 1.0)
-        before = float(skin.sum())
-        if before > 0 and float(refined.sum()) >= (1.0 - _MC_MAX_SKIN_LOSS) * before:
-            regions.skin = refined.astype(np.float32)
-        elif before > 0:
+        occluder = np.maximum(hair_cut, other_cut)
+
+        # Guard: when the segmenter calls much of the face clothes or an
+        # accessory (face paint, heavy makeup, a mask) or calls the lower face
+        # hair, it is disagreeing with the landmarks; keep the landmark skin.
+        # Hair above the eye line is bangs, which may legitimately cover most
+        # of a forehead, so it does not count towards the guard (it used to,
+        # and full bangs then threw the whole refinement away).
+        base = skin * gate
+        eye_row = self._eye_line_row(regions, h)
+        lower = np.zeros((h, 1), dtype=np.float32)
+        lower[eye_row:] = 1.0
+        guard_cut = np.maximum(other_cut, hair_cut * lower)
+        before = float(base.sum())
+        loss = float((base * guard_cut).sum()) / before if before > 0 else 0.0
+        if loss <= _MC_MAX_SKIN_LOSS:
+            factor = gate * (1.0 - occluder)
+        else:
             logger.info(
-                "Multiclass segmenter would remove %.0f%% of landmark skin; keeping landmark skin",
-                100.0 * (1.0 - float(refined.sum()) / before),
+                "Multiclass segmenter would remove %.0f%% of landmark skin below the "
+                "eye line; keeping landmark skin",
+                100.0 * loss,
             )
+            factor = gate
+
+        # The segmenter runs at 256 px, so its edges are blocky and loose;
+        # snap them to the photo's own edges (the landmark geometry and the
+        # eye/brow/lip holes stay as they are).
+        try:
+            import cv2.ximgproc as xp
+            factor = xp.guidedFilter(guide, factor.astype(np.float32), radius=r, eps=1e-3)
+        except (ImportError, AttributeError, cv2.error):
+            from .utils import guided_filter
+            factor = guided_filter(factor.astype(np.float32), radius=r, eps=1e-3, guide=guide)
+        regions.skin = np.clip(skin * np.clip(factor, 0.0, 1.0), 0.0, 1.0).astype(np.float32)
 
         # Neck: body-skin in a band under the jaw, no wider than the face
         # (keeps chest, shoulders and hands out, like BiSeNet's neck label).
@@ -1287,6 +1335,20 @@ class FaceParser:
                 keep = feather_mask(keep.astype(np.float32), radius=max(int(0.03 * fw), 2))
                 neck = neck * np.clip(keep, 0.0, 1.0)
             regions.neck = np.clip(neck, 0.0, 1.0).astype(np.float32)
+
+    @staticmethod
+    def _eye_line_row(regions: "FaceRegions", h: int) -> int:
+        """Row of the eye centres (the face oval's middle if eyes are empty)."""
+        rows = []
+        for eye in (regions.left_eye, regions.right_eye):
+            if eye is not None:
+                ys = np.nonzero(eye > 0.5)[0]
+                if ys.size:
+                    rows.append(float(ys.mean()))
+        if rows:
+            return int(np.clip(round(float(np.mean(rows))), 0, h))
+        ys = np.nonzero(regions.face_oval > 0.5)[0] if regions.face_oval is not None else np.array([])
+        return int((ys.min() + ys.max()) // 2) if ys.size else h // 2
 
     def _add_landmark_subregions(
         self,
