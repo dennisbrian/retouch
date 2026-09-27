@@ -29,7 +29,7 @@ def test_photometric_detectors_use_geometry_reference(monkeypatch):
     monkeypatch.setattr(
         qa_detectors,
         "detect_color_drift",
-        lambda _img, _mask, reference: capture("color_drift", reference),
+        lambda _img, _mask, reference, face_mask=None: capture("color_drift", reference),
     )
     monkeypatch.setattr(
         qa_detectors,
