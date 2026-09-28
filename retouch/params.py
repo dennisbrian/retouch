@@ -722,6 +722,18 @@ _SKIN_PARAMS = [
         max_val=100,
     ),
     ParamSpec(
+        # Soft highlight down the nose bridge (retouch/nose_highlight.py).
+        # Opt-in: 0 = off, so recipes render as before.
+        name="nose_highlight",
+        cli_flag="nose-highlight",
+        cli_type=int,
+        default=0,
+        recipe_key="skin.nose_highlight",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
         name="skin_sss",
         cli_flag="skin-sss",
         cli_type=float,

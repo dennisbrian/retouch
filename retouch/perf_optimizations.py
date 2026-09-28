@@ -1430,6 +1430,20 @@ def _process_face_core(
         canvas = _tr('dodge_burn', canvas)
         canvas = skin.dodge_burn(canvas, regions, ctx.dodge_burn)
 
+    # ---- Nose bridge highlight (opt-in) ----
+    # A soft highlight stripe down the bridge, drawn from the landmarks
+    # (dodge_burn's regions.nose_bridge is a near-empty sliver). Runs after
+    # whitening, relight, sculpt and makeup so they don't flatten it. See
+    # retouch/nose_highlight.py.
+    _nose_highlight = float(getattr(ctx, 'nose_highlight', 0) or 0)
+    if _nose_highlight > 0 and shifted_face.landmarks is not None:
+        canvas = _tr('nose_highlight', canvas)
+        from .nose_highlight import add_nose_highlight
+        canvas = add_nose_highlight(
+            canvas, shifted_face.landmarks, _nose_highlight,
+            ied=shifted_face.ied, skin_mask=skin_n,
+        )
+
     # ---- Shadow lift (opt-in targeted fill-light, see shadow_lift.py) ----
     # Real photographic shade (e.g. a jaw shadow next to a bright prop, or
     # hair passing in front of a dark background) is not a retouch defect,

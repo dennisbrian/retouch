@@ -365,6 +365,7 @@ class ProcessingContext:
     nose_restore: float = 0.0
     nose_shape: float = 0.0
     powder_finish: float = 0.0
+    nose_highlight: float = 0.0
     skin_sss: float = 0.0
     freckle_removal: float = 0.0
     heal_engine: str = "telea"
@@ -1644,6 +1645,7 @@ class RetouchEngine:
         nose_restore: Optional[float] = None,
         nose_shape: Optional[float] = None,
         powder_finish: Optional[float] = None,
+        nose_highlight: Optional[float] = None,
         skin_sss: Optional[float] = None,
         regional_modulation: Optional[float] = None,
         smooth_engine: Optional[str] = None,
@@ -1962,6 +1964,7 @@ class RetouchEngine:
             "nose_restore": nose_restore,
             "nose_shape": nose_shape,
             "powder_finish": powder_finish,
+            "nose_highlight": nose_highlight,
             "skin_sss": skin_sss,
             "lut": lut,
             "skin_locus": skin_locus,
