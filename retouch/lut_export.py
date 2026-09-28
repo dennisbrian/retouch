@@ -10,10 +10,9 @@ Everything that looks at neighbouring pixels or at a mask is left out,
 because a LUT cannot express it: face and skin retouching, reshaping,
 background and subject work, clarity, glow/bloom/haze, vignette, grain,
 halation, chromatic aberration, sharpening and the impact finish. Steps the
-engine only applies inside the skin mask (recipe-level three-way split
-toning, fade toe, skin glow, multi-illuminant skin adaptation) are left out
-too, so the LUT reproduces exactly what the recipe does to a pixel outside
-the face and skin. Reference-image colour transfer depends on the photo's
+engine only applies inside the skin mask (skin glow, multi-illuminant skin
+adaptation) are left out too, so the LUT reproduces exactly what the recipe
+does to a pixel outside the face and skin. Reference-image colour transfer depends on the photo's
 own statistics and is skipped as well.
 
 The LUT is built by running the engine's own global and grade stages on an

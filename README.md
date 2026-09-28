@@ -463,7 +463,7 @@ colour and tone steps and nothing else:
   background and subject work, and anything that looks at neighbouring
   pixels: clarity, glow and bloom, haze, vignette, grain, halation,
   chromatic aberration, sharpening and the impact finish. Steps the recipe
-  applies only on skin (three-way split toning, fade toe, skin glow) are left
+  applies only on skin (skin glow) are left
   out too, so the LUT matches what the recipe does to everything outside the
   face. The command lists which of these a recipe uses.
 
