@@ -53,13 +53,20 @@ _HUE_RAMP = 20.0
 _NEUTRAL_OFF, _NEUTRAL_ON = 0.05, 0.08
 
 
+def _clip01(x: np.ndarray) -> np.ndarray:
+    """In-place clip to [0, 1]; np.clip is several times slower at 26 MP."""
+    np.maximum(x, 0.0, out=x)
+    np.minimum(x, 1.0, out=x)
+    return x
+
+
 def _norm(mask: np.ndarray) -> np.ndarray:
-    m = mask.astype(np.float32)
+    m = mask.astype(np.float32)  # always a copy, so clipping in place is safe
     if m.ndim == 3:
-        m = m[..., 0]
+        m = np.ascontiguousarray(m[..., 0])
     if m.size and float(m.max()) > 1.5:
-        m = m / 255.0
-    return np.clip(m, 0.0, 1.0)
+        m *= 1.0 / 255.0
+    return _clip01(m)
 
 
 def _paint_gate(hue_deg: float, chroma: float, light: float) -> float:
@@ -114,7 +121,7 @@ def skin_warmth(
         return img
 
     is_u8 = img.dtype == np.uint8
-    f = img.astype(np.float32) / 255.0 if is_u8 else np.clip(img.astype(np.float32), 0.0, 1.0)
+    f = img.astype(np.float32) * (1.0 / 255.0) if is_u8 else _clip01(img.astype(np.float32))
     lab = cv2.cvtColor(f, cv2.COLOR_BGR2Lab)  # true CIELab: L 0-100, a/b ~±127
     A, B = lab[..., 1], lab[..., 2]
 
@@ -155,8 +162,9 @@ def skin_warmth(
         spread = float(np.hypot(np.percentile(a_s, 84) - np.percentile(a_s, 16),
                                 np.percentile(b_s, 84) - np.percentile(b_s, 16))) / 2.0
         sigma = max(2.5, 1.5 * spread)
-        dist2 = (A - a0) ** 2 + (B - b0) ** 2
-        key = np.exp(-dist2 / (2.0 * sigma * sigma)).astype(np.float32)
+        key = cv2.magnitude(A - a0, B - b0)
+        key *= key * np.float32(-1.0 / (2.0 * sigma * sigma))
+        cv2.exp(key, key)
         # Stay near this person: inside the person mask when there is one,
         # else within a few face-widths of the face.
         if pm is not None:
@@ -171,10 +179,11 @@ def skin_warmth(
         # Own face skin via the feathered mask; other pixels via the key.
         kd = max(3, face_w // 8) | 1
         own = m * cv2.dilate(sel.astype(np.uint8), np.ones((kd, kd), np.uint8)).astype(np.float32)
-        w_i = np.maximum(own, key * reach)
-        w_i *= gate
-        da += w_i * sa
-        db += w_i * sb
+        key *= reach
+        w_i = np.maximum(own, key, out=key)
+        w_i *= np.float32(gate)
+        cv2.scaleAdd(w_i, float(sa), da, dst=da)
+        cv2.scaleAdd(w_i, float(sb), db, dst=db)
         weight_sum += w_i
 
     if not weight_sum.any():
@@ -186,10 +195,12 @@ def skin_warmth(
         da[over] /= weight_sum[over]
         db[over] /= weight_sum[over]
 
-    pull = MAX_PULL * min(s, 1.0)
-    lab[..., 1] = A + da * pull
-    lab[..., 2] = B + db * pull
-    out = np.clip(cv2.cvtColor(lab, cv2.COLOR_Lab2BGR), 0.0, 1.0)
+    pull = np.float32(MAX_PULL * min(s, 1.0))
+    da *= pull
+    db *= pull
+    lab[..., 1] += da
+    lab[..., 2] += db
+    out = _clip01(cv2.cvtColor(lab, cv2.COLOR_Lab2BGR))
     if is_u8:
-        return np.clip(out * 255.0 + 0.5, 0, 255).astype(np.uint8)
-    return out.astype(np.float32)
+        return cv2.convertScaleAbs(out, alpha=255.0)
+    return out
