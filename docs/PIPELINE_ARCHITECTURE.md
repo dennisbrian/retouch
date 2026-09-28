@@ -1,5 +1,10 @@
 # Retouch Engine Pipeline Architecture / 引擎管线架构
 
+> **Canonical pipeline doc:** [docs/architecture/ARCHITECTURE.md](architecture/ARCHITECTURE.md)
+> (module map) + [docs/architecture/PIPELINE_FLOW.md](architecture/PIPELINE_FLOW.md)
+> (stage flow). This file is the bilingual walkthrough only — do not restate
+> stage structure here.
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                      RETOUCH ENGINE PIPELINE                     │

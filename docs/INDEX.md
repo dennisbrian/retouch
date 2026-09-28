@@ -11,6 +11,8 @@ output verification.
 ## Root Level (Keep Short)
 - `README.md` — Installation & quick start
 - `CLAUDE.md` — Development guidelines & architecture
+- `docs/REPO_STATS.md` — Generated repo size truth (modules, tests, LOC); refreshed by `scripts/dev/governance --write-stats`
+- `docs/GOVERNANCE.md` — Repository governance policy + tooling
 
 ## Guides (`docs/guides/`)
 - `GETTING_STARTED.md` — Desktop one-photo workflow, CLI basics, and result checks
@@ -197,6 +199,13 @@ output verification.
 - `REVIEW_EYE_VISIBILITY_GATE_2026_08_26.md` — 15-agent review of the eye-occlusion gate + BiSeNet CPU pin; found P0 sclera no-op / P1 handedness swap (both now fixed), 78% corpus over-gating by mask-area signals (gate rewritten to EAR+contrast), vacuous tests (replaced with mutation-tested suite)
 - `TEST_REPORT_*.md` — Test results
 - `session/` — Session progress logs
+- `archive/` — Historical snapshots (e.g. `MASTER_PLAN_2026-07-02.md`)
+- `HOUSEKEEPING_AUDIT_2026_09_17.md` — Repo housekeeping audit
+- `MONTHLY_CHANGELOG_2026_09.md` — September feature/fix changelog
+- `DOCUMENTATION_AUDIT_2026-07-15.md` — Documentation link/staleness audit
+
+## Update (`docs/update/`)
+- `IMPROVEMENTS.md` — Running improvement notes
 
 ## Improvements (`docs/improvements/`)
 - Feature enhancement proposals
