@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Show the merge queue in risk order, or validate main after a merge:
+#   scripts/dev/merge-queue            queue view
+#   scripts/dev/merge-queue post     post-merge smoke validation (main)
+set -euo pipefail
+cd "$(dirname "$0")/../.."
+if [[ "${1:-}" == "post" ]]; then
+    shift
+    exec python3 scripts/dev/pr_governor.py post-merge "$@"
+fi
+exec python3 scripts/dev/pr_governor.py queue "$@"
