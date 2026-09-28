@@ -27,3 +27,4 @@ cc.json
 *_out/
 
 control-plane/attention.json
+control-plane/maintenance.json
