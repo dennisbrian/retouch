@@ -83,7 +83,7 @@ Fixes #142
 
 2. **Run full test suite:**
    ```bash
-   python3 -m pytest tests/ -q
+   .venv/bin/python -m pytest tests/ -q
    ```
 
 3. **Add tests for new features:**
@@ -94,7 +94,7 @@ Fixes #142
 
 4. **Check coverage (optional but recommended):**
    ```bash
-   python3 -m pytest tests/ --cov=retouch --cov-report=term
+   .venv/bin/python -m pytest tests/ --cov=retouch --cov-report=term
    ```
 
 5. **Push to your branch:**
@@ -199,7 +199,7 @@ python3 -c "import retouch; print('OK')"
 ### ⚠️ Dead Recipe Keys
 If you add a new recipe, verify all keys map to registered parameters:
 ```bash
-python3 -m pytest tests/test_recipe_validation.py -v
+.venv/bin/python -m pytest tests/test_recipe_validation.py -v
 ```
 
 This catches silent no-op keys (like `anime_crystal_void`'s 7 dead keys).

@@ -49,6 +49,28 @@ output verification.
 - [Proposed cosplay tutorial transfer study — 2026-09-24](plans/PLAN_COSPLAY_TUTORIAL_TRANSFER_STUDY_2026_09_24.md)
   — Documentation-only photo-pair protocol, separated edit intents, preservation
   review sheet, and decision gates; no photos processed
+- [Cosplay tutorial current-code crosswalk — 2026-09-25](plans/RESEARCH_COSPLAY_TUTORIAL_CURRENT_CODE_CROSSWALK_2026_09_25.md)
+  — Read-only map of tutorial observations to the inspected Retouch branch,
+  recipe and mark-policy boundaries, and remaining study evidence; no renders
+  or photo comparisons performed
+- [Cosplay tutorial compositing review — 2026-09-25](plans/RESEARCH_COSPLAY_TUTORIAL_COMPOSITING_2026_09_25.md)
+  — Masks, depth, occlusion, reflected light, and the boundary between existing
+  background polish and full asset compositing; no photo experiment run
+- [Cosplay tutorial Google Drive Photography inventory — 2026-09-25](plans/RESEARCH_COSPLAY_TUTORIAL_DRIVE_PHOTO_INVENTORY_2026_09_25.md)
+  — Candidate matched folders and filename overlap; no image-level review
+- [QA flag calibration — 2026-09-25](plans/RESEARCH_QA_FLAG_CALIBRATION_2026_09_25.md)
+  — Differential (vs input photo) recalibration of the batch-review QA
+  detectors: banding / plastic_skin / seam / asymmetry no longer flag 100% of
+  clean renders; color_drift tail gate p99>10° → p95>20°
+- [Person-gate false-negative on bright wigs — 2026-09-25](plans/RESEARCH_PERSON_GATE_WIG_FALSENEG_2026_09_25.md)
+  — Status report (not fixed here) on the person-mask coverage gate dropping
+  real faces under near-white wigs; led to the face-skin rescue second opinion
+- [Over-smoothing check, patch-scale QA — 2026-09-27](plans/RESEARCH_OVER_SMOOTHING_CHECK_2026_09_27.md)
+  — plastic_skin and color_drift now also scan cheek-sized windows per face so
+  one waxy cheek or a partial-face cast is caught; 0 new flags on clean renders
+- [Closed-eye flag on glasses, darker skin, bursts — 2026-09-27](plans/RESEARCH_CLOSED_EYE_CHECK_2026_09_27.md)
+  — Misfire-free calibration of the closed-eye flag and burst blink check,
+  plus the two burst misfires fixed in `shoot_intelligence.rank_burst_candidates`
 - [Retouch target identity and preview/export agreement — 2026-09-23](plans/RESEARCH_RETOUCH_TARGET_AND_PREVIEW_PARITY_2026_09_23.md)
   — Cache coordinate audit and follow-up fixes for preview inspection, per-face
   target association, and explicit manual rebase; full photo qualification pending

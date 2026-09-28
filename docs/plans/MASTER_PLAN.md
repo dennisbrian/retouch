@@ -4,7 +4,7 @@
 
 **This document is the single source of truth for execution ORDER and STATUS.** Long verification
 narratives, bug-found receipts, agent-integrity notes, and measured numbers now live in
-[`docs/EXECUTION_LOG.md`](docs/EXECUTION_LOG.md), organized by phase → stage ID. Each status cell
+[`docs/EXECUTION_LOG.md`](../EXECUTION_LOG.md), organized by phase → stage ID. Each status cell
 below is a one-line receipt pointing there. Detail on *design* lives in the tier docs; when order
 here conflicts with a tier doc, this doc wins. Supersedes the master sequence in
 `PLAN_TIERP_PERF_ARCH_SHIP.md` and resolves the placement decisions flagged in `PLAN_SKIN_PRO.md` /

@@ -3,7 +3,7 @@
 **Project:** Professional automated face retouching pipeline  
 **Repository:** https://github.com/dennisbrian/retouch  
 **Status:** Mature (v2.0.0 — Fuji-quality color recipe system)  
-**Last Updated:** 2026-09-24
+**Last Updated:** 2026-09-28
 
 ---
 
@@ -29,7 +29,7 @@ This is a **production-grade image processing engine** that applies professional
 - Color grading + Fuji film simulation presets
 - Virtual studio relighting + advanced lens effects
 
-**~71k LOC (retouch/*.py + gui.py/gui_advanced.py/gui_shoot.py/gui_batch.py + cli.py), 119 modules in retouch/, 4,555 tests collected (pytest --collect-only, 2026-08-26).**
+**~98k LOC (retouch/*.py + gui.py/gui_advanced.py/gui_shoot.py/gui_batch.py + cli.py), 140 modules in retouch/, 6,518 tests collected (`.venv/bin/python -m pytest tests/ --collect-only -q`, 2026-09-28).**
 
 ---
 
@@ -50,7 +50,7 @@ Task difficulty decides the model, not a flat cheapest-first cascade:
 ### Key Commands
 ```bash
 # Run full test suite
-python3 -m pytest tests/ -q
+.venv/bin/python -m pytest tests/ -q
 
 # Test syntax
 for f in retouch/*.py gui.py cli.py; do python3 -m py_compile "$f"; done
@@ -130,7 +130,7 @@ runs complete in roughly 27–325 s depending on recipe and face workload. The
 ## Testing & Quality
 
 ### Test Coverage
-- **4,555 tests collected** (`pytest --collect-only`, 2026-08-26) — full-suite pass/fail baseline not re-run at this count
+- **6,518 tests collected** (`pytest --collect-only`, 2026-09-28) — full-suite pass/fail baseline not re-run at this count
 - **89% coverage** on core modules (per `pytest --cov`; last measured 2026-07-01)
 - **Unit + integration tests** for every public API
 - **Deep algorithmic verification** (monotonicity checks, round-trip stability, etc.)
