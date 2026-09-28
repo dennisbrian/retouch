@@ -365,6 +365,7 @@ class ProcessingContext:
     nose_restore: float = 0.0
     nose_shape: float = 0.0
     powder_finish: float = 0.0
+    skin_warmth: float = 0.0
     nose_highlight: float = 0.0
     skin_sss: float = 0.0
     freckle_removal: float = 0.0
@@ -1645,6 +1646,7 @@ class RetouchEngine:
         nose_restore: Optional[float] = None,
         nose_shape: Optional[float] = None,
         powder_finish: Optional[float] = None,
+        skin_warmth: Optional[float] = None,
         nose_highlight: Optional[float] = None,
         skin_sss: Optional[float] = None,
         regional_modulation: Optional[float] = None,
@@ -1964,6 +1966,7 @@ class RetouchEngine:
             "nose_restore": nose_restore,
             "nose_shape": nose_shape,
             "powder_finish": powder_finish,
+            "skin_warmth": skin_warmth,
             "nose_highlight": nose_highlight,
             "skin_sss": skin_sss,
             "lut": lut,
@@ -5434,6 +5437,14 @@ class RetouchEngine:
                 result = self._grader._F_split_tone_three_way(result, tones, mask=None)
             else:
                 result = self._grader._split_tone_three_way(result, tones, mask=None)
+
+        # Skin Warmth (opt-in): after every colour step that moves skin, so it
+        # sets where the skin ends up. Keyed on each face's own skin colour;
+        # face paint and already-peach skin are left alone.
+        # See retouch/skin_warmth.py.
+        if getattr(ctx, "skin_warmth", 0) > 0 and acc_skin is not None:
+            from .skin_warmth import skin_warmth
+            result = skin_warmth(result, acc_skin, ctx.skin_warmth, person_mask=person_mask)
 
         if ctx.highlight_rolloff_strength > 0:
             # F1/E2: apply_highlight_rolloff now dtype-aware (float32 [0,255] path)
