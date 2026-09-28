@@ -1,0 +1,62 @@
+{
+  "identity_ssim": {
+    "warn": 0.995,
+    "regress": 0.985,
+    "direction": "low"
+  },
+  "identity_deltaE_mean": {
+    "warn": 0.8,
+    "regress": 2.0,
+    "direction": "high"
+  },
+  "luminance_drift": {
+    "warn": 6.0,
+    "regress": 12.0,
+    "direction": "high"
+  },
+  "chroma_drift": {
+    "warn": 5.0,
+    "regress": 10.0,
+    "direction": "high"
+  },
+  "highlight_clip_delta": {
+    "warn": 1.5,
+    "regress": 3.0,
+    "direction": "high"
+  },
+  "shadow_clip_delta": {
+    "warn": 1.5,
+    "regress": 3.0,
+    "direction": "high"
+  },
+  "region_texture_retention": {
+    "warn": 0.75,
+    "regress": 0.55,
+    "direction": "low"
+  },
+  "region_luminance_drift": {
+    "warn": 8.0,
+    "regress": 15.0,
+    "direction": "high"
+  },
+  "region_chroma_drift": {
+    "warn": 6.0,
+    "regress": 12.0,
+    "direction": "high"
+  },
+  "edge_preservation": {
+    "warn": 0.8,
+    "regress": 0.65,
+    "direction": "low"
+  },
+  "perf_time_ratio": {
+    "warn": 1.25,
+    "regress": 1.75,
+    "direction": "high"
+  },
+  "perf_ram_ratio": {
+    "warn": 1.25,
+    "regress": 2.0,
+    "direction": "high"
+  }
+}
