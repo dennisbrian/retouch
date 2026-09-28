@@ -164,6 +164,17 @@ you set for shine removal, shadow lift or face exposure still wins. Start
 around 50. It leaves highlights wider than about a twentieth of the face alone
 (they read as lit form, not shine) and does not add blush or reshape anything.
 
+Powder Finish (`--powder-finish 0-100` in the CLI, the "Powder Finish" slider
+next to Face Polish in the app, or `skin.powder_finish` in a recipe, where
+0.5 = 50) gives skin a soft, powdered look: shine and sheen settle into the
+skin's own colour instead of turning grey, and it works on white face paint,
+where the shine keeps the paint's colour and Face Polish barely touches it.
+Broad lit areas and the face's overall brightness are kept; only the local
+peak of each highlight and the brightest fine sparkle go. It is off by
+default; start near 50 (100 can look flat). It pairs with Face Polish rather
+than replacing it. Note that the older Skin Finish "powder" and "matte" modes
+subtract grey and can darken lit cheeks on pale skin or face paint.
+
 Keep Nose Shape (`--nose-shape 0-100` in the CLI, the "Keep Nose Shape" slider
 under Skin Tone in the app, or `skin.nose_shape` in a recipe, where 0.5 = 50)
 puts back the broad nose shading that skin smoothing flattens, so the nose

@@ -118,10 +118,11 @@ EXPECTED_RECIPE_KEYS.append("lens_glare")
 EXPECTED_RECIPE_KEYS.append("red_eye")
 EXPECTED_RECIPE_KEYS.append("spot_heal")
 EXPECTED_RECIPE_KEYS.append("face_polish")
+EXPECTED_RECIPE_KEYS.append("powder_finish")
 EXPECTED_RECIPE_KEYS.append("nose_shape")
 EXPECTED_RECIPE_KEYS.append("nose_highlight")
 
-EXPECTED_RECIPE_KEY_COUNT = 267
+EXPECTED_RECIPE_KEY_COUNT = 268
 # Self-updating: the recipe/smart-style slider tuple length is the contract
 # defined by RECIPE_OUTPUT_KEYS, so this constant can never go stale.
 EXPECTED_UI_OUTPUT_COUNT = len(gui.RECIPE_OUTPUT_KEYS)
