@@ -98,6 +98,7 @@ def process(
     body_shadow_lift: Optional[float] = None,
     nose_restore: Optional[float] = None,
     nose_shape: Optional[int] = None,
+    nose_highlight: Optional[int] = None,
     specular_bloom: Optional[int] = None,
     specular_bloom_tone: Optional[str] = None,
     specular_finish: Optional[str] = None,
@@ -420,6 +421,7 @@ Passing an explicit value override to these parameters takes precedence over the
 *   **`under_eye_blush`** (Type: `bool`, Default: `False`, Range: None, Recipe key: `under_eye_blush`): Boolean flag to toggle under eye blush.
 *   **`nose_restore`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.nose_restore`): Adjusts the nose restore parameter.
 *   **`nose_shape`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.nose_shape`): Keep Nose Shape. Puts back the broad nose shading that skin smoothing flattens (fine texture stays smoothed; later tone edits still reach the nose). Off by default.
+*   **`nose_highlight`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.nose_highlight`): Nose Bridge Highlight. A soft highlight stripe down the nose bridge (linear-light gain, so the skin keeps its colour on every tone). Off by default; start near 50.
 *   **`eye_enhance`** (Type: `int`, Default: `5`, Range: `0` to `100`, Recipe key: `eyes.whites`): Adjusts the eye enhance parameter.
 *   **`catchlight`** (Type: `int`, Default: `5`, Range: `0` to `100`, Recipe key: `eyes.catchlight`): Adjusts the catchlight parameter.
 *   **`dark_circles`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `eyes.dark_circles`): Adjusts the dark circles parameter.

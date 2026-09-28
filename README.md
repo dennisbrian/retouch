@@ -175,6 +175,17 @@ the face landmarks, so hair or glasses over the nose are left as they are.
 Unlike Nose Restore, which blends the untouched original nose back in, it
 keeps the retouch and only undoes the flattening.
 
+Nose Bridge Highlight (`--nose-highlight 0-100` in the CLI, the "Nose Bridge
+Highlight" slider under Skin Tone in the app, or `skin.nose_highlight` in a
+recipe, where 0.5 = 50) adds a soft highlight down the nose bridge, from
+between the brows to just above the tip, like a highlighter stroke. It
+brightens the skin's own colour rather than painting white on it, so it looks
+the same on darker and lighter skin and bright face paint rolls off instead of
+clipping. Start near 50; 100 is about the bridge lift in finished porcelain
+cosplay edits. It is off by default, uses no model, follows the face
+landmarks, and leaves hair, brows or glasses over the bridge alone. It pairs
+with Keep Nose Shape, which restores the nose's own shading first.
+
 Set `RETOUCH_OFFLINE=1` before launching the GUI to disable update checks and
 prevent model downloads; the Advanced Retouch status panel shows the mode.
 

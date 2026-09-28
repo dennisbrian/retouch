@@ -119,8 +119,9 @@ EXPECTED_RECIPE_KEYS.append("red_eye")
 EXPECTED_RECIPE_KEYS.append("spot_heal")
 EXPECTED_RECIPE_KEYS.append("face_polish")
 EXPECTED_RECIPE_KEYS.append("nose_shape")
+EXPECTED_RECIPE_KEYS.append("nose_highlight")
 
-EXPECTED_RECIPE_KEY_COUNT = 266
+EXPECTED_RECIPE_KEY_COUNT = 267
 # Self-updating: the recipe/smart-style slider tuple length is the contract
 # defined by RECIPE_OUTPUT_KEYS, so this constant can never go stale.
 EXPECTED_UI_OUTPUT_COUNT = len(gui.RECIPE_OUTPUT_KEYS)
@@ -834,13 +835,13 @@ class TestResetFunctions:
     def test_reset_skin_tone_returns_seven_values(self):
         result = gui.reset_skin_tone("natural")
         assert isinstance(result, tuple)
-        assert len(result) == 12
+        assert len(result) == 13
 
     def test_reset_skin_tone_values_match_natural_recipe(self):
         d = gui.recipe_defaults("natural")
         result = gui.reset_skin_tone("natural")
         assert result == (d["whiten"], d["whiten_tone"], d["equalize"],
-                          d["shadow_lift"], d["nose_restore"], d["nose_shape"], d["skin_sss"],
+                          d["shadow_lift"], d["nose_restore"], d["nose_shape"], d["nose_highlight"], d["skin_sss"],
                           d["skin_unify"], d["skin_unify_hue"], d["auto_exposure"],
                           d["white_costume_lift"], d["face_exposure"])
 
