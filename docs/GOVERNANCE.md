@@ -161,5 +161,48 @@ Advisory only — never blocks.
   governance warnings. Guardrail/metric output is observational telemetry;
   PR count is never a target.
 
+## Release train (`scripts/dev/release_train.py`)
+
+Third layer. PR-level CI proves each change alone; the release train proves a
+**batch** of merged changes together (the "A ✅ B ✅ C ✅, A+B+C 💀" problem).
+
+### Commands
+
+```bash
+scripts/dev/release-train candidates     # PRs merged since stable, risk-bucketed
+scripts/dev/release-train cut            # combined validation + tag rc/YYYY.MM.DD-N
+scripts/dev/release-train validate [SHA] # the batch check alone
+scripts/dev/release-train manifest TAG   # machine-generated changelog
+scripts/dev/release-train channels       # dev/canary/stable pointers
+scripts/dev/release-train promote TAG canary|stable   # human-run pointer move
+scripts/dev/release-train bisect GOOD BAD [--cmd C]   # isolate the bad merge
+scripts/dev/release-train health         # main vs stable + rollback recommendation
+```
+
+### Channels
+
+`dev` = main. `canary` and `stable` are git tags moved **only** by
+`promote` (human-run). `stable` refuses a SHA that isn't a GREEN **full**
+validation RC or current canary — a `--gov-only` RC cannot reach stable.
+
+### Combined validation (cut)
+
+Governance `--ci` + full test suite + benchmark run. `cut` only tags the RC
+when every step is GREEN, and records the risk composition of the batch in
+`.git/governance-state.json`.
+
+### Bisect
+
+When a batch regresses, `bisect GOOD BAD` binary-searches the merge commits
+(`~log₂N` checkouts), re-running validation per probe, and names the
+first broken merge (with its PR number). Restores `main` when done.
+
+### Rollback policy
+
+`health` compares main against `stable` (post-merge validation record) and,
+when degraded, prints a rollback **recommendation**: suspected merge window,
+exact bisect command, manual revert steps. It never reverts, resets, or
+deletes anything — rollback is human-approved only, by design.
+
 
 

@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "generated": "2026-09-28T08:42:56Z",
+  "note": "Synthetic seed corpus. Real photos: drop into test_output/quality_lab/<id>/input.png and append a case entry; do NOT commit private images.",
+  "cases": [
+    {
+      "id": "synthetic-light-skin",
+      "tags": [
+        "face",
+        "skin"
+      ],
+      "input": "test_output/quality_lab/synthetic-light-skin/input.png"
+    },
+    {
+      "id": "synthetic-dark-skin",
+      "tags": [
+        "face",
+        "skin"
+      ],
+      "input": "test_output/quality_lab/synthetic-dark-skin/input.png"
+    },
+    {
+      "id": "synthetic-face-paint",
+      "tags": [
+        "face",
+        "skin",
+        "makeup",
+        "face_paint"
+      ],
+      "input": "test_output/quality_lab/synthetic-face-paint/input.png"
+    },
+    {
+      "id": "synthetic-wig-glasses",
+      "tags": [
+        "face",
+        "skin",
+        "wig",
+        "glasses",
+        "eyes"
+      ],
+      "input": "test_output/quality_lab/synthetic-wig-glasses/input.png"
+    },
+    {
+      "id": "synthetic-closed-eyes",
+      "tags": [
+        "face",
+        "skin",
+        "eyes"
+      ],
+      "input": "test_output/quality_lab/synthetic-closed-eyes/input.png"
+    },
+    {
+      "id": "synthetic-blemish-texture",
+      "tags": [
+        "face",
+        "skin",
+        "blemish"
+      ],
+      "input": "test_output/quality_lab/synthetic-blemish-texture/input.png"
+    },
+    {
+      "id": "synthetic-harsh-highlight",
+      "tags": [
+        "face",
+        "skin",
+        "makeup"
+      ],
+      "input": "test_output/quality_lab/synthetic-harsh-highlight/input.png"
+    },
+    {
+      "id": "synthetic-low-light",
+      "tags": [
+        "face",
+        "skin"
+      ],
+      "input": "test_output/quality_lab/synthetic-low-light/input.png"
+    },
+    {
+      "id": "synthetic-real-face",
+      "tags": [
+        "face",
+        "skin",
+        "eyes"
+      ],
+      "input": "test_output/quality_lab/synthetic-real-face/input.png"
+    }
+  ]
+}

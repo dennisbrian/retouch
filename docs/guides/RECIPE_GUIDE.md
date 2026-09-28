@@ -218,6 +218,7 @@ These keys are defined inside nested dictionary blocks inside a recipe.
 | `skin` | `texture_transplant` | 0 to 100 | `0` | `texture_transplant` |
 | `skin` | `unify_hue` | -1.0 to 360.0 | `-1.0` | `skin_unify_hue` |
 | `skin` | `unify` | 0 to 100 | `0` | `skin_unify` |
+| `skin` | `warmth` | 0.0 to 1.0 | `0` | `skin_warmth` |
 | `skin` | `vein_attenuate` | 0.0 to 1.0 | `0.0` | `vein_attenuate` |
 | `skin` | `whiten_hue_stable` | 0.0 to 1.0 | `False` | `whiten_hue_stable` |
 | `skin` | `wrinkle_soften_forehead` | 0 to 100 | `0.0` | `wrinkle_soften_forehead` |
@@ -561,6 +562,7 @@ and 0–360 for split-toning hue).
 | Skin Quantize | `skin.quantize` | ÷ 100 |
 | Skin Unify Hue | `skin.unify_hue` | direct |
 | Skin Unify | `skin.unify` | ÷ 100 |
+| Skin Warmth | `skin.warmth` | ÷ 100 |
 | Slimming | `slimming` | direct |
 | Smooth Engine | `frequency.smooth_engine` | direct |
 | Smooth | `frequency.smooth` | ÷ 100 |

@@ -365,6 +365,7 @@ class ProcessingContext:
     nose_restore: float = 0.0
     nose_shape: float = 0.0
     powder_finish: float = 0.0
+    skin_warmth: float = 0.0
     nose_highlight: float = 0.0
     skin_sss: float = 0.0
     freckle_removal: float = 0.0
@@ -1645,6 +1646,7 @@ class RetouchEngine:
         nose_restore: Optional[float] = None,
         nose_shape: Optional[float] = None,
         powder_finish: Optional[float] = None,
+        skin_warmth: Optional[float] = None,
         nose_highlight: Optional[float] = None,
         skin_sss: Optional[float] = None,
         regional_modulation: Optional[float] = None,
@@ -1964,6 +1966,7 @@ class RetouchEngine:
             "nose_restore": nose_restore,
             "nose_shape": nose_shape,
             "powder_finish": powder_finish,
+            "skin_warmth": skin_warmth,
             "nose_highlight": nose_highlight,
             "skin_sss": skin_sss,
             "lut": lut,
@@ -5379,7 +5382,7 @@ class RetouchEngine:
 
             result = self._grader.grade(
                 result, settings, ctx.grade_intensity,
-                split_tone_mask=acc_skin, glow_mask=g_mask, haze_mask=g_mask,
+                split_tone_mask=None, glow_mask=g_mask, haze_mask=g_mask,
                 skin_mask=acc_skin,
                 skip_glows=skip_glows, skip_post_effects=True,
                 skin_protect_strength=ctx.skin_protect_strength,
@@ -5420,7 +5423,10 @@ class RetouchEngine:
             else:
                 result = self._grader._apply_hsl_adjustments(result, hsl)
 
-        # Apply recipe-level split toning
+        # Apply recipe-level split toning. Whole frame: it used to be passed
+        # the skin mask as its *apply* mask, so a recipe's shadow/highlight
+        # tint reached only face and body skin and never the background or
+        # costume. Skin still gets exactly what it got before.
         if any((ctx.shadow_hue, ctx.shadow_sat, ctx.midtone_hue, ctx.midtone_sat, ctx.highlight_hue, ctx.highlight_sat)):
             tones = {
                 "shadows": {"hue": ctx.shadow_hue, "sat": ctx.shadow_sat},
@@ -5428,9 +5434,17 @@ class RetouchEngine:
                 "highlights": {"hue": ctx.highlight_hue, "sat": ctx.highlight_sat},
             }
             if is_float:
-                result = self._grader._F_split_tone_three_way(result, tones, mask=acc_skin)
+                result = self._grader._F_split_tone_three_way(result, tones, mask=None)
             else:
-                result = self._grader._split_tone_three_way(result, tones, mask=acc_skin)
+                result = self._grader._split_tone_three_way(result, tones, mask=None)
+
+        # Skin Warmth (opt-in): after every colour step that moves skin, so it
+        # sets where the skin ends up. Keyed on each face's own skin colour;
+        # face paint and already-peach skin are left alone.
+        # See retouch/skin_warmth.py.
+        if getattr(ctx, "skin_warmth", 0) > 0 and acc_skin is not None:
+            from .skin_warmth import skin_warmth
+            result = skin_warmth(result, acc_skin, ctx.skin_warmth, person_mask=person_mask)
 
         if ctx.highlight_rolloff_strength > 0:
             # F1/E2: apply_highlight_rolloff now dtype-aware (float32 [0,255] path)
@@ -5470,9 +5484,12 @@ class RetouchEngine:
         if _finish_needs_scale:
             result = np.clip(result * 255.0, 0.0, 255.0).astype(np.float32)
 
-        # Fade toe: lifted-black with hue-locked toe (L-only in LAB)
+        # Fade toe: lifted-black with hue-locked toe (L-only in LAB). Whole
+        # frame: the skin mask used to be passed as the apply mask, so blacks
+        # (hair, costume, background) were never lifted and the fade was
+        # close to invisible.
         if ctx.fade_toe > 0:
-            result = self._grader.fade_toe(result, ctx.fade_toe / 100.0, mask=acc_skin)
+            result = self._grader.fade_toe(result, ctx.fade_toe / 100.0)
 
         # Highlight drift: hue rotation toward cyan in highlights, skin-protected
         if ctx.highlight_drift > 0:
@@ -5515,7 +5532,7 @@ class RetouchEngine:
         if post_effects:
             result = self._grader.grade(
                 result, post_effects, 1.0,
-                split_tone_mask=acc_skin, glow_mask=g_mask, haze_mask=g_mask,
+                split_tone_mask=None, glow_mask=g_mask, haze_mask=g_mask,
                 skin_mask=acc_skin,
                 skin_protect_strength=ctx.skin_protect_strength,
                 return_float=is_float,

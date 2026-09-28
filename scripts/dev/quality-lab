@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Autonomous Image Quality & Regression Lab.
+#   scripts/dev/quality-lab <corpus|baseline|run|compare|report|benchmark|check-thresholds>
+set -euo pipefail
+cd "$(dirname "$0")/../.."
+PY=python3
+[[ -x .venv/bin/python ]] && PY=.venv/bin/python
+exec "$PY" -m scripts.dev.quality_lab "$@"

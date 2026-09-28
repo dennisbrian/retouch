@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Release train: candidates / cut / validate / manifest / channels /
+# promote / bisect / health. See scripts/dev/release_train.py docstring.
+# Rollback is recommend-only; this tool never reverts anything.
+set -euo pipefail
+cd "$(dirname "$0")/../.."
+exec python3 scripts/dev/release_train.py "$@"
