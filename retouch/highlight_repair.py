@@ -100,9 +100,22 @@ def _unit(mask: Optional[np.ndarray]) -> Optional[np.ndarray]:
     return np.clip(m.astype(np.float32), 0.0, 1.0)
 
 
+def _blur(x: np.ndarray, sigma: float) -> np.ndarray:
+    """Gaussian blur; wide ones run on a downsampled copy (same result to
+    within a fraction of a level, orders of magnitude faster)."""
+    if sigma <= 6.0:
+        return cv2.GaussianBlur(x, (0, 0), sigma)
+    h, w = x.shape[:2]
+    f = sigma / 3.0
+    sw, sh = max(1, int(round(w / f))), max(1, int(round(h / f)))
+    small = cv2.resize(x, (sw, sh), interpolation=cv2.INTER_AREA)
+    small = cv2.GaussianBlur(small, (0, 0), sigma * sw / w)
+    return cv2.resize(small, (w, h), interpolation=cv2.INTER_LINEAR)
+
+
 def _masked_blur(x: np.ndarray, w: np.ndarray, sigma: float) -> Tuple[np.ndarray, np.ndarray]:
-    num = cv2.GaussianBlur(x * w, (0, 0), sigma)
-    den = cv2.GaussianBlur(w, (0, 0), sigma)
+    num = _blur(x * w, sigma)
+    den = _blur(w, sigma)
     return num / np.maximum(den, 1e-6), den
 
 
@@ -293,7 +306,7 @@ def repair_blown_highlights(
     # Zone: the kept spots grown over their bright shoulder, inside skin.
     zone_r = max(2, int(round(_ZONE_IED * ied)))
     zone = cv2.dilate(keep, _ellipse(zone_r)).astype(np.float32)
-    zone = cv2.GaussianBlur(zone, (0, 0), max(1.0, zone_r * 0.35))
+    zone = _blur(zone, max(1.0, zone_r * 0.35))
     zone = np.clip(zone * 1.5, 0.0, 1.0) * np.clip(support.astype(np.float32) + sk, 0.0, 1.0)
     zone = zone.astype(np.float32)
 
