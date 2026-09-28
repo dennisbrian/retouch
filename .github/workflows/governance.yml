@@ -78,6 +78,9 @@ jobs:
       - name: Post-merge smoke (governance + golden/recipe tests + stats deltas)
         run: uv run --locked python scripts/dev/pr_governor.py post-merge
 
+      - name: Release-train health (vs stable; advisory unless stable tag exists)
+        run: uv run --locked python scripts/dev/release_train.py health || echo "::warning::release-train health flagged degradation — see job log"
+
   full-audit:
     name: Governance full audit (nightly)
     runs-on: ubuntu-latest
