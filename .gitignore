@@ -26,3 +26,4 @@ scripts/build/*
 cc.json
 *_out/
 
+control-plane/attention.json

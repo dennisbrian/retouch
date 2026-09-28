@@ -14,6 +14,7 @@ output verification.
 - `docs/REPO_STATS.md` — Generated repo size truth (modules, tests, LOC); refreshed by `scripts/dev/governance --write-stats`
 - `docs/GOVERNANCE.md` — Repository governance policy + tooling
 - `docs/ENGINEERING_CONTROL_PLANE.md` — Multi-agent task queue, leases, planner & circuit breaker (`scripts/dev/control-plane`)
+- `docs/ATTENTION_ROUTER.md` — Owner decision routing, memory, budget, overrides & overload circuit breaker (`scripts/dev/attention`)
 
 ## Guides (`docs/guides/`)
 - `GETTING_STARTED.md` — Desktop one-photo workflow, CLI basics, and result checks

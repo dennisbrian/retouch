@@ -46,6 +46,11 @@ def _fmt_task(task) -> str:
 
 
 def cmd_intake(args) -> int:
+    if args.priority in ("P3", "P4") and (args.type in (None, "feature")):
+        from scripts.dev.attention_router import core as attention
+        if attention.overload(attention.load()["daily"]):
+            print("error: owner attention budget exceeded for 3 days; P3/P4 feature intake paused", file=sys.stderr)
+            return 1
     tasks = core.load_all()
     acceptance = [line.strip() for line in (args.accept or "").split(";")
                   if line.strip()]
