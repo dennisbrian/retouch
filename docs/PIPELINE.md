@@ -1,4 +1,8 @@
 # PIPELINE.md — Pipeline Architecture Reference
+> **Canonical pipeline doc:** [docs/architecture/ARCHITECTURE.md](architecture/ARCHITECTURE.md)
+> (module map) + [docs/architecture/PIPELINE_FLOW.md](architecture/PIPELINE_FLOW.md)
+> (stage flow). This file adds blast-radius notes only — do not restate stage
+> structure here.
 > Load when: planning tasks that touch pipeline stages, or when blast radius is unclear.
 > Related: `docs/PERCEPTUAL.md` (pipeline invariants), `docs/VISUAL_QA.md` (gate scope).
 

@@ -254,6 +254,13 @@ per `AGENTS.md`.
 | `regions.py` | Region-mask geometry helpers. |
 | `hairwork.py` | Hair retouching helpers (distinct from `hair.py` enhancement). |
 | `batch_processor.py` | Batch orchestration over `RetouchEngine`. |
+| `spot_heal_auto.py` | Automatic spot healing (pimple/red-spot detection + plane-fit heal; first op in the per-face core). |
+| `eye_visibility.py` | Eye-occlusion gate (EAR + tone-adaptive contrast) gating eye ops on closed/occluded eyes. |
+| `duplicates.py` | Shoot-wide duplicate detection (pose + framing alignment, keeper ranking). |
+| `watermark.py` | Watermark/credit overlay stamping into `<output>/watermarked/`. |
+| `xmp_sidecar.py` | XMP sidecars for picks, ratings, flags (merge-safe, never overwrites external ratings). |
+| `edit_report.py` | Per-photo JSON edit reports (`--edit-report`). |
+| `content_credentials.py` | C2PA Content Credentials signing (`--sign-cert`/`--sign-key`). |
 
 ## 5. Key dataclasses
 
