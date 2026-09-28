@@ -90,4 +90,76 @@ reminder, not a form.
 - **Nightly + manual** — full audit with `--strict`; regenerates
   `docs/REPO_STATS.md` and fails if the checked-in copy is stale.
 
+## PR traffic control (`scripts/dev/pr_governor.py`)
+
+Second layer, for dozens-of-PRs/day velocity. Design objective: machine
+attention first, human attention only for consequential decisions.
+
+### Commands
+
+```bash
+scripts/dev/pr-risk [BASE] [HEAD]    # LOW/MEDIUM/HIGH + owner summary (+ --json)
+scripts/dev/pr-triage                # bucket all open PRs + overlap warnings
+scripts/dev/merge-queue              # merge queue in risk order
+scripts/dev/merge-queue post         # post-merge smoke validation of main
+python3 scripts/dev/pr_governor.py guardrails   # velocity health warnings
+```
+
+### Risk model (deterministic, edit tables in pr_governor.py)
+
+- **HIGH** (never auto-merge): `HIGH_RISK_PATHS` — engine.py, params.py,
+  detection.py, perf_optimizations.py, precision.py, io.py,
+  content_credentials.py, recipe_schema.py, `.github/workflows/`,
+  the governance scripts themselves, `pyproject.toml`/`uv.lock`,
+  `models/manifest.json`.
+- **MEDIUM**: production code by default; GUI/CLI/recipes/dev-scripts floors;
+  golden-artifact changes; deleted test files; >15 production files or
+  >3k changed lines; any suspicious validation weakening.
+- **LOW**: docs/tests/scripts-qa only — and only when no warning fired.
+  A PR is **never** LOW merely because its weakened tests pass.
+
+Semantic impact beats line count: a 20-line `params.py` change is HIGH;
+a 500-line docs PR is LOW.
+
+### Suspicious-validation detection
+
+Diffs in `tests/` and `.github/workflows/` are scanned for removed
+assertions, added skip/xfail, deleted tests, and threshold-literal changes
+(direction must be eyeballed — the tool can't know intent).
+
+### Overlap & duplicates
+
+`pr-triage`/`pr-risk` query open PRs via `gh` and warn when two PRs touch the
+same file. Weak heuristic, advisory only, never blocks.
+
+### Test selection
+
+`pr-risk` recommends targeted test files via `IMPACT_MAP` (config table) plus
+the `tests/test_<module>.py` naming fallback. CI escalation: LOW → targeted +
+governance; MEDIUM → + subsystem; HIGH → full suite. Post-merge smoke always
+runs golden + recipe-validation tests on main.
+
+### Merge queue & post-merge
+
+`merge-queue` orders open PRs LOW→HIGH with the required action per bucket.
+No auto-merge bot exists yet: `merge-queue post` (also a push-to-main CI job)
+re-runs governance + smoke tests + stats deltas after every merge and fails
+noisily if main regressed. State lives in `.git/governance-state.json`
+(untracked): merge history, stats baseline, PR risk cache.
+
+### Velocity guardrails
+
+`guardrails` warns on: ≥3 failed post-merge validations in the last 20,
+≥3 reverts in the last 50 commits, any `retouch/` file churning ≥8×/week.
+Advisory only — never blocks.
+
+### Safety rules (hard-coded behavior)
+
+- HIGH risk exits 1 under `--ci` — auto-merge automation can never take HIGH.
+- Governance/merge-infrastructure changes classify HIGH by construction.
+- No command bypasses failing tests, touches branch protection, or suppresses
+  governance warnings. Guardrail/metric output is observational telemetry;
+  PR count is never a target.
+
+
 

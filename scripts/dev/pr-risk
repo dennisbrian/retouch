@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Classify the current PR's risk: LOW / MEDIUM / HIGH.
+#   scripts/dev/pr-risk [BASE] [HEAD]      (default origin/main...HEAD)
+#   scripts/dev/pr-risk -- --json          machine-readable
+set -euo pipefail
+cd "$(dirname "$0")/../.."
+base="origin/main"; head="HEAD"
+[[ $# -gt 0 && "$1" != --* ]] && { base="$1"; shift; }
+[[ $# -gt 0 && "$1" != --* ]] && { head="$1"; shift; }
+exec python3 scripts/dev/pr_governor.py risk "$base" "$head" "$@"
