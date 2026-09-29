@@ -14,7 +14,11 @@ output verification.
 - `docs/REPO_STATS.md` — Generated repo size truth (modules, tests, LOC); refreshed by `scripts/dev/governance --write-stats`
 - `docs/GOVERNANCE.md` — Repository governance policy + tooling
 - `docs/ENGINEERING_CONTROL_PLANE.md` — Multi-agent task queue, leases, planner & circuit breaker (`scripts/dev/control-plane`)
+- `docs/ATTENTION_ROUTER.md` — Owner decision routing, memory, budget, overrides & overload circuit breaker (`scripts/dev/attention`)
 - `docs/QUALITY_LAB.md` — Autonomous visual regression & performance lab (`scripts/dev/quality-lab`)
+- `docs/MAINTENANCE_SYSTEM.md` — Technical debt register, bounded maintenance tasks, and safe repair (`scripts/dev/maintenance`)
+- `docs/EXPERIMENT_LAB.md` — Frozen experiment designs, isolated candidates, Quality Lab evidence, and promotion (`scripts/dev/experiment`)
+- `docs/RD_DIRECTOR.md` — R&D opportunity registry, hypothesis tracking, negative-result memory & portfolio balance (`scripts/dev/rd`)
 
 ## Guides (`docs/guides/`)
 - `GETTING_STARTED.md` — Desktop one-photo workflow, CLI basics, and result checks
@@ -215,4 +219,3 @@ output verification.
 
 ## Contributing
 See `docs/CONTRIBUTING.md` for dev workflow
-- `docs/EXPERIMENT_LAB.md` — Frozen experiment designs, isolated candidates, Quality Lab evidence, and promotion (`scripts/dev/experiment`)
