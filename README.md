@@ -187,6 +187,21 @@ most darker skin, is left as it is or changes only a little. It is off by
 default; start near 50. A beige or pink costume part the same colour as the
 skin warms with it. When the face is painted, body skin is left alone too.
 
+Blown Highlight Repair (`--highlight-repair 0-100` in the CLI, the "Blown
+Highlight Repair" slider next to Powder Finish in the app, or
+`skin.highlight_repair` in a recipe, where 0.6 = 60) rebuilds skin that a
+flash or harsh sun blew out to pure white, such as a hot spot on the nose,
+forehead or cheekbones. Those pixels hold no colour or texture, so shine
+removal and Powder Finish can only turn them grey or flat. This setting
+brings the spot back below white with a smooth roll-off (it still reads as a
+highlight), gives it the colour of the skin right around it and copies in
+fine skin texture from a clean patch of the same face. It leaves eyes,
+brows, lips, hair and anything not surrounded by skin (a white prop or
+costume part) alone, skips a painted face entirely (white face paint,
+including a bare nose on it) and skips a face that is mostly blown. It is off
+by default; start near 60. Very large blown areas come back smooth rather
+than textured: there is only so much skin nearby to borrow from.
+
 Keep Nose Shape (`--nose-shape 0-100` in the CLI, the "Keep Nose Shape" slider
 under Skin Tone in the app, or `skin.nose_shape` in a recipe, where 0.5 = 50)
 puts back the broad nose shading that skin smoothing flattens, so the nose

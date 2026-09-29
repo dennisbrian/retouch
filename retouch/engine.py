@@ -365,6 +365,7 @@ class ProcessingContext:
     nose_restore: float = 0.0
     nose_shape: float = 0.0
     powder_finish: float = 0.0
+    highlight_repair: float = 0.0
     skin_warmth: float = 0.0
     nose_highlight: float = 0.0
     skin_sss: float = 0.0
@@ -1646,6 +1647,7 @@ class RetouchEngine:
         nose_restore: Optional[float] = None,
         nose_shape: Optional[float] = None,
         powder_finish: Optional[float] = None,
+        highlight_repair: Optional[float] = None,
         skin_warmth: Optional[float] = None,
         nose_highlight: Optional[float] = None,
         skin_sss: Optional[float] = None,
@@ -1966,6 +1968,7 @@ class RetouchEngine:
             "nose_restore": nose_restore,
             "nose_shape": nose_shape,
             "powder_finish": powder_finish,
+            "highlight_repair": highlight_repair,
             "skin_warmth": skin_warmth,
             "nose_highlight": nose_highlight,
             "skin_sss": skin_sss,

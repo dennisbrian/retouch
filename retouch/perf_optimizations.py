@@ -345,7 +345,8 @@ def _process_face_core(
     # Spot healing keeps clear of the facial features. Taken before the eye
     # gate, which can blank an eye's masks.
     spot_feature_mask = None
-    if float(_ctx_get(ctx, "spot_heal", 0.0) or 0.0) > 0:
+    _hl_repair = float(_ctx_get(ctx, "highlight_repair", 0.0) or 0.0)
+    if float(_ctx_get(ctx, "spot_heal", 0.0) or 0.0) > 0 or _hl_repair > 0:
         from .spot_heal_auto import feature_mask_from_regions
 
         spot_feature_mask = feature_mask_from_regions(regions)
@@ -496,6 +497,21 @@ def _process_face_core(
         # re-grow right back across the boundary it was just clipped to.
         _policy_preserve = _policy_preserve * skin_n
         skin_n_marks_protected = np.clip(skin_n - _policy_preserve, 0.0, 1.0)
+
+    # ---- Blown highlight repair (opt-in, before any smoothing) ----
+    # Rebuilds skin that flash blew out to white from the skin around it
+    # (tone roll-off, local skin colour, donor texture), so later skin ops
+    # work on skin instead of a flat white patch. White face paint, props
+    # and features are left alone. See retouch/highlight_repair.py.
+    if _hl_repair > 0 and skin_n is not None:
+        canvas = _tr('highlight_repair', canvas)
+        from .highlight_repair import repair_blown_highlights
+
+        canvas, _hl_diags = repair_blown_highlights(
+            canvas, skin_n, _hl_repair, ied=shifted_face.ied,
+            feature_mask=spot_feature_mask,
+        )
+        logger.debug("highlight_repair: %s", _hl_diags)
 
     # ---- Spot healing (opt-in, before any smoothing) ----
     # Heals each detected pimple / small spot on its own from the skin around
