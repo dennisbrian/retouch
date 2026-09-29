@@ -992,6 +992,7 @@ class FaceParser:
 
     def __getstate__(self):
         state = self.__dict__.copy()
+        state["_sess"] = None  # ONNX InferenceSession is not picklable
         state["_class_segmenter"] = None
         state["_class_segmenter_failed"] = False
         state["_class_segmenter_lock"] = None

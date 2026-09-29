@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Local pre-merge gate — replaces CI while GitHub Actions is blocked on
+# billing (resets next month). Runs the same fast checks locally, free.
+#
+# Usage:
+#   scripts/dev/local-gate           fast tier (~2 min): governance + unit tests
+#   scripts/dev/local-gate --full    adds quality-lab threshold check (~5 min)
+#   scripts/dev/local-gate --hook    install as .git/hooks/pre-push
+#
+# Exit 0 = safe to merge/push. Exit 1 = something failed; read output above.
+set -euo pipefail
+
+project_root="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$project_root"
+
+full=0
+for arg in "$@"; do
+    case "$arg" in
+        --full) full=1 ;;
+        --hook)
+            hook="$project_root/.git/hooks/pre-push"
+            cat > "$hook" <<'EOF'
+#!/usr/bin/env bash
+exec "$(git rev-parse --show-toplevel)/scripts/dev/local-gate"
+EOF
+            chmod +x "$hook"
+            echo "installed pre-push hook -> $hook"
+            exit 0
+            ;;
+        *) echo "unknown arg: $arg" >&2; exit 2 ;;
+    esac
+done
+
+step() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
+
+step "1/3 governance fast checks (ERRORs only)"
+python3 scripts/dev/governance.py --ci
+
+step "2/3 unit tests (engine + dev tooling)"
+scripts/dev/test -x -q
+
+if [[ "$full" == 1 ]]; then
+    step "3/3 quality-lab threshold check"
+    scripts/dev/quality-lab check-thresholds
+else
+    step "3/3 quality-lab threshold check (skipped — use --full)"
+fi
+
+printf '\n\033[1mLOCAL GATE: PASS\033[0m\n'
