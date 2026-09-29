@@ -675,6 +675,332 @@ class FrequencySeparator:
 
         return FrequencyLayers(low, mid, high)
 
+    # ------------------------------------------------------------------
+    # Private combine() helpers (pure decomposition — no behavior change)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _crop_to_skin_bbox(
+        layers: "FrequencyLayers",
+        m_raw: np.ndarray,
+        face_width: Optional[float],
+        mark_protect: Optional[np.ndarray],
+        smooth_engine: str,
+    ) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray], float, Tuple[int, int, int, int]]]:
+        """Crop the layers/mask to the padded skin-mask bounding box.
+
+        Returns None when the mask has no positive pixels (caller should
+        reconstruct without processing). Otherwise returns
+        ``(low, mid, mid_original, high, m_raw, mark_protect_crop,
+        fw_approx, crop)`` where ``crop`` is ``(y1, y2, x1, x2)`` and
+        ``low``/``mid``/``high`` are copies aligned to the cropped mask.
+        """
+        # --- Bounding Box Optimization ---
+        # Crop to the mask region to avoid running heavy ops (like bilateral filter)
+        # on the entire image when the skin only covers a small fraction.
+        ys, xs = np.where(m_raw > 0.01)
+        if len(xs) == 0:
+            return None
+
+        fw_approx = face_width if face_width else estimate_face_width(img_shape=layers.low.shape[:2], fallback_ratio=APPROX_FACE_WIDTH_RATIO)
+        pad = max(10, int(fw_approx * 0.1))
+        x1, x2 = max(0, xs.min() - pad), min(m_raw.shape[1], xs.max() + pad + 1)
+        y1, y2 = max(0, ys.min() - pad), min(m_raw.shape[0], ys.max() + pad + 1)
+
+        low = layers.low[y1:y2, x1:x2].copy()
+        mid_original = layers.mid[y1:y2, x1:x2]
+        mid = mid_original.copy()
+        high = layers.high[y1:y2, x1:x2].copy()
+        m_raw = m_raw[y1:y2, x1:x2]
+
+        # Crop mark_protect identically to m_raw -- it arrives in full-image
+        # coordinates. Only meaningful for guided smoothing (see combine
+        # docstring); gating on smooth_engine here (the requested engine, not
+        # whatever _smooth_anisotropic falls back to internally) keeps the
+        # scope exactly what FA-01 validated.
+        mark_protect_crop = None
+        if mark_protect is not None and smooth_engine == "guided":
+            mark_protect_crop = mark_protect[y1:y2, x1:x2]
+            if not np.any(mark_protect_crop > 0.5):
+                mark_protect_crop = None
+        elif mark_protect is not None and np.any(mark_protect):
+            logger.debug(
+                "frequency.combine: mark_protect supplied but smooth_engine=%r "
+                "(only 'guided' is validated, FA-01) -- ignoring, marks are "
+                "unprotected against this smoothing pass",
+                smooth_engine,
+            )
+
+        return low, mid, mid_original, high, m_raw, mark_protect_crop, fw_approx, (y1, y2, x1, x2)
+
+    @staticmethod
+    def _prepare_blend_mask(
+        m_raw: np.ndarray,
+        layers: "FrequencyLayers",
+        face_width: Optional[float],
+        mark_protect_crop: Optional[np.ndarray],
+    ) -> np.ndarray:
+        """Feather the cropped skin mask and shrink it at protected marks."""
+        if face_width:
+            feather_r = max(DEFAULT_FEATHER_MIN, int(face_width * DEFAULT_FEATHER_FACTOR) | 1)
+        else:
+            h_full, w_full = layers.low.shape[:2]
+            feather_r = max(DEFAULT_FEATHER_MIN, int(min(h_full, w_full) * FALLBACK_FEATHER_FACTOR) | 1)
+
+        m_2d = cv2.GaussianBlur(m_raw, (feather_r, feather_r), 0)
+
+        # Shrink the blend alpha at protected-mark locations BEFORE
+        # _texture_adaptation_factor reads m_2d, matching the validated
+        # experiment (which modified m_raw/m_2d pre-adapt, not post). This
+        # changes only the final compositing alpha -- the guided filter's
+        # own input (low_mid_f32) below is never touched, so it cannot
+        # contaminate the filter's local statistics the way the rejected
+        # "filter_input" alternative did.
+        if mark_protect_crop is not None:
+            protect_alpha = _mark_protect_feather_mask(mark_protect_crop, m_2d.shape)
+            if protect_alpha is not None:
+                m_2d = np.clip(m_2d * (1.0 - protect_alpha), 0.0, 1.0)
+
+        return m_2d
+
+    @staticmethod
+    def _adapt_levers_for_texture(
+        high: np.ndarray,
+        m_2d: np.ndarray,
+        smooth_strength: float,
+        mid_reduction: float,
+        texture_opacity: float,
+    ) -> Tuple[float, float, float]:
+        """Back off smoothing levers on flat/front-lit (low-energy) skin.
+
+        Returns the adapted ``(smooth_strength, mid_reduction,
+        texture_opacity)``. On normal/high-texture faces adapt == 1.0 and the
+        inputs are returned unchanged (output stays byte-for-byte identical).
+        """
+        # --- Adaptive texture preservation ---
+        # Flat/front-lit skin has low intrinsic high-band energy, so the fixed,
+        # content-blind smoothing parameters strip real pore texture as if it
+        # were noise. Measure masked high-band energy and, when low, back off the
+        # levers that erode pore-scale structure:
+        #   (a) smooth_strength — drives the guided-filter eps/radius on low+mid;
+        #       this is the dominant texture-killer, so it is scaled directly.
+        #   (b) texture_opacity — floored upward so the high band is fully kept.
+        #   (c) mid_reduction — scaled by the same factor (2026-09-06; see below).
+        # The response is smooth (no threshold pop), monotonic in energy, and
+        # strictly asymmetric: every lever is only ever *reduced* (smoothing
+        # never gets stronger than the recipe asks). On normal/high-texture
+        # faces adapt == 1.0 → output is byte-for-byte identical to before.
+        #
+        # mid_reduction WAS deliberately excluded (comment here previously
+        # claimed "the guided-filter interaction makes the output mid band
+        # non-monotonic in mid_reduction"), but that claim was never backed by
+        # a cited measurement or test. Swept mid_reduction 0.0->1.0 directly
+        # against the same robust HF-energy measure used by this guard, on 3
+        # real faces (smooth_engine="anisotropic", the recipe in question) --
+        # cleanly monotonic on all 3, no bump. mid_reduction is also the
+        # second-largest independent texture-loss lever after smooth_strength
+        # (real corpus faces: zeroing it alone recovered +2.9 to +6.1pp
+        # HF-retention versus the unguarded recipe default), and unlike
+        # smooth_strength/texture_opacity it had no adaptation at all, so a
+        # low-energy face's mid-band blemish/shadow-scale detail was removed
+        # at full recipe strength regardless of how flat the skin already was.
+        # Not re-verified on smooth_engine="bilateral" -- if that path shows
+        # non-monotonic behavior, gate this scaling on smooth_engine rather
+        # than reverting it globally.
+        adapt = _texture_adaptation_factor(high, m_2d)
+        if os.getenv("TEXTURE_ADAPT_DEBUG"):
+            sel_dbg = m_2d > 0.5
+            if int(np.count_nonzero(sel_dbg)) >= 16:
+                high_mag_dbg = np.abs(high).mean(axis=2)
+                vals_dbg = high_mag_dbg[sel_dbg]
+                med_dbg = float(np.median(vals_dbg))
+                mad_dbg = float(np.median(np.abs(vals_dbg - med_dbg)))
+                energy_dbg = mad_dbg * _MAD_TO_STD
+            else:
+                energy_dbg = float("nan")
+            logger.warning("TEXTURE_ADAPT_DEBUG adapt=%.4f energy=%.4f smooth_strength_in=%.4f mid_reduction_in=%.4f texture_opacity_in=%.4f", adapt, energy_dbg, smooth_strength, mid_reduction, texture_opacity)
+        if adapt < 1.0:
+            smooth_strength = smooth_strength * adapt
+            mid_reduction = mid_reduction * adapt
+            # Raise opacity toward 1.0 (keep more of the surviving high band).
+            texture_opacity = texture_opacity + (1.0 - adapt) * (1.0 - texture_opacity)
+            texture_opacity = max(0.0, min(1.0, texture_opacity))
+        return smooth_strength, mid_reduction, texture_opacity
+
+    @staticmethod
+    def _apply_high_band_adjustments(
+        high: np.ndarray,
+        m_3d: np.ndarray,
+        texture_opacity: float,
+        face_width: Optional[float],
+        roi_coords: Optional[Tuple[int, int]],
+        pore_synthesis: float,
+    ) -> np.ndarray:
+        """Attenuate the high band by texture opacity and inject pore synthesis."""
+        # Texture opacity — attenuate high band inside the mask
+        if texture_opacity < 1.0:
+            high = high * (1.0 - m_3d * (1.0 - texture_opacity))
+
+        # Pore synthesis — inject synthetic high-frequency noise
+        if face_width and roi_coords and pore_synthesis > 0:
+            roi_x1, roi_y1 = roi_coords
+            seed = abs(hash((int(face_width * 100), roi_x1, roi_y1))) & 0xFFFFFFFF
+            rng = np.random.default_rng(seed)
+            h, w = high.shape[:2]
+
+            # Generate 2D (1-channel) noise to avoid chroma noise.
+            noise = rng.standard_normal((h, w)).astype(np.float32) * 15.0
+
+            sigma = max(0.5, face_width / 120.0)
+            noise_blur = cv2.GaussianBlur(noise, (0, 0), sigma)
+
+            P = (noise - noise_blur)[:, :, np.newaxis]
+            high = high + (pore_synthesis * P * m_3d)
+
+        return high
+
+    @staticmethod
+    def _apply_blotch_reduction(
+        low: np.ndarray,
+        mid_original: np.ndarray,
+        high: np.ndarray,
+        layers: "FrequencyLayers",
+        m_3d: np.ndarray,
+        blotch_reduction: float,
+        face_width: Optional[float],
+        crop: Tuple[int, int, int, int],
+    ) -> np.ndarray:
+        """Even broad pigment/redness blotches by carving a dedicated LOW sub-band."""
+        # --- Dedicated blotch band (R4 — D&B v2: dedicated blotch-band) ---
+        # Broad pigment/redness blotches (wavelengths ~13-40px) live in the LOW
+        # band, which S2 only *smooths* (blending blotches together) rather than
+        # *evens*. We carve a dedicated broad band as blur(k_a) - low, where
+        # k_a > k_low. Because both terms pass the lowest frequencies (true
+        # form/shading) almost equally, the difference cancels them *by
+        # construction* — so removing this band from LOW evens blotches without
+        # flattening facial form. Pores (below k_low) are absent from LOW
+        # entirely, so they survive untouched. This gives independent control
+        # of broad blotch evening (this lever) versus fine blemish reduction
+        # (mid_reduction), which until now shared one band. No-op when 0.
+        if blotch_reduction > 0 and face_width:
+            y1, y2, x1, x2 = crop
+            k_a = adaptive_ksize(face_width, factor=0.32, minimum=17)
+            base = low + mid_original + high
+            blur_a = cv2.GaussianBlur(base, (k_a, k_a), 0)
+            # Band = LOW minus a broader blur → the broad component that the
+            # broader blur removed. Pushing LOW toward blur_a evens it.
+            blotch_band = layers.low[y1:y2, x1:x2] - blur_a
+            low = low - m_3d * blotch_reduction * blotch_band
+        return low
+
+    @staticmethod
+    def _smooth_low_mid(
+        low_mid_f32: np.ndarray,
+        mid_original: np.ndarray,
+        smooth_engine: str,
+        smooth_strength: float,
+    ) -> Tuple[np.ndarray, np.ndarray, float, float]:
+        """Run the selected smoothing engine on the low+mid band.
+
+        Returns ``(smoothed_f32, smoothed_low, sigma_color, sigma_space)``
+        where ``smoothed_low`` is the smoothed band minus the original mid
+        (i.e. the engine's smoothed LOW estimate).
+        """
+        sigma_color = SIGMA_BASE + smooth_strength * SIGMA_STRENGTH_FACTOR
+        sigma_space = SIGMA_BASE + smooth_strength * SIGMA_STRENGTH_FACTOR
+
+        if smooth_engine == "anisotropic":
+            # Orientation-aware smoothing along local skin-grain direction.
+            # Graceful fallback to guided inside _smooth_anisotropic for flat/
+            # ambiguous regions, so this never replaces the high band (it only
+            # ever receives low+mid) and never crashes on degenerate input.
+            try:
+                smoothed_f32 = _smooth_anisotropic(low_mid_f32, smooth_strength)
+            except cv2.error as e:  # pragma: no cover - defensive
+                logger.warning("Anisotropic smoothing failed (%s); falling back to guided.", e)
+                smoothed_f32 = _guided_smooth(low_mid_f32, sigma_color, sigma_space)
+            smoothed_low_bilateral = smoothed_f32 - mid_original
+        elif smooth_engine == "guided":
+            smoothed_f32 = _guided_smooth(low_mid_f32, sigma_color, sigma_space)
+            smoothed_low_bilateral = smoothed_f32 - mid_original
+        else:
+            # Bilateral filter (legacy path)
+            # Use d=-1 to let OpenCV compute an optimal, efficient kernel size.
+            smoothed_f32 = cv2.bilateralFilter(low_mid_f32, -1, sigma_color, sigma_space)
+            smoothed_low_bilateral = smoothed_f32 - mid_original
+
+        return smoothed_f32, smoothed_low_bilateral, sigma_color, sigma_space
+
+    @staticmethod
+    def _apply_regional_modulation(
+        smoothed_f32: np.ndarray,
+        low_mid_f32: np.ndarray,
+        mid_original: np.ndarray,
+        high: np.ndarray,
+        regions: Optional[Any],
+        regional_modulation: float,
+        smooth_engine: str,
+        smooth_strength: float,
+        sigma_color: float,
+        sigma_space: float,
+        crop: Tuple[int, int, int, int],
+    ) -> np.ndarray:
+        """Blend per-region scaled smoothing into the base smoothed band.
+
+        Returns the modulated smoothed LOW estimate. Strict no-op when
+        ``regional_modulation == 0.0`` or ``regions`` is None (or every
+        region factor collapsed to 1.0), preserving byte-identical output.
+        """
+        regional_factors = _regional_modulation_factors(
+            high, regions, high.shape[:2], regional_modulation, crop=crop
+        )
+        base_smoothed = smoothed_f32
+        for name, factor in regional_factors.items():
+            if abs(factor - 1.0) < 1e-6:
+                continue
+            region_mask = getattr(regions, name, None)
+            if region_mask is None:
+                continue
+            rm = _region_mask_crop(region_mask, low_mid_f32.shape[:2], crop)
+            sel = rm > 0.01
+            if int(np.count_nonzero(sel)) < 16:
+                continue
+            # Feather region boundary (allowed: mask feathering, not skin smoothing).
+            rm_f = cv2.GaussianBlur(rm, (15, 15), 0)
+            rm_3d = rm_f[:, :, np.newaxis]
+
+            scaled = _region_smooth(low_mid_f32, smooth_engine, smooth_strength, factor, sigma_color, sigma_space)
+            base_smoothed = base_smoothed * (1.0 - rm_3d) + scaled * rm_3d
+        return base_smoothed - mid_original
+
+    @staticmethod
+    def _composite_crop(
+        layers: "FrequencyLayers",
+        low: np.ndarray,
+        mid: np.ndarray,
+        high: np.ndarray,
+        m_2d: np.ndarray,
+        crop: Tuple[int, int, int, int],
+        float32_out: bool,
+    ) -> np.ndarray:
+        """Composite the processed crop on final pixel values and paste it back."""
+        y1, y2, x1, x2 = crop
+        # Composite on final pixel values
+        processed_crop = low + mid + high
+        orig_crop = layers.low[y1:y2, x1:x2] + layers.mid[y1:y2, x1:x2] + layers.high[y1:y2, x1:x2]
+        result_crop = blend_masked(orig_crop, processed_crop, m_2d)
+
+        if float32_out:
+            # E1 float path: keep the full result float32 — no uint8 paste target.
+            full_result = np.clip(layers.low + layers.mid + layers.high, 0, 255).astype(np.float32)
+            full_result[y1:y2, x1:x2] = np.clip(result_crop, 0, 255)
+            return full_result
+
+        # Paste back into the full image
+        full_result = layers.reconstruct()
+        full_result[y1:y2, x1:x2] = result_crop
+        return full_result
+
     def combine(
         self,
         layers: "FrequencyLayers",
@@ -734,44 +1060,14 @@ class FrequencySeparator:
 
         m_raw = skin_mask.astype(np.float32)
 
-        # --- Bounding Box Optimization ---
-        # Crop to the mask region to avoid running heavy ops (like bilateral filter)
-        # on the entire image when the skin only covers a small fraction.
-        ys, xs = np.where(m_raw > 0.01)
-        if len(xs) == 0:
+        crop_result = self._crop_to_skin_bbox(layers, m_raw, face_width, mark_protect, smooth_engine)
+        if crop_result is None:
             result = layers.reconstruct()
             if float32_out:
                 return result.astype(np.float32)
             return result
-
-        fw_approx = face_width if face_width else estimate_face_width(img_shape=layers.low.shape[:2], fallback_ratio=APPROX_FACE_WIDTH_RATIO)
-        pad = max(10, int(fw_approx * 0.1))
-        x1, x2 = max(0, xs.min() - pad), min(m_raw.shape[1], xs.max() + pad + 1)
-        y1, y2 = max(0, ys.min() - pad), min(m_raw.shape[0], ys.max() + pad + 1)
-
-        low = layers.low[y1:y2, x1:x2].copy()
-        mid_original = layers.mid[y1:y2, x1:x2]
-        mid = mid_original.copy()
-        high = layers.high[y1:y2, x1:x2].copy()
-        m_raw = m_raw[y1:y2, x1:x2]
-
-        # Crop mark_protect identically to m_raw -- it arrives in full-image
-        # coordinates. Only meaningful for guided smoothing (see docstring);
-        # gating on smooth_engine here (the requested engine, not whatever
-        # _smooth_anisotropic falls back to internally) keeps the scope
-        # exactly what FA-01 validated.
-        mark_protect_crop = None
-        if mark_protect is not None and smooth_engine == "guided":
-            mark_protect_crop = mark_protect[y1:y2, x1:x2]
-            if not np.any(mark_protect_crop > 0.5):
-                mark_protect_crop = None
-        elif mark_protect is not None and np.any(mark_protect):
-            logger.debug(
-                "frequency.combine: mark_protect supplied but smooth_engine=%r "
-                "(only 'guided' is validated, FA-01) -- ignoring, marks are "
-                "unprotected against this smoothing pass",
-                smooth_engine,
-            )
+        low, mid, mid_original, high, m_raw, mark_protect_crop, fw_approx, crop = crop_result
+        y1, y2, x1, x2 = crop
 
         texture_opacity = max(0.0, min(1.0, texture_opacity))
         # Defense-in-depth: ParamSpec declares [0.0, 1.0] but that's GUI/CLI
@@ -783,135 +1079,28 @@ class FrequencySeparator:
         # — reproduced with mid_reduction=100.0 on a real render.
         mid_reduction = max(0.0, min(1.0, mid_reduction))
 
-        if face_width:
-            feather_r = max(DEFAULT_FEATHER_MIN, int(face_width * DEFAULT_FEATHER_FACTOR) | 1)
-        else:
-            h_full, w_full = layers.low.shape[:2]
-            feather_r = max(DEFAULT_FEATHER_MIN, int(min(h_full, w_full) * FALLBACK_FEATHER_FACTOR) | 1)
-
-        m_2d = cv2.GaussianBlur(m_raw, (feather_r, feather_r), 0)
-
-        # Shrink the blend alpha at protected-mark locations BEFORE
-        # _texture_adaptation_factor reads m_2d, matching the validated
-        # experiment (which modified m_raw/m_2d pre-adapt, not post). This
-        # changes only the final compositing alpha -- the guided filter's
-        # own input (low_mid_f32) below is never touched, so it cannot
-        # contaminate the filter's local statistics the way the rejected
-        # "filter_input" alternative did.
-        if mark_protect_crop is not None:
-            protect_alpha = _mark_protect_feather_mask(mark_protect_crop, m_2d.shape)
-            if protect_alpha is not None:
-                m_2d = np.clip(m_2d * (1.0 - protect_alpha), 0.0, 1.0)
-
+        m_2d = self._prepare_blend_mask(m_raw, layers, face_width, mark_protect_crop)
         m_3d = m_2d[:, :, np.newaxis]
 
-        # --- Adaptive texture preservation ---
-        # Flat/front-lit skin has low intrinsic high-band energy, so the fixed,
-        # content-blind smoothing parameters strip real pore texture as if it
-        # were noise. Measure masked high-band energy and, when low, back off the
-        # levers that erode pore-scale structure:
-        #   (a) smooth_strength — drives the guided-filter eps/radius on low+mid;
-        #       this is the dominant texture-killer, so it is scaled directly.
-        #   (b) texture_opacity — floored upward so the high band is fully kept.
-        #   (c) mid_reduction — scaled by the same factor (2026-09-06; see below).
-        # The response is smooth (no threshold pop), monotonic in energy, and
-        # strictly asymmetric: every lever is only ever *reduced* (smoothing
-        # never gets stronger than the recipe asks). On normal/high-texture
-        # faces adapt == 1.0 → output is byte-for-byte identical to before.
-        #
-        # mid_reduction WAS deliberately excluded (comment here previously
-        # claimed "the guided-filter interaction makes the output mid band
-        # non-monotonic in mid_reduction"), but that claim was never backed by
-        # a cited measurement or test. Swept mid_reduction 0.0->1.0 directly
-        # against the same robust HF-energy measure used by this guard, on 3
-        # real faces (smooth_engine="anisotropic", the recipe in question) --
-        # cleanly monotonic on all 3, no bump. mid_reduction is also the
-        # second-largest independent texture-loss lever after smooth_strength
-        # (real corpus faces: zeroing it alone recovered +2.9 to +6.1pp
-        # HF-retention versus the unguarded recipe default), and unlike
-        # smooth_strength/texture_opacity it had no adaptation at all, so a
-        # low-energy face's mid-band blemish/shadow-scale detail was removed
-        # at full recipe strength regardless of how flat the skin already was.
-        # Not re-verified on smooth_engine="bilateral" -- if that path shows
-        # non-monotonic behavior, gate this scaling on smooth_engine rather
-        # than reverting it globally.
-        adapt = _texture_adaptation_factor(high, m_2d)
-        if os.getenv("TEXTURE_ADAPT_DEBUG"):
-            sel_dbg = m_2d > 0.5
-            if int(np.count_nonzero(sel_dbg)) >= 16:
-                high_mag_dbg = np.abs(high).mean(axis=2)
-                vals_dbg = high_mag_dbg[sel_dbg]
-                med_dbg = float(np.median(vals_dbg))
-                mad_dbg = float(np.median(np.abs(vals_dbg - med_dbg)))
-                energy_dbg = mad_dbg * _MAD_TO_STD
-            else:
-                energy_dbg = float("nan")
-            logger.warning("TEXTURE_ADAPT_DEBUG adapt=%.4f energy=%.4f smooth_strength_in=%.4f mid_reduction_in=%.4f texture_opacity_in=%.4f", adapt, energy_dbg, smooth_strength, mid_reduction, texture_opacity)
-        if adapt < 1.0:
-            smooth_strength = smooth_strength * adapt
-            mid_reduction = mid_reduction * adapt
-            # Raise opacity toward 1.0 (keep more of the surviving high band).
-            texture_opacity = texture_opacity + (1.0 - adapt) * (1.0 - texture_opacity)
-            texture_opacity = max(0.0, min(1.0, texture_opacity))
+        smooth_strength, mid_reduction, texture_opacity = self._adapt_levers_for_texture(
+            high, m_2d, smooth_strength, mid_reduction, texture_opacity
+        )
 
-        # Texture opacity — attenuate high band inside the mask
-        if texture_opacity < 1.0:
-            high = high * (1.0 - m_3d * (1.0 - texture_opacity))
-
-        # Pore synthesis — inject synthetic high-frequency noise
-        if face_width and roi_coords and pore_synthesis > 0:
-            roi_x1, roi_y1 = roi_coords
-            seed = abs(hash((int(face_width * 100), roi_x1, roi_y1))) & 0xFFFFFFFF
-            rng = np.random.default_rng(seed)
-            h, w = low.shape[:2]
-
-            # Generate 2D (1-channel) noise to avoid chroma noise.
-            noise = rng.standard_normal((h, w)).astype(np.float32) * 15.0
-
-            sigma = max(0.5, face_width / 120.0)
-            noise_blur = cv2.GaussianBlur(noise, (0, 0), sigma)
-
-            P = (noise - noise_blur)[:, :, np.newaxis]
-            high = high + (pore_synthesis * P * m_3d)
+        high = self._apply_high_band_adjustments(
+            high, m_3d, texture_opacity, face_width, roi_coords, pore_synthesis
+        )
 
         # Reduce mid layer
         if mid_reduction > 0:
             mid = mid * (1.0 - m_3d * mid_reduction)
 
-        # --- Dedicated blotch band (R4 — D&B v2: dedicated blotch-band) ---
-        # Broad pigment/redness blotches (wavelengths ~13-40px) live in the LOW
-        # band, which S2 only *smooths* (blending blotches together) rather than
-        # *evens*. We carve a dedicated broad band as blur(k_a) - low, where
-        # k_a > k_low. Because both terms pass the lowest frequencies (true
-        # form/shading) almost equally, the difference cancels them *by
-        # construction* — so removing this band from LOW evens blotches without
-        # flattening facial form. Pores (below k_low) are absent from LOW
-        # entirely, so they survive untouched. This gives independent control
-        # of broad blotch evening (this lever) versus fine blemish reduction
-        # (mid_reduction), which until now shared one band. No-op when 0.
-        if blotch_reduction > 0 and face_width:
-            k_a = adaptive_ksize(face_width, factor=0.32, minimum=17)
-            base = low + mid_original + high
-            blur_a = cv2.GaussianBlur(base, (k_a, k_a), 0)
-            # Band = LOW minus a broader blur → the broad component that the
-            # broader blur removed. Pushing LOW toward blur_a evens it.
-            blotch_band = layers.low[y1:y2, x1:x2] - blur_a
-            low = low - m_3d * blotch_reduction * blotch_band
+        low = self._apply_blotch_reduction(
+            low, mid_original, high, layers, m_3d, blotch_reduction, face_width, crop
+        )
 
         # Early exit for no-smoothing case
         if smooth_strength <= 0:
-            processed_crop = low + mid + high
-            orig_crop = layers.low[y1:y2, x1:x2] + layers.mid[y1:y2, x1:x2] + layers.high[y1:y2, x1:x2]
-            result_crop = blend_masked(orig_crop, processed_crop, m_2d)
-
-            if float32_out:
-                # E1 float path: keep the full result float32 — no uint8 paste target.
-                full_result = np.clip(layers.low + layers.mid + layers.high, 0, 255).astype(np.float32)
-                full_result[y1:y2, x1:x2] = np.clip(result_crop, 0, 255)
-                return full_result
-            full_result = layers.reconstruct()
-            full_result[y1:y2, x1:x2] = result_crop
-            return full_result
+            return self._composite_crop(layers, low, mid, high, m_2d, crop, float32_out)
 
         # Smooth low + mid layers
         f_width = face_width if face_width else fw_approx
@@ -921,55 +1110,19 @@ class FrequencySeparator:
         # Smoothing filter (guided / bilateral / anisotropic)
         # Keep in float32 to avoid quantization banding on gradients (uint8 artifacts).
         low_mid_f32 = np.clip(low + mid_original, 0, 255)
-        sigma_color = SIGMA_BASE + smooth_strength * SIGMA_STRENGTH_FACTOR
-        sigma_space = SIGMA_BASE + smooth_strength * SIGMA_STRENGTH_FACTOR
-
-        if smooth_engine == "anisotropic":
-            # Orientation-aware smoothing along local skin-grain direction.
-            # Graceful fallback to guided inside _smooth_anisotropic for flat/
-            # ambiguous regions, so this never replaces the high band (it only
-            # ever receives low+mid) and never crashes on degenerate input.
-            try:
-                smoothed_f32 = _smooth_anisotropic(low_mid_f32, smooth_strength)
-            except cv2.error as e:  # pragma: no cover - defensive
-                logger.warning("Anisotropic smoothing failed (%s); falling back to guided.", e)
-                smoothed_f32 = _guided_smooth(low_mid_f32, sigma_color, sigma_space)
-            smoothed_low_bilateral = smoothed_f32 - mid_original
-        elif smooth_engine == "guided":
-            smoothed_f32 = _guided_smooth(low_mid_f32, sigma_color, sigma_space)
-            smoothed_low_bilateral = smoothed_f32 - mid_original
-        else:
-            # Bilateral filter (legacy path)
-            # Use d=-1 to let OpenCV compute an optimal, efficient kernel size.
-            smoothed_f32 = cv2.bilateralFilter(low_mid_f32, -1, sigma_color, sigma_space)
-            smoothed_low_bilateral = smoothed_f32 - mid_original
+        smoothed_f32, smoothed_low_bilateral, sigma_color, sigma_space = self._smooth_low_mid(
+            low_mid_f32, mid_original, smooth_engine, smooth_strength
+        )
 
         # Per-region modulation: blend region-scaled smoothing into the base.
         # Strict no-op when regional_modulation == 0.0 or regions is None (or
         # every region factor collapsed to 1.0), preserving byte-identical output.
         if regional_modulation != 0.0 and regions is not None:
-            crop = (y1, y2, x1, x2)
-            regional_factors = _regional_modulation_factors(
-                high, regions, high.shape[:2], regional_modulation, crop=crop
+            smoothed_low_bilateral = self._apply_regional_modulation(
+                smoothed_f32, low_mid_f32, mid_original, high, regions,
+                regional_modulation, smooth_engine, smooth_strength,
+                sigma_color, sigma_space, crop,
             )
-            base_smoothed = smoothed_f32
-            for name, factor in regional_factors.items():
-                if abs(factor - 1.0) < 1e-6:
-                    continue
-                region_mask = getattr(regions, name, None)
-                if region_mask is None:
-                    continue
-                rm = _region_mask_crop(region_mask, low_mid_f32.shape[:2], crop)
-                sel = rm > 0.01
-                if int(np.count_nonzero(sel)) < 16:
-                    continue
-                # Feather region boundary (allowed: mask feathering, not skin smoothing).
-                rm_f = cv2.GaussianBlur(rm, (15, 15), 0)
-                rm_3d = rm_f[:, :, np.newaxis]
-
-                scaled = _region_smooth(low_mid_f32, smooth_engine, smooth_strength, factor, sigma_color, sigma_space)
-                base_smoothed = base_smoothed * (1.0 - rm_3d) + scaled * rm_3d
-            smoothed_low_bilateral = base_smoothed - mid_original
 
         # Hybrid blend (cv2.addWeighted is slightly faster and purely SIMD optimized)
         blend_gaussian = min(1.0, smooth_strength * GAUSSIAN_BLEND_FACTOR)
@@ -981,21 +1134,7 @@ class FrequencySeparator:
 
         low = low * (1.0 - m_3d) + smoothed_low_final * m_3d
 
-        # Composite on final pixel values
-        processed_crop = low + mid + high
-        orig_crop = layers.low[y1:y2, x1:x2] + layers.mid[y1:y2, x1:x2] + layers.high[y1:y2, x1:x2]
-        result_crop = blend_masked(orig_crop, processed_crop, m_2d)
-
-        if float32_out:
-            # E1 float path: keep the full result float32 — no uint8 paste target.
-            full_result = np.clip(layers.low + layers.mid + layers.high, 0, 255).astype(np.float32)
-            full_result[y1:y2, x1:x2] = np.clip(result_crop, 0, 255)
-            return full_result
-
-        # Paste back into the full image
-        full_result = layers.reconstruct()
-        full_result[y1:y2, x1:x2] = result_crop
-        return full_result
+        return self._composite_crop(layers, low, mid, high, m_2d, crop, float32_out)
 
 
 # ---------------------------------------------------------------------------

@@ -262,6 +262,114 @@ per `AGENTS.md`.
 | `edit_report.py` | Per-photo JSON edit reports (`--edit-report`). |
 | `content_credentials.py` | C2PA Content Credentials signing (`--sign-cert`/`--sign-key`). |
 
+### Performance & infrastructure
+
+| Module | Role |
+|--------|------|
+| `acceleration.py` | Hardware acceleration abstraction (CUDA / MPS / CPU fallback) for vectorized batch, filtering, and color-space ops. |
+| `benchmark.py` | Engine performance benchmarking and pre-flight QA (Mpx/s, FPS, memory across 1080p/4K/8K). |
+| `tiling.py` | Gigapixel tiled processing: overlapping spatial tiles through the pipeline with cosine-feathered seam blending. |
+| `runtime_doctor.py` | Dependency-light runtime diagnostics; stdlib-only at import, lazy best-effort checks for native/optional deps. |
+| `update_check.py` | Non-blocking version check against GitHub release tags; never downloads anything. |
+| `plugin_api.py` | Plugin API v0 (T4): external pipeline stages/lifecycle hooks loaded from `~/.retouch/plugins/`. |
+
+### Advanced Retouch & GUI contracts
+
+| Module | Role |
+|--------|------|
+| `advanced_retouch.py` | Gradio-independent interactive Advanced Retouch ops; owns the image contract, delegates pixel math to heal/regions/parsing/geometry. |
+| `advanced_history.py` | Memory-compact undo history primitives for Advanced Retouch (no full-RGB copy per step). |
+| `gui_inspection.py` | Pure native-resolution inspection contracts for the GUI (`fit` / `100%` views of the actual render). |
+| `gui_preview_cache.py` | Session-scoped preview cache storing bounded content references (shape/dtype/digest), not arrays; deepcopy-safe for Gradio `State`. |
+| `gui_render_modes.py` | Pure render-mode contracts separating draft GUI state from queued render work (preview vs export). |
+| `gui_workspace.py` | Session-owned temporary workspace primitives; per-session digest-named directories so sessions cannot delete each other's files. |
+
+### Batch, CLI & review workflow
+
+| Module | Role |
+|--------|------|
+| `batch_progress.py` | Live megapixel-measured progress tracking for multi-image CLI batch runs (tqdm bar + ETA). |
+| `jobs.py` | `Job`/`FileRecord` model and `JobStore` persistence behind the batch Job Dashboard tab. |
+| `cli_input.py` | Deterministic, explainable CLI input planning; keeps selection, inspection, and execution separate (dry-run safe). |
+| `render_manifest.py` | Pixel-free, versioned JSON render manifest + inspector contract recording what a render did. |
+| `review_page.py` | Per-batch review records, thumbnails, self-contained `review.html`, and pick/reject decisions under `.retouch-review/`. |
+| `review_template.py` | Self-contained HTML template (inline CSS/JS, no external requests) for the per-batch review page. |
+
+### Shoot workflow
+
+| Module | Role |
+|--------|------|
+| `shoot_intelligence.py` | Explainable shoot intelligence: dependency/status graph and burst grouping; non-destructive, reason-carrying. |
+| `shoot_split.py` | Splits a shoot folder into sets by EXIF capture time (gap threshold or hour/day buckets; RAW+JPEG+XMP stems stay together). |
+| `cosplayer_groups.py` | Groups a shoot by cosplayer without face recognition (costume/time evidence, not identity). |
+| `social_crops.py` | Face-aware social-media crops (4:5, 9:16, 1:1, 3:4) placed around the subject. |
+
+### Skin & colour science
+
+| Module | Role |
+|--------|------|
+| `chromophore.py` | Melanin/hemoglobin log-RGB chromophore unmixing (Tsumura 2003); classical, no training. |
+| `chromophore_v2.py` | Constrained chromophore decomposition in linear-light optical density with confidence/fallback reporting. |
+| `skin_chromophore.py` | R10/R11 operators built on chromophore decomposition (float32 throughout; `strength == 0` is an exact no-op). |
+| `intrinsic.py` | R9 intrinsic albedo × shading decomposition so even-out-albedo smoothing never touches form. |
+| `harmonizer.py` | C5 skin-anchored background color harmonization (split-tone-like grade outside the person mask). |
+| `color_context.py` | Explicit color-management contract for ingest and delivery (display-referred sRGB working space). |
+| `matting.py` | Automatic-trimap alpha matting (Z3): guided-filter band refinement plus closed-form Levin alpha solver. |
+| `patchmatch.py` | Deterministic, source-constrained PatchMatch-style exemplar filling with caller-supplied `source_mask`. |
+
+### Face analysis, QA & smart decisions
+
+| Module | Role |
+|--------|------|
+| `face_quality.py` | Transparent, non-decisional face-quality measurements (geometry, local focus, eyelid aperture / `eyes_open` flag). |
+| `eye_enhancement.py` | Eye Enhancement v0: sclera brightening and iris saturation/hue/brightness per eye. |
+| `eye_artifact_safety.py` | Source-adaptive strength guard for eye retouching (mask-size and chroma-headroom limits). |
+| `fa02_texture_eligibility.py` | FA-02 production eligibility/abstention gate for micro-texture restoration (counterpart to the offline research gate). |
+| `face_params.py` | Per-face recipe/param overrides merged onto a base `ProcessingContext` (image-global grade/WB/body never leak). |
+| `image_analyzer.py` | F9 image analysis (lighting, DR, noise, WB, skin condition) suggesting params/recipe toward neutral targets. |
+| `smart_default.py` | F10 one-click smart mode wrapping F9 with a human-readable explanation per chosen parameter; backs `--smart` batch. |
+| `smart_intents.py` | Dependency-light Smart Workspace intent/macro/write/adjustment contracts (no Gradio, models, or pixel I/O). |
+| `safe_auto.py` | Confidence-aware decision contract for automatic stages; applying a skipped decision returns the input unchanged. |
+| `qa_backoff.py` | Plastic-skin QA parameter back-off helper (currently not wired into the render pipeline). |
+| `perceptual_metrics.py` | Subject-relative observational perceptual metrics (feature contrast, skin chroma/texture state). |
+| `metamorphic.py` | Processor-agnostic metamorphic robustness checks for engine, Safe Auto, and Advanced Retouch stages. |
+| `input_rescue.py` | Non-mutating input-quality preflight for conservative rescue decisions. |
+
+### Certification & release contracts
+
+| Module | Role |
+|--------|------|
+| `certification.py` | Shared truth contract for automatic and human visual certification (`HUMAN_REVIEW_STATES`). |
+| `certification_evidence_v2.py` | Pure, stdlib-only v2 evidence contracts; JSON-compatible, missing observations stay unresolved. |
+| `certification_review_v2.py` | v2 human-review contract: two distinct blinded reviews per item, third reviewer on disagreement/critical defect. |
+| `core_recipes.py` | Small correction-first recipe set giving release certification a stable scope separate from the full catalog. |
+| `corpus_manifest.py` | Deterministic validation of consented certification corpora (hashes, splits, person ids, controlled tags, label records). |
+
+### RAW & capture fidelity
+
+| Module | Role |
+|--------|------|
+| `capture_fidelity.py` | Capture-fidelity metadata and sensor calibration primitives (EXIF via Pillow; optional Lensfun; linear-mosaic calibration). |
+| `raw_develop.py` | Linear RAW development pipeline (`RAWDeveloper`): DNG/CR2/ARW/NEF in linear RGB, export to DNG/TIFF. |
+| `fuji_match.py` | Learns a monotone L* tone curve + guarded Lab chroma stats from a Fujifilm RAF preview JPEG and applies them to the full-res RAW decode. |
+
+### Looks, recipes & delivery
+
+| Module | Role |
+|--------|------|
+| `look_extractor.py` | F6 look-from-reference extraction: reverse-engineers a finishing look into editable engine params/preset. |
+| `lut_export.py` | Exports a recipe's per-pixel colour look as an Adobe `.cube` 3D LUT. |
+| `recipe_cookbook.py` | Read-only browsable index of every recipe (category, description, parent chain, key params); data layer for cookbook UIs. |
+| `recipe_gallery.py` | Renders every recipe on one user photo at preview size for side-by-side comparison (GUI panel + `python3 -m retouch.recipe_gallery`). |
+| `project_profiles.py` | Subject-linked project profiles and multi-reference Look Boards (intent metadata, not face pixels). |
+
+### Cosplay & experimental
+
+| Module | Role |
+|--------|------|
+| `cosplay_moat.py` | A3 cosplay skin moat: makeup-agnostic enhancements (wig-lace blend at the hairline, stockings smoothing, consistency). |
+| `neural_boosters.py` | PARKED neural stray-hair/defect segmentation infrastructure; disabled pending A1 benchmark evidence. |
+
 ## 5. Key dataclasses
 
 ### `ProcessingContext` (`engine.py:167`)

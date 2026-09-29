@@ -29,3 +29,4 @@ cc.json
 control-plane/attention.json
 control-plane/maintenance.json
 control-plane/rd.json
+control-plane/gate-cron.log
