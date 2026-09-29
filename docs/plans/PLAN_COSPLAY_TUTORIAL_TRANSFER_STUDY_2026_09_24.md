@@ -7,6 +7,10 @@ does not authorize a photo study or a production change.
 This study plan follows the
 [batch review](RESEARCH_COSPLAY_TUTORIAL_BATCH_REVIEW_2026_09_24.md) and
 [face evidence ledger](RESEARCH_COSPLAY_TUTORIAL_FACE_EVIDENCE_LEDGER_2026_09_24.md).
+Before selecting a recipe for a future run, consult the dated
+[current-code crosswalk](RESEARCH_COSPLAY_TUTORIAL_CURRENT_CODE_CROSSWALK_2026_09_25.md)
+for the inspected branch's mark-policy, catchlight, slimming, and body-mask
+boundaries; recheck the active checkout because that audit is branch-specific.
 It asks which ideas from photographed Photoshop tutorials can guide a
 preservation-aware Retouch review. The screenshots document one artist's manual
 workflow; they do not establish image quality or a reusable algorithm.
@@ -37,9 +41,15 @@ that plan and the current branch before a future study is run.
 
 The review bundle contains tutorial-page photographs, including visible
 intermediate composites. It does not contain the original photographs used by
-the tutorials, editable layer files, a stable source/output pair, or an
-independent review of the result. The provided image folder therefore cannot
-serve as a Retouch photo-evaluation set.
+the tutorials, editable layer files, or an independent review of the result.
+The locally synced Google Drive `My Drive/Photography` folder does contain
+candidate source/output collections by filename; the read-only
+[Drive inventory](RESEARCH_COSPLAY_TUTORIAL_DRIVE_PHOTO_INVENTORY_2026_09_25.md)
+records their counts and limits. No pair has yet been visually or technically
+verified for this study, and no source/output photo has been selected or
+processed. Before selection, confirm pair identity, stage, provenance, and
+requested intent, then recheck the current branch, recipe, runtime, and output
+workflow.
 
 Any later study would need owner-authorized photographs and their exact
 pre-edit originals and delivered outputs. Before selection, recheck the current
@@ -57,6 +67,10 @@ Seek examples that cover:
 
 - frontal and turned faces, including hair crossing the face;
 - soft, hard, mixed, and low light with different skin exposure levels;
+- near-white or silver wigs against bright backgrounds, including backlit
+  windows. A separate [person-gate false-negative report](RESEARCH_PERSON_GATE_WIG_FALSENEG_2026_09_25.md)
+  records a single-shoot cluster of real faces rejected by the person gate in
+  this condition; treat it as one coverage warning, not a general rate;
 - visible makeup, drawn marks, beauty marks, and facial hair where available;
 - dark and light wigs, loose flyaways, and detailed costume/skin boundaries;
 - single-person and multi-person frames, including small faces in the full image;
@@ -65,7 +79,10 @@ Seek examples that cover:
 Record how many candidates were screened, selected, excluded, and why. Keep
 images of the same shoot or known person together when dividing data for any
 later calibration or qualification. Use an owner-provided grouping; do not add
-face recognition to create it.
+face recognition to create it. Record both initial face detections and the
+person-gate outcome. A face detected and then rejected by the gate is a
+coverage miss, not a successful preservation result. Recheck the gate and
+branch revision before a future run.
 
 ## 4. Freeze each comparison
 
@@ -78,7 +95,9 @@ content hash. Record:
 - recipe, resolved settings, requested edit intent, and per-face target;
 - input/output dimensions, orientation, color profile/domain, and export format;
 - the exact processing stage represented by every saved image;
-- whether each intended operation executed, skipped, abstained, or failed.
+- whether each intended operation executed, skipped, abstained, or failed;
+- per-face detection, person-gate coverage, and whether the intended operation
+  reached that face.
 
 Use the same source, delivery dimensions, and viewing conditions across
 comparisons. A proxy render can help locate gross failures; it cannot certify
@@ -126,6 +145,7 @@ For each case, capture:
 | Eyes | Were the iris, sclera, lashes, brows, and existing catchlights preserved? Was any new catchlight explicitly requested? |
 | Hair and boundaries | Are strands and flyaways plausible? Did the edit leak into hair, costume, jewelry, or background? Are halos or cutout edges visible? |
 | Person/face ownership | Was the intended person and face edited? Were other people or nearby skin/costume left alone? |
+| Coverage | Was the face detected and retained by the person gate? Were any intended edits skipped because face/person support was absent? Count these outcomes in the study denominator. |
 | Color and light | Did skin hue or exposure drift beyond the request? Did local light contradict visible scene lighting or clip detail? |
 | Geometry and likeness | For the opt-in reshape arm only, is the requested change limited to its declared support, and do reviewers judge the person still recognizable as the source subject? |
 | Delivery | Does the decoded final export preserve the reviewed appearance at native and intended display size? |
