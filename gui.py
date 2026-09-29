@@ -4168,6 +4168,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 face_exposure = gr.Slider(0, 100, 0, step=1, label="Face Exposure Lift", info="Brighten/darken the exposed face relative to the body (skin.face_exposure) · 0 = off")
                                 face_polish = gr.Slider(0, 100, 0, step=1, label="Face Polish", info="Porcelain finish in one control: tones oily hot spots to a satin sheen, lifts under-eye and smile-line shadows, brightens the face a little, adds soft nose and cheekbone highlights and crisper irises · 0 = off")
                                 powder_finish = gr.Slider(0, 100, 0, step=1, label="Powder Finish", info="Soft, powdered skin: evens shine and sheen into the skin's own colour instead of greying it, and works on white face paint too. Keeps the face's overall brightness. Off by default; start near 50.")
+                                highlight_repair = gr.Slider(0, 100, 0, step=1, label="Blown Highlight Repair", info="Rebuilds skin that flash or sun blew out to pure white (forehead, nose, cheekbones): brings back skin colour and texture from the skin around it and rolls the spot below white. Leaves white face paint, eyes, lips and props alone. Off by default; start near 60.")
+                                skin_warmth = gr.Slider(0, 100, 0, step=1, label="Skin Warmth", info="Moves natural skin toward a warm peach, face and body together; leaves face paint and already-warm skin alone. Off by default; start near 50.")
 
                             with gr.Accordion("🦵 Body Skin", open=False):
                                 reset_body_skin_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
@@ -5608,6 +5610,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "skin_chroma_even": _skin_chroma_even_state,
         "face_polish": face_polish,
         "powder_finish": powder_finish,
+        "highlight_repair": highlight_repair,
+        "skin_warmth": skin_warmth,
         "skin_glow": skin_glow,
         "mask_feather_mode": mask_feather_mode,
         "eye_enhance": eye_enhance,

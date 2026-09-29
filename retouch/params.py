@@ -963,6 +963,30 @@ _SKIN_PARAMS = [
         max_val=100,
     ),
     ParamSpec(
+        # Blown (clipped) highlight repair on skin (retouch/highlight_repair.py).
+        # Opt-in: 0 = off, so recipes render as before.
+        name="highlight_repair",
+        cli_flag="highlight-repair",
+        cli_type=int,
+        default=0,
+        recipe_key="skin.highlight_repair",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        # Skin warmth toward a warm peach (retouch/skin_warmth.py), keyed on
+        # each face's skin; face paint left alone. Opt-in: 0 = off.
+        name="skin_warmth",
+        cli_flag="skin-warmth",
+        cli_type=int,
+        default=0,
+        recipe_key="skin.warmth",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
         name="skin_glow",
         cli_flag="skin-glow",
         cli_type=int,

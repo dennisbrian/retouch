@@ -175,6 +175,33 @@ default; start near 50 (100 can look flat). It pairs with Face Polish rather
 than replacing it. Note that the older Skin Finish "powder" and "matte" modes
 subtract grey and can darken lit cheeks on pale skin or face paint.
 
+Skin Warmth (`--skin-warmth 0-100` in the CLI, the "Skin Warmth" slider next
+to Powder Finish in the app, or `skin.warmth` in a recipe, where 0.5 = 50)
+turns natural skin that reads pink or flat toward a warm peach, the tone of
+most porcelain cosplay edits. It runs after the colour grade, so it sets where
+the skin ends up whatever the recipe, and it moves the neck, chest, arms and
+hands with the face (pixels of the same person whose colour matches the face)
+so they stay matched; blush and shading are kept. It leaves white, blue,
+violet or green face paint alone, and skin that is already warm, including
+most darker skin, is left as it is or changes only a little. It is off by
+default; start near 50. A beige or pink costume part the same colour as the
+skin warms with it. When the face is painted, body skin is left alone too.
+
+Blown Highlight Repair (`--highlight-repair 0-100` in the CLI, the "Blown
+Highlight Repair" slider next to Powder Finish in the app, or
+`skin.highlight_repair` in a recipe, where 0.6 = 60) rebuilds skin that a
+flash or harsh sun blew out to pure white, such as a hot spot on the nose,
+forehead or cheekbones. Those pixels hold no colour or texture, so shine
+removal and Powder Finish can only turn them grey or flat. This setting
+brings the spot back below white with a smooth roll-off (it still reads as a
+highlight), gives it the colour of the skin right around it and copies in
+fine skin texture from a clean patch of the same face. It leaves eyes,
+brows, lips, hair and anything not surrounded by skin (a white prop or
+costume part) alone, skips a painted face entirely (white face paint,
+including a bare nose on it) and skips a face that is mostly blown. It is off
+by default; start near 60. Very large blown areas come back smooth rather
+than textured: there is only so much skin nearby to borrow from.
+
 Keep Nose Shape (`--nose-shape 0-100` in the CLI, the "Keep Nose Shape" slider
 under Skin Tone in the app, or `skin.nose_shape` in a recipe, where 0.5 = 50)
 puts back the broad nose shading that skin smoothing flattens, so the nose
@@ -463,7 +490,7 @@ colour and tone steps and nothing else:
   background and subject work, and anything that looks at neighbouring
   pixels: clarity, glow and bloom, haze, vignette, grain, halation,
   chromatic aberration, sharpening and the impact finish. Steps the recipe
-  applies only on skin (three-way split toning, fade toe, skin glow) are left
+  applies only on skin (skin glow) are left
   out too, so the LUT matches what the recipe does to everything outside the
   face. The command lists which of these a recipe uses.
 
