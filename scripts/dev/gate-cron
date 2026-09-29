@@ -45,8 +45,8 @@ else
     say "SKIP pull (branch=$branch or dirty tree)"
 fi
 
-# 2. run gate
-if scripts/dev/local-gate >>"$log" 2>&1; then
+# 2. run gate (full: entire suite + quality-lab thresholds — this is the deep daily check)
+if scripts/dev/local-gate --full >>"$log" 2>&1; then
     say "gate: PASS"
 else
     say "gate: FAIL — see log"

@@ -37,7 +37,22 @@ step "1/3 governance fast checks (ERRORs only)"
 python3 scripts/dev/governance.py --ci
 
 step "2/3 unit tests (engine + dev tooling)"
-scripts/dev/test -x -q
+if [[ "$full" == 1 ]]; then
+    scripts/dev/test -x -q
+else
+    # Fast tier on pre-push: core engine + integration + dev tooling suites.
+    # Full 6.6k suite runs in the daily gate-cron job and with --full.
+    scripts/dev/test -x -q \
+        tests/test_engine.py \
+        tests/test_integration.py \
+        tests/test_frequency.py \
+        tests/test_lips.py \
+        tests/test_parsing_class_segmenter.py \
+        tests/test_attention_router.py \
+        tests/test_maintenance_system.py \
+        tests/test_experiment_lab.py \
+        tests/test_quality_lab.py
+fi
 
 if [[ "$full" == 1 ]]; then
     step "3/3 quality-lab threshold check"
