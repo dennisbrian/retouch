@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Daily scheduled gate: fast-forward main, run the fast gate, then check for
+# PRs that became mergeable (checks green) and auto-merge them.
+# Installed via: scripts/dev/gate-cron --install
+# Logs to: control-plane/gate-cron.log
+set -uo pipefail
+
+project_root="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$project_root"
+
+log_dir="$project_root/control-plane"
+mkdir -p "$log_dir"
+log="$log_dir/gate-cron.log"
+
+say() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$log"; }
+
+if [[ "${1:-}" == "--install" ]]; then
+    plist="$HOME/Library/LaunchAgents/com.retouch.gate-cron.plist"
+    cat > "$plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.retouch.gate-cron</string>
+  <key>ProgramArguments</key><array><string>$project_root/scripts/dev/gate-cron</string></array>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
+  <key>StandardOutPath</key><string>$log</string>
+  <key>StandardErrorPath</key><string>$log</string>
+</dict>
+</plist>
+EOF
+    launchctl unload "$plist" 2>/dev/null || true
+    launchctl load "$plist"
+    echo "installed: runs daily at 09:00, log -> $log"
+    exit 0
+fi
+
+say "== gate-cron start =="
+
+# 1. fast-forward main if clean
+branch="$(git branch --show-current)"
+if [[ "$branch" == "main" && -z "$(git status --porcelain)" ]]; then
+    git pull --ff-only >>"$log" 2>&1 && say "main fast-forwarded" || say "WARN: pull failed"
+else
+    say "SKIP pull (branch=$branch or dirty tree)"
+fi
+
+# 2. run gate
+if scripts/dev/local-gate >>"$log" 2>&1; then
+    say "gate: PASS"
+else
+    say "gate: FAIL — see log"
+    osascript -e 'display notification "Retouch local gate FAILED — check control-plane/gate-cron.log" with title "Retouch Gate" sound name "Basso"' 2>/dev/null || true
+fi
+
+# 3. auto-merge PRs whose checks are green (works once Actions billing resets)
+for pr in $(gh pr list --state open --json number --jq '.[].number' 2>/dev/null); do
+    state="$(gh pr view "$pr" --json mergeStateStatus --jq .mergeStateStatus 2>/dev/null)"
+    case "$state" in
+        CLEAN)
+            if gh pr merge "$pr" --merge >>"$log" 2>&1; then
+                say "auto-merged PR #$pr"
+                osascript -e "display notification \"Auto-merged PR #$pr\" with title \"Retouch Gate\"" 2>/dev/null || true
+            else
+                say "WARN: PR #$pr clean but merge failed"
+            fi
+            ;;
+        BLOCKED|BEHIND|DIRTY)
+            say "PR #$pr not mergeable ($state) — skipped"
+            ;;
+    esac
+done
+
+say "== gate-cron done =="
