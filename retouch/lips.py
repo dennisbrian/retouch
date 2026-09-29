@@ -87,35 +87,85 @@ class LipEnhancer:
         lip_texture = self._extract_texture(result, lip_mask, face_width)
 
         # ---- Vibrance (smart saturation) ----
-        result = vibrance_fn(result, lip_mask, s * 0.25)
+        result = self._apply_vibrance(result, lip_mask, s)
 
         # ---- Smoothing based on finish ----
-        if finish == "velvet":
-            # Stronger bilateral smoothing for velvet look
-            result = self._smooth(result, lip_mask, s * 0.65)
-        else:
-            # Subtle smoothing for matte/gloss
-            result = self._smooth(result, lip_mask, s * 0.3)
+        result = self._smooth_for_finish(result, lip_mask, s, finish)
 
         # ---- Colour tint (optional) ----
-        if tint is not None:
-            # For cosplay, apply a much stronger tint wash (0.85 opacity max) to achieve vibrant anime look
-            tint_opacity = s * 0.85 if (isinstance(tint, str) and tint == "cosplay") else s * 0.25
-            result = self._apply_tint(result, lip_mask, tint, tint_opacity)
+        result = self._apply_optional_tint(result, lip_mask, tint, s)
 
         # ---- Re-apply texture with dynamic opacity based on finish ----
-        if finish == "velvet":
-            # Re-apply texture very subtly (20% strength) to keep the soft velvet sheen
-            result = self._reapply_texture(result, lip_texture, lip_mask, face_width, opacity=0.20)
-        else:
-            # Standard texture re-application (75% strength)
-            result = self._reapply_texture(result, lip_texture, lip_mask, face_width, opacity=0.75)
+        result = self._restore_texture_for_finish(result, lip_texture, lip_mask, face_width, finish)
 
         # ---- Lip Gloss Specular Highlights (gloss only) ----
-        if finish == "gloss":
-            result = self._add_lip_gloss(result, lip_mask, s)
+        result = self._apply_gloss_finish(result, lip_mask, s, finish)
 
         return result
+
+    def _apply_vibrance(
+        self,
+        img_bgr: np.ndarray,
+        lip_mask: np.ndarray,
+        s: float,
+    ) -> np.ndarray:
+        """Boost lip colour with vibrance (smart saturation)."""
+        return vibrance_fn(img_bgr, lip_mask, s * 0.25)
+
+    def _smooth_for_finish(
+        self,
+        img_bgr: np.ndarray,
+        lip_mask: np.ndarray,
+        s: float,
+        finish: str,
+    ) -> np.ndarray:
+        """Bilateral lip smoothing; velvet uses a stronger pass."""
+        if finish == "velvet":
+            # Stronger bilateral smoothing for velvet look
+            return self._smooth(img_bgr, lip_mask, s * 0.65)
+        # Subtle smoothing for matte/gloss
+        return self._smooth(img_bgr, lip_mask, s * 0.3)
+
+    def _apply_optional_tint(
+        self,
+        img_bgr: np.ndarray,
+        lip_mask: np.ndarray,
+        tint: Optional[Union[str, Tuple[int, int, int]]],
+        s: float,
+    ) -> np.ndarray:
+        """Apply the optional colour tint (no-op when tint is None)."""
+        if tint is None:
+            return img_bgr
+        # For cosplay, apply a much stronger tint wash (0.85 opacity max) to achieve vibrant anime look
+        tint_opacity = s * 0.85 if (isinstance(tint, str) and tint == "cosplay") else s * 0.25
+        return self._apply_tint(img_bgr, lip_mask, tint, tint_opacity)
+
+    def _restore_texture_for_finish(
+        self,
+        img_bgr: np.ndarray,
+        lip_texture: np.ndarray,
+        lip_mask: np.ndarray,
+        face_width: float,
+        finish: str,
+    ) -> np.ndarray:
+        """Re-apply preserved texture; velvet keeps only a subtle sheen."""
+        if finish == "velvet":
+            # Re-apply texture very subtly (20% strength) to keep the soft velvet sheen
+            return self._reapply_texture(img_bgr, lip_texture, lip_mask, face_width, opacity=0.20)
+        # Standard texture re-application (75% strength)
+        return self._reapply_texture(img_bgr, lip_texture, lip_mask, face_width, opacity=0.75)
+
+    def _apply_gloss_finish(
+        self,
+        img_bgr: np.ndarray,
+        lip_mask: np.ndarray,
+        s: float,
+        finish: str,
+    ) -> np.ndarray:
+        """Add specular gloss highlights for the gloss finish only."""
+        if finish == "gloss":
+            return self._add_lip_gloss(img_bgr, lip_mask, s)
+        return img_bgr
 
     def _add_lip_gloss(
         self,
