@@ -217,3 +217,4 @@ output verification.
 
 ## Contributing
 See `docs/CONTRIBUTING.md` for dev workflow
+- `docs/EXPERIMENT_LAB.md` — Frozen experiment designs, isolated candidates, Quality Lab evidence, and promotion (`scripts/dev/experiment`)
