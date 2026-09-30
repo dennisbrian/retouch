@@ -22,6 +22,13 @@ advertised Python 3.9 support.
 pip install -r requirements/desktop.txt
 ```
 
+### `video.txt` (Video Extra)
+PyAV, which bundles its own FFmpeg (H.264 included), for `retouch.video`
+streaming decode/encode with audio passthrough.
+```bash
+pip install -r requirements/video.txt
+```
+
 ### `dev.txt` (Development)
 Testing, linting, and development tools.
 ```bash

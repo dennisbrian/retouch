@@ -254,6 +254,7 @@ per `AGENTS.md`.
 | `regions.py` | Region-mask geometry helpers. |
 | `hairwork.py` | Hair retouching helpers (distinct from `hair.py` enhancement). |
 | `wig_shine.py` | Wig Shine (`hair_deglare`): mattes synthetic-wig gloss into the wig colour; called via `hairwork.deglare_wig` in the per-face hair stage. |
+| `video/media.py` | V1 video slice S1: streaming decode (upright BGR frames with source timestamps) and H.264/lossless FFV1 encode with the source audio copied; needs the `video` extra (PyAV). |
 | `batch_processor.py` | Batch orchestration over `RetouchEngine`. |
 | `spot_heal_auto.py` | Automatic spot healing (pimple/red-spot detection + plane-fit heal; first op in the per-face core). |
 | `eye_visibility.py` | Eye-occlusion gate (EAR + tone-adaptive contrast) gating eye ops on closed/occluded eyes. |
