@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated": "2026-09-28T08:42:56Z",
-  "note": "Synthetic seed corpus. Real photos: drop into test_output/quality_lab/<id>/input.png and append a case entry; do NOT commit private images.",
+  "note": "Synthetic seed corpus + wig-edge real-photo corpus (45 cases, 2026-09-30; private images untracked under test_output/quality_lab/corpus_wig_edge/).",
   "cases": [
     {
       "id": "synthetic-light-skin",
@@ -83,6 +83,429 @@
         "eyes"
       ],
       "input": "test_output/quality_lab/synthetic-real-face/input.png"
+    },
+    {
+      "id": "fn_dscf3773",
+      "input": "test_output/quality_lab/corpus_wig_edge/fn_dscf3773/input.png",
+      "subject": "s0913_silver_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "wig",
+        "blown_bg",
+        "false_negative"
+      ]
+    },
+    {
+      "id": "fn_dscf3774",
+      "input": "test_output/quality_lab/corpus_wig_edge/fn_dscf3774/input.png",
+      "subject": "s0913_silver_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "wig",
+        "blown_bg",
+        "false_negative"
+      ]
+    },
+    {
+      "id": "fn_dscf3783",
+      "input": "test_output/quality_lab/corpus_wig_edge/fn_dscf3783/input.png",
+      "subject": "s0913_silver_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "wig",
+        "blown_bg",
+        "false_negative"
+      ]
+    },
+    {
+      "id": "fn_dscf3786",
+      "input": "test_output/quality_lab/corpus_wig_edge/fn_dscf3786/input.png",
+      "subject": "s0913_silver_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "wig",
+        "blown_bg",
+        "false_negative"
+      ]
+    },
+    {
+      "id": "fn_dscf3788",
+      "input": "test_output/quality_lab/corpus_wig_edge/fn_dscf3788/input.png",
+      "subject": "s0913_silver_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "wig",
+        "blown_bg",
+        "false_negative"
+      ]
+    },
+    {
+      "id": "fn_dscf3792",
+      "input": "test_output/quality_lab/corpus_wig_edge/fn_dscf3792/input.png",
+      "subject": "s0913_silver_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "wig",
+        "blown_bg",
+        "false_negative"
+      ]
+    },
+    {
+      "id": "fn_dscf3794",
+      "input": "test_output/quality_lab/corpus_wig_edge/fn_dscf3794/input.png",
+      "subject": "s0913_silver_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "wig",
+        "blown_bg",
+        "false_negative"
+      ]
+    },
+    {
+      "id": "fn_dscf3799",
+      "input": "test_output/quality_lab/corpus_wig_edge/fn_dscf3799/input.png",
+      "subject": "s0913_silver_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "wig",
+        "blown_bg",
+        "false_negative"
+      ]
+    },
+    {
+      "id": "fn_dscf3809",
+      "input": "test_output/quality_lab/corpus_wig_edge/fn_dscf3809/input.png",
+      "subject": "s0913_silver_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "wig",
+        "blown_bg",
+        "false_negative"
+      ]
+    },
+    {
+      "id": "ctrl_dscf3775",
+      "input": "test_output/quality_lab/corpus_wig_edge/ctrl_dscf3775/input.png",
+      "subject": "s0913_silver_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "control"
+      ]
+    },
+    {
+      "id": "ctrl_dscf3800",
+      "input": "test_output/quality_lab/corpus_wig_edge/ctrl_dscf3800/input.png",
+      "subject": "s0913_silver_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "control"
+      ]
+    },
+    {
+      "id": "ctrl_dscf3776",
+      "input": "test_output/quality_lab/corpus_wig_edge/ctrl_dscf3776/input.png",
+      "subject": "s0913_silver_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "control"
+      ]
+    },
+    {
+      "id": "ctrl_dscf3785",
+      "input": "test_output/quality_lab/corpus_wig_edge/ctrl_dscf3785/input.png",
+      "subject": "s0913_silver_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "control"
+      ]
+    },
+    {
+      "id": "ctrl_dscf3790",
+      "input": "test_output/quality_lab/corpus_wig_edge/ctrl_dscf3790/input.png",
+      "subject": "s0913_silver_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "control"
+      ]
+    },
+    {
+      "id": "ctrl_dscf3797",
+      "input": "test_output/quality_lab/corpus_wig_edge/ctrl_dscf3797/input.png",
+      "subject": "s0913_silver_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "control"
+      ]
+    },
+    {
+      "id": "v0919_dscf3928",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0919_dscf3928/input.png",
+      "subject": "s0919_pink_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0919_dscf3943",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0919_dscf3943/input.png",
+      "subject": "s0919_pink_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0919_dscf3957",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0919_dscf3957/input.png",
+      "subject": "s0919_pink_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0919_dscf3972",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0919_dscf3972/input.png",
+      "subject": "s0919_pink_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0919_dscf3987",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0919_dscf3987/input.png",
+      "subject": "s0919_pink_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0919_dscf4002",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0919_dscf4002/input.png",
+      "subject": "s0919_pink_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0919_dscf4017",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0919_dscf4017/input.png",
+      "subject": "s0919_pink_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0919_dscf4031",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0919_dscf4031/input.png",
+      "subject": "s0919_pink_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0919_dscf4051",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0919_dscf4051/input.png",
+      "subject": "s0919_pink_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0919_dscf4066",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0919_dscf4066/input.png",
+      "subject": "s0919_pink_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0919_dscf4080",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0919_dscf4080/input.png",
+      "subject": "s0919_pink_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0919_dscf4095",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0919_dscf4095/input.png",
+      "subject": "s0919_pink_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0919_dscf4110",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0919_dscf4110/input.png",
+      "subject": "s0919_pink_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0919_dscf4124",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0919_dscf4124/input.png",
+      "subject": "s0919_pink_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0919_dscf4139",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0919_dscf4139/input.png",
+      "subject": "s0919_pink_wig",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0920_dscf4141",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0920_dscf4141/input.png",
+      "subject": "s0920_teal_maid",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0920_dscf4158",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0920_dscf4158/input.png",
+      "subject": "s0920_teal_maid",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0920_dscf4174",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0920_dscf4174/input.png",
+      "subject": "s0920_teal_maid",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0920_dscf4191",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0920_dscf4191/input.png",
+      "subject": "s0920_teal_maid",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0920_dscf4207",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0920_dscf4207/input.png",
+      "subject": "s0920_teal_maid",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0920_dscf4224",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0920_dscf4224/input.png",
+      "subject": "s0920_teal_maid",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0920_dscf4240",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0920_dscf4240/input.png",
+      "subject": "s0920_teal_maid",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0920_dscf4257",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0920_dscf4257/input.png",
+      "subject": "s0920_teal_maid",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0920_dscf4274",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0920_dscf4274/input.png",
+      "subject": "s0920_teal_maid",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0920_dscf4290",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0920_dscf4290/input.png",
+      "subject": "s0920_teal_maid",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0920_dscf4307",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0920_dscf4307/input.png",
+      "subject": "s0920_teal_maid",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0920_dscf4324",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0920_dscf4324/input.png",
+      "subject": "s0920_teal_maid",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0920_dscf4341",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0920_dscf4341/input.png",
+      "subject": "s0920_teal_maid",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0920_dscf4357",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0920_dscf4357/input.png",
+      "subject": "s0920_teal_maid",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
+    },
+    {
+      "id": "v0920_dscf4374",
+      "input": "test_output/quality_lab/corpus_wig_edge/v0920_dscf4374/input.png",
+      "subject": "s0920_teal_maid",
+      "evidence_class": "real_photo",
+      "tags": [
+        "validation"
+      ]
     }
   ]
 }
