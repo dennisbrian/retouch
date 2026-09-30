@@ -1,0 +1,180 @@
+{
+  "artifacts": [],
+  "baseline": {
+    "commit": "6b6844af2bc67bc816ad7281b962c4b79b99e321",
+    "environment": {
+      "cv2": "4.11.0",
+      "mediapipe": "0.10.5",
+      "numpy": "1.26.4"
+    },
+    "recipes": [
+      "cosplay_clear_protected_v1",
+      "natural"
+    ],
+    "report": "/Applications/htdocs/retouch/test_output/quality_lab/reports/baseline_full54.json",
+    "sha256": "22595afe1c8e9c038c99f5fd7e22491700d2094f47622e199498a186f19ae11f",
+    "thresholds_sha256": "8e02a6ce77e5b907ba1c3ede0cda72af494ec1d20fe023d24899d891e705899c"
+  },
+  "budget": "MEDIUM",
+  "candidate_count": 3,
+  "candidates": [
+    {
+      "approach": "edge-contrast rescue",
+      "complexity": {},
+      "elimination_reason": "",
+      "id": "A",
+      "mechanism": "Canny edge density in box center >= 0.02 when coverage <= 0.25 and retinaface confidence >= 0.85",
+      "patch": "/Applications/htdocs/retouch/test_output/experiment_lab/candidate_A_edge_contrast_rescue.patch",
+      "rationale": "Real heads carry edge structure (hairline, brows, eyes, mouth); bokeh/sky/wall FPs are edge-poor centrally",
+      "rounds": 0,
+      "runs": [],
+      "status": "DESIGNED",
+      "worktree": ""
+    },
+    {
+      "approach": "bright-bg relaxed gate",
+      "complexity": {},
+      "elimination_reason": "",
+      "id": "B",
+      "mechanism": "lower coverage cutoff to 0.15 when face has measured presence evidence AND surround ring mean luma >= 235 (blown-highlight background)",
+      "patch": "/Applications/htdocs/retouch/test_output/experiment_lab/candidate_B_bright_bg_relaxed_gate.patch",
+      "rationale": "Targets the exact root cause: near-white subject vs near-white background confuses the segmenter at the head",
+      "rounds": 0,
+      "runs": [],
+      "status": "DESIGNED",
+      "worktree": ""
+    },
+    {
+      "approach": "hair-mask-aware coverage",
+      "complexity": {},
+      "elimination_reason": "",
+      "id": "C",
+      "mechanism": "recompute central coverage against max(person_mask, wig-aware hair mask) + require existing _face_skin_rescue",
+      "patch": "/Applications/htdocs/retouch/test_output/experiment_lab/candidate_C_hair_aware_coverage.patch",
+      "rationale": "Uses existing wig-aware hair machinery (parsing._grow_wig_hair, _MC_HAIR) so the wig region counts as person; skin rescue still required so a bare wig cannot pass",
+      "rounds": 0,
+      "runs": [],
+      "status": "DESIGNED",
+      "worktree": ""
+    }
+  ],
+  "completed_at": "",
+  "conclusion": null,
+  "confidence": "NONE",
+  "constraints": {
+    "max_changed_files": 8,
+    "max_loc_added": 500
+  },
+  "corpus": {
+    "case_count": 43,
+    "cases": {
+      "development": [
+        "ctrl_dscf3775",
+        "ctrl_dscf3776",
+        "ctrl_dscf3785",
+        "ctrl_dscf3790",
+        "ctrl_dscf3797",
+        "ctrl_dscf3800",
+        "fn_dscf3773",
+        "fn_dscf3774",
+        "fn_dscf3783",
+        "fn_dscf3786",
+        "fn_dscf3788",
+        "fn_dscf3792",
+        "fn_dscf3794",
+        "fn_dscf3799"
+      ],
+      "holdout": [
+        "v0919_dscf3928",
+        "v0919_dscf3943",
+        "v0919_dscf3957",
+        "v0919_dscf3972",
+        "v0919_dscf3987",
+        "v0919_dscf4002",
+        "v0919_dscf4017",
+        "v0919_dscf4031",
+        "v0919_dscf4051",
+        "v0919_dscf4066",
+        "v0919_dscf4080",
+        "v0919_dscf4095",
+        "v0919_dscf4124",
+        "v0919_dscf4139"
+      ],
+      "qualified": false,
+      "reason": "too few independent groups",
+      "validation": [
+        "v0920_dscf4141",
+        "v0920_dscf4158",
+        "v0920_dscf4174",
+        "v0920_dscf4191",
+        "v0920_dscf4207",
+        "v0920_dscf4224",
+        "v0920_dscf4240",
+        "v0920_dscf4257",
+        "v0920_dscf4274",
+        "v0920_dscf4290",
+        "v0920_dscf4307",
+        "v0920_dscf4324",
+        "v0920_dscf4341",
+        "v0920_dscf4357",
+        "v0920_dscf4374"
+      ]
+    },
+    "manifest": "/Applications/htdocs/retouch/test_output/quality_lab/corpus_wig_edge/experiment_corpus.json",
+    "real_holdout": true,
+    "sha256": "00eac2e01104bf2d38532ce8f27e247f884e20491092e9c5e9008409995c5b3c"
+  },
+  "created_at": "2026-09-30T09:35:02+00:00",
+  "design_sha256": "4e74fc9c3ea424b1d94e48be4414daa3a5bfc931e3a071c01e699d61308d7dff",
+  "experiment_id": "EXP-0001",
+  "failure_criteria": {
+    "max_ram_ratio": 1.15,
+    "max_regression_fraction": 0.02,
+    "max_runtime_ratio": 1.1
+  },
+  "history": [
+    {
+      "at": "2026-09-30T09:35:02+00:00",
+      "event": "created"
+    },
+    {
+      "at": "2026-09-30T15:30:21+00:00",
+      "event": "design frozen",
+      "sha256": "4e74fc9c3ea424b1d94e48be4414daa3a5bfc931e3a071c01e699d61308d7dff"
+    }
+  ],
+  "hypothesis": "A person-gate coverage fallback using local edge/luminance contrast at the head region can rescue silver-wig false negatives without re-admitting background false positives",
+  "hypothesis_id": "HYP-002",
+  "hypothesis_success_text": "9/9 documented FN frames detect on the 2026-09-13 shoot; 0 FP regressions on the 439-image 2026-09-19/20 validation corpus",
+  "metrics": [
+    "regions.HAIR.edge_retention",
+    "Quality Lab regression count",
+    "time ratio",
+    "RAM ratio",
+    "complexity"
+  ],
+  "negative_findings": [],
+  "new_evidence": "",
+  "promotion_task": null,
+  "question": "Can local edge/luminance evidence rescue silver-wig false negatives without re-admitting background false positives?",
+  "reject_all_if": "Every candidate either fails to restore detection/retouch on the silver-wig false-negative frames (no HAIR-region improvement over baseline) or re-admits background false positives / harms background separation (Quality Lab BACKGROUND-region or global REGRESSION verdicts) or fails the holdout.",
+  "related_research": [],
+  "schema": 1,
+  "similarity": {
+    "matches": [],
+    "sources_unavailable": [],
+    "verdict": "NEW"
+  },
+  "started_at": "",
+  "status": "DESIGNED",
+  "success_criteria": {
+    "direction": "higher",
+    "metric": "regions.HAIR.edge_retention",
+    "min_delta": 0.05,
+    "min_positive_fraction": 0.8,
+    "quality_tolerance": 0.01
+  },
+  "title": "Wig-edge person-gate rescue",
+  "updated_at": "2026-09-30T15:32:46+00:00",
+  "winner": null
+}
