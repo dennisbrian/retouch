@@ -114,12 +114,18 @@ catchlights or face reshaping an automatic natural-retouch default.
 |---|---|---|
 | Completed 2026-09-24 | [Face evidence ledger](RESEARCH_COSPLAY_TUTORIAL_FACE_EVIDENCE_LEDGER_2026_09_24.md) for indices 143–145, 167–168, and 219–225, including working translations, confidence, source type, intended effect, and repeated-page groups. | Keep direct observations, translations, and repeated captures auditable. |
 | Completed 2026-09-24 | [Proposed transfer study](PLAN_COSPLAY_TUTORIAL_TRANSFER_STUDY_2026_09_24.md) defining the photo-pair contract, separated edit arms, preservation review, and decision gates. | Make a later photo study reviewable; no photos or outputs were processed. |
+| Completed 2026-09-25 | [Current-code crosswalk](RESEARCH_COSPLAY_TUTORIAL_CURRENT_CODE_CROSSWALK_2026_09_25.md) checking tutorial ideas against the inspected Retouch branch, recipe settings, mark-policy wiring, and remaining code/evidence gaps. | Avoid repeating completed work and freeze the relevant code state before a future study. |
+| Completed 2026-09-25 | [Stylized compositing review](RESEARCH_COSPLAY_TUTORIAL_COMPOSITING_2026_09_25.md) synthesizing masks, depth, occlusion, and lighting examples from images 039–066, 108–135, 208–227, and 228–248, with a bounded current-code map. | Separate existing portrait/background polish from the larger asset-compositing workflow shown in the tutorials. |
+| Completed 2026-09-25 | [Google Drive Photography inventory](RESEARCH_COSPLAY_TUTORIAL_DRIVE_PHOTO_INVENTORY_2026_09_25.md) listing candidate matched sets by folder count and filename overlap. | Locate possible source/output references without treating filenames as verified pairs or photo-quality evidence. |
 | 1 | Collect authorized matched source/output pairs and complete a small pilot using the protocol. | Judge whether a technique improves the requested look on the reviewed cases. |
-| 2 | Prepare a separate stylized-compositing review for masks, depth, and light examples from 039–066, 108–135, and 208–248. | Decide which manual ideas merit a bounded, user-invoked workflow. |
 
 The [transfer study plan](PLAN_COSPLAY_TUTORIAL_TRANSFER_STUDY_2026_09_24.md)
-specifies the future comparison record and review gates. No source/output
-experiment has been run, and no algorithm has been selected.
+specifies the future comparison record and review gates. The face-side
+[current-code crosswalk](RESEARCH_COSPLAY_TUTORIAL_CURRENT_CODE_CROSSWALK_2026_09_25.md)
+and broader [stylized-compositing review](RESEARCH_COSPLAY_TUTORIAL_COMPOSITING_2026_09_25.md)
+are now documented. The Drive inventory found candidate matched folders but
+did not inspect image pixels or verify their source/output stages. No new
+source/output experiment has been run, and no algorithm has been selected.
 
 ## Related Retouch research
 
