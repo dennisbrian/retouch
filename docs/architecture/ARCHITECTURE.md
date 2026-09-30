@@ -253,6 +253,7 @@ per `AGENTS.md`.
 | `model_fetch.py` | ONNX/TFLite model download. |
 | `regions.py` | Region-mask geometry helpers. |
 | `hairwork.py` | Hair retouching helpers (distinct from `hair.py` enhancement). |
+| `wig_shine.py` | Wig Shine (`hair_deglare`): mattes synthetic-wig gloss into the wig colour; called via `hairwork.deglare_wig` in the per-face hair stage. |
 | `batch_processor.py` | Batch orchestration over `RetouchEngine`. |
 | `spot_heal_auto.py` | Automatic spot healing (pimple/red-spot detection + plane-fit heal; first op in the per-face core). |
 | `eye_visibility.py` | Eye-occlusion gate (EAR + tone-adaptive contrast) gating eye ops on closed/occluded eyes. |
