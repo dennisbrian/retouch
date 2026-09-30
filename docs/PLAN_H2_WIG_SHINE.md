@@ -1,5 +1,7 @@
 # PLAN_H2_WIG_SHINE — Wig Shine Shaping (Deglare + Anisotropic Angel Ring)
 
+> **2026-09-30:** the deglare half of this plan was replaced by `retouch/wig_shine.py` (the first version was inert on real wigs; see its module docstring). The angel-ring half is unchanged.
+
 > **Master-plan row 18c** (`MASTER_PLAN.md:84`): *Wig shine shaping (deglare + anisotropic angel ring); optional depth D&B along flow — ~1.5 wk, depends on H0 ✅.*
 > **Tier-H plan source:** `PLAN_TIERH_HAIR.md:32-37` (H2 section).
 > **Type:** MEDIUM / **Visual-Critical** — touches `hairwork.py` (a pipeline stage) and reuses `skin.shine_removal` math at hair scale.

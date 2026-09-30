@@ -3983,7 +3983,6 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         _reshape_mouth_size_state = gr.State(value=0.0)
                         _reshape_smile_state = gr.State(value=0.0)
                         _reshape_forehead_state = gr.State(value=0.0)
-                        _hair_deglare_state = gr.State(value=0.0)
                         _hair_ring_position_state = gr.State(value=0.5)
                         _hair_ring_tint_state = gr.State(value=0.0)
                         _hair_remove_flyaways_state = gr.State(value=0.0)
@@ -4247,6 +4246,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             with gr.Accordion("🌟 Structure & Effects", open=False):
                                 reset_structure_effects_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                                 hair_enhance = gr.Slider(0, 100, 5, step=1, label="Hair Shine", info="Boost highlight reflections and depth in hair strands")
+                                hair_deglare = gr.Slider(0, 100, 0, step=1, label="Wig Shine", info="Soften the plastic shine synthetic wigs pick up under flash or con lighting, back into the wig's own colour. Keeps the strands and the wig's lit side. Off by default; start near 50.")
                                 dodge_burn = gr.Slider(0, 100, 0, step=1, label="Dodge & Burn", info="Sculpt face structure with local highlight/shadow contouring")
                                 impact = gr.Slider(0, 100, 0, step=1, label="Global Impact Finish", info="Final punch: combined clarity, sharpening, and micro-contrast boost")
                                 specular_bloom = gr.Slider(0, 100, 0, step=1, label="Specular Bloom", info="Dreamy bloom glow applied specifically to skin highlight zones")
@@ -5652,7 +5652,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "reshape_neck_width": _reshape_neck_width_state,
         "reshape_neck_length": _reshape_neck_length_state,
         "hair_enhance": hair_enhance,
-        "hair_deglare": _hair_deglare_state,
+        "hair_deglare": hair_deglare,
         "hair_ring_position": _hair_ring_position_state,
         "hair_ring_tint": _hair_ring_tint_state,
         "hair_remove_flyaways": _hair_remove_flyaways_state,

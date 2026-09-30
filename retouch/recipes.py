@@ -3497,7 +3497,10 @@ RECIPES["auto_clean_v1"] = {
     "eyes": {"whites": 0.10, "dark_circles": 0.10},
     "hair": {
         "shine": 0.20,
-        "deglare": 30,
+        # 0, not 30: the first deglare was inert on real wigs, so this
+        # recipe never visibly had it. The 2026-09-29 Wig Shine rewrite
+        # does act; left off here so the recipe's look doesn't change.
+        "deglare": 0,
         "remove_flyaways": 35,
     },
     # Neural boosters are compatibility-only until real segmenters/models

@@ -202,6 +202,19 @@ including a bare nose on it) and skips a face that is mostly blown. It is off
 by default; start near 60. Very large blown areas come back smooth rather
 than textured: there is only so much skin nearby to borrow from.
 
+Wig Shine (`--hair-deglare 0-100` in the CLI, the "Wig Shine" slider under
+Structure & Effects in the app, or `hair.deglare` in a recipe, where 50 = 50)
+softens the plastic gloss synthetic wigs pick up under flash, softboxes or
+con hall lighting, back into the wig's own colour. It measures the gloss
+against the wig around it, so the lit side of a wig and single bright
+strands are kept, and it takes the gloss off as light rather than painting
+grey in, so a blonde or red wig gets its colour back. White bows and lace
+caught in the hair mask, and a backlit wig edge against a bright window, are
+left alone. It is off by default; start near 50. It works on the hair near
+the face (the crown, bangs and sides), not the far ends of a waist-length
+wig. The earlier version of this setting was hidden and did almost nothing
+on real wigs.
+
 Keep Nose Shape (`--nose-shape 0-100` in the CLI, the "Keep Nose Shape" slider
 under Skin Tone in the app, or `skin.nose_shape` in a recipe, where 0.5 = 50)
 puts back the broad nose shading that skin smoothing flattens, so the nose

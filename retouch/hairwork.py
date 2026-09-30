@@ -41,7 +41,6 @@ from .utils import (
     bgr_f32_to_lab_f32,
     lab_f32_to_bgr_f32,
     normalize_mask,
-    guided_filter,
 )
 
 
@@ -254,8 +253,6 @@ def unify_hair_color(
 
 
 _COHERENCE_FLOOR: float = 0.25
-_DEGLARE_MAX_REDUCTION: float = 0.70
-_DEGLARE_MIDBAND_FLOOR: float = 0.85
 _RING_ALPHA: float = 8.0
 _RING_LIGHT_AZIMUTH_DEG: float = 0.0
 _RING_LIGHT_ELEVATION_DEG: float = 70.0
@@ -274,58 +271,6 @@ def _from_lab(lab: np.ndarray, is_float: bool) -> np.ndarray:
     return cv2.cvtColor(clipped.astype(np.uint8), cv2.COLOR_LAB2BGR)
 
 
-def _midband_energy(L: np.ndarray, face_width: float) -> float:
-    """Mid-band luminance energy of a region — the deglare dimensionality gauge.
-
-    Reuses skin._blotch_bandpass's difference-of-Gaussians bandpass to measure
-    the shading structure that must survive the deglare (per PLAN_H2 §2.5 the
-    post-deglare value must stay ≥ 85% of the pre-deglare value).
-    """
-    sigma_small = max(1.0, face_width / 40.0)
-    sigma_large = max(1.0, face_width / 12.0)
-    low_small = cv2.GaussianBlur(L, (0, 0), sigma_small)
-    low_large = cv2.GaussianBlur(L, (0, 0), sigma_large)
-    band = low_small - low_large
-    return float(np.mean(band * band))
-
-
-def _anisotropic_feather(
-    mask: np.ndarray,
-    orientation: np.ndarray,
-    face_width: float,
-) -> np.ndarray:
-    """Feather a mask along the strand tangent (orientation + π/2).
-
-    A separable two-pass Gaussian with σ_along = 4·σ_across elongates the
-    mask along the strand so the deglare reads as a band, not a blob. Where
-    the flow field is undefined (orientation == 0 everywhere) this collapses
-    to a near-isotropic blur, which is the safe fallback.
-    """
-    sigma_across = max(1.0, face_width / 120.0)
-    sigma_along = 4.0 * sigma_across
-    # Two 1D passes. The across-strand direction is the gradient principal
-    # axis (orientation); the along-strand direction is orientation + π/2.
-    # We approximate by blurring with σ_along along the dominant strand axis
-    # (vertical for near-horizontal strands, horizontal for near-vertical),
-    # then σ_across along the perpendicular axis. A pixel-wise anisotropic
-    # kernel is impractical per-pixel, so we use the angle to pick the axis
-    # pair via a soft blend of the two separable orderings.
-    # Vertical σ_along pass
-    v = cv2.GaussianBlur(mask, (0, int(2 * np.ceil(3 * sigma_along)) + 1), sigma_along)
-    v = cv2.GaussianBlur(v, (int(2 * np.ceil(3 * sigma_across)) + 1, 0), sigma_across)
-    # Horizontal σ_along pass
-    h = cv2.GaussianBlur(mask, (int(2 * np.ceil(3 * sigma_along)) + 1, 0), sigma_along)
-    h = cv2.GaussianBlur(h, (0, int(2 * np.ceil(3 * sigma_across)) + 1), sigma_across)
-    # Blend by how vertical the strand is. Strand tangent angle:
-    #   tan_angle = orientation + π/2
-    # weight_v = sin²(tan_angle) → 1 when strands run vertically.
-    tan_angle = orientation + (np.pi * 0.5)
-    w_v = np.sin(tan_angle) ** 2
-    w_v = w_v.astype(np.float32)
-    out = v * w_v + h * (1.0 - w_v)
-    return np.clip(out, 0.0, 1.0)
-
-
 def deglare_wig(
     img_bgr: np.ndarray,
     hair_mask: Optional[np.ndarray],
@@ -335,135 +280,34 @@ def deglare_wig(
     face_width: float = 200.0,
     eyebrow_mask: Optional[np.ndarray] = None,
 ) -> np.ndarray:
-    """Tame synthetic wig specular (deglare) without killing dimensionality.
+    """Soften synthetic wig shine into the wig's own colour ("Wig Shine").
 
-    Adapts SkinProcessor.shine_removal to hair scale: detect bright
-    low-chroma pixels within ``hair_mask``, reconstruct their chroma via a
-    guided filter, and compress L toward a local non-glare target with an
-    exponential soft rolloff capped at 70%. The detection mask is feathered
-    anisotropically along the strand tangent (from the H0 flow field) and
-    gated by a coherence floor so fuzzy/parting regions are left alone. A
-    mid-band energy floor scales the compression back if it would flatten
-    the wig's shading dimensionality below 85% of pre-deglare.
+    Delegates to :func:`retouch.wig_shine.matte_wig_shine`, which measures
+    shine against a local baseline of the wig itself (tone-invariant) and
+    removes it as neutral linear light, so the fibre colour comes back. The
+    first version of this function gated on low chroma against the whole
+    wig's median and was inert on real wigs (0.5-2 L at strength 60).
 
     Args:
         img_bgr: (H, W, 3) uint8 or float32 [0, 255] BGR image.
-        hair_mask: (H, W) float mask in [0, 1]. None or empty → no-op.
-        orientation: (H, W) float32 H0 orientation field (radians).
-        coherence: (H, W) float32 H0 coherence field in [0, 1].
-        strength: 0–100 deglare intensity. 0 returns input unchanged.
-        face_width: Face width in pixels; all kernel radii scale from it.
-        eyebrow_mask: Optional union of left+right eyebrow masks, dilated
-            and subtracted from the glare mask so eyebrow hairs are never
-            deglared (mirrors skin.dodge_burn's eyebrow exclusion).
+        hair_mask: (H, W) float mask in [0, 1]. None or empty -> no-op.
+        orientation: (H, W) H0 orientation field (unused; kept for the
+            dispatch signature shared with the other H-stage ops).
+        coherence: (H, W) H0 coherence field in [0, 1]; fuzzy and parting
+            areas (low coherence) are left alone.
+        strength: 0-100. 0 returns input unchanged.
+        face_width: Face width in pixels; all scales derive from it.
+        eyebrow_mask: Optional eyebrow mask, never touched.
 
     Returns:
         (H, W, 3) image, same dtype as input.
     """
-    if strength <= 0 or hair_mask is None:
-        return img_bgr
+    from .wig_shine import matte_wig_shine
 
-    is_float = img_bgr.dtype == np.float32
-    lab = _to_lab(img_bgr, is_float)
-    L = lab[:, :, 0]
-    a = lab[:, :, 1]
-    b = lab[:, :, 2]
-
-    mask_f = normalize_mask(hair_mask)
-    if mask_f is None or mask_f.max() < 0.05:
-        return img_bgr
-    mask_f = mask_f.astype(np.float32, copy=False)
-    if mask_f.shape != L.shape:
-        mask_f = cv2.resize(mask_f, (L.shape[1], L.shape[0]),
-                            interpolation=cv2.INTER_LINEAR)
-
-    hair_idx = mask_f > 0.3
-    if not np.any(hair_idx):
-        return img_bgr
-
-    chroma = np.sqrt((a - 128.0) ** 2 + (b - 128.0) ** 2)
-    median_L = float(np.median(L[hair_idx]))
-    median_chroma = float(np.median(chroma[hair_idx]))
-
-    # H2 §2.2 — retuned thresholds vs S4 (skin).
-    shine_L_threshold = median_L + 12.0
-    chroma_thresh = max(5.0, median_chroma * 0.25)
-
-    L_gate = np.clip((L - shine_L_threshold) / 15.0, 0.0, 1.0)
-    chroma_gate = 1.0 - np.clip(chroma / chroma_thresh, 0.0, 1.0)
-    glare_m = L_gate * chroma_gate * mask_f
-
-    # H2 §2.3 — coherence gate + anisotropic feather along strand tangent.
-    coh = np.where(coherence > _COHERENCE_FLOOR, coherence, 0.0).astype(np.float32)
-    glare_m = glare_m * coh
-    glare_m = _anisotropic_feather(glare_m, orientation, face_width)
-    glare_m = np.clip(glare_m, 0.0, 1.0)
-
-    # H2 §6.3 — eyebrow/eyelash exclusion.
-    if eyebrow_mask is not None:
-        eb = normalize_mask(eyebrow_mask)
-        if eb is not None:
-            eb = eb.astype(np.float32, copy=False)
-            if eb.shape != L.shape:
-                eb = cv2.resize(eb, (L.shape[1], L.shape[0]),
-                                interpolation=cv2.INTER_LINEAR)
-            eb_dilated = cv2.dilate(eb, np.ones((5, 5), np.uint8))
-            glare_m = glare_m * (1.0 - eb_dilated)
-
-    if glare_m.max() < 0.01:
-        return img_bgr
-
-    # H2 §2.4 — chroma inpaint + local non-glare L target (radii scale with
-    # face_width, NOT the S4 hardcoded 30 / (31,31)).
-    gf_radius = max(4, int(face_width / 8.0))
-    a_inpainted = guided_filter(a.astype(np.float32, copy=False),
-                                radius=gf_radius, eps=100.0, guide=None)
-    b_inpainted = guided_filter(b.astype(np.float32, copy=False),
-                                radius=gf_radius, eps=100.0, guide=None)
-    a_new = a * (1.0 - glare_m) + a_inpainted * glare_m
-    b_new = b * (1.0 - glare_m) + b_inpainted * glare_m
-
-    # Local non-glare L target. Use a *hard* non-shine mask for the target
-    # field so bright glare pixels are fully replaced by the regional median
-    # before blurring — otherwise a broad glare band leaks its own L back
-    # into the target via the soft mask and the compression has nothing to
-    # pull toward. The feathered ``glare_m`` is still what blends the final
-    # result, so the visible transition stays soft.
-    hard_shine = (glare_m > 0.05).astype(np.float32)
-    non_shine_hard = 1.0 - hard_shine
-    L_masked = L * non_shine_hard + median_L * hard_shine
-    target_sigma = max(1.0, face_width / 8.0)
-    L_target_smooth = cv2.GaussianBlur(L_masked, (0, 0), target_sigma)
-    L_target = L * (1.0 - glare_m) + L_target_smooth * glare_m
-
-    s = strength / 100.0
-    L_excess = np.maximum(L - L_target, 0.0)
-    excess_max = float(np.max(L_excess))
-    if excess_max <= 0.0:
-        return img_bgr
-    normalized_excess = L_excess / (excess_max + 1e-6)
-    compression_factor = 1.0 - np.exp(-1.5 * normalized_excess)
-    compression_factor = np.clip(compression_factor * s, 0.0,
-                                 _DEGLARE_MAX_REDUCTION)
-
-    # H2 §2.5 — mid-band dimensionality floor. Scale back compression if the
-    # deglare would drop mid-band energy below 85% of pre-deglare.
-    energy_pre = _midband_energy(L * mask_f, face_width)
-    L_trial = L - L_excess * compression_factor * glare_m
-    energy_post = _midband_energy(L_trial * mask_f, face_width)
-    if energy_post < _DEGLARE_MIDBAND_FLOOR * energy_pre and energy_post > 1e-8:
-        scale_back = (energy_pre * _DEGLARE_MIDBAND_FLOOR) / energy_post
-        scale_back = min(scale_back, 1.0)
-        compression_factor = compression_factor * scale_back
-
-    L_new = L - L_excess * compression_factor * glare_m
-
-    lab_out = lab.copy()
-    lab_out[:, :, 0] = np.clip(L_new, 0, 255)
-    lab_out[:, :, 1] = a_new
-    lab_out[:, :, 2] = b_new
-    result = _from_lab(lab_out, is_float)
-    return blend_masked(img_bgr, result, mask_f)
+    return matte_wig_shine(
+        img_bgr, hair_mask, strength, face_width,
+        coherence=coherence, exclude_mask=eyebrow_mask,
+    )
 
 
 def add_angel_ring(

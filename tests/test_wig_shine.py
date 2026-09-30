@@ -256,3 +256,134 @@ class TestAnisotropy:
             f"ring should be anisotropic (band, not blob): "
             f"v={vertical_extent}, h={horizontal_extent}, ratio={longer/shorter:.2f}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Wig Shine (retouch/wig_shine.py): the deglare rewrite
+# ---------------------------------------------------------------------------
+
+from retouch.utils import bgr_f32_to_lab_f32  # noqa: E402
+from retouch.wig_shine import (  # noqa: E402
+    _linear_to_srgb,
+    _srgb_to_linear,
+    matte_wig_shine,
+)
+
+FW = 200.0
+
+
+def _wig_scene(scale: float = 1.0, band: bool = True, colour=(0.45, 0.62, 0.80)):
+    """A blonde wig patch: vertical strands, a broad lit side, a gloss band.
+
+    ``scale`` multiplies linear light (0.12 is a dark brown wig under the
+    same light). The gloss is neutral light added on top of the fibre
+    colour, as off real synthetic fibre, so it keeps some of the fibre's
+    chroma: the case the first deglare missed.
+    """
+    rng = np.random.default_rng(7)
+    h, w = 300, 300
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    strands = 1.0 + 0.18 * cv2.GaussianBlur(
+        rng.standard_normal((1, w)).astype(np.float32), (0, 0), 1.0
+    ).repeat(h, 0) + 0.04 * rng.standard_normal((h, w)).astype(np.float32)
+    lit = 0.7 + 0.5 * (xx / w)  # broad form, not shine
+    lin = np.array(colour, np.float32)[None, None] * (lit * strands)[..., None] * 0.5 * scale
+    gloss = np.exp(-((yy - 110) ** 2) / (2 * 8.0**2)).astype(np.float32)
+    if band:
+        lin = lin + (0.9 * float(np.median(lin.mean(2))) * gloss * strands)[..., None]
+    img = _linear_to_srgb(lin)
+    mask = np.zeros((h, w), np.float32)
+    mask[20:280, 20:280] = 1.0
+    return img, mask, gloss > 0.5
+
+
+def _L(img):
+    return bgr_f32_to_lab_f32(img.astype(np.float32))[..., 0] * 100.0 / 255.0
+
+
+def _C(img):
+    lab = bgr_f32_to_lab_f32(img.astype(np.float32))
+    return np.hypot(lab[..., 1] - 128.0, lab[..., 2] - 128.0)
+
+
+def _band_lift(img, band):
+    L = _L(img)
+    ref = np.zeros_like(band)
+    ref[150:200, 40:260] = True
+    ref2 = np.zeros_like(band)
+    ref2[40:70, 40:260] = True
+    return float(L[band][:, None].mean() - 0.5 * (L[ref].mean() + L[ref2].mean()))
+
+
+class TestWigShineMatte:
+    def test_zero_strength_and_missing_mask_are_identity(self):
+        img, mask, _ = _wig_scene()
+        assert matte_wig_shine(img, mask, 0, FW) is img
+        assert matte_wig_shine(img, None, 60, FW) is img
+        assert matte_wig_shine(img, np.zeros_like(mask), 60, FW) is img
+
+    def test_softens_colour_keeping_gloss_band(self):
+        img, mask, band = _wig_scene()
+        out = matte_wig_shine(img, mask, 100, FW)
+        before, after = _band_lift(img, band), _band_lift(out, band)
+        assert before > 8.0
+        assert after < 0.6 * before, (before, after)
+
+    def test_strength_is_monotone(self):
+        img, mask, band = _wig_scene()
+        lifts = [_band_lift(matte_wig_shine(img, mask, s, FW), band) for s in (0, 50, 100)]
+        assert lifts[0] > lifts[1] > lifts[2]
+
+    def test_fibre_colour_comes_back_not_grey(self):
+        img, mask, band = _wig_scene()
+        out = matte_wig_shine(img, mask, 100, FW)
+        assert _C(out)[band].mean() > _C(img)[band].mean() + 1.0
+
+    def test_strand_texture_kept(self):
+        img, mask, band = _wig_scene()
+        out = matte_wig_shine(img, mask, 100, FW)
+
+        def fine_sd(x):
+            L = _L(x)
+            return float((L - cv2.GaussianBlur(L, (0, 0), 3))[band].std())
+
+        assert fine_sd(out) > 0.8 * fine_sd(img)
+
+    def test_lit_side_without_gloss_is_left_alone(self):
+        img, mask, _ = _wig_scene(band=False)
+        out = matte_wig_shine(img, mask, 100, FW)
+        assert float(np.abs(_L(out) - _L(img))[mask > 0].mean()) < 0.5
+
+    def test_same_relative_reduction_on_dark_wig(self):
+        light, mask, band = _wig_scene()
+        dark, _, _ = _wig_scene(scale=0.12)
+        r_light = _band_lift(matte_wig_shine(light, mask, 100, FW), band) / _band_lift(light, band)
+        r_dark = _band_lift(matte_wig_shine(dark, mask, 100, FW), band) / _band_lift(dark, band)
+        assert r_dark < 0.65
+        assert abs(r_light - r_dark) < 0.2, (r_light, r_dark)
+
+    def test_outside_mask_and_eyebrows_untouched(self):
+        img, mask, _ = _wig_scene()
+        brow = np.zeros_like(mask)
+        brow[100:120, 100:160] = 1.0
+        out = matte_wig_shine(img, mask, 100, FW, exclude_mask=brow)
+        assert np.array_equal(out[mask == 0], img[mask == 0])
+        assert np.array_equal(out[104:116, 104:156], img[104:116, 104:156])
+
+    def test_low_coherence_is_left_alone(self):
+        img, mask, _ = _wig_scene()
+        out = matte_wig_shine(img, mask, 100, FW, coherence=np.zeros_like(mask))
+        assert out is img or np.array_equal(out, img)
+
+    def test_uint8_in_uint8_out(self):
+        img, mask, band = _wig_scene()
+        u8 = np.clip(np.round(img), 0, 255).astype(np.uint8)
+        out = matte_wig_shine(u8, mask, 100, FW)
+        assert out.dtype == np.uint8
+        assert _band_lift(out, band) < _band_lift(u8, band)
+
+    def test_deglare_wig_dispatch_reaches_it(self):
+        img, mask, band = _wig_scene()
+        coh = np.ones_like(mask)
+        out = deglare_wig(img, mask, np.zeros_like(mask), coh, strength=100, face_width=FW)
+        assert _band_lift(out, band) < 0.6 * _band_lift(img, band)
