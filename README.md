@@ -141,6 +141,22 @@ next to the eye are left alone. It skips very small faces (iris under about 4
 pixels across its radius), pale or pink "white-eye" glows only turn grey
 rather than black, and gold or green animal eye-shine is not touched.
 
+Bloodshot eye whites (`--eye-sclera-vessel-remove 0-100` in the CLI, the
+"Bloodshot Eye Whites" slider under Eyes & Lips in the app, or
+`eyes.sclera_vessel_remove` in a recipe, where 0.5 = 50) calms whites of the
+eyes that coloured contacts or a long con day have turned pink or veiny. It
+takes the red out of thin vessels and out of an overall pink, restores the
+little bit of darkening a vessel leaves, and lifts the white a touch (at most
+3.5%, by scaling, so the eyeball keeps its shading). It works only on the
+white it can see: the iris, a coloured contact lens wider than the iris,
+lashes, the waterline, catchlights and the lid skin are left alone, and a
+closed or hidden eye is skipped. It follows the colour of the light, so a
+white that is pink because of a cool or magenta softbox is kept as it is.
+Under strongly red or pink stage light, keep it low: it cannot tell that
+red from a bloodshot eye. It is off by default and uses no model; start near
+50. The earlier version of this setting was hidden, changed nothing at low
+strength and painted patches over red contacts at high strength.
+
 Spot healing (`--spot-heal 0-100` in the CLI, the "Spot Healing" slider under
 Skin Smoothing & Texture in the app, or `skin.spot_heal` in a recipe) finds pimples and
 small red or dark spots on the face and heals each one on its own, the way a

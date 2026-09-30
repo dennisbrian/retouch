@@ -111,6 +111,8 @@ historical fallback (None/None/None/False/1.0). `auto_exposure` gained
     (face-crop bisect: removing it dropped face delta 3.34 → 2.07; visually clean).
   - `eyes.sclera_vessel_remove: 40` — opaque white/red ellipses painted over both eyes
     ("demon eyes"; face-crop knockout delta 0.85, visually unmistakable).
+    Rewritten 2026-09-30 as Bloodshot Eye Whites (`retouch/bloodshot_eyes.py`),
+    now a visible slider; `apex_editorial_v1`'s old 0.20 (inert) was set to 0.
   - `hair.ring_position: 45` + `hair.ring_tint: 55` — solid blue streak painted into the
     bangs. Resolution-dependent: exact no-op at ≤1600px input (round-1 bisect missed it),
     fires at full 6240px (bangs-crop on/off delta 11.57).
