@@ -565,6 +565,7 @@ and 0–360 for split-toning hue).
 | Skin Unify | `skin.unify` | ÷ 100 |
 | Skin Warmth | `skin.warmth` | ÷ 100 |
 | Blown Highlight Repair | `skin.highlight_repair` | ÷ 100 |
+| Wig Shine | `hair.deglare` | direct |
 | Slimming | `slimming` | direct |
 | Smooth Engine | `frequency.smooth_engine` | direct |
 | Smooth | `frequency.smooth` | ÷ 100 |
