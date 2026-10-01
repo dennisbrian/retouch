@@ -136,6 +136,26 @@ class CrossRegionSkinStage(_EngineStage):
         )
 
 
+class NeckToneMatchStage(_EngineStage):
+    """Stage 3.57: Neck Tone Match (opt-in), neck and chest follow the face."""
+
+    name = "neck_tone_match"
+    phase = "global"
+
+    def enabled(self, state: PipelineState) -> bool:
+        return (getattr(state.ctx, "neck_tone_match", 0.0) or 0.0) > 0 and bool(state.faces)
+
+    def _call(self, state: PipelineState) -> np.ndarray:
+        return self._engine._stage_neck_tone_match(
+            state.img,
+            state.ctx,
+            state.person_mask,
+            state.acc_skin,
+            state.acc_hair_only,
+            state.faces,
+        )
+
+
 class CosplayMoatStage(_EngineStage):
     """Stage 3.6: A3 — cosplay skin moat (wig-lace, stockings, consistency).
 
@@ -315,6 +335,7 @@ def build_global_registry(engine: "RetouchEngine") -> "StageRegistry":
     registry.add(BackgroundReplaceStage(engine))
     registry.add(BodySkinStage(engine))
     registry.add(CrossRegionSkinStage(engine))
+    registry.add(NeckToneMatchStage(engine))
     registry.add(CosplayMoatStage(engine))
     registry.add(BodyPaintStage(engine))
     registry.add(ProstheticBlendStage(engine))

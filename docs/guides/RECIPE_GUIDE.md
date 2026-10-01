@@ -219,6 +219,7 @@ These keys are defined inside nested dictionary blocks inside a recipe.
 | `skin` | `unify_hue` | -1.0 to 360.0 | `-1.0` | `skin_unify_hue` |
 | `skin` | `unify` | 0 to 100 | `0` | `skin_unify` |
 | `skin` | `warmth` | 0.0 to 1.0 | `0` | `skin_warmth` |
+| `skin` | `neck_tone_match` | 0.0 to 1.0 | `0` | `neck_tone_match` |
 | `skin` | `highlight_repair` | 0.0 to 1.0 | `0` | `highlight_repair` |
 | `skin` | `vein_attenuate` | 0.0 to 1.0 | `0.0` | `vein_attenuate` |
 | `skin` | `whiten_hue_stable` | 0.0 to 1.0 | `False` | `whiten_hue_stable` |
