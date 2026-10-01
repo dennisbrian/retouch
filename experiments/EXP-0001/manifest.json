@@ -20,46 +20,262 @@
   "candidates": [
     {
       "approach": "edge-contrast rescue",
-      "complexity": {},
-      "elimination_reason": "",
+      "complexity": {
+        "changed_files": 1,
+        "loc_added": 47,
+        "new_dependencies": 0,
+        "paths": [
+          "retouch/detection.py"
+        ],
+        "subsystems": [
+          "retouch"
+        ]
+      },
+      "elimination_reason": "early stop: runtime",
       "id": "A",
       "mechanism": "Canny edge density in box center >= 0.02 when coverage <= 0.25 and retinaface confidence >= 0.85",
       "patch": "/Applications/htdocs/retouch/test_output/experiment_lab/candidate_A_edge_contrast_rescue.patch",
       "rationale": "Real heads carry edge structure (hairline, brows, eyes, mouth); bokeh/sky/wall FPs are edge-poor centrally",
-      "rounds": 0,
-      "runs": [],
-      "status": "DESIGNED",
-      "worktree": ""
+      "rounds": 1,
+      "runs": [
+        {
+          "case_ids": [
+            "ctrl_dscf3775",
+            "ctrl_dscf3776",
+            "ctrl_dscf3785",
+            "ctrl_dscf3790",
+            "ctrl_dscf3797",
+            "ctrl_dscf3800",
+            "fn_dscf3773",
+            "fn_dscf3774",
+            "fn_dscf3783",
+            "fn_dscf3786",
+            "fn_dscf3788",
+            "fn_dscf3792",
+            "fn_dscf3794",
+            "fn_dscf3799"
+          ],
+          "complexity": {
+            "changed_files": 1,
+            "loc_added": 47,
+            "new_dependencies": 0,
+            "paths": [
+              "retouch/detection.py"
+            ],
+            "subsystems": [
+              "retouch"
+            ]
+          },
+          "elapsed_seconds": 150.48,
+          "environment": {
+            "cv2": "4.11.0",
+            "mediapipe": "0.10.5",
+            "numpy": "1.26.4"
+          },
+          "fingerprint": "f00f3172f28c8deda5365fdfbe3ce577b301b259ca2b4632a404e0e7c5312258",
+          "max_ram_ratio": 1.027,
+          "max_time_ratio": 1.533,
+          "performance": {
+            "PASS": 13,
+            "REGRESSION": 0,
+            "REVIEW": 15
+          },
+          "quality": {
+            "PASS": 28,
+            "REGRESSION": 0,
+            "REVIEW": 0
+          },
+          "report": "/Applications/htdocs/retouch/test_output/experiment_lab/EXP-0001/worktrees/A/test_output/experiment_lab/EXP-0001-A-development-r1.json",
+          "report_sha256": "3f537b21d7ccb3309b497ff1bb28ed8925311b431d63b1595a2403056e52ed96",
+          "round": 1,
+          "split": "development",
+          "target": {
+            "median_delta": -0.0013,
+            "positive_pairs": 7,
+            "sample_size": 18,
+            "spread": [
+              -0.032,
+              0.0195
+            ]
+          }
+        }
+      ],
+      "status": "ELIMINATED",
+      "worktree": "/Applications/htdocs/retouch/test_output/experiment_lab/EXP-0001/worktrees/A"
     },
     {
       "approach": "bright-bg relaxed gate",
-      "complexity": {},
-      "elimination_reason": "",
+      "complexity": {
+        "changed_files": 1,
+        "loc_added": 33,
+        "new_dependencies": 0,
+        "paths": [
+          "retouch/detection.py"
+        ],
+        "subsystems": [
+          "retouch"
+        ]
+      },
+      "elimination_reason": "early stop: runtime",
       "id": "B",
       "mechanism": "lower coverage cutoff to 0.15 when face has measured presence evidence AND surround ring mean luma >= 235 (blown-highlight background)",
       "patch": "/Applications/htdocs/retouch/test_output/experiment_lab/candidate_B_bright_bg_relaxed_gate.patch",
       "rationale": "Targets the exact root cause: near-white subject vs near-white background confuses the segmenter at the head",
-      "rounds": 0,
-      "runs": [],
-      "status": "DESIGNED",
-      "worktree": ""
+      "rounds": 1,
+      "runs": [
+        {
+          "case_ids": [
+            "ctrl_dscf3775",
+            "ctrl_dscf3776",
+            "ctrl_dscf3785",
+            "ctrl_dscf3790",
+            "ctrl_dscf3797",
+            "ctrl_dscf3800",
+            "fn_dscf3773",
+            "fn_dscf3774",
+            "fn_dscf3783",
+            "fn_dscf3786",
+            "fn_dscf3788",
+            "fn_dscf3792",
+            "fn_dscf3794",
+            "fn_dscf3799"
+          ],
+          "complexity": {
+            "changed_files": 1,
+            "loc_added": 33,
+            "new_dependencies": 0,
+            "paths": [
+              "retouch/detection.py"
+            ],
+            "subsystems": [
+              "retouch"
+            ]
+          },
+          "elapsed_seconds": 162.97,
+          "environment": {
+            "cv2": "4.11.0",
+            "mediapipe": "0.10.5",
+            "numpy": "1.26.4"
+          },
+          "fingerprint": "46fa986d820f18767a483a7d9052b668590448a8d0e6670b9ba032a71d5e3671",
+          "max_ram_ratio": 1.027,
+          "max_time_ratio": 1.688,
+          "performance": {
+            "PASS": 8,
+            "REGRESSION": 0,
+            "REVIEW": 20
+          },
+          "quality": {
+            "PASS": 28,
+            "REGRESSION": 0,
+            "REVIEW": 0
+          },
+          "report": "/Applications/htdocs/retouch/test_output/experiment_lab/EXP-0001/worktrees/B/test_output/experiment_lab/EXP-0001-B-development-r1.json",
+          "report_sha256": "980f3e02ca8b95113b003bc7c479ddf87a6580f598fa748b70b0aca7f84d4df0",
+          "round": 1,
+          "split": "development",
+          "target": {
+            "median_delta": -0.0013,
+            "positive_pairs": 7,
+            "sample_size": 18,
+            "spread": [
+              -0.032,
+              0.0195
+            ]
+          }
+        }
+      ],
+      "status": "ELIMINATED",
+      "worktree": "/Applications/htdocs/retouch/test_output/experiment_lab/EXP-0001/worktrees/B"
     },
     {
       "approach": "hair-mask-aware coverage",
-      "complexity": {},
-      "elimination_reason": "",
+      "complexity": {
+        "changed_files": 1,
+        "loc_added": 42,
+        "new_dependencies": 0,
+        "paths": [
+          "retouch/detection.py"
+        ],
+        "subsystems": [
+          "retouch"
+        ]
+      },
+      "elimination_reason": "early stop: runtime",
       "id": "C",
       "mechanism": "recompute central coverage against max(person_mask, wig-aware hair mask) + require existing _face_skin_rescue",
       "patch": "/Applications/htdocs/retouch/test_output/experiment_lab/candidate_C_hair_aware_coverage.patch",
       "rationale": "Uses existing wig-aware hair machinery (parsing._grow_wig_hair, _MC_HAIR) so the wig region counts as person; skin rescue still required so a bare wig cannot pass",
-      "rounds": 0,
-      "runs": [],
-      "status": "DESIGNED",
-      "worktree": ""
+      "rounds": 1,
+      "runs": [
+        {
+          "case_ids": [
+            "ctrl_dscf3775",
+            "ctrl_dscf3776",
+            "ctrl_dscf3785",
+            "ctrl_dscf3790",
+            "ctrl_dscf3797",
+            "ctrl_dscf3800",
+            "fn_dscf3773",
+            "fn_dscf3774",
+            "fn_dscf3783",
+            "fn_dscf3786",
+            "fn_dscf3788",
+            "fn_dscf3792",
+            "fn_dscf3794",
+            "fn_dscf3799"
+          ],
+          "complexity": {
+            "changed_files": 1,
+            "loc_added": 42,
+            "new_dependencies": 0,
+            "paths": [
+              "retouch/detection.py"
+            ],
+            "subsystems": [
+              "retouch"
+            ]
+          },
+          "elapsed_seconds": 166.1,
+          "environment": {
+            "cv2": "4.11.0",
+            "mediapipe": "0.10.5",
+            "numpy": "1.26.4"
+          },
+          "fingerprint": "950eb4ecaec6b97a452c418adb1908dc649d0c0a4be37a217a770ce94b6cb3b4",
+          "max_ram_ratio": 1.027,
+          "max_time_ratio": 1.733,
+          "performance": {
+            "PASS": 7,
+            "REGRESSION": 0,
+            "REVIEW": 21
+          },
+          "quality": {
+            "PASS": 28,
+            "REGRESSION": 0,
+            "REVIEW": 0
+          },
+          "report": "/Applications/htdocs/retouch/test_output/experiment_lab/EXP-0001/worktrees/C/test_output/experiment_lab/EXP-0001-C-development-r1.json",
+          "report_sha256": "8860968bd7eae4529b13b073c467896300c4b41b888551672530d0a4e2df2715",
+          "round": 1,
+          "split": "development",
+          "target": {
+            "median_delta": -0.0013,
+            "positive_pairs": 7,
+            "sample_size": 18,
+            "spread": [
+              -0.032,
+              0.0195
+            ]
+          }
+        }
+      ],
+      "status": "ELIMINATED",
+      "worktree": "/Applications/htdocs/retouch/test_output/experiment_lab/EXP-0001/worktrees/C"
     }
   ],
-  "completed_at": "",
-  "conclusion": null,
+  "completed_at": "2026-10-01T10:02:47+00:00",
+  "conclusion": "NO_WINNER",
   "confidence": "NONE",
   "constraints": {
     "max_changed_files": 8,
@@ -132,6 +348,7 @@
     "max_regression_fraction": 0.02,
     "max_runtime_ratio": 1.1
   },
+  "finalists": [],
   "history": [
     {
       "at": "2026-09-30T09:35:02+00:00",
@@ -141,6 +358,21 @@
       "at": "2026-09-30T15:30:21+00:00",
       "event": "design frozen",
       "sha256": "4e74fc9c3ea424b1d94e48be4414daa3a5bfc931e3a071c01e699d61308d7dff"
+    },
+    {
+      "at": "2026-10-01T09:46:57+00:00",
+      "conclusion": "PENDING_CANDIDATES",
+      "event": "compared"
+    },
+    {
+      "at": "2026-10-01T09:55:31+00:00",
+      "conclusion": "PENDING_CANDIDATES",
+      "event": "compared"
+    },
+    {
+      "at": "2026-10-01T10:02:47+00:00",
+      "conclusion": "NO_WINNER",
+      "event": "compared"
     }
   ],
   "hypothesis": "A person-gate coverage fallback using local edge/luminance contrast at the head region can rescue silver-wig false negatives without re-admitting background false positives",
@@ -153,7 +385,35 @@
     "RAM ratio",
     "complexity"
   ],
-  "negative_findings": [],
+  "negative_findings": [
+    {
+      "approach": "edge-contrast rescue",
+      "at": "2026-10-01T09:46:57+00:00",
+      "candidate": "A",
+      "mechanism": "Canny edge density in box center >= 0.02 when coverage <= 0.25 and retinaface confidence >= 0.85",
+      "observed": "early stop: runtime",
+      "rd_negative_id": "NEG-002",
+      "retry_unless": "new mechanism or materially new corpus evidence"
+    },
+    {
+      "approach": "hair-mask-aware coverage",
+      "at": "2026-10-01T09:55:31+00:00",
+      "candidate": "C",
+      "mechanism": "recompute central coverage against max(person_mask, wig-aware hair mask) + require existing _face_skin_rescue",
+      "observed": "early stop: runtime",
+      "rd_negative_id": "NEG-003",
+      "retry_unless": "new mechanism or materially new corpus evidence"
+    },
+    {
+      "approach": "bright-bg relaxed gate",
+      "at": "2026-10-01T10:02:47+00:00",
+      "candidate": "B",
+      "mechanism": "lower coverage cutoff to 0.15 when face has measured presence evidence AND surround ring mean luma >= 235 (blown-highlight background)",
+      "observed": "DEVELOPMENT ELIMINATION UNSOUND: (1) runtime ratio 1.688x was measured while candidate C rendered concurrently on the same machine \u2014 CPU contention inflates ratio (cap 1.10x). (2) METRIC PERVERSITY: regions.HAIR.edge_retention returns None (mask_too_small) on exactly the frames the rescue succeeds on \u2014 wig-aware hair path under-covers silver wigs vs blown windows \u2014 so the success metric cannot see the improvement (7/18 positive pairs). (3) RESCUE CONFIRMED VISUALLY: face detected on fn_dscf3773 (face-skin path: person coverage 0.000, face-skin 0.611) and renders changed 2.7k-19k px on all 8 FN development frames vs near-identity baseline.",
+      "rd_negative_id": "NEG-004",
+      "retry_unless": "serialized runtime re-measurement + success metric switched to render-identity delta (fraction of FN frames leaving no-op) or hair-mask coverage floor fix"
+    }
+  ],
   "new_evidence": "",
   "promotion_task": null,
   "question": "Can local edge/luminance evidence rescue silver-wig false negatives without re-admitting background false positives?",
@@ -165,8 +425,8 @@
     "sources_unavailable": [],
     "verdict": "NEW"
   },
-  "started_at": "",
-  "status": "DESIGNED",
+  "started_at": "2026-10-01T09:39:53+00:00",
+  "status": "COMPLETED",
   "success_criteria": {
     "direction": "higher",
     "metric": "regions.HAIR.edge_retention",
@@ -175,6 +435,6 @@
     "quality_tolerance": 0.01
   },
   "title": "Wig-edge person-gate rescue",
-  "updated_at": "2026-09-30T15:32:46+00:00",
+  "updated_at": "2026-10-01T10:02:47+00:00",
   "winner": null
 }
