@@ -4740,7 +4740,11 @@ RECIPES["apex_editorial_v1"] = {
         "iris": 0.16,
         "catchlight": 0.14,
         "dark_circles": 0.14,
-        "sclera_vessel_remove": 0.20,
+        # 0, not 0.20: the first vessel remover changed nothing at 20 on
+        # real faces (0 pixels on both bunny photos). The 2026-09-30
+        # Bloodshot Eye Whites rewrite does act; left off here so the
+        # recipe's look doesn't change.
+        "sclera_vessel_remove": 0.0,
     },
     "eye": {"sclera_brighten": 0.12},
     "undereye": {"darken_removal": 0.30, "puffiness_reduction": 0.25},

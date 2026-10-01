@@ -4034,7 +4034,6 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         _wrinkle_soften_forehead_state = gr.State(value=0)
                         _wrinkle_soften_nasolabial_state = gr.State(value=0)
                         _wrinkle_soften_neck_state = gr.State(value=0)
-                        _eye_sclera_vessel_remove_state = gr.State(value=0)
                         _backdrop_cleanup_state = gr.State(value=0)
                         _fabric_wrinkle_smooth_state = gr.State(value=0.0)
                         _reshape_jaw_width_l_state = gr.State(value=0.0)
@@ -4238,6 +4237,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                     eye_gate = gr.Checkbox(label="Eye Occlusion Gate", value=True, info="Skip enhancing eyes detected as closed/occluded (prevents painting an iris onto hair or a closed lid)")
                                     lens_glare = gr.Slider(0, 100, 0, step=1, label="Glasses Glare Removal", info="Lift flash, softbox and window reflections off glasses, goggles and visors over the eyes. Off by default; on bare faces it also softens shine around the eyes.")
                                     red_eye = gr.Slider(0, 100, 0, step=1, label="Red-Eye Fix", info="Turn flash red pupils back to dark. Off by default; red contact lenses (dark pupil in the middle) are left alone.")
+                                    eye_sclera_vessel_remove = gr.Slider(0, 100, 0, step=1, label="Bloodshot Eye Whites", info="Calm red, veiny eye whites and lift them a touch toward a natural white. Leaves the iris, coloured contacts, lashes and catchlights alone. Off by default; start near 50.")
 
                             with gr.Accordion("🧬 Face Reshaping", open=False):
                                 reset_face_reshaping_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
@@ -5621,7 +5621,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "undereye_darken_removal": undereye_darken_removal,
         "undereye_puffiness_reduction": undereye_puffiness_reduction,
         "eye_sclera_brighten": eye_sclera_brighten,
-        "eye_sclera_vessel_remove": _eye_sclera_vessel_remove_state,
+        "eye_sclera_vessel_remove": eye_sclera_vessel_remove,
         "eye_gate": eye_gate,
         "backdrop_cleanup": _backdrop_cleanup_state,
         "fabric_wrinkle_smooth": _fabric_wrinkle_smooth_state,

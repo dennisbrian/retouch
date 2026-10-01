@@ -402,7 +402,7 @@ and 0–360 for split-toning hue).
 | Eye Iris Hue Shift | `eye.iris_hue_shift` | direct |
 | Eye Iris Saturate | `eye.iris_saturate` | ÷ 100 |
 | Eye Sclera Brighten | `eye.sclera_brighten` | ÷ 100 |
-| Eye Sclera Vessel Remove | `eyes.sclera_vessel_remove` | ÷ 100 |
+| Bloodshot Eye Whites (Eye Sclera Vessel Remove) | `eyes.sclera_vessel_remove` | ÷ 100 |
 | Fabric Wrinkle Smooth | `fabric.wrinkle_smooth` | ÷ 100 |
 | Face Exposure | `skin.face_exposure` | ÷ 100 |
 | Fade Toe | `finish.fade_toe` | direct |
