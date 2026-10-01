@@ -256,6 +256,7 @@ per `AGENTS.md`.
 | `wig_shine.py` | Wig Shine (`hair_deglare`): mattes synthetic-wig gloss into the wig colour; called via `hairwork.deglare_wig` in the per-face hair stage. |
 | `bloodshot_eyes.py` | Bloodshot Eye Whites (`eye_sclera_vessel_remove`): calms red, veiny eye whites and lifts them slightly, leaving iris, contacts, lashes and catchlights alone; called per eye from `EyeEnhancer.enhance`. |
 | `video/media.py` | V1 video slice S1: streaming decode (upright BGR frames with source timestamps) and H.264/lossless FFV1 encode with the source audio copied; needs the `video` extra (PyAV). |
+| `video/tracker.py` | V1 video slice S2: follows one face through a clip: the engine FaceDetector finds it (first frame, and again after a loss), then MediaPipe FaceLandmarker in VIDEO mode tracks it on a crop around the previous box (largest face first, then nearest-box continuity) and writes version-2 track JSON (V0 harness contract plus 478 landmarks per frame). `python -m retouch.video.tracker clip --out tracks.json`. |
 | `batch_processor.py` | Batch orchestration over `RetouchEngine`. |
 | `spot_heal_auto.py` | Automatic spot healing (pimple/red-spot detection + plane-fit heal; first op in the per-face core). |
 | `eye_visibility.py` | Eye-occlusion gate (EAR + tone-adaptive contrast) gating eye ops on closed/occluded eyes. |
