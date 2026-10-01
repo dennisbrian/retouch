@@ -1236,7 +1236,9 @@ def _process_face_core(
                     )
 
     # ---- Neck harmonisation ----
-    if ctx.whiten != 0 or ctx.equalize > 0 or ctx.skin_hue_unify > 0 or ctx.skin_chroma_even > 0 or ctx.redness_even > 0:
+    # The Neck Tone Match slider replaces this automatic pass when it is on
+    # (retouch/neck_tone_match.py, run in the global phase on the full frame).
+    if (ctx.whiten != 0 or ctx.equalize > 0 or ctx.skin_hue_unify > 0 or ctx.skin_chroma_even > 0 or ctx.redness_even > 0) and getattr(ctx, "neck_tone_match", 0) <= 0:
         canvas = _tr('harmonize_neck', canvas)
         canvas = skin.harmonize_neck(
             canvas,

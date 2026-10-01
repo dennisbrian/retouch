@@ -987,6 +987,19 @@ _SKIN_PARAMS = [
         max_val=100,
     ),
     ParamSpec(
+        # Neck and chest matched to the retouched face (retouch/
+        # neck_tone_match.py); face paint left alone. Opt-in: 0 = off, and
+        # the old automatic neck pass (skin.harmonize_neck) still runs.
+        name="neck_tone_match",
+        cli_flag="neck-tone-match",
+        cli_type=int,
+        default=0,
+        recipe_key="skin.neck_tone_match",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
         name="skin_glow",
         cli_flag="skin-glow",
         cli_type=int,
