@@ -50,6 +50,7 @@ Optional extras:
 pip install -r requirements/dev.txt   # pytest
 pip install -r requirements/gui.txt   # Gradio web UI
 pip install -r requirements/raw.txt   # RAW camera file support
+pip install -r requirements/video.txt # video read/write (PyAV), for retouch.video
 ```
 
 RetinaFace is not supported: its dependencies conflict with the pinned
