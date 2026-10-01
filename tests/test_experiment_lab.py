@@ -167,6 +167,7 @@ def test_holdout_exposure_seals_refinement(laboratory, monkeypatch, tmp_path):
 
 
 def test_real_detached_worktree_isolation(tmp_path, monkeypatch):
+    # The real worktree fixture: git-ignored models/ must reach the candidate.
     root = tmp_path / "repo"
     (root / "retouch").mkdir(parents=True)
     (root / "quality_lab").mkdir()
@@ -174,7 +175,10 @@ def test_real_detached_worktree_isolation(tmp_path, monkeypatch):
     (root / "quality_lab" / "thresholds.json").write_text("{}\n")
     (root / "corpus.json").write_text("{}\n")
     (root / "baseline.json").write_text("{}\n")
-    (root / ".gitignore").write_text("test_output/\nexperiments/\n")
+    (root / ".gitignore").write_text("test_output/\nexperiments/\n/models/*\n!/models/manifest.json\n")
+    (root / "models").mkdir()
+    (root / "models" / "manifest.json").write_text("{}\n")
+    (root / "models" / "engine.onnx").write_bytes(b"\x00MODEL")
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
     subprocess.run(["git", "add", "."], cwd=root, check=True)
     subprocess.run(["git", "-c", "user.name=Experiment Test", "-c", "user.email=test@example.invalid",
@@ -200,6 +204,13 @@ def test_real_detached_worktree_isolation(tmp_path, monkeypatch):
     worktree = Path(prepared["worktree"])
     try:
         assert subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=worktree, text=True).strip() == base
+        # Regression: git worktrees do not carry git-ignored engine assets.
+        # prepare() must share the root models/ dir or every candidate
+        # silently benchmarks the engine's no-model fallback paths.
+        wt_models = worktree / "models" / "engine.onnx"
+        assert wt_models.exists(), "candidate worktree is missing git-ignored models/"
+        assert (worktree / "models" / "engine.onnx").read_bytes() == b"\x00MODEL"
+        assert (root / "retouch" / "example.py").read_text() == "VALUE = 1\n"
         (worktree / "retouch" / "example.py").write_text("VALUE = 2\n")
         complexity, fingerprint = runner.inspect_candidate(exp, cand)
         assert complexity["paths"] == ["retouch/example.py"] and fingerprint

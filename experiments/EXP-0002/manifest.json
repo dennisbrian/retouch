@@ -1,0 +1,246 @@
+{
+  "artifacts": [],
+  "baseline": {
+    "commit": "ed53c492a0ff6825a130f8fd5b9b1b98e506d145",
+    "environment": {
+      "cv2": "4.11.0",
+      "mediapipe": "0.10.5",
+      "numpy": "1.26.4"
+    },
+    "recipes": [
+      "natural",
+      "cosplay_clear_protected_v1"
+    ],
+    "report": "/Applications/htdocs/retouch/test_output/quality_lab/reports/baseline_exp2.json",
+    "sha256": "be2070b5136ee3cbb1cd8f98a2969e61f995bfe4fe2489a369306f7b3e439e81",
+    "thresholds_sha256": "8e02a6ce77e5b907ba1c3ede0cda72af494ec1d20fe023d24899d891e705899c"
+  },
+  "budget": "MEDIUM",
+  "candidate_count": 1,
+  "candidates": [
+    {
+      "approach": "bright-bg relaxed gate (serialized)",
+      "complexity": {
+        "changed_files": 1,
+        "loc_added": 33,
+        "new_dependencies": 0,
+        "paths": [
+          "retouch/detection.py"
+        ],
+        "subsystems": [
+          "retouch"
+        ]
+      },
+      "elimination_reason": "early stop: runtime",
+      "id": "A",
+      "mechanism": "same as EXP-0001 B: lower coverage cutoff to 0.15 when face has measured presence evidence AND surround ring mean luma >= 235; benchmarked serialized this time",
+      "patch": "/Applications/htdocs/retouch/test_output/experiment_lab/candidate_B_bright_bg_relaxed_gate.patch",
+      "rationale": "EXP-0001 proved the rescue visually (8/8 FN frames retouched via face-skin path); elimination was a measurement artifact. Re-measured honestly with render-identity success metric",
+      "rounds": 1,
+      "runs": [
+        {
+          "case_ids": [
+            "ctrl_dscf3775",
+            "ctrl_dscf3776",
+            "ctrl_dscf3785",
+            "ctrl_dscf3790",
+            "ctrl_dscf3797",
+            "ctrl_dscf3800",
+            "fn_dscf3773",
+            "fn_dscf3774",
+            "fn_dscf3783",
+            "fn_dscf3786",
+            "fn_dscf3788",
+            "fn_dscf3792",
+            "fn_dscf3794",
+            "fn_dscf3799"
+          ],
+          "complexity": {
+            "changed_files": 1,
+            "loc_added": 33,
+            "new_dependencies": 0,
+            "paths": [
+              "retouch/detection.py"
+            ],
+            "subsystems": [
+              "retouch"
+            ]
+          },
+          "elapsed_seconds": 146.42,
+          "environment": {
+            "cv2": "4.11.0",
+            "mediapipe": "0.10.5",
+            "numpy": "1.26.4"
+          },
+          "fingerprint": "46fa986d820f18767a483a7d9052b668590448a8d0e6670b9ba032a71d5e3671",
+          "max_ram_ratio": 1.027,
+          "max_time_ratio": 1.599,
+          "performance": {
+            "PASS": 11,
+            "REGRESSION": 0,
+            "REVIEW": 17
+          },
+          "quality": {
+            "PASS": 28,
+            "REGRESSION": 0,
+            "REVIEW": 0
+          },
+          "report": "/Applications/htdocs/retouch/test_output/experiment_lab/EXP-0002/worktrees/A/test_output/experiment_lab/EXP-0002-A-development-r1.json",
+          "report_sha256": "58a8d97a0301b865318a27d48121eb1c304c0a23735e90a637f9d675940e7a41",
+          "round": 1,
+          "split": "development",
+          "target": {
+            "median_delta": 0.1533,
+            "positive_pairs": 27,
+            "sample_size": 28,
+            "spread": [
+              -0.0054,
+              0.237
+            ]
+          }
+        }
+      ],
+      "status": "ELIMINATED",
+      "worktree": "/Applications/htdocs/retouch/test_output/experiment_lab/EXP-0002/worktrees/A"
+    }
+  ],
+  "completed_at": "2026-10-01T10:59:21+00:00",
+  "conclusion": "NO_WINNER",
+  "confidence": "NONE",
+  "constraints": {
+    "max_changed_files": 8,
+    "max_loc_added": 500
+  },
+  "corpus": {
+    "case_count": 43,
+    "cases": {
+      "development": [
+        "ctrl_dscf3775",
+        "ctrl_dscf3776",
+        "ctrl_dscf3785",
+        "ctrl_dscf3790",
+        "ctrl_dscf3797",
+        "ctrl_dscf3800",
+        "fn_dscf3773",
+        "fn_dscf3774",
+        "fn_dscf3783",
+        "fn_dscf3786",
+        "fn_dscf3788",
+        "fn_dscf3792",
+        "fn_dscf3794",
+        "fn_dscf3799"
+      ],
+      "holdout": [
+        "v0920_dscf4141",
+        "v0920_dscf4158",
+        "v0920_dscf4174",
+        "v0920_dscf4191",
+        "v0920_dscf4207",
+        "v0920_dscf4224",
+        "v0920_dscf4240",
+        "v0920_dscf4257",
+        "v0920_dscf4274",
+        "v0920_dscf4290",
+        "v0920_dscf4307",
+        "v0920_dscf4324",
+        "v0920_dscf4341",
+        "v0920_dscf4357",
+        "v0920_dscf4374"
+      ],
+      "qualified": false,
+      "reason": "too few independent groups",
+      "validation": [
+        "v0919_dscf3928",
+        "v0919_dscf3943",
+        "v0919_dscf3957",
+        "v0919_dscf3972",
+        "v0919_dscf3987",
+        "v0919_dscf4002",
+        "v0919_dscf4017",
+        "v0919_dscf4031",
+        "v0919_dscf4051",
+        "v0919_dscf4066",
+        "v0919_dscf4080",
+        "v0919_dscf4095",
+        "v0919_dscf4124",
+        "v0919_dscf4139"
+      ]
+    },
+    "manifest": "/Applications/htdocs/retouch/test_output/quality_lab/corpus_wig_edge/experiment_corpus.json",
+    "real_holdout": true,
+    "sha256": "00eac2e01104bf2d38532ce8f27e247f884e20491092e9c5e9008409995c5b3c"
+  },
+  "created_at": "2026-10-01T10:25:59+00:00",
+  "design_sha256": "556a1b18742710b414b4432969327f8054a9989cf087f461e4abb03269602240",
+  "experiment_id": "EXP-0002",
+  "failure_criteria": {
+    "max_ram_ratio": 1.15,
+    "max_regression_fraction": 0.02,
+    "max_runtime_ratio": 1.1
+  },
+  "finalists": [],
+  "history": [
+    {
+      "at": "2026-10-01T10:25:59+00:00",
+      "event": "created"
+    },
+    {
+      "at": "2026-10-01T10:35:24+00:00",
+      "event": "design frozen",
+      "sha256": "556a1b18742710b414b4432969327f8054a9989cf087f461e4abb03269602240"
+    },
+    {
+      "at": "2026-10-01T10:59:21+00:00",
+      "conclusion": "NO_WINNER",
+      "event": "compared"
+    },
+    {
+      "at": "2026-10-01T10:59:46+00:00",
+      "event": "archived; prototypes retained until explicit cleanup"
+    }
+  ],
+  "hypothesis": "Re-measured bright-bg relaxed gate (serialized runtime) rescues all silver-wig false-negative frames with runtime under 1.10x baseline",
+  "hypothesis_id": "HYP-003",
+  "hypothesis_success_text": "8/8 FN frames leave no-op (luminance_drift delta >= 0.05 on development); 0 REGRESSION on validation controls; runtime ratio <= 1.10 serialized",
+  "metrics": [
+    "global.luminance_drift",
+    "Quality Lab regression count",
+    "time ratio",
+    "RAM ratio",
+    "complexity"
+  ],
+  "negative_findings": [
+    {
+      "approach": "bright-bg relaxed gate (serialized)",
+      "at": "2026-10-01T10:59:21+00:00",
+      "candidate": "A",
+      "mechanism": "same as EXP-0001 B: lower coverage cutoff to 0.15 when face has measured presence evidence AND surround ring mean luma >= 235; benchmarked serialized this time",
+      "observed": "early stop: runtime",
+      "rd_negative_id": "NEG-005",
+      "retry_unless": "new mechanism or materially new corpus evidence"
+    }
+  ],
+  "new_evidence": "EXP-0001 candidate B rescue confirmed visually (8/8 FN frames retouched, face-skin path) but eliminated on contaminated concurrent runtime measurement and a metric blind to the rescue (HAIR edge_retention None on rescued frames). EXP-0002 fixes both: serialized execution, global.luminance_drift success metric",
+  "promotion_task": null,
+  "question": "Does the bright-bg relaxed gate rescue silver-wig false negatives with honest serialized runtime and a render-identity success metric?",
+  "reject_all_if": "Any validation control frame regresses (quality REGRESSION count > 0) or serialized runtime exceeds 1.10x baseline. NOTE: candidate runs MUST be serialized \u2014 no concurrent benchmarks on the host machine (EXP-0001 B/C runtime contamination).",
+  "related_research": [],
+  "schema": 1,
+  "similarity": {
+    "matches": [],
+    "sources_unavailable": [],
+    "verdict": "NEW"
+  },
+  "started_at": "2026-10-01T10:35:41+00:00",
+  "status": "ARCHIVED",
+  "success_criteria": {
+    "direction": "higher",
+    "metric": "global.luminance_drift",
+    "min_delta": 0.05,
+    "min_positive_fraction": 0.4,
+    "quality_tolerance": 0.01
+  },
+  "title": "Wig-edge rescue: serialized re-measurement",
+  "updated_at": "2026-10-01T10:59:46+00:00",
+  "winner": null
+}

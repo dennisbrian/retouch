@@ -37,7 +37,11 @@ def _run(argv, cwd=None, timeout=60):
 def changed_paths(worktree):
     tracked = _run(["git", "diff", "--name-only", "HEAD"], cwd=worktree).splitlines()
     untracked = _run(["git", "ls-files", "--others", "--exclude-standard"], cwd=worktree).splitlines()
-    return sorted(set(tracked + untracked))
+    # models/ is engine infrastructure shared from the repo root by
+    # _link_engine_assets(), never candidate code — exclude it from the
+    # change/fingerprint view entirely.
+    return sorted(p for p in set(tracked + untracked)
+                  if not (p == "models" or p.startswith("models/")))
 
 
 def allowed_path(path):
@@ -111,6 +115,32 @@ def inspect_candidate(exp, cand):
     return complexity, source_fingerprint(worktree, paths)
 
 
+def _link_engine_assets(worktree):
+    """Share git-ignored engine assets (models/) with the candidate worktree.
+
+    ``models/`` holds large binaries that are deliberately untracked (only
+    manifest.json is committed), so a fresh ``git worktree`` has none of them.
+    Without this link every candidate benchmark silently runs the engine's
+    no-model fallback paths: different renders (landmark-only masks), slower
+    detection, and quality/threshold numbers that describe the fallback, not
+    the candidate. A symlink keeps a single physical copy on disk.
+    """
+    target = worktree / "models"
+    if target.is_symlink() and target.exists():
+        return
+    source = core.ROOT / "models"
+    if not source.is_dir():
+        return
+    if target.exists():
+        # git checkout materialised models/ with the tracked manifest.json;
+        # the physical asset dir in the repo root is the single source of truth.
+        shutil.rmtree(target)
+    try:
+        target.symlink_to(source, target_is_directory=True)
+    except OSError:
+        shutil.copytree(source, target, dirs_exist_ok=True)
+
+
 def prepare(exp, cand):
     core.ensure_frozen(exp)
     if cand["worktree"]:
@@ -125,6 +155,7 @@ def prepare(exp, cand):
     path.parent.mkdir(parents=True, exist_ok=True)
     _run(["git", "worktree", "add", "--detach", str(path), exp["baseline"]["commit"]], timeout=60)
     try:
+        _link_engine_assets(path)
         if cand["patch"]:
             patch = Path(cand["patch"])
             raw = _run(["git", "apply", "--numstat", str(patch)], cwd=path)
