@@ -1,9 +1,17 @@
 """Single-face video tracker with landmarks (V1 slice S2).
 
-Runs the repo's MediaPipe FaceLandmarker (``face_landmarker.task``) in VIDEO
-running mode, so consecutive frames reuse the previous face instead of
-re-detecting from scratch, and emits one selected face per frame: a box,
-478 landmarks and a confidence.
+Emits one selected face per frame: a box, 478 landmarks and a confidence.
+Two models do the work:
+
+* The engine's ``FaceDetector`` finds faces on a downscaled copy of the
+  frame. It runs on the first frame, and again whenever the selected face is
+  lost. It is the same detector the V0 extractor uses, so small faces in 4K
+  frames are found (MediaPipe FaceLandmarker's own detector misses a face
+  about 11% of the frame wide: 0 of 95 frames on DSCF4322).
+* While the face is tracked, the repo's FaceLandmarker (``face_landmarker.task``)
+  runs in VIDEO mode on a square crop around the previous box, so the face
+  fills the model's input and consecutive frames reuse the previous face
+  instead of re-detecting from scratch (lower landmark jitter).
 
 Selection policy (plan S2): the largest face in the first frame that has
 one, then the face nearest the previous box on every later frame. The
@@ -11,12 +19,8 @@ tracker never switches to a different face mid-clip; a face is only accepted
 if it is close to where the selected one was last seen (the allowed distance
 grows while the face is lost, so a subject who moves during an occlusion is
 picked up again). Frames where the selected face is not found are left out,
-which the QA harness and later slices treat as untracked.
-
-VIDEO mode can drop a clear face for a few frames (S0 measured 3 of 30 on a
-frontal 720p clip). When it does, the same frame is re-run through the
-landmarker in IMAGE mode before the frame is given up on; records say which
-path found them (``via``).
+which the QA harness and later slices treat as untracked. Records say which
+model found them (``via``: ``"video"`` or ``"detect"``).
 
 The JSON written by :func:`build_contract` is the V0 harness track contract
 (``scripts/review/video_qa_report.py``) at version 2: the V0 per-frame keys
@@ -61,18 +65,24 @@ _SIZE_RATIO_MAX = 1.5
 _SIZE_RATIO_MAX_LOST = 2.0
 
 
-class LandmarkBackend(Protocol):
-    """Returns every face's landmarks, each (478, 3) normalized to the image."""
+# The VIDEO-mode crop around the previous box: this many box sides wide,
+# resized so its long edge is _CROP_SIZE px (FaceLandmarker's input is 256).
+_CROP_SCALE = 2.0
+_CROP_SIZE = 384
 
-    def detect_video(self, image_bgr: np.ndarray, timestamp_ms: int) -> List[np.ndarray]: ...
 
-    def detect_image(self, image_bgr: np.ndarray) -> List[np.ndarray]: ...
+class TrackerBackend(Protocol):
+    """The two models; each returns every face's landmarks, (478, 3) normalized to its input."""
+
+    def find_faces(self, image_bgr: np.ndarray) -> List[np.ndarray]: ...
+
+    def landmark_video(self, crop_bgr: np.ndarray, timestamp_ms: int) -> List[np.ndarray]: ...
 
     def close(self) -> None: ...
 
 
 class MediaPipeBackend:
-    """FaceLandmarker in VIDEO mode, plus an IMAGE-mode one for re-acquiring.
+    """The engine's FaceDetector plus a VIDEO-mode FaceLandmarker.
 
     Must be closed on the main thread (see ``FaceDetector.close``): left to the
     garbage collector, MediaPipe's task finalizer can hang the process.
@@ -81,56 +91,48 @@ class MediaPipeBackend:
     def __init__(self, *, max_faces: int = 4, min_confidence: float = 0.5) -> None:
         import mediapipe as mp
 
+        from ..detection import FaceDetector
         from ..model_fetch import get_model_path
 
-        vision = mp.tasks.vision
-        model = get_model_path("face_landmarker")
         self._mp = mp
-
-        def make(mode):
-            return vision.FaceLandmarker.create_from_options(
-                vision.FaceLandmarkerOptions(
-                    base_options=mp.tasks.BaseOptions(model_asset_path=model),
-                    running_mode=mode,
-                    num_faces=max_faces,
-                    min_face_detection_confidence=min_confidence,
-                    min_face_presence_confidence=min_confidence,
-                    min_tracking_confidence=min_confidence,
-                )
+        self._detector = FaceDetector(max_faces=max_faces)
+        if not self._detector.available:
+            reason = self._detector.unavailable_reason
+            self._detector.close()
+            raise RuntimeError(f"face detection is unavailable: {reason}")
+        vision = mp.tasks.vision
+        self._video = vision.FaceLandmarker.create_from_options(
+            vision.FaceLandmarkerOptions(
+                base_options=mp.tasks.BaseOptions(model_asset_path=get_model_path("face_landmarker")),
+                running_mode=vision.RunningMode.VIDEO,
+                num_faces=max_faces,
+                min_face_detection_confidence=min_confidence,
+                min_face_presence_confidence=min_confidence,
+                min_tracking_confidence=min_confidence,
             )
+        )
 
-        self._video = make(vision.RunningMode.VIDEO)
-        self._image = None
-        self._make_image = lambda: make(vision.RunningMode.IMAGE)
-
-    def _wrap(self, image_bgr: np.ndarray):
-        rgb = np.ascontiguousarray(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB))
-        return self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb)
-
-    @staticmethod
-    def _arrays(result) -> List[np.ndarray]:
+    def find_faces(self, image_bgr: np.ndarray) -> List[np.ndarray]:
         return [
-            np.array([(p.x, p.y, p.z) for p in face], dtype=np.float32)
-            for face in result.face_landmarks
+            np.array([(p.x, p.y, p.z) for p in face.landmarks.landmark], dtype=np.float32)
+            for face in self._detector.detect(image_bgr)
         ]
 
-    def detect_video(self, image_bgr: np.ndarray, timestamp_ms: int) -> List[np.ndarray]:
-        return self._arrays(self._video.detect_for_video(self._wrap(image_bgr), timestamp_ms))
-
-    def detect_image(self, image_bgr: np.ndarray) -> List[np.ndarray]:
-        if self._image is None:  # built on first dropout only
-            self._image = self._make_image()
-        return self._arrays(self._image.detect(self._wrap(image_bgr)))
+    def landmark_video(self, crop_bgr: np.ndarray, timestamp_ms: int) -> List[np.ndarray]:
+        rgb = np.ascontiguousarray(cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB))
+        result = self._video.detect_for_video(
+            self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb), timestamp_ms
+        )
+        return [np.array([(p.x, p.y, p.z) for p in face], dtype=np.float32) for face in result.face_landmarks]
 
     def close(self) -> None:
-        for attr in ("_video", "_image"):
-            task = getattr(self, attr)
-            if task is not None:
-                try:
-                    task.close()
-                except Exception:  # teardown must not mask the caller's error
-                    pass
-                setattr(self, attr, None)
+        if self._video is not None:
+            try:
+                self._video.close()
+            except Exception:  # teardown must not mask the caller's error
+                pass
+            self._video = None
+        self._detector.close()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -142,7 +144,7 @@ class TrackedFace:
     bbox: Bbox  # (x, y, w, h), source pixels, clamped to the frame
     landmarks: np.ndarray  # (478, 3) float32; x, y normalized to the frame
     confidence: float
-    via: str  # "video" (VIDEO-mode tracking) or "reacquire" (IMAGE-mode rerun)
+    via: str  # "video" (VIDEO-mode landmarker on a crop) or "detect" (FaceDetector)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -209,6 +211,17 @@ def match_previous(boxes: Sequence[Bbox], previous: Bbox, frames_lost: int = 0) 
     return best
 
 
+def crop_around(box: Bbox, width: int, height: int, scale: float = _CROP_SCALE) -> Bbox:
+    """Square region ``scale`` box sides wide centred on ``box``, clipped to the frame."""
+    side = scale * max(box[2], box[3])
+    cx, cy = _centre(box)
+    x0 = max(0, int(round(cx - side / 2)))
+    y0 = max(0, int(round(cy - side / 2)))
+    x1 = min(width, int(round(cx + side / 2)))
+    y1 = min(height, int(round(cy + side / 2)))
+    return (x0, y0, max(1, x1 - x0), max(1, y1 - y0))
+
+
 class FaceTracker:
     """Follows one face through consecutive frames; see the module docstring.
 
@@ -222,15 +235,13 @@ class FaceTracker:
         max_faces: int = 4,
         min_confidence: float = 0.5,
         detect_max_dim: int = 1280,
-        reacquire: bool = True,
-        backend: Optional[LandmarkBackend] = None,
+        backend: Optional[TrackerBackend] = None,
     ) -> None:
         if detect_max_dim < 64:
             raise ValueError("detect_max_dim must be at least 64")
         self.max_faces = max_faces
         self.min_confidence = min_confidence
         self.detect_max_dim = detect_max_dim
-        self.reacquire = reacquire
         self._backend = backend if backend is not None else MediaPipeBackend(
             max_faces=max_faces, min_confidence=min_confidence
         )
@@ -250,8 +261,6 @@ class FaceTracker:
 
     def _timestamp_ms(self, time_s: float) -> int:
         # VIDEO mode needs strictly increasing integer milliseconds.
-        if self._t0 is None:
-            self._t0 = time_s
         ms = max(int(round((time_s - self._t0) * 1000.0)), self._last_ms + 1)
         self._last_ms = ms
         return ms
@@ -262,6 +271,27 @@ class FaceTracker:
             return select_initial(boxes)
         return match_previous(boxes, self._last_box, self._frames_lost)
 
+    def _track_in_crop(self, image: np.ndarray, time_s: float) -> List[np.ndarray]:
+        """VIDEO-mode landmarks on a crop around the last box, mapped to frame coordinates."""
+        height, width = image.shape[:2]
+        x, y, w, h = crop_around(self._last_box, width, height)
+        crop = image[y : y + h, x : x + w]
+        size = _CROP_SIZE / max(w, h)
+        resized = cv2.resize(
+            crop,
+            (max(1, round(w * size)), max(1, round(h * size))),
+            interpolation=cv2.INTER_AREA if size < 1.0 else cv2.INTER_LINEAR,
+        )
+        faces = []
+        for face in self._backend.landmark_video(resized, self._timestamp_ms(time_s)):
+            mapped = np.asarray(face, dtype=np.float32).copy()
+            if mapped.ndim == 2 and mapped.shape[1] == 3:
+                # Normalized to the crop, which was resized uniformly: map back via its size.
+                mapped[:, 0] = (x + mapped[:, 0] * w) / width
+                mapped[:, 1] = (y + mapped[:, 1] * h) / height
+            faces.append(mapped)
+        return faces
+
     def update(self, image: np.ndarray, time_s: float) -> Optional[TrackedFace]:
         """Track the selected face on the next frame; None when it isn't found."""
         if image.dtype != np.uint8 or image.ndim != 3 or image.shape[2] != 3:
@@ -269,14 +299,18 @@ class FaceTracker:
         height, width = image.shape[:2]
         index = self._frame
         self._frame += 1
-        proxy = self._proxy(image)
+        if self._t0 is None:
+            self._t0 = time_s
 
-        via = "video"
-        faces = self._backend.detect_video(proxy, self._timestamp_ms(time_s))
-        chosen = self._pick(faces, width, height)
-        if chosen is None and self.reacquire:
-            via = "reacquire"
-            faces = self._backend.detect_image(proxy)
+        chosen = None
+        if self._last_box is not None:
+            via = "video"
+            faces = self._track_in_crop(image, time_s)
+            chosen = self._pick(faces, width, height)
+        if chosen is None:
+            # Not tracked yet, or lost: detect on the whole (downscaled) frame.
+            via = "detect"
+            faces = self._backend.find_faces(self._proxy(image))
             chosen = self._pick(faces, width, height)
         if chosen is None:
             if self._last_box is not None:
@@ -289,8 +323,8 @@ class FaceTracker:
         box = landmarks_bbox(landmarks, width, height)
         self._last_box = box
         self._frames_lost = 0
-        # MediaPipe reports no per-face score; a returned face has passed the
-        # presence/tracking gates at min_confidence, so it is recorded as 1.0.
+        # Neither model reports a per-face score; a returned face has passed the
+        # detection/presence gates, so it is recorded as 1.0.
         return TrackedFace(index, float(time_s), box, landmarks, 1.0, via)
 
     def close(self) -> None:
@@ -385,7 +419,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--out", type=Path, required=True, help="Track JSON output path")
     parser.add_argument("--detect-max-dim", type=int, default=1280, help="Long edge of the detection proxy")
     parser.add_argument("--max-frames", type=int, help="Stop after this many frames")
-    parser.add_argument("--no-reacquire", action="store_true", help="Skip the IMAGE-mode rerun on dropouts")
     args = parser.parse_args(argv)
 
     def report(frames: int, tracked: int) -> None:
@@ -397,14 +430,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         max_frames=args.max_frames,
         progress=report,
         detect_max_dim=args.detect_max_dim,
-        reacquire=not args.no_reacquire,
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(build_contract(track, args.video.name)) + "\n", encoding="utf-8")
-    reacquired = sum(face.via == "reacquire" for face in track.faces)
+    detected = sum(face.via == "detect" for face in track.faces)
     print(
         f"wrote {args.out}: {len(track.faces)}/{track.frame_count} frames tracked "
-        f"({track.coverage:.1%}), {reacquired} re-acquired"
+        f"({track.coverage:.1%}), {detected} from the detector"
     )
     return 0
 
