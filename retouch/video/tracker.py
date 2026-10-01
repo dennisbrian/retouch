@@ -1,0 +1,413 @@
+"""Single-face video tracker with landmarks (V1 slice S2).
+
+Runs the repo's MediaPipe FaceLandmarker (``face_landmarker.task``) in VIDEO
+running mode, so consecutive frames reuse the previous face instead of
+re-detecting from scratch, and emits one selected face per frame: a box,
+478 landmarks and a confidence.
+
+Selection policy (plan S2): the largest face in the first frame that has
+one, then the face nearest the previous box on every later frame. The
+tracker never switches to a different face mid-clip; a face is only accepted
+if it is close to where the selected one was last seen (the allowed distance
+grows while the face is lost, so a subject who moves during an occlusion is
+picked up again). Frames where the selected face is not found are left out,
+which the QA harness and later slices treat as untracked.
+
+VIDEO mode can drop a clear face for a few frames (S0 measured 3 of 30 on a
+frontal 720p clip). When it does, the same frame is re-run through the
+landmarker in IMAGE mode before the frame is given up on; records say which
+path found them (``via``).
+
+The JSON written by :func:`build_contract` is the V0 harness track contract
+(``scripts/review/video_qa_report.py``) at version 2: the V0 per-frame keys
+are unchanged and ``landmarks``/``time``/``via`` are added, along with
+top-level ``version`` and ``landmark_format``.
+
+Usage::
+
+    python -m retouch.video.tracker clip.mp4 --out tracks.json
+"""
+
+from __future__ import annotations
+
+import argparse
+import dataclasses
+import json
+import math
+from collections.abc import Sequence
+from fractions import Fraction
+from pathlib import Path
+from typing import Callable, List, Optional, Protocol, Union
+
+import cv2
+import numpy as np
+
+PathLike = Union[str, Path]
+Bbox = tuple  # (x, y, w, h) in source pixels
+
+CONTRACT_VERSION = 2
+LANDMARK_FORMAT = "mediapipe_face_478_xyz_normalized"
+NUM_LANDMARKS = 478
+
+# A face counts as the same one if its box centre is within this many
+# previous-box diagonals of the last selected box...
+_MATCH_RADIUS = 0.5
+# ...growing by this much per frame the face has been lost, up to the cap.
+_MATCH_RADIUS_GROWTH = 0.05
+_MATCH_RADIUS_MAX = 2.0
+# Box size (sqrt of area ratio) allowed between consecutive matches, and
+# after a loss.
+_SIZE_RATIO_MAX = 1.5
+_SIZE_RATIO_MAX_LOST = 2.0
+
+
+class LandmarkBackend(Protocol):
+    """Returns every face's landmarks, each (478, 3) normalized to the image."""
+
+    def detect_video(self, image_bgr: np.ndarray, timestamp_ms: int) -> List[np.ndarray]: ...
+
+    def detect_image(self, image_bgr: np.ndarray) -> List[np.ndarray]: ...
+
+    def close(self) -> None: ...
+
+
+class MediaPipeBackend:
+    """FaceLandmarker in VIDEO mode, plus an IMAGE-mode one for re-acquiring.
+
+    Must be closed on the main thread (see ``FaceDetector.close``): left to the
+    garbage collector, MediaPipe's task finalizer can hang the process.
+    """
+
+    def __init__(self, *, max_faces: int = 4, min_confidence: float = 0.5) -> None:
+        import mediapipe as mp
+
+        from ..model_fetch import get_model_path
+
+        vision = mp.tasks.vision
+        model = get_model_path("face_landmarker")
+        self._mp = mp
+
+        def make(mode):
+            return vision.FaceLandmarker.create_from_options(
+                vision.FaceLandmarkerOptions(
+                    base_options=mp.tasks.BaseOptions(model_asset_path=model),
+                    running_mode=mode,
+                    num_faces=max_faces,
+                    min_face_detection_confidence=min_confidence,
+                    min_face_presence_confidence=min_confidence,
+                    min_tracking_confidence=min_confidence,
+                )
+            )
+
+        self._video = make(vision.RunningMode.VIDEO)
+        self._image = None
+        self._make_image = lambda: make(vision.RunningMode.IMAGE)
+
+    def _wrap(self, image_bgr: np.ndarray):
+        rgb = np.ascontiguousarray(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB))
+        return self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb)
+
+    @staticmethod
+    def _arrays(result) -> List[np.ndarray]:
+        return [
+            np.array([(p.x, p.y, p.z) for p in face], dtype=np.float32)
+            for face in result.face_landmarks
+        ]
+
+    def detect_video(self, image_bgr: np.ndarray, timestamp_ms: int) -> List[np.ndarray]:
+        return self._arrays(self._video.detect_for_video(self._wrap(image_bgr), timestamp_ms))
+
+    def detect_image(self, image_bgr: np.ndarray) -> List[np.ndarray]:
+        if self._image is None:  # built on first dropout only
+            self._image = self._make_image()
+        return self._arrays(self._image.detect(self._wrap(image_bgr)))
+
+    def close(self) -> None:
+        for attr in ("_video", "_image"):
+            task = getattr(self, attr)
+            if task is not None:
+                try:
+                    task.close()
+                except Exception:  # teardown must not mask the caller's error
+                    pass
+                setattr(self, attr, None)
+
+
+@dataclasses.dataclass(frozen=True)
+class TrackedFace:
+    """The selected face on one frame."""
+
+    frame: int
+    time: float  # seconds, from the frame's presentation timestamp
+    bbox: Bbox  # (x, y, w, h), source pixels, clamped to the frame
+    landmarks: np.ndarray  # (478, 3) float32; x, y normalized to the frame
+    confidence: float
+    via: str  # "video" (VIDEO-mode tracking) or "reacquire" (IMAGE-mode rerun)
+
+
+@dataclasses.dataclass(frozen=True)
+class VideoTrack:
+    """Tracker output for a whole clip."""
+
+    width: int
+    height: int
+    fps: Fraction
+    frame_count: int  # frames decoded, tracked or not
+    faces: List[TrackedFace]
+
+    @property
+    def coverage(self) -> float:
+        return len(self.faces) / self.frame_count if self.frame_count else 0.0
+
+
+def landmarks_bbox(landmarks: np.ndarray, width: int, height: int) -> Bbox:
+    """Landmark box in pixels (edges rounded), clamped to the frame (at least 1x1)."""
+    xs = landmarks[:, 0] * width
+    ys = landmarks[:, 1] * height
+    x0 = max(0, int(round(float(xs.min()))))
+    y0 = max(0, int(round(float(ys.min()))))
+    x1 = min(width, int(round(float(xs.max()))))
+    y1 = min(height, int(round(float(ys.max()))))
+    x0, y0 = min(x0, width - 1), min(y0, height - 1)
+    return (x0, y0, max(1, x1 - x0), max(1, y1 - y0))
+
+
+def _centre(b: Bbox) -> tuple:
+    return (b[0] + b[2] / 2.0, b[1] + b[3] / 2.0)
+
+
+def select_initial(boxes: Sequence[Bbox]) -> Optional[int]:
+    """Index of the largest box (the first one wins a tie), or None."""
+    best, best_area = None, 0
+    for i, b in enumerate(boxes):
+        area = b[2] * b[3]
+        if area > best_area:
+            best, best_area = i, area
+    return best
+
+
+def match_previous(boxes: Sequence[Bbox], previous: Bbox, frames_lost: int = 0) -> Optional[int]:
+    """Index of the box nearest ``previous`` that could be the same face, or None.
+
+    A candidate must lie within a radius of the previous box's diagonal (wider
+    the longer the face has been lost) and be of similar size.
+    """
+    diag = math.hypot(previous[2], previous[3])
+    radius = min(_MATCH_RADIUS + _MATCH_RADIUS_GROWTH * frames_lost, _MATCH_RADIUS_MAX) * diag
+    size_limit = _SIZE_RATIO_MAX if frames_lost == 0 else _SIZE_RATIO_MAX_LOST
+    px, py = _centre(previous)
+    prev_size = math.sqrt(previous[2] * previous[3])
+    best, best_dist = None, None
+    for i, b in enumerate(boxes):
+        ratio = math.sqrt(b[2] * b[3]) / prev_size
+        if not 1.0 / size_limit <= ratio <= size_limit:
+            continue
+        cx, cy = _centre(b)
+        dist = math.hypot(cx - px, cy - py)
+        if dist <= radius and (best_dist is None or dist < best_dist):
+            best, best_dist = i, dist
+    return best
+
+
+class FaceTracker:
+    """Follows one face through consecutive frames; see the module docstring.
+
+    Feed frames in presentation order with :meth:`update`. Use as a context
+    manager (or call :meth:`close`) on the main thread.
+    """
+
+    def __init__(
+        self,
+        *,
+        max_faces: int = 4,
+        min_confidence: float = 0.5,
+        detect_max_dim: int = 1280,
+        reacquire: bool = True,
+        backend: Optional[LandmarkBackend] = None,
+    ) -> None:
+        if detect_max_dim < 64:
+            raise ValueError("detect_max_dim must be at least 64")
+        self.max_faces = max_faces
+        self.min_confidence = min_confidence
+        self.detect_max_dim = detect_max_dim
+        self.reacquire = reacquire
+        self._backend = backend if backend is not None else MediaPipeBackend(
+            max_faces=max_faces, min_confidence=min_confidence
+        )
+        self._frame = 0
+        self._t0: Optional[float] = None
+        self._last_ms = -1
+        self._last_box: Optional[Bbox] = None
+        self._frames_lost = 0
+
+    def _proxy(self, image: np.ndarray) -> np.ndarray:
+        height, width = image.shape[:2]
+        scale = self.detect_max_dim / max(height, width)
+        if scale >= 1.0:
+            return image
+        size = (max(1, round(width * scale)), max(1, round(height * scale)))
+        return cv2.resize(image, size, interpolation=cv2.INTER_AREA)
+
+    def _timestamp_ms(self, time_s: float) -> int:
+        # VIDEO mode needs strictly increasing integer milliseconds.
+        if self._t0 is None:
+            self._t0 = time_s
+        ms = max(int(round((time_s - self._t0) * 1000.0)), self._last_ms + 1)
+        self._last_ms = ms
+        return ms
+
+    def _pick(self, faces: List[np.ndarray], width: int, height: int) -> Optional[int]:
+        boxes = [landmarks_bbox(f, width, height) for f in faces]
+        if self._last_box is None:
+            return select_initial(boxes)
+        return match_previous(boxes, self._last_box, self._frames_lost)
+
+    def update(self, image: np.ndarray, time_s: float) -> Optional[TrackedFace]:
+        """Track the selected face on the next frame; None when it isn't found."""
+        if image.dtype != np.uint8 or image.ndim != 3 or image.shape[2] != 3:
+            raise ValueError(f"expected an H x W x 3 uint8 BGR image, got {image.dtype} {image.shape}")
+        height, width = image.shape[:2]
+        index = self._frame
+        self._frame += 1
+        proxy = self._proxy(image)
+
+        via = "video"
+        faces = self._backend.detect_video(proxy, self._timestamp_ms(time_s))
+        chosen = self._pick(faces, width, height)
+        if chosen is None and self.reacquire:
+            via = "reacquire"
+            faces = self._backend.detect_image(proxy)
+            chosen = self._pick(faces, width, height)
+        if chosen is None:
+            if self._last_box is not None:
+                self._frames_lost += 1
+            return None
+
+        landmarks = np.asarray(faces[chosen], dtype=np.float32)
+        if landmarks.shape != (NUM_LANDMARKS, 3):
+            raise ValueError(f"backend returned landmarks of shape {landmarks.shape}")
+        box = landmarks_bbox(landmarks, width, height)
+        self._last_box = box
+        self._frames_lost = 0
+        # MediaPipe reports no per-face score; a returned face has passed the
+        # presence/tracking gates at min_confidence, so it is recorded as 1.0.
+        return TrackedFace(index, float(time_s), box, landmarks, 1.0, via)
+
+    def close(self) -> None:
+        self._backend.close()
+
+    def __enter__(self) -> FaceTracker:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+
+def track_video(
+    path: PathLike,
+    *,
+    max_frames: Optional[int] = None,
+    progress: Optional[Callable[[int, int], None]] = None,
+    **tracker_options,
+) -> VideoTrack:
+    """Decode a clip with ``media.read_frames`` and track its selected face."""
+    from .media import probe, read_frames
+
+    info = probe(path)
+    faces: List[TrackedFace] = []
+    frames = 0
+    with FaceTracker(**tracker_options) as tracker:
+        for frame in read_frames(path):
+            if max_frames is not None and frames >= max_frames:
+                break
+            face = tracker.update(frame.image, frame.time)
+            if face is not None:
+                faces.append(face)
+            frames += 1
+            if progress is not None:
+                progress(frames, len(faces))
+    if frames == 0:
+        raise ValueError(f"{path}: no frames decoded")
+    return VideoTrack(info.width, info.height, info.fps, frames, faces)
+
+
+def build_contract(track: VideoTrack, source: str, *, decimals: int = 5) -> dict:
+    """The version-2 track JSON (a superset of the V0 harness contract)."""
+    frames = [
+        {
+            "frame": face.frame,
+            "face": [int(v) for v in face.bbox],
+            "confidence": face.confidence,
+            "time": round(face.time, 6),
+            "via": face.via,
+            "landmarks": np.round(face.landmarks.astype(np.float64), decimals).tolist(),
+        }
+        for face in track.faces
+    ]
+    return {
+        "version": CONTRACT_VERSION,
+        "source": source,
+        "width": track.width,
+        "height": track.height,
+        "fps": float(track.fps),
+        "frame_count": track.frame_count,
+        "landmark_format": LANDMARK_FORMAT,
+        "confidence_source": "presence_gate",
+        "frames": frames,
+    }
+
+
+def load_contract(path: PathLike) -> dict:
+    """Read and validate a track JSON; version-1 files (no ``version``) have no landmarks."""
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    version = payload.get("version", 1)
+    if version not in (1, CONTRACT_VERSION):
+        raise ValueError(f"{path}: unsupported track contract version {version!r}")
+    frames = payload.get("frames")
+    if not isinstance(frames, list):
+        raise ValueError(f"{path}: track JSON must contain a 'frames' list")
+    seen = set()
+    for record in frames:
+        frame = int(record["frame"])
+        if frame in seen:
+            raise ValueError(f"{path}: duplicate record for frame {frame}")
+        seen.add(frame)
+        if len(record["face"]) != 4 or not 0.0 <= float(record["confidence"]) <= 1.0:
+            raise ValueError(f"{path}: invalid record at frame {frame}")
+        if version >= 2 and np.asarray(record["landmarks"]).shape != (NUM_LANDMARKS, 3):
+            raise ValueError(f"{path}: frame {frame} needs {NUM_LANDMARKS} x 3 landmarks")
+    return payload
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="Track one face through a clip and write track JSON.")
+    parser.add_argument("video", type=Path, help="Local source clip")
+    parser.add_argument("--out", type=Path, required=True, help="Track JSON output path")
+    parser.add_argument("--detect-max-dim", type=int, default=1280, help="Long edge of the detection proxy")
+    parser.add_argument("--max-frames", type=int, help="Stop after this many frames")
+    parser.add_argument("--no-reacquire", action="store_true", help="Skip the IMAGE-mode rerun on dropouts")
+    args = parser.parse_args(argv)
+
+    def report(frames: int, tracked: int) -> None:
+        if frames % 60 == 0:
+            print(f"  frame {frames}: {tracked} tracked", flush=True)
+
+    track = track_video(
+        args.video,
+        max_frames=args.max_frames,
+        progress=report,
+        detect_max_dim=args.detect_max_dim,
+        reacquire=not args.no_reacquire,
+    )
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(build_contract(track, args.video.name)) + "\n", encoding="utf-8")
+    reacquired = sum(face.via == "reacquire" for face in track.faces)
+    print(
+        f"wrote {args.out}: {len(track.faces)}/{track.frame_count} frames tracked "
+        f"({track.coverage:.1%}), {reacquired} re-acquired"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
