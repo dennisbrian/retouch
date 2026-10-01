@@ -32,6 +32,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 INDEX = ROOT / "docs" / "INDEX.md"
+# Git-ignored local run outputs (see .gitignore); doc links into it are not checked.
+ARTIFACT_DIR = ROOT / "test_output"
 STATS_FILE = ROOT / "docs" / "REPO_STATS.md"
 
 # ---------------------------------------------------------------------------
@@ -212,6 +214,13 @@ def check_links(rep: Report) -> None:
             if target.startswith("#"):
                 continue
             p = (f.parent / target).resolve()
+            # Research notes cite run outputs in the git-ignored test_output/
+            # folder and source photos elsewhere on the author's machine
+            # (absolute paths). Both exist only where the study ran, so a
+            # clean checkout (CI) can never resolve them; only links to files
+            # the repo itself carries are checked.
+            if ROOT not in p.parents or p == ARTIFACT_DIR or ARTIFACT_DIR in p.parents:
+                continue
             if not p.exists():
                 broken += 1
                 rep.error(f"broken link: {rel(f)} -> {target}")
