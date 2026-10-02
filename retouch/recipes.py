@@ -465,7 +465,10 @@ RECIPES = {
         # 100 → engine 0-100), so values are 0-1 ratios here.
         "extends": "cosplay",
         "cosplay": {
-            "wig_lace_blend": 0.30,
+            # 0 since the wig-lace blend was rebuilt (retouch/wig_hairline.py,
+            # 2026-10-02): the old filter changed nothing, so 0 keeps this
+            # recipe's look.
+            "wig_lace_blend": 0.0,
             "stockings_smooth": 0.20,
             "consistency_strength": 0.40,
         },
@@ -3740,7 +3743,9 @@ RECIPES["cosplay_character_showcase_v1"] = {
     },
     "lips": {"tint": "cosplay", "gloss": 0.30},
     "hair": {"shine": 0.30},
-    "cosplay": {"wig_lace_blend": 0.42},
+    # Wig-lace blend 0.42 -> 0 when it was rebuilt (retouch/wig_hairline.py,
+    # 2026-10-02): the old filter changed nothing, so 0 keeps this look.
+    "cosplay": {"wig_lace_blend": 0.0},
     "dodge_burn": {"amount": 0.28},
     "color_harmony": {"preset": "cosplay", "amount": 0.32},
     "bloom": {"opacity": 0.12, "threshold": 198.0},
