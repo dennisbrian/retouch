@@ -152,7 +152,9 @@ class CosplayMoatStage(_EngineStage):
 
     def _call(self, state: PipelineState) -> np.ndarray:
         return self._engine._stage_cosplay_moat(
-            state.img, state.ctx, state.acc_skin_hair, state.person_mask
+            state.img, state.ctx, state.acc_skin_hair, state.person_mask,
+            faces=state.faces, acc_skin=state.acc_skin,
+            acc_hair_only=state.acc_hair_only,
         )
 
 

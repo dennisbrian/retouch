@@ -602,7 +602,7 @@ Passing an explicit value override to these parameters takes precedence over the
 
 ##### **Cosplay Moat & Stockings**
 
-*   **`cosplay_wig_lace_blend`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `cosplay.wig_lace_blend`): Adjusts the cosplay wig lace blend parameter.
+*   **`cosplay_wig_lace_blend`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `cosplay.wig_lace_blend`): Feathers a wig's front edge into the forehead and tones a lace or glue band just outside it back to the skin (`retouch/wig_hairline.py`). Only a hairline well above the brows with skin below it counts, so bangs, side locks and the wig's outer edge stay as they are. Start near 50.
 *   **`cosplay_stockings_smooth`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `cosplay.stockings_smooth`): Adjusts the cosplay stockings smooth parameter.
 *   **`cosplay_consistency_strength`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `cosplay.consistency_strength`): Adjusts the cosplay consistency strength parameter.
 

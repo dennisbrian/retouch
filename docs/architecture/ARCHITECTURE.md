@@ -370,7 +370,8 @@ per `AGENTS.md`.
 
 | Module | Role |
 |--------|------|
-| `cosplay_moat.py` | A3 cosplay skin moat: makeup-agnostic enhancements (wig-lace blend at the hairline, stockings smoothing, consistency). |
+| `cosplay_moat.py` | A3 cosplay skin moat: makeup-agnostic enhancements (stockings smoothing, consistency; its old `WigLaceBlender` is no longer used by the engine). |
+| `wig_hairline.py` | Wig Lace Blend (`cosplay_wig_lace_blend`): feathers a wig front into the forehead and tones a lace band to the skin. |
 | `neural_boosters.py` | PARKED neural stray-hair/defect segmentation infrastructure; disabled pending A1 benchmark evidence. |
 
 ## 5. Key dataclasses
