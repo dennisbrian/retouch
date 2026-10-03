@@ -192,6 +192,18 @@ default; start near 50 (100 can look flat). It pairs with Face Polish rather
 than replacing it. Note that the older Skin Finish "powder" and "matte" modes
 subtract grey and can darken lit cheeks on pale skin or face paint.
 
+Body Skin Evening (`--body-skin-even 0-100` in the CLI, the "Body Skin
+Evening" slider in the app's Body Skin section, or `body_skin.even` in a
+recipe, where 0.5 = 50) calms blotchy colour on arms, legs, chest and back,
+such as red patches or an uneven tan, by pulling each patch's colour back
+toward the skin around it. Nothing is blurred: pores, body hair, freckles,
+moles, muscle and limb shading and the sheen of oiled skin or sheer hosiery
+stay as shot. The face, wig, costume, tattoos and white face or body paint are
+left alone. It is off by default; start near 50. On simulated darker skin the
+body-skin detector can miss parts of a limb, which are then left as shot. The
+older "Body Equalize" slider next to it is a different op (it adds local
+contrast) kept for the recipes that use it.
+
 Skin Warmth (`--skin-warmth 0-100` in the CLI, the "Skin Warmth" slider next
 to Powder Finish in the app, or `skin.warmth` in a recipe, where 0.5 = 50)
 turns natural skin that reads pink or flat toward a warm peach, the tone of

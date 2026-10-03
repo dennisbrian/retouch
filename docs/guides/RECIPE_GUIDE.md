@@ -56,6 +56,7 @@ These keys are defined inside nested dictionary blocks inside a recipe.
 | `body_reshape` | `torso_width` | 0 to 100 | `50.0` | `body_reshape_torso_width` |
 | `body_skin` | `dodge_burn` | 0 to 100 | `0` | `body_dodge_burn` |
 | `body_skin` | `equalize` | 0 to 100 | `0` | `body_equalize` |
+| `body_skin` | `even` | 0 to 100 | `0` | `body_skin_even` |
 | `body_skin` | `match_face` | 0 to 100 | `0` | `body_match_face` |
 | `body_skin` | `relight` | 0 to 100 | `0` | `body_relight` |
 | `body_skin` | `shadow_lift` | 0 to 100 | `0` | `body_shadow_lift` |
@@ -359,6 +360,7 @@ and 0–360 for split-toning hue).
 | Blush | `blush` | direct |
 | Body Dodge Burn | `body_skin.dodge_burn` | ÷ 100 |
 | Body Equalize | `body_skin.equalize` | ÷ 100 |
+| Body Skin Evening | `body_skin.even` | ÷ 100 |
 | Body Match Face | `body_skin.match_face` | ÷ 100 |
 | Body Relight | `body_skin.relight` | ÷ 100 |
 | Body Reshape Arm Length | `body_reshape.arm_length` | direct |
