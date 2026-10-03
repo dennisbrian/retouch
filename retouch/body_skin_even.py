@@ -177,49 +177,67 @@ def even_body_skin(
     Returns:
         Same shape and dtype as ``img``; pixels outside ``mask`` unchanged.
     """
-    if strength <= 0 or mask is None or float(mask.max()) < 0.01:
+    if strength <= 0 or mask is None:
         return img
+    m = mask[..., 0] if mask.ndim == 3 else mask
+    m = m.astype(np.float32, copy=False)
+    # Full-resolution work is kept to the body-skin bounding box: at 26 MP,
+    # whole-frame float copies and Lab round trips cost several seconds.
+    support = m > 1e-3
+    rows = np.flatnonzero(support.any(axis=1))
+    if rows.size == 0 or float(m.max()) < 0.01:
+        return img
+    cols = np.flatnonzero(support.any(axis=0))
+    y0, y1, x0, x1 = int(rows[0]), int(rows[-1]) + 1, int(cols[0]), int(cols[-1]) + 1
     u8 = img.dtype == np.uint8
-    f = img.astype(np.float32) / 255.0 if u8 else img.astype(np.float32)
-    h, w = f.shape[:2]
-    m = mask.astype(np.float32)
-    if m.ndim == 3:
-        m = m[..., 0]
+    norm = 255.0 if u8 else 1.0
+    h, w = img.shape[:2]
     fw = float(face_width) if face_width and face_width > 0 else 0.12 * max(h, w)
     fw = max(fw, 40.0)
 
     scale = min(1.0, _WORK_FACE_WIDTH / fw)
     if scale < 1.0:
         size = (max(8, int(round(w * scale))), max(8, int(round(h * scale))))
-        f_s = cv2.resize(f, size, interpolation=cv2.INTER_AREA)
+        f_s = cv2.resize(img, size, interpolation=cv2.INTER_AREA).astype(np.float32) / norm
         m_s = cv2.resize(m, size, interpolation=cv2.INTER_AREA)
     else:
-        f_s, m_s = f, m
+        f_s, m_s = img.astype(np.float32) / norm, m
     lab_s = cv2.cvtColor(np.clip(f_s, 0.0, 1.0), cv2.COLOR_BGR2Lab)
     corr = _corrections(lab_s, m_s, float(np.clip(strength, 0.0, 1.0)), fw * scale)
     if corr is None:
         return img
     dL, gain, dab = corr
+    # Weight the fields by the mask smoothed at the texture scale (the
+    # guided-filter mask follows fine detail such as fishnet or hosiery weave
+    # and would print it into the shift).
+    m_w = cv2.GaussianBlur(m_s, (0, 0), sigmaX=max(1.0, FINE_SCALE * fw * scale * 0.5))
+    fields = np.dstack([dL * m_w, (gain - 1.0) * m_w, dab * m_w[..., None]]).astype(np.float32)
     if scale < 1.0:
-        dL = cv2.resize(dL, (w, h), interpolation=cv2.INTER_LINEAR)
-        gain = cv2.resize(gain, (w, h), interpolation=cv2.INTER_LINEAR)
-        dab = cv2.resize(dab, (w, h), interpolation=cv2.INTER_LINEAR)
-    # Only body-skin pixels change; the upsampled field can't leak past it.
-    support = m > 1e-3
-    if not support.any():
-        return img
-    lab = cv2.cvtColor(np.clip(f, 0.0, 1.0), cv2.COLOR_BGR2Lab)
-    # The fields are computed with the work-size mask; weight them by the
-    # full-resolution mask so edges follow the photo, not the work grid.
-    # Smoothed at the texture scale: the guided-filter mask follows fine
-    # detail (fishnet, hosiery weave) and would print it into the shift.
-    m = cv2.GaussianBlur(m, (0, 0), sigmaX=max(1.0, FINE_SCALE * fw * 0.5)) * support
-    lab_new = np.empty_like(lab)
-    lab_new[..., 0] = np.clip(lab[..., 0] + dL * m, 0.0, 100.0)
-    g = 1.0 + (gain - 1.0) * m
-    lab_new[..., 1:] = lab[..., 1:] * g[..., None] + dab * m[..., None]
-    out = cv2.cvtColor(lab_new, cv2.COLOR_Lab2BGR)
-    out = np.where(support[..., None], np.clip(out, 0.0, 1.0), f)
+        # Upsample only the box. Crop pixel (u, v) is full-res (x0 + u,
+        # y0 + v); same pixel-centre mapping as cv2.resize's bilinear.
+        sy, sx = fields.shape[0] / h, fields.shape[1] / w
+        mx = np.float32([[sx, 0.0, (x0 + 0.5) * sx - 0.5],
+                         [0.0, sy, (y0 + 0.5) * sy - 0.5]])
+        fields = cv2.warpAffine(
+            fields, mx, (x1 - x0, y1 - y0),
+            flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE,
+        )
+    else:
+        fields = fields[y0:y1, x0:x1]
+    sup = support[y0:y1, x0:x1]
+    crop = img[y0:y1, x0:x1].astype(np.float32) / norm
+    np.clip(crop, 0.0, 1.0, out=crop)
+    lab = cv2.cvtColor(crop, cv2.COLOR_BGR2Lab)
+    lab[..., 0] += fields[..., 0]
+    np.clip(lab[..., 0], 0.0, 100.0, out=lab[..., 0])
+    lab[..., 1:] *= 1.0 + fields[..., 1:2]
+    lab[..., 1:] += fields[..., 2:4]
+    new = cv2.cvtColor(lab, cv2.COLOR_Lab2BGR)
+    np.clip(new, 0.0, 1.0, out=new)
     if u8:
-        return np.clip(out * 255.0 + 0.5, 0, 255).astype(np.uint8)
-    return out.astype(img.dtype)
+        new = np.clip(new * 255.0 + 0.5, 0, 255).astype(np.uint8)
+    else:
+        new = new.astype(img.dtype, copy=False)
+    out = img.copy()
+    out[y0:y1, x0:x1][sup] = new[sup]
+    return out
