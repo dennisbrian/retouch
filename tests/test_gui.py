@@ -120,11 +120,12 @@ EXPECTED_RECIPE_KEYS.append("spot_heal")
 EXPECTED_RECIPE_KEYS.append("face_polish")
 EXPECTED_RECIPE_KEYS.append("powder_finish")
 EXPECTED_RECIPE_KEYS.append("skin_warmth")
+EXPECTED_RECIPE_KEYS.append("body_skin_even")
 EXPECTED_RECIPE_KEYS.append("highlight_repair")
 EXPECTED_RECIPE_KEYS.append("nose_shape")
 EXPECTED_RECIPE_KEYS.append("nose_highlight")
 
-EXPECTED_RECIPE_KEY_COUNT = 270
+EXPECTED_RECIPE_KEY_COUNT = 271
 # Self-updating: the recipe/smart-style slider tuple length is the contract
 # defined by RECIPE_OUTPUT_KEYS, so this constant can never go stale.
 EXPECTED_UI_OUTPUT_COUNT = len(gui.RECIPE_OUTPUT_KEYS)
@@ -863,11 +864,12 @@ class TestResetFunctions:
         assert isinstance(result, tuple)
         assert len(result) == 3
 
-    def test_reset_body_skin_returns_eight_values_with_p7_off(self):
+    def test_reset_body_skin_returns_nine_values_with_p7_off(self):
         result = gui.reset_body_skin("natural")
         assert isinstance(result, tuple)
-        assert len(result) == 8
+        assert len(result) == 9
         assert result[4] == 0.0
+        assert result[8] == 0  # Body Skin Evening, off by default
 
     def test_reset_eyes_lips_returns_seventeen_values(self):
         result = gui.reset_eyes_lips("natural")

@@ -87,6 +87,7 @@ def process(
     texture_transplant: Optional[float] = None,
     body_smooth: Optional[float] = None,
     body_equalize: Optional[float] = None,
+    body_skin_even: Optional[int] = None,
     body_whiten: Optional[float] = None,
     body_match_face: Optional[float] = None,
     cross_region_skin: Optional[float] = None,
@@ -610,7 +611,8 @@ Passing an explicit value override to these parameters takes precedence over the
 
 *   **`sculpt`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.sculpt`): Adjusts the sculpt parameter.
 *   **`body_smooth`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `body_skin.smooth`): Adjusts the body smooth parameter.
-*   **`body_equalize`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `body_skin.equalize`): Adjusts the body equalize parameter.
+*   **`body_equalize`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `body_skin.equalize`): Older body tone op used by 16 recipes: pulls a*/b* a little toward the body median and runs CLAHE on L*, which adds local contrast to body skin rather than evening it. For blotchy colour use `body_skin_even`.
+*   **`body_skin_even`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `body_skin.even`): Body Skin Evening. Pulls mid-scale colour blotches on body skin (redness, uneven tan) back toward the skin around them, measured in chromaticity (a*/L*, b*/L*); lightness follows only where the colour also deviates. Pores, body hair, freckles, moles, shading and gloss are kept; face, hair, costume, tattoos and white or grey paint are left alone. Mask: the multiclass segmenter's body-skin class, snapped to the photo and grown into connected same-coloured skin. Off by default; start near 50. See `retouch/body_skin_even.py`.
 *   **`body_whiten`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `body_skin.whiten`): Adjusts the body whiten parameter.
 *   **`body_match_face`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `body_skin.match_face`): Adjusts the body match face parameter.
 *   **`cross_region_skin`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: none): Explicit opt-in P7 control that propagates the approved face-edit LAB delta to same-person exposed skin. It is limited to one detected face, abstains on ambiguous ownership, and remains disabled by every recipe. Keep `body_match_face=0` when using it; a reviewed `cross_region_skin_mask` may be supplied through the Python API.
