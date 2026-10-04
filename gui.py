@@ -3986,7 +3986,6 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         _hair_ring_position_state = gr.State(value=0.5)
                         _hair_ring_tint_state = gr.State(value=0.0)
                         _hair_remove_flyaways_state = gr.State(value=0.0)
-                        _purple_fringing_state = gr.State(value=0.0)
                         _flyaway_cleanup_state = gr.State(value=0.0)
                         _micro_grain_state = gr.State(value=0.0)
                         _split_toning_state = gr.State(value=0.0)
@@ -4247,6 +4246,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 reset_structure_effects_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                                 hair_enhance = gr.Slider(0, 100, 5, step=1, label="Hair Shine", info="Boost highlight reflections and depth in hair strands")
                                 hair_deglare = gr.Slider(0, 100, 0, step=1, label="Wig Shine", info="Soften the plastic shine synthetic wigs pick up under flash or con lighting, back into the wig's own colour. Keeps the strands and the wig's lit side. Off by default; start near 50.")
+                                purple_fringing = gr.Slider(0, 100, 0, step=1, label="Defringe", info="Remove the purple, blue or green edge colour lenses add where a dark edge meets something very bright (a wig or glove against a window, softbox bokeh). Real purple, blue and green objects keep their colour. Off by default.")
                                 dodge_burn = gr.Slider(0, 100, 0, step=1, label="Dodge & Burn", info="Sculpt face structure with local highlight/shadow contouring")
                                 impact = gr.Slider(0, 100, 0, step=1, label="Global Impact Finish", info="Final punch: combined clarity, sharpening, and micro-contrast boost")
                                 specular_bloom = gr.Slider(0, 100, 0, step=1, label="Specular Bloom", info="Dreamy bloom glow applied specifically to skin highlight zones")
@@ -5802,7 +5802,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "body_reshape_shoulder_width": body_reshape_shoulder_width,
         "body_reshape_hip_width": body_reshape_hip_width,
         "auto_body_reshape": auto_body_reshape,
-        "purple_fringing": _purple_fringing_state,
+        "purple_fringing": purple_fringing,
         "flyaway_cleanup": _flyaway_cleanup_state,
         "micro_grain": _micro_grain_state,
         "split_toning": _split_toning_state,
