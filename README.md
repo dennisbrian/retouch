@@ -172,6 +172,24 @@ lips or hairline. It runs before smoothing, so it can be used with smoothing at
 works on the face only, not body skin. The older "Blemish Removal" slider is a
 separate pass that follows the recipe's smoothing strength.
 
+Stray hair cleanup (`--hair-remove-flyaways 0-100` in the CLI, the "Stray Hair
+Cleanup" slider under Skin Smoothing & Texture in the app, or
+`hair.remove_flyaways` in a recipe) removes loose wig fibres and flyaway hairs
+lying across the face and neck. Each strand is healed from the skin beside it,
+with the skin's own grain borrowed from a few strand widths to the side, so the
+cheek doesn't turn smooth where a hair used to be. It looks for long, thin,
+fairly straight lines of the wig's colour (or clearly lighter or darker than
+the skin), so pores, freckles, smile lines and neck creases stay. The wig
+itself, bangs, a lock many fibres wide, the wig's own outline against the face,
+brows, lashes, eyes, lips and the nose are never touched. It is off by default
+and uses no model; start near 60. Limits: it works on the face and the neck
+skin parsed with the face, not shoulders, arms or chest; strands right next to
+the eyes, the nose or the face outline are left alone; a strand almost the same
+colour and brightness as the skin is only partly found; and a long dark crease
+under the chin can be softened a little. `--flyaway-cleanup` is an older name
+for the same setting. The earlier version of this setting was hidden, removed
+no real strands and changed catchlights, pupils and costume trim instead.
+
 Face polish (`--face-polish 0-100` in the CLI, the "Face Polish" slider under
 the skin tone controls in the app, or `skin.face_polish` in a recipe) is the
 porcelain cosplay finish in one control: it tones oily hot spots down to a

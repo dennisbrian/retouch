@@ -529,6 +529,28 @@ def _process_face_core(
         )
         logger.debug("spot_heal: %s", _spot_diags)
 
+    # ---- Stray hair cleanup (opt-in, before any smoothing) ----
+    # Heals loose wig fibres and flyaways lying across face and neck skin
+    # from the skin beside them; the wig, bangs, brows, lashes, eyes, lips
+    # and nose are left alone. Runs on the pristine crop, before smoothing
+    # blurs the strands into the skin. flyaway_cleanup is an alias of
+    # hair_remove_flyaways, max-combined (e73d3ba pattern). See
+    # retouch/stray_hair.py.
+    _stray = max(
+        float(getattr(ctx, 'hair_remove_flyaways', 0) or 0),
+        float(getattr(ctx, 'flyaway_cleanup', 0) or 0),
+    )
+    if _stray > 0 and skin_n is not None:
+        canvas = _tr('hair.remove_flyaways', canvas)
+        from .stray_hair import exclusion_from_regions, remove_stray_hairs
+
+        _stray_skin = skin_n if neck_n is None else np.maximum(skin_n, neck_n)
+        canvas, _stray_diags = remove_stray_hairs(
+            canvas, _stray_skin, face_width, _stray, hair_mask=hair_n,
+            feature_mask=exclusion_from_regions(regions, face_width),
+        )
+        logger.debug("stray_hair: %s", _stray_diags)
+
     # ---- P4: Makeup unmix (before albedo_even so paint ≠ blotch) ----
     _mce = float(getattr(ctx, "makeup_coverage_even", 0.0) or 0.0)
     _mcr = float(getattr(ctx, "makeup_cake_reduce", 0.0) or 0.0)
@@ -1368,48 +1390,14 @@ def _process_face_core(
     # isotropic path is kept as a fallback when no hair mask is available.
     hair_deglare_v = getattr(ctx, 'hair_deglare', 0) or 0
     hair_ring_strength = ctx.hair_enhance
-    # flyaway_cleanup aliases to the same H1 remove_flyaways() dispatch as
-    # hair_remove_flyaways, max-combined (e73d3ba pattern), rather than
-    # calling hair.py::cleanup_flyaway_strands directly. That function's
-    # "allowed zone" excludes only a ~41px ring around the hair silhouette —
-    # everywhere else (clothing embroidery, background texture) is fair game
-    # to it — so its former call site (deleted 2026-08-17 as believed-dead
-    # A/B residue, aaaa1e5) produced visible fabric/texture smearing when
-    # restored and tested 2026-09-24. hairwork.py::remove_flyaways here is
-    # the live, hair-mask-scoped, tested implementation 4 recipes already
-    # use via hair_remove_flyaways; flyaway_cleanup now reaches the same
-    # safe path instead of resurrecting the broken one.
-    hair_flyaway_v = max(
-        getattr(ctx, 'hair_remove_flyaways', 0) or 0,
-        getattr(ctx, 'flyaway_cleanup', 0) or 0,
-    )
-    if hair_deglare_v > 0 or hair_ring_strength > 0 or hair_flyaway_v > 0:
+    if hair_deglare_v > 0 or hair_ring_strength > 0:
         if regions.hair is not None and _norm_mask(regions.hair).max() > 0.01:
-            from .hairwork import hair_flow, deglare_wig, add_angel_ring, remove_flyaways
+            from .hairwork import hair_flow, deglare_wig, add_angel_ring
             canvas_u8_for_flow = (np.clip(canvas, 0, 255).astype(np.uint8)
                                  if canvas.dtype != np.uint8 else canvas)
             orientation, coherence = hair_flow(
                 canvas_u8_for_flow, hair_mask=_norm_mask(regions.hair)
             )
-            # H1 — flyaway removal runs first so the cleaned silhouette feeds
-            # the H2 deglare/ring stages (and the flow field recomputed for
-            # those stages stays clean). Eyebrow/eyelash exclusion mirrors
-            # the deglare guard.
-            if hair_flyaway_v > 0:
-                canvas = _tr('hair.remove_flyaways', canvas)
-                eb = None
-                if regions.left_eyebrow is not None or regions.right_eyebrow is not None:
-                    eb = np.zeros((roi_h, roi_w), dtype=np.float32)
-                    if regions.left_eyebrow is not None:
-                        eb = np.clip(eb + _norm_mask(regions.left_eyebrow), 0, 1)
-                    if regions.right_eyebrow is not None:
-                        eb = np.clip(eb + _norm_mask(regions.right_eyebrow), 0, 1)
-                skin_m = _norm_mask(regions.skin) if regions.skin is not None else None
-                canvas = remove_flyaways(
-                    canvas, _norm_mask(regions.hair), orientation, coherence,
-                    strength=int(hair_flyaway_v), face_width=face_width,
-                    eyebrow_mask=eb, skin_mask=skin_m,
-                )
             if hair_deglare_v > 0:
                 canvas = _tr('hair.deglare', canvas)
                 eb = None

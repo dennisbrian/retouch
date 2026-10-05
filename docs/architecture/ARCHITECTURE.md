@@ -258,6 +258,7 @@ per `AGENTS.md`.
 | `video/media.py` | V1 video slice S1: streaming decode (upright BGR frames with source timestamps) and H.264/lossless FFV1 encode with the source audio copied; needs the `video` extra (PyAV). |
 | `batch_processor.py` | Batch orchestration over `RetouchEngine`. |
 | `spot_heal_auto.py` | Automatic spot healing (pimple/red-spot detection + plane-fit heal; first op in the per-face core). |
+| `stray_hair.py` | Stray Hair Cleanup (`hair_remove_flyaways`, alias `flyaway_cleanup`): heals loose wig fibres and flyaways lying on face and neck skin from the skin beside them; runs right after spot healing in the per-face core. |
 | `eye_visibility.py` | Eye-occlusion gate (EAR + tone-adaptive contrast) gating eye ops on closed/occluded eyes. |
 | `duplicates.py` | Shoot-wide duplicate detection (pose + framing alignment, keeper ranking). |
 | `watermark.py` | Watermark/credit overlay stamping into `<output>/watermarked/`. |

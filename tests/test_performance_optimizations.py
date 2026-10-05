@@ -11,7 +11,6 @@ import cv2
 import numpy as np
 
 from retouch.freckle import FreckleRemover
-from retouch.hairwork import _flyaway_mask, _flyaway_mask_full
 from retouch.marks import _relative_features
 from retouch.undereye import build_undereye_support
 
@@ -129,19 +128,3 @@ def test_under_eye_roi_support_preserves_full_frame_mid_and_edge_contracts():
         assert support[h - 1, w - 1] == 0.0
         assert not bool(ring[h - 1, w - 1])
         assert bool(valid[h - 1, w - 1])
-
-
-def test_flyaway_roi_wrapper_matches_full_canvas_reference():
-    rng = np.random.default_rng(20260908)
-    h, w = 192, 256
-    image = rng.integers(0, 256, (h, w, 3), dtype=np.uint8)
-    hair = np.zeros((h, w), np.float32)
-    cv2.ellipse(hair, (w // 2, h // 2), (w // 4, h // 4), 15, 0, 360, 1, -1)
-    orientation = rng.normal(0.0, 1.0, (h, w)).astype(np.float32)
-    coherence = rng.random((h, w), dtype=np.float32)
-    exclude = np.zeros((h, w), np.float32)
-    cv2.ellipse(exclude, (w // 2, h // 3), (w // 5, max(3, h // 20)), 0, 0, 360, 1, -1)
-
-    full = _flyaway_mask_full(image, hair, orientation, coherence, 40, exclude, 100.0)
-    roi = _flyaway_mask(image, hair, orientation, coherence, 40, exclude, 100.0)
-    np.testing.assert_array_equal(roi, full)

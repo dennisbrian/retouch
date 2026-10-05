@@ -120,7 +120,10 @@ historical fallback (None/None/None/False/1.0). `auto_exposure` gained
   `background.backdrop_cleanup`, `neural.*`, `body_reshape.auto` — note the bisect showed
   neural.*, body_reshape.auto, hair.deglare/remove_flyaways and auto_exposure as exact
   no-ops on these photos (deltas 0.00), consistent with the A4 "parked stub" comments in
-  params.py: covered but inert. Post-fix full-res deltas vs natural: DSCF8083 **0.10**,
+  params.py: covered but inert. (`hair.remove_flyaways` was rewritten 2026-10-05 as Stray
+  Hair Cleanup, `retouch/stray_hair.py`, now a visible slider; the old pass changed
+  catchlights, pupils and trim on the bunny photos at 35, and the 4 recipes that set it
+  25-35 now set 0.) Post-fix full-res deltas vs natural: DSCF8083 **0.10**,
   DSCF8114 **0.33** (remaining ops are face-local + subtle bloom/sharpen). Bisect renders:
   `test_output/bonodori_recipe_wiring/bisect/`.
 
