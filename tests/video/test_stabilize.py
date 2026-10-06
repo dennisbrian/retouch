@@ -427,7 +427,7 @@ def test_mismatched_decoded_evidence_is_rejected():
         st.stabilize(contract, [st.FrameEvidence(0, 0.0, 0.0, None)])
 
 
-@pytest.mark.parametrize('kwargs', [{'fade_s': 0}, {'max_gap_s': -1}, {'min_cutoff': float('nan')}, {'z_off': 7}])
+@pytest.mark.parametrize('kwargs', [{'fade_s': 0}, {'max_gap_s': -1}, {'min_cutoff': float('nan')}, {'z_off': StabilizeParams().z_on + 1}, {'cover_fade_s': 0}])
 def test_invalid_parameters_are_rejected(kwargs):
     with pytest.raises(ValueError):
         StabilizeParams(**kwargs)
