@@ -2248,7 +2248,7 @@ def reset_body_skin(recipe_name):
     return (
         d["body_smooth"], d["body_equalize"], d["body_whiten"],
         d["body_match_face"], d["cross_region_skin"], d["body_relight"],
-        d["body_dodge_burn"], d["body_shadow_lift"],
+        d["body_dodge_burn"], d["body_shadow_lift"], d["body_skin_even"],
     )
 
 
@@ -4173,7 +4173,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             with gr.Accordion("🦵 Body Skin", open=False):
                                 reset_body_skin_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                                 body_smooth = gr.Slider(0, 100, 0, step=1, label="Body Smooth", info="Smoothing for arms, legs, décolletage · milder curve than face to preserve texture")
-                                body_equalize = gr.Slider(0, 100, 0, step=1, label="Body Equalize", info="Even out tone in body skin regions · tone harmonization at body scale")
+                                body_equalize = gr.Slider(0, 100, 0, step=1, label="Body Equalize", info="Older body tone op used by some recipes: adds local contrast to body skin. To calm blotchy colour, use Body Skin Evening")
+                                body_skin_even = gr.Slider(0, 100, 0, step=1, label="Body Skin Evening", info="Calms blotchy redness and uneven tan on arms, legs and chest; keeps texture, moles, freckles and shading. Off by default; start near 50.")
                                 body_whiten = gr.Slider(0, 100, 0, step=1, label="Body Whiten", info="Lighten body skin to match face whitening treatment")
                                 body_match_face = gr.Slider(0, 100, 0, step=1, label="Body Match Face", info="Pull body skin L/a/b toward retouched face skin color · bounded ±8L ±6a/b")
                                 cross_region_skin = gr.Slider(
@@ -5110,7 +5111,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     _track_reset_event(reset_body_skin_btn.click(
         fn=reset_body_skin,
         inputs=[recipe],
-        outputs=[body_smooth, body_equalize, body_whiten, body_match_face, cross_region_skin, body_relight, body_dodge_burn, body_shadow_lift],
+        outputs=[body_smooth, body_equalize, body_whiten, body_match_face, cross_region_skin, body_relight, body_dodge_burn, body_shadow_lift, body_skin_even],
         queue=False,
         show_progress="hidden",
     ))
@@ -5579,6 +5580,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "texture_transplant": texture_transplant,
         "body_smooth": body_smooth,
         "body_equalize": body_equalize,
+        "body_skin_even": body_skin_even,
         "body_whiten": body_whiten,
         "body_match_face": body_match_face,
         "cross_region_skin": cross_region_skin,

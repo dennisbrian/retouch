@@ -617,6 +617,20 @@ _SKIN_PARAMS = [
         max_val=100,
     ),
     ParamSpec(
+        # Body Skin Evening (retouch/body_skin_even.py): calms blotchy colour
+        # (redness, uneven tan) on arms, legs and chest; texture, moles and
+        # shading kept. Opt-in: 0 = off. Not the old body_equalize above,
+        # which 16 recipes use and which adds local contrast (CLAHE).
+        name="body_skin_even",
+        cli_flag="body-skin-even",
+        cli_type=int,
+        default=0,
+        recipe_key="body_skin.even",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
         name="body_whiten",
         cli_flag=None,
         cli_type=None,

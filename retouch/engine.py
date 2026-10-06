@@ -367,6 +367,7 @@ class ProcessingContext:
     powder_finish: float = 0.0
     highlight_repair: float = 0.0
     skin_warmth: float = 0.0
+    body_skin_even: float = 0.0
     neck_tone_match: float = 0.0
     nose_highlight: float = 0.0
     skin_sss: float = 0.0
@@ -1652,6 +1653,7 @@ class RetouchEngine:
         powder_finish: Optional[float] = None,
         highlight_repair: Optional[float] = None,
         skin_warmth: Optional[float] = None,
+        body_skin_even: Optional[float] = None,
         neck_tone_match: Optional[float] = None,
         nose_highlight: Optional[float] = None,
         skin_sss: Optional[float] = None,
@@ -1975,6 +1977,7 @@ class RetouchEngine:
             "powder_finish": powder_finish,
             "highlight_repair": highlight_repair,
             "skin_warmth": skin_warmth,
+            "body_skin_even": body_skin_even,
             "neck_tone_match": neck_tone_match,
             "nose_highlight": nose_highlight,
             "skin_sss": skin_sss,
@@ -4729,7 +4732,7 @@ class RetouchEngine:
         if (ctx.body_smooth <= 0 and ctx.body_equalize <= 0 and
             ctx.body_whiten <= 0 and ctx.body_match_face <= 0 and
             ctx.body_relight <= 0 and ctx.body_dodge_burn <= 0 and
-            ctx.body_shadow_lift <= 0):
+            ctx.body_shadow_lift <= 0 and ctx.body_skin_even <= 0):
             return img
 
         if person_mask is None or person_mask.max() < 0.01:
@@ -4745,12 +4748,16 @@ class RetouchEngine:
         pm = normalize_mask(person_mask)
         pm = squeeze_mask(pm)
         body_skin_candidate = skin_mask_lch_result * pm
+        # Everything left out of body skin below (face, hair, lips), kept for
+        # the Body Skin Evening mask, which starts from the class segmenter.
+        excluded = np.zeros(pm.shape, dtype=np.float32)
 
         # Exclude face skin region (already handled by per-face processing)
         if acc_skin is not None:
             acc_skin_norm = normalize_mask(acc_skin)
             acc_skin_norm = squeeze_mask(acc_skin_norm)
             body_skin_candidate = np.clip(body_skin_candidate - acc_skin_norm, 0, 1)
+            excluded = np.maximum(excluded, acc_skin_norm.astype(np.float32))
 
             # Exclude the whole FACE INTERIOR, not just the per-face skin mask.
             # The raw acc_skin mask has gaps between skin patches (nose bridge,
@@ -4778,6 +4785,7 @@ class RetouchEngine:
                     body_skin_candidate = body_skin_candidate * (
                         1.0 - face_interior.astype(np.float32)
                     )
+                    excluded = np.maximum(excluded, face_interior.astype(np.float32))
 
         # Exclude face hair region if available
         if acc_skin_hair is not None:
@@ -4786,6 +4794,7 @@ class RetouchEngine:
             # Erode hair mask to avoid over-exclusion at edges
             acc_hair_eroded = cv2.erode(acc_hair, np.ones((3, 3), np.uint8), iterations=1)
             body_skin_candidate = np.clip(body_skin_candidate - acc_hair_eroded, 0, 1)
+            excluded = np.maximum(excluded, acc_hair_eroded.astype(np.float32))
 
         # Exclude lips (already handled by per-face lip processing). High-chroma
         # red lip pixels can pass skin_mask_lch's hue/chroma heuristic and were
@@ -4796,6 +4805,7 @@ class RetouchEngine:
             acc_lips_norm = squeeze_mask(acc_lips_norm)
             acc_lips_dilated = cv2.dilate(acc_lips_norm, np.ones((5, 5), np.uint8), iterations=1)
             body_skin_candidate = np.clip(body_skin_candidate - acc_lips_dilated, 0, 1)
+            excluded = np.maximum(excluded, acc_lips_dilated.astype(np.float32))
 
         # Exclude wig/hair draping past the face crop onto the body (e.g.
         # long hair over the chest/shoulders). acc_skin_hair above only
@@ -4809,6 +4819,7 @@ class RetouchEngine:
         )
         if body_hair_mask is not None:
             body_skin_candidate = body_skin_candidate * (1.0 - body_hair_mask)
+            excluded = np.maximum(excluded, body_hair_mask.astype(np.float32))
 
         # Morphological cleaning: open (remove small noise) then close (fill small holes)
         # Scale kernel size to person size, not face size
@@ -4961,6 +4972,20 @@ class RetouchEngine:
                 result_u8 = np.clip(result * 255.0, 0, 255).astype(np.uint8)
                 result = blend_masked(result_u8, result_equalized_u8, body_skin_mask * s).astype(np.float32) / 255.0
 
+        # 3b. Body Skin Evening (``body_skin_even``; retouch/body_skin_even.py):
+        # pulls mid-scale colour blotches (redness, uneven tan) back toward
+        # the skin around them; texture, moles, shading and gloss are kept.
+        # Its mask comes from the multiclass segmenter's body-skin class, not
+        # the hue heuristic above, which also takes in beige costume parts.
+        if ctx.body_skin_even > 0:
+            from .body_skin_even import even_body_skin
+            even_mask = self._body_even_mask(img, pm, excluded, body_skin_mask)
+            fw = max((float(f.bbox[2]) for f in faces or []), default=0.0)
+            result = even_body_skin(
+                result, even_mask, ctx.body_skin_even / 100.0,
+                face_width=fw or None,
+            )
+
         # 4. Body whitening (lighten L channel in body skin)
         if ctx.body_whiten > 0:
             s = ctx.body_whiten / 100.0
@@ -5013,6 +5038,9 @@ class RetouchEngine:
         # the strongest active param, rather than derived from body_smooth alone
         # (deriving it from one unrelated param was the bug: a user setting only
         # body_whiten/body_match_face/body_equalize got silently zero blemish removal).
+        # Body Skin Evening (body_skin_even) does not unlock it: evening is a
+        # colour op that keeps moles and freckles, which blemish removal
+        # would erase.
         if (ctx.body_smooth > 0 or ctx.body_equalize > 0 or
             ctx.body_whiten > 0 or ctx.body_match_face > 0 or
             ctx.body_relight > 0 or ctx.body_dodge_burn > 0 or
@@ -5039,6 +5067,91 @@ class RetouchEngine:
             ).astype(np.float32) / 255.0
 
         return result
+
+    def _body_even_mask(
+        self,
+        img: np.ndarray,
+        person_mask: np.ndarray,
+        excluded: np.ndarray,
+        fallback: np.ndarray,
+    ) -> np.ndarray:
+        """Body-skin mask for Body Skin Evening.
+
+        The multiclass segmenter's body-skin class (it tells beige costume
+        from skin, which the hue heuristic can't), ramped from its soft
+        confidences to 0/1 and snapped to the photo's edges with a guided
+        filter (the model runs at 256 px), gated by the person mask, with
+        face, hair and lips left out. Falls back to the hue-based body mask
+        when the segmenter is unavailable.
+        """
+        from .parsing import _MC_BODY_SKIN, _FULL_HAIR_WORK_DIM, _confidence_ramp
+
+        h, w = img.shape[:2]
+        img_u8 = np.clip(img * 255.0, 0, 255).astype(np.uint8)
+        scale = _FULL_HAIR_WORK_DIM / max(h, w)
+        work = img_u8
+        if scale < 1.0:
+            work = cv2.resize(
+                img_u8, (max(1, round(w * scale)), max(1, round(h * scale))),
+                interpolation=cv2.INTER_AREA,
+            )
+        probs = self._parser._segment_classes(work)
+        if probs is None:
+            return fallback
+        body = _confidence_ramp(probs[:, :, _MC_BODY_SKIN])
+        body = self._grow_body_skin_by_colour(work, probs, body, person_mask)
+        guide = cv2.cvtColor(work, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+        r = max(2, int(round(max(work.shape[:2]) * 0.004)))
+        body = guided_filter(body, radius=r, eps=1e-3, guide=guide, max_dim=None)
+        if body.shape != (h, w):
+            body = cv2.resize(body, (w, h), interpolation=cv2.INTER_LINEAR)
+        mask = np.clip(body, 0.0, 1.0) * np.clip(person_mask, 0.0, 1.0)
+        mask = mask * (1.0 - np.clip(excluded, 0.0, 1.0))
+        return mask.astype(np.float32)
+
+    @staticmethod
+    def _grow_body_skin_by_colour(
+        work: np.ndarray,
+        probs: np.ndarray,
+        body: np.ndarray,
+        person_mask: np.ndarray,
+    ) -> np.ndarray:
+        """Add same-person pixels coloured like the confident body skin.
+
+        The 256 px segmenter loses much of darker body skin (a simulated
+        darker-skin copy of DSCF3503 kept a third of it). Pixels inside the
+        person, not hair, whose chromaticity (a*/L*, b*/L*) sits within the
+        confident body skin's own spread and which touch it are added. Black,
+        red or white costume parts are far from skin chromaticity and stay out.
+        """
+        from .parsing import _MC_HAIR, _confidence_ramp
+
+        seeds = body > 0.5
+        if int(seeds.sum()) < 200:
+            return body
+        lab = cv2.cvtColor(work.astype(np.float32) / 255.0, cv2.COLOR_BGR2Lab)
+        L = np.maximum(lab[:, :, 0], 1e-3)
+        ca, cb = lab[:, :, 1] / L, lab[:, :, 2] / L
+        a0, b0 = float(np.median(ca[seeds])), float(np.median(cb[seeds]))
+        dist = np.hypot(ca - a0, cb - b0)
+        spread = float(np.median(np.abs(dist[seeds] - np.median(dist[seeds])))) * 1.4826
+        tau = max(2.5 * float(np.percentile(dist[seeds], 75)), 3.0 * spread, 1e-3)
+        L0 = float(np.median(L[seeds]))
+        # Shadowed skin keeps its chromaticity; very dark pixels have none.
+        lit = np.clip((L - 0.3 * L0) / (0.15 * L0), 0.0, 1.0)
+        pm = person_mask
+        if pm.shape != body.shape:
+            pm = cv2.resize(pm.astype(np.float32), (body.shape[1], body.shape[0]),
+                            interpolation=cv2.INTER_LINEAR)
+        key = np.exp(-0.5 * (dist / tau) ** 2) * lit * np.clip(pm, 0.0, 1.0)
+        key = key * (1.0 - _confidence_ramp(probs[:, :, _MC_HAIR]))
+        cand = (key > 0.5) | seeds
+        n_lbl, lbl = cv2.connectedComponents(cand.astype(np.uint8))
+        if n_lbl <= 1:
+            return body
+        touching = np.unique(lbl[seeds])
+        keep = np.isin(lbl, touching[touching != 0])
+        return np.maximum(body, (key * keep).astype(np.float32))
 
     def _stage_body_paint(
         self,
