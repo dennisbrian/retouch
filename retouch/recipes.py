@@ -3504,7 +3504,10 @@ RECIPES["auto_clean_v1"] = {
         # recipe never visibly had it. The 2026-09-29 Wig Shine rewrite
         # does act; left off here so the recipe's look doesn't change.
         "deglare": 0,
-        "remove_flyaways": 35,
+        # 0: the first flyaway remover found no real strands and changed
+        # catchlights, pupils and trim instead. The 2026-10-05 Stray Hair Cleanup
+        # rewrite does act; left off here so the recipe gains no new effect.
+        "remove_flyaways": 0,
     },
     # Neural boosters are compatibility-only until real segmenters/models
     # exist; non-zero recipe defaults would advertise a silent no-op.
@@ -4409,7 +4412,10 @@ RECIPES["studio_headshot_protected_v1"] = {
     },
     "eye": {"sclera_brighten": 0.14, "iris_saturate": 0.20, "iris_brightness": 0.16},
     "lips": {"tint": None, "gloss": 0.06},
-    "hair": {"shine": 0.10, "remove_flyaways": 30},
+    # 0: the first flyaway remover found no real strands and changed
+    # catchlights, pupils and trim instead. The 2026-10-05 Stray Hair Cleanup
+    # rewrite does act; left off here so the recipe gains no new effect.
+    "hair": {"shine": 0.10, "remove_flyaways": 0},
     "mark_policy": "protect_identity",
     # Slimming left non-zero for the same yaw-gate reason as sculpt/relight
     # above, but small. NOTE THE SCALE: slimming's ParamSpec is gui_direct on
@@ -4688,7 +4694,10 @@ RECIPES["apex_cosplay_v1"] = {
     },
     "undereye": {"darken_removal": 0.15, "puffiness_reduction": 0.15},
     "lips": {"tint": None, "gloss": 0.22},
-    "hair": {"shine": 0.20, "remove_flyaways": 30},
+    # 0: the first flyaway remover found no real strands and changed
+    # catchlights, pupils and trim instead. The 2026-10-05 Stray Hair Cleanup
+    # rewrite does act; left off here so the recipe gains no new effect.
+    "hair": {"shine": 0.20, "remove_flyaways": 0},
     "film": {
         "enable": True,
         "strength": 0.30,
@@ -4754,7 +4763,10 @@ RECIPES["apex_editorial_v1"] = {
     "eye": {"sclera_brighten": 0.12},
     "undereye": {"darken_removal": 0.30, "puffiness_reduction": 0.25},
     "lips": {"tint": None, "gloss": 0.10},
-    "hair": {"shine": 0.10, "remove_flyaways": 25},
+    # 0: the first flyaway remover found no real strands and changed
+    # catchlights, pupils and trim instead. The 2026-10-05 Stray Hair Cleanup
+    # rewrite does act; left off here so the recipe gains no new effect.
+    "hair": {"shine": 0.10, "remove_flyaways": 0},
     "film": {
         "enable": True,
         "strength": 0.24,

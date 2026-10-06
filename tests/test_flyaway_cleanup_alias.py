@@ -1,5 +1,5 @@
-"""``flyaway_cleanup`` (hair.flyaway_cleanup) aliases to the same H1
-``hairwork.remove_flyaways`` dispatch as ``hair_remove_flyaways``
+"""``flyaway_cleanup`` (hair.flyaway_cleanup) aliases to the same Stray Hair
+Cleanup pass (``retouch/stray_hair.py``) as ``hair_remove_flyaways``
 (hair.remove_flyaways), max-combined (e73d3ba pattern), rather than calling
 ``hair.py::cleanup_flyaway_strands`` directly.
 
@@ -9,9 +9,8 @@ only a ~41px ring around the hair silhouette — everywhere else (clothing
 embroidery, background texture) is fair game to it. That call site was
 deleted 2026-08-17 (aaaa1e5) as believed-dead A/B residue; restoring it
 verbatim and testing on a real cosplay render produced visible fabric/
-texture smearing outside the hair region. Aliasing to hair_remove_flyaways'
-dispatch instead reuses the live, hair-mask-scoped, tested implementation
-that 4 recipes already use.
+texture smearing outside the hair region. Since 2026-10-05 both keys reach
+Stray Hair Cleanup, which only ever searches face and neck skin.
 """
 from __future__ import annotations
 
@@ -21,7 +20,7 @@ import pytest
 
 from tests.test_engine import _build_synthetic_regions, _build_synthetic_face
 
-ROI = 256
+ROI = 512
 
 
 def _processors():
@@ -58,22 +57,17 @@ def _ctx(hair_remove_flyaways: float, flyaway_cleanup: float):
 
 @pytest.fixture(scope="module")
 def scene():
-    """Skin-toned canvas with a hair region containing vertical strands
-    (matches test_flyaway_removal.py's synthetic-strand pattern) plus a thin
-    diagonal flyaway crossing them, so the H1 detector has something real to
-    find."""
-    regions = _build_synthetic_regions(ROI, ROI, skin_value=1.0)
-    hair = np.zeros((ROI, ROI), np.float32)
-    cv2.rectangle(hair, (40, 20), (ROI - 40, 140), 1.0, -1)
-    regions.hair = hair
+    """Skin with grain, a wig band along the top and thin wig-coloured
+    strands lying across the skin (the Stray Hair Cleanup test scene)."""
+    from tests.test_stray_hair import _scene
 
-    canvas = np.full((ROI, ROI, 3), 80, dtype=np.uint8)
-    stripe_w = 6
-    for x in range(0, ROI, 2 * stripe_w):
-        canvas[:, x: x + stripe_w] = 160
-    # thin diagonal flyaway strand crossing the vertical strands
-    cv2.line(canvas, (30, 10), (110, 150), (20, 20, 20), 2)
-    return canvas, regions, _build_synthetic_face(ied=30.0, size=100), np.ones((ROI, ROI), np.float32), _processors()
+    img, _clean, skin, hair, _alphas = _scene()
+    regions = _build_synthetic_regions(ROI, ROI, skin_value=1.0)
+    regions.skin = skin
+    regions.hair = hair
+    canvas = np.clip(img, 0, 255).astype(np.uint8)
+    # ied 160 -> face width 400, the scale the test scene was drawn at.
+    return canvas, regions, _build_synthetic_face(ied=160.0, size=ROI), np.ones((ROI, ROI), np.float32), _processors()
 
 
 def _render(scene, hair_remove_flyaways, flyaway_cleanup):
@@ -104,14 +98,14 @@ def test_both_keys_equal_single_pass_at_max(scene):
     assert np.array_equal(both, single)
 
 
-def test_flyaway_cleanup_does_not_touch_out_of_hair_region(scene):
-    """The whole point of the alias: flyaway_cleanup must stay scoped to the
-    hair mask, unlike the broken cleanup_flyaway_strands call site it
-    replaces (which fired on ~everything outside a ~41px hair ring)."""
-    canvas, regions, face, person, procs = scene
+def test_flyaway_cleanup_never_touches_the_wig(scene):
+    """The whole point of the alias: flyaway_cleanup must stay off the hair
+    and everything that isn't skin, unlike the broken
+    cleanup_flyaway_strands call site it replaced (which fired on
+    ~everything outside a ~41px hair ring)."""
+    from tests.test_stray_hair import HAIR_ROWS
+
     off = _render(scene, 0, 0)
     on = _render(scene, 0, 60)
-    # Bottom strip of the canvas is well outside the synthetic hair
-    # rectangle (hair covers rows 20-140 of a 256-row canvas).
-    outside = slice(180, 256)
-    assert np.array_equal(off[outside], on[outside])
+    wig = slice(0, HAIR_ROWS - 2)
+    assert np.array_equal(off[wig], on[wig])

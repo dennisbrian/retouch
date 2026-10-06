@@ -656,7 +656,7 @@ class TestNewFeatureRecipesResolve:
         ("apex_cosplay_v1", "skin_sss", 25.0),
         ("apex_cosplay_v1", "film_highlight_purity", 0.30),
         ("apex_cosplay_v1", "saturation_mode", "subtractive"),
-        ("apex_cosplay_v1", "hair_remove_flyaways", 30.0),
+        ("apex_cosplay_v1", "hair_remove_flyaways", 0.0),
         ("apex_editorial_v1", "heal_engine", "telea"),
         ("apex_editorial_v1", "mole_protect", 0.90),
         ("apex_editorial_v1", "micro_dodge_burn", 15.0),

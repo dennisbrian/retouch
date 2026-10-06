@@ -3985,7 +3985,6 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         _reshape_forehead_state = gr.State(value=0.0)
                         _hair_ring_position_state = gr.State(value=0.5)
                         _hair_ring_tint_state = gr.State(value=0.0)
-                        _hair_remove_flyaways_state = gr.State(value=0.0)
                         _flyaway_cleanup_state = gr.State(value=0.0)
                         _micro_grain_state = gr.State(value=0.0)
                         _split_toning_state = gr.State(value=0.0)
@@ -4125,6 +4124,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 pore_synthesis = gr.Slider(0, 100, 0, step=1, label="Pore Synthesis", info="Add micro-texture/synthesized pores to prevent artificial plastic skin")
                                 blemish = gr.Slider(0, 100, 30, step=1, label="Blemish Removal", info="AI blemish detection and inpainting for acne/spots")
                                 spot_heal = gr.Slider(0, 100, 0, step=1, label="Spot Healing", info="Heal each pimple and small red or dark spot on its own from the skin around it, like a healing brush; the rest of the skin is left untouched and moles are kept. Off by default; start near 60.")
+                                hair_remove_flyaways = gr.Slider(0, 100, 0, step=1, label="Stray Hair Cleanup", info="Remove loose wig fibres and flyaway hairs lying across the face and neck, healed from the skin beside them. The wig, bangs, brows, lashes, eyes, lips and nose are left alone. Off by default; start near 60.")
                                 freckle_removal = gr.Slider(0, 100, 0, step=1, label="Freckle Removal", info="Remove freckles while preserving beauty marks (0=off)")
                                 heal_engine = gr.Dropdown(choices=["telea", "patchmatch"], value="telea", label="Auto Heal Engine", info="PatchMatch synthesizes from nearby skin texture; Telea remains the fast default")
                                 mark_policy = gr.Dropdown(
@@ -5661,7 +5661,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "hair_deglare": hair_deglare,
         "hair_ring_position": _hair_ring_position_state,
         "hair_ring_tint": _hair_ring_tint_state,
-        "hair_remove_flyaways": _hair_remove_flyaways_state,
+        "hair_remove_flyaways": hair_remove_flyaways,
         "contrast": contrast,
         "brightness": brightness,
         "highlights": highlights,

@@ -1468,7 +1468,7 @@ _FACE_FEATURE_PARAMS = [
         cli_type=int,
         default=0,
         recipe_key="hair.remove_flyaways",
-        # 0-100 raw pass-through (hairwork.remove_flyaways strength is 0-100).
+        # 0-100 raw pass-through (stray_hair.remove_stray_hairs strength is 0-100).
         conversion="recipe_direct",
         min_val=0,
         max_val=100,

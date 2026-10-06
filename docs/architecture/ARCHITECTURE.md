@@ -262,6 +262,7 @@ per `AGENTS.md`.
 | `video/tracker.py` | V1 video slice S2: follows one face through a clip: the engine FaceDetector finds it (first frame, and again after a loss), then MediaPipe FaceLandmarker in VIDEO mode tracks it on a crop around the previous box (largest face first, then nearest-box continuity) and writes version-2 track JSON (V0 harness contract plus 478 landmarks per frame). `python -m retouch.video.tracker clip --out tracks.json`. |
 | `batch_processor.py` | Batch orchestration over `RetouchEngine`. |
 | `spot_heal_auto.py` | Automatic spot healing (pimple/red-spot detection + plane-fit heal; first op in the per-face core). |
+| `stray_hair.py` | Stray Hair Cleanup (`hair_remove_flyaways`, alias `flyaway_cleanup`): heals loose wig fibres and flyaways lying on face and neck skin from the skin beside them; runs right after spot healing in the per-face core. |
 | `eye_visibility.py` | Eye-occlusion gate (EAR + tone-adaptive contrast) gating eye ops on closed/occluded eyes. |
 | `duplicates.py` | Shoot-wide duplicate detection (pose + framing alignment, keeper ranking). |
 | `watermark.py` | Watermark/credit overlay stamping into `<output>/watermarked/`. |

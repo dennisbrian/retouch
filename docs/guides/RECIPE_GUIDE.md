@@ -121,7 +121,7 @@ These keys are defined inside nested dictionary blocks inside a recipe.
 | `frequency` | `smooth_engine` | 0.0 to 1.0 | `guided` | `smooth_engine` |
 | `frequency` | `smooth` | 0 to 100 | `30` | `smooth` |
 | `hair` | `deglare` | 0 to 100 | `0` | `hair_deglare` |
-| `hair` | `remove_flyaways` | 0 to 100 | `0` | `hair_remove_flyaways` |
+| `hair` | `remove_flyaways` | 0 to 100 | `0` | `hair_remove_flyaways` (Stray Hair Cleanup) |
 | `hair` | `ring_position` | 0 to 100 | `30` | `hair_ring_position` |
 | `hair` | `ring_tint` | 0 to 100 | `40` | `hair_ring_tint` |
 | `hair` | `shine` | 0 to 100 | `5` | `hair_enhance` |
@@ -478,7 +478,7 @@ and 0–360 for split-toning hue).
 | Lens Blur | `background.lens_blur` | direct |
 | Corneal Shading (`corneal_shading`) | `eyes.corneal_shading` | ÷ 100 |
 | Film Highlight Purity (`film_highlight_purity`) | `film.tonemap.highlight_purity` | direct |
-| Flyaway Cleanup (`flyaway_cleanup`) | `hair.flyaway_cleanup` | ÷ 100 |
+| Flyaway Cleanup (`flyaway_cleanup`, alias of Stray Hair Cleanup) | `hair.flyaway_cleanup` | ÷ 100 |
 | Hemoglobin Even (`hb_even`) | `skin.hb_even` | direct |
 | Hemoglobin Shift (`hb_shift`) | `skin.hb_shift` | direct |
 | Heal Engine (`heal_engine`) | `frequency.heal_engine` | direct |
