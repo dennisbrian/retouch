@@ -71,6 +71,36 @@ _WIG_HEAD_RADIUS_FW = 1.0
 _WIG_MAX_FACE_MULTIPLE = 5.0
 # Working size for the whole-frame hair pass (parse_hair_full_image fallback).
 _FULL_HAIR_WORK_DIM = 2048
+# Seedless wig colour model (see _seedless_wig_hair). It runs only when the
+# segmenter calls less than this share of the ring around the head hair, i.e.
+# when it has missed the wig; above it the result is the seeded growth alone.
+_WIG_SEEDLESS_MAX_RING_COVER = 0.3
+# The ring: up to this many face widths outside the face oval, above this
+# share of the face height from its top. Bangs: oval rows above this share.
+_WIG_RING_FW, _WIG_RING_ROWS, _WIG_BANG_ROWS = 0.25, 0.55, 0.3
+# Need this share of the ring to be hair/clothes/accessory pixels to model.
+_WIG_MIN_ZONE_SHARE = 0.15
+# Chromaticity (a*/L*, b*/L*) histogram bin and half-range.
+_WIG_CHROMA_BIN, _WIG_CHROMA_RANGE = 0.02, 3.0
+# A colour cluster: within this radius of the histogram mode, widened by this
+# share of the mode's own chroma (saturated colours shift more with shading).
+_WIG_CLUSTER_RADIUS, _WIG_CLUSTER_RADIUS_REL = 0.06, 0.1
+# The wig cluster must hold this share of the head zone, and its strands
+# must be this coherent (fine-scale structure tensor), which rejects
+# headpieces, hats and fabric of the same colour.
+_WIG_MIN_CLUSTER_SHARE = 0.3
+_WIG_MIN_COHERENCE = 0.5
+# Growth: pixels within this many robust sigmas of the cluster colour, with a
+# sigma floor that widens with chroma; L* no lower than this share of the
+# cluster's own 2nd percentile.
+_WIG_MATCH_SIGMAS = 3.0
+_WIG_SIGMA_FLOOR, _WIG_SIGMA_FLOOR_REL = 0.02, 0.08
+_WIG_L_FLOOR_SHARE = 0.7
+# Washed-out highlights: at least this share of the wig's own chroma.
+_WIG_HIGHLIGHT_MIN_T = 0.25
+# A seedless wig larger than this multiple of the face oval is a match on
+# something else (a same-coloured outfit or wall).
+_WIG_SEEDLESS_MAX_FACE_MULTIPLE = 10.0
 
 
 # Segmenter confidences below/above these count as absent/present (a few
@@ -98,6 +128,203 @@ def _grow_wig_hair(
     face_width: int,
 ) -> np.ndarray:
     """Hair confidence with wig pixels the segmenter mislabelled added back.
+
+    Two steps. ``_grow_wig_from_seeds`` grows the hair the segmenter did find
+    into the rest of the wig. When the segmenter found almost no hair around
+    the head at all (white, pastel and brightly coloured wigs it reads as
+    clothing), ``_seedless_wig_hair`` models the wig from the head's own
+    colours and strand texture instead, and the two are combined. Where the
+    segmenter already covers the head, the result is the seeded growth alone.
+
+    Args:
+        img_bgr: (H, W, 3) BGR image, uint8 or float in [0, 1] / [0, 255].
+        class_probs: (H, W, 6) multiclass confidences.
+        face_oval: (H, W) bool face-oval mask.
+        face_width: face width in pixels.
+
+    Returns:
+        (H, W) float32 hair confidence in [0, 1], never below the segmenter's.
+    """
+    hair = _grow_wig_from_seeds(img_bgr, class_probs, face_oval, face_width)
+    if not face_oval.any():
+        return hair
+    img_u8 = _as_u8(img_bgr)
+    zones = _head_zones(face_oval, face_width)
+    ring = zones[0]
+    if not ring.any():
+        return hair
+    cover = float((class_probs[:, :, _MC_HAIR] > 0.5)[ring].mean())
+    if cover >= _WIG_SEEDLESS_MAX_RING_COVER:
+        return hair
+    wig = _seedless_wig_hair(img_u8, class_probs, face_oval, face_width, zones)
+    if wig is None:
+        return hair
+    not_hair = (
+        class_probs[:, :, 0] + class_probs[:, :, _MC_FACE_SKIN] + class_probs[:, :, _MC_BODY_SKIN]
+    )
+    wig_p = wig.astype(np.float32) * np.clip(1.0 - not_hair, 0.0, 1.0)
+    return np.maximum(hair, wig_p).astype(np.float32)
+
+
+def _as_u8(img_bgr: np.ndarray) -> np.ndarray:
+    """uint8 copy of a BGR image given as uint8, [0, 1] or [0, 255] float."""
+    if img_bgr.dtype == np.uint8:
+        return img_bgr
+    scale = 255.0 if float(np.max(img_bgr)) <= 1.5 else 1.0
+    return np.clip(img_bgr.astype(np.float32) * scale, 0, 255).astype(np.uint8)
+
+
+def _head_zones(face_oval: np.ndarray, face_width: int) -> Tuple[np.ndarray, np.ndarray]:
+    """(ring, bangs): a band just outside the upper face oval, where hair
+    almost always is, and the top of the oval itself, where bangs are."""
+    h = face_oval.shape[0]
+    ys = np.nonzero(face_oval.any(axis=1))[0]
+    y0, y1 = int(ys[0]), int(ys[-1])
+    fh = y1 - y0 + 1
+    rows = np.arange(h)[:, None]
+    dist = cv2.distanceTransform((~face_oval).astype(np.uint8), cv2.DIST_L2, 5)
+    ring = (dist > 0) & (dist <= _WIG_RING_FW * max(face_width, 1)) & (
+        rows < y0 + _WIG_RING_ROWS * fh
+    )
+    bangs = face_oval & (rows < y0 + _WIG_BANG_ROWS * fh)
+    return ring, bangs
+
+
+def _strand_coherence(gray: np.ndarray, face_width: int) -> np.ndarray:
+    """Fine-scale structure-tensor coherence in [0, 1].
+
+    Wig fibre lies in long parallel strands, so its gradients share one
+    direction (coherence near 1); hats, headpieces and fabric are smooth or
+    edged in every direction. Scales follow the face, not the frame.
+    """
+    s_d = max(0.003 * face_width, 0.7)
+    s_t = max(0.02 * face_width, 2.0)
+    g = cv2.GaussianBlur(gray, (0, 0), s_d)
+    gx = cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)
+    jxx = cv2.GaussianBlur(gx * gx, (0, 0), s_t)
+    jyy = cv2.GaussianBlur(gy * gy, (0, 0), s_t)
+    jxy = cv2.GaussianBlur(gx * gy, (0, 0), s_t)
+    tr = jxx + jyy
+    # The floor keeps flat, noiseless areas (no gradient at all) at 0.
+    return np.sqrt((jxx - jyy) ** 2 + 4.0 * jxy ** 2) / (tr + 1e-6)
+
+
+def _seedless_wig_hair(
+    img_u8: np.ndarray,
+    class_probs: np.ndarray,
+    face_oval: np.ndarray,
+    face_width: int,
+    zones: Tuple[np.ndarray, np.ndarray],
+) -> Optional[np.ndarray]:
+    """Wig mask for wigs the segmenter does not call hair at all, or None.
+
+    The segmenter was trained on natural hair: a white, lavender, pastel blue
+    or mint wig comes back as "clothes" with no hair pixel to grow from. Hair
+    still sits in a ring round the upper face and in the bangs, so this takes
+    the non-skin, non-background pixels there, finds their dominant
+    chromaticity (a*/L*, b*/L*: one wig colour stays put from its lit side to
+    its shadow), and keeps that colour only if its pixels have strand texture
+    (``_strand_coherence``), which a hat or headpiece of the same colour
+    lacks. The wig is then every connected hair/clothes/accessory pixel of
+    that colour (within its own spread) and no darker than its own shadows.
+    Every threshold is relative to the photo's own wig, so the result does
+    not depend on skin tone or exposure. Returns a bool mask.
+    """
+    ring, bangs = zones
+    label = class_probs.argmax(axis=2)
+    wiglike = np.isin(label, (_MC_HAIR, _MC_CLOTHES, _MC_OTHERS))
+    zone = (ring | bangs) & wiglike
+    n_zone = int(zone.sum())
+    if n_zone < _WIG_MIN_SEED_PX or n_zone < _WIG_MIN_ZONE_SHARE * int(ring.sum()):
+        return None
+
+    lab = cv2.cvtColor(img_u8.astype(np.float32) / 255.0, cv2.COLOR_BGR2LAB)
+    lum = lab[:, :, 0]
+    lum_s = np.maximum(lum, 5.0)
+    cx, cy = lab[:, :, 1] / lum_s, lab[:, :, 2] / lum_s
+
+    b, half = _WIG_CHROMA_BIN, _WIG_CHROMA_RANGE
+    n = int(round(2 * half / b))
+
+    def _bins(v: np.ndarray) -> np.ndarray:
+        return np.clip(((v + half) / b).astype(np.int32), 0, n - 1)
+
+    hist = np.bincount(_bins(cx[zone]) * n + _bins(cy[zone]), minlength=n * n)
+    hist = cv2.GaussianBlur(hist.reshape(n, n).astype(np.float32), (0, 0), 1.0)
+    ii, jj = np.meshgrid(np.arange(n), np.arange(n), indexing="ij")
+    # Up to three colour clusters; of those big enough, the most strand-like
+    # is the wig (a dark headpiece can hold as much of the zone as the wig).
+    coherence = None
+    cluster, best = None, _WIG_MIN_COHERENCE
+    taken = np.zeros_like(zone)
+    for _ in range(3):
+        i, j = np.unravel_index(int(hist.argmax()), hist.shape)
+        if hist[i, j] <= 0:
+            break
+        mode = np.array([(i + 0.5) * b - half, (j + 0.5) * b - half])
+        rad = _WIG_CLUSTER_RADIUS + _WIG_CLUSTER_RADIUS_REL * float(np.hypot(*mode))
+        hist[np.hypot((ii - i) * b, (jj - j) * b) < rad] = 0.0
+        cand = zone & ~taken & (np.hypot(cx - mode[0], cy - mode[1]) < rad)
+        taken |= cand
+        if cand.sum() < _WIG_MIN_CLUSTER_SHARE * n_zone:
+            continue
+        if coherence is None:
+            coherence = _strand_coherence(lum / 100.0, face_width)
+        coh = float(np.median(coherence[cand]))
+        if coh >= best:
+            cluster, best = cand, coh
+    if cluster is None:
+        return None
+
+    med = np.array([np.median(cx[cluster]), np.median(cy[cluster])])
+    floor = _WIG_SIGMA_FLOOR + _WIG_SIGMA_FLOOR_REL * float(np.hypot(*med))
+    sig = np.maximum(
+        1.4826 * np.array([
+            np.median(np.abs(cx[cluster] - med[0])),
+            np.median(np.abs(cy[cluster] - med[1])),
+        ]),
+        floor,
+    )
+    z = ((cx - med[0]) / sig[0]) ** 2 + ((cy - med[1]) / sig[1]) ** 2
+    l_floor = _WIG_L_FLOOR_SHARE * float(np.percentile(lum[cluster], 2))
+    match = wiglike & (z < _WIG_MATCH_SIGMAS ** 2) & (lum >= l_floor)
+    # Highlights on a pastel wig wash out toward white: same hue, less
+    # chroma, lighter than the wig's own median. Keep those too (a white
+    # collar has no hue left and stays out).
+    c2 = float(med @ med)
+    if c2 > (_WIG_MATCH_SIGMAS * floor) ** 2:
+        t = (cx * med[0] + cy * med[1]) / c2
+        perp = np.abs(cx * med[1] - cy * med[0]) / np.sqrt(c2)
+        match |= wiglike & (t >= _WIG_HIGHLIGHT_MIN_T) & (t < 1.0) & (
+            perp < _WIG_MATCH_SIGMAS * float(sig.min())
+        ) & (lum >= float(np.median(lum[cluster])))
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    match = cv2.morphologyEx(match.astype(np.uint8), cv2.MORPH_OPEN, k) > 0
+    _, lbl = cv2.connectedComponents((match | cluster).astype(np.uint8))
+    keep = np.unique(lbl[cluster])
+    wig = np.isin(lbl, keep[keep > 0]) & (match | cluster)
+    n_wig = int(wig.sum())
+    n_face = max(int(face_oval.sum()), 1)
+    if n_wig > _WIG_SEEDLESS_MAX_FACE_MULTIPLE * n_face:
+        logger.info(
+            "Seedless wig mask would cover %.1fx the face; not using it", n_wig / n_face
+        )
+        return None
+    if float(np.median(coherence[wig])) < _WIG_MIN_COHERENCE:
+        logger.info("Seedless wig mask grew into untextured pixels; not using it")
+        return None
+    logger.debug("Seedless wig mask: %d px (%.1fx the face)", n_wig, n_wig / n_face)
+    return wig
+
+
+def _grow_wig_from_seeds(
+    img_bgr: np.ndarray,
+    class_probs: np.ndarray,
+    face_oval: np.ndarray,
+    face_width: int,
+) -> np.ndarray:
+    """Hair confidence with the segmenter's own hair grown into the wig.
 
     The multiclass selfie segmenter was trained on natural hair. On pale,
     long or brightly coloured cosplay wigs it calls most of the wig an
@@ -130,10 +357,7 @@ def _grow_wig_hair(
     n_seed = int(seeds.sum())
     if n_seed < _WIG_MIN_SEED_PX:
         return hair_p
-    img_u8 = img_bgr
-    if img_u8.dtype != np.uint8:
-        scale = 255.0 if float(np.max(img_u8)) <= 1.5 else 1.0
-        img_u8 = np.clip(img_u8.astype(np.float32) * scale, 0, 255).astype(np.uint8)
+    img_u8 = _as_u8(img_bgr)
     lab = cv2.cvtColor(np.ascontiguousarray(img_u8), cv2.COLOR_BGR2LAB)
     n_l, n_ab = 256 // _WIG_L_BIN, 256 // _WIG_AB_BIN
     idx = (
