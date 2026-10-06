@@ -617,6 +617,20 @@ _SKIN_PARAMS = [
         max_val=100,
     ),
     ParamSpec(
+        # Body Skin Evening (retouch/body_skin_even.py): calms blotchy colour
+        # (redness, uneven tan) on arms, legs and chest; texture, moles and
+        # shading kept. Opt-in: 0 = off. Not the old body_equalize above,
+        # which 16 recipes use and which adds local contrast (CLAHE).
+        name="body_skin_even",
+        cli_flag="body-skin-even",
+        cli_type=int,
+        default=0,
+        recipe_key="body_skin.even",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
         name="body_whiten",
         cli_flag=None,
         cli_type=None,
@@ -987,6 +1001,19 @@ _SKIN_PARAMS = [
         max_val=100,
     ),
     ParamSpec(
+        # Neck and chest matched to the retouched face (retouch/
+        # neck_tone_match.py); face paint left alone. Opt-in: 0 = off, and
+        # the old automatic neck pass (skin.harmonize_neck) still runs.
+        name="neck_tone_match",
+        cli_flag="neck-tone-match",
+        cli_type=int,
+        default=0,
+        recipe_key="skin.neck_tone_match",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
         name="skin_glow",
         cli_flag="skin-glow",
         cli_type=int,
@@ -1115,6 +1142,19 @@ _FACE_FEATURE_PARAMS = [
         cli_type=float,
         default=0.0,
         recipe_key="fabric.wrinkle_smooth",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
+        # Costume Clarity: local contrast + fine texture on costume and props
+        # only (retouch/costume_clarity.py); skin, painted skin, hair and the
+        # face are left alone. Opt-in, 0 = off.
+        name="costume_clarity",
+        cli_flag="costume-clarity",
+        cli_type=int,
+        default=0,
+        recipe_key="fabric.costume_clarity",
         conversion="recipe_pct",
         min_val=0,
         max_val=100,
@@ -1428,7 +1468,7 @@ _FACE_FEATURE_PARAMS = [
         cli_type=int,
         default=0,
         recipe_key="hair.remove_flyaways",
-        # 0-100 raw pass-through (hairwork.remove_flyaways strength is 0-100).
+        # 0-100 raw pass-through (stray_hair.remove_stray_hairs strength is 0-100).
         conversion="recipe_direct",
         min_val=0,
         max_val=100,

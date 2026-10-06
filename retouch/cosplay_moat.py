@@ -42,6 +42,10 @@ logger = logging.getLogger(__name__)
 class WigLaceBlender:
     """Detects and blends wig edges seamlessly into skin at the hairline.
 
+    Superseded in the engine by ``retouch/wig_hairline.py`` (2026-10-02):
+    this filter's eps (1.0 on a 0-255 image) left real photos unchanged.
+    Kept for callers of this class.
+
     Strategy:
     1. Detect wig edges via hue+saturation clustering on hair-like colors
     2. Identify the transition zone (high hue/saturation variance edge)

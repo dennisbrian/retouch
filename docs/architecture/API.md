@@ -87,6 +87,7 @@ def process(
     texture_transplant: Optional[float] = None,
     body_smooth: Optional[float] = None,
     body_equalize: Optional[float] = None,
+    body_skin_even: Optional[int] = None,
     body_whiten: Optional[float] = None,
     body_match_face: Optional[float] = None,
     cross_region_skin: Optional[float] = None,
@@ -100,6 +101,7 @@ def process(
     nose_shape: Optional[int] = None,
     powder_finish: Optional[int] = None,
     skin_warmth: Optional[int] = None,
+    neck_tone_match: Optional[int] = None,
     highlight_repair: Optional[int] = None,
     nose_highlight: Optional[int] = None,
     specular_bloom: Optional[int] = None,
@@ -131,6 +133,7 @@ def process(
     eye_sclera_vessel_remove: Optional[int] = None,
     backdrop_cleanup: Optional[int] = None,
     fabric_wrinkle_smooth: Optional[float] = None,
+    costume_clarity: Optional[int] = None,
     eye_iris_saturate: Optional[int] = None,
     eye_iris_hue_shift: Optional[int] = None,
     eye_iris_brightness: Optional[int] = None,
@@ -377,6 +380,7 @@ Passing an explicit value override to these parameters takes precedence over the
 *   **`skin_sss`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.sss`): Adds screen-space subsurface scattering for a translucent game-character skin finish.
 *   **`mask_feather_mode`** (Type: `str`, Default: `gaussian`, Recipe key: `mask.feather_mode`): Selects `gaussian` mask feathering or `guided` edge-aware refinement for fine hair, wig, and lash boundaries.
 *   **`fabric_wrinkle_smooth`** (Type: `float`, Default: `0.0`, Range: `0` to `100`, Recipe key: `fabric.wrinkle_smooth`): Adjusts the fabric wrinkle smooth parameter.
+*   **`costume_clarity`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `fabric.costume_clarity`): Costume Clarity. Adds local contrast and fine texture to the costume and props only (`retouch/costume_clarity.py`, global stage after tone, before grading). The costume is the person minus skin (segmenter skin classes where the colour could be this person's skin), hair and wig masks, the face pipeline's masks, face ellipses and painted skin; skin-coloured pixels inside it (skin through fishnet or lace) are left alone. Two L*-only bands scaled to the face width (fine texture, and clarity over an edge-preserving guided filter), each soft-limited at a few of its own robust spreads and cored below the frame's own noise level. Off by default.
 *   **`blush`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `blush`): Adjusts the blush parameter.
 *   **`hair_enhance`** (Type: `int`, Default: `5`, Range: `0` to `100`, Recipe key: `hair.shine`): Adjusts the hair enhance parameter.
 *   **`hair_deglare`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `hair.deglare`): Wig Shine. Softens synthetic-wig gloss into the wig's own colour (`retouch/wig_shine.py`, called from `hairwork.deglare_wig` in the per-face hair stage). The gloss is the strand-averaged excess of L* over a local two-pass baseline of the wig (0.25 x face width), gated in units of that excess's own spread with a floor of twice the fine strand spread, and removed as equal linear light from B, G and R (capped by the darkest channel) so the fibre colour comes back. Pixels much less saturated than the fibre around them (white bows, lace), the silhouette where it meets a brighter backdrop, low strand-flow coherence (fuzz, partings) and eyebrows are left alone. Off by default.
@@ -448,6 +452,7 @@ Passing an explicit value override to these parameters takes precedence over the
 *   **`powder_finish`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.powder_finish`): Powder Finish. Evens shine into the skin's own colour (not grey), works on white face paint, keeps broad lit areas and overall brightness. Off by default.
 *   **`highlight_repair`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.highlight_repair`): Blown Highlight Repair. Rebuilds face skin whose brightest channel is at the file ceiling (flash or sun hot spots): the excess over a local skin baseline is rolled off below white by a monotone curve, the blown core takes the colour of the unclipped skin around it and fine texture from a clean patch of the same face. Runs first in the per-face pipeline. Spots not ringed by skin, eyes, brows, lips, mouth and hair are left alone; so is a painted face (skin chroma / L* < 0.06, or skin hue outside -5 to 80° CIELab, as white paint under cool light reads) and a face with over 35% of its skin blown. Off by default.
 *   **`skin_warmth`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.warmth`): Skin Warmth. Turns natural skin toward a warm peach (CIELab hue 30-42°, chroma at least 0.21 × L*), face and same-coloured body skin together, after colour grading. Face paint (blue/violet/green or near-neutral) and skin already in the band are left alone. Off by default.
+*   **`neck_tone_match`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.neck_tone_match`): Neck Tone Match. Neck, chest and shoulder skin of the same person get the brightness change (one linear-light gain, so the shadow under the chin stays) and a*/b* change the face edits made to the face, plus 60% of a pre-existing face/neck colour gap (foundation). Colour-keyed on the neck's own chromaticity (a*/L*, b*/L*), so wigs, collars and costume stay out; skipped for painted faces and body-painted necks. Runs after the body-skin stages, before body paint and the grade. When on, replaces the automatic `harmonize_neck` pass. Off by default.
 *   **`face_polish`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.face_polish`): Porcelain finish in one control. Raises the floor of `shine_removal`, `shadow_lift` and `face_exposure` together; a stronger value you set for any of those still wins. Off by default.
 *   **`contrast`** (Type: `int`, Default: `0.0`, Range: `-50` to `50`, Recipe key: `contrast`): Adjusts the contrast parameter.
 *   **`brightness`** (Type: `int`, Default: `None`, Range: `-50` to `50`, Recipe key: `brightness`): Adjusts the brightness parameter.
@@ -602,7 +607,7 @@ Passing an explicit value override to these parameters takes precedence over the
 
 ##### **Cosplay Moat & Stockings**
 
-*   **`cosplay_wig_lace_blend`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `cosplay.wig_lace_blend`): Adjusts the cosplay wig lace blend parameter.
+*   **`cosplay_wig_lace_blend`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `cosplay.wig_lace_blend`): Feathers a wig's front edge into the forehead and tones a lace or glue band just outside it back to the skin (`retouch/wig_hairline.py`). Only a hairline well above the brows with skin below it counts, so bangs, side locks and the wig's outer edge stay as they are. Start near 50.
 *   **`cosplay_stockings_smooth`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `cosplay.stockings_smooth`): Adjusts the cosplay stockings smooth parameter.
 *   **`cosplay_consistency_strength`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `cosplay.consistency_strength`): Adjusts the cosplay consistency strength parameter.
 
@@ -610,7 +615,8 @@ Passing an explicit value override to these parameters takes precedence over the
 
 *   **`sculpt`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.sculpt`): Adjusts the sculpt parameter.
 *   **`body_smooth`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `body_skin.smooth`): Adjusts the body smooth parameter.
-*   **`body_equalize`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `body_skin.equalize`): Adjusts the body equalize parameter.
+*   **`body_equalize`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `body_skin.equalize`): Older body tone op used by 16 recipes: pulls a*/b* a little toward the body median and runs CLAHE on L*, which adds local contrast to body skin rather than evening it. For blotchy colour use `body_skin_even`.
+*   **`body_skin_even`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `body_skin.even`): Body Skin Evening. Pulls mid-scale colour blotches on body skin (redness, uneven tan) back toward the skin around them, measured in chromaticity (a*/L*, b*/L*); lightness follows only where the colour also deviates. Pores, body hair, freckles, moles, shading and gloss are kept; face, hair, costume, tattoos and white or grey paint are left alone. Mask: the multiclass segmenter's body-skin class, snapped to the photo and grown into connected same-coloured skin. Off by default; start near 50. See `retouch/body_skin_even.py`.
 *   **`body_whiten`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `body_skin.whiten`): Adjusts the body whiten parameter.
 *   **`body_match_face`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `body_skin.match_face`): Adjusts the body match face parameter.
 *   **`cross_region_skin`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: none): Explicit opt-in P7 control that propagates the approved face-edit LAB delta to same-person exposed skin. It is limited to one detected face, abstains on ambiguous ownership, and remains disabled by every recipe. Keep `body_match_face=0` when using it; a reviewed `cross_region_skin_mask` may be supplied through the Python API.
@@ -657,7 +663,7 @@ The registry also accepts these keyword overrides through `process(..., **kwargs
 * `heal_engine`
 * `mark_policy`
 * `micro_grain`
-* `purple_fringing`
+* `purple_fringing`: Defringe (GUI slider under Structure & Effects). Removes purple/blue/cyan/green lens fringes along edges next to the photo's brightest areas, replacing their colour with the neighbouring object's (`retouch/defringe.py`, run in `_stage_finish`).
 * `split_toning`
 
 For simple scripts or backward-compatibility, you can use the `retouch` module-level wrapper. It handles the instantiation and teardown of the engine automatically.

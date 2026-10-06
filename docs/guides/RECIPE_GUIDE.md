@@ -56,6 +56,7 @@ These keys are defined inside nested dictionary blocks inside a recipe.
 | `body_reshape` | `torso_width` | 0 to 100 | `50.0` | `body_reshape_torso_width` |
 | `body_skin` | `dodge_burn` | 0 to 100 | `0` | `body_dodge_burn` |
 | `body_skin` | `equalize` | 0 to 100 | `0` | `body_equalize` |
+| `body_skin` | `even` | 0 to 100 | `0` | `body_skin_even` |
 | `body_skin` | `match_face` | 0 to 100 | `0` | `body_match_face` |
 | `body_skin` | `relight` | 0 to 100 | `0` | `body_relight` |
 | `body_skin` | `shadow_lift` | 0 to 100 | `0` | `body_shadow_lift` |
@@ -88,6 +89,7 @@ These keys are defined inside nested dictionary blocks inside a recipe.
 | `eyes` | `whites` | 0 to 100 | `5` | `eye_enhance` |
 | `eyes` | `whites` | 0 to 100 | `5` | `teeth_whiten` |
 | `fabric` | `wrinkle_smooth` | 0 to 100 | `0.0` | `fabric_wrinkle_smooth` |
+| `fabric` | `costume_clarity` | 0.0 to 1.0 | `0` | `costume_clarity` |
 | `film` | `crosstalk.cy_mg` | -0.15 to 0.15 | `0.06` | `film_crosstalk_cy_mg` |
 | `film` | `crosstalk.cy_ye` | -0.15 to 0.15 | `0.03` | `film_crosstalk_cy_ye` |
 | `film` | `crosstalk.mg_ye` | -0.15 to 0.15 | `0.02` | `film_crosstalk_mg_ye` |
@@ -219,6 +221,7 @@ These keys are defined inside nested dictionary blocks inside a recipe.
 | `skin` | `unify_hue` | -1.0 to 360.0 | `-1.0` | `skin_unify_hue` |
 | `skin` | `unify` | 0 to 100 | `0` | `skin_unify` |
 | `skin` | `warmth` | 0.0 to 1.0 | `0` | `skin_warmth` |
+| `skin` | `neck_tone_match` | 0.0 to 1.0 | `0` | `neck_tone_match` |
 | `skin` | `highlight_repair` | 0.0 to 1.0 | `0` | `highlight_repair` |
 | `skin` | `vein_attenuate` | 0.0 to 1.0 | `0.0` | `vein_attenuate` |
 | `skin` | `whiten_hue_stable` | 0.0 to 1.0 | `False` | `whiten_hue_stable` |
@@ -359,6 +362,7 @@ and 0–360 for split-toning hue).
 | Blush | `blush` | direct |
 | Body Dodge Burn | `body_skin.dodge_burn` | ÷ 100 |
 | Body Equalize | `body_skin.equalize` | ÷ 100 |
+| Body Skin Evening | `body_skin.even` | ÷ 100 |
 | Body Match Face | `body_skin.match_face` | ÷ 100 |
 | Body Relight | `body_skin.relight` | ÷ 100 |
 | Body Reshape Arm Length | `body_reshape.arm_length` | direct |
@@ -404,6 +408,7 @@ and 0–360 for split-toning hue).
 | Eye Sclera Brighten | `eye.sclera_brighten` | ÷ 100 |
 | Bloodshot Eye Whites (Eye Sclera Vessel Remove) | `eyes.sclera_vessel_remove` | ÷ 100 |
 | Fabric Wrinkle Smooth | `fabric.wrinkle_smooth` | ÷ 100 |
+| Costume Clarity | `fabric.costume_clarity` | ÷ 100 |
 | Face Exposure | `skin.face_exposure` | ÷ 100 |
 | Fade Toe | `finish.fade_toe` | direct |
 | Film Crosstalk Cy Mg | `film.crosstalk.cy_mg` | direct |
@@ -479,7 +484,7 @@ and 0–360 for split-toning hue).
 | Heal Engine (`heal_engine`) | `frequency.heal_engine` | direct |
 | Mark Policy | `mark_policy` | direct |
 | Micro Grain (`micro_grain`) | `finish.micro_grain` | ÷ 100 |
-| Purple Fringing (`purple_fringing`) | `finish.purple_fringing` | ÷ 100 |
+| Defringe (`purple_fringing`) | `finish.purple_fringing` | ÷ 100 |
 | Split Toning (`split_toning`) | `finish.split_toning` | ÷ 100 |
 | Light Wrap | `background.light_wrap` | direct |
 | Lip Enhance | `lips.gloss` | ÷ 100 |
