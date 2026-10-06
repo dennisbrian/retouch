@@ -53,6 +53,23 @@ pip install -r requirements/raw.txt   # RAW camera file support
 pip install -r requirements/video.txt # video read/write (PyAV), for retouch.video
 ```
 
+Offline video track stabilization is available as a CLI after installing the
+video extra:
+
+```bash
+.venv/bin/python -m retouch.video.tracker clip.mp4 --out tracks.json
+.venv/bin/python -m retouch.video.stabilize clip.mp4 tracks.json --out stable.json --overlay review.mp4
+```
+
+It smooths tracked landmarks within each shot, fills brief tracking gaps, fades
+retouch weights around longer losses, and resets at scene cuts. The review
+video shows raw landmarks in red and stabilized landmarks in green. Region
+visibility estimates flag potentially covered face parts; those thresholds
+remain provisional pending real-clip calibration. This produces a stable track
+and a review overlay, not a retouched video export; the selected-face renderer
+and export job are the next planned slices. Input video and track files are
+preserved, and output paths must be distinct from them.
+
 RetinaFace is not supported: its dependencies conflict with the pinned
 MediaPipe runtime, so MediaPipe is the only detection path.
 
