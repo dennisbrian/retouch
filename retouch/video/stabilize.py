@@ -107,9 +107,13 @@ class StabilizeParams:
     colour_floor: float = 1.5
     texture_floor: float = 0.15
     # Covered spans shorter than this are ignored (a one-frame landmark blip);
-    # the rest are widened by cover_margin_s each side and faded over fade_s.
+    # clear spans between two covered ones too short to fade fully back in
+    # (2 x (margin + fade)) are filled; the rest are widened by cover_margin_s each side and faded over
+    # cover_fade_s. On 042 this starts and ends the chin/lips fade within
+    # 3-6 frames of the ball touching and leaving (0.1/0.2: 9-12 frames).
     min_cover_s: float = 0.05
-    cover_margin_s: float = 0.1
+    cover_margin_s: float = 0.05
+    cover_fade_s: float = 0.1
 
 
 # --------------------------------------------------------------------------
@@ -442,7 +446,11 @@ def stabilize(
             for first, last in _runs(np.flatnonzero(covered)):
                 if local_t[last] - local_t[first] < params.min_cover_s:
                     covered[first : last + 1] = False
-            visibility[:, r] = 1.0 - _ramp(covered, local_t, params.cover_margin_s, params.fade_s)
+            spans = _runs(np.flatnonzero(covered))
+            for (_, end), (start, _) in zip(spans, spans[1:]):
+                if local_t[start] - local_t[end] <= 2 * (params.cover_margin_s + params.cover_fade_s) + 1e-9:
+                    covered[end:start] = True
+            visibility[:, r] = 1.0 - _ramp(covered, local_t, params.cover_margin_s, params.cover_fade_s)
 
         pos = {int(i): k for k, i in enumerate(idx)}
         for run in runs:
@@ -604,7 +612,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.overlay:
         from .media import VideoWriter
 
-        with VideoWriter(args.overlay, args.video) as writer:
+        with VideoWriter(args.overlay, args.video, audio=False) as writer:
             for frame in read_frames(args.video):
                 writer.write(frame, _draw_overlay(frame.image, by_frame.get(frame.index), stable_by.get(frame.index)))
         print(f"wrote {args.overlay}")

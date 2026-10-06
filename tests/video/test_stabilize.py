@@ -252,6 +252,19 @@ class TestCoveredParts:
         assert lips == sorted(lips) and lips[0] == 0.0 and lips[-1] == 1.0
         assert any(0.0 < v < 1.0 for v in lips)
 
+    def test_ball_lifting_off_briefly_does_not_flash_the_edit(self):
+        # the ball leaves the chin for a few frames: too short to fade fully
+        # back in, so the chin stays hidden instead of half-showing the edit
+        rng = np.random.default_rng(9)
+        n = 200
+        stats = _skin_stats(n, rng)
+        _ball(stats, slice(60, 90), ["chin"])
+        _ball(stats, slice(94, 130), ["chin"])
+        frames = {i: _base_landmarks() for i in range(n)}
+        track = st.stabilize(_contract(frames, n), _evidence(stats))
+        by = {f.frame: f for f in track.frames}
+        assert all(by[i].visibility["chin"] == 0.0 for i in range(62, 128))
+
     def test_steady_face_never_reads_covered(self):
         rng = np.random.default_rng(5)
         n = 300
