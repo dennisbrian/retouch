@@ -254,8 +254,11 @@ per `AGENTS.md`.
 | `regions.py` | Region-mask geometry helpers. |
 | `hairwork.py` | Hair retouching helpers (distinct from `hair.py` enhancement). |
 | `wig_shine.py` | Wig Shine (`hair_deglare`): mattes synthetic-wig gloss into the wig colour; called via `hairwork.deglare_wig` in the per-face hair stage. |
+| `costume_clarity.py` | Costume Clarity (`costume_clarity`): clarity and fine texture on costume and props only, skin, paint, hair and face left alone; global stage `CostumeClarityStage` after tone, before grading. |
 | `bloodshot_eyes.py` | Bloodshot Eye Whites (`eye_sclera_vessel_remove`): calms red, veiny eye whites and lifts them slightly, leaving iris, contacts, lashes and catchlights alone; called per eye from `EyeEnhancer.enhance`. |
+| `neck_tone_match.py` | Neck Tone Match (`neck_tone_match`): neck, chest and shoulder skin follow the brightness and colour change the face edits made (chin shadow kept, painted faces skipped); global stage `NeckToneMatchStage` after the body-skin stages. |
 | `video/media.py` | V1 video slice S1: streaming decode (upright BGR frames with source timestamps) and H.264/lossless FFV1 encode with the source audio copied; needs the `video` extra (PyAV). |
+| `video/tracker.py` | V1 video slice S2: follows one face through a clip: the engine FaceDetector finds it (first frame, and again after a loss), then MediaPipe FaceLandmarker in VIDEO mode tracks it on a crop around the previous box (largest face first, then nearest-box continuity) and writes version-2 track JSON (V0 harness contract plus 478 landmarks per frame). `python -m retouch.video.tracker clip --out tracks.json`. |
 | `batch_processor.py` | Batch orchestration over `RetouchEngine`. |
 | `spot_heal_auto.py` | Automatic spot healing (pimple/red-spot detection + plane-fit heal; first op in the per-face core). |
 | `eye_visibility.py` | Eye-occlusion gate (EAR + tone-adaptive contrast) gating eye ops on closed/occluded eyes. |
@@ -370,7 +373,8 @@ per `AGENTS.md`.
 
 | Module | Role |
 |--------|------|
-| `cosplay_moat.py` | A3 cosplay skin moat: makeup-agnostic enhancements (wig-lace blend at the hairline, stockings smoothing, consistency). |
+| `cosplay_moat.py` | A3 cosplay skin moat: makeup-agnostic enhancements (stockings smoothing, consistency; its old `WigLaceBlender` is no longer used by the engine). |
+| `wig_hairline.py` | Wig Lace Blend (`cosplay_wig_lace_blend`): feathers a wig front into the forehead and tones a lace band to the skin. |
 | `neural_boosters.py` | PARKED neural stray-hair/defect segmentation infrastructure; disabled pending A1 benchmark evidence. |
 
 ## 5. Key dataclasses

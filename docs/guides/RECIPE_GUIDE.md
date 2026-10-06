@@ -89,6 +89,7 @@ These keys are defined inside nested dictionary blocks inside a recipe.
 | `eyes` | `whites` | 0 to 100 | `5` | `eye_enhance` |
 | `eyes` | `whites` | 0 to 100 | `5` | `teeth_whiten` |
 | `fabric` | `wrinkle_smooth` | 0 to 100 | `0.0` | `fabric_wrinkle_smooth` |
+| `fabric` | `costume_clarity` | 0.0 to 1.0 | `0` | `costume_clarity` |
 | `film` | `crosstalk.cy_mg` | -0.15 to 0.15 | `0.06` | `film_crosstalk_cy_mg` |
 | `film` | `crosstalk.cy_ye` | -0.15 to 0.15 | `0.03` | `film_crosstalk_cy_ye` |
 | `film` | `crosstalk.mg_ye` | -0.15 to 0.15 | `0.02` | `film_crosstalk_mg_ye` |
@@ -220,6 +221,7 @@ These keys are defined inside nested dictionary blocks inside a recipe.
 | `skin` | `unify_hue` | -1.0 to 360.0 | `-1.0` | `skin_unify_hue` |
 | `skin` | `unify` | 0 to 100 | `0` | `skin_unify` |
 | `skin` | `warmth` | 0.0 to 1.0 | `0` | `skin_warmth` |
+| `skin` | `neck_tone_match` | 0.0 to 1.0 | `0` | `neck_tone_match` |
 | `skin` | `highlight_repair` | 0.0 to 1.0 | `0` | `highlight_repair` |
 | `skin` | `vein_attenuate` | 0.0 to 1.0 | `0.0` | `vein_attenuate` |
 | `skin` | `whiten_hue_stable` | 0.0 to 1.0 | `False` | `whiten_hue_stable` |
@@ -406,6 +408,7 @@ and 0–360 for split-toning hue).
 | Eye Sclera Brighten | `eye.sclera_brighten` | ÷ 100 |
 | Bloodshot Eye Whites (Eye Sclera Vessel Remove) | `eyes.sclera_vessel_remove` | ÷ 100 |
 | Fabric Wrinkle Smooth | `fabric.wrinkle_smooth` | ÷ 100 |
+| Costume Clarity | `fabric.costume_clarity` | ÷ 100 |
 | Face Exposure | `skin.face_exposure` | ÷ 100 |
 | Fade Toe | `finish.fade_toe` | direct |
 | Film Crosstalk Cy Mg | `film.crosstalk.cy_mg` | direct |

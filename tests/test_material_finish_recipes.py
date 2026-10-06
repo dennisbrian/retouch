@@ -86,12 +86,13 @@ def test_character_showcase_reaches_wig_and_material_finish_stages() -> None:
     assert resolved["skin"]["specular_finish"] == "dewy"
     assert resolved["skin"]["specular_finish_strength"] == 0.26
     assert resolved["skin"]["sss"] == 0.42
-    assert resolved["cosplay"]["wig_lace_blend"] == 0.42
+    # 0 since the wig-lace blend was rebuilt (it used to change nothing).
+    assert resolved["cosplay"]["wig_lace_blend"] == 0.0
     assert resolved["slimming"] == 0.0
     assert context.specular_finish == "dewy"
     assert context.specular_finish_strength == 0.26
     assert context.skin_sss == 42.0
-    assert context.cosplay_wig_lace_blend == 42
+    assert context.cosplay_wig_lace_blend == 0
     assert context.slimming == 0.0
 
 
