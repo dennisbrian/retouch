@@ -1,7 +1,7 @@
 # Plan — V1 Execution: Stable Offline Single-Face Export
 
-**Status:** S1–S3 IMPLEMENTED; S4–S5 PROPOSED — remaining slices start on
-explicit owner approval, slice by slice. Companion to
+**Status:** S1–S5 INITIAL CLI IMPLEMENTED — captured-video qualification
+and broader control support remain pending. Companion to
 `PLAN_VIDEO_FACE_RETOUCH.md` (V1), `PLAN_V0_VIDEO_QA_EXECUTION.md`, and
 `RESEARCH_VIDEO_RETOUCH_ALGORITHMS.md`.
 
@@ -11,9 +11,14 @@ S1 media I/O, S2 tracking, and S3 offline stabilization are implemented.
 S3 is available as `python -m retouch.video.stabilize`; it writes stable-track
 JSON and an optional review overlay. Track validation rejects invalid or
 mismatched frames/timestamps, and visibility fades use bounded linear storage.
-Covered-region thresholds remain provisional: synthetic and real-model checks
-are implementation evidence, not real-video qualification. S4 selected-face
-rendering and S5 export integration remain proposed and need separate approval.
+S3 covered-region thresholds have two-clip calibration. Renderer/export
+synthetic and real-model checks are implementation evidence, not full
+captured-video qualification. S4 selected-face rendering and S5 export are now available through
+`python -m retouch.video.export`: smoothing/whitening only, cached-mask warping,
+visible-skin compositing, streaming encoding, frame/audio verification, null
+measurement, progress and cancellation. The standalone CLI is implemented;
+corpus-based flicker/turn/blink/occlusion acceptance remains pending. No GUI
+video tab or broad recipe support is claimed.
 
 ## What V0 measured that this plan is built on (2026-07-18, DSCF4322)
 

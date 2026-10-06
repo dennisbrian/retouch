@@ -905,3 +905,51 @@ not a speculative segmentation mask. Collection defaults to off and does not
 change render pixels. The GUI persists snapshots in its request workspace;
 its session state holds paths and statuses, and refuses stale source/settings
 or failed-render evidence. These inspection artifacts are not export images.
+
+
+### Selected-face video export
+
+`retouch.video.export.export_video(source, output, stable_path=None,
+params=RenderParams(), qa=True, progress=None, cancelled=None)` runs the initial
+S4/S5 job. `RenderParams` supports only `smooth`, `whiten`, `parse_every` and
+`max_crop_dim`; no arbitrary image recipe is exposed. Supply a validated S3
+stable JSON or let the job analyze the source. `SelectedFaceRenderer` holds one
+stream's bounded crop/parsing reference, refreshes at cuts/gaps or poor motion
+fits, and composites only visible selected-face skin onto the original frame.
+Fresh parses record actual parser input; warped masks leave that claim unset.
+The manifest counts parsing and warping separately. Existing image modules and
+image-mode processing behavior are unchanged.
+
+The output path and `<output>.qa` must be new. The job writes to its owned QA
+workspace, verifies all decoded frame timings/dimensions, audio packet payloads
+and A/V offset/end timing, and publishes through an exclusive atomic link.
+Cancellation is checked between frames/passes; Ctrl+C or a true `cancelled()`
+callback produces a cancelled manifest and no published partial output. A
+`progress(event)` callback receives `phase`, `frames`, `total` and `elapsed_s`.
+Publication-boundary interruptions reconcile the owned output before cleanup.
+A notification failure after successful publication does not undo the export.
+
+Default temporal QA streams source/result/null encodes with only current frames
+and small canonical crops in memory; percentile arrays retain scalar samples.
+It resets at shots/gaps and records codec-floor differences. These metrics are
+not a certification verdict. MKV can shift the shared timeline and quantize
+PTS, so verification checks relative timing and A/V offset at the container's
+time precision. Changed AAC end-trim timing and multiple audio streams are
+rejected. Use MP4 for AAC delivery. `--no-qa` keeps frame/audio verification.
+
+The initial export path validates source color tags and component depth before
+decoding: 8-bit SDR only; tagged HDR/log/wide-gamut and higher-bit-depth inputs
+are rejected. Untagged input is explicitly recorded as assumed SDR. Source and
+supplied stable-track hashes must remain unchanged through publication.
+
+PCM16 MOV sources use streamed lossless ALAC audio in MP4. Verification compares
+canonical decoded PCM samples, channel count, sample rate and A/V timing;
+other compatible codecs retain packet-copy verification. ALAC playback requires
+a compatible editor/player. The delivery writer aborts without draining the
+remaining source audio when rendering is cancelled or fails.
+
+Between parser runs, current landmark geometry independently protects eyes,
+brows and lips. Covered/interpolated frames cannot create parsing keyframes;
+without a trustworthy prior reference they pass through. Reliable parsing
+updates cross-fade over one interval. Mixed/warped masks leave the fresh-parser
+pixel reference unset and record parsing/warping counters separately.

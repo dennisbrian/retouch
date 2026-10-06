@@ -64,11 +64,49 @@ video extra:
 It smooths tracked landmarks within each shot, fills brief tracking gaps, fades
 retouch weights around longer losses, and resets at scene cuts. The review
 video shows raw landmarks in red and stabilized landmarks in green. Region
-visibility estimates flag potentially covered face parts; those thresholds
-remain provisional pending real-clip calibration. This produces a stable track
-and a review overlay, not a retouched video export; the selected-face renderer
-and export job are the next planned slices. Input video and track files are
-preserved, and output paths must be distinct from them.
+visibility estimates flag potentially covered face parts. S3 thresholds have
+been set on two calibration clips; broader captured-motion qualification
+remains pending. Input video and track files
+are preserved, and output paths must be distinct from them.
+
+### Selected-face video export (initial CLI)
+
+```bash
+.venv/bin/python -m retouch.video.export clip.mp4 --out retouched.mp4 --smooth 20 --whiten 0
+# Reuse a reviewed stabilized track:
+.venv/bin/python -m retouch.video.export clip.mp4 --stable stable.json --out reviewed.mp4
+```
+
+This first version accepts 8-bit SDR input; tagged HDR/log/wide-gamut and
+high-bit-depth footage are rejected before processing. Convert those sources
+explicitly to SDR first. The job tracks/stabilizes automatically when `--stable`
+is omitted. It applies
+only smoothing and whitening to the selected face's visible skin, preserving
+features, covered-region margins, and everything outside that skin before
+encoding. Untracked frames pass through. H.264 compression can still change
+pixels outside the edited face; a same-codec identity encode measures that
+floor. Parsing refreshes every three frames by default (`--parse-every`), at
+cuts/gaps, and when a cached mask's motion fit is unreliable. Current landmarks protect
+eyes/brows/lips between parses; new masks are not learned on covered frames,
+and valid parsing updates cross-fade over one interval.
+
+Progress reports tracking, stabilization, rendering and verification. **Ctrl+C**
+stops between frames; `--cancel-file stop.flag` also stops when that file appears.
+Partial videos are never published and existing output/QA paths are preserved.
+Each job keeps `<output>.qa/manifest.json`, tracks, temporal metrics, a null
+encode and a contact sheet. Failed/cancelled jobs retain their status for review.
+Video frames are streamed; full clips of pixels are never loaded into RAM.
+
+Audio packets are copied and verified along with A/V timing. For 16-bit PCM
+MOV sources, MP4 uses lossless ALAC audio and verifies decoded samples exactly;
+use an ALAC-capable editor/player. MP4 is the delivery
+format; `--lossless --out review.mkv` provides FFV1 for pixel inspection. Some AAC
+end-trim metadata cannot survive MKV remux; those jobs fail timing verification
+and should use MP4. Multiple audio streams are currently rejected. `--no-qa`
+skips null/temporal measurements while retaining frame/audio verification.
+Metrics remain measurement aids: inspect moving faces, mask edges and flicker
+before batch use. This initial CLI has generated-sequence/model verification;
+full captured-video qualification remains pending.
 
 RetinaFace is not supported: its dependencies conflict with the pinned
 MediaPipe runtime, so MediaPipe is the only detection path.
