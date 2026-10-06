@@ -192,6 +192,18 @@ default; start near 50 (100 can look flat). It pairs with Face Polish rather
 than replacing it. Note that the older Skin Finish "powder" and "matte" modes
 subtract grey and can darken lit cheeks on pale skin or face paint.
 
+Body Skin Evening (`--body-skin-even 0-100` in the CLI, the "Body Skin
+Evening" slider in the app's Body Skin section, or `body_skin.even` in a
+recipe, where 0.5 = 50) calms blotchy colour on arms, legs, chest and back,
+such as red patches or an uneven tan, by pulling each patch's colour back
+toward the skin around it. Nothing is blurred: pores, body hair, freckles,
+moles, muscle and limb shading and the sheen of oiled skin or sheer hosiery
+stay as shot. The face, wig, costume, tattoos and white face or body paint are
+left alone. It is off by default; start near 50. On simulated darker skin the
+body-skin detector can miss parts of a limb, which are then left as shot. The
+older "Body Equalize" slider next to it is a different op (it adds local
+contrast) kept for the recipes that use it.
+
 Skin Warmth (`--skin-warmth 0-100` in the CLI, the "Skin Warmth" slider next
 to Powder Finish in the app, or `skin.warmth` in a recipe, where 0.5 = 50)
 turns natural skin that reads pink or flat toward a warm peach, the tone of
@@ -203,6 +215,22 @@ violet or green face paint alone, and skin that is already warm, including
 most darker skin, is left as it is or changes only a little. It is off by
 default; start near 50. A beige or pink costume part the same colour as the
 skin warms with it. When the face is painted, body skin is left alone too.
+
+Neck Tone Match (`--neck-tone-match 0-100` in the CLI, the "Neck Tone Match"
+slider next to Skin Warmth in the app, or `skin.neck_tone_match` in a recipe,
+where 0.5 = 50) keeps the neck and chest the same tone as the retouched face.
+It measures what the face edits (whitening, Face Polish, exposure, a recipe's
+face look) did to the face, relative to the skin below it, and makes the same
+brightness and colour change on the neck, chest and shoulders, plus part of
+any colour gap the photo already had (foundation that doesn't match the neck).
+Brightness moves as one linear-light gain, so the shadow under the chin stays.
+Only skin of the same person in the neck/chest colour moves: wigs, collars,
+ribbons and costume parts in other colours stay out, and so does a face in
+white, grey, blue or green paint (the neck is not dragged toward the paint)
+or a body-painted neck. It is off by default; start near 50. Pale fabric close
+to the skin's colour, right next to it, can pick up a little of the change.
+With the slider at 0 the older automatic neck pass still runs whenever
+whitening or tone evening is on; with the slider on, this replaces it.
 
 Blown Highlight Repair (`--highlight-repair 0-100` in the CLI, the "Blown
 Highlight Repair" slider next to Powder Finish in the app, or
@@ -243,6 +271,32 @@ keep their colour; skin, lips, red and gold never change. It is off by
 default and safe at 100. A thin purple or blue strap lying wholly inside a
 fringe band can lose some of its colour at its edges. The earlier version of
 this setting was hidden and only caught magenta fringes.
+
+Wig Lace Blend (`--cosplay-wig-lace-blend 0-100` in the CLI, the "Wig Lace
+Blend" slider under Cosplay & Body > Cosplay Moat in the app, or
+`cosplay.wig_lace_blend` in a recipe, where 0.5 = 50) softens the hard line
+where a wig's front edge meets the forehead, so the hairline fades in the way
+real hair does, and tones a lace, glue or make-up band just outside the hair
+back to the forehead. It finds the hairline from the hair mask and the face
+landmarks and only acts where skin lies just below the hair, well above the
+brows: full bangs, side locks over the cheeks and the wig's outer edge against
+a wall or costume are left as they are, and nothing outside a narrow band
+along the hairline changes. It is off by default; start near 50. It was
+tested on a public studio portrait and on a hard wig front with a lace band
+planted on it (simulated, also with darker and lighter skin), since none of
+the cosplay photos at hand shows a hairline. The earlier version of this
+setting changed nothing on real photos.
+
+Costume Clarity (`--costume-clarity 0-100` in the CLI, the "Costume Clarity"
+slider under Structure & Effects in the app, or `fabric.costume_clarity` in a
+recipe, where 0.5 = 50) brings out fabric weave, lace, fishnet, seams, vinyl
+and armour detail on the costume and props, without touching the skin. Skin,
+face paint, hair, wigs and the face are left exactly as they are, and skin
+seen through fishnet or lace keeps its smooth texture. It lifts real detail,
+not sensor noise, and leaves strong edges and shiny highlights from blowing
+out. It is off by default; start near 50. A beige or tan costume part the
+same colour as the wearer's skin may be treated as skin and left alone, and a
+white costume part right next to white face paint can be left out too.
 
 Keep Nose Shape (`--nose-shape 0-100` in the CLI, the "Keep Nose Shape" slider
 under Skin Tone in the app, or `skin.nose_shape` in a recipe, where 0.5 = 50)
