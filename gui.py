@@ -1841,6 +1841,10 @@ def process_image(
             else:
                 engine_kwargs.pop("face_contexts", None)
 
+            engine_kwargs["collect_effect_previews"] = (
+                isinstance(preview_cache, GuiPreviewCache)
+                and first_result_rgb is None and first_combined is None
+            )
             result = engine.process(img_bgr, **engine_kwargs)
             if cache_key is not None:
                 try:
@@ -1912,6 +1916,11 @@ def process_image(
                         ),
                         "safe_auto_decisions": list(
                             getattr(result, "safe_auto_decisions", []) or []
+                        ),
+                        "effect_source_identity": identity.to_dict() if identity is not None else {},
+                        "effect_previews": _save_effect_previews(
+                            getattr(result, "effect_previews", {}),
+                            os.path.join(temp_dir, "effects"),
                         ),
                         "backend": runtime_diagnostics,
                         "precision": getattr(result, "precision_metadata", {}),
@@ -2190,6 +2199,46 @@ def invalidate_preview_cache_handler(cache):
 def on_recipe_change(recipe):
     d = recipe_defaults(recipe)
     return tuple(d[k] for k in RECIPE_OUTPUT_KEYS)
+
+
+def _save_effect_previews(previews, directory):
+    from retouch.effect_preview import save_previews
+    try:
+        return save_previews(previews, directory)
+    except (OSError, ValueError) as exc:
+        _logger.warning("Effect preview unavailable: %s", exc)
+        return {}
+
+
+def show_effect_preview(effect, view, img_paths, revision, cache):
+    """Read stage evidence only when it matches the current source/settings."""
+    evidence = cache.latest_render_evidence if isinstance(cache, GuiPreviewCache) else {}
+    paths = _render_contract_paths(img_paths)
+    if not evidence or not paths:
+        return None, "Upload a photo, raise the effect's slider, then Render Preview."
+    attempt = evidence.get("render_attempt", {})
+    if attempt.get("status") != "completed":
+        return None, "No completed effect preview available. Render again."
+    source = os.path.abspath(os.fsdecode(os.fspath(paths[0])))
+    if (os.path.abspath(str(evidence.get("source_path", ""))) != source
+            or evidence.get("render_revision") != _coerce_settings_revision(revision)):
+        return None, "Photo or settings changed — render again to refresh the effect preview."
+    expected = evidence.get("effect_source_identity")
+    if expected:
+        try:
+            if source_identity(source).to_dict() != expected:
+                return None, "Source file changed — render again to refresh the effect preview."
+        except OSError:
+            return None, "Source photo unavailable — upload it and render again."
+    item = evidence.get("effect_previews", {}).get(effect, {})
+    status_text = item.get("status", "No effect preview available. Render again.")
+    path = item.get(view)
+    if not path:
+        return None, status_text
+    image = cv2.imread(path)
+    if image is None:
+        return None, "Effect preview expired — render again."
+    return cv2.cvtColor(image, cv2.COLOR_BGR2RGB), status_text
 
 
 def reset_skin_smoothing(recipe_name):
@@ -3794,6 +3843,19 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 size="sm",
                                 scale=2,
                             )
+                        with gr.Accordion("Effect preview", open=False):
+                            gr.Markdown("Inspect the first photo's individual effect. Gold shows pixels changed at that stage, before later grading.")
+                            effect_preview_choice = gr.Dropdown(
+                                choices=[("Body Skin Evening", "body_skin_even"), ("Neck Tone Match", "neck_tone_match"),
+                                         ("Costume Clarity", "costume_clarity"), ("Stray Hair Cleanup", "hair_remove_flyaways")],
+                                value="body_skin_even", label="Effect",
+                            )
+                            effect_preview_view = gr.Radio(
+                                choices=[("Affected pixels", "overlay"), ("Before", "before"), ("After", "after")],
+                                value="overlay", label="View",
+                            )
+                            effect_preview_image = gr.Image(label="Effect preview", height=360, show_download_button=False)
+                            effect_preview_status = gr.Markdown("Raise the effect's slider, then Render Preview.")
                         inspection_output = gr.Image(
                             label="Native inspection (download disabled)",
                             height=520,
@@ -5957,6 +6019,12 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
             queue=False,
         )
         _completion_event.then(
+            fn=show_effect_preview,
+            inputs=[effect_preview_choice, effect_preview_view, img_input, _settings_revision_state, _preview_cache_state],
+            outputs=[effect_preview_image, effect_preview_status],
+            show_progress="hidden", queue=False,
+        )
+        _completion_event.then(
             fn=build_render_manifest_handler,
             inputs=[
                 _render_snapshot_state,
@@ -6117,6 +6185,14 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         show_progress="hidden",
         queue=False,
     )
+
+    for _effect_refresh in (effect_preview_choice, effect_preview_view, img_input, _settings_revision_state):
+        _effect_refresh.change(
+            fn=show_effect_preview,
+            inputs=[effect_preview_choice, effect_preview_view, img_input, _settings_revision_state, _preview_cache_state],
+            outputs=[effect_preview_image, effect_preview_status],
+            show_progress="hidden", queue=False,
+        )
 
     inspect_render_btn.click(
         fn=inspect_render_handler,

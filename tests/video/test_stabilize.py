@@ -344,6 +344,7 @@ def test_real_models_mark_a_ball_over_the_mouth():
 
     import cv2
 
+    pytest.importorskip("av", reason="optional video extra not installed")
     from retouch.video.media import Frame
     from retouch.video.tracker import FaceTracker, VideoTrack, build_contract
 
@@ -380,3 +381,69 @@ def test_real_models_mark_a_ball_over_the_mouth():
         assert f.visibility["forehead"] == 1.0 and f.visibility["eye_l"] == 1.0, f.frame
     for i in list(range(0, 12)) + list(range(52, 60)):
         assert all(v == 1.0 for v in by[i].visibility.values()), (i, by[i].visibility)
+
+
+def test_missing_vfr_timestamps_interpolate_between_tracked_neighbours():
+    contract = _contract({i: _base_landmarks() for i in (0, 1, 4, 5)}, 6)
+    for record in contract['frames']:
+        record['time'] = 10.0 + record['frame'] * 0.04
+    track = st.stabilize(contract)
+    assert [f.frame for f in track.frames] == list(range(6))
+    np.testing.assert_allclose([f.time for f in track.frames], 10.0 + np.arange(6) * 0.04)
+    assert track.frames[2].source == 'interpolated'
+
+
+def test_visibility_ramp_matches_reference_without_quadratic_storage():
+    times = np.array([0.0, 0.03, 0.09, 0.13, 0.19, 0.22, 0.3])
+    mask = np.array([False, True, False, False, True, False, False])
+    dist = np.min(np.abs(times[:, None] - times[mask][None]), axis=1)
+    expected = np.clip(1.0 - (dist - 0.02) / 0.1, 0, 1)
+    np.testing.assert_allclose(st._ramp(mask, times, 0.02, 0.1), expected)
+    # 60,000 frames would require a 14+ GB temporary matrix in the old path.
+    long_times = np.arange(60_000) / FPS
+    long_mask = np.arange(60_000) % 2 == 0
+    ramp = st._ramp(long_mask, long_times, 0.01, 0.1)
+    assert ramp.shape == long_times.shape and np.isfinite(ramp).all()
+    assert np.all(ramp[long_mask] == 1)
+
+
+@pytest.mark.parametrize('bad', ['duplicate', 'negative', 'outside', 'nan', 'time', 'fps', 'version'])
+def test_invalid_tracks_fail_before_smoothing(bad):
+    contract = _contract({i: _base_landmarks() for i in range(3)}, 3)
+    if bad == 'duplicate': contract['frames'].append(contract['frames'][0])
+    if bad == 'negative': contract['frames'][0]['frame'] = -1
+    if bad == 'outside': contract['frames'][2]['frame'] = 3
+    if bad == 'nan': contract['frames'][1]['landmarks'][0][0] = float('nan')
+    if bad == 'time': contract['frames'][1]['time'] = 0
+    if bad == 'fps': contract['fps'] = 0
+    if bad == 'version': contract['version'] = 1
+    with pytest.raises(ValueError):
+        st.stabilize(contract)
+
+
+def test_mismatched_decoded_evidence_is_rejected():
+    contract = _contract({i: _base_landmarks() for i in range(3)}, 3)
+    with pytest.raises(ValueError, match='every frame'):
+        st.stabilize(contract, [st.FrameEvidence(0, 0.0, 0.0, None)])
+
+
+@pytest.mark.parametrize('kwargs', [{'fade_s': 0}, {'max_gap_s': -1}, {'min_cutoff': float('nan')}, {'z_off': 7}])
+def test_invalid_parameters_are_rejected(kwargs):
+    with pytest.raises(ValueError):
+        StabilizeParams(**kwargs)
+
+
+@pytest.mark.parametrize('target', ['video', 'tracks', 'shared'])
+def test_cli_never_overwrites_its_inputs(tmp_path, target):
+    pytest.importorskip('av')
+    video, tracks = tmp_path / 'clip.mp4', tmp_path / 'tracks.json'
+    video.write_bytes(b'preserve video')
+    tracks.write_bytes(b'preserve tracks')
+    output = video if target == 'video' else tracks if target == 'tracks' else tmp_path / 'output.json'
+    argv = [str(video), str(tracks), '--out', str(output)]
+    if target == 'shared': argv += ['--overlay', str(output)]
+    with pytest.raises(SystemExit) as exc:
+        st.main(argv)
+    assert exc.value.code == 2
+    assert video.read_bytes() == b'preserve video'
+    assert tracks.read_bytes() == b'preserve tracks'

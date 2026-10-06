@@ -49,7 +49,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Tuple, Union
 import cv2
 import numpy as np
 
-from .tracker import NUM_LANDMARKS, load_contract
+from .tracker import NUM_LANDMARKS, load_contract, landmarks_bbox
 
 PathLike = Union[str, Path]
 
@@ -114,6 +114,17 @@ class StabilizeParams:
     min_cover_s: float = 0.05
     cover_margin_s: float = 0.05
     cover_fade_s: float = 0.1
+
+    def __post_init__(self):
+        for field in dataclasses.fields(self):
+            value = getattr(self, field.name)
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"{field.name} must be finite and nonnegative")
+        for name in ("min_cutoff", "d_cutoff", "fade_s", "cover_fade_s", "cut_ratio", "cut_window_s", "colour_floor", "texture_floor"):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be positive")
+        if self.z_off > self.z_on:
+            raise ValueError("z_off must not exceed z_on")
 
 
 # --------------------------------------------------------------------------
@@ -327,7 +338,13 @@ def _ramp(mask: np.ndarray, times: np.ndarray, margin_s: float, fade_s: float) -
     if not len(on):
         return np.zeros(len(times))
     # distance in seconds from each frame to the nearest masked frame
-    dist = np.min(np.abs(times[:, None] - times[on][None, :]), axis=1)
+    # Sorted times let us find the nearest covered neighbour without a
+    # T-by-covered-frame matrix (gigabytes for even a short long-form clip).
+    covered_times = times[on]
+    right = np.searchsorted(covered_times, times)
+    left_times = covered_times[np.maximum(right - 1, 0)]
+    right_times = covered_times[np.minimum(right, len(covered_times) - 1)]
+    dist = np.minimum(np.abs(times - left_times), np.abs(times - right_times))
     return np.clip(1.0 - (dist - margin_s) / max(fade_s, 1e-6), 0.0, 1.0)
 
 
@@ -397,26 +414,52 @@ def stabilize(
     Without ``evidence`` there is no cut detection beyond box jumps and every
     region is reported visible; frame times come from the records and fps.
     """
+    if contract.get("version") != 2:
+        raise ValueError("stabilization requires a version-2 landmark track")
     width, height = int(contract["width"]), int(contract["height"])
-    fps = float(contract.get("fps") or 30.0)
-    records = {int(r["frame"]): r for r in contract["frames"]}
-    n = int(contract.get("frame_count") or (max(records) + 1 if records else 0))
-    if evidence is not None:
-        n = max(n, len(evidence))
+    fps = float(contract.get("fps", 30.0))
+    if min(width, height) <= 0 or not math.isfinite(fps) or fps <= 0:
+        raise ValueError("track dimensions and frame rate must be positive and finite")
+    records = {}
+    for record in contract["frames"]:
+        i = int(record["frame"])
+        landmarks = np.asarray(record["landmarks"], np.float64)
+        box = np.asarray(record["face"], np.float64)
+        if i < 0 or i in records:
+            raise ValueError("track frame indices must be nonnegative and unique")
+        if landmarks.shape != (NUM_LANDMARKS, 3) or not np.isfinite(landmarks).all():
+            raise ValueError(f"frame {i}: expected finite 478 x 3 landmarks")
+        if box.shape != (4,) or not np.isfinite(box).all() or (box[2:] <= 0).any():
+            raise ValueError(f"frame {i}: invalid face box")
+        records[i] = record
+    n = int(contract.get("frame_count", max(records) + 1 if records else 0))
+    if n < 0 or any(i >= n for i in records):
+        raise ValueError("track frame indices exceed frame_count")
 
     times = np.arange(n, dtype=np.float64) / fps
-    for i, r in records.items():
-        if "time" in r and i < n:
-            times[i] = float(r["time"])
+    if records:
+        idx = np.array(sorted(records))
+        known = np.array([float(records[i].get("time", i / fps)) for i in idx])
+        if not np.isfinite(known).all() or (np.diff(known) <= 0).any():
+            raise ValueError("tracked timestamps must be finite and strictly increasing")
+        # With no decoded evidence, missing VFR timestamps are estimated
+        # between their tracked neighbours; clip ends extrapolate at fps.
+        times = np.interp(np.arange(n), idx, known)
+        times[:idx[0]] = known[0] + (np.arange(idx[0]) - idx[0]) / fps
+        times[idx[-1] + 1:] = known[-1] + np.arange(1, n - idx[-1]) / fps
     diffs = np.zeros(n)
     stats = np.full((n, len(REGIONS), 4), np.nan)
     if evidence is not None:
+        if len(evidence) != n or sorted(e.frame for e in evidence) != list(range(n)):
+            raise ValueError("decoded evidence must cover every frame of the track exactly once")
         for e in evidence:
-            if e.frame < n:
-                times[e.frame] = e.time
-                diffs[e.frame] = e.diff
-                if e.regions is not None:
-                    stats[e.frame] = e.regions
+            times[e.frame] = e.time
+            diffs[e.frame] = e.diff
+            if e.regions is not None:
+                stats[e.frame] = e.regions
+    if (not np.isfinite(times).all() or (np.diff(times) <= 0).any()
+            or not np.isfinite(diffs).all() or (diffs < 0).any()):
+        raise ValueError("frame timestamps must increase and differences must be finite and nonnegative")
 
     boxes = {i: tuple(map(float, r["face"])) for i, r in records.items()}
     cuts = find_cuts(times, diffs, params, boxes)
@@ -476,10 +519,6 @@ def stabilize(
 
             for k, i in enumerate(run):
                 lm = (smooth[k] / scale_px).astype(np.float32)
-                x0, y0 = lm[:, 0].min() * width, lm[:, 1].min() * height
-                x1, y1 = lm[:, 0].max() * width, lm[:, 1].max() * height
-                x0, y0 = max(0, round(x0)), max(0, round(y0))
-                x1, y1 = min(width, round(x1)), min(height, round(y1))
                 out.append(
                     StableFrame(
                         frame=int(i),
@@ -487,7 +526,7 @@ def stabilize(
                         shot=shot,
                         source="tracked" if i in pos else "interpolated",
                         weight=float(weight[k]),
-                        bbox=(int(x0), int(y0), int(max(1, x1 - x0)), int(max(1, y1 - y0))),
+                        bbox=landmarks_bbox(lm, width, height),
                         landmarks=lm,
                         visibility={
                             name: float(visibility[i - a, r]) for r, name in enumerate(REGION_NAMES)
@@ -561,7 +600,7 @@ def _draw_overlay(image: np.ndarray, raw: Optional[np.ndarray], stable: Optional
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    from .media import read_frames
+    from .media import read_frames, probe
 
     parser = argparse.ArgumentParser(description="Stabilize a face track and mark covered face parts.")
     parser.add_argument("video", type=Path, help="Local source clip (read only)")
@@ -569,6 +608,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--out", type=Path, required=True, help="Stable track JSON output path")
     parser.add_argument("--overlay", type=Path, help="Also write a review video: raw (red) vs stable (green)")
     args = parser.parse_args(argv)
+
+    sources = {args.video.resolve(), args.tracks.resolve()}
+    outputs = [args.out.resolve()] + ([args.overlay.resolve()] if args.overlay else [])
+    if any(path in sources for path in outputs) or len(set(outputs)) != len(outputs):
+        parser.error("output paths must be distinct from video, input tracks, and each other")
 
     contract = load_contract(args.tracks)
     if int(contract.get("version", 1)) < 2:
@@ -579,6 +623,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if count % 60 == 0:
             print(f"  frame {count}", flush=True)
 
+    info = probe(args.video)
+    if (info.width, info.height) != (int(contract["width"]), int(contract["height"])):
+        raise SystemExit("track dimensions do not match the decoded source video")
     evidence = gather_evidence(read_frames(args.video), by_frame, progress=report)
     track = stabilize(contract, evidence)
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -598,12 +645,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         for name, index in (("nose", 1), ("eye_l", 33), ("eye_r", 263), ("chin", 152)):
             raw_j, stable_j = [], []
             for i in both:
+                if any(j not in stable_by for j in (i - 1, i, i + 1)):
+                    continue
+                if len({stable_by[j].shot for j in (i - 1, i, i + 1)}) != 1:
+                    continue  # a shot boundary is not landmark jitter
                 ied = float(np.linalg.norm((by_frame[i][33, :2] - by_frame[i][263, :2]) * (track.width, track.height)))
                 tri_raw = [by_frame[j] * (track.width, track.height, track.width) for j in (i - 1, i, i + 1)]
                 if all(j in stable_by for j in (i - 1, i + 1)):
                     tri_st = [stable_by[j].landmarks * (track.width, track.height, track.width) for j in (i - 1, i, i + 1)]
                     stable_j.append(landmark_jitter(tri_st, [ied] * 3, index)[0])
                 raw_j.append(landmark_jitter(tri_raw, [ied] * 3, index)[0])
+            if not raw_j or not stable_j:
+                continue
             print(
                 f"  jitter p95/IED {name}: raw {np.percentile(raw_j, 95):.4f} "
                 f"stable {np.percentile(stable_j, 95):.4f}"
@@ -612,6 +665,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.overlay:
         from .media import VideoWriter
 
+        args.overlay.parent.mkdir(parents=True, exist_ok=True)
         with VideoWriter(args.overlay, args.video, audio=False) as writer:
             for frame in read_frames(args.video):
                 writer.write(frame, _draw_overlay(frame.image, by_frame.get(frame.index), stable_by.get(frame.index)))

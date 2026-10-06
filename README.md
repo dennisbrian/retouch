@@ -53,6 +53,23 @@ pip install -r requirements/raw.txt   # RAW camera file support
 pip install -r requirements/video.txt # video read/write (PyAV), for retouch.video
 ```
 
+Offline video track stabilization is available as a CLI after installing the
+video extra:
+
+```bash
+.venv/bin/python -m retouch.video.tracker clip.mp4 --out tracks.json
+.venv/bin/python -m retouch.video.stabilize clip.mp4 tracks.json --out stable.json --overlay review.mp4
+```
+
+It smooths tracked landmarks within each shot, fills brief tracking gaps, fades
+retouch weights around longer losses, and resets at scene cuts. The review
+video shows raw landmarks in red and stabilized landmarks in green. Region
+visibility estimates flag potentially covered face parts; those thresholds
+remain provisional pending real-clip calibration. This produces a stable track
+and a review overlay, not a retouched video export; the selected-face renderer
+and export job are the next planned slices. Input video and track files are
+preserved, and output paths must be distinct from them.
+
 RetinaFace is not supported: its dependencies conflict with the pinned
 MediaPipe runtime, so MediaPipe is the only detection path.
 
@@ -221,6 +238,18 @@ left alone. It is off by default; start near 50. On simulated darker skin the
 body-skin detector can miss parts of a limb, which are then left as shot. The
 older "Body Equalize" slider next to it is a different op (it adds local
 contrast) kept for the recipes that use it.
+
+The **Effect preview** panel below the preview canvas lets you inspect Body
+Skin Evening, Neck Tone Match, Costume Clarity, and Stray Hair Cleanup on the
+first photo. Stray Hair Cleanup shows the first detected face's crop (Face #0),
+including its parsed neck skin; the other effects show the frame. Raise the effect's slider
+and click **Render Preview**, then select **Affected pixels**, **Before**, or
+**After**. Gold marks pixels that actually changed at that effect's stage;
+before/after isolates that effect before later grading, rather than comparing
+the whole recipe. Images are limited to 800 px. The panel explains when an
+effect is off or skips; changing the photo or settings clears old evidence
+until you render again. Exported photos do not contain the overlay.
+
 
 Skin Warmth (`--skin-warmth 0-100` in the CLI, the "Skin Warmth" slider next
 to Powder Finish in the app, or `skin.warmth` in a recipe, where 0.5 = 50)
