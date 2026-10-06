@@ -3950,6 +3950,14 @@ class RetouchEngine:
                     if face_result is not None else None
                 )
 
+        def _collect_effect_previews() -> None:
+            if getattr(ctx, "_collect_effect_previews", False) and results:
+                preview = getattr(results[0], "stray_hair_preview", None)
+                if preview is not None:
+                    preview = dict(preview)
+                    preview["status"] = "Face #0 crop — " + preview["status"]
+                    ctx._effect_previews["hair_remove_flyaways"] = preview
+
         if len(faces) == 1:
             results[0] = self._process_one_face(
                 img, faces[0], person_mask, self._ctx_for_face(ctx, 0), h_img, w_img,
@@ -3959,6 +3967,7 @@ class RetouchEngine:
             face_progress.done(0)
             _collect_safe_auto_decisions()
             _collect_fa02_diagnostics()
+            _collect_effect_previews()
             return results, built_contexts  # type: ignore[return-value]
 
         # Multi-face: try ProcessPool (FaceProcessorPool) for true parallelism,
@@ -3968,7 +3977,7 @@ class RetouchEngine:
             def _slim_ctx(c):
                 return {
                     k: v for k, v in c.__dict__.items()
-                    if not isinstance(v, np.ndarray)
+                    if not isinstance(v, np.ndarray) and k != "_effect_previews"
                 }
             payloads = [
                 (
@@ -4019,9 +4028,11 @@ class RetouchEngine:
                         hair_only_mask=pr.get('hair_only_mask'),
                         safe_auto_decisions=pr.get('safe_auto_decisions', []),
                         fa02_diagnostics=pr.get('fa02_diagnostics'),
+                        stray_hair_preview=pr.get('stray_hair_preview'),
                     )
             _collect_safe_auto_decisions()
             _collect_fa02_diagnostics()
+            _collect_effect_previews()
             return results, built_contexts  # type: ignore[return-value]
 
         # Fallback: ThreadPoolExecutor (engine instance shared via memory)
@@ -4042,6 +4053,7 @@ class RetouchEngine:
                 face_progress.done(idx)
         _collect_safe_auto_decisions()
         _collect_fa02_diagnostics()
+        _collect_effect_previews()
         return results, built_contexts  # type: ignore[return-value]
 
     def _process_one_face(
@@ -5290,6 +5302,15 @@ class RetouchEngine:
             face_skin=skin,
         )
         ctx._runtime_diagnostics["costume_clarity"] = diag
+        from .effect_preview import capture
+        reasons = {
+            "no_segmentation": "Skipped — no reliable person or costume segmentation available.",
+            "no_skin_model": "Skipped — no reliable skin colour sample to protect skin.",
+            "no_costume": "Skipped — no confident costume region found.",
+            "costume_all_skin_coloured": "Skipped — selected region matches skin colours and is protected.",
+        }
+        capture(ctx, "costume_clarity", img, out,
+                reasons.get(diag.get("reason"), "Skipped — no costume correction needed."))
         return out
 
     def _stage_cosplay_moat(

@@ -223,7 +223,9 @@ older "Body Equalize" slider next to it is a different op (it adds local
 contrast) kept for the recipes that use it.
 
 The **Effect preview** panel below the preview canvas lets you inspect Body
-Skin Evening and Neck Tone Match on the first photo. Raise the effect's slider
+Skin Evening, Neck Tone Match, Costume Clarity, and Stray Hair Cleanup on the
+first photo. Stray Hair Cleanup shows the first detected face's crop (Face #0),
+including its parsed neck skin; the other effects show the frame. Raise the effect's slider
 and click **Render Preview**, then select **Affected pixels**, **Before**, or
 **After**. Gold marks pixels that actually changed at that effect's stage;
 before/after isolates that effect before later grading, rather than comparing

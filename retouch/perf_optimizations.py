@@ -193,6 +193,8 @@ class _FaceResult:
     # `_process_single_face_worker`'s dict return below). None when
     # fa02_texture_mode == "legacy" (the FA-02 branch never ran).
     fa02_diagnostics: Optional[Dict[str, Any]] = None
+    # Bounded crop-stage evidence crosses both process and thread paths.
+    stray_hair_preview: Optional[Dict[str, Any]] = None
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -529,6 +531,7 @@ def _process_face_core(
         )
         logger.debug("spot_heal: %s", _spot_diags)
 
+    stray_hair_preview = None
     # ---- Stray hair cleanup (opt-in, before any smoothing) ----
     # Heals loose wig fibres and flyaways lying across face and neck skin
     # from the skin beside them; the wig, bangs, brows, lashes, eyes, lips
@@ -540,16 +543,31 @@ def _process_face_core(
         float(getattr(ctx, 'hair_remove_flyaways', 0) or 0),
         float(getattr(ctx, 'flyaway_cleanup', 0) or 0),
     )
+    preview_ctx = None
+    if getattr(ctx, "_collect_effect_previews", False):
+        from .effect_preview import initialize
+        preview_ctx = SimpleNamespace(hair_remove_flyaways=_stray)
+        initialize(preview_ctx, True)
+        if _stray > 0 and skin_n is None:
+            from .effect_preview import skipped
+            skipped(preview_ctx, "hair_remove_flyaways", "Skipped — no face skin mask available to search for stray hairs.")
     if _stray > 0 and skin_n is not None:
         canvas = _tr('hair.remove_flyaways', canvas)
         from .stray_hair import exclusion_from_regions, remove_stray_hairs
 
         _stray_skin = skin_n if neck_n is None else np.maximum(skin_n, neck_n)
+        before_stray = canvas
         canvas, _stray_diags = remove_stray_hairs(
             canvas, _stray_skin, face_width, _stray, hair_mask=hair_n,
             feature_mask=exclusion_from_regions(regions, face_width),
         )
         logger.debug("stray_hair: %s", _stray_diags)
+        if preview_ctx is not None:
+            from .effect_preview import capture
+            capture(preview_ctx, "hair_remove_flyaways", before_stray, canvas,
+                    "Skipped — no confident stray hairs found on unprotected skin.", image_scale=255.0)
+    if preview_ctx is not None:
+        stray_hair_preview = preview_ctx._effect_previews["hair_remove_flyaways"]
 
     # ---- P4: Makeup unmix (before albedo_even so paint ≠ blotch) ----
     _mce = float(getattr(ctx, "makeup_coverage_even", 0.0) or 0.0)
@@ -1608,6 +1626,7 @@ def _process_face_core(
         roi_box=(roi_x1, roi_y1, roi_x1 + roi_w, roi_y1 + roi_h),
         safe_auto_decisions=safe_auto_decisions,
         fa02_diagnostics=fa02_diagnostics,
+        stray_hair_preview=stray_hair_preview,
     )
 
 
@@ -1719,6 +1738,7 @@ def _process_single_face_worker(payload: tuple) -> Dict[str, Any]:
         "roi_box": fr.roi_box,
         "safe_auto_decisions": fr.safe_auto_decisions or [],
         "fa02_diagnostics": fr.fa02_diagnostics,
+        "stray_hair_preview": fr.stray_hair_preview,
     }
 
 

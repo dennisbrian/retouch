@@ -7,8 +7,17 @@ import numpy as np
 EFFECT_LABELS = {
     "body_skin_even": "Body Skin Evening",
     "neck_tone_match": "Neck Tone Match",
+    "costume_clarity": "Costume Clarity",
+    "hair_remove_flyaways": "Stray Hair Cleanup",
 }
 MAX_DIM = 800
+
+
+def _strength(ctx, name):
+    value = float(getattr(ctx, name, 0) or 0)
+    if name == "hair_remove_flyaways":
+        value = max(value, float(getattr(ctx, "flyaway_cleanup", 0) or 0))
+    return value
 
 
 def initialize(ctx, enabled):
@@ -16,7 +25,7 @@ def initialize(ctx, enabled):
     ctx._effect_previews = {}
     if enabled:
         for name in EFFECT_LABELS:
-            active = float(getattr(ctx, name, 0) or 0) > 0
+            active = _strength(ctx, name) > 0
             ctx._effect_previews[name] = {
                 "status": "Effect not run. Render with a detected face to inspect it." if active else "Off — raise this effect's slider and render again.",
             }
@@ -24,14 +33,14 @@ def initialize(ctx, enabled):
 
 def skipped(ctx, name, message):
     if (getattr(ctx, "_collect_effect_previews", False)
-            and float(getattr(ctx, name, 0) or 0) > 0):
+            and _strength(ctx, name) > 0):
         ctx._effect_previews[name] = {"status": message}
 
 
-def capture(ctx, name, before, after, empty_message):
+def capture(ctx, name, before, after, empty_message, image_scale=1.0):
     """Store stage-local before/after and actual changed-pixel coverage.
 
-    Images are float BGR [0,1]. Coverage is measured before resizing: small
+    Images are BGR in [0,image_scale]. Coverage is measured before resizing: small
     changes cannot disappear through averaging or a final 8-bit export.
     """
     if not getattr(ctx, "_collect_effect_previews", False):
@@ -43,9 +52,9 @@ def capture(ctx, name, before, after, empty_message):
     for y in range(0, before.shape[0], 256):
         changed[y:y + 256] = np.max(
             np.abs(after[y:y + 256] - before[y:y + 256]), axis=2,
-        ) > 1e-5
+        ) > 1e-5 * image_scale
     if not changed.any():
-        skipped(ctx, name, "No visible correction needed on the selected skin.")
+        skipped(ctx, name, "No visible correction needed on the selected region.")
         return
     h, w = before.shape[:2]
     scale = min(1.0, MAX_DIM / max(h, w))
@@ -53,7 +62,7 @@ def capture(ctx, name, before, after, empty_message):
     def small(image):
         if scale < 1:
             image = cv2.resize(image, size, interpolation=cv2.INTER_AREA)
-        return np.clip(image * 255.0 + 0.5, 0, 255).astype(np.uint8)
+        return np.clip(image * (255.0 / image_scale) + 0.5, 0, 255).astype(np.uint8)
     b, a = small(before), small(after)
     mask = changed.astype(np.float32)
     if scale < 1:

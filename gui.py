@@ -3846,7 +3846,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         with gr.Accordion("Effect preview", open=False):
                             gr.Markdown("Inspect the first photo's individual effect. Gold shows pixels changed at that stage, before later grading.")
                             effect_preview_choice = gr.Dropdown(
-                                choices=[("Body Skin Evening", "body_skin_even"), ("Neck Tone Match", "neck_tone_match")],
+                                choices=[("Body Skin Evening", "body_skin_even"), ("Neck Tone Match", "neck_tone_match"),
+                                         ("Costume Clarity", "costume_clarity"), ("Stray Hair Cleanup", "hair_remove_flyaways")],
                                 value="body_skin_even", label="Effect",
                             )
                             effect_preview_view = gr.Radio(

@@ -142,3 +142,72 @@ def test_gui_returns_rgb_and_skip_status(tmp_path):
     rgb, status = gui.show_effect_preview("body_skin_even", "after", [str(path)], 3, cache)
     assert tuple(rgb[0, 0]) == (80, 40, 20) and status == "Changed"
     assert gui.show_effect_preview("neck_tone_match", "overlay", [str(path)], 3, cache) == (None, "No suitable neck skin")
+
+
+def test_costume_stage_snapshot_and_skip_reason():
+    from tests.test_costume_clarity import _scene
+    img, probs = _scene()
+    person = np.ones(img.shape[:2], np.float32)
+    skin = hair = None
+    boxes = []
+    engine = RetouchEngine.__new__(RetouchEngine)
+    engine._parser = SimpleNamespace(_segment_classes=lambda image: cv2.resize(probs, (image.shape[1], image.shape[0])),
+                                    parse_hair_full_image=lambda image: hair)
+    ctx = ProcessingContext(costume_clarity=60)
+    initialize(ctx, True)
+    faces = [SimpleNamespace(bbox=box) for box in boxes]
+    output = engine._stage_costume_clarity(img, ctx, faces, person, skin, acc_hair_only=hair)
+    item = ctx._effect_previews["costume_clarity"]
+    assert "Changed" in item["status"]
+    np.testing.assert_array_equal(item["after"], np.clip(output * 255 + 0.5, 0, 255).astype(np.uint8))
+    # No person/classes should yield a useful message rather than stale pixels.
+    engine._parser._segment_classes = lambda image: None
+    engine._parser.parse_hair_full_image = lambda image: None
+    engine._stage_costume_clarity(img, ctx, [], None, None)
+    assert "segmentation" in ctx._effect_previews["costume_clarity"]["status"]
+    assert "overlay" not in ctx._effect_previews["costume_clarity"]
+
+
+def test_stray_hair_crop_snapshot_uses_255_scale_and_preserves_pixels():
+    from tests.test_flyaway_cleanup_alias import scene, _ctx, ROI
+    from retouch.perf_optimizations import _process_face_core
+    canvas, regions, face, person, procs = scene.__wrapped__()
+    ctx = _ctx(0, 60)  # alias must still activate the inspection record
+    initialize(ctx, True)
+    assert not ctx._effect_previews["hair_remove_flyaways"]["status"].startswith("Off")
+    output = _process_face_core(canvas.copy(), regions, face, ctx, 0, 0, ROI, ROI, person, procs)
+    item = output.stray_hair_preview
+    assert "Changed" in item["status"]
+    assert item["before"].dtype == np.uint8
+    np.testing.assert_array_equal(item["before"], canvas)
+    assert item["after"].mean() < 250  # unit-scale mistakes produce all-white crops
+    assert np.any(item["overlay"] != item["after"])
+    off_ctx = _ctx(0, 60)
+    plain = _process_face_core(canvas.copy(), regions, face, off_ctx, 0, 0, ROI, ROI, person, procs)
+    np.testing.assert_array_equal(output.canvas, plain.canvas)
+    assert plain.stray_hair_preview is None
+
+
+@pytest.mark.parametrize("dispatch", ["single", "process", "thread"])
+def test_stray_preview_reaches_result_through_every_dispatch(dispatch, monkeypatch):
+    import pickle
+    from tests.golden_face_fixture import make_face_context, make_synthetic_face_image
+    from retouch.perf_optimizations import _process_single_face_worker
+    img = make_synthetic_face_image()
+    h, w = img.shape[:2]
+    contexts = [make_face_context(w, h, img)]
+    if dispatch != "single":
+        contexts.append(make_face_context(w, h, img))
+    with RetouchEngine() as engine:
+        if dispatch == "process":
+            def worker_path(payloads, **kwargs):
+                result = [_process_single_face_worker(payload) for payload in payloads]
+                return pickle.loads(pickle.dumps(result))
+            monkeypatch.setattr(engine._face_pool, "process_faces", worker_path)
+        elif dispatch == "thread":
+            monkeypatch.setattr(engine._face_pool, "process_faces", lambda *a, **kw: None)
+        opts = dict(recipe="natural", face_contexts=contexts, flyaway_cleanup=60, slimming=0)
+        plain = engine.process(img, **opts)
+        inspected = engine.process(img, **opts, collect_effect_previews=True)
+        assert inspected.effect_previews["hair_remove_flyaways"]["status"].startswith("Face #0 crop")
+        np.testing.assert_array_equal(inspected, plain)

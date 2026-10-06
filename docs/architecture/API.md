@@ -894,7 +894,10 @@ Performs machine learning over a folder pair. It matches image filenames, filter
 ### Individual effect previews (GUI inspection)
 
 `RetouchEngine.process(..., collect_effect_previews=True)` optionally exposes
-`result.effect_previews` for `body_skin_even` and `neck_tone_match`. Each record
+`result.effect_previews` for `body_skin_even`, `neck_tone_match`,
+`costume_clarity`, and `hair_remove_flyaways` (including its `flyaway_cleanup`
+alias). Stray-hair snapshots show the first detected face's crop (Face #0),
+collected through both process-worker and thread paths. Each record
 contains a plain-language `status` and, when pixels changed, bounded 800 px
 uint8 BGR `before`, `after`, and `overlay` arrays. Snapshots isolate the effect's
 own stage before later grading. Gold overlays mark actual changed pixels,
