@@ -891,6 +891,7 @@ class ProcessingResult(np.ndarray):
         obj.fa02_diagnostics = list(fa02_diagnostics or [])
         obj.qa_provenance = dict(qa_provenance or {})
         obj.p7_diagnostics = dict(p7_diagnostics or {})
+        obj.effect_previews = getattr(params, "_effect_previews", {})
         obj.precision = precision or ProcessingPrecision.from_output(
             np.asarray(image), source_dtype=source_dtype
         )
@@ -917,6 +918,7 @@ class ProcessingResult(np.ndarray):
         self.fa02_diagnostics = getattr(obj, "fa02_diagnostics", [])
         self.qa_provenance = getattr(obj, "qa_provenance", {})
         self.p7_diagnostics = getattr(obj, "p7_diagnostics", {})
+        self.effect_previews = getattr(obj, "effect_previews", {})
         self.precision = getattr(obj, "precision", None)
         self.precision_metadata = getattr(obj, "precision_metadata", {})
 
@@ -1781,6 +1783,7 @@ class RetouchEngine:
         cross_region_skin_mask: Optional[np.ndarray] = None,
         cross_region_protect_mask: Optional[np.ndarray] = None,
         progress_cb: Optional[Callable[[str, dict], None]] = None,
+        collect_effect_previews: bool = False,
         **kwargs: Any,
     ) -> ProcessingResult:
         """Process a single image through the full Retouch pipeline.
@@ -2090,6 +2093,8 @@ class RetouchEngine:
         overrides.update(kwargs)
 
         ctx = build_context(active_recipe, rec, overrides)
+        from .effect_preview import initialize
+        initialize(ctx, collect_effect_previews)
         # Expose whether this render's engine had a face-aware detector
         # available. A zero face count is still distinct from global-only:
         # the detector may have run successfully and found no face.
@@ -4692,10 +4697,14 @@ class RetouchEngine:
                 exclude = np.maximum(squeeze_mask(normalize_mask(exclude)), body_hair)
             else:
                 exclude = body_hair
-        return neck_tone_match(
+        out = neck_tone_match(
             img, faces, acc_skin, strength,
             reference=ref, person_mask=person_mask, exclude_mask=exclude,
         )
+        from .effect_preview import capture
+        capture(ctx, "neck_tone_match", img, out,
+                "Skipped — no suitable neck/chest skin found. Painted faces and unreliable skin samples are left alone.")
+        return out
 
     def _stage_body_skin(
         self,
@@ -4736,6 +4745,8 @@ class RetouchEngine:
             return img
 
         if person_mask is None or person_mask.max() < 0.01:
+            from .effect_preview import skipped
+            skipped(ctx, "body_skin_even", "Skipped — no person mask available to locate body skin.")
             return img
 
         # ------ Build body skin mask ------
@@ -4983,10 +4994,14 @@ class RetouchEngine:
             from .body_skin_even import even_body_skin
             even_mask = self._body_even_mask(img, pm, excluded, body_skin_mask)
             fw = max((float(f.bbox[2]) for f in faces or []), default=0.0)
+            before_even = result
             result = even_body_skin(
                 result, even_mask, ctx.body_skin_even / 100.0,
                 face_width=fw or None,
             )
+            from .effect_preview import capture
+            capture(ctx, "body_skin_even", before_even, result,
+                    "Skipped — no confident natural body skin or colour blotches found.")
 
         # 4. Body whitening (lighten L channel in body skin)
         if ctx.body_whiten > 0:

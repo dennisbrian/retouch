@@ -889,3 +889,16 @@ Performs machine learning over a folder pair. It matches image filenames, filter
 *   **New recipe `xhs_soft_glow`**: the strongest Xiaohongshu preset — full light-sculpting stack (face relight, specular bloom, tonal curve, highlight rolloff, cool/warm split-toning) plus restored micro-texture and organic grain.
 *   **Updated recipes `xiaohongshu` and `xhs_ultrasoft`**: now wire the full light-sculpting stack (`relight`, `specular_bloom`, `tonal_curve_strength`, `highlight_rolloff`, `skin_protect`, split-toning, `micro_restore`, `grain_strength`).
 *   **`relight` resolver fix** (`retouch/engine.py`): the engine now respects `spec.recipe_key` for the `relight` parameter instead of hard-coding the top-level key. Previously, every recipe that set `skin.relight` had its value silently dropped (e.g. `xiaohongshu` and `xhs_ultrasoft` resolved to `relight=0`). The fix is data-driven: any future spec that adds a nested `recipe_key` will Just Work without engine-side changes. As a side benefit, every existing recipe that already set `skin.relight` (`cosplay`, `portrait`, `idol`, `korean_beauty`, `wedding`, `fuji_porcelain`, the Fuji sims) now receives its intended light-sculpting treatment.
+
+
+### Individual effect previews (GUI inspection)
+
+`RetouchEngine.process(..., collect_effect_previews=True)` optionally exposes
+`result.effect_previews` for `body_skin_even` and `neck_tone_match`. Each record
+contains a plain-language `status` and, when pixels changed, bounded 800 px
+uint8 BGR `before`, `after`, and `overlay` arrays. Snapshots isolate the effect's
+own stage before later grading. Gold overlays mark actual changed pixels,
+not a speculative segmentation mask. Collection defaults to off and does not
+change render pixels. The GUI persists snapshots in its request workspace;
+its session state holds paths and statuses, and refuses stale source/settings
+or failed-render evidence. These inspection artifacts are not export images.

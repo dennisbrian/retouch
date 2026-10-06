@@ -222,6 +222,16 @@ body-skin detector can miss parts of a limb, which are then left as shot. The
 older "Body Equalize" slider next to it is a different op (it adds local
 contrast) kept for the recipes that use it.
 
+The **Effect preview** panel below the preview canvas lets you inspect Body
+Skin Evening and Neck Tone Match on the first photo. Raise the effect's slider
+and click **Render Preview**, then select **Affected pixels**, **Before**, or
+**After**. Gold marks pixels that actually changed at that effect's stage;
+before/after isolates that effect before later grading, rather than comparing
+the whole recipe. Images are limited to 800 px. The panel explains when an
+effect is off or skips; changing the photo or settings clears old evidence
+until you render again. Exported photos do not contain the overlay.
+
+
 Skin Warmth (`--skin-warmth 0-100` in the CLI, the "Skin Warmth" slider next
 to Powder Finish in the app, or `skin.warmth` in a recipe, where 0.5 = 50)
 turns natural skin that reads pink or flat toward a warm peach, the tone of
