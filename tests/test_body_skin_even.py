@@ -171,3 +171,47 @@ class TestMaskGrowth:
             img, probs, probs[:, :, 2].copy(), np.ones((H, W), np.float32)
         )
         assert grown[:, 320:].max() < 0.05
+
+
+class TestEngineDispatch:
+    def test_semantic_evening_runs_when_legacy_skin_mask_is_empty(self):
+        from types import SimpleNamespace
+        from retouch.engine import ProcessingContext
+
+        # Cool-lit skin sits outside the legacy warm-hue mask, but is still
+        # confident body skin for the semantic segmenter.
+        img = _bgr(_plant_red(_skin(L=60, a=16, b=-6), _blob(), scale=0.5))
+        mask = np.ones((H, W), np.float32)
+        calls = []
+
+        def segment(work):
+            calls.append(work.shape)
+            probs = np.zeros(work.shape[:2] + (6,), np.float32)
+            probs[..., 2] = 1.0
+            return probs
+
+        engine = RetouchEngine.__new__(RetouchEngine)
+        engine._parser = SimpleNamespace(
+            parse_hair_full_image=lambda image: None, _segment_classes=segment,
+        )
+        result = engine._stage_body_skin(
+            img, ProcessingContext(body_skin_even=100), mask,
+            None, None, None, [], H, W,
+        )
+        assert calls, "semantic body-skin mask was bypassed"
+        assert np.max(np.abs(result - img)) > 0.005
+        expected = even_body_skin(img, mask, 1.0)
+        np.testing.assert_allclose(result, expected, atol=1e-5)
+
+    def test_empty_legacy_mask_still_skips_when_evening_is_off(self):
+        from types import SimpleNamespace
+        from retouch.engine import ProcessingContext
+
+        img = _bgr(_skin(L=60, a=16, b=-6))
+        engine = RetouchEngine.__new__(RetouchEngine)
+        engine._parser = SimpleNamespace(parse_hair_full_image=lambda image: None)
+        result = engine._stage_body_skin(
+            img, ProcessingContext(body_smooth=50), np.ones((H, W), np.float32),
+            None, None, None, [], H, W,
+        )
+        assert result is img

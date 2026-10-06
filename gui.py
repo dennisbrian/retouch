@@ -2194,11 +2194,11 @@ def on_recipe_change(recipe):
 
 def reset_skin_smoothing(recipe_name):
     d = recipe_defaults(recipe_name)
-    return d["smooth"], d["nose_smooth"], d["mid_reduction"], d["texture_opacity"], d["micro_restore"], d["pore_synthesis"], d["blemish"], d["skin_flatten"], d["skin_quantize"]
+    return d["smooth"], d["nose_smooth"], d["mid_reduction"], d["texture_opacity"], d["micro_restore"], d["pore_synthesis"], d["blemish"], d["skin_flatten"], d["skin_quantize"], d["hair_remove_flyaways"]
 
 def reset_skin_tone(recipe_name):
     d = recipe_defaults(recipe_name)
-    return d["whiten"], d["whiten_tone"], d["equalize"], d["shadow_lift"], d["nose_restore"], d["nose_shape"], d["nose_highlight"], d["skin_sss"], d["skin_unify"], d["skin_unify_hue"], d["auto_exposure"], d["white_costume_lift"], d["face_exposure"]
+    return d["whiten"], d["whiten_tone"], d["equalize"], d["shadow_lift"], d["nose_restore"], d["nose_shape"], d["nose_highlight"], d["skin_sss"], d["skin_unify"], d["skin_unify_hue"], d["auto_exposure"], d["white_costume_lift"], d["face_exposure"], d["neck_tone_match"]
 
 def reset_basic_tone(recipe_name):
     d = recipe_defaults(recipe_name)
@@ -2222,7 +2222,7 @@ def reset_face_reshaping(recipe_name):
 
 def reset_structure_effects(recipe_name):
     d = recipe_defaults(recipe_name)
-    return d["hair_enhance"], d["dodge_burn"], d["impact"], d["specular_bloom"], d["specular_bloom_tone"], d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["sharpen"], d["sharpen_radius"], d["glow"], d["skin_glow"], d["mask_feather_mode"], d["vignette"], d["subject_separation"]
+    return d["hair_enhance"], d["dodge_burn"], d["impact"], d["specular_bloom"], d["specular_bloom_tone"], d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["sharpen"], d["sharpen_radius"], d["glow"], d["skin_glow"], d["mask_feather_mode"], d["vignette"], d["subject_separation"], d["purple_fringing"], d["costume_clarity"]
 
 def reset_color_grading(recipe_name):
     d = recipe_defaults(recipe_name)
@@ -5007,7 +5007,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     _track_reset_event(reset_skin_smooth_btn.click(
         fn=reset_skin_smoothing,
         inputs=[recipe],
-        outputs=[smooth, nose_smooth, mid_reduction, texture_opacity, micro_restore, pore_synthesis, blemish, skin_flatten, skin_quantize],
+        outputs=[smooth, nose_smooth, mid_reduction, texture_opacity, micro_restore, pore_synthesis, blemish, skin_flatten, skin_quantize, hair_remove_flyaways],
         queue=False,
         show_progress="hidden",
     ))
@@ -5015,7 +5015,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     _track_reset_event(reset_skin_tone_btn.click(
         fn=reset_skin_tone,
         inputs=[recipe],
-        outputs=[whiten, whiten_tone, equalize, shadow_lift, nose_restore, nose_shape, nose_highlight, skin_sss, skin_unify, skin_unify_hue, auto_exposure, white_costume_lift, face_exposure],
+        outputs=[whiten, whiten_tone, equalize, shadow_lift, nose_restore, nose_shape, nose_highlight, skin_sss, skin_unify, skin_unify_hue, auto_exposure, white_costume_lift, face_exposure, neck_tone_match],
         queue=False,
         show_progress="hidden",
     ))
@@ -5063,7 +5063,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     _track_reset_event(reset_structure_effects_btn.click(
         fn=reset_structure_effects,
         inputs=[recipe],
-        outputs=[hair_enhance, dodge_burn, impact, specular_bloom, specular_bloom_tone, bloom, bloom_threshold, bloom_softness, sharpen, sharpen_radius, glow, skin_glow, mask_feather_mode, vignette, subject_separation],
+        outputs=[hair_enhance, dodge_burn, impact, specular_bloom, specular_bloom_tone, bloom, bloom_threshold, bloom_softness, sharpen, sharpen_radius, glow, skin_glow, mask_feather_mode, vignette, subject_separation, purple_fringing, costume_clarity],
         queue=False,
         show_progress="hidden",
     ))

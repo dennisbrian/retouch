@@ -825,10 +825,10 @@ class TestGetEngine:
 class TestResetFunctions:
     """Tests for the gui.reset_*() section-reset helpers."""
 
-    def test_reset_skin_smoothing_returns_nine_values(self):
+    def test_reset_skin_smoothing_returns_ten_values(self):
         result = gui.reset_skin_smoothing("natural")
         assert isinstance(result, tuple)
-        assert len(result) == 9
+        assert len(result) == 10
 
     def test_reset_skin_smoothing_values_match_natural_recipe(self):
         d = gui.recipe_defaults("natural")
@@ -836,12 +836,12 @@ class TestResetFunctions:
         assert result == (d["smooth"], d["nose_smooth"], d["mid_reduction"],
                           d["texture_opacity"], d["micro_restore"],
                           d["pore_synthesis"], d["blemish"],
-                          d["skin_flatten"], d["skin_quantize"])
+                          d["skin_flatten"], d["skin_quantize"], d["hair_remove_flyaways"])
 
-    def test_reset_skin_tone_returns_seven_values(self):
+    def test_reset_skin_tone_returns_fourteen_values(self):
         result = gui.reset_skin_tone("natural")
         assert isinstance(result, tuple)
-        assert len(result) == 13
+        assert len(result) == 14
 
     def test_reset_skin_tone_values_match_natural_recipe(self):
         d = gui.recipe_defaults("natural")
@@ -849,7 +849,7 @@ class TestResetFunctions:
         assert result == (d["whiten"], d["whiten_tone"], d["equalize"],
                           d["shadow_lift"], d["nose_restore"], d["nose_shape"], d["nose_highlight"], d["skin_sss"],
                           d["skin_unify"], d["skin_unify_hue"], d["auto_exposure"],
-                          d["white_costume_lift"], d["face_exposure"])
+                          d["white_costume_lift"], d["face_exposure"], d["neck_tone_match"])
 
     def test_reset_basic_tone_returns_five_values(self):
         result = gui.reset_basic_tone("natural")
@@ -883,10 +883,22 @@ class TestResetFunctions:
         d = gui.recipe_defaults("natural")
         assert result == d["slimming"]
 
-    def test_reset_structure_effects_returns_fifteen_values(self):
+    def test_reset_structure_effects_returns_seventeen_values(self):
         result = gui.reset_structure_effects("natural")
         assert isinstance(result, tuple)
-        assert len(result) == 15
+        assert len(result) == 17
+
+    @pytest.mark.parametrize("handler, keys", [
+        ("reset_skin_smoothing", ["hair_remove_flyaways"]),
+        ("reset_skin_tone", ["neck_tone_match"]),
+        ("reset_structure_effects", ["purple_fringing", "costume_clarity"]),
+    ])
+    def test_new_sliders_reset_to_recipe_values(self, monkeypatch, handler, keys):
+        defaults = gui.recipe_defaults("natural")
+        defaults.update({key: 37 + i for i, key in enumerate(keys)})
+        monkeypatch.setattr(gui, "recipe_defaults", lambda name: defaults)
+        result = getattr(gui, handler)("natural")
+        assert result[-len(keys):] == tuple(defaults[key] for key in keys)
 
     def test_reset_color_grading_returns_two_values(self):
         result = gui.reset_color_grading("natural")

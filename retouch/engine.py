@@ -4885,7 +4885,9 @@ class RetouchEngine:
         k_feather = max(5, int(person_bbox_size / 40.0) | 1)
         body_skin_mask = feather_mask(body_skin_candidate, radius=k_feather, sigma=k_feather / 2.0)
 
-        if body_skin_mask.max() < 0.01:
+        # Body Skin Evening builds its own semantic mask; the legacy colour
+        # mask can be empty on valid cool-lit or low-chroma skin.
+        if body_skin_mask.max() < 0.01 and ctx.body_skin_even <= 0:
             return img
 
         # ------ Apply body skin operations ------

@@ -317,3 +317,28 @@ def test_real_models_follow_the_subject_past_a_growing_second_face():
     for i, face in enumerate(out):
         assert abs(face.bbox[0] - (first[0] + 8 * i)) <= 12  # follows the 8 px/frame pan
         assert face.bbox[0] + face.bbox[2] < 700  # never the face on the right
+
+
+@pytest.mark.parametrize("box", [A, (0.0, 0.0, 0.2, 0.4)])
+def test_crop_depth_is_normalized_to_frame_width(box):
+    class DepthBackend(FakeBackend):
+        def find_faces(self, image):
+            faces = super().find_faces(image)
+            for face in faces:
+                face[:, 2] = 0.1
+            return faces
+
+        def landmark_video(self, image, timestamp):
+            faces = super().landmark_video(image, timestamp)
+            crop_width = crop_around(self.tracker._last_box, *self.size)[2]
+            for face in faces:
+                # The same physical depth, expressed in crop-width units.
+                face[:, 2] = 0.1 * self.size[0] / crop_width
+            return faces
+
+    backend = DepthBackend({0: [box]}, {1: [box]})
+    with _tracker(backend) as tracker:
+        detected = tracker.update(_frame(), 0.0)
+        tracked = tracker.update(_frame(), 1 / 30)
+    assert tracked.via == "video"
+    np.testing.assert_allclose(tracked.landmarks[:, 2], detected.landmarks[:, 2], atol=1e-6)

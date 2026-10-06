@@ -289,6 +289,8 @@ class FaceTracker:
                 # Normalized to the crop, which was resized uniformly: map back via its size.
                 mapped[:, 0] = (x + mapped[:, 0] * w) / width
                 mapped[:, 1] = (y + mapped[:, 1] * h) / height
+                # MediaPipe depth uses the same normalized scale as x.
+                mapped[:, 2] *= w / width
             faces.append(mapped)
         return faces
 
