@@ -260,6 +260,18 @@ the face (the crown, bangs and sides), not the far ends of a waist-length
 wig. The earlier version of this setting was hidden and did almost nothing
 on real wigs.
 
+Defringe (`--purple-fringing 0-100` in the CLI, the "Defringe" slider under
+Structure & Effects in the app, or `finish.purple_fringing` in a recipe,
+where 0.5 = 50) removes the purple, blue, cyan or green edge colour a lens
+adds where a dark edge meets something very bright: a wig, glove or costume
+edge against a blown window, or the rim of softbox bokeh. It only looks at
+edges next to the photo's own brightest areas and gives each fringe the
+colour of the object beside it, so real purple, blue and green costume parts
+keep their colour; skin, lips, red and gold never change. It is off by
+default and safe at 100. A thin purple or blue strap lying wholly inside a
+fringe band can lose some of its colour at its edges. The earlier version of
+this setting was hidden and only caught magenta fringes.
+
 Wig Lace Blend (`--cosplay-wig-lace-blend 0-100` in the CLI, the "Wig Lace
 Blend" slider under Cosplay & Body > Cosplay Moat in the app, or
 `cosplay.wig_lace_blend` in a recipe, where 0.5 = 50) softens the hard line

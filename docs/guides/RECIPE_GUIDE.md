@@ -484,7 +484,7 @@ and 0–360 for split-toning hue).
 | Heal Engine (`heal_engine`) | `frequency.heal_engine` | direct |
 | Mark Policy | `mark_policy` | direct |
 | Micro Grain (`micro_grain`) | `finish.micro_grain` | ÷ 100 |
-| Purple Fringing (`purple_fringing`) | `finish.purple_fringing` | ÷ 100 |
+| Defringe (`purple_fringing`) | `finish.purple_fringing` | ÷ 100 |
 | Split Toning (`split_toning`) | `finish.split_toning` | ÷ 100 |
 | Light Wrap | `background.light_wrap` | direct |
 | Lip Enhance | `lips.gloss` | ÷ 100 |

@@ -1091,6 +1091,11 @@ def remove_purple_fringing(
 ) -> np.ndarray:
     """Detect and desaturate lateral chromatic aberration (purple fringing).
 
+    Superseded in the engine by :func:`retouch.defringe.remove_fringes`
+    (2026-10-04): this version only acts on magenta-purple pixels whose own
+    3x3 gradient passes a fixed level, so it removed little on real photos.
+    Kept for callers of the old API.
+
     Identifies purple/violet chroma spikes immediately adjacent to high-contrast
     luminance edges (e.g. backlit windows, dark wigs against bright backgrounds).
     Non-edge pixels (uniform purple fabrics, irises) are strictly protected by the

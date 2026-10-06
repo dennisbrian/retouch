@@ -254,6 +254,7 @@ per `AGENTS.md`.
 | `regions.py` | Region-mask geometry helpers. |
 | `hairwork.py` | Hair retouching helpers (distinct from `hair.py` enhancement). |
 | `wig_shine.py` | Wig Shine (`hair_deglare`): mattes synthetic-wig gloss into the wig colour; called via `hairwork.deglare_wig` in the per-face hair stage. |
+| `defringe.py` | Defringe (`purple_fringing`): removes purple/blue/cyan/green lens fringes along bright edges, borrowing colour from the object beside the fringe; whole frame, run in `_stage_finish`. |
 | `costume_clarity.py` | Costume Clarity (`costume_clarity`): clarity and fine texture on costume and props only, skin, paint, hair and face left alone; global stage `CostumeClarityStage` after tone, before grading. |
 | `bloodshot_eyes.py` | Bloodshot Eye Whites (`eye_sclera_vessel_remove`): calms red, veiny eye whites and lifts them slightly, leaving iris, contacts, lashes and catchlights alone; called per eye from `EyeEnhancer.enhance`. |
 | `neck_tone_match.py` | Neck Tone Match (`neck_tone_match`): neck, chest and shoulder skin follow the brightness and colour change the face edits made (chin shadow kept, painted faces skipped); global stage `NeckToneMatchStage` after the body-skin stages. |

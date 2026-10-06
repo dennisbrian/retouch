@@ -5931,14 +5931,11 @@ class RetouchEngine:
             else:
                 result = self._grader.add_impact_finish(result, ctx.impact, subject_mask=person_mask)
 
-        # AB4: Purple Fringing Removal
+        # AB4: Defringe (colour fringes along bright edges; retouch/defringe.py).
+        # Float path stays float: pixels away from the fringes are untouched.
         if getattr(ctx, "purple_fringing", 0.0) > 0:
-            from .utils import remove_purple_fringing
-            if is_float:
-                res_u8 = remove_purple_fringing(np.clip(result * 255.0, 0, 255).astype(np.uint8), strength=float(ctx.purple_fringing) / 100.0)
-                result = res_u8.astype(np.float32) / 255.0
-            else:
-                result = remove_purple_fringing(result, strength=float(ctx.purple_fringing) / 100.0)
+            from .defringe import remove_fringes
+            result = remove_fringes(result, float(ctx.purple_fringing))
 
         # AA8: Micro Grain Synthesis
         if getattr(ctx, "micro_grain", 0.0) > 0:

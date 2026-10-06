@@ -663,7 +663,7 @@ The registry also accepts these keyword overrides through `process(..., **kwargs
 * `heal_engine`
 * `mark_policy`
 * `micro_grain`
-* `purple_fringing`
+* `purple_fringing`: Defringe (GUI slider under Structure & Effects). Removes purple/blue/cyan/green lens fringes along edges next to the photo's brightest areas, replacing their colour with the neighbouring object's (`retouch/defringe.py`, run in `_stage_finish`).
 * `split_toning`
 
 For simple scripts or backward-compatibility, you can use the `retouch` module-level wrapper. It handles the instantiation and teardown of the engine automatically.
