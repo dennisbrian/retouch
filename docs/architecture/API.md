@@ -132,6 +132,7 @@ def process(
     eye_sclera_vessel_remove: Optional[int] = None,
     backdrop_cleanup: Optional[int] = None,
     fabric_wrinkle_smooth: Optional[float] = None,
+    costume_clarity: Optional[int] = None,
     eye_iris_saturate: Optional[int] = None,
     eye_iris_hue_shift: Optional[int] = None,
     eye_iris_brightness: Optional[int] = None,
@@ -378,6 +379,7 @@ Passing an explicit value override to these parameters takes precedence over the
 *   **`skin_sss`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.sss`): Adds screen-space subsurface scattering for a translucent game-character skin finish.
 *   **`mask_feather_mode`** (Type: `str`, Default: `gaussian`, Recipe key: `mask.feather_mode`): Selects `gaussian` mask feathering or `guided` edge-aware refinement for fine hair, wig, and lash boundaries.
 *   **`fabric_wrinkle_smooth`** (Type: `float`, Default: `0.0`, Range: `0` to `100`, Recipe key: `fabric.wrinkle_smooth`): Adjusts the fabric wrinkle smooth parameter.
+*   **`costume_clarity`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `fabric.costume_clarity`): Costume Clarity. Adds local contrast and fine texture to the costume and props only (`retouch/costume_clarity.py`, global stage after tone, before grading). The costume is the person minus skin (segmenter skin classes where the colour could be this person's skin), hair and wig masks, the face pipeline's masks, face ellipses and painted skin; skin-coloured pixels inside it (skin through fishnet or lace) are left alone. Two L*-only bands scaled to the face width (fine texture, and clarity over an edge-preserving guided filter), each soft-limited at a few of its own robust spreads and cored below the frame's own noise level. Off by default.
 *   **`blush`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `blush`): Adjusts the blush parameter.
 *   **`hair_enhance`** (Type: `int`, Default: `5`, Range: `0` to `100`, Recipe key: `hair.shine`): Adjusts the hair enhance parameter.
 *   **`hair_deglare`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `hair.deglare`): Wig Shine. Softens synthetic-wig gloss into the wig's own colour (`retouch/wig_shine.py`, called from `hairwork.deglare_wig` in the per-face hair stage). The gloss is the strand-averaged excess of L* over a local two-pass baseline of the wig (0.25 x face width), gated in units of that excess's own spread with a floor of twice the fine strand spread, and removed as equal linear light from B, G and R (capped by the darkest channel) so the fibre colour comes back. Pixels much less saturated than the fibre around them (white bows, lace), the silhouette where it meets a brighter backdrop, low strand-flow coherence (fuzz, partings) and eyebrows are left alone. Off by default.

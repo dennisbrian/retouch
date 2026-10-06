@@ -1133,6 +1133,19 @@ _FACE_FEATURE_PARAMS = [
         max_val=100,
     ),
     ParamSpec(
+        # Costume Clarity: local contrast + fine texture on costume and props
+        # only (retouch/costume_clarity.py); skin, painted skin, hair and the
+        # face are left alone. Opt-in, 0 = off.
+        name="costume_clarity",
+        cli_flag="costume-clarity",
+        cli_type=int,
+        default=0,
+        recipe_key="fabric.costume_clarity",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
         name="eye_iris_saturate",
         cli_flag="eye-iris-saturate",
         cli_type=int,

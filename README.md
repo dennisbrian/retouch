@@ -248,6 +248,17 @@ the face (the crown, bangs and sides), not the far ends of a waist-length
 wig. The earlier version of this setting was hidden and did almost nothing
 on real wigs.
 
+Costume Clarity (`--costume-clarity 0-100` in the CLI, the "Costume Clarity"
+slider under Structure & Effects in the app, or `fabric.costume_clarity` in a
+recipe, where 0.5 = 50) brings out fabric weave, lace, fishnet, seams, vinyl
+and armour detail on the costume and props, without touching the skin. Skin,
+face paint, hair, wigs and the face are left exactly as they are, and skin
+seen through fishnet or lace keeps its smooth texture. It lifts real detail,
+not sensor noise, and leaves strong edges and shiny highlights from blowing
+out. It is off by default; start near 50. A beige or tan costume part the
+same colour as the wearer's skin may be treated as skin and left alone, and a
+white costume part right next to white face paint can be left out too.
+
 Keep Nose Shape (`--nose-shape 0-100` in the CLI, the "Keep Nose Shape" slider
 under Skin Tone in the app, or `skin.nose_shape` in a recipe, where 0.5 = 50)
 puts back the broad nose shading that skin smoothing flattens, so the nose

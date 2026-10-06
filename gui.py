@@ -4248,6 +4248,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 reset_structure_effects_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                                 hair_enhance = gr.Slider(0, 100, 5, step=1, label="Hair Shine", info="Boost highlight reflections and depth in hair strands")
                                 hair_deglare = gr.Slider(0, 100, 0, step=1, label="Wig Shine", info="Soften the plastic shine synthetic wigs pick up under flash or con lighting, back into the wig's own colour. Keeps the strands and the wig's lit side. Off by default; start near 50.")
+                                costume_clarity = gr.Slider(0, 100, 0, step=1, label="Costume Clarity", info="Brings out fabric weave, lace, seams, armour and prop detail on the costume only. Skin, face paint, hair and wigs stay exactly as they are. Off by default; start near 50.")
                                 dodge_burn = gr.Slider(0, 100, 0, step=1, label="Dodge & Burn", info="Sculpt face structure with local highlight/shadow contouring")
                                 impact = gr.Slider(0, 100, 0, step=1, label="Global Impact Finish", info="Final punch: combined clarity, sharpening, and micro-contrast boost")
                                 specular_bloom = gr.Slider(0, 100, 0, step=1, label="Specular Bloom", info="Dreamy bloom glow applied specifically to skin highlight zones")
@@ -5627,6 +5628,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "eye_gate": eye_gate,
         "backdrop_cleanup": _backdrop_cleanup_state,
         "fabric_wrinkle_smooth": _fabric_wrinkle_smooth_state,
+        "costume_clarity": costume_clarity,
         "eye_iris_saturate": eye_iris_saturate,
         "eye_iris_hue_shift": eye_iris_hue_shift,
         "eye_iris_brightness": eye_iris_brightness,
