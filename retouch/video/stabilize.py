@@ -17,14 +17,17 @@ every frame of the clip, what the retouch stage needs to keep edits steady:
   the retouch to apply) fades out before the face is lost and back in after
   it returns, instead of popping.
 * **Covered parts.** The tracker keeps placing nose, lips and chin landmarks
-  on a ball held in front of the face, at full confidence (042, frames
-  226-327). Each landmark region's colour and texture are compared with the
+  on a ball held in front of the face, at full confidence (042: the ball
+  touches the chin from frame 184 to 325). Each landmark region's colour and texture are compared with the
   same region over the rest of the shot, after removing the change every
   region shares on that frame (exposure, white balance, shade). A region
   that changes on its own, beyond its own usual spread, is marked covered,
   with hysteresis, and its ``visibility`` fades to 0 so later slices can
   skip the edits that would land on the occluder. Every measure is relative
   to the same face in the same clip, so skin tone and exposure cancel.
+  A region is only flagged once roughly half of it is covered (it uses the
+  region's median), and an eye region also drops when the eye closes,
+  squints or falls into shadow, which is when eye edits should stop anyway.
 
 Usage::
 
@@ -95,11 +98,14 @@ class StabilizeParams:
     cut_jump: float = 1.0
     # Covered parts: deviation from the region's own normal in units of its
     # spread over the shot. Covered above z_on, clear again below z_off.
-    z_on: float = 6.0
-    z_off: float = 3.0
+    # Set on 042 against a by-eye frame log (lips, chin, both jaws: 0% of the
+    # edit left on covered frames; half-covered nose/cheek: 21-26% left on)
+    # with DSCF4322 as the no-cover control (0 frames flagged).
+    z_on: float = 8.0
+    z_off: float = 4.0
     # Spread floors: colour difference (CIELab, L 0-100) and log texture ratio.
     colour_floor: float = 1.5
-    texture_floor: float = 0.08
+    texture_floor: float = 0.15
     # Covered spans shorter than this are ignored (a one-frame landmark blip);
     # the rest are widened by cover_margin_s each side and faded over fade_s.
     min_cover_s: float = 0.05
