@@ -17,14 +17,17 @@ every frame of the clip, what the retouch stage needs to keep edits steady:
   the retouch to apply) fades out before the face is lost and back in after
   it returns, instead of popping.
 * **Covered parts.** The tracker keeps placing nose, lips and chin landmarks
-  on a ball held in front of the face, at full confidence (042, frames
-  226-327). Each landmark region's colour and texture are compared with the
+  on a ball held in front of the face, at full confidence (042: the ball
+  touches the chin from frame 184 to 325). Each landmark region's colour and texture are compared with the
   same region over the rest of the shot, after removing the change every
   region shares on that frame (exposure, white balance, shade). A region
   that changes on its own, beyond its own usual spread, is marked covered,
   with hysteresis, and its ``visibility`` fades to 0 so later slices can
   skip the edits that would land on the occluder. Every measure is relative
   to the same face in the same clip, so skin tone and exposure cancel.
+  A region is only flagged once roughly half of it is covered (it uses the
+  region's median), and an eye region also drops when the eye closes,
+  squints or falls into shadow, which is when eye edits should stop anyway.
 
 Usage::
 
@@ -95,22 +98,29 @@ class StabilizeParams:
     cut_jump: float = 1.0
     # Covered parts: deviation from the region's own normal in units of its
     # spread over the shot. Covered above z_on, clear again below z_off.
-    z_on: float = 6.0
-    z_off: float = 3.0
+    # Set on 042 against a by-eye frame log (lips, chin, both jaws: 0% of the
+    # edit left on covered frames; half-covered nose/cheek: 21-26% left on)
+    # with DSCF4322 as the no-cover control (0 frames flagged).
+    z_on: float = 8.0
+    z_off: float = 4.0
     # Spread floors: colour difference (CIELab, L 0-100) and log texture ratio.
     colour_floor: float = 1.5
-    texture_floor: float = 0.08
+    texture_floor: float = 0.15
     # Covered spans shorter than this are ignored (a one-frame landmark blip);
-    # the rest are widened by cover_margin_s each side and faded over fade_s.
+    # clear spans between two covered ones too short to fade fully back in
+    # (2 x (margin + fade)) are filled; the rest are widened by cover_margin_s each side and faded over
+    # cover_fade_s. On 042 this starts and ends the chin/lips fade within
+    # 3-6 frames of the ball touching and leaving (0.1/0.2: 9-12 frames).
     min_cover_s: float = 0.05
-    cover_margin_s: float = 0.1
+    cover_margin_s: float = 0.05
+    cover_fade_s: float = 0.1
 
     def __post_init__(self):
         for field in dataclasses.fields(self):
             value = getattr(self, field.name)
             if not math.isfinite(value) or value < 0:
                 raise ValueError(f"{field.name} must be finite and nonnegative")
-        for name in ("min_cutoff", "d_cutoff", "fade_s", "cut_ratio", "cut_window_s", "colour_floor", "texture_floor"):
+        for name in ("min_cutoff", "d_cutoff", "fade_s", "cover_fade_s", "cut_ratio", "cut_window_s", "colour_floor", "texture_floor"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive")
         if self.z_off > self.z_on:
@@ -479,7 +489,11 @@ def stabilize(
             for first, last in _runs(np.flatnonzero(covered)):
                 if local_t[last] - local_t[first] < params.min_cover_s:
                     covered[first : last + 1] = False
-            visibility[:, r] = 1.0 - _ramp(covered, local_t, params.cover_margin_s, params.fade_s)
+            spans = _runs(np.flatnonzero(covered))
+            for (_, end), (start, _) in zip(spans, spans[1:]):
+                if local_t[start] - local_t[end] <= 2 * (params.cover_margin_s + params.cover_fade_s) + 1e-9:
+                    covered[end:start] = True
+            visibility[:, r] = 1.0 - _ramp(covered, local_t, params.cover_margin_s, params.cover_fade_s)
 
         pos = {int(i): k for k, i in enumerate(idx)}
         for run in runs:
@@ -652,7 +666,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         from .media import VideoWriter
 
         args.overlay.parent.mkdir(parents=True, exist_ok=True)
-        with VideoWriter(args.overlay, args.video) as writer:
+        with VideoWriter(args.overlay, args.video, audio=False) as writer:
             for frame in read_frames(args.video):
                 writer.write(frame, _draw_overlay(frame.image, by_frame.get(frame.index), stable_by.get(frame.index)))
         print(f"wrote {args.overlay}")
