@@ -367,6 +367,7 @@ class ProcessingContext:
     powder_finish: float = 0.0
     highlight_repair: float = 0.0
     skin_warmth: float = 0.0
+    neck_tone_match: float = 0.0
     nose_highlight: float = 0.0
     skin_sss: float = 0.0
     freckle_removal: float = 0.0
@@ -381,6 +382,7 @@ class ProcessingContext:
     eye_sclera_vessel_remove: float = 0.0
     backdrop_cleanup: float = 0.0
     fabric_wrinkle_smooth: float = 0.0
+    costume_clarity: float = 0.0
     dark_circles: float = 0.0
     undereye_darken_removal: float = 0.0
     undereye_puffiness_reduction: float = 0.0
@@ -1524,6 +1526,7 @@ class RetouchEngine:
         eye_iris_brightness: Optional[float] = None,
         backdrop_cleanup: Optional[float] = None,
         fabric_wrinkle_smooth: Optional[float] = None,
+        costume_clarity: Optional[float] = None,
         dark_circles: Optional[float] = None,
         undereye_darken_removal: Optional[float] = None,
         undereye_puffiness_reduction: Optional[float] = None,
@@ -1649,6 +1652,7 @@ class RetouchEngine:
         powder_finish: Optional[float] = None,
         highlight_repair: Optional[float] = None,
         skin_warmth: Optional[float] = None,
+        neck_tone_match: Optional[float] = None,
         nose_highlight: Optional[float] = None,
         skin_sss: Optional[float] = None,
         regional_modulation: Optional[float] = None,
@@ -1853,6 +1857,7 @@ class RetouchEngine:
             "eye_iris_brightness": eye_iris_brightness,
             "backdrop_cleanup": backdrop_cleanup,
             "fabric_wrinkle_smooth": fabric_wrinkle_smooth,
+            "costume_clarity": costume_clarity,
             "dark_circles": dark_circles,
             "undereye_darken_removal": undereye_darken_removal,
             "undereye_puffiness_reduction": undereye_puffiness_reduction,
@@ -1970,6 +1975,7 @@ class RetouchEngine:
             "powder_finish": powder_finish,
             "highlight_repair": highlight_repair,
             "skin_warmth": skin_warmth,
+            "neck_tone_match": neck_tone_match,
             "nose_highlight": nose_highlight,
             "skin_sss": skin_sss,
             "lut": lut,
@@ -2505,6 +2511,14 @@ class RetouchEngine:
                     interpolation=cv2.INTER_LINEAR,
                 ).astype(np.float32, copy=False)
 
+            neck_ref = getattr(ctx, "_neck_ref", None)
+            if neck_ref is not None and neck_ref.shape[:2] != (h, w):
+                ctx._neck_ref = cv2.resize(
+                    neck_ref,
+                    (w, h),
+                    interpolation=cv2.INTER_LINEAR,
+                ).astype(np.float32, copy=False)
+
             paint_ref = getattr(ctx, "_paint_ref", None)
             if paint_ref is not None and paint_ref.shape[:2] != (h, w):
                 ctx._paint_ref = cv2.resize(
@@ -2789,6 +2803,13 @@ class RetouchEngine:
                 np.clip(result_native.astype(np.float32), 0.0, 255.0)
                 * (1.0 / 255.0)
             )
+        if getattr(ctx, "neck_tone_match", 0) > 0:
+            # Neck Tone Match: pre-face-edit reference, so the change the
+            # face edits make can be measured (retouch/neck_tone_match.py).
+            ctx._neck_ref = (
+                np.clip(result_native.astype(np.float32), 0.0, 255.0)
+                * (1.0 / 255.0)
+            )
         if ctx.body_paint > 0.0:
             # Body paint: pre-face-edit reference whose paint colour is
             # restored after the skin edits (see retouch/body_paint.py).
@@ -3045,6 +3066,13 @@ class RetouchEngine:
             # Capture the post-reshape, pre-face-edit reference so geometry
             # changes are not mistaken for a tone edit to propagate.
             ctx._p7_source = (
+                np.clip(result.astype(np.float32), 0.0, 255.0)
+                * (1.0 / 255.0)
+            )
+        if getattr(ctx, "neck_tone_match", 0) > 0:
+            # Neck Tone Match: pre-face-edit reference, so the change the
+            # face edits make can be measured (retouch/neck_tone_match.py).
+            ctx._neck_ref = (
                 np.clip(result.astype(np.float32), 0.0, 255.0)
                 * (1.0 / 255.0)
             )
@@ -4620,6 +4648,52 @@ class RetouchEngine:
         ctx._p7_diagnostics = result.to_dict()
         return result.image
 
+    def _stage_neck_tone_match(
+        self,
+        img: np.ndarray,
+        ctx: ProcessingContext,
+        person_mask: Optional[np.ndarray],
+        acc_skin: Optional[np.ndarray],
+        acc_hair_only: Optional[np.ndarray],
+        faces: Optional[list],
+    ) -> np.ndarray:
+        """Neck Tone Match: neck and chest skin follow the retouched face.
+
+        Runs after the body-skin stages, before body paint and the global
+        tone/grade (which then move face and neck together). Measures the
+        face edits against ``ctx._neck_ref``, the frame captured before
+        them. See retouch/neck_tone_match.py.
+        """
+        strength = float(getattr(ctx, "neck_tone_match", 0.0) or 0.0)
+        if strength <= 0 or not faces or acc_skin is None:
+            return img
+        from .neck_tone_match import neck_tone_match
+
+        ref = getattr(ctx, "_neck_ref", None)
+        if ref is not None and ref.shape != img.shape:
+            ref = None
+        # Hair over the neck and chest (long wigs) is excluded with the
+        # whole-frame hair mask; the face-crop hair mask only covers the head.
+        exclude = acc_hair_only
+        try:
+            src = ref if ref is not None else img
+            body_hair = self._parser.parse_hair_full_image(
+                np.clip(src * 255.0, 0, 255).astype(np.uint8)
+            )
+        except Exception as exc:  # model trouble: fall back to the crop mask
+            logger.warning("neck_tone_match: full-frame hair mask failed: %s", exc)
+            body_hair = None
+        if body_hair is not None:
+            body_hair = squeeze_mask(normalize_mask(body_hair))
+            if exclude is not None:
+                exclude = np.maximum(squeeze_mask(normalize_mask(exclude)), body_hair)
+            else:
+                exclude = body_hair
+        return neck_tone_match(
+            img, faces, acc_skin, strength,
+            reference=ref, person_mask=person_mask, exclude_mask=exclude,
+        )
+
     def _stage_body_skin(
         self,
         img: np.ndarray,
@@ -5041,6 +5115,51 @@ class RetouchEngine:
             ref=getattr(ctx, "_prosthetic_ref", None),
         )
         ctx._runtime_diagnostics["prosthetic_blend"] = diag
+        return out
+
+    def _stage_costume_clarity(
+        self,
+        img: np.ndarray,
+        ctx: ProcessingContext,
+        faces,
+        person_mask: Optional[np.ndarray],
+        acc_skin: Optional[np.ndarray],
+        acc_skin_hair: Optional[np.ndarray] = None,
+        acc_lips: Optional[np.ndarray] = None,
+        acc_hair_only: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """Costume Clarity: clarity and texture on costume and props only.
+
+        Opt-in (``ctx.costume_clarity`` 0-100). Skin, painted skin, hair and
+        the face are left alone; see ``retouch/costume_clarity.py``.
+        """
+        from .costume_clarity import apply_costume_clarity
+
+        _emit_stage("costume_clarity")
+        h_img, w_img = img.shape[:2]
+        boxes = []
+        for face in faces or []:
+            x, y, fw, fh = (int(v) for v in face.bbox)
+            if fw > 0 and fh > 0 and x < w_img and y < h_img:
+                boxes.append((max(0, x), max(0, y), fw, fh))
+        protect = None
+        for m in (acc_skin, acc_skin_hair, acc_lips, acc_hair_only):
+            if m is not None and m.shape[:2] == (h_img, w_img):
+                m2 = squeeze_mask(normalize_mask(m))
+                protect = m2 if protect is None else np.maximum(protect, m2)
+        skin = squeeze_mask(normalize_mask(acc_skin)) if acc_skin is not None else None
+        pm = squeeze_mask(normalize_mask(person_mask)) if person_mask is not None else None
+        out, diag = apply_costume_clarity(
+            img,
+            float(ctx.costume_clarity) / 100.0,
+            boxes,
+            segment_classes=self._parser._segment_classes,
+            hair_full=self._parser.parse_hair_full_image,
+            person_mask=pm,
+            protect=protect,
+            face_skin=skin,
+        )
+        ctx._runtime_diagnostics["costume_clarity"] = diag
         return out
 
     def _stage_cosplay_moat(

@@ -204,6 +204,22 @@ most darker skin, is left as it is or changes only a little. It is off by
 default; start near 50. A beige or pink costume part the same colour as the
 skin warms with it. When the face is painted, body skin is left alone too.
 
+Neck Tone Match (`--neck-tone-match 0-100` in the CLI, the "Neck Tone Match"
+slider next to Skin Warmth in the app, or `skin.neck_tone_match` in a recipe,
+where 0.5 = 50) keeps the neck and chest the same tone as the retouched face.
+It measures what the face edits (whitening, Face Polish, exposure, a recipe's
+face look) did to the face, relative to the skin below it, and makes the same
+brightness and colour change on the neck, chest and shoulders, plus part of
+any colour gap the photo already had (foundation that doesn't match the neck).
+Brightness moves as one linear-light gain, so the shadow under the chin stays.
+Only skin of the same person in the neck/chest colour moves: wigs, collars,
+ribbons and costume parts in other colours stay out, and so does a face in
+white, grey, blue or green paint (the neck is not dragged toward the paint)
+or a body-painted neck. It is off by default; start near 50. Pale fabric close
+to the skin's colour, right next to it, can pick up a little of the change.
+With the slider at 0 the older automatic neck pass still runs whenever
+whitening or tone evening is on; with the slider on, this replaces it.
+
 Blown Highlight Repair (`--highlight-repair 0-100` in the CLI, the "Blown
 Highlight Repair" slider next to Powder Finish in the app, or
 `skin.highlight_repair` in a recipe, where 0.6 = 60) rebuilds skin that a
@@ -246,6 +262,17 @@ tested on a public studio portrait and on a hard wig front with a lace band
 planted on it (simulated, also with darker and lighter skin), since none of
 the cosplay photos at hand shows a hairline. The earlier version of this
 setting changed nothing on real photos.
+
+Costume Clarity (`--costume-clarity 0-100` in the CLI, the "Costume Clarity"
+slider under Structure & Effects in the app, or `fabric.costume_clarity` in a
+recipe, where 0.5 = 50) brings out fabric weave, lace, fishnet, seams, vinyl
+and armour detail on the costume and props, without touching the skin. Skin,
+face paint, hair, wigs and the face are left exactly as they are, and skin
+seen through fishnet or lace keeps its smooth texture. It lifts real detail,
+not sensor noise, and leaves strong edges and shiny highlights from blowing
+out. It is off by default; start near 50. A beige or tan costume part the
+same colour as the wearer's skin may be treated as skin and left alone, and a
+white costume part right next to white face paint can be left out too.
 
 Keep Nose Shape (`--nose-shape 0-100` in the CLI, the "Keep Nose Shape" slider
 under Skin Tone in the app, or `skin.nose_shape` in a recipe, where 0.5 = 50)

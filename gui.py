@@ -4168,6 +4168,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 powder_finish = gr.Slider(0, 100, 0, step=1, label="Powder Finish", info="Soft, powdered skin: evens shine and sheen into the skin's own colour instead of greying it, and works on white face paint too. Keeps the face's overall brightness. Off by default; start near 50.")
                                 highlight_repair = gr.Slider(0, 100, 0, step=1, label="Blown Highlight Repair", info="Rebuilds skin that flash or sun blew out to pure white (forehead, nose, cheekbones): brings back skin colour and texture from the skin around it and rolls the spot below white. Leaves white face paint, eyes, lips and props alone. Off by default; start near 60.")
                                 skin_warmth = gr.Slider(0, 100, 0, step=1, label="Skin Warmth", info="Moves natural skin toward a warm peach, face and body together; leaves face paint and already-warm skin alone. Off by default; start near 50.")
+                                neck_tone_match = gr.Slider(0, 100, 0, step=1, label="Neck Tone Match", info="Keeps the neck and chest the same tone as the retouched face, so whitening, Face Polish or a recipe's look doesn't leave the neck darker, redder or yellower. Keeps the shadow under the chin; leaves face paint, wigs, collars and costume alone. Off by default; start near 50.")
 
                             with gr.Accordion("🦵 Body Skin", open=False):
                                 reset_body_skin_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
@@ -4247,6 +4248,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 reset_structure_effects_btn = gr.Button("↺ Reset Section", size="sm", elem_classes=["secondary-btn", "section-reset-btn"])
                                 hair_enhance = gr.Slider(0, 100, 5, step=1, label="Hair Shine", info="Boost highlight reflections and depth in hair strands")
                                 hair_deglare = gr.Slider(0, 100, 0, step=1, label="Wig Shine", info="Soften the plastic shine synthetic wigs pick up under flash or con lighting, back into the wig's own colour. Keeps the strands and the wig's lit side. Off by default; start near 50.")
+                                costume_clarity = gr.Slider(0, 100, 0, step=1, label="Costume Clarity", info="Brings out fabric weave, lace, seams, armour and prop detail on the costume only. Skin, face paint, hair and wigs stay exactly as they are. Off by default; start near 50.")
                                 dodge_burn = gr.Slider(0, 100, 0, step=1, label="Dodge & Burn", info="Sculpt face structure with local highlight/shadow contouring")
                                 impact = gr.Slider(0, 100, 0, step=1, label="Global Impact Finish", info="Final punch: combined clarity, sharpening, and micro-contrast boost")
                                 specular_bloom = gr.Slider(0, 100, 0, step=1, label="Specular Bloom", info="Dreamy bloom glow applied specifically to skin highlight zones")
@@ -5612,6 +5614,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "powder_finish": powder_finish,
         "highlight_repair": highlight_repair,
         "skin_warmth": skin_warmth,
+        "neck_tone_match": neck_tone_match,
         "skin_glow": skin_glow,
         "mask_feather_mode": mask_feather_mode,
         "eye_enhance": eye_enhance,
@@ -5625,6 +5628,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "eye_gate": eye_gate,
         "backdrop_cleanup": _backdrop_cleanup_state,
         "fabric_wrinkle_smooth": _fabric_wrinkle_smooth_state,
+        "costume_clarity": costume_clarity,
         "eye_iris_saturate": eye_iris_saturate,
         "eye_iris_hue_shift": eye_iris_hue_shift,
         "eye_iris_brightness": eye_iris_brightness,
