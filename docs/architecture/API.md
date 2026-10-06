@@ -100,6 +100,7 @@ def process(
     nose_shape: Optional[int] = None,
     powder_finish: Optional[int] = None,
     skin_warmth: Optional[int] = None,
+    neck_tone_match: Optional[int] = None,
     highlight_repair: Optional[int] = None,
     nose_highlight: Optional[int] = None,
     specular_bloom: Optional[int] = None,
@@ -450,6 +451,7 @@ Passing an explicit value override to these parameters takes precedence over the
 *   **`powder_finish`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.powder_finish`): Powder Finish. Evens shine into the skin's own colour (not grey), works on white face paint, keeps broad lit areas and overall brightness. Off by default.
 *   **`highlight_repair`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.highlight_repair`): Blown Highlight Repair. Rebuilds face skin whose brightest channel is at the file ceiling (flash or sun hot spots): the excess over a local skin baseline is rolled off below white by a monotone curve, the blown core takes the colour of the unclipped skin around it and fine texture from a clean patch of the same face. Runs first in the per-face pipeline. Spots not ringed by skin, eyes, brows, lips, mouth and hair are left alone; so is a painted face (skin chroma / L* < 0.06, or skin hue outside -5 to 80° CIELab, as white paint under cool light reads) and a face with over 35% of its skin blown. Off by default.
 *   **`skin_warmth`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.warmth`): Skin Warmth. Turns natural skin toward a warm peach (CIELab hue 30-42°, chroma at least 0.21 × L*), face and same-coloured body skin together, after colour grading. Face paint (blue/violet/green or near-neutral) and skin already in the band are left alone. Off by default.
+*   **`neck_tone_match`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.neck_tone_match`): Neck Tone Match. Neck, chest and shoulder skin of the same person get the brightness change (one linear-light gain, so the shadow under the chin stays) and a*/b* change the face edits made to the face, plus 60% of a pre-existing face/neck colour gap (foundation). Colour-keyed on the neck's own chromaticity (a*/L*, b*/L*), so wigs, collars and costume stay out; skipped for painted faces and body-painted necks. Runs after the body-skin stages, before body paint and the grade. When on, replaces the automatic `harmonize_neck` pass. Off by default.
 *   **`face_polish`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.face_polish`): Porcelain finish in one control. Raises the floor of `shine_removal`, `shadow_lift` and `face_exposure` together; a stronger value you set for any of those still wins. Off by default.
 *   **`contrast`** (Type: `int`, Default: `0.0`, Range: `-50` to `50`, Recipe key: `contrast`): Adjusts the contrast parameter.
 *   **`brightness`** (Type: `int`, Default: `None`, Range: `-50` to `50`, Recipe key: `brightness`): Adjusts the brightness parameter.

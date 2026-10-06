@@ -204,6 +204,22 @@ most darker skin, is left as it is or changes only a little. It is off by
 default; start near 50. A beige or pink costume part the same colour as the
 skin warms with it. When the face is painted, body skin is left alone too.
 
+Neck Tone Match (`--neck-tone-match 0-100` in the CLI, the "Neck Tone Match"
+slider next to Skin Warmth in the app, or `skin.neck_tone_match` in a recipe,
+where 0.5 = 50) keeps the neck and chest the same tone as the retouched face.
+It measures what the face edits (whitening, Face Polish, exposure, a recipe's
+face look) did to the face, relative to the skin below it, and makes the same
+brightness and colour change on the neck, chest and shoulders, plus part of
+any colour gap the photo already had (foundation that doesn't match the neck).
+Brightness moves as one linear-light gain, so the shadow under the chin stays.
+Only skin of the same person in the neck/chest colour moves: wigs, collars,
+ribbons and costume parts in other colours stay out, and so does a face in
+white, grey, blue or green paint (the neck is not dragged toward the paint)
+or a body-painted neck. It is off by default; start near 50. Pale fabric close
+to the skin's colour, right next to it, can pick up a little of the change.
+With the slider at 0 the older automatic neck pass still runs whenever
+whitening or tone evening is on; with the slider on, this replaces it.
+
 Blown Highlight Repair (`--highlight-repair 0-100` in the CLI, the "Blown
 Highlight Repair" slider next to Powder Finish in the app, or
 `skin.highlight_repair` in a recipe, where 0.6 = 60) rebuilds skin that a

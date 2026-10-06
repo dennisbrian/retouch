@@ -367,6 +367,7 @@ class ProcessingContext:
     powder_finish: float = 0.0
     highlight_repair: float = 0.0
     skin_warmth: float = 0.0
+    neck_tone_match: float = 0.0
     nose_highlight: float = 0.0
     skin_sss: float = 0.0
     freckle_removal: float = 0.0
@@ -1651,6 +1652,7 @@ class RetouchEngine:
         powder_finish: Optional[float] = None,
         highlight_repair: Optional[float] = None,
         skin_warmth: Optional[float] = None,
+        neck_tone_match: Optional[float] = None,
         nose_highlight: Optional[float] = None,
         skin_sss: Optional[float] = None,
         regional_modulation: Optional[float] = None,
@@ -1973,6 +1975,7 @@ class RetouchEngine:
             "powder_finish": powder_finish,
             "highlight_repair": highlight_repair,
             "skin_warmth": skin_warmth,
+            "neck_tone_match": neck_tone_match,
             "nose_highlight": nose_highlight,
             "skin_sss": skin_sss,
             "lut": lut,
@@ -2508,6 +2511,14 @@ class RetouchEngine:
                     interpolation=cv2.INTER_LINEAR,
                 ).astype(np.float32, copy=False)
 
+            neck_ref = getattr(ctx, "_neck_ref", None)
+            if neck_ref is not None and neck_ref.shape[:2] != (h, w):
+                ctx._neck_ref = cv2.resize(
+                    neck_ref,
+                    (w, h),
+                    interpolation=cv2.INTER_LINEAR,
+                ).astype(np.float32, copy=False)
+
             paint_ref = getattr(ctx, "_paint_ref", None)
             if paint_ref is not None and paint_ref.shape[:2] != (h, w):
                 ctx._paint_ref = cv2.resize(
@@ -2792,6 +2803,13 @@ class RetouchEngine:
                 np.clip(result_native.astype(np.float32), 0.0, 255.0)
                 * (1.0 / 255.0)
             )
+        if getattr(ctx, "neck_tone_match", 0) > 0:
+            # Neck Tone Match: pre-face-edit reference, so the change the
+            # face edits make can be measured (retouch/neck_tone_match.py).
+            ctx._neck_ref = (
+                np.clip(result_native.astype(np.float32), 0.0, 255.0)
+                * (1.0 / 255.0)
+            )
         if ctx.body_paint > 0.0:
             # Body paint: pre-face-edit reference whose paint colour is
             # restored after the skin edits (see retouch/body_paint.py).
@@ -3048,6 +3066,13 @@ class RetouchEngine:
             # Capture the post-reshape, pre-face-edit reference so geometry
             # changes are not mistaken for a tone edit to propagate.
             ctx._p7_source = (
+                np.clip(result.astype(np.float32), 0.0, 255.0)
+                * (1.0 / 255.0)
+            )
+        if getattr(ctx, "neck_tone_match", 0) > 0:
+            # Neck Tone Match: pre-face-edit reference, so the change the
+            # face edits make can be measured (retouch/neck_tone_match.py).
+            ctx._neck_ref = (
                 np.clip(result.astype(np.float32), 0.0, 255.0)
                 * (1.0 / 255.0)
             )
@@ -4622,6 +4647,52 @@ class RetouchEngine:
         )
         ctx._p7_diagnostics = result.to_dict()
         return result.image
+
+    def _stage_neck_tone_match(
+        self,
+        img: np.ndarray,
+        ctx: ProcessingContext,
+        person_mask: Optional[np.ndarray],
+        acc_skin: Optional[np.ndarray],
+        acc_hair_only: Optional[np.ndarray],
+        faces: Optional[list],
+    ) -> np.ndarray:
+        """Neck Tone Match: neck and chest skin follow the retouched face.
+
+        Runs after the body-skin stages, before body paint and the global
+        tone/grade (which then move face and neck together). Measures the
+        face edits against ``ctx._neck_ref``, the frame captured before
+        them. See retouch/neck_tone_match.py.
+        """
+        strength = float(getattr(ctx, "neck_tone_match", 0.0) or 0.0)
+        if strength <= 0 or not faces or acc_skin is None:
+            return img
+        from .neck_tone_match import neck_tone_match
+
+        ref = getattr(ctx, "_neck_ref", None)
+        if ref is not None and ref.shape != img.shape:
+            ref = None
+        # Hair over the neck and chest (long wigs) is excluded with the
+        # whole-frame hair mask; the face-crop hair mask only covers the head.
+        exclude = acc_hair_only
+        try:
+            src = ref if ref is not None else img
+            body_hair = self._parser.parse_hair_full_image(
+                np.clip(src * 255.0, 0, 255).astype(np.uint8)
+            )
+        except Exception as exc:  # model trouble: fall back to the crop mask
+            logger.warning("neck_tone_match: full-frame hair mask failed: %s", exc)
+            body_hair = None
+        if body_hair is not None:
+            body_hair = squeeze_mask(normalize_mask(body_hair))
+            if exclude is not None:
+                exclude = np.maximum(squeeze_mask(normalize_mask(exclude)), body_hair)
+            else:
+                exclude = body_hair
+        return neck_tone_match(
+            img, faces, acc_skin, strength,
+            reference=ref, person_mask=person_mask, exclude_mask=exclude,
+        )
 
     def _stage_body_skin(
         self,
