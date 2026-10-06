@@ -6,7 +6,7 @@ This guide describes how to run the batch processing CLI tool for the **Pro Max 
 
 ## 1. Quick Start
 
-To run a batch of images with the **`cosplay_character_showcase_v1`** recipe (dewy skin, vivid eyes, wig-lace blend):
+To run a batch of images with the **`cosplay_character_showcase_v1`** recipe (dewy skin, vivid eyes):
 
 ```bash
 python3 cli.py "/path/to/input_folder" -o "/path/to/output_folder" --recipe cosplay_character_showcase_v1

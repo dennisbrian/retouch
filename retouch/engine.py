@@ -5168,11 +5168,16 @@ class RetouchEngine:
         ctx: ProcessingContext,
         hair_mask: Optional[np.ndarray],
         person_mask: Optional[np.ndarray],
+        faces=None,
+        acc_skin: Optional[np.ndarray] = None,
+        acc_hair_only: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """A3: Cosplay skin moat — makeup-agnostic enhancements.
 
         Applies three independent operations:
-        1. Wig-lace blend: seamless transition where wig meets skin at hairline
+        1. Wig-lace blend: feather the wig front into the forehead and tone
+           a lace band back to the skin (``retouch/wig_hairline.py``; needs
+           ``faces`` and the hair-only mask ``acc_hair_only``)
         2. Stockings: detect and smooth hosiery without over-blurring
         3. Shoot-consistency lock: maintain white-balance continuity across shots
 
@@ -5193,6 +5198,24 @@ class RetouchEngine:
             ctx.cosplay_consistency_strength <= 0):
             return img
 
+        # --- Stage 1: Wig-lace blending ---
+        # Runs on the caller's image directly (no 8-bit round trip), so with
+        # only this op on, nothing outside the hairline band changes.
+        if ctx.cosplay_wig_lace_blend > 0 and faces:
+            from . import wig_hairline
+            _emit_stage("wig_hairline")
+            img, diag = wig_hairline.apply_wig_hairline(
+                img,
+                faces,
+                acc_skin,
+                acc_hair_only,
+                float(ctx.cosplay_wig_lace_blend) / 100.0,
+                person_mask=person_mask,
+            )
+            ctx._runtime_diagnostics["wig_hairline"] = diag
+        if ctx.cosplay_stockings_smooth <= 0 and ctx.cosplay_consistency_strength <= 0:
+            return img
+
         is_float = img.dtype == np.float32
         if is_float:
             img_u8 = np.clip(img * 255.0, 0, 255).astype(np.uint8)
@@ -5200,21 +5223,6 @@ class RetouchEngine:
             img_u8 = img
 
         result = img_u8.astype(np.float32)
-
-        # --- Stage 1: Wig-lace blending ---
-        if ctx.cosplay_wig_lace_blend > 0 and hair_mask is not None:
-            from .cosplay_moat import WigLaceBlender
-            blender = WigLaceBlender()
-            # Detect skin mask from the processed image (for blending with natural skin)
-            lch = bgr_to_lch(img_u8)
-            skin_mask_detected = skin_mask_lch(lch, hue_center=25.0, hue_tolerance=25.0, chroma_min=8.0)
-            result_blended = blender.blend(
-                result,
-                hair_mask,
-                skin_mask_detected,
-                strength=ctx.cosplay_wig_lace_blend / 100.0,
-            )
-            result = result_blended.astype(np.float32)
 
         # --- Stage 2: Stockings smoothing ---
         if ctx.cosplay_stockings_smooth > 0 and person_mask is not None:

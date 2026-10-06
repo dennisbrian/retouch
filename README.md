@@ -248,6 +248,21 @@ the face (the crown, bangs and sides), not the far ends of a waist-length
 wig. The earlier version of this setting was hidden and did almost nothing
 on real wigs.
 
+Wig Lace Blend (`--cosplay-wig-lace-blend 0-100` in the CLI, the "Wig Lace
+Blend" slider under Cosplay & Body > Cosplay Moat in the app, or
+`cosplay.wig_lace_blend` in a recipe, where 0.5 = 50) softens the hard line
+where a wig's front edge meets the forehead, so the hairline fades in the way
+real hair does, and tones a lace, glue or make-up band just outside the hair
+back to the forehead. It finds the hairline from the hair mask and the face
+landmarks and only acts where skin lies just below the hair, well above the
+brows: full bangs, side locks over the cheeks and the wig's outer edge against
+a wall or costume are left as they are, and nothing outside a narrow band
+along the hairline changes. It is off by default; start near 50. It was
+tested on a public studio portrait and on a hard wig front with a lace band
+planted on it (simulated, also with darker and lighter skin), since none of
+the cosplay photos at hand shows a hairline. The earlier version of this
+setting changed nothing on real photos.
+
 Costume Clarity (`--costume-clarity 0-100` in the CLI, the "Costume Clarity"
 slider under Structure & Effects in the app, or `fabric.costume_clarity` in a
 recipe, where 0.5 = 50) brings out fabric weave, lace, fishnet, seams, vinyl

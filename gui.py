@@ -4277,7 +4277,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         with gr.Accordion("Cosplay & Body", open=False):
                             with gr.Accordion("🎭 Cosplay Moat (A3)", open=False):
                                 gr.Markdown("Cosplay-specific skin / wardrobe continuity (wig lace blend, stockings smooth, cross-shot consistency).")
-                                cosplay_wig_lace_blend = gr.Slider(0, 100, 0, step=1, label="Wig Lace Blend", info="Fade wig lace edge into forehead skin")
+                                cosplay_wig_lace_blend = gr.Slider(0, 100, 0, step=1, label="Wig Lace Blend", info="Feather a wig front or lace line into the forehead (bangs left alone); start near 50")
                                 cosplay_stockings_smooth = gr.Slider(0, 100, 0, step=1, label="Stockings Smooth", info="Smooth hosiery / stocking texture")
                                 cosplay_consistency_strength = gr.Slider(0, 100, 0, step=1, label="Consistency Strength", info="Cross-shot lighting / white-balance continuity for a cosplay set")
 
