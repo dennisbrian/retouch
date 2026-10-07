@@ -67,6 +67,11 @@ def _invalid(why):
 def load_project(path):
     """Read a ``.comp`` package into a :class:`Document`."""
     package = Path(path)
+    manifest, version = _read_manifest(package)
+    return _decode(manifest, version, package)
+
+
+def _read_manifest(package):
     if not package.is_dir() or package.is_symlink():
         raise _invalid('not a package directory')
     data = _read_file(package / 'manifest.json', package, MAX_MANIFEST_BYTES)
@@ -80,10 +85,10 @@ def load_project(path):
     if not _is_int(version) or version not in SUPPORTED_VERSIONS:
         raise ProjectError('project format version %r; supported %d-%d'
                            % (version, SUPPORTED_VERSIONS[0], CURRENT_VERSION))
-    return _decode(manifest, version, package)
+    return manifest, version
 
 
-def _decode(manifest, version, package):
+def _check_manifest(manifest, version):
     unknown = set(manifest) - _TOP_KEYS
     if unknown:
         raise UnsupportedFeature(f'unknown manifest keys: {sorted(unknown)}')
@@ -118,6 +123,13 @@ def _decode(manifest, version, package):
         active = _uuid(active)
         if active not in ids:
             raise _invalid('activeLayerID names no layer')
+    document_id = _uuid(manifest.get('documentID'))
+    return width, height, resolution, guides, active, document_id, parsed
+
+
+def _decode(manifest, version, package):
+    width, height, resolution, guides, active, document_id, parsed = (
+        _check_manifest(manifest, version))
 
     budget = {'image': 0, 'mask': 0}
     layers = []
@@ -136,7 +148,7 @@ def _decode(manifest, version, package):
                             **fields))
     document = Document(width=width, height=height, layers=layers,
                         resolution=float(resolution),
-                        document_id=_uuid(manifest.get('documentID')),
+                        document_id=document_id,
                         active_layer_id=active, guides=guides)
     return document
 
@@ -333,11 +345,17 @@ def save_project(document, path):
     target = Path(path)
     if target.suffix != '.comp':
         raise ValueError('project path must end in .comp')
-    if target.exists() and not (target.is_dir() and not target.is_symlink()
-                                and (target / 'manifest.json').is_file()):
-        raise FileExistsError(f'{target} exists and is not a Compositor project')
+    if target.exists() or target.is_symlink():
+        try:
+            existing, version = _read_manifest(target)
+            _check_manifest(existing, version)
+        except (ValueError, OSError) as exc:
+            raise FileExistsError(
+                f'{target} exists and is not a supported Compositor project') from exc
     document.validate()
     manifest = _encode(document)
+    # Use the reader's schema checks before creating files or retiring a target.
+    _check_manifest(manifest, CURRENT_VERSION)
     payload = json.dumps(manifest, indent=2, sort_keys=True).encode('utf-8')
     if len(payload) > MAX_MANIFEST_BYTES:
         raise ProjectError('manifest exceeds 4 MiB')

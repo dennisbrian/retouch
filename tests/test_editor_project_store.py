@@ -245,6 +245,66 @@ class TestWrite:
             save_project(self._document(), target)
         assert (target / 'keep.txt').read_text() == 'mine'
 
+    @pytest.mark.parametrize('manifest', [
+        'not json', '[]', '{"application": "other"}',
+        '{"format": "com.compositor.project", "version": 11}',
+    ])
+    def test_foreign_manifest_does_not_authorize_replacement(self, tmp_path, manifest):
+        target = tmp_path / 'notes.comp'
+        target.mkdir()
+        (target / 'manifest.json').write_text(manifest)
+        (target / 'keep.txt').write_text('mine')
+        with pytest.raises(FileExistsError):
+            save_project(self._document(), target)
+        assert (target / 'manifest.json').read_text() == manifest
+        assert (target / 'keep.txt').read_text() == 'mine'
+        assert list(tmp_path.iterdir()) == [target]
+
+    def test_symlinked_manifest_does_not_authorize_replacement(self, tmp_path):
+        source = save_project(self._document(), tmp_path / 'source.comp')
+        target = tmp_path / 'notes.comp'
+        target.mkdir()
+        (target / 'manifest.json').symlink_to(source / 'manifest.json')
+        (target / 'keep.txt').write_text('mine')
+        with pytest.raises(FileExistsError):
+            save_project(self._document(), target)
+        assert (target / 'manifest.json').is_symlink()
+        assert (target / 'keep.txt').read_text() == 'mine'
+        load_project(source)
+
+    @pytest.mark.parametrize('field, value', [
+        ('document_id', 'invalid'), ('document_id', None),
+        ('width', 1.5), ('height', True),
+        ('guides', [{'invalid': True}]),
+        ('guides', [{'id': fx.IDS[0], 'axis': 'diagonal', 'position': 0}]),
+        ('guides', [{'id': fx.IDS[0], 'axis': 'vertical', 'position': 0}] * 2),
+    ])
+    @pytest.mark.parametrize('overwrite', [False, True])
+    def test_invalid_document_is_rejected_before_writing(self, tmp_path, field, value, overwrite):
+        target = tmp_path / 'out.comp'
+        if overwrite:
+            save_project(self._document(), target)
+            before = {p.relative_to(target): p.read_bytes()
+                      for p in target.rglob('*') if p.is_file()}
+        doc = self._document()
+        setattr(doc, field, value)
+        with pytest.raises(ValueError):
+            save_project(doc, target)
+        if overwrite:
+            after = {p.relative_to(target): p.read_bytes()
+                     for p in target.rglob('*') if p.is_file()}
+            assert after == before
+            load_project(target)
+        else:
+            assert not target.exists()
+        assert list(tmp_path.iterdir()) == ([target] if overwrite else [])
+
+    def test_guides_round_trip(self, tmp_path):
+        doc = self._document()
+        doc.guides = [{'id': fx.IDS[0], 'axis': 'horizontal', 'position': 1.5}]
+        again = load_project(save_project(doc, tmp_path / 'guided.comp'))
+        assert again.guides == doc.guides
+
     def test_text_metadata_round_trips_until_pixels_change(self, tmp_path):
         doc = Document(2, 2)
         layer = doc.add_image(fx.solid(2, 2, (1, 2, 3, 255)), 'Title')

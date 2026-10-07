@@ -188,8 +188,14 @@ class Document:
         self.layers.insert(max(0, min(index, len(self.layers))), layer)
 
     def validate(self):
-        if not (1 <= self.width <= MAX_SIDE and 1 <= self.height <= MAX_SIDE):
+        if not (isinstance(self.width, int) and not isinstance(self.width, bool)
+                and isinstance(self.height, int) and not isinstance(self.height, bool)
+                and 1 <= self.width <= MAX_SIDE and 1 <= self.height <= MAX_SIDE):
             raise ValueError('canvas side outside 1..%d px' % MAX_SIDE)
+        try:
+            uuid.UUID(self.document_id)
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ValueError('document id must be a UUID string') from exc
         if not (math.isfinite(self.resolution) and 1 <= self.resolution <= 9600):
             raise ValueError('resolution must be within 1..9600 pixels/inch')
         if len(self.layers) > MAX_LAYERS:
