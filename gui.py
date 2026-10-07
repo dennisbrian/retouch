@@ -292,6 +292,39 @@ import gui_batch
 gui_batch.gui = sys.modules[__name__]
 
 
+from retouch.gui_video import VideoJobs
+_video_jobs = VideoJobs()
+
+
+def prepare_video_job(source, stable, smooth, whiten, qa, request: gr.Request):
+    """Capture a session-owned video job before queuing the worker."""
+    try:
+        token = _video_jobs.prepare(getattr(request, "session_hash", None), source, stable, smooth, whiten, qa)
+    except (ValueError, OSError) as exc:
+        raise gr.Error(str(exc)) from exc
+    name = Path(source).name
+    return (token, f"Queued — {name}. Smoothing {smooth:g}, whitening {whiten:g}. Settings captured for this job.",
+            None, None, None, None, gr.update(interactive=False), gr.update(interactive=True))
+
+
+def run_video_job(token, request: gr.Request):
+    """Yield progress without retaining video arrays in GUI state."""
+    try:
+        for event in _video_jobs.run(getattr(request, "session_hash", None), token):
+            yield (event['status'], event['video'], event['video'], event['report'], event['contact'],
+                   gr.update(interactive=event['done']), gr.update(interactive=not event['done']))
+    except (ValueError, OSError) as exc:
+        yield (str(exc), None, None, None, None, gr.update(interactive=True), gr.update(interactive=False))
+
+
+def cancel_video_job(token, request: gr.Request):
+    """Cancel independently of the long-running video queue."""
+    try:
+        return _video_jobs.cancel(getattr(request, "session_hash", None), token)
+    except ValueError as exc:
+        return str(exc)
+
+
 def _workspace_for_request(request=None):
     """Return the session-owned workspace for a Gradio request, if present."""
     session_hash = getattr(request, "session_hash", None)
@@ -304,8 +337,9 @@ def _workspace_for_request(request=None):
         return None
 
 
-def cleanup_gui_request(request=None):
+def cleanup_gui_request(request: gr.Request = None):
     """Clean one browser session's workspace at Gradio unload/shutdown."""
+    _video_jobs.unload(getattr(request, "session_hash", None))
     workspace = _workspace_for_request(request)
     return cleanup_workspace(workspace)
 
@@ -4566,6 +4600,28 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         batch_zip_out = gr.File(label="Download Packaged ZIP")
                         batch_status = gr.Textbox(label="Execution Log & Statistics", lines=12, interactive=False, placeholder="Click 'Process Entire Folder' to start batch processing...")
 
+        with gr.Tab("Video Retouch"):
+            gr.Markdown("Retouch one tracked face with gentle smoothing and whitening. The largest face is selected first, then followed through the clip; review the result before batch use. Input must be 8-bit SDR.")
+            with gr.Row():
+                with gr.Column(scale=1):
+                    video_input = gr.File(label="Source video", file_types=["video"], type="filepath")
+                    with gr.Accordion("Reviewed tracking (optional)", open=False):
+                        video_tracking = gr.File(label="Stabilized tracking JSON", file_types=[".json"], type="filepath")
+                    video_smooth = gr.Slider(0, 100, 20, step=1, label="Video smoothing")
+                    video_whiten = gr.Slider(0, 100, 0, step=1, label="Video whitening")
+                    video_qa = gr.Checkbox(value=True, label="Create comparison and QA report")
+                    gr.Markdown("Settings are captured when you export. Changes apply to the next job. Cancel stops between frames; partial delivery videos are not published.")
+                    with gr.Row():
+                        video_export_btn = gr.Button("Export Video", variant="primary")
+                        video_cancel_btn = gr.Button("Cancel Video", interactive=False)
+                    video_job_state = gr.State(value=None)
+                    video_status = gr.Textbox(label="Video progress", lines=4, interactive=False)
+                with gr.Column(scale=2):
+                    video_preview = gr.Video(label="Rendered video", interactive=False)
+                    video_download = gr.File(label="Download rendered MP4")
+                    video_report = gr.File(label="Download QA report")
+                    video_contact = gr.Image(label="Source / retouch / codec comparison", height=380, interactive=False)
+
         with gr.Tab("Job Dashboard"):
             with gr.Group() as job_list_group:
                 gr.Markdown("### Batch Job History")
@@ -6208,6 +6264,25 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         outputs=[inspection_output, inspection_status],
         show_progress="hidden",
         queue=False,
+    )
+
+    _video_capture = video_export_btn.click(
+        fn=prepare_video_job,
+        inputs=[video_input, video_tracking, video_smooth, video_whiten, video_qa],
+        outputs=[video_job_state, video_status, video_preview, video_download, video_report,
+                 video_contact, video_export_btn, video_cancel_btn],
+        queue=False, show_progress="hidden",
+    )
+    _video_capture.success(
+        fn=run_video_job,
+        inputs=[video_job_state],
+        outputs=[video_status, video_preview, video_download, video_report, video_contact,
+                 video_export_btn, video_cancel_btn],
+        concurrency_id="retouch-video", concurrency_limit=1, show_progress="minimal",
+    )
+    video_cancel_btn.click(
+        fn=cancel_video_job, inputs=[video_job_state], outputs=[video_status],
+        queue=False, show_progress="hidden",
     )
 
     # Session-owned artifact cleanup is scoped by Gradio's request hash. Keep

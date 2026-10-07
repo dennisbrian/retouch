@@ -953,3 +953,23 @@ brows and lips. Covered/interpolated frames cannot create parsing keyframes;
 without a trustworthy prior reference they pass through. Reliable parsing
 updates cross-fade over one interval. Mixed/warped masks leave the fresh-parser
 pixel reference unset and record parsing/warping counters separately.
+
+
+### GUI video jobs
+
+The Video Retouch tab reserves an opaque job token in a nonqueued capture
+callback, then streams `run_video_job` updates in a separate video concurrency
+group. Cancel is nonqueued and validates the request's session hash. Jobs run
+`retouch.video.export` as an isolated Python subprocess on its main thread,
+keeping native video model lifecycle separate from the GUI image engine.
+Source/strengths/tracking inputs are captured once; state retains only a token.
+
+`retouch.gui_video.VideoJobs` allocates session-owned request workspaces below
+the GUI workspace's video root. Completion requires exit code zero, a completed
+manifest and an actual output file. Failed/cancelled jobs never expose a media
+download. Report ZIPs contain JSON and contact images, excluding bulky movie
+artifacts. Browser unload requests cancellation; live directories are deleted
+only after the worker exits. Completed files remain available for download
+until the session unloads. Frozen bundles need an external compatible Python
+runtime configured through `RETOUCH_VIDEO_PYTHON`; source/venv launches use the
+current interpreter.

@@ -69,7 +69,14 @@ been set on two calibration clips; broader captured-motion qualification
 remains pending. Input video and track files
 are preserved, and output paths must be distinct from them.
 
-### Selected-face video export (initial CLI)
+### Selected-face video export
+
+In the app, open **Video Retouch**, upload a source video, set smoothing and
+whitening, then click **Export Video**. The tab shows live progress and a Cancel
+button, followed by the rendered video, MP4 download, QA ZIP and comparison
+sheet. Settings are captured for each export. Expand **Reviewed tracking** to
+reuse a stabilized JSON; otherwise the face is tracked automatically. Outputs
+are temporary session artifacts: download them before closing the page.
 
 ```bash
 .venv/bin/python -m retouch.video.export clip.mp4 --out retouched.mp4 --smooth 20 --whiten 0
@@ -105,7 +112,7 @@ end-trim metadata cannot survive MKV remux; those jobs fail timing verification
 and should use MP4. Multiple audio streams are currently rejected. `--no-qa`
 skips null/temporal measurements while retaining frame/audio verification.
 Metrics remain measurement aids: inspect moving faces, mask edges and flicker
-before batch use. This initial CLI has generated-sequence/model verification;
+before batch use. The initial video path has generated-sequence/model verification;
 full captured-video qualification remains pending.
 
 RetinaFace is not supported: its dependencies conflict with the pinned

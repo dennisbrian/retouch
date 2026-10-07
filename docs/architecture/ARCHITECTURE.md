@@ -294,6 +294,7 @@ per `AGENTS.md`.
 | `advanced_retouch.py` | Gradio-independent interactive Advanced Retouch ops; owns the image contract, delegates pixel math to heal/regions/parsing/geometry. |
 | `advanced_history.py` | Memory-compact undo history primitives for Advanced Retouch (no full-RGB copy per step). |
 | `gui_inspection.py` | Pure native-resolution inspection contracts for the GUI (`fit` / `100%` views of the actual render). |
+| `gui_video.py` | Session-owned GUI video subprocess jobs: immutable captured arguments, independent cancellation, bounded progress, verified completion/downloads and deferred cleanup after browser unload. |
 | `gui_preview_cache.py` | Session-scoped preview cache storing bounded content references (shape/dtype/digest), not arrays; deepcopy-safe for Gradio `State`. |
 | `gui_render_modes.py` | Pure render-mode contracts separating draft GUI state from queued render work (preview vs export). |
 | `gui_workspace.py` | Session-owned temporary workspace primitives; per-session digest-named directories so sessions cannot delete each other's files. |

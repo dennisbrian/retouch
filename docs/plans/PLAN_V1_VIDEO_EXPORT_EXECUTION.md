@@ -1,6 +1,6 @@
 # Plan — V1 Execution: Stable Offline Single-Face Export
 
-**Status:** S1–S5 INITIAL CLI IMPLEMENTED — captured-video qualification
+**Status:** S1–S5 INITIAL CLI + GUI IMPLEMENTED — captured-video qualification
 and broader control support remain pending. Companion to
 `PLAN_VIDEO_FACE_RETOUCH.md` (V1), `PLAN_V0_VIDEO_QA_EXECUTION.md`, and
 `RESEARCH_VIDEO_RETOUCH_ALGORITHMS.md`.
@@ -17,8 +17,9 @@ captured-video qualification. S4 selected-face rendering and S5 export are now a
 `python -m retouch.video.export`: smoothing/whitening only, cached-mask warping,
 visible-skin compositing, streaming encoding, frame/audio verification, null
 measurement, progress and cancellation. The standalone CLI is implemented;
-corpus-based flicker/turn/blink/occlusion acceptance remains pending. No GUI
-video tab or broad recipe support is claimed.
+corpus-based flicker/turn/blink/occlusion acceptance remains pending. The GUI Video Retouch tab now captures session-owned jobs, streams progress,
+provides independent cancellation and exposes video/report downloads. Broad
+recipe support and captured-motion qualification remain pending.
 
 ## What V0 measured that this plan is built on (2026-07-18, DSCF4322)
 
