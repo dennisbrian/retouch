@@ -112,6 +112,18 @@ automatically preserved by a Python translation.
    profiling, optional acceleration and platform packaging. Validate each OS
    actually supported before calling the editor cross-platform.
 
+### Progress
+
+- 2026-10-07, milestones 1-2: done in the cloud, except the parts that need a
+  Mac. `retouch/editor/` holds the document model, the validated `.comp`
+  reader/writer for a declared subset and the Normal-blend reference
+  compositor; `third_party/compositor/` the license and provenance;
+  `scripts/dev/compositor_reference.py` the real-photo check. Details,
+  docs-versus-source differences, the declared subset, colour rules, evidence
+  and the UI spike: [COMPOSITOR_FORMAT_NOTES.md](COMPOSITOR_FORMAT_NOTES.md).
+  Still open: parity against the Mac app's own export, and the UI runtime
+  choice (recommended in the notes, not decided).
+
 Video remains on Retouch's existing tracking/stabilization/export path. A
 timeline editor and per-frame layer history are a separate project.
 

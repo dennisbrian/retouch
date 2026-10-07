@@ -47,6 +47,8 @@ output verification.
 
 ## Plans (`docs/plans/`)
 - `MASTER_PLAN.md` — Overall roadmap
+- [Compositor Python port plan](plans/COMPOSITOR_PYTHON_PORT.md) — staged port of the Compositor layer editor
+- [Compositor port format notes](plans/COMPOSITOR_FORMAT_NOTES.md) — supported `.comp` subset, colour rules, evidence
 - [Cosplay tutorial batch review — 2026-09-24](plans/RESEARCH_COSPLAY_TUTORIAL_BATCH_REVIEW_2026_09_24.md)
   — Documentation-only synthesis of 249 photographed Photoshop tutorial pages,
   corrected cross-batch continuity, face-relevant evidence, and proposed
