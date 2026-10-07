@@ -298,6 +298,8 @@ per `AGENTS.md`.
 | `gui_preview_cache.py` | Session-scoped preview cache storing bounded content references (shape/dtype/digest), not arrays; deepcopy-safe for Gradio `State`. |
 | `gui_render_modes.py` | Pure render-mode contracts separating draft GUI state from queued render work (preview vs export). |
 | `gui_workspace.py` | Session-owned temporary workspace primitives; per-session digest-named directories so sessions cannot delete each other's files. |
+| `compositor.py` | Handoff writer: a new Compositor `.comp` package (base, masked result, hidden Difference layer) from the Advanced canvas. |
+| `editor/` | UI-free layer-editor core ported from Compositor (MIT, `third_party/compositor/`): `document.py` records, `project_store.py` validated `.comp` subset reader/writer, `composite.py` Normal-blend reference compositor. See `docs/plans/COMPOSITOR_FORMAT_NOTES.md`. |
 
 ### Batch, CLI & review workflow
 
