@@ -114,6 +114,19 @@ automatically preserved by a Python translation.
 
 ### Progress
 
+- 2026-10-07, milestone 3 foundation: `retouch.editor.DocumentHistory` adds
+  validated, transactional layer add/remove/reorder, property updates, masks
+  and pixel replacement, with undo/redo and saved-revision dirty tracking.
+  Use its `document` snapshot for rendering; edits go through history methods.
+  New documents start dirty; opened projects use `saved=True`. Its `save(path)`
+  marks clean only after success; undo to that revision is clean, while a
+  new edit after undo discards redo without reusing revision IDs. Metadata is
+  detached and immutable arrays are shared. Defaults: 100 undo entries,
+  512 MiB of unique retained array buffers (including current document).
+  Old history is pruned first; if current pixels alone exceed the budget,
+  retain the document and drop undo history. This does not cap total RSS.
+  The layer editor UI, unsaved-change prompts and native-app parity remain
+  pending; Advanced Retouch's existing history is a separate workflow.
 - 2026-10-07, milestones 1-2: done in the cloud, except the parts that need a
   Mac. `retouch/editor/` holds the document model, the validated `.comp`
   reader/writer for a declared subset and the Normal-blend reference

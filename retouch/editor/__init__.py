@@ -10,11 +10,13 @@ LLC, MIT License (full text in ``third_party/compositor/LICENSE``; per-module
 origins in ``third_party/compositor/PROVENANCE.md``).
 """
 from .composite import composite, export_png
+from .commands import DocumentHistory
 from .document import Document, Layer, UnsupportedFeature
 from .project_store import ProjectError, load_project, save_project
 
 __all__ = [
     'Document',
+    'DocumentHistory',
     'Layer',
     'ProjectError',
     'UnsupportedFeature',
