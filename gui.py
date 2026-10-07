@@ -2421,6 +2421,38 @@ def on_img_change_clear_faces():
     return {}, [], gr.update(choices=[], value=None), "Image changed — re-detect faces."
 
 
+def compositor_export_handler(
+    base_rgb, current_rgb, base_contract=None,
+    rebase_review_required=False, rebase_review_acknowledged=False,
+    overlay_visible=True, overlay_opacity=42, request: gr.Request = None,
+):
+    """Hand off the verified Advanced canvas as a new editable project."""
+    if base_rgb is None or current_rgb is None:
+        return gr.update(value=None, visible=False), "Load an Advanced Retouch canvas first."
+    if rebase_review_required and (
+        not rebase_review_acknowledged
+        or not advanced_rebase_overlay_is_reviewable(overlay_visible, overlay_opacity)
+    ):
+        return gr.update(value=None, visible=False), "Review the highlighted rebase support before exporting."
+    delivery = advanced_delivery_decision(base_contract)
+    if not delivery["allowed"]:
+        return gr.update(value=None, visible=False), "Compositor export blocked: " + delivery["reason"]
+    from retouch.compositor import export_project, archive_project
+    try:
+        workspace = _workspace_for_request(request)
+        directory = (workspace.request_workspace("compositor") if workspace
+                     else Path(tempfile.mkdtemp(prefix="retouch_compositor_")))
+        project = export_project(base_rgb, current_rgb, Path(directory) / "Retouch.comp")
+        archive = archive_project(project)
+        return gr.update(value=str(archive), visible=True), (
+            "Compositor project ready: unzip and open Retouch.comp. "
+            "Paint the result mask, change opacity, or enable Difference inspection. "
+            "8-bit working-sRGB; download before closing this session."
+        )
+    except (ValueError, OSError) as exc:
+        return gr.update(value=None, visible=False), "Compositor export unavailable: " + str(exc)
+
+
 def advanced_export_handler(
     current_rgb,
     export_fmt,
@@ -4014,6 +4046,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 advanced_export_fmt = gr.Radio(choices=["PNG", "PNG-16", "TIFF-16", "JPEG", "WEBP"], value="PNG", label="Export format", scale=1)
                                 advanced_export_btn = gr.Button("Download current canvas", size="sm", variant="secondary", scale=1)
                                 advanced_export_file = gr.File(label="Advanced export", visible=False, scale=2)
+                            compositor_export_btn = gr.Button("Export editable Compositor project", size="sm")
+                            compositor_export_file = gr.File(label="Compositor project ZIP", visible=False)
                             advanced_status = gr.Markdown("Advanced Retouch is ready.")
                             advanced_rebase_ack = gr.Checkbox(
                                 label="I reviewed the highlighted rebase support and result (20%+ opacity)",
@@ -5453,6 +5487,17 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
             advanced_overlay_visible, advanced_overlay_opacity,
         ],
         outputs=[advanced_export_file, advanced_status],
+        concurrency_limit=1,
+        concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
+        show_progress="minimal",
+    )
+
+    compositor_export_btn.click(
+        fn=compositor_export_handler,
+        inputs=[_advanced_source_state, _advanced_current_state,
+                _advanced_base_contract_state, _advanced_rebase_review_required,
+                advanced_rebase_ack, advanced_overlay_visible, advanced_overlay_opacity],
+        outputs=[compositor_export_file, advanced_status],
         concurrency_limit=1,
         concurrency_id=GUI_ENGINE_CONCURRENCY_ID,
         show_progress="minimal",
