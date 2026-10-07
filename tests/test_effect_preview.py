@@ -211,3 +211,23 @@ def test_stray_preview_reaches_result_through_every_dispatch(dispatch, monkeypat
         inspected = engine.process(img, **opts, collect_effect_previews=True)
         assert inspected.effect_previews["hair_remove_flyaways"]["status"].startswith("Face #0 crop")
         np.testing.assert_array_equal(inspected, plain)
+
+
+def test_lint_dust_stage_snapshot_and_skip_reason():
+    from tests.test_lint_dust import FACE, _dot, _scene
+    clean, probs, person = _scene()
+    img, _ = _dot(clean, (380, 300), 2, np.array([0.75, 0.75, 0.78], np.float32))
+    engine = RetouchEngine.__new__(RetouchEngine)
+    engine._parser = SimpleNamespace(_segment_classes=lambda image: cv2.resize(probs, (image.shape[1], image.shape[0])),
+                                    parse_hair_full_image=lambda image: None)
+    ctx = ProcessingContext(backdrop_cleanup=60)
+    initialize(ctx, True)
+    faces = [SimpleNamespace(bbox=box) for box in FACE]
+    output = engine._stage_lint_dust(img, ctx, faces, person, None)
+    item = ctx._effect_previews["backdrop_cleanup"]
+    assert "Changed" in item["status"]
+    np.testing.assert_array_equal(item["after"], np.clip(output * 255 + 0.5, 0, 255).astype(np.uint8))
+    engine._parser._segment_classes = lambda image: None
+    engine._stage_lint_dust(img, ctx, [], None, None)
+    assert "segmentation" in ctx._effect_previews["backdrop_cleanup"]["status"]
+    assert "overlay" not in ctx._effect_previews["backdrop_cleanup"]

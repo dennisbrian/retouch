@@ -471,6 +471,40 @@ def enhance_costume(
     return out, diag
 
 
+def painted_skin_mask(
+    work: np.ndarray,
+    boxes: Sequence[Tuple[int, int, int, int]],
+    face_skin: Optional[np.ndarray],
+    person_mask: Optional[np.ndarray] = None,
+) -> Tuple[Optional[np.ndarray], int]:
+    """Painted face plus same-coloured person pixels (``body_paint``).
+
+    All inputs at the size of ``work`` (float32 BGR [0, 1]). Returns
+    ``(mask, n_painted_faces)``; mask is None when no face is painted.
+    """
+    if face_skin is None or not boxes:
+        return None, 0
+    from .body_paint import (
+        _face_skin_masks,
+        _to_oklab,
+        detect_painted_face,
+        is_monochrome,
+        paint_region_mask,
+    )
+
+    ok = _to_oklab(work)
+    mono = is_monochrome(ok)
+    painted, painted_skins = [], []
+    for i, sk in enumerate(_face_skin_masks(face_skin, boxes)):
+        pf = detect_painted_face(ok, sk, face_index=i, monochrome=mono)
+        if pf is not None:
+            painted.append(pf)
+            painted_skins.append(sk)
+    if not painted:
+        return None, 0
+    return paint_region_mask(ok, painted, painted_skins, person_mask), len(painted)
+
+
 def apply_costume_clarity(
     img: np.ndarray,
     strength: float,
@@ -512,28 +546,9 @@ def apply_costume_clarity(
     probs = segment_classes(work_u8) if segment_classes is not None else None
     hair = hair_full(work_u8) if hair_full is not None else None
 
-    paint = None
-    skin_s = _as_2d(face_skin, size)
-    if skin_s is not None and boxes_s:
-        from .body_paint import (
-            _face_skin_masks,
-            _to_oklab,
-            detect_painted_face,
-            is_monochrome,
-            paint_region_mask,
-        )
-
-        ok = _to_oklab(work)
-        mono = is_monochrome(ok)
-        painted, painted_skins = [], []
-        for i, sk in enumerate(_face_skin_masks(skin_s, boxes_s)):
-            pf = detect_painted_face(ok, sk, face_index=i, monochrome=mono)
-            if pf is not None:
-                painted.append(pf)
-                painted_skins.append(sk)
-        if painted:
-            paint = paint_region_mask(ok, painted, painted_skins, _as_2d(person_mask, size))
-            diag["painted_faces"] = len(painted)
+    paint, n_painted = painted_skin_mask(work, boxes_s, _as_2d(face_skin, size), _as_2d(person_mask, size))
+    if n_painted:
+        diag["painted_faces"] = n_painted
 
     mask_s, model, mdiag = costume_mask(
         work, boxes_s, probs, person_mask=person_mask, hair_mask=hair,
