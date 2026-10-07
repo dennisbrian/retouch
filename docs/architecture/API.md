@@ -535,7 +535,7 @@ Passing an explicit value override to these parameters takes precedence over the
 
 ##### **Background Replacement & Separation**
 
-*   **`backdrop_cleanup`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `background.backdrop_cleanup`): Adjusts the backdrop cleanup parameter.
+*   **`backdrop_cleanup`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `background.backdrop_cleanup`): Lint & Dust Cleanup (GUI slider under Structure & Effects). Removes isolated lint, fluff and dust specks from the costume, props and backdrop, and soft sensor-dust spots from light backdrop areas; skin, paint, hair and the face are left alone (`retouch/lint_dust.py`, global stage before tone).
 *   **`subject_separation`** (Type: `float`, Default: `0.0`, Range: `0` to `100`, Recipe key: `subject_separation`): Adjusts the subject separation parameter.
 *   **`lens_blur`** (Type: `float`, Default: `0.0`, Range: `0` to `100`, Recipe key: `background.lens_blur`): Adjusts the lens blur parameter.
 

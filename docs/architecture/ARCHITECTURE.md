@@ -255,6 +255,7 @@ per `AGENTS.md`.
 | `hairwork.py` | Hair retouching helpers (distinct from `hair.py` enhancement). |
 | `wig_shine.py` | Wig Shine (`hair_deglare`): mattes synthetic-wig gloss into the wig colour; called via `hairwork.deglare_wig` in the per-face hair stage. |
 | `defringe.py` | Defringe (`purple_fringing`): removes purple/blue/cyan/green lens fringes along bright edges, borrowing colour from the object beside the fringe; whole frame, run in `_stage_finish`. |
+| `lint_dust.py` | Lint & Dust Cleanup (`backdrop_cleanup`): removes isolated lint, fluff and dust specks from costume, props and backdrop (glints, studs, weave, fishnet and edges kept), plus soft sensor-dust spots on light backdrop areas; global stage `LintDustStage` before tone. |
 | `costume_clarity.py` | Costume Clarity (`costume_clarity`): clarity and fine texture on costume and props only, skin, paint, hair and face left alone; global stage `CostumeClarityStage` after tone, before grading. |
 | `bloodshot_eyes.py` | Bloodshot Eye Whites (`eye_sclera_vessel_remove`): calms red, veiny eye whites and lifts them slightly, leaving iris, contacts, lashes and catchlights alone; called per eye from `EyeEnhancer.enhance`. |
 | `effect_preview.py` | Opt-in bounded stage snapshots and changed-pixel overlays for GUI effect inspection; stores no native image copies. |

@@ -1127,6 +1127,9 @@ _FACE_FEATURE_PARAMS = [
         conversion="bool_flag",
     ),
     ParamSpec(
+        # Lint & Dust Cleanup: lint, fluff and dust specks off costume, props
+        # and backdrop (retouch/lint_dust.py); skin, hair and the face are left
+        # alone. Name kept from the old backdrop inpaint it replaced. 0 = off.
         name="backdrop_cleanup",
         cli_flag="backdrop-cleanup",
         cli_type=int,

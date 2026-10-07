@@ -883,15 +883,15 @@ class TestResetFunctions:
         d = gui.recipe_defaults("natural")
         assert result == d["slimming"]
 
-    def test_reset_structure_effects_returns_seventeen_values(self):
+    def test_reset_structure_effects_returns_eighteen_values(self):
         result = gui.reset_structure_effects("natural")
         assert isinstance(result, tuple)
-        assert len(result) == 17
+        assert len(result) == 18
 
     @pytest.mark.parametrize("handler, keys", [
         ("reset_skin_smoothing", ["hair_remove_flyaways"]),
         ("reset_skin_tone", ["neck_tone_match"]),
-        ("reset_structure_effects", ["purple_fringing", "costume_clarity"]),
+        ("reset_structure_effects", ["purple_fringing", "backdrop_cleanup", "costume_clarity"]),
     ])
     def test_new_sliders_reset_to_recipe_values(self, monkeypatch, handler, keys):
         defaults = gui.recipe_defaults("natural")

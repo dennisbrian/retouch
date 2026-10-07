@@ -285,7 +285,7 @@ older "Body Equalize" slider next to it is a different op (it adds local
 contrast) kept for the recipes that use it.
 
 The **Effect preview** panel below the preview canvas lets you inspect Body
-Skin Evening, Neck Tone Match, Costume Clarity, and Stray Hair Cleanup on the
+Skin Evening, Neck Tone Match, Costume Clarity, Lint & Dust Cleanup, and Stray Hair Cleanup on the
 first photo. Stray Hair Cleanup shows the first detected face's crop (Face #0),
 including its parsed neck skin; the other effects show the frame. Raise the effect's slider
 and click **Render Preview**, then select **Affected pixels**, **Before**, or
@@ -378,6 +378,19 @@ tested on a public studio portrait and on a hard wig front with a lace band
 planted on it (simulated, also with darker and lighter skin), since none of
 the cosplay photos at hand shows a hairline. The earlier version of this
 setting changed nothing on real photos.
+
+Lint & Dust Cleanup (`--backdrop-cleanup 0-100` in the CLI, the "Lint & Dust
+Cleanup" slider under Structure & Effects in the app, or
+`background.backdrop_cleanup` in a recipe, where 0.5 = 50) removes isolated
+lint, fluff, stray fibres and dust specks from the costume, props and backdrop,
+and soft sensor-dust spots from light, even parts of the backdrop. Skin, face
+paint, hair, wigs and the face are never touched, and fabric weave, fishnet,
+sequins, studs, rhinestones, seams and edges are left alone. It is off by
+default; start near 50. Light specks on glossy vinyl, latex or satin are left
+in place because they cannot be told apart from the shine's own glints, and
+light specks on the backdrop are left too (they are usually lights). The
+earlier version of this setting was hidden and smeared costume edges the
+person mask missed.
 
 Costume Clarity (`--costume-clarity 0-100` in the CLI, the "Costume Clarity"
 slider under Structure & Effects in the app, or `fabric.costume_clarity` in a

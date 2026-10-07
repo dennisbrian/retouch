@@ -241,6 +241,32 @@ class GlobalStage(_EngineStage):
         return self._engine._stage_global(state.img, state.ctx)
 
 
+class LintDustStage(_EngineStage):
+    """Stage 3.9: Lint & Dust Cleanup (opt-in, ``backdrop_cleanup``).
+
+    Runs before global tone and Costume Clarity so neither sharpens the
+    specks it removes.
+    """
+
+    name = "backdrop_cleanup"
+    phase = "global"
+
+    def enabled(self, state: PipelineState) -> bool:
+        return (getattr(state.ctx, "backdrop_cleanup", 0.0) or 0.0) > 0
+
+    def _call(self, state: PipelineState) -> np.ndarray:
+        return self._engine._stage_lint_dust(
+            state.img,
+            state.ctx,
+            state.faces,
+            state.person_mask,
+            state.acc_skin,
+            acc_skin_hair=state.acc_skin_hair,
+            acc_lips=state.acc_lips,
+            acc_hair_only=state.acc_hair_only,
+        )
+
+
 class CostumeClarityStage(_EngineStage):
     """Stage 4.5: Costume Clarity (opt-in).
 
@@ -367,6 +393,7 @@ def build_global_registry(engine: "RetouchEngine") -> "StageRegistry":
     registry.add(CosplayMoatStage(engine))
     registry.add(BodyPaintStage(engine))
     registry.add(ProstheticBlendStage(engine))
+    registry.add(LintDustStage(engine))
     registry.add(GlobalStage(engine))
     registry.add(CostumeClarityStage(engine))
     registry.add(GradeStage(engine))

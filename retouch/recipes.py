@@ -3496,7 +3496,11 @@ RECIPES["auto_clean_v1"] = {
         "wrinkle_soften_neck": 0.30,
     },
     "texture": {"pore_synthesis": 0.30},
-    "background": {"backdrop_cleanup": 35},
+    # 0, not 35: the old backdrop inpaint smeared prop edges the person mask
+    # missed (bunny ears, wristband, fishnet) and never reached the costume.
+    # The 2026-10-07 Lint & Dust Cleanup rewrite (retouch/lint_dust.py) acts
+    # on costume lint and backdrop dust; left off here so the look is kept.
+    "background": {"backdrop_cleanup": 0},
     "eyes": {"whites": 0.10, "dark_circles": 0.10},
     "hair": {
         "shine": 0.20,

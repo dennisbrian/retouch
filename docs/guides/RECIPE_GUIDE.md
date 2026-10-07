@@ -348,7 +348,7 @@ and 0–360 for split-toning hue).
 | Albedo Even | `skin.albedo_even` | direct |
 | Auto Body Reshape | `body_reshape.auto` | direct |
 | Auto Exposure | `auto_exposure` | direct |
-| Backdrop Cleanup | `background.backdrop_cleanup` | ÷ 100 |
+| Lint & Dust Cleanup (`backdrop_cleanup`) | `background.backdrop_cleanup` | ÷ 100 |
 | Background Blur | `background.background_blur` | direct |
 | Background Desaturation | `background.background_desaturation` | direct |
 | Background Harmonize Mode | `harmony.background_harmonize_mode` | direct |

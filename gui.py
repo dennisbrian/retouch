@@ -2305,7 +2305,7 @@ def reset_face_reshaping(recipe_name):
 
 def reset_structure_effects(recipe_name):
     d = recipe_defaults(recipe_name)
-    return d["hair_enhance"], d["dodge_burn"], d["impact"], d["specular_bloom"], d["specular_bloom_tone"], d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["sharpen"], d["sharpen_radius"], d["glow"], d["skin_glow"], d["mask_feather_mode"], d["vignette"], d["subject_separation"], d["purple_fringing"], d["costume_clarity"]
+    return d["hair_enhance"], d["dodge_burn"], d["impact"], d["specular_bloom"], d["specular_bloom_tone"], d["bloom"], d["bloom_threshold"], d["bloom_softness"], d["sharpen"], d["sharpen_radius"], d["glow"], d["skin_glow"], d["mask_feather_mode"], d["vignette"], d["subject_separation"], d["purple_fringing"], d["backdrop_cleanup"], d["costume_clarity"]
 
 def reset_color_grading(recipe_name):
     d = recipe_defaults(recipe_name)
@@ -3913,7 +3913,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                             gr.Markdown("Inspect the first photo's individual effect. Gold shows pixels changed at that stage, before later grading.")
                             effect_preview_choice = gr.Dropdown(
                                 choices=[("Body Skin Evening", "body_skin_even"), ("Neck Tone Match", "neck_tone_match"),
-                                         ("Costume Clarity", "costume_clarity"), ("Stray Hair Cleanup", "hair_remove_flyaways")],
+                                         ("Costume Clarity", "costume_clarity"), ("Lint & Dust Cleanup", "backdrop_cleanup"),
+                                         ("Stray Hair Cleanup", "hair_remove_flyaways")],
                                 value="body_skin_even", label="Effect",
                             )
                             effect_preview_view = gr.Radio(
@@ -4162,7 +4163,6 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         _wrinkle_soften_forehead_state = gr.State(value=0)
                         _wrinkle_soften_nasolabial_state = gr.State(value=0)
                         _wrinkle_soften_neck_state = gr.State(value=0)
-                        _backdrop_cleanup_state = gr.State(value=0)
                         _fabric_wrinkle_smooth_state = gr.State(value=0.0)
                         _reshape_jaw_width_l_state = gr.State(value=0.0)
                         _reshape_jaw_width_r_state = gr.State(value=0.0)
@@ -4379,6 +4379,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 hair_enhance = gr.Slider(0, 100, 5, step=1, label="Hair Shine", info="Boost highlight reflections and depth in hair strands")
                                 hair_deglare = gr.Slider(0, 100, 0, step=1, label="Wig Shine", info="Soften the plastic shine synthetic wigs pick up under flash or con lighting, back into the wig's own colour. Keeps the strands and the wig's lit side. Off by default; start near 50.")
                                 purple_fringing = gr.Slider(0, 100, 0, step=1, label="Defringe", info="Remove the purple, blue or green edge colour lenses add where a dark edge meets something very bright (a wig or glove against a window, softbox bokeh). Real purple, blue and green objects keep their colour. Off by default.")
+                                backdrop_cleanup = gr.Slider(0, 100, 0, step=1, label="Lint & Dust Cleanup", info="Remove lint, fluff, pet hair and dust specks from the costume, props and backdrop. Skin, face paint, hair and wigs are left alone; fabric weave, fishnet, sequins and rhinestones stay. Off by default; start near 50.")
                                 costume_clarity = gr.Slider(0, 100, 0, step=1, label="Costume Clarity", info="Brings out fabric weave, lace, seams, armour and prop detail on the costume only. Skin, face paint, hair and wigs stay exactly as they are. Off by default; start near 50.")
                                 dodge_burn = gr.Slider(0, 100, 0, step=1, label="Dodge & Burn", info="Sculpt face structure with local highlight/shadow contouring")
                                 impact = gr.Slider(0, 100, 0, step=1, label="Global Impact Finish", info="Final punch: combined clarity, sharpening, and micro-contrast boost")
@@ -5215,7 +5216,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     _track_reset_event(reset_structure_effects_btn.click(
         fn=reset_structure_effects,
         inputs=[recipe],
-        outputs=[hair_enhance, dodge_burn, impact, specular_bloom, specular_bloom_tone, bloom, bloom_threshold, bloom_softness, sharpen, sharpen_radius, glow, skin_glow, mask_feather_mode, vignette, subject_separation, purple_fringing, costume_clarity],
+        outputs=[hair_enhance, dodge_burn, impact, specular_bloom, specular_bloom_tone, bloom, bloom_threshold, bloom_softness, sharpen, sharpen_radius, glow, skin_glow, mask_feather_mode, vignette, subject_separation, purple_fringing, backdrop_cleanup, costume_clarity],
         queue=False,
         show_progress="hidden",
     ))
@@ -5791,7 +5792,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "eye_sclera_brighten": eye_sclera_brighten,
         "eye_sclera_vessel_remove": eye_sclera_vessel_remove,
         "eye_gate": eye_gate,
-        "backdrop_cleanup": _backdrop_cleanup_state,
+        "backdrop_cleanup": backdrop_cleanup,
         "fabric_wrinkle_smooth": _fabric_wrinkle_smooth_state,
         "costume_clarity": costume_clarity,
         "eye_iris_saturate": eye_iris_saturate,

@@ -3219,18 +3219,6 @@ class RetouchEngine:
         timings.update(state.timings)
 
         # ------------------------------------------------------------------
-        # Stage 7.5 — Background cleanup (dust/specks/creases via inpaint)
-        # Runs in both registry + hardcoded paths (inserted after stage run).
-        # ------------------------------------------------------------------
-        if ctx.backdrop_cleanup > 0 and person_mask is not None:
-            from .backdrop import clean_backdrop
-
-            _emit_stage("backdrop_cleanup")
-            t_bdc = time.perf_counter()
-            result = clean_backdrop(result, person_mask, ctx.backdrop_cleanup)
-            timings["backdrop_cleanup"] = (time.perf_counter() - t_bdc) * 1000
-
-        # ------------------------------------------------------------------
         # Stage 7.6 — Fabric/clothing wrinkle smoothing (mid-frequency folds)
         # Runs in both registry + hardcoded paths (inserted after backdrop).
         # Cloth mask = person minus skin/hair/neck (acc_skin_hair accumulator).
@@ -5257,6 +5245,59 @@ class RetouchEngine:
             ref=getattr(ctx, "_prosthetic_ref", None),
         )
         ctx._runtime_diagnostics["prosthetic_blend"] = diag
+        return out
+
+    def _stage_lint_dust(
+        self,
+        img: np.ndarray,
+        ctx: ProcessingContext,
+        faces,
+        person_mask: Optional[np.ndarray],
+        acc_skin: Optional[np.ndarray],
+        acc_skin_hair: Optional[np.ndarray] = None,
+        acc_lips: Optional[np.ndarray] = None,
+        acc_hair_only: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """Lint & Dust Cleanup: lint, fluff and dust specks off costume and backdrop.
+
+        Opt-in (``ctx.backdrop_cleanup`` 0-100, the setting the old backdrop
+        inpaint used). Skin, painted skin, hair and the face are left alone;
+        see ``retouch/lint_dust.py``.
+        """
+        from .lint_dust import apply_lint_dust
+
+        _emit_stage("backdrop_cleanup")
+        h_img, w_img = img.shape[:2]
+        boxes = []
+        for face in faces or []:
+            x, y, fw, fh = (int(v) for v in face.bbox)
+            if fw > 0 and fh > 0 and x < w_img and y < h_img:
+                boxes.append((max(0, x), max(0, y), fw, fh))
+        protect = None
+        for m in (acc_skin, acc_skin_hair, acc_lips, acc_hair_only):
+            if m is not None and m.shape[:2] == (h_img, w_img):
+                m2 = squeeze_mask(normalize_mask(m))
+                protect = m2 if protect is None else np.maximum(protect, m2)
+        skin = squeeze_mask(normalize_mask(acc_skin)) if acc_skin is not None else None
+        pm = squeeze_mask(normalize_mask(person_mask)) if person_mask is not None else None
+        out, diag = apply_lint_dust(
+            img,
+            float(ctx.backdrop_cleanup) / 100.0,
+            boxes,
+            segment_classes=self._parser._segment_classes,
+            hair_full=self._parser.parse_hair_full_image,
+            person_mask=pm,
+            protect=protect,
+            face_skin=skin,
+        )
+        ctx._runtime_diagnostics["backdrop_cleanup"] = diag
+        from .effect_preview import capture
+        reasons = {
+            "no_segmentation": "Skipped — no reliable person segmentation available.",
+            "no_region": "Skipped — no costume or backdrop left to search.",
+        }
+        capture(ctx, "backdrop_cleanup", img, out,
+                reasons.get(diag.get("reason"), "Skipped — no lint or dust specks found."))
         return out
 
     def _stage_costume_clarity(
