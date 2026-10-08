@@ -82,7 +82,7 @@ def test_open_requires_discard_and_failed_open_preserves_session(session, callba
         assert replacement.history.document.width == 3
         assert replacement.history.dirty
         assert not Path(session.workspace).exists()
-        assert len(loaded) == 12
+        assert len(loaded) == 19
     finally:
         replacement.close()
 
@@ -97,7 +97,7 @@ def test_save_and_export_gate_unapplied_strokes(session, callbacks, tmp_path):
         export(session, stroke_canvas())
     assert not target.exists() and session.history.dirty
     result = save(session, str(target), None)
-    assert len(result) == 11 and not session.history.dirty
+    assert len(result) == 18 and not session.history.dirty
     np.testing.assert_array_equal(composite(load_project(target)),
                                   composite(session.history.document))
     path = export(session, None)
@@ -109,7 +109,7 @@ def test_save_and_export_gate_unapplied_strokes(session, callbacks, tmp_path):
 def test_ui_edit_callbacks_change_layer_and_restore_with_undo(session, callbacks):
     edits = [fn for fn in callbacks if fn.__name__ == 'edit']
     result = edits[0](session, session.selected_id, None, 'New name', False, 50, True)
-    assert len(result) == 11
+    assert len(result) == 18
     layer = session.selected()
     assert (layer.name, layer.visible, layer.opacity) == ('New name', False, 0.5)
     undo = next(fn for fn in edits if fn.__kwdefaults__['operation'] == 'undo')
@@ -164,7 +164,7 @@ def test_recipe_callbacks_attach_one_masked_layer_and_block_overlapping_jobs(ses
     render_worker(session.job.directory, Engine)
     session.job.status = 'completed'
     result = finish(session, None)
-    assert len(result) == 14 and session.job.finalized
+    assert len(result) == 21 and session.job.finalized
     assert session.selected().name == 'Retouch · natural'
     assert session.selected().opacity == 0.5
     assert composite(session.history.document)[0, 0].tolist() == [150, 150, 150, 255]
@@ -185,3 +185,109 @@ def test_recipe_finalization_preserves_pending_brush_strokes(session, callbacks)
     assert len(session.history.document.layers) == 1
     assert result[7] == gr.update()
     assert 'Unapplied strokes' in result[10]
+
+
+def test_blend_selector_tracks_property_edits_and_undo(session, callbacks):
+    edit = next(fn for fn in callbacks if fn.__name__ == 'edit'
+                and fn.__kwdefaults__['operation'] == 'properties')
+    undo = next(fn for fn in callbacks if fn.__name__ == 'edit'
+                and fn.__kwdefaults__['operation'] == 'undo')
+    result = edit(session, session.selected_id, None, 'Base', True, 100, True, 'Screen')
+    assert session.selected().blend_mode == 'Screen'
+    assert result[11]['value'] == 'Screen'
+    result = undo(session, session.selected_id, None)
+    assert session.selected().blend_mode == result[11]['value'] == 'Normal'
+
+
+def test_revealing_unsupported_mode_is_rejected_before_mutation(session, callbacks):
+    layer = session.selected()
+    session.history.update_layer(layer.id, blend_mode='Color Dodge', visible=False)
+    revision = session.history.revision
+    edit = next(fn for fn in callbacks if fn.__name__ == 'edit'
+                and fn.__kwdefaults__['operation'] == 'properties')
+    with pytest.raises(gr.Error, match='supported blend'):
+        edit(session, layer.id, None, 'Base', True, 100, True, 'Color Dodge')
+    assert not session.selected().visible and session.history.revision == revision
+
+
+def test_position_and_flips_are_undoable_and_saved(session, callbacks, tmp_path):
+    transform = next(fn for fn in callbacks if fn.__name__ == 'edit'
+                     and fn.__kwdefaults__['operation'] == 'transform')
+    original = composite(session.history.document)
+    lid = session.selected_id
+    result = transform(session, lid, None, -2, 1, True, True)
+    assert (session.selected().origin, session.selected().flip_x, session.selected().flip_y) == (
+        (-2, 1), True, True)
+    assert result[12:16] == (-2, 1, True, True)
+    rendered = composite(session.history.document)
+    assert not rendered[0].any()
+    assert not rendered[:, -2:].any()
+    target = tmp_path / 'position.comp'
+    session.history.save(target)
+    again = load_project(target)
+    assert again.layers[0].origin == (-2, 1)
+    assert again.layers[0].flip_x and again.layers[0].flip_y
+    np.testing.assert_array_equal(composite(again), rendered)
+    session.history.undo()
+    np.testing.assert_array_equal(composite(session.history.document), original)
+    session.history.redo()
+    np.testing.assert_array_equal(composite(session.history.document), rendered)
+
+
+@pytest.mark.parametrize('x, y', [(0.5, 0), (0, float('nan')), (None, 0), (True, 0), (1000001, 0)])
+def test_invalid_transform_preserves_document_and_history(session, callbacks, x, y):
+    transform = next(fn for fn in callbacks if fn.__name__ == 'edit'
+                     and fn.__kwdefaults__['operation'] == 'transform')
+    before = composite(session.history.document)
+    with pytest.raises(gr.Error):
+        transform(session, session.selected_id, None, x, y, True, False)
+    assert session.history.revision == 0
+    assert session.selected().origin == (0, 0)
+    np.testing.assert_array_equal(composite(session.history.document), before)
+
+
+@pytest.mark.parametrize('flip_x, flip_y', [(True, False), (False, True), (True, True)])
+def test_painting_flipped_layer_keeps_canvas_and_native_mask_aligned(session, flip_x, flip_y):
+    from retouch.editor.ui import _view
+    lid = session.selected_id
+    pixels = np.arange(6 * 8 * 3, dtype=np.uint8).reshape(6, 8, 3)
+    session.history.replace_pixels(lid, pixels)
+    session.history.update_layer(lid, flip_x=flip_x, flip_y=flip_y)
+    expected = session.selected().pixels
+    if flip_y:
+        expected = expected[::-1]
+    if flip_x:
+        expected = expected[:, ::-1]
+    np.testing.assert_array_equal(_view(session)[7]['background'], expected)
+    stroke = np.zeros((6, 8, 4), np.uint8)
+    stroke[1, 2] = [0, 0, 0, 255]
+    session.apply_mask({'layers': [stroke]})
+    mask = session.selected().mask
+    expected_y = 4 if flip_y else 1
+    expected_x = 5 if flip_x else 2
+    assert mask[expected_y, expected_x] == 0
+    assert (mask == 0).sum() == 1
+    rendered = composite(session.history.document)
+    assert rendered[1, 2, 3] == 0
+    assert (rendered[..., 3] == 0).sum() == 1
+    session.history.undo()
+    assert (composite(session.history.document)[..., 3] == 255).all()
+
+
+def test_resize_callback_and_brush_keep_native_pixels(session, callbacks):
+    resize = next(fn for fn in callbacks if fn.__name__ == 'edit'
+                  and fn.__kwdefaults__['operation'] == 'resize')
+    source = session.selected().pixels
+    lid = session.selected_id
+    result = resize(session, lid, None, 16, 12)
+    assert result[16:18] == (16, 12)
+    assert session.selected().pixels is source
+    stroke = np.zeros((12, 16, 4), np.uint8)
+    stroke[2:4, 4:6] = [0, 0, 0, 255]
+    session.apply_mask({'layers': [stroke]})
+    assert session.selected().mask.shape == (6, 8)
+    assert session.selected().mask[1, 2] < 255
+    assert session.selected().mask[-1, -1] == 255
+    session.history.undo()
+    session.history.undo()
+    assert session.selected().size == (8, 6)

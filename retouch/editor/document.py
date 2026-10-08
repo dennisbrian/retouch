@@ -3,7 +3,7 @@
 Mirrors the subset of Compositor's ``ProjectManifest`` / ``ProjectLayerRecord``
 (``Compositor/IO/ProjectStore.swift``) that milestone 2 composites: ungrouped
 pixel and blank layers, bottom-to-top order, visibility, opacity, blend-mode
-name, an untransformed placement (integer origin, flips) and an 8-bit raster
+name, integer placement, resizing, flips and an 8-bit raster
 mask. Anything else is refused with :class:`UnsupportedFeature` rather than
 dropped. Pixel and mask arrays are read-only: an edit replaces the array, so
 the same buffers can later back undo history without copies.
@@ -24,8 +24,8 @@ MAX_SIDE = 30_000
 MAX_SURFACE_PIXELS = 200_000_000
 MAX_LAYERS = 10_000
 
-# Every name the format accepts (docs/writing-comp-files.md). Only Normal is
-# composited so far; the rest are stored and round-tripped unchanged.
+# Every name the format accepts (docs/writing-comp-files.md). Rendering supports
+# the subset in composite.RENDER_BLEND_MODES; the rest round-trip unchanged.
 BLEND_MODES = (
     'Normal', 'Darken', 'Multiply', 'Color Burn', 'Linear Burn', 'Lighten',
     'Screen', 'Color Dodge', 'Linear Dodge (Add)', 'Overlay', 'Soft Light',
@@ -89,7 +89,7 @@ class Layer:
     opacity: float = 1.0
     blend_mode: str = 'Normal'
     origin: tuple = (0, 0)         # document pixels, top-left
-    size: tuple = None             # transform size; image layers: image size
+    size: tuple = None             # rendered rectangle; source pixels stay native
     flip_x: bool = False
     flip_y: bool = False
     sampling: str = 'High quality'
@@ -114,8 +114,10 @@ class Layer:
     def replace_pixels(self, pixels):
         """Swap in new pixel content (same placement); drops text/shape styles."""
         pixels = rgba_from(pixels)
-        if (pixels.shape[1], pixels.shape[0]) != self.size:
-            raise ValueError('replacement pixels must match the layer size')
+        source_size = ((self.pixels.shape[1], self.pixels.shape[0])
+                       if self.pixels is not None else self.size)
+        if (pixels.shape[1], pixels.shape[0]) != source_size:
+            raise ValueError('replacement pixels must match the source size')
         self.pixels, self.text, self.shape = pixels, None, None
 
     def set_mask(self, mask, enabled=True):
@@ -136,11 +138,8 @@ class Layer:
             raise ValueError('layer origin out of range')
         if not all(1 <= v <= 300_000 for v in self.size):
             raise ValueError('layer size out of range')
-        if self.pixels is not None and (
-                (self.pixels.shape[1], self.pixels.shape[0]) != self.size):
-            # A stretched layer needs resampling that has not been ported.
-            raise UnsupportedFeature(f'layer {self.name!r} is scaled; only 1:1 placement '
-                                     'is supported')
+        if self.pixels is not None and any(v > MAX_SIDE for v in self.size):
+            raise ValueError('rendered layer side exceeds %d px' % MAX_SIDE)
 
 
 @dataclass(eq=False)
@@ -201,7 +200,7 @@ class Document:
         if len(self.layers) > MAX_LAYERS:
             raise ValueError('more than %d layers' % MAX_LAYERS)
         ids = set()
-        image_pixels = mask_pixels = 0
+        image_pixels = mask_pixels = rendered_pixels = 0
         for layer in self.layers:
             layer.validate()
             uuid.UUID(layer.id)
@@ -210,9 +209,10 @@ class Document:
             ids.add(layer.id)
             if layer.pixels is not None:
                 image_pixels += layer.pixels.shape[0] * layer.pixels.shape[1]
+                rendered_pixels += layer.size[0] * layer.size[1]
             if layer.mask is not None:
                 mask_pixels += layer.mask.size
-        if image_pixels > MAX_SURFACE_PIXELS or mask_pixels > MAX_SURFACE_PIXELS:
+        if max(image_pixels, mask_pixels, rendered_pixels) > MAX_SURFACE_PIXELS:
             raise ValueError('document exceeds the %d MP layer budget'
                              % (MAX_SURFACE_PIXELS // 1_000_000))
         if self.active_layer_id is not None and self.active_layer_id not in ids:

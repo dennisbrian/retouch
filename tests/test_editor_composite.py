@@ -108,10 +108,10 @@ class TestSourceOver:
 
 
 class TestUnsupported:
-    def test_visible_non_normal_blend_is_refused(self):
+    def test_unimplemented_visible_blend_is_refused(self):
         doc = Document(1, 1)
-        doc.add_image(fx.solid(1, 1, (1, 2, 3, 255)), 'Top').blend_mode = 'Multiply'
-        with pytest.raises(UnsupportedFeature, match='Multiply'):
+        doc.add_image(fx.solid(1, 1, (1, 2, 3, 255)), 'Top').blend_mode = 'Color Dodge'
+        with pytest.raises(UnsupportedFeature, match='Color Dodge'):
             composite(doc)
 
     def test_hidden_non_normal_blend_is_kept_but_not_drawn(self):

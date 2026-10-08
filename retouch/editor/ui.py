@@ -1,6 +1,7 @@
 """Session-owned layer editor in the existing Gradio desktop shell."""
 import shutil
 import io
+import math
 import tempfile
 import uuid
 import threading
@@ -15,7 +16,7 @@ import numpy as np
 from PIL import Image, ImageCms, ImageOps
 
 from .commands import DocumentHistory
-from .composite import composite, export_png
+from .composite import RENDER_BLEND_MODES, composite, export_png
 from .document import Document, Layer, MAX_SURFACE_PIXELS
 from .project_store import load_project
 
@@ -104,7 +105,7 @@ class EditorSession:
         layer = self.selected()
         if layer is None or layer.pixels is None:
             raise ValueError('Select a pixel layer first')
-        width, height = layer.size
+        width, height = layer.pixels.shape[1], layer.pixels.shape[0]
         mask = (np.full((height, width), 255, np.uint8) if layer.mask is None
                 else cv2.resize(layer.mask, (width, height), interpolation=cv2.INTER_LINEAR))
         painted = False
@@ -116,6 +117,12 @@ class EditorSession:
                 continue
             rgba = np.asarray(Image.fromarray(stroke).resize(
                 (width, height), Image.Resampling.BILINEAR)).astype(np.float32)
+            # The brush canvas shows the layer's orientation; store coverage
+            # in source coordinates so the compositor flips pixels and mask once.
+            if layer.flip_y:
+                rgba = rgba[::-1]
+            if layer.flip_x:
+                rgba = rgba[:, ::-1]
             alpha = rgba[..., 3] / 255.0
             value = rgba[..., :3].mean(axis=2)
             mask = np.rint(mask * (1 - alpha) + value * alpha).astype(np.uint8)
@@ -129,7 +136,8 @@ def _view(session, message=''):
     if session is None:
         return (None, None, gr.update(choices=[], value=None), '', True, 100,
                 True, None, gr.update(interactive=False), gr.update(interactive=False),
-                'Open a photo or project to start.')
+                'Open a photo or project to start.', gr.update(choices=list(RENDER_BLEND_MODES), value='Normal'),
+                0, 0, False, False, 1, 1)
     doc = session.history.document
     layer = session.selected()
     canvas = None
@@ -137,6 +145,10 @@ def _view(session, message=''):
         scale = min(1, PREVIEW_SIDE / max(layer.size))
         size = tuple(max(1, round(v * scale)) for v in layer.size)
         image = np.asarray(Image.fromarray(layer.pixels).resize(size))
+        if layer.flip_y:
+            image = image[::-1]
+        if layer.flip_x:
+            image = image[:, ::-1]
         canvas = {'background': image, 'layers': [], 'composite': image}
     state = 'Unsaved changes' if session.history.dirty else 'Saved'
     return (session, preview_document(doc),
@@ -147,7 +159,13 @@ def _view(session, message=''):
             layer.mask_enabled if layer else True, canvas,
             gr.update(interactive=session.history.can_undo),
             gr.update(interactive=session.history.can_redo),
-            f'{state} · {doc.width} × {doc.height} · {len(doc.layers)} layers. {message}')
+            f'{state} · {doc.width} × {doc.height} · {len(doc.layers)} layers. {message}',
+            gr.update(choices=list(RENDER_BLEND_MODES) + (
+                [layer.blend_mode] if layer and layer.blend_mode not in RENDER_BLEND_MODES else []),
+                value=layer.blend_mode if layer else 'Normal'),
+            layer.origin[0] if layer else 0, layer.origin[1] if layer else 0,
+            layer.flip_x if layer else False, layer.flip_y if layer else False,
+            layer.size[0] if layer else 1, layer.size[1] if layer else 1)
 
 
 def build_editor_tab():
@@ -183,7 +201,24 @@ def build_editor_tab():
                 visible = gr.Checkbox(label='Visible', value=True)
                 opacity = gr.Slider(0, 100, value=100, step=1, label='Opacity')
                 mask_enabled = gr.Checkbox(label='Mask enabled', value=True)
+                blend = gr.Dropdown(label='Blend mode', choices=list(RENDER_BLEND_MODES), value='Normal')
                 properties = gr.Button('Apply layer properties')
+                with gr.Accordion('Position & flips', open=False):
+                    gr.Markdown('Position uses canvas pixels from the top-left. '
+                                'Negative positions are allowed; pixels outside the canvas are clipped. '
+                                'Flips move the mask with the layer.')
+                    with gr.Row():
+                        position_x = gr.Number(label='X position', value=0, precision=0)
+                        position_y = gr.Number(label='Y position', value=0, precision=0)
+                    flip_x = gr.Checkbox(label='Flip horizontally', value=False)
+                    flip_y = gr.Checkbox(label='Flip vertically', value=False)
+                    transform = gr.Button('Apply position & flips')
+                    with gr.Row():
+                        layer_width = gr.Number(label='Layer width (pixels)', value=1, precision=0)
+                        layer_height = gr.Number(label='Layer height (pixels)', value=1, precision=0)
+                    gr.Markdown('Resizing preserves the original pixels. Set both dimensions '
+                                'to keep the aspect ratio; changing one stretches the layer.')
+                    resize = gr.Button('Apply layer size')
                 with gr.Row():
                     up = gr.Button('Move up')
                     down = gr.Button('Move down')
@@ -205,7 +240,8 @@ def build_editor_tab():
                 download = gr.File(label='PNG download', interactive=False)
         status = gr.Markdown('Open a photo or project to start.')
         outputs = [session, preview, layers, name, visible, opacity, mask_enabled,
-                   canvas, undo, redo, status]
+                   canvas, undo, redo, status, blend, position_x, position_y, flip_x, flip_y,
+                   layer_width, layer_height]
 
         def opening(current, photo_path, path, discard_edits, strokes, kind):
             if current and current.job and not current.job.finalized:
@@ -248,11 +284,29 @@ def build_editor_tab():
                     current.selected_id = selected
                 else:
                     layer = current.selected()
-                    if operation in ('properties', 'up', 'down', 'remove', 'mask') and layer is None:
+                    if operation in ('properties', 'transform', 'resize', 'up', 'down', 'remove', 'mask') and layer is None:
                         raise ValueError('Select a layer first')
                     if operation == 'properties':
+                        chosen_blend = args[4] if len(args) > 4 else layer.blend_mode
+                        if args[1] and chosen_blend not in RENDER_BLEND_MODES:
+                            raise ValueError('Choose a supported blend mode before revealing this layer')
                         current.history.update_layer(layer.id, name=args[0], visible=args[1],
-                                                     opacity=args[2] / 100, mask_enabled=args[3])
+                                                     opacity=args[2] / 100, mask_enabled=args[3],
+                                                     blend_mode=chosen_blend)
+                    elif operation == 'transform':
+                        for value in args[:2]:
+                            if (not isinstance(value, (int, float)) or isinstance(value, bool)
+                                    or not math.isfinite(value) or value != int(value)):
+                                raise ValueError('Layer positions must be whole pixel coordinates')
+                        current.history.update_layer(layer.id,
+                                                     origin=(int(args[0]), int(args[1])),
+                                                     flip_x=args[2], flip_y=args[3])
+                    elif operation == 'resize':
+                        for value in args[:2]:
+                            if (not isinstance(value, (int, float)) or isinstance(value, bool)
+                                    or not math.isfinite(value) or value != int(value) or value < 1):
+                                raise ValueError('Layer dimensions must be positive whole pixels')
+                        current.history.update_layer(layer.id, size=(int(args[0]), int(args[1])))
                     elif operation in ('up', 'down'):
                         index = current.history.document.index_of(layer.id)
                         current.history.move_layer(layer.id, index + (1 if operation == 'up' else -1))
@@ -281,11 +335,13 @@ def build_editor_tab():
         layers.input(select, [session, layers, canvas], outputs, concurrency_id='layer-editor')
         for button, operation in ((properties, 'properties'), (up, 'up'), (down, 'down'),
                                   (remove, 'remove'), (apply_mask, 'mask'), (add, 'add'),
-                                  (undo, 'undo'), (redo, 'redo')):
+                                  (undo, 'undo'), (redo, 'redo'), (transform, 'transform'), (resize, 'resize')):
             def edit(current, selected, strokes, *args, operation=operation):
                 return action(current, selected, strokes, operation, *args)
-            extra = [name, visible, opacity, mask_enabled] if operation == 'properties' else (
-                [add_photo] if operation == 'add' else [])
+            extra = [name, visible, opacity, mask_enabled, blend] if operation == 'properties' else (
+                [position_x, position_y, flip_x, flip_y] if operation == 'transform' else (
+                    [layer_width, layer_height] if operation == 'resize' else (
+                        [add_photo] if operation == 'add' else [])))
             button.click(edit, [session, layers, canvas] + extra, outputs, concurrency_id='layer-editor')
 
         def saving(current, path, strokes):

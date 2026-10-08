@@ -175,7 +175,7 @@ class TestUnsupportedIsExplicit:
             load_project(path)
 
     @pytest.mark.parametrize('geometry', [
-        {'rotation': 15}, {'size': [4, 4]}, {'origin': [0.5, 0]}])
+        {'rotation': 15}, {'origin': [0.5, 0]}])
     def test_transformed_layers(self, tmp_path, geometry):
         record = fx.layer_record(0, 'Layer', 2, 2)
         record['transform'].update(geometry)

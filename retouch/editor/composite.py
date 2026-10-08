@@ -1,4 +1,4 @@
-"""CPU reference compositor: Normal blending with opacity and raster masks.
+"""CPU reference compositor: separable blending with opacity and raster masks.
 
 Semantics follow Compositor's export path (``IO/ImageExporter.swift`` and
 ``Rendering/LayerRenderer.swift``): a transparent sRGB canvas, layers drawn
@@ -25,6 +25,8 @@ from PIL import Image
 
 from .document import MAX_SURFACE_PIXELS, UnsupportedFeature
 
+RENDER_BLEND_MODES = ('Normal', 'Multiply', 'Screen', 'Overlay', 'Difference')
+
 
 def composite(document, band_rows=256):
     """Flatten ``document`` to a uint8 straight-alpha RGBA (H, W, 4) array."""
@@ -39,7 +41,7 @@ def composite(document, band_rows=256):
         bottom = min(height, top + band_rows)
         rgb = np.zeros((bottom - top, width, 3), np.float32)   # premultiplied
         alpha = np.zeros((bottom - top, width), np.float32)
-        for pixels, coverage, (x0, y0), opacity in layers:
+        for pixels, coverage, (x0, y0), opacity, mode in layers:
             h, w = pixels.shape[:2]
             ys, ye = max(top, y0), min(bottom, y0 + h)
             xs, xe = max(0, x0), min(width, x0 + w)
@@ -51,9 +53,19 @@ def composite(document, band_rows=256):
                 a *= coverage[ys - y0:ye - y0, xs - x0:xe - x0].astype(np.float32) / 255.0
             keep = 1.0 - a
             region = rgb[ys - top:ye - top, xs:xe]
-            region *= keep[..., None]
-            region += src[..., :3].astype(np.float32) * (a[..., None] / 255.0)
             under = alpha[ys - top:ye - top, xs:xe]
+            if mode != 'Normal':
+                source = src[..., :3].astype(np.float32) / 255.0
+                backdrop = region / np.where(under > 0, under, 1.0)[..., None]
+                # Blend straight colors only in the overlapping coverage.
+                # W3C compositing-1: Cs' = (1 - ab) Cs + ab B(Cb, Cs).
+                source = (1.0 - under[..., None]) * source + under[..., None] * (
+                    _blend(backdrop, source, mode))
+            region *= keep[..., None]
+            if mode == 'Normal':
+                region += src[..., :3].astype(np.float32) * (a[..., None] / 255.0)
+            else:
+                region += source * a[..., None]
             under *= keep
             under += a
         out[top:bottom] = _straight(rgb, alpha)
@@ -79,7 +91,7 @@ def export_png(document, path):
 def _contributes(layer):
     if not layer.visible or layer.pixels is None or layer.opacity == 0:
         return False
-    if layer.blend_mode != 'Normal':
+    if layer.blend_mode not in RENDER_BLEND_MODES:
         raise UnsupportedFeature(f'blend mode {layer.blend_mode!r} (layer {layer.name!r}) is not composited yet')
     return True
 
@@ -87,6 +99,12 @@ def _contributes(layer):
 def _prepare(layer):
     """Pixels and coverage in document orientation, plus placement."""
     pixels = layer.pixels
+    if (pixels.shape[1], pixels.shape[0]) != layer.size:
+        sampling = {'Nearest': Image.Resampling.NEAREST,
+                    'Smooth': Image.Resampling.BILINEAR,
+                    'High quality': Image.Resampling.LANCZOS}[layer.sampling]
+        # Pillow resizes RGBA through premultiplied alpha, avoiding dark halos.
+        pixels = np.asarray(Image.fromarray(pixels).resize(layer.size, sampling))
     coverage = None
     if layer.mask is not None and layer.mask_enabled:
         coverage = _fit_mask(layer.mask, pixels.shape[1], pixels.shape[0], layer.sampling)
@@ -97,7 +115,21 @@ def _prepare(layer):
     if layer.flip_x:
         pixels = pixels[:, ::-1]
         coverage = None if coverage is None else coverage[:, ::-1]
-    return pixels, coverage, layer.origin, layer.opacity
+    return pixels, coverage, layer.origin, layer.opacity, layer.blend_mode
+
+
+def _blend(backdrop, source, mode):
+    """W3C separable formulas in the document's gamma-encoded sRGB space."""
+    if mode == 'Multiply':
+        return backdrop * source
+    if mode == 'Screen':
+        return backdrop + source - backdrop * source
+    if mode == 'Overlay':
+        return np.where(backdrop <= 0.5, 2 * backdrop * source,
+                        1 - 2 * (1 - backdrop) * (1 - source))
+    if mode == 'Difference':
+        return np.abs(backdrop - source)
+    raise UnsupportedFeature(f'blend mode {mode!r} is not composited yet')
 
 
 def _fit_mask(mask, width, height, sampling):

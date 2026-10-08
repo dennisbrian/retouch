@@ -29,7 +29,7 @@ blend mode from 3, masks from 4, guides from 8, text colour/font runs from
 10/11). Written: version 11.
 
 Supported: ungrouped pixel layers and blank layers, bottom-to-top order,
-visibility, opacity, any of the 24 blend-mode names (stored), 1:1 placement at
+visibility, opacity, any of the 24 blend-mode names (stored), resizing at
 an integer origin (layers may hang off the canvas), flips, an 8-bit raster
 mask with enabled flag (any mask size; 1×1 uniform masks broadcast), document
 resolution, active layer, guides (kept verbatim), text and shape metadata
@@ -39,9 +39,10 @@ the pixels are replaced, as upstream does on a destructive edit).
 Refused with `UnsupportedFeature` (valid upstream, not modelled yet):
 folders (`isGroup`, `parentID`), clipping masks (`maskSourceID`), adjustment
 layers, layer effects, unlinked masks (`maskPlacement`, `maskLinked: false`),
-rotated, scaled or fractionally placed layers, unknown keys. Compositing a
-visible layer with any blend mode other than Normal is refused too; a hidden
-one is kept and skipped (the handoff's Difference inspection layer).
+rotated or fractionally placed layers, unknown keys. Compositing a
+visible layer with a blend mode outside Normal, Multiply, Screen, Overlay
+and Difference is refused too; hidden modes are kept and skipped. The handoff's
+Difference inspection layer can now be revealed.
 
 Refused with `ProjectError` (invalid or over a limit), before any pixels are
 decoded: wrong format or colour space, unsupported version, bad UUIDs or
@@ -51,6 +52,22 @@ the side, pixel or byte limits, masks with colour or alpha, non-8-bit PNGs.
 
 ## Colour and precision
 
+- The 2026-10-08 finishing slice adds Multiply, Screen, Overlay and Difference.
+  Formulas follow [W3C Compositing and Blending Level 1](https://www.w3.org/TR/compositing-1/#blending):
+  blend straight RGB only in overlapping source/backdrop coverage, then apply
+  source-over with layer opacity and enabled mask. No backdrop means source
+  colour is retained, even for Multiply. Overlay switches on backdrop colour.
+  These operate in gamma-encoded sRGB. Existing Normal arithmetic is retained.
+  Independent pixel/alpha checks, band invariance, save/reopen and undo are
+  tested. A five-mode sheet using the local 512-pixel genuine-engine contact
+  sheet was rendered and viewed; native Compositor parity remains unverified.
+- Resizing stores target width/height separately from unchanged source pixels.
+  Nearest uses nearest-neighbour, Smooth uses bilinear, High quality uses Lanczos
+  RGBA interpolation through premultiplied alpha. Masks span the rendered
+  rectangle, then flip with pixels. The side limit is 30,000 pixels and summed
+  rendered image areas must stay within 200 MP, checked before PNG decode or
+  render allocation. These bound extra scaled buffers, not total process RSS.
+  Original source dimensions remain authoritative for pixel replacement.
 - Working space: gamma-encoded sRGB, as upstream. No linearisation; the
   existing Retouch canvases are 8-bit working sRGB already.
 - Arrays are RGB/RGBA. Retouch's BGR stays at the engine boundary.
@@ -62,9 +79,8 @@ the side, pixel or byte limits, masks with colour or alpha, non-8-bit PNGs.
   canvas after every layer, so stacks of translucent layers can differ from
   the app by about one level per layer; opaque, fully revealed and fully
   hidden pixels match exactly. Upstream's own pixel tests allow ±0.02.
-- 1:1 upright layers copy pixels without resampling upstream
-  (`LayerRenderer.interpolation`), so sampling only matters once scaled
-  layers are supported.
+- 1:1 layers keep their pixels without resampling; sampling controls scaled
+  pixels and resized masks. Native-app scaled-render parity is not yet measured.
 - Saving never claims more than 8 bits: PNG assets are 8-bit, and float
   buffers do not recover precision.
 

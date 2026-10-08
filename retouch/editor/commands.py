@@ -161,7 +161,7 @@ class DocumentHistory:
     def update_layer(self, layer_id: str, **changes) -> bool:
         """Set layer properties together as one undoable edit."""
         allowed = {'name', 'visible', 'opacity', 'blend_mode', 'origin',
-                   'flip_x', 'flip_y', 'sampling', 'mask_enabled'}
+                   'size', 'flip_x', 'flip_y', 'sampling', 'mask_enabled'}
         if set(changes) - allowed:
             raise ValueError('unsupported layer properties')
 

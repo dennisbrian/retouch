@@ -114,6 +114,28 @@ automatically preserved by a Python translation.
 
 ### Progress
 
+- 2026-10-08, milestone 5 resizing slice: layer width/height controls update the
+  rendered rectangle without replacing source pixels. Undo and save/reopen
+  retain both source and transform. RGBA interpolation preserves alpha edges,
+  masks remain aligned under resizing and flips, and painting a scaled layer
+  stores coverage at source resolution. Rendered surface budgets are enforced
+  before decoding/allocating oversized transformed layers. Rotation remains
+  unsupported; native Compositor scaled-render parity remains pending.
+- 2026-10-08, milestone 5 placement slice: Position & flips controls set integer
+  canvas X/Y placement and horizontal/vertical flips as one undoable edit.
+  Negative placement clips at canvas boundaries; save/reopen retains placement
+  and flips. The brush canvas shows the selected layer's flipped orientation;
+  applied strokes map back to source mask coordinates so pixels and mask flip
+  together exactly once. Pending strokes block transforms. Rotation remains
+  unsupported. Focused tests cover clipped placement, saved transforms,
+  failed-edit rollback and brush alignment under all flip combinations.
+- 2026-10-08, milestone 5 blend slice: Multiply, Screen, Overlay and Difference
+  render alongside Normal, with a Blend mode control in the layer panel.
+  Property edits are undoable, and save/reopen retains the mode. Masks,
+  opacity and partial backdrop alpha participate in the composition; hidden
+  unsupported modes remain stored but cannot be revealed without choosing a
+  supported mode. The handoff's Difference inspection layer is now usable.
+  Formula/evidence boundaries are recorded in COMPOSITOR_FORMAT_NOTES.md.
 - 2026-10-08, milestone 4 implementation: Layer Editor recipe controls capture
   the current native composite, recipe, strength, document ID and revision.
   `retouch/editor/retouch_jobs.py` runs the existing `RetouchEngine` in a

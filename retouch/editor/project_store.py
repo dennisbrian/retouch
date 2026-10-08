@@ -124,6 +124,10 @@ def _check_manifest(manifest, version):
         if active not in ids:
             raise _invalid('activeLayerID names no layer')
     document_id = _uuid(manifest.get('documentID'))
+    surfaces = [fields['size'] for _, fields in parsed if fields['image_file']]
+    if any(max(size) > MAX_SIDE for size in surfaces) or sum(
+            width * height for width, height in surfaces) > MAX_SURFACE_PIXELS:
+        raise ProjectError('rendered layers exceed the size limits')
     return width, height, resolution, guides, active, document_id, parsed
 
 
@@ -140,16 +144,13 @@ def _decode(manifest, version, package):
         if fields.pop('mask_file'):
             mask = _read_png(package, layer_id + '.mask.png', budget, 'mask')
         size = fields.pop('size')
-        if pixels is not None and (pixels.shape[1], pixels.shape[0]) != size:
-            raise UnsupportedFeature('layer %r is scaled (transform %s, image '
-                                     '%dx%d)' % (fields['name'], size,
-                                                 pixels.shape[1], pixels.shape[0]))
         layers.append(Layer(id=layer_id, pixels=pixels, mask=mask, size=size,
                             **fields))
     document = Document(width=width, height=height, layers=layers,
                         resolution=float(resolution),
                         document_id=document_id,
                         active_layer_id=active, guides=guides)
+    document.validate()
     return document
 
 
