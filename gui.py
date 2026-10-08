@@ -2297,7 +2297,7 @@ def reset_relighting(recipe_name):
 
 def reset_eyes_lips(recipe_name):
     d = recipe_defaults(recipe_name)
-    return d["eye_enhance"], d["catchlight"], d["dark_circles"], d["undereye_darken_removal"], d["undereye_puffiness_reduction"], d["eye_sclera_brighten"], d["eye_iris_saturate"], d["eye_iris_hue_shift"], d["eye_iris_brightness"], d["teeth_whiten"], d["lip_enhance"], d["lip_tint"], d["lip_finish"], d["blush"], d["nose_blush"], d["under_eye_blush"], d["eye_gate"]
+    return d["eye_enhance"], d["catchlight"], d["dark_circles"], d["undereye_darken_removal"], d["undereye_puffiness_reduction"], d["eye_sclera_brighten"], d["eye_iris_saturate"], d["eye_iris_hue_shift"], d["eye_iris_brightness"], d["teeth_whiten"], d["lip_enhance"], d["lip_tint"], d["lip_finish"], d["blush"], d["nose_tip_blush"], d["nose_blush"], d["under_eye_blush"], d["eye_gate"]
 
 def reset_face_reshaping(recipe_name):
     d = recipe_defaults(recipe_name)
@@ -4362,8 +4362,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 lip_tint = gr.Dropdown(choices=LIP_TINTS, value="none", label="Lip Tint Color", interactive=True, info="Apply a natural cosmetic tint overlay")
                                 lip_finish = gr.Dropdown(choices=LIP_FINISH_CHOICES, value="gloss", label="Lip Finish", interactive=True, info="Surface finish style: gloss (shiny), matte (flat), velvet (soft)")
                                 blush = gr.Slider(0, 100, 0, step=1, label="Blush Strength", info="Intensity of virtual cosmetic blush on cheeks")
+                                nose_tip_blush = gr.Slider(0, 100, 0, step=1, label="Nose Tip Blush", info="Soft pink tint on the tip of the nose, a little onto the wings; nostrils and lips stay clean. Works without cheek blush and scales with every skin tone. Off by default; start near 50.")
+                                # Legacy nose_blush (a faint disc inside the cheek blush) is
+                                # recipe-only now; Nose Tip Blush above replaces it when on.
+                                nose_blush = gr.State(value=False)
                                 with gr.Row():
-                                    nose_blush = gr.Checkbox(label="Nose Blush", value=False, info="Add cosmetic pink tone to nose tip")
                                     under_eye_blush = gr.Checkbox(label="Under-Eye Blush", value=False, info="Apply soft under-eye blush for a fresh/cosplay look")
                                     eye_gate = gr.Checkbox(label="Eye Occlusion Gate", value=True, info="Skip enhancing eyes detected as closed/occluded (prevents painting an iris onto hair or a closed lid)")
                                     lens_glare = gr.Slider(0, 100, 0, step=1, label="Glasses Glare Removal", info="Lift flash, softbox and window reflections off glasses, goggles and visors over the eyes. Off by default; on bare faces it also softens shine around the eyes.")
@@ -4813,6 +4816,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
  "blemish",
  "whiten_tone",
  "nose_blush",
+        # Visible opt-in nose tip slider; a recipe may set skin.nose_tip_blush.
+        "nose_tip_blush",
         "under_eye_blush",
  "white_costume_lift",
  "body_smooth",
@@ -4969,6 +4974,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "blemish": blemish,
  "whiten_tone": whiten_tone,
  "nose_blush": nose_blush,
+        "nose_tip_blush": nose_tip_blush,
         "under_eye_blush": under_eye_blush,
  "white_costume_lift": white_costume_lift,
  "body_smooth": body_smooth,
@@ -5203,7 +5209,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     _track_reset_event(reset_eyes_lips_btn.click(
         fn=reset_eyes_lips,
         inputs=[recipe],
-        outputs=[eye_enhance, catchlight, dark_circles, undereye_darken_removal, undereye_puffiness_reduction, eye_sclera_brighten, eye_iris_saturate, eye_iris_hue_shift, eye_iris_brightness, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, nose_blush, under_eye_blush, eye_gate],
+        outputs=[eye_enhance, catchlight, dark_circles, undereye_darken_removal, undereye_puffiness_reduction, eye_sclera_brighten, eye_iris_saturate, eye_iris_hue_shift, eye_iris_brightness, teeth_whiten, lip_enhance, lip_tint, lip_finish, blush, nose_tip_blush, nose_blush, under_eye_blush, eye_gate],
         queue=False,
         show_progress="hidden",
     ))
@@ -5759,6 +5765,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "nose_restore": nose_restore,
         "nose_shape": nose_shape,
         "nose_highlight": nose_highlight,
+        "nose_tip_blush": nose_tip_blush,
         "skin_sss": skin_sss,
         "specular_bloom": specular_bloom,
         "specular_bloom_tone": specular_bloom_tone,

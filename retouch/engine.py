@@ -370,6 +370,7 @@ class ProcessingContext:
     body_skin_even: float = 0.0
     neck_tone_match: float = 0.0
     nose_highlight: float = 0.0
+    nose_tip_blush: float = 0.0
     skin_sss: float = 0.0
     freckle_removal: float = 0.0
     heal_engine: str = "telea"
@@ -1658,6 +1659,7 @@ class RetouchEngine:
         body_skin_even: Optional[float] = None,
         neck_tone_match: Optional[float] = None,
         nose_highlight: Optional[float] = None,
+        nose_tip_blush: Optional[float] = None,
         skin_sss: Optional[float] = None,
         regional_modulation: Optional[float] = None,
         smooth_engine: Optional[str] = None,
@@ -1983,6 +1985,7 @@ class RetouchEngine:
             "body_skin_even": body_skin_even,
             "neck_tone_match": neck_tone_match,
             "nose_highlight": nose_highlight,
+            "nose_tip_blush": nose_tip_blush,
             "skin_sss": skin_sss,
             "lut": lut,
             "skin_locus": skin_locus,

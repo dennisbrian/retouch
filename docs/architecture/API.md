@@ -104,6 +104,7 @@ def process(
     neck_tone_match: Optional[int] = None,
     highlight_repair: Optional[int] = None,
     nose_highlight: Optional[int] = None,
+    nose_tip_blush: Optional[int] = None,
     specular_bloom: Optional[int] = None,
     specular_bloom_tone: Optional[str] = None,
     specular_finish: Optional[str] = None,
@@ -424,11 +425,12 @@ Passing an explicit value override to these parameters takes precedence over the
 ##### **Face Features (Eyes, Lips, Teeth, Nose)**
 
 *   **`undereye_shadow_strength`** (Type: `float`, Default: `0.0`, Range: `0.0` to `1.0`, Recipe key: `eyes.undereye_shadow_strength`): Adjusts the undereye shadow strength parameter.
-*   **`nose_blush`** (Type: `bool`, Default: `False`, Range: None, Recipe key: `nose_blush`): Boolean flag to toggle nose blush.
+*   **`nose_blush`** (Type: `bool`, Default: `False`, Range: None, Recipe key: `nose_blush`): Boolean flag to toggle nose blush (legacy: a faint disc inside the cheek blush, only with `blush` > 0; skipped while `nose_tip_blush` > 0).
 *   **`under_eye_blush`** (Type: `bool`, Default: `False`, Range: None, Recipe key: `under_eye_blush`): Boolean flag to toggle under eye blush.
 *   **`nose_restore`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.nose_restore`): Adjusts the nose restore parameter.
 *   **`nose_shape`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.nose_shape`): Keep Nose Shape. Puts back the broad nose shading that skin smoothing flattens (fine texture stays smoothed; later tone edits still reach the nose). Off by default.
 *   **`nose_highlight`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.nose_highlight`): Nose Bridge Highlight. A soft highlight stripe down the nose bridge (linear-light gain, so the skin keeps its colour on every tone). Off by default; start near 50.
+*   **`nose_tip_blush`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.nose_tip_blush`): Nose Tip Blush. A soft pink tint on the nose tip (pigment-style ratio in linear light, so it scales with every skin tone; nostrils and lips excluded). Works without `blush`; replaces the legacy `nose_blush` disc while above 0. Off by default; start near 50.
 *   **`eye_enhance`** (Type: `int`, Default: `5`, Range: `0` to `100`, Recipe key: `eyes.whites`): Adjusts the eye enhance parameter.
 *   **`catchlight`** (Type: `int`, Default: `5`, Range: `0` to `100`, Recipe key: `eyes.catchlight`): Adjusts the catchlight parameter.
 *   **`dark_circles`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `eyes.dark_circles`): Adjusts the dark circles parameter.
