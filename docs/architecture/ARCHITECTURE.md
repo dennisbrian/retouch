@@ -300,7 +300,7 @@ per `AGENTS.md`.
 | `gui_render_modes.py` | Pure render-mode contracts separating draft GUI state from queued render work (preview vs export). |
 | `gui_workspace.py` | Session-owned temporary workspace primitives; per-session digest-named directories so sessions cannot delete each other's files. |
 | `compositor.py` | Handoff writer: a new Compositor `.comp` package (base, masked result, hidden Difference layer) from the Advanced canvas. |
-| `editor/` | UI-free layer-editor core: `document.py` records, `project_store.py` validated `.comp` subset reader/writer, `composite.py` Normal-blend reference compositor (Compositor MIT provenance in `third_party/compositor/`), `commands.py` transactional layer edits, bounded undo/redo and saved-revision tracking. See `docs/plans/COMPOSITOR_FORMAT_NOTES.md`. |
+| `editor/` | Layer editor: `document.py` records, `project_store.py` validated `.comp` subset reader/writer, `composite.py` Normal-blend reference compositor (Compositor MIT provenance in `third_party/compositor/`), `commands.py` transactional layer edits, bounded undo/redo and saved-revision tracking; `ui.py` session-owned Gradio tab, bounded previews, brush masks and native export; `retouch_jobs.py` captured-revision recipe subprocesses, cancellation and stale-result rejection. The core remains independent of UI imports. See `docs/plans/COMPOSITOR_FORMAT_NOTES.md`. |
 
 ### Batch, CLI & review workflow
 

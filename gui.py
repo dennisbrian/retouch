@@ -4536,6 +4536,9 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         """)
 
 
+        from retouch.editor.ui import build_editor_tab
+        build_editor_tab()
+
         with gr.Tab("Batch Library Ingestion"):
             with gr.Row():
                 with gr.Column(scale=1):

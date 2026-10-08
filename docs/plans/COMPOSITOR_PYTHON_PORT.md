@@ -114,6 +114,45 @@ automatically preserved by a Python translation.
 
 ### Progress
 
+- 2026-10-08, milestone 4 implementation: Layer Editor recipe controls capture
+  the current native composite, recipe, strength, document ID and revision.
+  `retouch/editor/retouch_jobs.py` runs the existing `RetouchEngine` in a
+  separate Python process and publishes a new fully revealed mask/result
+  layer through the serialized editor queue. Strength is result-layer opacity;
+  the recipe's engine settings remain unchanged. Hiding the result restores
+  the captured underlying composite, and adding it is undoable. Manual edits
+  or unapplied strokes while rendering reject the result. Document replacement
+  waits for the active render to end. Cancellation works independently of the
+  render queue, checks publication boundaries, and terminates only this worker
+  after a two-second grace period. Jobs time out at 15 minutes. Workspaces
+  are cleaned after workers exit. Transparent composites are explicitly refused
+  for this first slice to avoid compositing result alpha twice. Frozen builds
+  require `RETOUCH_EDITOR_PYTHON`; ordinary runs use their existing Python.
+  Focused tests include simulated-engine color/opacity contracts and actual
+  subprocess completion/cancellation; those alone are not real-photo engine
+  qualification or native-app visual parity.
+  Local genuine-engine smoke evidence: `natural` on a 512-pixel copy of
+  `docs/reference_targets/chang_e_cosplay_tamed_shine.jpg` (a photo contact
+  sheet). Render completed; saved project's revealed composite equals the
+  worker PNG exactly, and hiding the result restores captured input exactly.
+  The input/output sheet was viewed. This is not native-resolution portrait
+  qualification or evidence for every recipe.
+- 2026-10-08, milestone 3 UI slice: the existing Gradio shell now includes
+  a Layer Editor tab (`retouch/editor/ui.py`). Open a photo or local `.comp`
+  folder; add/remove/reorder layers, set name/visibility/opacity, paint white
+  (reveal) or black (hide) on the selected layer's local canvas, apply as one
+  undo step, save a `.comp` folder and download a native-resolution PNG.
+  Previews are capped at 1024 px; source pixels remain native, embedded ICC
+  profiles convert to sRGB on import. Only painted support changes an existing
+  mask. Opening a replacement requires explicit discard when edits or strokes
+  are pending; saving/exporting blocks unapplied strokes. Browser unload
+  prompts cover dirty projects and pending strokes. Editor callbacks serialize
+  to avoid overlapping mutations. Workspaces are session-owned and cleaned
+  when released. Recipe worker integration is recorded in the milestone 4 entry.
+  Synthetic two-layer Safari review verified open, visibility, undo, save and
+  PNG delivery; brush calculations/native preservation have regression tests.
+  Real-photo brush interaction and native Compositor renderer parity remain
+  separate acceptance checks.
 - 2026-10-07, milestone 3 foundation: `retouch.editor.DocumentHistory` adds
   validated, transactional layer add/remove/reorder, property updates, masks
   and pixel replacement, with undo/redo and saved-revision dirty tracking.
@@ -125,8 +164,8 @@ automatically preserved by a Python translation.
   512 MiB of unique retained array buffers (including current document).
   Old history is pruned first; if current pixels alone exceed the budget,
   retain the document and drop undo history. This does not cap total RSS.
-  The layer editor UI, unsaved-change prompts and native-app parity remain
-  pending; Advanced Retouch's existing history is a separate workflow.
+  Native-app parity remains pending; Advanced Retouch's existing history
+  is a separate workflow. UI work is recorded in the following day's entry.
 - 2026-10-07, milestones 1-2: done in the cloud, except the parts that need a
   Mac. `retouch/editor/` holds the document model, the validated `.comp`
   reader/writer for a declared subset and the Normal-blend reference
