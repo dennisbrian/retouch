@@ -4781,6 +4781,20 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                     learn_style_btn = gr.Button("Extract & Learn Style from Dataset 🧠", variant="primary", elem_classes=["primary-btn"])
                     learn_status = gr.Textbox(label="Learning Status", lines=5, interactive=False)
 
+        with gr.Tab("Layer Editor"):
+            gr.Markdown(
+                "Open a photo or a Compositor `.comp` project, hide or reveal parts of each layer "
+                "with the brush, then save the project or export a full-size PNG. "
+                "Guide: `docs/guides/LAYER_EDITOR.md`."
+            )
+            # The canvas page is served by retouch.editor.web on this same
+            # server (routes added in launch() below), so it shares the window.
+            gr.HTML(
+                '<iframe src="/editor/" title="Layer editor" '
+                'style="width:100%;height:calc(100vh - 220px);min-height:640px;'
+                'border:1px solid var(--border-color-primary);border-radius:8px"></iframe>'
+            )
+
     def on_batch_style_change(style_type):
         if style_type == "Use Custom Style":
             return [gr.update(visible=False), gr.update(visible=True)]
@@ -6339,6 +6353,23 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     # gr.Info only reaches the page from inside an event, so the update found
     # by the entry point's background check is shown on page load.
     app.load(fn=notify_update_available, show_progress="hidden")
+
+
+def _launch_with_layer_editor(*args, _blocks_launch=app.launch, **kwargs):
+    """Blocks.launch, plus the layer editor's page and API on the same server.
+
+    Gradio builds its FastAPI app inside launch(); ``app_kwargs['routes']``
+    seeds that app's router, so the editor is served by every launch path
+    (``python gui.py``, ``./run``, the desktop window) without a second port.
+    """
+    from retouch.editor.web import editor_routes
+
+    app_kwargs = dict(kwargs.pop("app_kwargs", None) or {})
+    app_kwargs["routes"] = list(app_kwargs.get("routes") or []) + editor_routes()
+    return _blocks_launch(*args, app_kwargs=app_kwargs, **kwargs)
+
+
+app.launch = _launch_with_layer_editor
 
 if __name__ == "__main__":
     from retouch.diagnostics import enable_native_crash_log, setup_file_logging

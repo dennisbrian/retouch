@@ -27,4 +27,6 @@ from the upstream sources below; each module's docstring repeats the notice.
 | `retouch/editor/document.py` | `Compositor/IO/ProjectStore.swift` (`ProjectManifest`, `ProjectLayerRecord`), `Compositor/Document/DocumentLimits.swift`, `Compositor/Document/LayerTransform.swift`, `docs/writing-comp-files.md` (blend-mode names) |
 | `retouch/editor/project_store.py` | `Compositor/IO/ProjectStore.swift` (`load`, `validate`, `checkSize`, `checkFile`), `Compositor/Document/LayerMask.swift` (`isValid`), `docs/project-format.md` |
 | `retouch/editor/composite.py` | `Compositor/IO/ImageExporter.swift` (`render`), `Compositor/Rendering/LayerRenderer.swift` (`draw`) |
+| `retouch/editor/brush.py` | `Compositor/Document/BrushStroke.swift` (`spacingFraction`, `walk`, `dab`, `falloff`, the tip and the stroke-wide opacity cap) |
 | `tests/test_editor_composite.py`, `tests/test_editor_project_store.py` | Expected values translated from `CompositorTests/LayerAppearanceTests.swift`, `LayerMaskTests.swift` and `ProjectTests.swift` |
+| `tests/test_editor_brush.py`, `tests/test_editor_session.py` | Cases translated from `CompositorTests/BrushTests.swift` (opacity cap, soft build-up, ripple, mask opacity, hidden layers and disabled masks refuse painting) |

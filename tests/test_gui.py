@@ -1562,3 +1562,25 @@ class TestUpdateNotice:
 def test_gui_import_turns_off_gradio_analytics():
     # Set before gradio is imported by gui.py; see the comment there.
     assert os.environ.get("GRADIO_ANALYTICS_ENABLED") == "False"
+
+
+class TestLayerEditorTab:
+    """The Layer Editor tab embeds a page served by retouch.editor.web."""
+
+    def test_launch_adds_the_editor_routes(self):
+        captured = {}
+
+        def fake_launch(*args, **kwargs):
+            captured.update(kwargs)
+
+        gui._launch_with_layer_editor(server_port=1, app_kwargs={"docs_url": None},
+                                      _blocks_launch=fake_launch)
+        paths = {getattr(route, "path", None) for route in captured["app_kwargs"]["routes"]}
+        assert "/editor/" in paths and "/editor/api/{session_id}/action" in paths
+        assert captured["app_kwargs"]["docs_url"] is None and captured["server_port"] == 1
+        assert gui.app.launch is gui._launch_with_layer_editor
+
+    def test_tab_embeds_the_editor_page(self):
+        html = [block for block in gui.app.blocks.values()
+                if type(block).__name__ == "HTML" and 'src="/editor/"' in str(block.value)]
+        assert len(html) == 1

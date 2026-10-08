@@ -11,6 +11,7 @@ desktop bindings.
 import html
 import importlib
 import socket
+import sys
 import threading
 import time
 import traceback
@@ -348,6 +349,51 @@ def _attach_closed_handler(window: Any, callback: Callable[..., Any]) -> bool:
     return False
 
 
+def _unsaved_editor_titles() -> list:
+    """Documents with unsaved changes in the layer editor, if it was used."""
+
+    web = sys.modules.get("retouch.editor.web")
+    if web is None:
+        return []
+    try:
+        return list(web.unsaved_titles())
+    except Exception:  # never block closing on a probe failure
+        return []
+
+
+def _attach_unsaved_editor_guard(window: Any) -> bool:
+    """Ask before closing the window while the layer editor has unsaved work.
+
+    pywebview runs ``closing`` handlers synchronously and then shows its own
+    quit confirmation when ``window.confirm_close`` is set, on every
+    platform, so the handler only switches that prompt on when needed.
+    """
+
+    events = getattr(window, "events", None)
+    closing = getattr(events, "closing", None)
+    if closing is None:
+        return False
+
+    def on_closing() -> None:
+        titles = _unsaved_editor_titles()
+        try:
+            window.confirm_close = bool(titles)
+            localization = getattr(window, "localization", None)
+            if titles and isinstance(localization, dict):
+                localization["global.quitConfirmation"] = (
+                    "The layer editor has unsaved changes in %s. Quit anyway?"
+                    % ", ".join(titles)
+                )
+        except (AttributeError, TypeError):
+            pass
+
+    try:
+        closing += on_closing
+        return True
+    except (AttributeError, TypeError):
+        return False
+
+
 class DesktopRuntime:
     """Own the backend thread, native window, and shutdown lifecycle."""
 
@@ -426,6 +472,7 @@ class DesktopRuntime:
             )
         self.window = window
         _attach_closed_handler(window, self.shutdown)
+        _attach_unsaved_editor_guard(window)
         return window
 
     def run(self) -> bool:

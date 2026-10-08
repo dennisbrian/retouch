@@ -82,6 +82,7 @@ include = ["retouch*", "models", "presets", "luts"]
 models = ["manifest.json"]
 presets = ["*.json"]
 luts = ["*.cube", "ACQUISITION.md"]
+"retouch.editor" = ["static/*.html", "static/*.js"]
 
 [tool.pytest.ini_options]
 timeout = 120

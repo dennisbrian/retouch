@@ -114,6 +114,25 @@ automatically preserved by a Python translation.
 
 ### Progress
 
+- 2026-10-08, milestone 3: runnable editor MVP, as a web canvas inside the
+  existing app window (Alex chose the canvas-in-app plan; no new dependency).
+  New **Layer Editor** tab; `retouch/editor/web.py` serves the page
+  (`static/editor.html`, `editor.js`) and a JSON API on the Gradio server
+  under `/editor` (routes added in `gui.py`'s launch wrapper, local Host and a
+  per-process token required). `session.py` holds the editor actions over
+  `DocumentHistory`; `brush.py` ports upstream's mask brush (dab spacing,
+  falloff, stroke-wide opacity cap); `preview.py` composites at most 2048 px
+  from cached scaled copies while native pixels stay in the document. Covers
+  zoom/pan, layer panel (select, show/hide, rename, reorder, delete,
+  opacity, mask add/hide-all/off/delete), hide/reveal mask brush, undo/redo,
+  save/save as/open `.comp`, full-size PNG export, unsaved-change prompts
+  (open, page unload, desktop window close). Checked in headless Chromium
+  through the real app on DSCF3503 + its `cosplay_clear_v1` render
+  (open, add layer, stroke, undo, redo, save, reopen, export); export equals
+  the analytic blend. Not done: painting layer pixels, tiled export (the
+  composite still holds one full RGBA canvas), native-window check of the
+  close prompt (pywebview needs a desktop), Mac-app parity. User guide:
+  [LAYER_EDITOR.md](../guides/LAYER_EDITOR.md).
 - 2026-10-07, milestone 3 foundation: `retouch.editor.DocumentHistory` adds
   validated, transactional layer add/remove/reorder, property updates, masks
   and pixel replacement, with undo/redo and saved-revision dirty tracking.

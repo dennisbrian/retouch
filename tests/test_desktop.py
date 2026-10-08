@@ -306,3 +306,34 @@ def test_desktop_runtime_hands_readiness_timeout_to_error_window(desktop_module)
     assert "Timed out waiting" in webview.create_calls[0][1]["html"]
     assert app.close.called
     assert thread.join_calls == [module.DEFAULT_JOIN_TIMEOUT]
+
+
+def test_closing_asks_only_while_the_layer_editor_has_unsaved_work(desktop_module, monkeypatch):
+    module, _ = desktop_module
+    closing = _ClosedEvent()
+    window = type("Window", (), {})()
+    window.events = type("Events", (), {"closing": closing})()
+    window.confirm_close = False
+    window.localization = {"global.quitConfirmation": "Do you really want to quit?"}
+    assert module._attach_unsaved_editor_guard(window)
+    (handler,) = closing.callbacks
+
+    fake_web = type("Web", (), {"titles": []})()
+    fake_web.unsaved_titles = lambda: fake_web.titles
+    monkeypatch.setitem(sys.modules, "retouch.editor.web", fake_web)
+    handler()
+    assert window.confirm_close is False
+    fake_web.titles = ["DSCF3503"]
+    handler()
+    assert window.confirm_close is True
+    assert "DSCF3503" in window.localization["global.quitConfirmation"]
+    fake_web.titles = []
+    handler()
+    assert window.confirm_close is False
+
+
+def test_closing_guard_ignores_windows_without_a_closing_event(desktop_module, monkeypatch):
+    module, _ = desktop_module
+    assert module._attach_unsaved_editor_guard(_FakeWindow()) is False
+    monkeypatch.delitem(sys.modules, "retouch.editor.web", raising=False)
+    assert module._unsaved_editor_titles() == []
