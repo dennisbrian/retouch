@@ -153,7 +153,7 @@ def test_invert_disabled_mask_preserves_enablement_and_pixels():
     np.testing.assert_array_equal(composite(h.document), original)
 
 
-@pytest.mark.parametrize('operation', ['duplicate_layer', 'invert_mask'])
+@pytest.mark.parametrize('operation', ['duplicate_layer', 'invert_mask', 'reset_mask'])
 def test_new_actions_reject_missing_layer_without_losing_redo(operation):
     h = history(saved=True)
     lid = h.document.layers[0].id
@@ -162,6 +162,55 @@ def test_new_actions_reject_missing_layer_without_losing_redo(operation):
     with pytest.raises(KeyError):
         getattr(h, operation)('missing')
     assert h.revision == 0 and not h.dirty and h.can_redo
+
+
+@pytest.mark.parametrize('enabled', [True, False])
+def test_reset_mask_preserves_transformed_source_and_undo_save_round_trip(tmp_path, enabled):
+    h = history()
+    lid = h.document.layers[0].id
+    mask = np.array([[0, 80, 255]], np.uint8)
+    h.set_mask(lid, mask, enabled=enabled)
+    h.update_layer(lid, size=(6, 4), origin=(-1, 0), flip_x=True, opacity=0.5)
+    target = tmp_path / 'reset.comp'
+    h.save(target)
+    before = composite(h.document)
+    original = h.document.layer(lid)
+    expected_doc = h.document
+    expected_doc.layer(lid).set_mask(None, True)
+    expected = composite(expected_doc)
+    assert h.reset_mask(lid) and h.dirty
+    reset = h.document.layer(lid)
+    assert reset.mask is None and reset.mask_enabled
+    assert reset.pixels is original.pixels
+    assert (reset.size, reset.origin, reset.flip_x, reset.opacity) == (
+        original.size, original.origin, original.flip_x, original.opacity)
+    np.testing.assert_array_equal(composite(h.document), expected)
+    h.save(target)  # Replaces a package that previously contained the mask asset.
+    loaded = load_project(target)
+    assert loaded.layer(lid).mask is None
+    assert loaded.layer(lid).mask_enabled
+    assert not list((target / 'images').glob('*mask*'))
+    np.testing.assert_array_equal(composite(loaded), expected)
+    h.undo()
+    assert h.document.layer(lid).mask_enabled == enabled
+    np.testing.assert_array_equal(h.document.layer(lid).mask, mask)
+    np.testing.assert_array_equal(composite(h.document), before)
+    h.redo()
+    assert not h.dirty
+    np.testing.assert_array_equal(composite(h.document), expected)
+
+
+def test_reset_absent_mask_is_noop_and_preserves_redo_and_disabled_state():
+    h = history(saved=True)
+    lid = h.document.layers[0].id
+    h.invert_mask(lid)
+    h.undo()
+    assert not h.reset_mask(lid)
+    assert h.can_redo and not h.dirty and h.revision == 0
+    h.update_layer(lid, mask_enabled=False)
+    revision = h.revision
+    assert not h.reset_mask(lid)
+    assert h.revision == revision and not h.document.layer(lid).mask_enabled
 
 
 def test_branching_never_reuses_saved_revision(tmp_path):

@@ -114,6 +114,20 @@ automatically preserved by a Python translation.
 
 ### Progress
 
+- 2026-10-09, milestone 5 mask reset: Reset mask removes stored coverage from
+  the selected layer, revealing its pixels at the current opacity. Source
+  alpha, visibility, placement, resizing and flips are kept. Removing a stored
+  mask resets enablement to on, so subsequent painting works immediately and
+  matches the `.comp` format's default for layers without a mask asset.
+  Undo restores the exact previous mask; saving/reopening retains the reset.
+  Pending strokes must be applied or erased first. Resetting a layer without
+  a mask is a no-op that preserves redo history and saved-revision tracking.
+  Verification: 167 focused editor tests passed; governance CI reported no
+  errors or warnings. On the previous 360 × 480 real-photo smoke render,
+  resetting a fully hidden result reproduced its unmasked pixels exactly;
+  undo, redo and save/reopen were pixel-identical. The comparison was viewed.
+  This slice uses callback tests and rendered photo checks; its new button
+  has not received a separate browser interaction check or native-app parity.
 - 2026-10-09, milestone 5 layer/mask finishing slice: Duplicate layer inserts
   a separately editable copy directly above the source and selects it. Pixels
   and masks share immutable buffers until edited; placement, size, flips,

@@ -141,7 +141,7 @@ def test_duplicate_and_invert_callbacks_preserve_original_and_round_trip(session
     assert session.history.document.active_layer_id == duplicate_id
 
 
-@pytest.mark.parametrize('operation', ['duplicate', 'invert_mask'])
+@pytest.mark.parametrize('operation', ['duplicate', 'invert_mask', 'reset_mask'])
 def test_new_actions_gate_pending_strokes_and_missing_selection(session, callbacks, operation):
     edit = next(fn for fn in callbacks if fn.__name__ == 'edit'
                 and fn.__kwdefaults__['operation'] == operation)
@@ -152,6 +152,26 @@ def test_new_actions_gate_pending_strokes_and_missing_selection(session, callbac
     session.history.remove_layer(session.selected_id)
     with pytest.raises(gr.Error, match='Select a layer'):
         edit(session, None, None)
+
+
+def test_reset_mask_callback_reveals_layer_and_undo_restores_coverage(session, callbacks, tmp_path):
+    edits = {fn.__kwdefaults__['operation']: fn for fn in callbacks if fn.__name__ == 'edit'}
+    lid = session.selected_id
+    expected = composite(session.history.document)
+    session.apply_mask(stroke_canvas())
+    painted = composite(session.history.document)
+    assert not np.array_equal(painted, expected)
+    result = edits['reset_mask'](session, lid, None)
+    assert len(result) == 18 and session.selected_id == lid
+    assert session.selected().mask is None
+    np.testing.assert_array_equal(composite(session.history.document), expected)
+    session.history.save(tmp_path / 'reset.comp')
+    np.testing.assert_array_equal(composite(load_project(tmp_path / 'reset.comp')), expected)
+    edits['undo'](session, lid, None)
+    np.testing.assert_array_equal(composite(session.history.document), painted)
+    edits['redo'](session, lid, None)
+    assert not session.history.dirty
+    np.testing.assert_array_equal(composite(session.history.document), expected)
 
 
 def test_project_reopen_starts_clean_and_preserves_mask(session, callbacks, tmp_path):

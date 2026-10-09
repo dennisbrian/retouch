@@ -182,6 +182,15 @@ class DocumentHistory:
             layer.set_mask(mask, layer.mask_enabled)
         return self._edit('Invert mask', apply)
 
+    def reset_mask(self, layer_id: str) -> bool:
+        """Remove stored coverage as one undo step; future painting is enabled."""
+        def apply(doc: Document) -> None:
+            layer = doc.layer(layer_id)
+            if layer.mask is not None:
+                # .comp cannot store disabled enablement without a mask asset.
+                layer.set_mask(None, True)
+        return self._edit('Reset mask', apply)
+
     def move_layer(self, layer_id: str, index: int) -> bool:
         return self._edit('Reorder layer', lambda doc: doc.move_layer(layer_id, index))
 
