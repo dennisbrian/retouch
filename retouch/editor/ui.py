@@ -224,8 +224,12 @@ def build_editor_tab():
                     with gr.Row():
                         layer_width = gr.Number(label='Layer width (pixels)', value=1, precision=0)
                         layer_height = gr.Number(label='Layer height (pixels)', value=1, precision=0)
-                    gr.Markdown('Resizing preserves the original pixels. Set both dimensions '
-                                'to keep the aspect ratio; changing one stretches the layer.')
+                    keep_aspect = gr.Checkbox(label='Keep aspect ratio', value=True)
+                    resize_axis = gr.Radio(['Width', 'Height'], value='Width', label='Resize from')
+                    gr.Markdown('With Keep aspect ratio on, enter the dimension selected '
+                                'in Resize from; the other is calculated from the current '
+                                'layer proportions. Turn it off to set both dimensions freely. '
+                                'Original pixels are preserved.')
                     resize = gr.Button('Apply layer size')
                 with gr.Row():
                     up = gr.Button('Move up')
@@ -310,11 +314,9 @@ def build_editor_tab():
                                                      origin=(int(args[0]), int(args[1])),
                                                      flip_x=args[2], flip_y=args[3])
                     elif operation == 'resize':
-                        for value in args[:2]:
-                            if (not isinstance(value, (int, float)) or isinstance(value, bool)
-                                    or not math.isfinite(value) or value != int(value) or value < 1):
-                                raise ValueError('Layer dimensions must be positive whole pixels')
-                        current.history.update_layer(layer.id, size=(int(args[0]), int(args[1])))
+                        current.history.resize_layer(layer.id, args[0], args[1],
+                                                     keep_aspect=args[2] if len(args) > 2 else False,
+                                                     axis=args[3] if len(args) > 3 else 'Width')
                     elif operation in ('up', 'down'):
                         index = current.history.document.index_of(layer.id)
                         current.history.move_layer(layer.id, index + (1 if operation == 'up' else -1))
@@ -357,7 +359,7 @@ def build_editor_tab():
                 return action(current, selected, strokes, operation, *args)
             extra = [name, visible, opacity, mask_enabled, blend] if operation == 'properties' else (
                 [position_x, position_y, flip_x, flip_y] if operation == 'transform' else (
-                    [layer_width, layer_height] if operation == 'resize' else (
+                    [layer_width, layer_height, keep_aspect, resize_axis] if operation == 'resize' else (
                         [add_photo] if operation == 'add' else [])))
             button.click(edit, [session, layers, canvas] + extra, outputs, concurrency_id='layer-editor')
 

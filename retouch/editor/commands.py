@@ -6,6 +6,7 @@ If the current document alone exceeds it, all undo states are dropped. This
 is a buffer budget, not a promise about total Python process memory.
 """
 from copy import copy, deepcopy
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -193,6 +194,37 @@ class DocumentHistory:
 
     def move_layer(self, layer_id: str, index: int) -> bool:
         return self._edit('Reorder layer', lambda doc: doc.move_layer(layer_id, index))
+
+    def resize_layer(self, layer_id: str, width, height, *, keep_aspect=False,
+                     axis='Width') -> bool:
+        """Resize the rendered rectangle; optionally derive one dimension.
+
+        The current rendered aspect ratio is preserved, with half-up rounding
+        to whole pixels and a one-pixel minimum. Native pixels/masks stay intact.
+        """
+        if axis not in ('Width', 'Height') or not isinstance(keep_aspect, bool):
+            raise ValueError('Invalid aspect ratio controls')
+
+        def dimension(value):
+            if (not isinstance(value, (int, float)) or isinstance(value, bool)
+                    or not math.isfinite(value) or value != int(value) or value < 1):
+                raise ValueError('Layer dimensions must be positive whole pixels')
+            return int(value)
+
+        def apply(doc: Document) -> None:
+            layer = doc.layer(layer_id)
+            if keep_aspect:
+                old_width, old_height = layer.size
+                if axis == 'Width':
+                    new_width = dimension(width)
+                    new_height = max(1, (new_width * old_height + old_width // 2) // old_width)
+                else:
+                    new_height = dimension(height)
+                    new_width = max(1, (new_height * old_width + old_height // 2) // old_height)
+            else:
+                new_width, new_height = dimension(width), dimension(height)
+            layer.size = (new_width, new_height)
+        return self._edit('Resize layer', apply)
 
     def update_layer(self, layer_id: str, **changes) -> bool:
         """Set layer properties together as one undoable edit."""

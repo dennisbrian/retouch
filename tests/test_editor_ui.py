@@ -174,6 +174,25 @@ def test_reset_mask_callback_reveals_layer_and_undo_restores_coverage(session, c
     np.testing.assert_array_equal(composite(session.history.document), expected)
 
 
+def test_proportional_resize_ui_uses_selected_axis_and_can_unlock(session, callbacks):
+    resize = next(fn for fn in callbacks if fn.__name__ == 'edit'
+                  and fn.__kwdefaults__['operation'] == 'resize')
+    lid = session.selected_id
+    source = session.selected().pixels
+    result = resize(session, lid, None, 16, 999, True, 'Width')
+    assert session.selected().size == (16, 12)
+    assert result[-2:] == (16, 12)
+    resize(session, lid, None, 999, 9, True, 'Height')
+    assert session.selected().size == (12, 9)
+    resize(session, lid, None, 5, 10, False, 'Width')
+    assert session.selected().size == (5, 10)
+    assert session.selected().pixels is source
+    revision = session.history.revision
+    with pytest.raises(gr.Error, match='brush strokes'):
+        resize(session, lid, stroke_canvas(), 20, 20, True, 'Width')
+    assert session.history.revision == revision
+
+
 def test_project_reopen_starts_clean_and_preserves_mask(session, callbacks, tmp_path):
     session.apply_mask(stroke_canvas())
     target = tmp_path / 'saved.comp'

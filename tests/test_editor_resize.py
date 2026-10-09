@@ -82,3 +82,68 @@ def test_scaled_project_budget_is_checked_before_png_decode(tmp_path, monkeypatc
     monkeypatch.setattr(store, '_read_png', lambda *args: pytest.fail('PNG decode reached'))
     with pytest.raises(ValueError, match='size limits'):
         load_project(path)
+
+
+@pytest.mark.parametrize('axis,width,height,expected', [
+    ('Width', 9, 999, (9, 6)), ('Height', 999, 8, (12, 8)),
+])
+def test_proportional_resize_uses_current_rectangle_and_round_trips(tmp_path, axis, width, height, expected):
+    doc = document()
+    layer = doc.layers[0]
+    layer.size, layer.origin, layer.flip_x = (6, 4), (-1, 2), True
+    layer.set_mask(np.array([[0, 255], [255, 80]], np.uint8))
+    history = DocumentHistory(doc, saved=True)
+    before = composite(doc)
+    history.resize_layer(layer.id, width, height, keep_aspect=True, axis=axis)
+    resized = history.document.layer(layer.id)
+    assert resized.size == expected  # Native source is square, rendered ratio is 3:2.
+    assert resized.pixels is layer.pixels and resized.mask is layer.mask
+    assert resized.origin == layer.origin and resized.flip_x
+    after = composite(history.document)
+    history.save(tmp_path / 'proportional.comp')
+    loaded = load_project(tmp_path / 'proportional.comp')
+    assert loaded.layer(layer.id).size == expected
+    np.testing.assert_array_equal(composite(loaded), after)
+    history.undo()
+    assert history.document.layer(layer.id).size == (6, 4)
+    np.testing.assert_array_equal(composite(history.document), before)
+    history.redo()
+    assert not history.dirty
+    np.testing.assert_array_equal(composite(history.document), after)
+
+
+@pytest.mark.parametrize('old_size,axis,value,expected', [
+    ((4, 2), 'Width', 3, (3, 2)),  # 1.5 rounds up, never a fractional size.
+    ((2, 4), 'Height', 3, (2, 3)),
+    ((20, 1), 'Width', 1, (1, 1)),  # Avoid a zero-height result.
+    ((1, 20), 'Height', 1, (1, 1)),
+])
+def test_proportional_resize_rounding_and_one_pixel_floor(old_size, axis, value, expected):
+    doc = document()
+    doc.layers[0].size = old_size
+    history = DocumentHistory(doc)
+    history.resize_layer(doc.layers[0].id, value, value, keep_aspect=True, axis=axis)
+    assert history.document.layers[0].size == expected
+
+
+@pytest.mark.parametrize('value', [0, -1, 2.5, True, float('nan'), float('inf'), None])
+def test_proportional_resize_rejects_invalid_primary_without_losing_redo(value):
+    history = DocumentHistory(document(), saved=True)
+    lid = history.document.layers[0].id
+    history.resize_layer(lid, 4, 4)
+    history.undo()
+    with pytest.raises(ValueError, match='positive whole pixels'):
+        history.resize_layer(lid, value, 10, keep_aspect=True)
+    assert history.revision == 0 and not history.dirty and history.can_redo
+
+
+def test_proportional_resize_preserves_budget_limits_and_noop_redo():
+    history = DocumentHistory(document(), saved=True)
+    lid = history.document.layers[0].id
+    history.resize_layer(lid, 4, 4)
+    history.undo()
+    assert not history.resize_layer(lid, 2, 999, keep_aspect=True)
+    assert history.can_redo and not history.dirty
+    with pytest.raises(ValueError, match='budget'):
+        history.resize_layer(lid, 20000, 1, keep_aspect=True)
+    assert history.revision == 0 and not history.dirty and history.can_redo

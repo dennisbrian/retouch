@@ -114,6 +114,18 @@ automatically preserved by a Python translation.
 
 ### Progress
 
+- 2026-10-09, milestone 5 proportional resizing: Keep aspect ratio is on by
+  default. Resize from chooses Width or Height; the other dimension is derived
+  from the current rendered rectangle, rounded half-up to whole pixels with
+  a one-pixel minimum. Turn off the lock to set dimensions independently.
+  Source pixels and masks, placement and flips are retained. Resize is one undo
+  step; saved projects retain the calculated size. Invalid primary dimensions,
+  oversized surfaces and unapplied strokes are rejected without losing edits.
+  Verification: 182 focused editor tests passed and governance CI reported no
+  errors or warnings. A 360 × 480 real-photo render resized to 180 × 240 without
+  replacing source pixels; save/reopen and undo/redo were exact, and the output
+  sheet was viewed. Safari verified width-based 180 × 240, height-based 90 × 120
+  and undo back to 180 × 240. Native Compositor scaled-render parity remains open.
 - 2026-10-09, milestone 5 mask reset: Reset mask removes stored coverage from
   the selected layer, revealing its pixels at the current opacity. Source
   alpha, visibility, placement, resizing and flips are kept. Removing a stored
