@@ -1339,13 +1339,29 @@ def _process_face_core(
         )
 
     # ---- Blush ----
+    # Nose Tip Blush (opt-in slider) replaces the legacy nose_blush disc,
+    # which only ran with cheek blush on and barely tinted the tip.
+    _nose_tip_blush = float(getattr(ctx, 'nose_tip_blush', 0) or 0)
     if ctx.blush > 0:
         canvas = _tr('makeup.apply_blush', canvas)
         canvas = makeup.apply_blush(
             canvas, shifted_face.landmarks, face_width, ctx.blush,
             regions=regions,
-            nose_blush=ctx.nose_blush,
+            nose_blush=ctx.nose_blush and _nose_tip_blush <= 0,
             under_eye_blush=ctx.under_eye_blush,
+        )
+
+    # ---- Nose tip blush (opt-in) ----
+    # A pigment-style pink wash on the tip, its own landmark mask, skin
+    # masked, nostrils faded relative to the tip's own skin. See
+    # retouch/nose_tip_blush.py.
+    if _nose_tip_blush > 0 and shifted_face.landmarks is not None:
+        canvas = _tr('nose_tip_blush', canvas)
+        from .nose_tip_blush import add_nose_tip_blush
+        canvas = add_nose_tip_blush(
+            canvas, shifted_face.landmarks, _nose_tip_blush,
+            ied=shifted_face.ied, skin_mask=skin_n,
+            lips_mask=regions.lips,
         )
 
     # ---- Makeup v2 (eyeshadow, eyeliner, contour, brows, ombre lips) ----

@@ -202,6 +202,7 @@ These keys are defined inside nested dictionary blocks inside a recipe.
 | `skin` | `nose_restore` | 0 to 100 | `0` | `nose_restore` |
 | `skin` | `nose_highlight` | 0.0 to 1.0 | `0` | `nose_highlight` |
 | `skin` | `nose_shape` | 0.0 to 1.0 | `0` | `nose_shape` |
+| `skin` | `nose_tip_blush` | 0.0 to 1.0 | `0` | `nose_tip_blush` |
 | `skin` | `powder_finish` | 0.0 to 1.0 | `0` | `powder_finish` |
 | `skin` | `porcelain` | 0.0 to 1.0 | `rosy` | `whiten_tone` |
 | `skin` | `quantize` | 0 to 100 | `0` | `skin_quantize` |
@@ -524,6 +525,7 @@ and 0–360 for split-toning hue).
 | Nose Restore | `skin.nose_restore` | ÷ 100 |
 | Keep Nose Shape | `skin.nose_shape` | ÷ 100 |
 | Nose Bridge Highlight | `skin.nose_highlight` | ÷ 100 |
+| Nose Tip Blush | `skin.nose_tip_blush` | ÷ 100 |
 | Nose Smooth | `frequency.nose_smooth` | direct |
 | Pore Synthesis | `texture.pore_synthesis` | ÷ 100 |
 | Powder Finish | `skin.powder_finish` | ÷ 100 |

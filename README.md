@@ -425,6 +425,17 @@ cosplay edits. It is off by default, uses no model, follows the face
 landmarks, and leaves hair, brows or glasses over the bridge alone. It pairs
 with Keep Nose Shape, which restores the nose's own shading first.
 
+Nose Tip Blush (`--nose-tip-blush 0-100` in the CLI, the "Nose Tip Blush"
+slider under Eyes & Lips in the app, or `skin.nose_tip_blush` in a recipe,
+where 0.5 = 50) gives the tip of the nose a soft pink tint, a little onto the
+nose wings, like a cream blush. It tints the skin's own colour like a pigment
+rather than painting a fixed pink, so it reads the same way on darker and
+lighter skin, and white face paint takes it too. Nostrils, the upper lip and
+anything over the nose that isn't skin are left alone. It works without
+cheek blush; start near 50. It is off by default and uses no model. When it
+is on it replaces the old Nose Blush option (a faint disc that only showed
+with cheek blush and is now set by recipes only).
+
 Set `RETOUCH_OFFLINE=1` before launching the GUI to disable update checks and
 prevent model downloads; the Advanced Retouch status panel shows the mode.
 

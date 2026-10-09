@@ -126,8 +126,9 @@ EXPECTED_RECIPE_KEYS.append("nose_shape")
 EXPECTED_RECIPE_KEYS.append("nose_highlight")
 EXPECTED_RECIPE_KEYS.append("neck_tone_match")
 EXPECTED_RECIPE_KEYS.append("costume_clarity")
+EXPECTED_RECIPE_KEYS.append("nose_tip_blush")
 
-EXPECTED_RECIPE_KEY_COUNT = 273
+EXPECTED_RECIPE_KEY_COUNT = 274
 # Self-updating: the recipe/smart-style slider tuple length is the contract
 # defined by RECIPE_OUTPUT_KEYS, so this constant can never go stale.
 EXPECTED_UI_OUTPUT_COUNT = len(gui.RECIPE_OUTPUT_KEYS)
@@ -873,10 +874,10 @@ class TestResetFunctions:
         assert result[4] == 0.0
         assert result[8] == 0  # Body Skin Evening, off by default
 
-    def test_reset_eyes_lips_returns_seventeen_values(self):
+    def test_reset_eyes_lips_returns_eighteen_values(self):
         result = gui.reset_eyes_lips("natural")
         assert isinstance(result, tuple)
-        assert len(result) == 17
+        assert len(result) == 18
 
     def test_reset_face_reshaping_returns_slimming_int(self):
         result = gui.reset_face_reshaping("natural")
