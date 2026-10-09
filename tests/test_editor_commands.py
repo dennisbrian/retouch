@@ -65,6 +65,105 @@ def test_visibility_and_mask_enable_are_undoable():
     assert not composite(h.document).any()
 
 
+def test_duplicate_preserves_properties_shares_buffers_and_edits_independently(tmp_path):
+    h = history(saved=True)
+    lid = h.document.layers[0].id
+    h.set_mask(lid, np.array([[0, 128, 255]], np.uint8), enabled=False)
+    h.update_layer(lid, origin=(-1, 1), size=(6, 4), flip_x=True,
+                   opacity=0.4, blend_mode='Screen')
+    original = h.document.layer(lid)
+    retained = h.retained_buffer_bytes
+    h.duplicate_layer(lid)
+    duplicate = h.document.layers[1]
+    assert duplicate.id != lid and duplicate.name == 'Base copy'
+    assert h.document.active_layer_id == duplicate.id
+    assert duplicate.pixels is original.pixels and duplicate.mask is original.mask
+    assert h.retained_buffer_bytes == retained
+    for key in ('origin', 'size', 'flip_x', 'opacity', 'blend_mode', 'mask_enabled'):
+        assert getattr(duplicate, key) == getattr(original, key)
+    h.save(tmp_path / 'duplicate.comp')
+    loaded = load_project(tmp_path / 'duplicate.comp')
+    assert loaded.active_layer_id == duplicate.id
+    np.testing.assert_array_equal(composite(loaded), composite(h.document))
+    h.invert_mask(duplicate.id)
+    np.testing.assert_array_equal(h.document.layer(lid).mask, original.mask)
+    np.testing.assert_array_equal(h.document.layer(duplicate.id).mask, 255 - original.mask)
+    h.undo()
+    assert not h.dirty
+    h.undo()
+    assert len(h.document.layers) == 1 and h.document.active_layer_id == lid
+    h.redo()
+    assert h.document.active_layer_id == duplicate.id
+
+
+def test_inverting_mask_complements_transformed_coverage_and_undo(tmp_path):
+    h = history(saved=True)
+    lid = h.document.layers[0].id
+    h.set_mask(lid, np.array([[0, 80, 255], [255, 175, 0]], np.uint8))
+    h.update_layer(lid, flip_x=True)
+    before = composite(h.document)
+    h.invert_mask(lid)
+    after = composite(h.document)
+    np.testing.assert_array_equal(before[..., 3].astype(int) + after[..., 3], 255)
+    h.save(tmp_path / 'inverted.comp')
+    np.testing.assert_array_equal(composite(load_project(tmp_path / 'inverted.comp')), after)
+    h.undo()
+    np.testing.assert_array_equal(composite(h.document), before)
+    h.redo()
+    np.testing.assert_array_equal(composite(h.document), after)
+
+
+def test_invert_absent_mask_hides_layer_and_second_invert_reveals():
+    h = history(saved=True)
+    lid = h.document.layers[0].id
+    before = composite(h.document)
+    h.invert_mask(lid)
+    assert not composite(h.document).any()
+    assert h.document.layer(lid).mask.shape == (1, 1)
+    h.invert_mask(lid)
+    np.testing.assert_array_equal(composite(h.document), before)
+    h.undo()
+    h.undo()
+    assert h.document.layer(lid).mask is None and not h.dirty
+
+
+def test_duplicate_middle_layer_and_maximal_unicode_name():
+    h = history()
+    lid = h.document.layers[0].id
+    h.update_layer(lid, name='鼻' * (16_384 // 3))
+    top = Layer('Top', pixels=np.full((2, 3, 4), 255, np.uint8))
+    h.add_layer(top)
+    h.duplicate_layer(lid)
+    layers = h.document.layers
+    assert [layers[0].id, layers[2].id] == [lid, top.id]
+    assert layers[1].name.endswith(' copy')
+    assert len(layers[1].name.encode('utf-8')) <= 16_384
+
+
+def test_invert_disabled_mask_preserves_enablement_and_pixels():
+    h = history()
+    lid = h.document.layers[0].id
+    h.set_mask(lid, np.array([[80]], np.uint8), enabled=False)
+    original = composite(h.document)
+    pixels = h.document.layer(lid).pixels
+    h.invert_mask(lid)
+    layer = h.document.layer(lid)
+    assert not layer.mask_enabled and layer.mask[0, 0] == 175
+    assert layer.pixels is pixels
+    np.testing.assert_array_equal(composite(h.document), original)
+
+
+@pytest.mark.parametrize('operation', ['duplicate_layer', 'invert_mask'])
+def test_new_actions_reject_missing_layer_without_losing_redo(operation):
+    h = history(saved=True)
+    lid = h.document.layers[0].id
+    h.update_layer(lid, opacity=0.5)
+    h.undo()
+    with pytest.raises(KeyError):
+        getattr(h, operation)('missing')
+    assert h.revision == 0 and not h.dirty and h.can_redo
+
+
 def test_branching_never_reuses_saved_revision(tmp_path):
     h = history()
     lid = h.document.layers[0].id

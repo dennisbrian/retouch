@@ -203,6 +203,12 @@ def build_editor_tab():
                 mask_enabled = gr.Checkbox(label='Mask enabled', value=True)
                 blend = gr.Dropdown(label='Blend mode', choices=list(RENDER_BLEND_MODES), value='Normal')
                 properties = gr.Button('Apply layer properties')
+                with gr.Row():
+                    duplicate = gr.Button('Duplicate layer')
+                    invert_mask = gr.Button('Invert mask')
+                gr.Markdown('Invert mask swaps revealed and hidden areas. '
+                            'A layer without a mask becomes fully masked out; '
+                            'enable its mask to see the change.')
                 with gr.Accordion('Position & flips', open=False):
                     gr.Markdown('Position uses canvas pixels from the top-left. '
                                 'Negative positions are allowed; pixels outside the canvas are clipped. '
@@ -284,7 +290,7 @@ def build_editor_tab():
                     current.selected_id = selected
                 else:
                     layer = current.selected()
-                    if operation in ('properties', 'transform', 'resize', 'up', 'down', 'remove', 'mask') and layer is None:
+                    if operation in ('properties', 'transform', 'resize', 'up', 'down', 'remove', 'mask', 'duplicate', 'invert_mask') and layer is None:
                         raise ValueError('Select a layer first')
                     if operation == 'properties':
                         chosen_blend = args[4] if len(args) > 4 else layer.blend_mode
@@ -312,6 +318,11 @@ def build_editor_tab():
                         current.history.move_layer(layer.id, index + (1 if operation == 'up' else -1))
                     elif operation == 'remove':
                         current.history.remove_layer(layer.id)
+                    elif operation == 'duplicate':
+                        current.history.duplicate_layer(layer.id)
+                        current.selected_id = current.history.document.active_layer_id
+                    elif operation == 'invert_mask':
+                        current.history.invert_mask(layer.id)
                     elif operation == 'mask':
                         current.apply_mask(strokes)
                     elif operation == 'add':
@@ -335,7 +346,8 @@ def build_editor_tab():
         layers.input(select, [session, layers, canvas], outputs, concurrency_id='layer-editor')
         for button, operation in ((properties, 'properties'), (up, 'up'), (down, 'down'),
                                   (remove, 'remove'), (apply_mask, 'mask'), (add, 'add'),
-                                  (undo, 'undo'), (redo, 'redo'), (transform, 'transform'), (resize, 'resize')):
+                                  (undo, 'undo'), (redo, 'redo'), (transform, 'transform'), (resize, 'resize'),
+                                  (duplicate, 'duplicate'), (invert_mask, 'invert_mask')):
             def edit(current, selected, strokes, *args, operation=operation):
                 return action(current, selected, strokes, operation, *args)
             extra = [name, visible, opacity, mask_enabled, blend] if operation == 'properties' else (

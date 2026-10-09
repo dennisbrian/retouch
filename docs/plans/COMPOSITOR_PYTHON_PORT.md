@@ -114,6 +114,27 @@ automatically preserved by a Python translation.
 
 ### Progress
 
+- 2026-10-09, milestone 5 layer/mask finishing slice: Duplicate layer inserts
+  a separately editable copy directly above the source and selects it. Pixels
+  and masks share immutable buffers until edited; placement, size, flips,
+  visibility, opacity, blend mode and mask enablement are retained. Invert mask
+  swaps stored coverage (255 minus coverage) without resampling or changing
+  source pixels; an absent mask becomes a compact fully hidden mask. Disabled
+  masks stay disabled. Both actions are one undo step, round-trip through
+  `.comp` saves, and require pending brush strokes to be applied or erased.
+  Genuine-engine smoke check: a 360 × 480 top-middle portrait crop from
+  `docs/reference_targets/chang_e_cosplay_tamed_shine.jpg`, `natural`, detected
+  one face. Nose Tip Blush at 50/100 changed 350/471 pixels (maximum channel
+  deltas 4/10); repeating 0 was pixel-identical. The face comparison at 0/50/100
+  was viewed. A duplicated result layer with a gradient mask was inverted,
+  saved/reopened and undone/redone with exact composite equality; the photo
+  comparison was viewed. This is one small edited cosplay reference portrait,
+  not a native-resolution or representative skin-tone qualification.
+  Focused verification: 379 Nose Tip Blush/GUI/parameter tests and 161 editor
+  tests passed; governance CI reported zero errors and warnings. Safari opened
+  the real-photo project, selected the new duplicate and rendered mask inversion.
+  Rotation, selections, clipping/group masks, grading adjustments and native
+  Compositor parity remain separate milestones.
 - 2026-10-08, milestone 5 resizing slice: layer width/height controls update the
   rendered rectangle without replacing source pixels. Undo and save/reopen
   retain both source and transform. RGBA interpolation preserves alpha edges,

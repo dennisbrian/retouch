@@ -12,7 +12,7 @@ from typing import Callable, Optional
 
 import numpy as np
 
-from .document import Document, Layer, _frozen, rgba_from
+from .document import Document, Layer, _frozen, new_id, rgba_from
 from .project_store import CURRENT_VERSION, _check_manifest, _encode, save_project
 
 
@@ -154,6 +154,33 @@ class DocumentHistory:
 
     def remove_layer(self, layer_id: str) -> bool:
         return self._edit('Remove layer', lambda doc: doc.remove_layer(layer_id))
+
+    def duplicate_layer(self, layer_id: str) -> bool:
+        """Insert an independent copy directly above the source and select it."""
+        def apply(doc: Document) -> None:
+            layer = doc.layer(layer_id)
+            duplicate = copy(layer)
+            duplicate.id = new_id()
+            # A maximal valid name must remain valid after adding the suffix.
+            suffix = ' copy'
+            duplicate.name = (layer.name.encode('utf-8')[:16_384 - len(suffix)]
+                              .decode('utf-8', errors='ignore') + suffix)
+            duplicate.text = deepcopy(layer.text)
+            duplicate.shape = deepcopy(layer.shape)
+            doc.add_layer(duplicate, doc.index_of(layer_id) + 1)
+        return self._edit('Duplicate layer', apply)
+
+    def invert_mask(self, layer_id: str) -> bool:
+        """Invert stored coverage, preserving mask enablement and source pixels.
+
+        An absent mask means full coverage; its inverse is a compact black mask.
+        """
+        def apply(doc: Document) -> None:
+            layer = doc.layer(layer_id)
+            mask = (np.zeros((1, 1), np.uint8) if layer.mask is None
+                    else 255 - layer.mask)
+            layer.set_mask(mask, layer.mask_enabled)
+        return self._edit('Invert mask', apply)
 
     def move_layer(self, layer_id: str, index: int) -> bool:
         return self._edit('Reorder layer', lambda doc: doc.move_layer(layer_id, index))

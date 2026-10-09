@@ -117,6 +117,43 @@ def test_ui_edit_callbacks_change_layer_and_restore_with_undo(session, callbacks
     assert session.selected().name == 'Base'
 
 
+def test_duplicate_and_invert_callbacks_preserve_original_and_round_trip(session, callbacks, tmp_path):
+    edits = {fn.__kwdefaults__['operation']: fn for fn in callbacks if fn.__name__ == 'edit'}
+    original_id = session.selected_id
+    original = composite(session.history.document)
+    edits['duplicate'](session, original_id, None)
+    duplicate_id = session.selected_id
+    assert duplicate_id != original_id and session.selected().name == 'Base copy'
+    assert len(session.history.document.layers) == 2
+    edits['invert_mask'](session, duplicate_id, None)
+    assert session.selected().mask[0, 0] == 0
+    assert session.history.document.layer(original_id).mask is None
+    np.testing.assert_array_equal(composite(session.history.document), original)
+    target = tmp_path / 'new-actions.comp'
+    session.history.save(target)
+    np.testing.assert_array_equal(composite(load_project(target)), original)
+    edits['undo'](session, duplicate_id, None)
+    assert session.selected().mask is None
+    edits['undo'](session, duplicate_id, None)
+    assert session.selected_id == original_id
+    edits['redo'](session, original_id, None)
+    assert session.selected_id == original_id  # Undo/redo retain valid manual selection.
+    assert session.history.document.active_layer_id == duplicate_id
+
+
+@pytest.mark.parametrize('operation', ['duplicate', 'invert_mask'])
+def test_new_actions_gate_pending_strokes_and_missing_selection(session, callbacks, operation):
+    edit = next(fn for fn in callbacks if fn.__name__ == 'edit'
+                and fn.__kwdefaults__['operation'] == operation)
+    revision = session.history.revision
+    with pytest.raises(gr.Error, match='brush strokes'):
+        edit(session, session.selected_id, stroke_canvas())
+    assert session.history.revision == revision
+    session.history.remove_layer(session.selected_id)
+    with pytest.raises(gr.Error, match='Select a layer'):
+        edit(session, None, None)
+
+
 def test_project_reopen_starts_clean_and_preserves_mask(session, callbacks, tmp_path):
     session.apply_mask(stroke_canvas())
     target = tmp_path / 'saved.comp'
