@@ -367,3 +367,22 @@ def test_resize_callback_and_brush_keep_native_pixels(session, callbacks):
     session.history.undo()
     session.history.undo()
     assert session.selected().size == (8, 6)
+
+
+def test_fit_callback_updates_size_and_position_and_gates_strokes(session, callbacks):
+    edits = {fn.__kwdefaults__['operation']: fn for fn in callbacks if fn.__name__ == 'edit'}
+    lid = session.selected_id
+    session.history.update_layer(lid, size=(4, 4), origin=(-3, 2))
+    source = session.selected().pixels
+    result = edits['fit'](session, lid, None)
+    assert result[12:14] == (1, 0) and result[-2:] == (6, 6)
+    assert session.selected_id == lid and session.selected().pixels is source
+    edits['undo'](session, lid, None)
+    assert session.selected().size == (4, 4) and session.selected().origin == (-3, 2)
+    revision = session.history.revision
+    with pytest.raises(gr.Error, match='brush strokes'):
+        edits['fit'](session, lid, stroke_canvas())
+    assert session.history.revision == revision and session.history.can_redo
+    session.history.remove_layer(lid)
+    with pytest.raises(gr.Error, match='Select a layer'):
+        edits['fit'](session, None, None)

@@ -231,6 +231,10 @@ def build_editor_tab():
                                 'layer proportions. Turn it off to set both dimensions freely. '
                                 'Original pixels are preserved.')
                     resize = gr.Button('Apply layer size')
+                    fit = gr.Button('Fit layer to canvas')
+                    gr.Markdown('Fit scales the current layer proportions to fit inside '
+                                'the canvas and centers it. Source pixels and masks are kept; '
+                                'size and position change together in one undo step.')
                 with gr.Row():
                     up = gr.Button('Move up')
                     down = gr.Button('Move down')
@@ -296,7 +300,7 @@ def build_editor_tab():
                     current.selected_id = selected
                 else:
                     layer = current.selected()
-                    if operation in ('properties', 'transform', 'resize', 'up', 'down', 'remove', 'mask', 'duplicate', 'invert_mask', 'reset_mask') and layer is None:
+                    if operation in ('properties', 'transform', 'resize', 'fit', 'up', 'down', 'remove', 'mask', 'duplicate', 'invert_mask', 'reset_mask') and layer is None:
                         raise ValueError('Select a layer first')
                     if operation == 'properties':
                         chosen_blend = args[4] if len(args) > 4 else layer.blend_mode
@@ -317,6 +321,8 @@ def build_editor_tab():
                         current.history.resize_layer(layer.id, args[0], args[1],
                                                      keep_aspect=args[2] if len(args) > 2 else False,
                                                      axis=args[3] if len(args) > 3 else 'Width')
+                    elif operation == 'fit':
+                        current.history.fit_layer(layer.id)
                     elif operation in ('up', 'down'):
                         index = current.history.document.index_of(layer.id)
                         current.history.move_layer(layer.id, index + (1 if operation == 'up' else -1))
@@ -354,7 +360,7 @@ def build_editor_tab():
                                   (remove, 'remove'), (apply_mask, 'mask'), (add, 'add'),
                                   (undo, 'undo'), (redo, 'redo'), (transform, 'transform'), (resize, 'resize'),
                                   (duplicate, 'duplicate'), (invert_mask, 'invert_mask'),
-                                  (reset_mask, 'reset_mask')):
+                                  (reset_mask, 'reset_mask'), (fit, 'fit')):
             def edit(current, selected, strokes, *args, operation=operation):
                 return action(current, selected, strokes, operation, *args)
             extra = [name, visible, opacity, mask_enabled, blend] if operation == 'properties' else (

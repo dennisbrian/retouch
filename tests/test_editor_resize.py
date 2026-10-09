@@ -147,3 +147,74 @@ def test_proportional_resize_preserves_budget_limits_and_noop_redo():
     with pytest.raises(ValueError, match='budget'):
         history.resize_layer(lid, 20000, 1, keep_aspect=True)
     assert history.revision == 0 and not history.dirty and history.can_redo
+
+
+@pytest.mark.parametrize('canvas,size,expected_size,expected_origin', [
+    ((8, 6), (2, 2), (6, 6), (1, 0)),
+    ((8, 6), (4, 1), (8, 2), (0, 2)),
+    ((8, 6), (4, 8), (3, 6), (2, 0)),
+    ((9, 7), (2, 1), (9, 5), (0, 1)),
+    ((1, 1), (20, 1), (1, 1), (0, 0)),
+])
+def test_fit_layer_contains_and_centers_current_proportions(canvas, size, expected_size, expected_origin):
+    doc = Document(*canvas)
+    layer = doc.add_image(np.full((2, 2, 4), 255, np.uint8), 'Patch', origin=(-5, 9))
+    layer.size = size
+    history = DocumentHistory(doc)
+    history.fit_layer(layer.id)
+    fitted = history.document.layer(layer.id)
+    assert fitted.size == expected_size and fitted.origin == expected_origin
+    assert 1 <= fitted.size[0] <= doc.width and 1 <= fitted.size[1] <= doc.height
+    assert fitted.pixels is layer.pixels
+
+
+def test_fit_preserves_mask_flips_and_restores_size_position_in_one_undo(tmp_path):
+    doc = document()
+    layer = doc.layers[0]
+    layer.size, layer.origin, layer.flip_x, layer.sampling = (4, 2), (-1, 1), True, 'Nearest'
+    layer.set_mask(np.array([[0, 255], [0, 255]], np.uint8), enabled=True)
+    history = DocumentHistory(doc, saved=True)
+    before = composite(doc)
+    history.fit_layer(layer.id)
+    fitted = history.document.layer(layer.id)
+    assert fitted.size == (8, 4) and fitted.origin == (0, 1)
+    assert fitted.mask is layer.mask and fitted.pixels is layer.pixels
+    assert fitted.flip_x and fitted.mask_enabled and fitted.sampling == 'Nearest'
+    after = composite(history.document)
+    assert (after[1:5, :4, 3] == 255).all()
+    assert not after[:, 4:].any()  # Mask and flip remain aligned after fitting.
+    history.save(tmp_path / 'fitted.comp')
+    np.testing.assert_array_equal(composite(load_project(tmp_path / 'fitted.comp')), after)
+    history.undo()
+    restored = history.document.layer(layer.id)
+    assert restored.size == (4, 2) and restored.origin == (-1, 1)
+    np.testing.assert_array_equal(composite(history.document), before)
+    history.redo()
+    assert not history.dirty
+    np.testing.assert_array_equal(composite(history.document), after)
+
+
+def test_fit_noop_and_missing_layer_preserve_redo():
+    doc = document()
+    layer = doc.layers[0]
+    layer.size, layer.origin = (6, 6), (1, 0)
+    history = DocumentHistory(doc, saved=True)
+    history.update_layer(layer.id, origin=(-1, -1))
+    history.undo()
+    assert not history.fit_layer(layer.id)
+    assert history.can_redo and not history.dirty
+    with pytest.raises(KeyError):
+        history.fit_layer('missing')
+    assert history.can_redo and history.revision == 0
+
+
+def test_fit_rejects_total_render_budget_without_changing_document():
+    doc = Document(14000, 14000)
+    layer = doc.add_image(np.full((1, 1, 4), 255, np.uint8), 'Fit me')
+    other = doc.add_image(np.full((1, 1, 4), 255, np.uint8), 'Other')
+    other.size = (3000, 2000)
+    history = DocumentHistory(doc, saved=True)
+    with pytest.raises(ValueError, match='budget'):
+        history.fit_layer(layer.id)
+    assert history.revision == 0 and not history.dirty
+    assert history.document.layer(layer.id).size == (1, 1)

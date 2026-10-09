@@ -239,6 +239,26 @@ class DocumentHistory:
                 setattr(layer, key, deepcopy(value))
         return self._edit('Change layer', apply)
 
+    def fit_layer(self, layer_id: str) -> bool:
+        """Fit the current layer proportions inside the canvas and center it.
+
+        Rounded to whole pixels, with any odd spare pixel on the right/bottom.
+        Size and placement change together; native pixels and masks are shared.
+        """
+        def apply(doc: Document) -> None:
+            layer = doc.layer(layer_id)
+            width, height = layer.size
+            if width * doc.height >= height * doc.width:
+                fitted_width = doc.width
+                fitted_height = max(1, (doc.width * height + width // 2) // width)
+            else:
+                fitted_height = doc.height
+                fitted_width = max(1, (doc.height * width + height // 2) // height)
+            layer.size = (fitted_width, fitted_height)
+            layer.origin = ((doc.width - fitted_width) // 2,
+                            (doc.height - fitted_height) // 2)
+        return self._edit('Fit layer to canvas', apply)
+
     def set_mask(self, layer_id: str, mask: Optional[np.ndarray],
                  enabled: bool = True) -> bool:
         return self._edit('Edit mask', lambda doc: doc.layer(layer_id).set_mask(mask, enabled))

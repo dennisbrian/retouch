@@ -114,6 +114,20 @@ automatically preserved by a Python translation.
 
 ### Progress
 
+- 2026-10-09, milestone 5 fit to canvas: Fit layer to canvas scales the current
+  rendered proportions to fit completely inside the canvas and centers the layer.
+  Whole-pixel rounding uses a one-pixel minimum; odd spare pixels go to the
+  right/bottom. Size and position change as one undo step. Native source pixels,
+  masks, flips, sampling, visibility and opacity are retained. Pending brush
+  strokes and total rendered-surface budget violations block the action.
+  Already-fitted layers are a no-op that preserves saved state and redo history.
+  Verification: 191 focused editor tests passed, including mask/flip alignment,
+  undo/redo, save/reopen, centering, rounding and budget rollback. On the previous
+  real-photo smoke render, a 360 × 480 source fitted to 375 × 500 at (212, 0)
+  on an 800 × 500 canvas; source pixels stayed intact and save/reopen/undo/redo
+  composites were exact. The output sheet was viewed; Safari verified the fit
+  button, resulting size/position and real-photo composite preview. Native Compositor renderer
+  parity and representative native-resolution performance remain open.
 - 2026-10-09, milestone 5 proportional resizing: Keep aspect ratio is on by
   default. Resize from chooses Width or Height; the other dimension is derived
   from the current rendered rectangle, rounded half-up to whole pixels with
