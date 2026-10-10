@@ -371,6 +371,7 @@ class ProcessingContext:
     neck_tone_match: float = 0.0
     nose_highlight: float = 0.0
     nose_tip_blush: float = 0.0
+    iris_pop: float = 0.0
     skin_sss: float = 0.0
     freckle_removal: float = 0.0
     heal_engine: str = "telea"
@@ -1660,6 +1661,7 @@ class RetouchEngine:
         neck_tone_match: Optional[float] = None,
         nose_highlight: Optional[float] = None,
         nose_tip_blush: Optional[float] = None,
+        iris_pop: Optional[float] = None,
         skin_sss: Optional[float] = None,
         regional_modulation: Optional[float] = None,
         smooth_engine: Optional[str] = None,
@@ -1986,6 +1988,7 @@ class RetouchEngine:
             "neck_tone_match": neck_tone_match,
             "nose_highlight": nose_highlight,
             "nose_tip_blush": nose_tip_blush,
+            "iris_pop": iris_pop,
             "skin_sss": skin_sss,
             "lut": lut,
             "skin_locus": skin_locus,
@@ -4020,6 +4023,7 @@ class RetouchEngine:
                         safe_auto_decisions=pr.get('safe_auto_decisions', []),
                         fa02_diagnostics=pr.get('fa02_diagnostics'),
                         stray_hair_preview=pr.get('stray_hair_preview'),
+                        eye_edit_mask=pr.get('eye_edit_mask'),
                     )
             _collect_safe_auto_decisions()
             _collect_fa02_diagnostics()
@@ -4182,11 +4186,7 @@ class RetouchEngine:
             if owned_alphas is not None and owned_alphas[idx] is not None:
                 alpha = owned_alphas[idx][:, :, np.newaxis]
             else:
-                edit_mask = np.maximum.reduce((
-                    fr.skin_hair_mask,
-                    fr.lips_mask,
-                    fr.sharpen_mask,
-                ))
+                edit_mask = np.maximum.reduce(self._composite_parts(fr))
                 alpha = np.clip(edit_mask, 0.0, 1.0)[:, :, np.newaxis]
 
             # Blend cropped canvas back anywhere this face ROI was edited.
@@ -4210,6 +4210,15 @@ class RetouchEngine:
             acc_sharpen[y1:y2, x1:x2] = np.maximum(acc_sharpen[y1:y2, x1:x2], fr.sharpen_mask)
 
         return result, acc_skin, acc_skin_hair, acc_lips, acc_sharpen, acc_hair_only
+
+    @staticmethod
+    def _composite_parts(fr: _FaceResult) -> Tuple[np.ndarray, ...]:
+        """Masks whose union is where a face canvas is blended back."""
+        parts = (fr.skin_hair_mask, fr.lips_mask, fr.sharpen_mask)
+        extra = getattr(fr, "eye_edit_mask", None)
+        if extra is not None and extra.shape == fr.sharpen_mask.shape:
+            parts += (extra,)
+        return parts
 
     # Feather of a face's bbox claim, as a fraction of that face's own w/h.
     _OWNERSHIP_BOX_FEATHER = 0.15
@@ -4240,7 +4249,7 @@ class RetouchEngine:
         n = len(face_results)
         raw = [
             np.clip(
-                np.maximum.reduce((fr.skin_hair_mask, fr.lips_mask, fr.sharpen_mask)),
+                np.maximum.reduce(cls._composite_parts(fr)),
                 0.0, 1.0,
             ).astype(np.float32)
             for fr in face_results

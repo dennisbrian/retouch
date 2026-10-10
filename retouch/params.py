@@ -1186,6 +1186,18 @@ _FACE_FEATURE_PARAMS = [
         max_val=100,
     ),
     ParamSpec(
+        # Iris Pop: colour, texture and depth back into the visible iris,
+        # coloured contacts included (retouch/iris_pop.py). Opt-in, 0 = off.
+        name="iris_pop",
+        cli_flag="iris-pop",
+        cli_type=int,
+        default=0,
+        recipe_key="eyes.iris_pop",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
         name="eye_iris_hue_shift",
         cli_flag="eye-iris-hue-shift",
         cli_type=int,

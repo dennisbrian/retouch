@@ -195,6 +195,9 @@ class _FaceResult:
     fa02_diagnostics: Optional[Dict[str, Any]] = None
     # Bounded crop-stage evidence crosses both process and thread paths.
     stray_hair_preview: Optional[Dict[str, Any]] = None
+    # Extra composite support for eye edits that must land at full weight
+    # (Iris Pop); None when no such edit ran.
+    eye_edit_mask: Optional[np.ndarray] = None
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1325,6 +1328,23 @@ def _process_face_core(
             eye_scales=eye_artifact_scales,
         )
 
+    # ---- Iris Pop (opt-in): colour, texture and depth in the visible iris ----
+    # Uses the gated eye-opening masks, so a closed or hidden eye is skipped.
+    # See retouch/iris_pop.py.
+    # Its support is composited back at full weight (eye_edit_mask): the
+    # eye part of the sharpen mask is scaled down on saturated contacts.
+    _iris_pop = float(getattr(ctx, 'iris_pop', 0) or 0)
+    eye_edit_mask = None
+    if _iris_pop > 0 and shifted_face.landmarks is not None:
+        canvas = _tr('iris_pop', canvas)
+        from .iris_pop import iris_pop
+        eye_edit_mask = np.zeros(canvas.shape[:2], np.float32)
+        canvas = iris_pop(
+            canvas, shifted_face.landmarks, _iris_pop,
+            (regions.left_eye, regions.right_eye),
+            support_out=eye_edit_mask,
+        )
+
     # ---- Teeth whitening ----
     if ctx.teeth_whiten > 0:
         canvas = _tr('teeth.whiten', canvas)
@@ -1643,6 +1663,7 @@ def _process_face_core(
         safe_auto_decisions=safe_auto_decisions,
         fa02_diagnostics=fa02_diagnostics,
         stray_hair_preview=stray_hair_preview,
+        eye_edit_mask=eye_edit_mask,
     )
 
 
@@ -1755,6 +1776,7 @@ def _process_single_face_worker(payload: tuple) -> Dict[str, Any]:
         "safe_auto_decisions": fr.safe_auto_decisions or [],
         "fa02_diagnostics": fr.fa02_diagnostics,
         "stray_hair_preview": fr.stray_hair_preview,
+        "eye_edit_mask": fr.eye_edit_mask,
     }
 
 

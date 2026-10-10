@@ -436,6 +436,17 @@ cheek blush; start near 50. It is off by default and uses no model. When it
 is on it replaces the old Nose Blush option (a faint disc that only showed
 with cheek blush and is now set by recipes only).
 
+Iris Pop (`--iris-pop 0-100` in the CLI, the "Iris Pop" slider under Eyes &
+Lips in the app, or `eyes.iris_pop` in a recipe, where 0.5 = 50) brings
+colour, pattern and depth back to the iris, coloured contacts included:
+richer colour with the same hue, crisper lens or iris texture, a darker rim
+and a soft lift in the lower iris. It finds the visible iris in the photo,
+so a circle lens wider than the eye's own iris is covered, and leaves the
+pupil, lashes, catchlights and eye whites alone. Every change is relative to
+the eye's own colour and brightness, so it works the same on darker and
+lighter skin. Closed eyes, and eyes the Eye Occlusion Gate skips, are left
+alone. Start near 50; it is off by default and uses no model.
+
 Set `RETOUCH_OFFLINE=1` before launching the GUI to disable update checks and
 prevent model downloads; the Advanced Retouch status panel shows the mode.
 
