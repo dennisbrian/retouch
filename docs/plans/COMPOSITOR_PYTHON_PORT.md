@@ -114,6 +114,22 @@ automatically preserved by a Python translation.
 
 ### Progress
 
+- 2026-10-10, milestone 6 fast saves: saving no longer re-encodes layer
+  pixels or masks that are unchanged since they were opened or last saved.
+  Layer arrays are immutable, so `project_store` remembers which PNG holds
+  each array's bytes (weakly, checked against the file's inode, size and
+  modification time) and copies that file into the new package; any changed,
+  new or externally modified asset is encoded, several in parallel, at zlib
+  level 1 (`ASSET_COMPRESS_LEVEL`) instead of Pillow's default 6. A failed
+  copy falls back to encoding; the staged swap-in is unchanged. Flattened PNG
+  exports keep the default compression. Measured in the cloud sandbox (4
+  cores) on a 4160 × 6240 photo with a second full-size layer and a mask:
+  first save 17.7 s -> 2.2 s, re-save after an opacity change or mask stroke
+  0.2 s (was a full re-encode), save right after opening 0.04 s; the package
+  is about 20% larger (62 vs 52 MB). Reopened composites were exact. Focused
+  tests: `tests/test_editor_project_store.py::TestFastSave`. Not measured on a
+  Mac or Windows disk.
+
 - 2026-10-09, milestone 5 fit to canvas: Fit layer to canvas scales the current
   rendered proportions to fit completely inside the canvas and centers the layer.
   Whole-pixel rounding uses a one-pixel minimum; odd spare pixels go to the

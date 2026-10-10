@@ -9,7 +9,10 @@ effects, unlinked masks, scaled or rotated layers, unknown keys) raise
 :class:`UnsupportedFeature` instead of being dropped on the next save.
 
 Saving builds the whole package beside the target and swaps it in with
-renames, so a failed save leaves the previous package untouched.
+renames, so a failed save leaves the previous package untouched. Layer arrays
+are immutable, so an asset whose array is the one last read from or written to
+a still-unchanged file is copied instead of re-encoded; the rest are encoded
+in parallel at a fast zlib level (a 26 MP layer takes about 2 s instead of 9).
 
 Derived from Compositor (MIT, Copyright (c) 2026 Wonder Assembly LLC), pinned
 at 11d8d7a; see ``third_party/compositor/``.
@@ -20,7 +23,10 @@ import math
 import os
 import shutil
 import struct
+import threading
 import uuid
+import weakref
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -51,6 +57,11 @@ _LAYER_KEYS = {'id', 'name', 'isVisible', 'transform', 'imageFile',
                'maskLinked', 'shape', 'effects', 'text'}
 _TRANSFORM_KEYS = {'origin', 'size', 'rotation', 'flipX', 'flipY', 'sampling'}
 _PNG_SIGNATURE = b'\x89PNG\r\n\x1a\n'
+# zlib level for project assets. Level 1 encodes a 26 MP RGBA layer about 4x
+# faster than Pillow's default 6 for ~20% larger files; flattened exports
+# (composite.export_png) keep the default.
+ASSET_COMPRESS_LEVEL = 1
+_ENCODE_WORKERS = max(1, min(4, os.cpu_count() or 1))
 
 
 class ProjectError(ValueError):
@@ -146,6 +157,10 @@ def _decode(manifest, version, package):
         size = fields.pop('size')
         layers.append(Layer(id=layer_id, pixels=pixels, mask=mask, size=size,
                             **fields))
+    images = package / 'images'
+    for layer in layers:
+        _remember(layer.pixels, images / (layer.id + '.png'))
+        _remember(layer.mask, images / (layer.id + '.mask.png'))
     document = Document(width=width, height=height, layers=layers,
                         resolution=float(resolution),
                         document_id=document_id,
@@ -367,17 +382,100 @@ def save_project(document, path):
     try:
         images = staging / 'images'
         images.mkdir()
-        for layer in document.layers:
-            if layer.pixels is not None:
-                Image.fromarray(layer.pixels, 'RGBA').save(images / (layer.id + '.png'))
-            if layer.mask is not None:
-                Image.fromarray(layer.mask, 'L').save(images / (layer.id + '.mask.png'))
+        assets = _assets(document)
+        _write_assets(assets, images)
         (staging / 'manifest.json').write_bytes(payload)
         _swap_in(staging, target, token)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
+    for name, array, _ in assets:
+        _remember(array, target / 'images' / name)
     return target
+
+
+def _assets(document):
+    assets = []
+    for layer in document.layers:
+        if layer.pixels is not None:
+            assets.append((layer.id + '.png', layer.pixels, 'RGBA'))
+        if layer.mask is not None:
+            assets.append((layer.id + '.mask.png', layer.mask, 'L'))
+    return assets
+
+
+def _write_assets(assets, images):
+    """Copy assets whose bytes are already on disk; encode the rest."""
+    pending = []
+    for name, array, mode in assets:
+        source = _known_file(array)
+        if source is not None:
+            try:
+                shutil.copyfile(source, images / name)
+                continue
+            except OSError:
+                pass
+        pending.append((name, array, mode))
+    if not pending:
+        return
+
+    def encode(item):
+        name, array, mode = item
+        Image.fromarray(array, mode).save(
+            images / name, format='PNG', compress_level=ASSET_COMPRESS_LEVEL)
+
+    if len(pending) == 1:
+        encode(pending[0])
+        return
+    with ThreadPoolExecutor(min(_ENCODE_WORKERS, len(pending))) as pool:
+        for _ in pool.map(encode, pending):   # re-raises the first failure
+            pass
+
+
+# Immutable array -> the PNG holding exactly its bytes, while that file is
+# untouched since it was read or written. Keyed by id() and checked against a
+# weak reference, so a recycled id never matches and arrays are not kept alive.
+_KNOWN = {}
+_KNOWN_LOCK = threading.Lock()
+
+
+def _signature(path):
+    stat = os.stat(path)
+    return stat.st_ino, stat.st_size, stat.st_mtime_ns
+
+
+def _remember(array, path):
+    if array is None:
+        return
+    key = id(array)
+    try:
+        signature = _signature(path)
+        ref = weakref.ref(array, lambda _: _forget(key))
+    except (OSError, TypeError):
+        return
+    with _KNOWN_LOCK:
+        _KNOWN[key] = (ref, os.path.realpath(path), signature)
+
+
+def _forget(key):
+    with _KNOWN_LOCK:
+        entry = _KNOWN.get(key)
+        if entry is not None and entry[0]() is None:
+            del _KNOWN[key]
+
+
+def _known_file(array):
+    with _KNOWN_LOCK:
+        entry = _KNOWN.get(id(array))
+    if entry is None or entry[0]() is not array or array.flags.writeable:
+        return None
+    _, path, signature = entry
+    try:
+        if _signature(path) != signature:
+            return None
+    except OSError:
+        return None
+    return path
 
 
 def _swap_in(staging, target, token):
