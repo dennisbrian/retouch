@@ -6,6 +6,7 @@ mask, masks on an older schema, failed save keeps the previous package); MIT,
 Copyright (c) 2026 Wonder Assembly LLC for the translated cases.
 """
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -232,6 +233,7 @@ class TestWrite:
         def broken(*_args, **_kwargs):
             raise OSError('disk full')
         monkeypatch.setattr(store.Image.Image, 'save', broken)
+        monkeypatch.setattr(store.shutil, 'copyfile', broken)
         with pytest.raises(OSError):
             save_project(doc, path)
         assert (path / 'manifest.json').read_bytes() == before
@@ -321,3 +323,77 @@ class TestWrite:
         assert layer.pixels[0, 0].tolist() == [1, 2, 3, 255]
         with pytest.raises(ValueError):
             layer.pixels[0, 0, 0] = 5
+
+
+class TestFastSave:
+    """Unchanged assets are copied, not re-encoded; changed ones are encoded."""
+
+    def _count_encodes(self, monkeypatch):
+        import retouch.editor.project_store as store
+        calls = []
+        original = store.Image.Image.save
+
+        def counting(image, path, *args, **kwargs):
+            calls.append(Path(path).name)
+            return original(image, path, *args, **kwargs)
+        monkeypatch.setattr(store.Image.Image, 'save', counting)
+        return calls
+
+    def _document(self):
+        doc = Document(6, 4)
+        doc.add_image(fx.solid(6, 4, (10, 20, 30, 255)), 'Base')
+        top = doc.add_layer(Layer(name='Top', pixels=fx.solid(2, 2, (200, 0, 0, 180))))
+        top.set_mask(np.array([[255, 0], [64, 255]], np.uint8))
+        return doc
+
+    def test_resave_copies_unchanged_assets(self, tmp_path, monkeypatch):
+        doc = self._document()
+        path = save_project(doc, tmp_path / 'out.comp')
+        calls = self._count_encodes(monkeypatch)
+        doc.layers[1].opacity = 0.5
+        save_project(doc, path)
+        assert calls == []
+        again = load_project(path)
+        assert again.layers[1].opacity == 0.5
+        np.testing.assert_array_equal(composite(again), composite(doc))
+
+    def test_only_the_changed_layer_is_encoded(self, tmp_path, monkeypatch):
+        doc = self._document()
+        path = save_project(doc, tmp_path / 'out.comp')
+        calls = self._count_encodes(monkeypatch)
+        doc.layers[1].set_mask(np.full((2, 2), 7, np.uint8))
+        save_project(doc, tmp_path / 'copy.comp')       # save-as copies too
+        assert calls == [doc.layers[1].id + '.mask.png']
+        np.testing.assert_array_equal(load_project(tmp_path / 'copy.comp').layers[1].mask, 7)
+        np.testing.assert_array_equal(load_project(path).layers[1].mask,
+                                      [[255, 0], [64, 255]])
+
+    def test_opened_project_resaves_without_encoding(self, tmp_path, monkeypatch):
+        path = save_project(self._document(), tmp_path / 'out.comp')
+        doc = load_project(path)
+        calls = self._count_encodes(monkeypatch)
+        save_project(doc, path)
+        assert calls == []
+        np.testing.assert_array_equal(composite(load_project(path)), composite(doc))
+
+    def test_file_changed_on_disk_is_re_encoded(self, tmp_path, monkeypatch):
+        doc = self._document()
+        path = save_project(doc, tmp_path / 'out.comp')
+        base = path / 'images' / (doc.layers[0].id + '.png')
+        Image.fromarray(fx.solid(6, 4, (0, 0, 0, 255)), 'RGBA').save(base)
+        calls = self._count_encodes(monkeypatch)
+        save_project(doc, tmp_path / 'copy.comp')
+        assert calls == [base.name]
+        np.testing.assert_array_equal(load_project(tmp_path / 'copy.comp').layers[0].pixels,
+                                      doc.layers[0].pixels)
+
+    def test_copy_failure_falls_back_to_encoding(self, tmp_path, monkeypatch):
+        import retouch.editor.project_store as store
+        doc = self._document()
+        save_project(doc, tmp_path / 'out.comp')
+
+        def broken(*_args, **_kwargs):
+            raise OSError('gone')
+        monkeypatch.setattr(store.shutil, 'copyfile', broken)
+        path = save_project(doc, tmp_path / 'copy.comp')
+        np.testing.assert_array_equal(composite(load_project(path)), composite(doc))
