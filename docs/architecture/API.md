@@ -136,6 +136,7 @@ def process(
     fabric_wrinkle_smooth: Optional[float] = None,
     costume_clarity: Optional[int] = None,
     eye_iris_saturate: Optional[int] = None,
+    iris_pop: Optional[int] = None,
     eye_iris_hue_shift: Optional[int] = None,
     eye_iris_brightness: Optional[int] = None,
     teeth_whiten: Optional[int] = None,
@@ -440,6 +441,7 @@ Passing an explicit value override to these parameters takes precedence over the
 *   **`eye_sclera_vessel_remove`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `eyes.sclera_vessel_remove`): Bloodshot Eye Whites. Calms red, veiny sclera (`retouch/bloodshot_eyes.py`, called per eye from `EyeEnhancer.enhance` in the per-face eye stage). Support: the landmark sclera mask away from its rim (3-8% of eye width), outside the visible iris (found from the image, so a contact lens wider than the landmark iris is kept) and near the eye's own white level (L / 90th-percentile L, ramped 0.62-0.80). a* is pulled toward a natural white: the lower of the white's 20th-percentile a* and a cap that follows the light's colour via the white's b*; vessels (1-3 noise units above a local masked baseline) also get their b* and darkening restored; a uniform gain of up to 3.5% lifts the white, never past its own 99th percentile. Closed or occluded eyes are skipped by the eye-visibility gate. Off by default.
 *   **`eye_gate`** (Type: `bool`, Default: `True`, Recipe key: `eyes.gate`): Per-eye occlusion gate — skip enhancing eyes detected as closed/occluded (prevents painting an iris onto hair or a closed lid).
 *   **`eye_iris_saturate`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `eye.iris_saturate`): Adjusts the eye iris saturate parameter.
+*   **`iris_pop`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `eyes.iris_pop`): Iris Pop. Colour (vibrance-style chroma gain, hue kept, capped at 1.6x the iris's own p90 chroma), pattern detail (log-luminance, exposure invariant) and depth (darker limbal ring, lifted lower iris) inside the visible iris, measured from the image so a circle lens wider than the iris landmarks is included. Pupil, lashes and catchlights are faded out relative to the iris's own brightness; closed or gated eyes are skipped. Composited back at full weight. Off by default; start near 50.
 *   **`eye_iris_hue_shift`** (Type: `int`, Default: `0`, Range: `-30` to `30`, Recipe key: `eye.iris_hue_shift`): Adjusts the eye iris hue shift parameter.
 *   **`eye_iris_brightness`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `eye.iris_brightness`): Adjusts the eye iris brightness parameter.
 *   **`teeth_whiten`** (Type: `int`, Default: `5`, Range: `0` to `100`, Recipe key: `eyes.whites`): Adjusts the teeth whiten parameter.
