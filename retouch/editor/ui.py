@@ -19,6 +19,7 @@ from .commands import DocumentHistory
 from .composite import RENDER_BLEND_MODES, composite, export_png
 from .document import Document, Layer, MAX_SURFACE_PIXELS
 from .project_store import load_project
+from .recovery import Autosaver, discard_recovery, list_recoveries, load_recovery
 
 PREVIEW_SIDE = 1024
 
@@ -75,14 +76,25 @@ class EditorSession:
     selected_id: str
     workspace: str
     job: object = None
+    autosave: object = None
 
     @classmethod
-    def create(cls, document, saved=False):
+    def create(cls, document, saved=False, title='', recovery_id=None, recovery_root=None):
         return cls(DocumentHistory(document, saved=saved),
                    document.active_layer_id or (document.layers[-1].id if document.layers else None),
-                   tempfile.mkdtemp(prefix='retouch-layer-editor-'))
+                   tempfile.mkdtemp(prefix='retouch-layer-editor-'),
+                   autosave=Autosaver(title, recovery_root, recovery_id))
 
-    def close(self):
+    def checkpoint(self):
+        """Autosave unsaved work for crash recovery (background, never raises)."""
+        if self.autosave is not None:
+            self.autosave.checkpoint(self.history)
+
+    def close(self, keep_recovery=False):
+        """Release the session. ``keep_recovery`` leaves unsaved work offered
+        back on the next start (window closed); otherwise it is deleted."""
+        if self.autosave is not None:
+            self.autosave.close(keep=keep_recovery)
         if self.job and self.job.status in ('queued', 'running', 'timed out'):
             self.job.cancel()
             if self.job.status == 'queued':
@@ -138,6 +150,8 @@ def _view(session, message=''):
                 True, None, gr.update(interactive=False), gr.update(interactive=False),
                 'Open a photo or project to start.', gr.update(choices=list(RENDER_BLEND_MODES), value='Normal'),
                 0, 0, False, False, 1, 1)
+    # Every edit path renders through here, so this is the one autosave hook.
+    session.checkpoint()
     doc = session.history.document
     layer = session.selected()
     canvas = None
@@ -170,8 +184,9 @@ def _view(session, message=''):
 
 def build_editor_tab():
     """Add a complete independent tab inside the application's Tabs block."""
-    with gr.Tab('Layer Editor'):
-        session = gr.State(None, delete_callback=lambda value: value.close() if value else None)
+    with gr.Tab('Layer Editor') as tab:
+        session = gr.State(None, delete_callback=lambda value: value.close(keep_recovery=True)
+                           if value else None)
         gr.Markdown('Open a photo or local `.comp` folder. White reveals; black hides. '
                     'Apply brush strokes before changing layers. Export keeps native resolution.')
         with gr.Row():
@@ -182,6 +197,15 @@ def build_editor_tab():
                 project_path = gr.Textbox(label='Project folder', placeholder='/path/to/photo.comp',
                                           lines=1, max_lines=1)
                 open_project = gr.Button('Open project')
+        with gr.Accordion('Recover unsaved work', open=False) as recovery_panel:
+            gr.Markdown('Unsaved edits are autosaved while you work. If the app quits '
+                        'or the window closes before you save, restore them here. '
+                        'Autosaves are deleted when you save, discard them, or after 30 days.')
+            recoveries = gr.Dropdown(label='Autosaved documents', choices=[])
+            with gr.Row():
+                refresh_recoveries = gr.Button('Refresh list')
+                restore = gr.Button('Restore')
+                discard_saved = gr.Button('Discard autosave')
         discard = gr.Checkbox(label='Discard unsaved edits and unapplied strokes when opening', value=False)
         with gr.Row():
             with gr.Column(scale=2):
@@ -259,34 +283,75 @@ def build_editor_tab():
                    canvas, undo, redo, status, blend, position_x, position_y, flip_x, flip_y,
                    layer_width, layer_height]
 
+        def recovery_choices():
+            entries = list_recoveries()
+            return gr.update(choices=[(e.label, e.entry_id) for e in entries],
+                             value=entries[0].entry_id if entries else None)
+
         def opening(current, photo_path, path, discard_edits, strokes, kind):
             if current and current.job and not current.job.finalized:
                 raise gr.Error('Cancel or finish the recipe render before opening another document.')
             if current and (current.history.dirty or has_strokes(strokes)) and not discard_edits:
                 raise gr.Error('Save or select “Discard unsaved edits” before opening another document.')
+            recovery_id = None
             try:
                 if kind == 'photo':
                     if not photo_path:
                         raise ValueError('Choose a photo first')
                     pixels = _photo(photo_path)
                     doc = Document(pixels.shape[1], pixels.shape[0])
-                    doc.add_image(pixels, Path(photo_path).stem)
+                    title = Path(photo_path).stem
+                    doc.add_image(pixels, title)
+                elif kind == 'recovery':
+                    # ``path`` carries the chosen entry id.
+                    entry = next((e for e in list_recoveries() if e.entry_id == path), None)
+                    if entry is None:
+                        raise ValueError('That autosave is no longer available; refresh the list')
+                    doc, title, recovery_id = load_recovery(path), entry.title, path
                 else:
                     doc = load_project(path)
+                    title = Path(path).name
                 # Check that this subset can be rendered before replacing the session.
                 preview_document(doc)
-                replacement = EditorSession.create(doc, saved=kind == 'project')
+                # A restored document stays unsaved until the user saves it.
+                replacement = EditorSession.create(doc, saved=kind == 'project', title=title,
+                                                   recovery_id=recovery_id)
             except (ValueError, OSError) as exc:
                 raise gr.Error(str(exc)) from exc
             if current:
                 current.close()
-            return (*_view(replacement), False)
+            message = ('Restored autosaved work. Save the project to keep it.'
+                       if kind == 'recovery' else '')
+            return (*_view(replacement, message), False)
 
         for button, kind in ((open_photo, 'photo'), (open_project, 'project')):
             def load(current, p, path, d, strokes, kind=kind):
                 return opening(current, p, path, d, strokes, kind)
             button.click(load, [session, photo, project_path, discard, canvas],
                          outputs + [discard], concurrency_id='layer-editor')
+
+        def restoring(current, entry_id, d, strokes):
+            if not entry_id:
+                raise gr.Error('Choose an autosaved document first')
+            return (*opening(current, None, entry_id, d, strokes, 'recovery'), recovery_choices())
+        restore.click(restoring, [session, recoveries, discard, canvas],
+                      outputs + [discard, recoveries], concurrency_id='layer-editor')
+
+        def discarding_recovery(entry_id):
+            if not entry_id:
+                raise gr.Error('Choose an autosaved document first')
+            try:
+                discard_recovery(entry_id)
+            except (ValueError, OSError) as exc:
+                raise gr.Error(str(exc)) from exc
+            return recovery_choices()
+        discard_saved.click(discarding_recovery, recoveries, recoveries, concurrency_id='layer-editor')
+        refresh_recoveries.click(recovery_choices, None, recoveries, queue=False)
+
+        def offering_recoveries():
+            update = recovery_choices()
+            return update, gr.update(open=bool(update['choices']))
+        tab.select(offering_recoveries, None, [recoveries, recovery_panel], queue=False)
 
         def action(current, selected, strokes, operation, *args):
             if current is None:
