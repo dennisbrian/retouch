@@ -362,6 +362,7 @@ class ProcessingContext:
     body_dodge_burn: float = 0.0
     body_shadow_lift: float = 0.0
     shadow_lift: float = 0.0
+    face_shadow_fill: float = 0.0
     nose_restore: float = 0.0
     nose_shape: float = 0.0
     powder_finish: float = 0.0
@@ -1652,6 +1653,7 @@ class RetouchEngine:
         body_dodge_burn: Optional[float] = None,
         body_shadow_lift: Optional[float] = None,
         shadow_lift: Optional[float] = None,
+        face_shadow_fill: Optional[float] = None,
         nose_restore: Optional[float] = None,
         nose_shape: Optional[float] = None,
         powder_finish: Optional[float] = None,
@@ -1979,6 +1981,7 @@ class RetouchEngine:
             "body_dodge_burn": body_dodge_burn,
             "body_shadow_lift": body_shadow_lift,
             "shadow_lift": shadow_lift,
+            "face_shadow_fill": face_shadow_fill,
             "nose_restore": nose_restore,
             "nose_shape": nose_shape,
             "powder_finish": powder_finish,

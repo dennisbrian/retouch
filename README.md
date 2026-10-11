@@ -425,6 +425,19 @@ cosplay edits. It is off by default, uses no model, follows the face
 landmarks, and leaves hair, brows or glasses over the bridge alone. It pairs
 with Keep Nose Shape, which restores the nose's own shading first.
 
+Face Shadow Fill (`--face-shadow-fill 0-100` in the CLI, the "Face Shadow
+Fill" slider under Skin Tone in the app, or `skin.face_shadow_fill` in a
+recipe, where 0.5 = 50) works like a reflector held under the face: it opens
+up harsh shadows from a wig fringe, hat brim, ears or deep eye sockets. Only
+the part of a shadow deeper than the face's normal modelling (about a third
+of a stop below its lit side) is lifted, so cheeks, nose and jaw keep their
+shape, and the lift is a light gain, so skin texture and makeup colour stay.
+Small dark features (nostrils, lash line) and makeup are not read as shadow.
+It measures in stops against the face's own lit side, so it lifts darker and
+lighter skin by the same amount. Eyes, brows, lips, hair and everything off
+the face are left alone. It is off by default and uses no model; start near
+50. The older Shadow Lift slider is unchanged.
+
 Nose Tip Blush (`--nose-tip-blush 0-100` in the CLI, the "Nose Tip Blush"
 slider under Eyes & Lips in the app, or `skin.nose_tip_blush` in a recipe,
 where 0.5 = 50) gives the tip of the nose a soft pink tint, a little onto the

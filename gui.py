@@ -2281,7 +2281,7 @@ def reset_skin_smoothing(recipe_name):
 
 def reset_skin_tone(recipe_name):
     d = recipe_defaults(recipe_name)
-    return d["whiten"], d["whiten_tone"], d["equalize"], d["shadow_lift"], d["nose_restore"], d["nose_shape"], d["nose_highlight"], d["skin_sss"], d["skin_unify"], d["skin_unify_hue"], d["auto_exposure"], d["white_costume_lift"], d["face_exposure"], d["neck_tone_match"]
+    return d["whiten"], d["whiten_tone"], d["equalize"], d["shadow_lift"], d["face_shadow_fill"], d["nose_restore"], d["nose_shape"], d["nose_highlight"], d["skin_sss"], d["skin_unify"], d["skin_unify_hue"], d["auto_exposure"], d["white_costume_lift"], d["face_exposure"], d["neck_tone_match"]
 
 def reset_basic_tone(recipe_name):
     d = recipe_defaults(recipe_name)
@@ -4284,6 +4284,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 whiten_tone = gr.Dropdown(choices=WHITEN_TONE_CHOICES, value="rosy", label="Whitening Tone", interactive=True, info="Tone direction: rosy (warm pink), porcelain (cool neutral), neutral")
                                 equalize = gr.Slider(0, 100, 20, step=1, label="Equalize", info="Even out skin redness and regional color inconsistencies")
                                 shadow_lift = gr.Slider(0, 100, 0, step=1, label="Shadow Lift", info="Brighten small localized face shadows relative to local neighborhood")
+                                face_shadow_fill = gr.Slider(0, 100, 0, step=1, label="Face Shadow Fill", info="Soft fill light for harsh shadows on the face: under a wig fringe or hat brim, beside ears, in deep eye sockets. The face keeps its shape and texture; makeup colour stays. Off by default; start near 50.")
                                 nose_restore = gr.Slider(0, 100, 0, step=1, label="Nose Restore", info="Blend original (pre-retouch) nose pixels back in, to preserve natural nose shading")
                                 nose_shape = gr.Slider(0, 100, 0, step=1, label="Keep Nose Shape", info="Put back the nose shading that skin smoothing flattens, so the nose keeps its form instead of looking painted on. Texture stays smoothed and later tone edits still apply. Off by default.")
                                 nose_highlight = gr.Slider(0, 100, 0, step=1, label="Nose Bridge Highlight", info="Soft highlight down the nose bridge, from between the brows to just above the tip. Keeps the skin's own colour on every skin tone; start near 50. Off by default.")
@@ -4819,6 +4820,8 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
  "nose_blush",
         # Visible opt-in nose tip slider; a recipe may set skin.nose_tip_blush.
         "nose_tip_blush",
+        # Visible opt-in shadow fill slider; a recipe may set skin.face_shadow_fill.
+        "face_shadow_fill",
         # Visible opt-in iris slider; a recipe may set eyes.iris_pop.
         "iris_pop",
         "under_eye_blush",
@@ -4978,6 +4981,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
  "whiten_tone": whiten_tone,
  "nose_blush": nose_blush,
         "nose_tip_blush": nose_tip_blush,
+        "face_shadow_fill": face_shadow_fill,
         "iris_pop": iris_pop,
         "under_eye_blush": under_eye_blush,
  "white_costume_lift": white_costume_lift,
@@ -5181,7 +5185,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     _track_reset_event(reset_skin_tone_btn.click(
         fn=reset_skin_tone,
         inputs=[recipe],
-        outputs=[whiten, whiten_tone, equalize, shadow_lift, nose_restore, nose_shape, nose_highlight, skin_sss, skin_unify, skin_unify_hue, auto_exposure, white_costume_lift, face_exposure, neck_tone_match],
+        outputs=[whiten, whiten_tone, equalize, shadow_lift, face_shadow_fill, nose_restore, nose_shape, nose_highlight, skin_sss, skin_unify, skin_unify_hue, auto_exposure, white_costume_lift, face_exposure, neck_tone_match],
         queue=False,
         show_progress="hidden",
     ))
@@ -5769,6 +5773,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "nose_restore": nose_restore,
         "nose_shape": nose_shape,
         "nose_highlight": nose_highlight,
+        "face_shadow_fill": face_shadow_fill,
         "nose_tip_blush": nose_tip_blush,
         "skin_sss": skin_sss,
         "specular_bloom": specular_bloom,

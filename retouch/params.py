@@ -748,6 +748,18 @@ _SKIN_PARAMS = [
         max_val=100,
     ),
     ParamSpec(
+        # Soft fill light for harsh face shadows (retouch/face_shadow_fill.py).
+        # Opt-in: 0 = off, so recipes render as before.
+        name="face_shadow_fill",
+        cli_flag="face-shadow-fill",
+        cli_type=int,
+        default=0,
+        recipe_key="skin.face_shadow_fill",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
         # Soft pink wash on the nose tip (retouch/nose_tip_blush.py).
         # Opt-in: 0 = off, so recipes render as before. Above 0 it replaces
         # the legacy ``nose_blush`` disc inside the cheek blush.
