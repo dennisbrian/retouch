@@ -36,6 +36,14 @@ def _no_nafnet_download(monkeypatch):
     monkeypatch.setattr(model_fetch, "download_model", _guarded)
 
 
+@pytest.fixture(autouse=True)
+def _editor_recovery_dir(monkeypatch, tmp_path_factory):
+    """Layer Editor autosaves go to a per-test folder, never the user's."""
+    monkeypatch.setenv(
+        "RETOUCH_EDITOR_RECOVERY_DIR", str(tmp_path_factory.mktemp("recovery"))
+    )
+
+
 # ---------------------------------------------------------------------------
 # Eye-visibility gate mutation harness
 # ---------------------------------------------------------------------------

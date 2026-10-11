@@ -114,6 +114,30 @@ automatically preserved by a Python translation.
 
 ### Progress
 
+- 2026-10-11, milestone 6 crash recovery: the Layer Editor autosaves unsaved
+  work. After any edit that leaves the document dirty, `retouch/editor/recovery.py`
+  writes the current revision in a background thread as an ordinary `.comp`
+  package plus a small JSON description in the per-user recovery folder
+  (`~/Library/Application Support/ProMaxRetouch/Recovery`,
+  `%LOCALAPPDATA%\ProMaxRetouch\Recovery`, `$XDG_DATA_HOME/promaxretouch/recovery`;
+  `RETOUCH_EDITOR_RECOVERY_DIR` overrides). The newest pending revision wins,
+  writes reuse the staged swap-in so an entry is never half written, and a
+  failed write is logged without interrupting editing. Saving, undoing back to
+  the saved revision, or opening another document with "discard" deletes the
+  entry; a crash, force quit or closed window keeps it. "Recover unsaved work"
+  (opened automatically when the tab is selected and entries exist) lists
+  entries with name, size, layer count and time; Restore opens one as unsaved
+  work and keeps replacing the same entry, Discard deletes it. Entries a live
+  session owns are not offered to another window. Entries older than 30 days,
+  descriptions without a package and staging folders of interrupted writes are
+  cleaned when the list is read. Measured in the cloud sandbox on a 4160 ×
+  6240 photo with two full-size layers: the edit returns in 1 ms, the first
+  autosave takes 2.4 s in the background, later ones 0.03-0.1 s; restore
+  4.7 s, composite exact. In the running GUI, a photo opened and renamed,
+  the server killed with SIGKILL and restarted: the entry was offered and
+  restored with the edit. Focused tests: `tests/test_editor_recovery.py`
+  (including a subprocess that exits without cleanup). Not checked on a Mac
+  or Windows disk, nor in the packaged desktop window.
 - 2026-10-10, milestone 6 fast saves: saving no longer re-encodes layer
   pixels or masks that are unchanged since they were opened or last saved.
   Layer arrays are immutable, so `project_store` remembers which PNG holds
