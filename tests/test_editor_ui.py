@@ -426,3 +426,25 @@ def test_folder_brush_and_invalid_links_preserve_history(session, callbacks):
     with pytest.raises(gr.Error):
         edits['transform'](session, folder, stroke_canvas(), 0, 0, False, False, 90)
     assert session.history.revision == revision
+
+
+def test_folder_mask_propagates_to_composite_and_is_undoable():
+    doc = Document(8, 6)
+    doc.add_image(np.full((6, 8, 3), 100, np.uint8), 'Base')
+    session = EditorSession.create(doc)
+    try:
+        base = session.selected_id
+        assert session.history.group_layers([base], 'Folder')
+        folder = session.selected_id
+        before = composite(session.history.document)
+        assert before[0, 0, 3] == 255
+        stroke = np.zeros((6, 8, 4), np.uint8)
+        stroke[:, :4] = [0, 0, 0, 255]
+        assert session.apply_mask({'layers': [stroke]})
+        after = composite(session.history.document)
+        assert after[0, 0, 3] == 0        # painted half of the folder is hidden
+        assert after[0, 7, 3] == 255      # unpainted half still reveals
+        session.history.undo()
+        np.testing.assert_array_equal(composite(session.history.document), before)
+    finally:
+        session.close()
