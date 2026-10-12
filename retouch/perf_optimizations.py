@@ -1520,6 +1520,21 @@ def _process_face_core(
             lift_mask = np.clip(_norm_mask(regions.skin) + _norm_mask(regions.hair), 0, 1)
         canvas = shadow_lifter.lift(canvas, lift_mask, strength=ctx.shadow_lift)
 
+    # ---- Face shadow fill (opt-in soft fill light, see face_shadow_fill.py) ----
+    # Lifts only the depth of broad shadows beyond normal facial modelling,
+    # as a linear-light gain from the face's own illumination map.
+    _face_shadow_fill = float(getattr(ctx, 'face_shadow_fill', 0) or 0)
+    if _face_shadow_fill > 0 and skin_n is not None:
+        canvas = _tr('face_shadow_fill', canvas)
+        from .face_shadow_fill import face_shadow_fill
+        _features = [_norm_mask(m) for m in (
+            regions.left_eye, regions.right_eye, regions.left_eyebrow,
+            regions.right_eyebrow, regions.lips, regions.mouth_interior)
+            if m is not None]
+        _exclude = np.clip(np.max(np.stack(_features), axis=0), 0, 1) if _features else None
+        canvas = face_shadow_fill(canvas, _face_shadow_fill, shifted_face.ied,
+                                  skin_n, exclude_mask=_exclude)
+
     # ---- Wrinkle & line softening ----
     region_strengths = {
         "forehead": ctx.wrinkle_soften_forehead,
