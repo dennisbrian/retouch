@@ -1,0 +1,76 @@
+{
+  "review_regions": [],
+  "pore_regions": [],
+  "fine_hair_regions": [
+    {
+      "id": "vellus_hair_lower_left_cheek",
+      "xywh": [
+        110,
+        250,
+        120,
+        120
+      ],
+      "tags": [
+        "fine_hair"
+      ],
+      "notes": "Individually resolvable dark hair strands crossing the cheek; measured highpass_std 6.75 (2px Gaussian) at 8x vs 1.43 on adjacent bare skin. Strand cores are 1-2 px wide and separable."
+    }
+  ],
+  "makeup_edge_regions": [],
+  "protected_identity_marks": [],
+  "corrected_defect_regions": [],
+  "noise_regions": [],
+  "uncertainty_regions": [
+    {
+      "id": "unresolvable_pore_field_mid_cheek",
+      "xywh": [
+        130,
+        140,
+        120,
+        90
+      ],
+      "tags": [
+        "ambiguous",
+        "pore_candidate"
+      ],
+      "notes": "Examined at 4x and 8x: highpass_std 1.43 over a 2px Gaussian, low-amplitude tonal mottling only. No countable pore openings. Not resolvable at this capture scale -- recorded as unlabelABLE, not merely unlabelled."
+    }
+  ],
+  "notes": "First ff47-event subject (green outfit, brown wig, red contacts), lower-left cheek patch. X is the native crop; S is the same crop from the RetouchEngine 'natural' full-resolution render. Contributes the corpus's FIRST real fine_hair_regions ground-truth label. pore_regions deliberately empty: this batch's capture scale (730px face in a 4160x6240 frame, event distance, makeup base) carries no resolvable pore information.",
+  "uncertainty": "Examined at 8x nearest-neighbour magnification on the NATIVE crop (X, not S). The hair-strand rectangle bounds a strand cluster, not each strand; some bare skin is inside it. Allow-mask exclusions are rectangular approximations of the eye, hair-sweep and lip boundaries and over-exclude adjacent skin conservatively.",
+  "supports": {
+    "allow": {
+      "reference": "hand-painted rectangular exclusions in crop-local coordinates, read off the saved 512x512 crop preview: [0,0,210,130]; [0,380,512,132]; [0,240,110,272]; [200,0,312,120]; [300,120,212,392]; [230,150,90,60]; remainder (56300 px) is eligible skin -- lower-left/mid cheek band plus the hair-strand cluster deliberately kept inside allow",
+      "provenance": "owner_approved",
+      "description": "Eligible skin support for the FA-02 texture patch; excludes hair/wig, eye, lip, nose and prop intrusions visible in the crop preview"
+    },
+    "corrected": {
+      "reference": "none -- no known corrected defect in this patch",
+      "provenance": "owner_approved",
+      "description": "No correction applied or claimed in this patch; mask is all-zero",
+      "human_reference": "Owner visual review, 2026-09-06 session (ff47 event batch)"
+    },
+    "protected": {
+      "reference": "none -- no protected identity mark inside this crop; mask is all-zero",
+      "provenance": "owner_approved",
+      "description": "No permanent identity mark falls inside the selected clean-skin ROI, so nothing is held protected here. Applied-makeup edges present in this crop are recorded as makeup_edge_regions, which is a different claim."
+    }
+  },
+  "schema_version": 1,
+  "asset_id": "ff47_DSCF1058",
+  "person_id": "subject_ff47_01",
+  "native_dimensions": [
+    4160,
+    6240
+  ],
+  "native_roi_xywh": [
+    1830,
+    1880,
+    512,
+    512
+  ],
+  "native_source_reference": "DSCF1058_native.jpg",
+  "support_acceptance_reference": "Owner visual review and crop/mask approval, 2026-09-06 session, this conversation",
+  "annotation_source": "owner_approved",
+  "reviewer": "dennis"
+}

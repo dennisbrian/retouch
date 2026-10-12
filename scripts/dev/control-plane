@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# AI Engineering Control Plane. See docs/ENGINEERING_CONTROL_PLANE.md.
+set -euo pipefail
+project_root="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$project_root"
+if [[ -x "$project_root/.venv/bin/python" ]]; then
+    py="$project_root/.venv/bin/python"
+else
+    py="python3"
+fi
+exec "$py" -m scripts.dev.control_plane.cli "$@"

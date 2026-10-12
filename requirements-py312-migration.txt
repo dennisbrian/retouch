@@ -1,0 +1,21 @@
+# Candidate input for the separate Python 3.12 migration environment.
+#
+# This is not consumed by pyproject.toml or uv.lock. Do not install it into
+# the legacy project environment and do not interpret a successful resolver
+# run as proof that the current Retouch modules support this stack. The
+# application port must use MediaPipe Tasks (mp.tasks.vision.FaceLandmarker)
+# and Gradio 5 APIs before this becomes a supported runtime.
+#
+# Keep protobuf in a modern compatibility range: the legacy protobuf<4 bound
+# is deliberately not carried into this migration track. The final resolver
+# still has to confirm the selected MediaPipe/ONNX Runtime combination.
+mediapipe>=0.10.35,<1
+opencv-contrib-python>=4.10,<5
+numpy>=1.26,<3
+protobuf>=4.25,<7
+onnxruntime>=1.20,<2
+tqdm>=4.65
+Pillow>=10
+jsonschema>=4.18,<5
+gradio>=5,<6
+huggingface-hub>=0.27,<2

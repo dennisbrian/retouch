@@ -1,0 +1,40 @@
+{
+  "name": "Astia",
+  "description": "Fuji Astia emulation: soft portrait look, smooth skin tones, reduced red saturation, gentle contrast, slight warm bias",
+  "tonal_curve_strength": 0.55,
+  "skin_protect_strength": 0.85,
+  "highlight_rolloff_strength": 0.50,
+  "grain_strength": 0.0,
+  "lut": null,
+  "color_harmony": {
+    "preset": "natural",
+    "amount": 0.0
+  },
+  "curves": {
+    "L": [[0, 4], [32, 28], [96, 100], [160, 168], [224, 232], [255, 252]]
+  },
+  "calibration": {
+    "red": {"hue": 178, "sat": -12, "lum": 0},
+    "green": {"hue": 195, "sat": 4, "lum": 0},
+    "blue": {"hue": 220, "sat": 0, "lum": 0}
+  },
+  "hsl_adjustments": {
+    "hue": {"red": 4, "orange": 8, "yellow": 4, "green": 0, "cyan": 0, "blue": 0, "purple": 0, "magenta": 0},
+    "saturation": {"red": -18, "orange": -10, "yellow": -4, "green": 0, "cyan": 0, "blue": 0, "purple": 4, "magenta": 0},
+    "luminance": {"red": 4, "orange": 6, "yellow": 0, "green": 0, "cyan": 0, "blue": 0, "purple": 0, "magenta": 0}
+  },
+  "saturation_boost": 0.02,
+  "warmth": 0.04,
+  "split_tone_three_way": {
+    "shadows": {"hue": 30.0, "sat": 8.0},
+    "midtones": {"hue": 35.0, "sat": 2.0},
+    "highlights": {"hue": 40.0, "sat": 4.0},
+    "balance": 0.0
+  },
+  "shadow_lift": 2.0,
+  "vignette": 0.0,
+  "sharpness": 0.35,
+  "contrast": 0.2,
+  "highlights": 0.0,
+  "shadows": 0.0
+}

@@ -1,0 +1,19 @@
+{
+  "description": "Ethereal fantasy goddess: low contrast, cool blue/purple shadows, silver highlights, clarity reduction",
+  "curves": {
+    "L": [[0, 12], [64, 72], [128, 128], [192, 184], [255, 245]]
+  },
+  "warmth": -0.03,
+  "saturation_boost": -0.02,
+  "shadow_lift": 10,
+  "vignette": 0.0,
+  "clarity": -0.08,
+  "glow": 0.12,
+  "glow_tint": [255, 235, 242],
+  "haze": 0.05,
+  "sparkles": 0.25,
+  "split_tone": {
+    "shadows": [124, 124],
+    "highlights": [128, 127]
+  }
+}

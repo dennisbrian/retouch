@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Batch-triage all open PRs into HIGH/MEDIUM/LOW buckets + overlap warnings.
+set -euo pipefail
+cd "$(dirname "$0")/../.."
+exec python3 scripts/dev/pr_governor.py triage "$@"

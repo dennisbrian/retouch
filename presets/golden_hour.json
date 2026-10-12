@@ -1,0 +1,16 @@
+{
+  "description": "Rich golden warm look with soft sun-drenched glow and halation",
+  "curves": {
+    "L": [[0, 0], [50, 48], [128, 138], [200, 215], [255, 255]]
+  },
+  "warmth": 0.06,
+  "saturation_boost": 0.15,
+  "shadow_lift": 5,
+  "glow": 0.04,
+  "glow_tint": [120, 200, 255],
+  "halation": {
+    "threshold": 210,
+    "radius": 21,
+    "intensity": 0.4
+  }
+}

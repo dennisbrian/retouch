@@ -1,0 +1,801 @@
+"""Resumable, non-destructive watch-folder ingestion.
+
+The service uses polling rather than requiring a platform-specific watcher.
+Files are emitted only after their size/mtime signature is unchanged across
+two scans. Processing callbacks are supplied by the caller; failures remain
+pending and are recorded with an explanation.
+"""
+
+from __future__ import annotations
+
+import json
+import hashlib
+import os
+import shutil
+import tempfile
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Union
+
+try:  # POSIX advisory locking; on Windows the lock degrades to a no-op
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None
+
+from .io import EXT_MAP, IMAGE_EXTENSIONS
+
+
+WATCH_JOB_STATES = {"queued", "processing", "done", "failed", "cancelled"}
+
+
+class StateLoadError(ValueError):
+    """A durable watch state file exists but cannot be trusted."""
+
+
+def _quarantine_malformed_state(path: Path) -> Optional[Path]:
+    """Preserve a malformed state file beside itself for human recovery."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    quarantine = path.with_name(f"{path.name}.corrupt-{stamp}")
+    try:
+        shutil.copy2(path, quarantine)
+    except OSError:
+        return None
+    return quarantine
+
+
+class PermanentWatchJobError(RuntimeError):
+    """Processor error that needs changed settings or explicit human retry."""
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _hash_payload(payload: Mapping[str, Any]) -> str:
+    encoded = json.dumps(dict(payload), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+@contextmanager
+def _state_file_lock(state_path: Path) -> Iterator[None]:
+    """Advisory inter-process lock held only across a state load→modify→save.
+
+    flock is released automatically when the process dies, so there are no
+    stale lock files to clean up. No-op where fcntl is unavailable (Windows).
+    """
+    if fcntl is None:  # pragma: no cover - Windows
+        yield
+        return
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = state_path.with_name(state_path.name + ".lock")
+    # Keep the handle open for the lifetime of the lock; closing it (or process
+    # death) releases the flock.
+    handle = open(lock_path, "a")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
+_STATUS_RANK = {"pending": 0, "queued": 1, "processing": 2, "done": 3, "failed": 3}
+_RECORD_FIELDS = ("signature", "status", "attempts", "error", "content_id", "asset_instance_id")
+
+
+def _merge_record(local: WatchRecord, incoming: WatchRecord, base: Optional[WatchRecord]) -> None:
+    """Three-way merge one record; conflicts favor progress (rank, max attempts)."""
+    for field_name in _RECORD_FIELDS:
+        local_value = getattr(local, field_name)
+        incoming_value = getattr(incoming, field_name)
+        base_value = getattr(base, field_name) if base is not None else None
+        if local_value == base_value or incoming_value == base_value:
+            if local_value == base_value:
+                setattr(local, field_name, incoming_value)
+            continue
+        # Both sides changed this field since base.
+        if field_name == "attempts":
+            setattr(local, field_name, max(local_value, incoming_value))
+        elif field_name == "status":
+            if _STATUS_RANK.get(incoming_value, 0) > _STATUS_RANK.get(local_value, 0):
+                setattr(local, field_name, incoming_value)
+    for job_kind, job_id in incoming.job_ids.items():
+        local.job_ids.setdefault(job_kind, job_id)
+
+
+def _merge_job(local: WatchJob, incoming: WatchJob, base: Optional[WatchJob]) -> None:
+    """Three-way merge one job; on conflict the local transition wins."""
+    local_dict = local.to_dict()
+    incoming_dict = incoming.to_dict()
+    base_dict = base.to_dict() if base is not None else None
+    for field_name, incoming_value in incoming_dict.items():
+        if field_name not in local_dict:
+            continue
+        local_value = local_dict[field_name]
+        base_value = base_dict.get(field_name) if base_dict is not None else None
+        if local_value == base_value:
+            setattr(local, field_name, incoming_value)
+    if local.attempts < incoming.attempts:
+        local.attempts = incoming.attempts
+
+
+def _merge_states(base: WatchFolderState, local: WatchFolderState, incoming: WatchFolderState) -> None:
+    """Fold peer updates (``incoming`` = current disk) into ``local`` using ``base``.
+
+    Entries added by only one side since ``base`` are kept, so concurrent
+    writers no longer lose each other's entries; fields changed on both
+    sides resolve per-field instead of last-writer-wins.
+    """
+    for path, incoming_record in incoming.records.items():
+        local_record = local.records.get(path)
+        if local_record is None:
+            local.records[path] = incoming_record
+        else:
+            _merge_record(local_record, incoming_record, base.records.get(path))
+    for job_id, incoming_job in incoming.jobs.items():
+        local_job = local.jobs.get(job_id)
+        if local_job is None:
+            local.jobs[job_id] = incoming_job
+        else:
+            _merge_job(local_job, incoming_job, base.jobs.get(job_id))
+
+
+def _is_under(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+@dataclass
+class WatchJob:
+    """Durable work item; ``done`` is valid only after output verification."""
+
+    job_id: str
+    source_path: str
+    content_id: str
+    asset_instance_id: str
+    kind: str  # preview | final
+    settings: Dict[str, Any]
+    settings_fingerprint: str
+    pipeline_fingerprint: str
+    output_path: str
+    output_root: str = ""
+    status: str = "queued"
+    attempts: int = 0
+    error_code: Optional[str] = None
+    error: Optional[str] = None
+    queued_at: str = field(default_factory=_now)
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    output_size: Optional[int] = None
+    output_sha256: Optional[str] = None
+    retryable: bool = True
+
+    def __post_init__(self) -> None:
+        if self.kind not in {"preview", "final"}:
+            raise ValueError("watch job kind must be preview or final")
+        if self.status not in WATCH_JOB_STATES:
+            raise ValueError(f"unknown watch job status: {self.status!r}")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "WatchJob":
+        return cls(
+            job_id=str(payload["job_id"]),
+            source_path=str(payload["source_path"]),
+            content_id=str(payload.get("content_id", "")),
+            asset_instance_id=str(payload.get("asset_instance_id", "")),
+            kind=str(payload.get("kind", "preview")),
+            settings=dict(payload.get("settings") or {}),
+            settings_fingerprint=str(payload.get("settings_fingerprint", "")),
+            pipeline_fingerprint=str(payload.get("pipeline_fingerprint", "")),
+            output_path=str(payload["output_path"]),
+            output_root=str(payload.get("output_root", "")),
+            status=str(payload.get("status", "queued")),
+            attempts=int(payload.get("attempts", 0)),
+            error_code=payload.get("error_code"),
+            error=payload.get("error"),
+            queued_at=str(payload.get("queued_at", _now())),
+            started_at=payload.get("started_at"),
+            completed_at=payload.get("completed_at"),
+            output_size=payload.get("output_size"),
+            output_sha256=payload.get("output_sha256"),
+            retryable=bool(payload.get("retryable", True)),
+        )
+
+
+@dataclass
+class WatchRecord:
+    path: str
+    signature: str
+    status: str = "pending"  # pending | queued | processing | done | failed
+    attempts: int = 0
+    error: Optional[str] = None
+    content_id: Optional[str] = None
+    asset_instance_id: Optional[str] = None
+    job_ids: Dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.status not in {"pending", "queued", "processing", "done", "failed"}:
+            raise ValueError(f"unknown watch record status: {self.status!r}")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class WatchFolderState:
+    version: int = 2
+    records: Dict[str, WatchRecord] = field(default_factory=dict)
+    jobs: Dict[str, WatchJob] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "version": self.version,
+            "records": {path: record.to_dict() for path, record in self.records.items()},
+            "jobs": {job_id: job.to_dict() for job_id, job in self.jobs.items()},
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "WatchFolderState":
+        if not isinstance(payload, Mapping):
+            raise ValueError("watch state must be a JSON object")
+        version = payload.get("version", 1)
+        if isinstance(version, bool) or not isinstance(version, int) or version < 1 or version > cls.version:
+            raise ValueError(f"unsupported watch state version: {version!r}")
+        if "records" not in payload:
+            raise ValueError("watch state must contain records")
+        record_values = payload["records"]
+        # Version 1 predated durable WatchJob objects. Migrate its record-only
+        # state in memory; the next atomic save writes the current v2 shape.
+        if version == 1:
+            job_values = {}
+        elif "jobs" not in payload:
+            raise ValueError("watch state v2 must contain jobs")
+        else:
+            job_values = payload["jobs"]
+        if not isinstance(record_values, Mapping) or not isinstance(job_values, Mapping):
+            raise ValueError("watch state records and jobs must be JSON objects")
+        records = {
+            str(path): WatchRecord(**dict(value))
+            for path, value in record_values.items()
+            if isinstance(value, Mapping)
+        }
+        if len(records) != len(record_values):
+            raise ValueError("watch state record entries must be JSON objects")
+        jobs = {
+            str(job_id): WatchJob.from_dict(value)
+            for job_id, value in job_values.items()
+            if isinstance(value, Mapping)
+        }
+        if len(jobs) != len(job_values):
+            raise ValueError("watch state job entries must be JSON objects")
+        return cls(version=cls.version, records=records, jobs=jobs)
+
+
+class WatchFolder:
+    """Poll a folder and process only stable, changed image files."""
+
+    def __init__(
+        self,
+        input_dir: Union[str, Path],
+        *,
+        state_path: Optional[Union[str, Path]] = None,
+        recursive: bool = True,
+    ) -> None:
+        self.input_dir = Path(input_dir).expanduser().resolve()
+        if not self.input_dir.is_dir():
+            raise NotADirectoryError(str(self.input_dir))
+        self.recursive = bool(recursive)
+        self.state_path = Path(state_path).expanduser() if state_path else self.input_dir / ".retouch-watch.json"
+        # Output root pinned at runtime (set by queue_jobs); state-file
+        # output_root values are only trusted before the first queue pass.
+        self._pinned_output_root: Optional[Path] = None
+        self.state = self._load_state()
+        # Snapshot of the last on-disk state this process loaded/saved; the
+        # three-way merge base that lets save() keep concurrent peer updates.
+        self._base_state = self._clone_state(self.state)
+
+    def _clone_state(self, state: WatchFolderState) -> WatchFolderState:
+        return WatchFolderState(
+            records={path: WatchRecord(**record.to_dict()) for path, record in state.records.items()},
+            jobs={job_id: WatchJob.from_dict(job.to_dict()) for job_id, job in state.jobs.items()},
+        )
+
+    def _load_state(self) -> WatchFolderState:
+        if not self.state_path.exists():
+            return WatchFolderState()
+        try:
+            state = WatchFolderState.from_dict(json.loads(self.state_path.read_text(encoding="utf-8")))
+            self._validate_state_paths(state)
+            return state
+        except FileNotFoundError:
+            # The file may have been removed between exists() and read().
+            return WatchFolderState()
+        except OSError as exc:
+            raise StateLoadError(
+                f"Could not read watch-folder state {self.state_path}: {exc}"
+            ) from exc
+        except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+            quarantine = _quarantine_malformed_state(self.state_path)
+            detail = f"; preserved copy: {quarantine}" if quarantine else "; original preserved"
+            raise StateLoadError(
+                f"Malformed watch-folder state {self.state_path}{detail}: {exc}"
+            ) from exc
+
+    def _validate_state_paths(self, state: WatchFolderState) -> None:
+        for record in state.records.values():
+            self._validated_source(record)
+        for job in state.jobs.values():
+            self._validated_job_output(job)
+
+    def _validated_source(self, record: WatchRecord) -> Path:
+        source = Path(record.path).expanduser().resolve()
+        if not _is_under(source, self.input_dir):
+            raise StateLoadError(
+                f"watch state record path escapes the watched folder: {record.path}"
+            )
+        return source
+
+    def _validated_job_output(self, job: WatchJob) -> Path:
+        output = Path(job.output_path).expanduser().resolve()
+        # The persisted output_root self-attests; a hand-edited state file
+        # could raise both fields to cover an arbitrary write target. When
+        # this instance has seen a runtime output root (queue_jobs), pin the
+        # check to that value; fall back to the job's recorded root only for
+        # legacy state loaded before any queueing.
+        root: Optional[Path]
+        if self._pinned_output_root is not None:
+            root = self._pinned_output_root
+        else:
+            root = (
+                Path(job.output_root).expanduser().resolve()
+                if job.output_root
+                else None
+            )
+        if root is None or not _is_under(output, root):
+            raise StateLoadError(
+                f"watch job output path escapes its output root: {job.output_path}"
+            )
+        return output
+
+    def save(self) -> None:
+        """Persist state atomically under an advisory inter-process lock.
+
+        The lock is held only for the disk read-merge-write (never during
+        image processing); concurrent writers merge instead of clobbering.
+        """
+        with _state_file_lock(self.state_path):
+            if self.state_path.exists():
+                try:
+                    incoming = WatchFolderState.from_dict(
+                        json.loads(self.state_path.read_text(encoding="utf-8"))
+                    )
+                    self._validate_state_paths(incoming)
+                    _merge_states(self._base_state, self.state, incoming)
+                except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+                    # Unreadable/invalid peer writes must not lose local work;
+                    # fall through and overwrite atomically.
+                    pass
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            fd, temp_name = tempfile.mkstemp(prefix=".retouch-watch-", suffix=".tmp", dir=str(self.state_path.parent))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    json.dump(self.state.to_dict(), handle, indent=2, sort_keys=True)
+                os.replace(temp_name, self.state_path)
+            except OSError:
+                try:
+                    os.remove(temp_name)
+                except OSError:
+                    pass
+                raise
+            self._base_state = self._clone_state(self.state)
+
+    def _paths(self) -> Iterable[Path]:
+        iterator = self.input_dir.rglob("*") if self.recursive else self.input_dir.iterdir()
+        return sorted(
+            path for path in iterator
+            if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS and path.name != self.state_path.name
+        )
+
+    @staticmethod
+    def _signature(path: Path) -> str:
+        stat = path.stat()
+        return f"{stat.st_size}:{stat.st_mtime_ns}"
+
+    def scan_once(self) -> List[WatchRecord]:
+        """Update stability state and return files ready for processing.
+
+        A newly observed or changed file is held for one scan. It becomes
+        ready only when its signature is observed unchanged on the next scan.
+        """
+        ready: List[WatchRecord] = []
+        current_paths = set()
+        for path in self._paths():
+            resolved = str(path.resolve())
+            current_paths.add(resolved)
+            try:
+                signature = self._signature(path)
+            except OSError:
+                continue
+            previous = self.state.records.get(resolved)
+            if previous is None or previous.signature != signature:
+                self.state.records[resolved] = WatchRecord(path=resolved, signature=signature)
+                continue
+            if previous.status in {"pending", "failed"}:
+                ready.append(previous)
+        # Stale records are retained for audit/retry, but no longer appear in
+        # the active queue when the source has been removed.
+        for path, record in self.state.records.items():
+            if path not in current_paths and record.status == "processing":
+                record.status = "failed"
+                record.error = "source disappeared while processing"
+        self.save()
+        return ready
+
+    def _default_output_path(
+        self,
+        source: Path,
+        output_root: Path,
+        kind: str,
+        settings: Mapping[str, Any],
+        *,
+        content_id: str,
+        contract_fingerprint: str,
+    ) -> Path:
+        try:
+            relative = source.resolve().relative_to(self.input_dir.resolve())
+        except ValueError:
+            relative = Path(source.name)
+        extension = EXT_MAP.get(str(settings.get("export_fmt", "JPEG")), ".jpg")
+        source_ext = relative.suffix.lower().lstrip(".") or "image"
+        identity = (content_id or "unknown")[:8]
+        contract = (contract_fingerprint or "unknown")[:8]
+        return (
+            output_root / kind / relative.parent
+            / f"{relative.stem}_{source_ext}_{identity}_{contract}_retouched{extension}"
+        )
+
+    def queue_jobs(
+        self,
+        *,
+        kind: str,
+        output_root: Union[str, Path],
+        settings: Mapping[str, Any],
+        pipeline_fingerprint: str,
+        asset_instance_resolver: Optional[Callable[[Path, str], str]] = None,
+        output_path_resolver: Optional[Callable[[Path, str, Mapping[str, Any]], Union[str, Path]]] = None,
+        limit: Optional[int] = None,
+        retry_failed: bool = False,
+    ) -> List[WatchJob]:
+        """Create idempotent durable jobs for stable files."""
+        if kind not in {"preview", "final"}:
+            raise ValueError("kind must be preview or final")
+        if limit is not None and limit < 0:
+            raise ValueError("limit must be non-negative")
+        output_base = Path(output_root).expanduser().resolve()
+        # Pin the runtime output root: every later state reload validates
+        # persisted job outputs against THIS value, not a state-file claim.
+        self._pinned_output_root = output_base
+        try:
+            output_base.relative_to(self.input_dir.resolve())
+        except ValueError:
+            pass
+        else:
+            raise ValueError("job output root must be outside the watched folder")
+        normalized_settings = json.loads(json.dumps(dict(settings), sort_keys=True, default=str))
+        settings_fingerprint = _hash_payload(normalized_settings)
+        pipeline_value = str(pipeline_fingerprint)
+        contract_fingerprint = _hash_payload({
+            "kind": kind,
+            "settings_fingerprint": settings_fingerprint,
+            "pipeline_fingerprint": pipeline_value,
+        })
+        ready = self.scan_once()
+        ready_paths = {record.path for record in ready}
+        # A preview may already be done while a final job is still absent.
+        # Include stable records that are not in the scan queue solely because
+        # their aggregate WatchRecord status reflects an earlier job kind.
+        for path in self._paths():
+            resolved = str(path.resolve())
+            record = self.state.records.get(resolved)
+            if record is None or resolved in ready_paths:
+                continue
+            if record.status == "pending" and not record.job_ids:
+                # This is the first stability observation, not an eligible
+                # job yet.
+                continue
+            try:
+                signature = self._signature(path)
+            except OSError:
+                continue
+            if record.signature != signature:
+                continue
+            job_id = record.job_ids.get(kind)
+            job = self.state.jobs.get(job_id) if job_id else None
+            source = self._validated_source(record)
+            try:
+                content_id = _file_sha256(source)
+            except OSError:
+                continue
+            desired_output = (
+                Path(output_path_resolver(source, kind, normalized_settings))
+                if output_path_resolver
+                else self._default_output_path(
+                    source,
+                    output_base,
+                    kind,
+                    normalized_settings,
+                    content_id=content_id,
+                    contract_fingerprint=contract_fingerprint,
+                )
+            )
+            if output_path_resolver and not _is_under(desired_output.expanduser().resolve(), output_base):
+                raise ValueError("output_path_resolver result must stay under the output root")
+            contract_changed = bool(
+                job is not None
+                and (
+                    job.settings_fingerprint != settings_fingerprint
+                    or job.pipeline_fingerprint != pipeline_value
+                    or Path(job.output_path).expanduser().resolve() != desired_output.expanduser().resolve()
+                )
+            )
+            needs_job = (
+                job is None
+                or job.status == "failed"
+                or (job.status == "done" and not self._output_matches(job))
+                or contract_changed
+            )
+            if needs_job:
+                ready.append(record)
+        if limit is not None:
+            ready = ready[:limit]
+        queued: List[WatchJob] = []
+        for record in ready:
+            source = self._validated_source(record)
+            content_id = _file_sha256(source)
+            asset_instance_id = (
+                asset_instance_resolver(source, content_id)
+                if asset_instance_resolver is not None
+                else content_id
+            )
+            output_path = (
+                Path(output_path_resolver(source, kind, normalized_settings))
+                if output_path_resolver
+                else self._default_output_path(
+                    source,
+                    output_base,
+                    kind,
+                    normalized_settings,
+                    content_id=content_id,
+                    contract_fingerprint=contract_fingerprint,
+                )
+            )
+            if output_path_resolver and not _is_under(output_path.expanduser().resolve(), output_base):
+                raise ValueError("output_path_resolver result must stay under the output root")
+            logical_payload = {
+                "source_content_id": content_id,
+                "asset_instance_id": asset_instance_id,
+                "kind": kind,
+                "settings_fingerprint": settings_fingerprint,
+                "pipeline_fingerprint": pipeline_value,
+                "output_path": str(output_path),
+            }
+            job_id = "watch-job-" + _hash_payload(logical_payload)[:24]
+            previous_job_id = record.job_ids.get(kind)
+            if previous_job_id and previous_job_id != job_id:
+                previous_job = self.state.jobs.get(previous_job_id)
+                if previous_job is not None and previous_job.status == "queued":
+                    previous_job.status = "cancelled"
+                    previous_job.error_code = "superseded"
+                    previous_job.error = "superseded by a newer processing contract"
+                    previous_job.completed_at = _now()
+            existing = self.state.jobs.get(job_id)
+            if existing is not None:
+                if existing.status == "done" and self._output_matches(existing):
+                    record.status = "done"
+                    record.job_ids[kind] = existing.job_id
+                    record.content_id = content_id
+                    record.asset_instance_id = asset_instance_id
+                    continue
+                if existing.status in {"queued", "processing"}:
+                    record.status = "queued"
+                    record.job_ids[kind] = existing.job_id
+                    continue
+                if not existing.retryable and not retry_failed:
+                    record.status = "failed"
+                    record.job_ids[kind] = existing.job_id
+                    continue
+                existing.status = "queued"
+                existing.error_code = None
+                existing.error = None
+                existing.completed_at = None
+                existing.output_size = None
+                existing.output_sha256 = None
+                existing.queued_at = _now()
+                job = existing
+            else:
+                job = WatchJob(
+                    job_id=job_id,
+                    source_path=str(source),
+                    content_id=content_id,
+                    asset_instance_id=str(asset_instance_id),
+                    kind=kind,
+                    settings=normalized_settings,
+                    settings_fingerprint=settings_fingerprint,
+                    pipeline_fingerprint=pipeline_value,
+                    output_path=str(output_path),
+                    output_root=str(output_base),
+                )
+                self.state.jobs[job.job_id] = job
+            record.status = "queued"
+            record.content_id = content_id
+            record.asset_instance_id = str(asset_instance_id)
+            record.job_ids[kind] = job.job_id
+            queued.append(job)
+            self.save()
+        self.save()
+        return queued
+
+    @staticmethod
+    def _output_matches(job: WatchJob) -> bool:
+        if not job.output_sha256 or not job.output_size:
+            return False
+        output = Path(job.output_path)
+        if not output.is_file() or output.stat().st_size != job.output_size:
+            return False
+        try:
+            return _file_sha256(output) == job.output_sha256
+        except OSError:
+            return False
+
+    def recover_stale_jobs(self, *, max_age_seconds: float = 3600.0) -> List[WatchJob]:
+        """Return stale processing attempts to the durable queued state."""
+        now = datetime.now(timezone.utc)
+        recovered: List[WatchJob] = []
+        for job in self.state.jobs.values():
+            if job.status != "processing" or not job.started_at:
+                continue
+            try:
+                age = (now - datetime.fromisoformat(job.started_at)).total_seconds()
+            except ValueError:
+                age = max_age_seconds + 1
+            if age >= max_age_seconds:
+                job.status = "queued"
+                job.error_code = "worker_lost"
+                job.error = "stale processing attempt recovered"
+                job.started_at = None
+                for record in self.state.records.values():
+                    if record.job_ids.get(job.kind) == job.job_id:
+                        record.status = "queued"
+                        record.error = job.error
+                recovered.append(job)
+        if recovered:
+            self.save()
+        return recovered
+
+    def run_queued(
+        self,
+        processor: Callable[[WatchJob], Optional[Union[str, Path]]],
+        *,
+        limit: Optional[int] = None,
+        kind: Optional[str] = None,
+        verifier: Optional[Callable[[WatchJob, Path], None]] = None,
+    ) -> List[WatchJob]:
+        """Run queued jobs for one pass and verify each recorded output."""
+        if limit is not None and limit < 0:
+            raise ValueError("limit must be non-negative")
+        if kind is not None and kind not in {"preview", "final"}:
+            raise ValueError("kind must be preview or final")
+        self.recover_stale_jobs()
+        jobs = [
+            job for job in self.state.jobs.values()
+            if job.status == "queued" and (kind is None or job.kind == kind)
+        ]
+        jobs.sort(key=lambda job: (job.queued_at, job.job_id))
+        if limit is not None:
+            jobs = jobs[:limit]
+        completed: List[WatchJob] = []
+        for job in jobs:
+            self._validated_job_output(job)
+            job.status = "processing"
+            job.attempts += 1
+            job.started_at = _now()
+            job.error_code = None
+            job.error = None
+            job.retryable = True
+            for record in self.state.records.values():
+                if record.job_ids.get(job.kind) == job.job_id:
+                    record.status = "processing"
+                    record.attempts = job.attempts
+                    record.error = None
+            self.save()
+            before_output = None
+            output_before = Path(job.output_path)
+            if output_before.is_file():
+                try:
+                    before_output = (output_before.stat().st_size, output_before.stat().st_mtime_ns)
+                except OSError:
+                    before_output = None
+            try:
+                returned_path = processor(job)
+                if returned_path is not None and Path(returned_path).resolve() != Path(job.output_path).resolve():
+                    raise ValueError("processor returned an unexpected output path")
+                output = Path(job.output_path)
+                if not output.is_file() or output.stat().st_size <= 0:
+                    raise FileNotFoundError("verified output is missing or empty")
+                after_output = (output.stat().st_size, output.stat().st_mtime_ns)
+                if before_output is not None and before_output == after_output:
+                    raise IOError("processor did not update the intended output")
+                if verifier is not None:
+                    verifier(job, output)
+                job.output_size = output.stat().st_size
+                job.output_sha256 = _file_sha256(output)
+                job.status = "done"
+                job.completed_at = _now()
+                for record in self.state.records.values():
+                    if record.job_ids.get(job.kind) == job.job_id:
+                        record.status = "done"
+                        record.error = None
+            except Exception as exc:
+                job.status = "failed"
+                job.error_code = type(exc).__name__
+                job.error = str(exc)
+                job.retryable = not isinstance(exc, PermanentWatchJobError)
+                job.output_size = None
+                job.output_sha256 = None
+                job.completed_at = None
+                for record in self.state.records.values():
+                    if record.job_ids.get(job.kind) == job.job_id:
+                        record.status = "failed"
+                        record.attempts = job.attempts
+                        record.error = f"{job.error_code}: {job.error}"
+            completed.append(job)
+            self.save()
+        return completed
+
+    def process_pending(
+        self,
+        processor: Callable[[Path], Any],
+        *,
+        limit: Optional[int] = None,
+    ) -> List[WatchRecord]:
+        """Process stable files; failed callbacks remain retryable."""
+        ready = self.scan_once()
+        if limit is not None:
+            if limit < 0:
+                raise ValueError("limit must be non-negative")
+            ready = ready[:limit]
+        completed: List[WatchRecord] = []
+        for record in ready:
+            source = self._validated_source(record)
+            record.status = "processing"
+            record.attempts += 1
+            record.error = None
+            self.save()
+            try:
+                processor(source)
+            except Exception as exc:  # callback errors are queue state, not watcher crashes
+                record.status = "failed"
+                record.error = f"{type(exc).__name__}: {exc}"
+            else:
+                record.status = "done"
+            completed.append(record)
+            self.save()
+        return completed

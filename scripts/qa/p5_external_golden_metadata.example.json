@@ -1,0 +1,18 @@
+{
+  "schema": "p5_external_golden_v1",
+  "producer": "external_photoshop_exports",
+  "capture_status": "complete",
+  "photoshop_version": "UNKNOWN",
+  "document_profile": "UNKNOWN",
+  "bits": 8,
+  "operator": "UNKNOWN",
+  "capture_notes": "Replace with actual capture method and export settings. Do not attest guesses.",
+  "settings_confirmed": false,
+  "settings_evidence": null,
+  "blend_gamma_setting": {"enabled": "UNKNOWN", "gamma": "UNAVAILABLE"},
+  "fill_opacity": 100,
+  "opaque_equal_layers": true,
+  "blend_if": "disabled",
+  "layer_effects": false,
+  "masks": "none"
+}

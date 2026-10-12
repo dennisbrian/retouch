@@ -1,0 +1,232 @@
+{
+  "artifacts": [],
+  "baseline": {
+    "commit": "ed53c492a0ff6825a130f8fd5b9b1b98e506d145",
+    "environment": {
+      "cv2": "4.11.0",
+      "mediapipe": "0.10.5",
+      "numpy": "1.26.4"
+    },
+    "recipes": [
+      "natural",
+      "cosplay_clear_protected_v1"
+    ],
+    "report": "/Applications/htdocs/retouch/test_output/quality_lab/reports/baseline_exp2.json",
+    "sha256": "be2070b5136ee3cbb1cd8f98a2969e61f995bfe4fe2489a369306f7b3e439e81",
+    "thresholds_sha256": "8e02a6ce77e5b907ba1c3ede0cda72af494ec1d20fe023d24899d891e705899c"
+  },
+  "budget": "MEDIUM",
+  "candidate_count": 1,
+  "candidates": [
+    {
+      "approach": "bright-bg relaxed gate (fixed lab)",
+      "complexity": {
+        "changed_files": 1,
+        "loc_added": 33,
+        "new_dependencies": 0,
+        "paths": [
+          "retouch/detection.py"
+        ],
+        "subsystems": [
+          "retouch"
+        ]
+      },
+      "elimination_reason": "",
+      "id": "A",
+      "mechanism": "lower person-gate coverage cutoff to 0.15 when face has measured presence evidence AND surround ring mean luma >= 235 (blown highlight)",
+      "patch": "/Applications/htdocs/retouch/test_output/experiment_lab/candidate_B_bright_bg_relaxed_gate.patch",
+      "rationale": "Rescue mechanism from EXP-0001 B, now benchmarked in a worktree with real engine models",
+      "rounds": 1,
+      "runs": [
+        {
+          "case_ids": [
+            "ctrl_dscf3775",
+            "ctrl_dscf3776",
+            "ctrl_dscf3785",
+            "ctrl_dscf3790",
+            "ctrl_dscf3797",
+            "ctrl_dscf3800",
+            "fn_dscf3773",
+            "fn_dscf3774",
+            "fn_dscf3783",
+            "fn_dscf3786",
+            "fn_dscf3788",
+            "fn_dscf3792",
+            "fn_dscf3794",
+            "fn_dscf3799"
+          ],
+          "complexity": {
+            "changed_files": 1,
+            "loc_added": 33,
+            "new_dependencies": 0,
+            "paths": [
+              "retouch/detection.py"
+            ],
+            "subsystems": [
+              "retouch"
+            ]
+          },
+          "elapsed_seconds": 110.54,
+          "environment": {
+            "cv2": "4.11.0",
+            "mediapipe": "0.10.5",
+            "numpy": "1.26.4"
+          },
+          "fingerprint": "46fa986d820f18767a483a7d9052b668590448a8d0e6670b9ba032a71d5e3671",
+          "max_ram_ratio": 1.0,
+          "max_time_ratio": 1.023,
+          "performance": {
+            "PASS": 28,
+            "REGRESSION": 0,
+            "REVIEW": 0
+          },
+          "quality": {
+            "PASS": 28,
+            "REGRESSION": 0,
+            "REVIEW": 0
+          },
+          "report": "/Applications/htdocs/retouch/test_output/experiment_lab/EXP-0003/worktrees/A/test_output/experiment_lab/EXP-0003-A-development-r1.json",
+          "report_sha256": "0719989dd6cdbf7be6255d4b936c0c52cb56b2c7d3c1120b026f178e8f80a7af",
+          "round": 1,
+          "split": "development",
+          "target": {
+            "median_delta": 0.0,
+            "positive_pairs": 0,
+            "sample_size": 28,
+            "spread": [
+              0.0,
+              0.0
+            ]
+          }
+        }
+      ],
+      "status": "MEASURED",
+      "worktree": "/Applications/htdocs/retouch/test_output/experiment_lab/EXP-0003/worktrees/A"
+    }
+  ],
+  "completed_at": "",
+  "conclusion": null,
+  "confidence": "NONE",
+  "constraints": {
+    "max_changed_files": 8,
+    "max_loc_added": 500
+  },
+  "corpus": {
+    "case_count": 43,
+    "cases": {
+      "development": [
+        "ctrl_dscf3775",
+        "ctrl_dscf3776",
+        "ctrl_dscf3785",
+        "ctrl_dscf3790",
+        "ctrl_dscf3797",
+        "ctrl_dscf3800",
+        "fn_dscf3773",
+        "fn_dscf3774",
+        "fn_dscf3783",
+        "fn_dscf3786",
+        "fn_dscf3788",
+        "fn_dscf3792",
+        "fn_dscf3794",
+        "fn_dscf3799"
+      ],
+      "holdout": [
+        "v0920_dscf4141",
+        "v0920_dscf4158",
+        "v0920_dscf4174",
+        "v0920_dscf4191",
+        "v0920_dscf4207",
+        "v0920_dscf4224",
+        "v0920_dscf4240",
+        "v0920_dscf4257",
+        "v0920_dscf4274",
+        "v0920_dscf4290",
+        "v0920_dscf4307",
+        "v0920_dscf4324",
+        "v0920_dscf4341",
+        "v0920_dscf4357",
+        "v0920_dscf4374"
+      ],
+      "qualified": false,
+      "reason": "too few independent groups",
+      "validation": [
+        "v0919_dscf3928",
+        "v0919_dscf3943",
+        "v0919_dscf3957",
+        "v0919_dscf3972",
+        "v0919_dscf3987",
+        "v0919_dscf4002",
+        "v0919_dscf4017",
+        "v0919_dscf4031",
+        "v0919_dscf4051",
+        "v0919_dscf4066",
+        "v0919_dscf4080",
+        "v0919_dscf4095",
+        "v0919_dscf4124",
+        "v0919_dscf4139"
+      ]
+    },
+    "manifest": "/Applications/htdocs/retouch/test_output/quality_lab/corpus_wig_edge/experiment_corpus.json",
+    "real_holdout": true,
+    "sha256": "00eac2e01104bf2d38532ce8f27e247f884e20491092e9c5e9008409995c5b3c"
+  },
+  "created_at": "2026-10-01T10:59:55+00:00",
+  "design_sha256": "556a1b18742710b414b4432969327f8054a9989cf087f461e4abb03269602240",
+  "experiment_id": "EXP-0003",
+  "failure_criteria": {
+    "max_ram_ratio": 1.15,
+    "max_regression_fraction": 0.02,
+    "max_runtime_ratio": 1.1
+  },
+  "history": [
+    {
+      "at": "2026-10-01T10:59:55+00:00",
+      "event": "created"
+    },
+    {
+      "at": "2026-10-01T11:00:04+00:00",
+      "event": "design frozen",
+      "sha256": "556a1b18742710b414b4432969327f8054a9989cf087f461e4abb03269602240"
+    }
+  ],
+  "hypothesis": "Re-measured bright-bg relaxed gate (serialized runtime) rescues all silver-wig false-negative frames with runtime under 1.10x baseline",
+  "hypothesis_id": "HYP-003",
+  "hypothesis_success_text": "8/8 FN frames leave no-op (luminance_drift delta >= 0.05 on development); 0 REGRESSION on validation controls; runtime ratio <= 1.10 serialized",
+  "metrics": [
+    "global.luminance_drift",
+    "Quality Lab regression count",
+    "time ratio",
+    "RAM ratio",
+    "complexity"
+  ],
+  "negative_findings": [],
+  "new_evidence": "EXP-0001/EXP-0002 eliminations void: benchmark worktrees ran engine without models (git-ignored assets missing from git worktrees). Lab fix: runner._link_engine_assets shares repo models/ into worktrees; regression test in test_experiment_lab.py. EXP-0002 archive records the infrastructure failure.",
+  "promotion_task": null,
+  "question": "Does the bright-bg relaxed gate rescue silver-wig false negatives when the candidate worktree carries the real engine models?",
+  "reject_all_if": "Any validation control frame regresses (quality REGRESSION count > 0) or serialized runtime exceeds 1.10x baseline. NOTE: candidate runs MUST be serialized \u2014 no concurrent benchmarks on the host machine (EXP-0001 B/C runtime contamination).",
+  "related_research": [],
+  "schema": 1,
+  "similarity": {
+    "matches": [
+      {
+        "id": "EXP-0002",
+        "overlap": 0.36,
+        "source": "experiment"
+      }
+    ],
+    "sources_unavailable": [],
+    "verdict": "DUPLICATE"
+  },
+  "started_at": "2026-10-01T11:00:19+00:00",
+  "status": "ANALYZING",
+  "success_criteria": {
+    "direction": "higher",
+    "metric": "global.luminance_drift",
+    "min_delta": 0.05,
+    "min_positive_fraction": 0.4,
+    "quality_tolerance": 0.01
+  },
+  "title": "Wig-edge rescue on fixed lab",
+  "updated_at": "2026-10-01T11:02:54+00:00",
+  "winner": null
+}

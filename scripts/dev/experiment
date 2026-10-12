@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+project_root="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$project_root"
+if [[ -x "$project_root/.venv/bin/python" ]]; then
+    py="$project_root/.venv/bin/python"
+else
+    py="python3"
+fi
+exec "$py" -m scripts.dev.experiment_lab.cli "$@"

@@ -1,0 +1,10 @@
+{
+  "description": "High-contrast dramatic black and white",
+  "curves": {
+    "L": [[0, 0], [50, 30], [128, 128], [205, 225], [255, 255]]
+  },
+  "saturation_boost": -1.0,
+  "vignette": 0.18,
+  "clarity": 0.4,
+  "grain": 0.06
+}

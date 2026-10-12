@@ -1,0 +1,896 @@
+"""Tests for BatchProcessor async producer-consumer queue (BB7)."""
+
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import numpy as np
+import pytest
+from PIL import Image
+
+from retouch.batch_processor import (
+    BatchProcessor,
+    BatchProcessorCache,
+    _compute_queue_depth,
+    _estimate_image_working_bytes,
+    _batch_source_key,
+    _batch_source_matches,
+    _run_async_batch_queue,
+    plan_batch_outputs,
+    validate_batch_roots,
+)
+
+
+def test_estimate_image_working_bytes(tmp_path):
+    img_path = tmp_path / "sample.jpg"
+    Image.new("RGB", (1920, 1080), color=(128, 128, 128)).save(img_path)
+    est = _estimate_image_working_bytes(img_path)
+    assert est == 1920 * 1080 * 3 * 4
+
+
+def test_compute_queue_depth_scales_with_resolution(tmp_path):
+    small = tmp_path / "small.jpg"
+    Image.new("RGB", (640, 480), color=(0, 0, 0)).save(small)
+    depth = _compute_queue_depth(4, [small], ram_budget_bytes=50 * 1024 * 1024)
+    assert 1 <= depth <= 8
+
+
+def test_recursive_cache_keys_do_not_collide_on_same_basename(tmp_path):
+    input_dir = tmp_path / "input"
+    (input_dir / "card-a").mkdir(parents=True)
+    (input_dir / "card-b").mkdir(parents=True)
+    first = input_dir / "card-a" / "IMG_0001.jpg"
+    second = input_dir / "card-b" / "IMG_0001.jpg"
+    Image.new("RGB", (8, 8), color=(10, 10, 10)).save(first)
+    Image.new("RGB", (8, 8), color=(20, 20, 20)).save(second)
+    cache = BatchProcessorCache(input_dir)
+
+    assert cache.relative_key(first) == "card-a/IMG_0001.jpg"
+    assert cache.relative_key(second) == "card-b/IMG_0001.jpg"
+    cache.set(cache.relative_key(first), first.stat().st_mtime, {"faces": 1})
+    cache.set(cache.relative_key(second), second.stat().st_mtime, {"faces": 2})
+    assert cache.get(cache.relative_key(first), first.stat().st_mtime)["faces"] == 1
+    assert cache.get(cache.relative_key(second), second.stat().st_mtime)["faces"] == 2
+
+
+def test_recursive_outputs_preserve_relative_directories(monkeypatch, tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    (input_dir / "card-a").mkdir(parents=True)
+    (input_dir / "card-b").mkdir(parents=True)
+    first = input_dir / "card-a" / "IMG_0001.jpg"
+    second = input_dir / "card-b" / "IMG_0001.jpg"
+    Image.new("RGB", (8, 8), color=(10, 10, 10)).save(first)
+    Image.new("RGB", (8, 8), color=(20, 20, 20)).save(second)
+
+    engine = MagicMock()
+    engine.process.return_value = _fake_result()
+    processor = BatchProcessor(engine)
+    monkeypatch.setattr(
+        "retouch.batch_processor.analyze_and_group",
+        lambda paths, cache, eng: {"Group": paths},
+    )
+    monkeypatch.setattr(
+        "retouch.batch_processor.imread_exif",
+        lambda path: np.zeros((8, 8, 3), dtype=np.uint8),
+    )
+
+    def fake_write(path, *args, **kwargs):
+        Path(path).write_bytes(b"verified test output")
+
+    monkeypatch.setattr("retouch.io.write_image_with_icc", fake_write)
+    processed, _, _, _ = processor.process_folder(
+        input_dir, output_dir, generate_sheet=False, num_workers=1,
+    )
+
+    assert {Path(path).relative_to(output_dir).as_posix() for path in processed} == {
+        "card-a/IMG_0001_retouched.jpg",
+        "card-b/IMG_0001_retouched.jpg",
+    }
+
+
+def test_manifest_paths_preserve_symlink_identity_without_target_paths(tmp_path):
+    from retouch.batch_processor import _relative_manifest_path
+
+    input_root = tmp_path / "input"
+    external_a = tmp_path / "external-a"
+    external_b = tmp_path / "external-b"
+    (input_root / "card-a").mkdir(parents=True)
+    (input_root / "card-b").mkdir(parents=True)
+    external_a.mkdir()
+    external_b.mkdir()
+    target_a = external_a / "IMG_0001.jpg"
+    target_b = external_b / "IMG_0001.jpg"
+    target_a.touch()
+    target_b.touch()
+    link_a = input_root / "card-a" / "IMG_0001.jpg"
+    link_b = input_root / "card-b" / "IMG_0001.jpg"
+    try:
+        link_a.symlink_to(target_a)
+        link_b.symlink_to(target_b)
+    except OSError as exc:
+        pytest.skip("symlinks are unavailable in this test environment: %s" % exc)
+
+    assert _relative_manifest_path(link_a, input_root) == "card-a/IMG_0001.jpg"
+    assert _relative_manifest_path(link_b, input_root) == "card-b/IMG_0001.jpg"
+
+
+def test_batch_plan_disambiguates_same_stem_different_source_formats(tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    jpeg = input_dir / "photo.jpg"
+    png = input_dir / "photo.png"
+    jpeg.touch()
+    png.touch()
+
+    plan = plan_batch_outputs([jpeg, png], input_dir, output_dir, "JPEG")
+
+    destinations = {path.name for path in plan.values()}
+    assert destinations == {"photo_jpg_retouched.jpg", "photo_png_retouched.jpg"}
+
+
+def test_batch_plan_keeps_symlink_and_target_as_distinct_sources(tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    (input_dir / "album").mkdir(parents=True)
+    (input_dir / "links").mkdir(parents=True)
+    target = input_dir / "album" / "original.jpg"
+    alias = input_dir / "links" / "alias.jpg"
+    Image.new("RGB", (8, 8), color=(10, 20, 30)).save(target)
+    try:
+        alias.symlink_to(Path("../album/original.jpg"))
+    except OSError as exc:
+        pytest.skip("symlinks are unavailable in this test environment: %s" % exc)
+
+    plan = plan_batch_outputs([target, alias], input_dir, output_dir, "JPEG")
+
+    assert len(plan) == 2
+    assert plan[_batch_source_key(target)] == output_dir / "album" / "original_retouched.jpg"
+    assert plan[_batch_source_key(alias)] == output_dir / "links" / "alias_retouched.jpg"
+
+
+def test_batch_plan_rejects_output_subdirectory_symlink_escape(tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    outside = tmp_path / "outside"
+    (input_dir / "album").mkdir(parents=True)
+    output_dir.mkdir()
+    outside.mkdir()
+    source = input_dir / "album" / "photo.jpg"
+    Image.new("RGB", (8, 8)).save(source)
+    try:
+        (output_dir / "album").symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip("symlinks are unavailable in this test environment: %s" % exc)
+
+    with pytest.raises(ValueError, match="inside the output root"):
+        plan_batch_outputs([source], input_dir, output_dir, "JPEG")
+
+    assert list(outside.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    ("artifact_name", "generate_sheet", "export_zip"),
+    [
+        ("contact_sheet.jpg", True, False),
+        ("batch_export.zip", False, True),
+    ],
+)
+def test_batch_overrides_cannot_claim_reserved_artifacts(
+    tmp_path, artifact_name, generate_sheet, export_zip
+):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    source = input_dir / "photo.jpg"
+    Image.new("RGB", (8, 8)).save(source)
+    processor = BatchProcessor(MagicMock())
+
+    with pytest.raises(ValueError, match="reserved artifact"):
+        processor.process_folder(
+            input_dir,
+            output_dir,
+            generate_sheet=generate_sheet,
+            export_zip=export_zip,
+            output_path_overrides={source: output_dir / artifact_name},
+            num_workers=1,
+        )
+
+
+def test_batch_output_override_rejects_symlinked_parent_escape(tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    outside = tmp_path / "outside"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    outside.mkdir()
+    source = input_dir / "photo.jpg"
+    Image.new("RGB", (8, 8)).save(source)
+    try:
+        (output_dir / "redirect").symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip("symlinks are unavailable in this test environment: %s" % exc)
+
+    processor = BatchProcessor(MagicMock())
+    with pytest.raises(ValueError, match="inside the output root"):
+        processor.process_folder(
+            input_dir,
+            output_dir,
+            generate_sheet=False,
+            output_path_overrides={
+                source: output_dir / "redirect" / "custom.jpg",
+            },
+            num_workers=1,
+        )
+
+    assert list(outside.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    ("artifact_name", "generate_sheet", "export_zip"),
+    [
+        ("contact_sheet.jpg", True, False),
+        ("batch_export.zip", False, True),
+    ],
+)
+def test_batch_rejects_reserved_artifact_symlink_outside_output_root(
+    tmp_path, artifact_name, generate_sheet, export_zip
+):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    source = input_dir / "photo.jpg"
+    Image.new("RGB", (8, 8)).save(source)
+    outside = tmp_path / "outside.jpg"
+    outside.write_bytes(b"must remain unchanged")
+    try:
+        (output_dir / artifact_name).symlink_to(outside)
+    except OSError as exc:
+        pytest.skip("symlinks are unavailable in this test environment: %s" % exc)
+
+    processor = BatchProcessor(MagicMock())
+    with pytest.raises(ValueError, match="cannot be a symlink"):
+        processor.process_folder(
+            input_dir,
+            output_dir,
+            generate_sheet=generate_sheet,
+            export_zip=export_zip,
+            num_workers=1,
+        )
+
+    assert outside.read_bytes() == b"must remain unchanged"
+
+
+def test_batch_rechecks_output_parent_before_atomic_publish(monkeypatch, tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    outside = tmp_path / "outside"
+    (input_dir / "album").mkdir(parents=True)
+    (output_dir / "album").mkdir(parents=True)
+    outside.mkdir()
+    source = input_dir / "album" / "photo.jpg"
+    Image.new("RGB", (8, 8)).save(source)
+
+    def redirect_after_preflight(paths, cache, engine):
+        (output_dir / "album").rmdir()
+        (output_dir / "album").symlink_to(outside, target_is_directory=True)
+        return {"Group": paths}
+
+    engine = MagicMock()
+    engine.process.return_value = _fake_result()
+    processor = BatchProcessor(engine)
+    monkeypatch.setattr(
+        "retouch.batch_processor.BatchProcessorCache",
+        lambda _root: MagicMock(),
+    )
+    monkeypatch.setattr(
+        "retouch.batch_processor.analyze_and_group", redirect_after_preflight,
+    )
+    monkeypatch.setattr(
+        "retouch.batch_processor.imread_exif",
+        lambda path: np.zeros((8, 8, 3), dtype=np.uint8),
+    )
+
+    processed, _, _, status = processor.process_folder(
+        input_dir, output_dir, generate_sheet=False, num_workers=1,
+    )
+
+    assert processed == []
+    assert "Failed: 0/1 files completed" in status
+    assert list(outside.iterdir()) == []
+
+
+def test_batch_source_matching_remaps_symlinked_root_without_alias_fanout(tmp_path):
+    input_dir = tmp_path / "input"
+    (input_dir / "album").mkdir(parents=True)
+    (input_dir / "links").mkdir(parents=True)
+    target = input_dir / "album" / "original.jpg"
+    alias = input_dir / "links" / "alias.jpg"
+    Image.new("RGB", (8, 8)).save(target)
+    try:
+        alias.symlink_to(Path("../album/original.jpg"))
+        input_alias = tmp_path / "input-alias"
+        input_alias.symlink_to(input_dir, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip("symlinks are unavailable in this test environment: %s" % exc)
+
+    discovered = [target, alias]
+    target_match = _batch_source_matches(
+        input_alias / "album" / "original.jpg", discovered, input_alias, input_dir
+    )
+    alias_match = _batch_source_matches(
+        input_alias / "links" / "alias.jpg", discovered, input_alias, input_dir
+    )
+
+    assert target_match == [_batch_source_key(target)]
+    assert alias_match == [_batch_source_key(alias)]
+
+
+def test_process_folder_preserves_symlink_identity_in_outputs_manifest_and_zip(
+    monkeypatch, tmp_path
+):
+    import json
+    import zipfile
+
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    (input_dir / "album").mkdir(parents=True)
+    (input_dir / "links").mkdir(parents=True)
+    target = input_dir / "album" / "original.jpg"
+    alias = input_dir / "links" / "alias.jpg"
+    Image.new("RGB", (8, 8), color=(10, 20, 30)).save(target)
+    try:
+        alias.symlink_to(Path("../album/original.jpg"))
+    except OSError as exc:
+        pytest.skip("symlinks are unavailable in this test environment: %s" % exc)
+
+    engine = MagicMock()
+    engine.process.return_value = _fake_result()
+    processor = BatchProcessor(engine)
+    monkeypatch.setattr(
+        "retouch.batch_processor.analyze_and_group",
+        lambda paths, cache, eng: {"Group": paths},
+    )
+    monkeypatch.setattr(
+        "retouch.batch_processor.imread_exif",
+        lambda path: np.zeros((8, 8, 3), dtype=np.uint8),
+    )
+
+    def fake_write(path, *args, **kwargs):
+        Path(path).write_bytes(b"verified test output")
+
+    monkeypatch.setattr("retouch.io.write_image_with_icc", fake_write)
+    processed, _, zip_path, _ = processor.process_folder(
+        input_dir,
+        output_dir,
+        generate_sheet=False,
+        export_zip=True,
+        num_workers=1,
+    )
+
+    expected_outputs = {
+        "album/original_retouched.jpg",
+        "links/alias_retouched.jpg",
+    }
+    assert {
+        Path(path).relative_to(output_dir).as_posix() for path in processed
+    } == expected_outputs
+    manifest_path = next(output_dir.glob("retouch_batch_manifest_*.json"))
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert payload["summary"] == {
+        "total": 2, "done": 2, "failed": 0, "skipped": 0,
+    }
+    assert {row["source"] for row in payload["files"]} == {
+        "album/original.jpg", "links/alias.jpg",
+    }
+    assert {row["output"] for row in payload["files"]} == expected_outputs
+    assert zip_path is not None
+    with zipfile.ZipFile(zip_path) as archive:
+        names = archive.namelist()
+    assert len(names) == len(set(names))
+    assert expected_outputs.issubset(set(names))
+
+
+def test_only_files_selects_a_symlink_without_its_target(monkeypatch, tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    target = input_dir / "target.jpg"
+    alias = input_dir / "alias.jpg"
+    Image.new("RGB", (8, 8)).save(target)
+    try:
+        alias.symlink_to(target)
+    except OSError as exc:
+        pytest.skip("symlinks are unavailable in this test environment: %s" % exc)
+
+    seen = []
+    processor = BatchProcessor(MagicMock())
+    monkeypatch.setattr(
+        "retouch.batch_processor.analyze_and_group",
+        lambda paths, cache, eng: {"Group": paths},
+    )
+    monkeypatch.setattr(
+        processor,
+        "_process_single_file",
+        lambda path, *args, **kwargs: (seen.append(path), output_dir / "out.jpg")[1],
+    )
+
+    processor.process_folder(
+        input_dir,
+        output_dir,
+        generate_sheet=False,
+        num_workers=1,
+        only_files=[alias],
+    )
+
+    assert seen == [alias]
+
+
+def test_output_override_rejects_filtered_out_alias_of_selected_source(tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    target = input_dir / "target.jpg"
+    alias = input_dir / "alias.jpg"
+    Image.new("RGB", (8, 8)).save(target)
+    try:
+        alias.symlink_to(target)
+    except OSError as exc:
+        pytest.skip("symlinks are unavailable in this test environment: %s" % exc)
+
+    processor = BatchProcessor(MagicMock())
+    with pytest.raises(ValueError, match="missing or ambiguous source"):
+        processor.process_folder(
+            input_dir,
+            output_dir,
+            generate_sheet=False,
+            num_workers=1,
+            only_files=[target],
+            output_path_overrides={alias: output_dir / "alias-retouched.jpg"},
+        )
+
+
+@pytest.mark.parametrize("relative_output", (".", "exports", "exports/final"))
+def test_batch_rejects_output_inside_input_tree(tmp_path, relative_output):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    output_dir = input_dir / relative_output
+
+    with pytest.raises(ValueError, match="outside the input tree"):
+        validate_batch_roots(input_dir, output_dir)
+
+
+def test_batch_export_passes_color_context_to_writer(monkeypatch, tmp_path):
+    in_dir, out_dir = _make_input_dir(tmp_path, names=("source.jpg",))
+    engine = MagicMock()
+    engine.process.return_value = _fake_result()
+    processor = BatchProcessor(engine)
+    monkeypatch.setattr(
+        "retouch.batch_processor.analyze_and_group",
+        lambda paths, cache, eng: {"Group": paths},
+    )
+    monkeypatch.setattr(
+        "retouch.batch_processor.imread_exif",
+        lambda path: np.zeros((64, 64, 3), dtype=np.uint8),
+    )
+    captured = {}
+
+    def fake_write(path, image, *args, **kwargs):
+        captured["color_context"] = kwargs.get("color_context")
+        Path(path).write_bytes(b"verified test output")
+
+    monkeypatch.setattr("retouch.io.write_image_with_icc", fake_write)
+    processor.process_folder(in_dir, out_dir, generate_sheet=False, num_workers=1)
+
+    assert captured["color_context"].source_kind == "assumed-srgb"
+
+
+def test_batch_writes_face_mode_manifest_and_bundles_it_in_zip(monkeypatch, tmp_path):
+    import json
+    import zipfile
+
+    in_dir, out_dir = _make_input_dir(tmp_path, names=("portrait.jpg",))
+    engine = MagicMock()
+    result = _fake_result(shape=(800, 800, 3))
+    result.face_count = 1
+    result.runtime_diagnostics = {
+        "face_detection": {
+            "mode": "face_aware",
+            "available": True,
+            "backend": "test-backend",
+            "probe_state": "initialized",
+        },
+        "healing": [{
+            "index": 0,
+            "status": "done",
+            "requested": "patchmatch",
+            "executed": "telea_donor_constrained",
+            "reason": "no_full_source_patch",
+            "valid_source_centres": np.int64(0),
+            "permitted_donor_pixels": 4,
+            "fallback_pixels": 12,
+            "source_map_available": np.bool_(False),
+            "unlisted_private_field": "/not-for-manifest/private.png",
+        }],
+    }
+    engine.process.return_value = result
+    processor = BatchProcessor(engine)
+    monkeypatch.setattr(
+        "retouch.batch_processor.analyze_and_group",
+        lambda paths, cache, eng: {"Portrait": paths},
+    )
+    monkeypatch.setattr(
+        "retouch.batch_processor.imread_exif",
+        lambda path: np.zeros((800, 800, 3), dtype=np.uint8),
+    )
+
+    def fake_write(path, *args, **kwargs):
+        Path(path).write_bytes(b"verified test output")
+
+    monkeypatch.setattr("retouch.io.write_image_with_icc", fake_write)
+    processed, _, zip_path, status = processor.process_folder(
+        in_dir,
+        out_dir,
+        generate_sheet=False,
+        export_zip=True,
+        export_res="720px",
+        num_workers=1,
+    )
+
+    manifests = list(out_dir.glob("retouch_batch_manifest_*.json"))
+    assert len(manifests) == 1
+    payload = json.loads(manifests[0].read_text(encoding="utf-8"))
+    assert payload["schema"] == "retouch.batch-manifest.v2"
+    assert payload["summary"] == {"total": 1, "done": 1, "failed": 0, "skipped": 0}
+    row = payload["files"][0]
+    assert row["source"] == "portrait.jpg"
+    assert row["output"] == "portrait_retouched.jpg"
+    assert row["face_detection"]["mode"] == "face_aware"
+    assert row["global_only"] is False
+    assert row["face_count"] == 1
+    assert row["face_aware_execution"] is True
+    assert row["healing"] == [{
+        "index": 0,
+        "status": "done",
+        "requested": "patchmatch",
+        "executed": "telea_donor_constrained",
+        "reason": "no_full_source_patch",
+        "valid_source_centres": 0,
+        "permitted_donor_pixels": 4,
+        "fallback_pixels": 12,
+        "source_map_available": False,
+    }]
+    assert "input_root_name" not in payload
+    assert "output_root_name" not in payload
+    assert "unlisted_private_field" not in manifests[0].read_text(encoding="utf-8")
+    assert str(in_dir) not in manifests[0].read_text(encoding="utf-8")
+    assert manifests[0].name in status
+    assert len(processed) == 1
+    assert zip_path is not None
+    with zipfile.ZipFile(zip_path) as archive:
+        assert manifests[0].name in archive.namelist()
+
+
+def test_batch_callback_exception_does_not_mark_written_output_failed(monkeypatch, tmp_path):
+    import json
+
+    in_dir, out_dir = _make_input_dir(tmp_path, names=("portrait.jpg",))
+    engine = MagicMock()
+    result = _fake_result()
+    result.face_count = 1
+    result.runtime_diagnostics = {
+        "face_detection": {"mode": "face_aware", "available": True}
+    }
+    engine.process.return_value = result
+    processor = BatchProcessor(engine)
+    monkeypatch.setattr(
+        "retouch.batch_processor.analyze_and_group",
+        lambda paths, cache, eng: {"Portrait": paths},
+    )
+    monkeypatch.setattr(
+        "retouch.batch_processor.imread_exif",
+        lambda path: np.zeros((64, 64, 3), dtype=np.uint8),
+    )
+
+    def fake_write(path, *args, **kwargs):
+        Path(path).write_bytes(b"verified test output")
+
+    monkeypatch.setattr("retouch.io.write_image_with_icc", fake_write)
+    callback_calls = []
+
+    def broken_callback(*args):
+        callback_calls.append(args)
+        raise RuntimeError("observer failed")
+
+    processed, _, _, _ = processor.process_folder(
+        in_dir,
+        out_dir,
+        generate_sheet=False,
+        on_file_result=broken_callback,
+        num_workers=1,
+    )
+
+    assert len(callback_calls) == 1
+    assert len(processed) == 1
+    manifest = next(out_dir.glob("retouch_batch_manifest_*.json"))
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    assert payload["files"][0]["status"] == "done"
+    assert payload["files"][0]["face_count"] == 1
+
+
+def test_owned_batch_uses_worker_local_engines(monkeypatch, tmp_path):
+    import threading
+
+    class FakeEngine:
+        instances = []
+
+        def __init__(self):
+            self.identity = object()
+            self.process = MagicMock(return_value=_fake_result())
+            self.detector = MagicMock()
+            self.detector.detect.return_value = []
+            self.__class__.instances.append(self)
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("retouch.engine.RetouchEngine", FakeEngine)
+    in_dir, out_dir = _make_input_dir(tmp_path, names=("a.jpg", "b.jpg"))
+    monkeypatch.setattr(
+        "retouch.batch_processor.analyze_and_group",
+        lambda paths, cache, eng: {"Group": paths},
+    )
+    barrier = threading.Barrier(2)
+    seen = []
+
+    def fake_process(self, file_path, *args, **kwargs):
+        seen.append(kwargs["engine"])
+        barrier.wait(timeout=5)
+        return out_dir / f"{file_path.stem}_retouched.jpg"
+
+    monkeypatch.setattr(BatchProcessor, "_process_single_file", fake_process)
+    processor = BatchProcessor()
+    try:
+        processed, _, _, _ = processor.process_folder(
+            in_dir, out_dir, generate_sheet=False, num_workers=2,
+        )
+    finally:
+        processor.close()
+
+    assert len(processed) == 2
+    assert len({id(engine) for engine in seen}) == 2
+
+
+def test_batch_log_reports_partial_failure_truthfully(monkeypatch, tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    Image.new("RGB", (8, 8), color=(10, 10, 10)).save(input_dir / "ok.jpg")
+    Image.new("RGB", (8, 8), color=(20, 20, 20)).save(input_dir / "bad.jpg")
+    engine = MagicMock()
+    engine.process.return_value = _fake_result()
+    processor = BatchProcessor(engine)
+    monkeypatch.setattr(
+        "retouch.batch_processor.analyze_and_group",
+        lambda paths, cache, eng: {"Group": paths},
+    )
+    monkeypatch.setattr(
+        "retouch.batch_processor.imread_exif",
+        lambda path: np.zeros((8, 8, 3), dtype=np.uint8),
+    )
+
+    def fake_write(path, *args, **kwargs):
+        if "bad" in str(path):
+            raise IOError("simulated output failure")
+        Path(path).write_bytes(b"verified test output")
+
+    monkeypatch.setattr("retouch.io.write_image_with_icc", fake_write)
+    processed, _, _, log = processor.process_folder(
+        input_dir, output_dir, generate_sheet=False, num_workers=1,
+    )
+
+    assert len(processed) == 1
+    assert "Partial: Processed 1/2" in log
+    assert "1 failed" in log
+
+
+def test_run_async_batch_queue_processes_all_files(tmp_path):
+    paths = []
+    for i in range(6):
+        p = tmp_path / f"img_{i}.jpg"
+        Image.new("RGB", (32, 32), color=(i, i, i)).save(p)
+        paths.append(p)
+
+    def worker(fp: Path) -> Path:
+        return fp.with_name(fp.stem + "_out.jpg")
+
+    results = _run_async_batch_queue(
+        paths,
+        worker,
+        num_workers=3,
+        total_files=len(paths),
+    )
+    assert len(results) == 6
+    assert all(r.name.endswith("_out.jpg") for r in results)
+
+
+def test_run_async_batch_queue_skips_failed_workers(tmp_path):
+    paths = [tmp_path / "ok.jpg", tmp_path / "fail.jpg"]
+    Image.new("RGB", (16, 16)).save(paths[0])
+    Image.new("RGB", (16, 16)).save(paths[1])
+
+    def worker(fp: Path):
+        if fp.name == "fail.jpg":
+            return None
+        return fp
+
+    results = _run_async_batch_queue(
+        paths, worker, num_workers=2, total_files=len(paths),
+    )
+    assert results == [paths[0]]
+
+
+def test_batch_processor_uses_async_queue(monkeypatch, tmp_path):
+    engine = MagicMock()
+    processor = BatchProcessor(engine)
+
+    in_dir = tmp_path / "in"
+    out_dir = tmp_path / "out"
+    in_dir.mkdir()
+    out_dir.mkdir()
+    Image.new("RGB", (64, 64)).save(in_dir / "a.jpg")
+    Image.new("RGB", (64, 64)).save(in_dir / "b.jpg")
+
+    called = {"async": False}
+
+    def fake_queue(paths, worker_fn, num_workers, total_files, progress_callback=None):
+        called["async"] = True
+        return [str(out_dir / "a_retouched.jpg"), str(out_dir / "b_retouched.jpg")]
+
+    monkeypatch.setattr(
+        "retouch.batch_processor.analyze_and_group",
+        lambda paths, cache, eng: {"Group": paths},
+    )
+    monkeypatch.setattr(
+        "retouch.batch_processor._run_async_batch_queue", fake_queue,
+    )
+    monkeypatch.setattr(
+        processor, "_process_single_file",
+        lambda *args, **kwargs: out_dir / "stub.jpg",
+    )
+
+    processor.process_folder(
+        in_dir, out_dir, generate_sheet=False, num_workers=2,
+    )
+    assert called["async"] is True
+
+
+class _FakeResult(np.ndarray):
+    """Minimal ndarray subclass mirroring ProcessingResult's .qa attribute."""
+
+
+def _fake_result(shape=(64, 64, 3), qa=None):
+    arr = np.zeros(shape, dtype=np.uint8)
+    r = arr.view(_FakeResult)
+    r.qa = qa if qa is not None else []
+    return r
+
+
+def _make_input_dir(tmp_path, names=("a.jpg", "b.jpg")):
+    in_dir = tmp_path / "in"
+    out_dir = tmp_path / "out"
+    in_dir.mkdir()
+    out_dir.mkdir()
+    for name in names:
+        Image.new("RGB", (64, 64)).save(in_dir / name)
+    return in_dir, out_dir
+
+
+def test_only_files_restricts_processing(monkeypatch, tmp_path):
+    in_dir, out_dir = _make_input_dir(tmp_path, names=("a.jpg", "b.jpg", "c.jpg"))
+    engine = MagicMock()
+    engine.process.return_value = _fake_result()
+    processor = BatchProcessor(engine)
+
+    monkeypatch.setattr(
+        "retouch.batch_processor.analyze_and_group",
+        lambda paths, cache, eng: {"Group": paths},
+    )
+
+    seen = []
+    monkeypatch.setattr(
+        processor, "_process_single_file",
+        lambda fp, *args, **kwargs: (seen.append(fp), out_dir / f"{fp.stem}_out.jpg")[1],
+    )
+
+    processor.process_folder(
+        in_dir, out_dir, generate_sheet=False, num_workers=1,
+        only_files=[in_dir / "a.jpg", in_dir / "c.jpg"],
+    )
+
+    assert {p.name for p in seen} == {"a.jpg", "c.jpg"}
+
+
+def test_on_file_result_fires_for_success_and_failure(monkeypatch, tmp_path):
+    in_dir, out_dir = _make_input_dir(tmp_path, names=("good.jpg", "bad.jpg"))
+    engine = MagicMock()
+
+    def fake_process(img_bgr, recipe=None, **kwargs):
+        return _fake_result()
+
+    engine.process.side_effect = fake_process
+    processor = BatchProcessor(engine)
+
+    monkeypatch.setattr(
+        "retouch.batch_processor.analyze_and_group",
+        lambda paths, cache, eng: {"Group": paths},
+    )
+
+    def fake_imread(path):
+        if "bad" in str(path):
+            raise ValueError("corrupt file")
+        return np.zeros((64, 64, 3), dtype=np.uint8)
+
+    monkeypatch.setattr("retouch.batch_processor.imread_exif", fake_imread)
+    def fake_write(path, *args, **kwargs):
+        Path(path).write_bytes(b"verified test output")
+
+    monkeypatch.setattr("retouch.io.write_image_with_icc", fake_write)
+
+    results = {}
+
+    def on_file_result(source_path, output_path, qa_list, error):
+        results[source_path.name] = (output_path, qa_list, error)
+
+    processor.process_folder(
+        in_dir, out_dir, generate_sheet=False, num_workers=1,
+        on_file_result=on_file_result,
+    )
+
+    assert results["good.jpg"][0] is not None
+    assert results["good.jpg"][2] is None
+    assert results["bad.jpg"][0] is None
+    assert results["bad.jpg"][2] is not None
+
+
+def test_on_file_result_receives_qa_before_export_resize(monkeypatch, tmp_path):
+    """Regression: cv2.resize on the export path drops the ProcessingResult
+    subclass and its .qa attribute. QA must be captured before that resize,
+    not after — this test forces the resize branch and asserts QA survives.
+    """
+    in_dir, out_dir = _make_input_dir(tmp_path, names=("big.jpg",))
+    engine = MagicMock()
+
+    fake_qa = [{"detector": "halo", "score": 0.9, "flagged": True, "message": "halo"}]
+    big_result = _fake_result(shape=(2000, 2000, 3), qa=fake_qa)
+    engine.process.return_value = big_result
+
+    processor = BatchProcessor(engine)
+
+    monkeypatch.setattr(
+        "retouch.batch_processor.analyze_and_group",
+        lambda paths, cache, eng: {"Group": paths},
+    )
+    monkeypatch.setattr(
+        "retouch.batch_processor.imread_exif",
+        lambda path: np.zeros((2000, 2000, 3), dtype=np.uint8),
+    )
+    def fake_write(path, *args, **kwargs):
+        Path(path).write_bytes(b"verified test output")
+
+    monkeypatch.setattr("retouch.io.write_image_with_icc", fake_write)
+
+    captured = {}
+
+    def on_file_result(source_path, output_path, qa_list, error):
+        captured["qa_list"] = qa_list
+
+    processor.process_folder(
+        in_dir, out_dir, generate_sheet=False, num_workers=1,
+        export_res="720px",  # forces the cv2.resize branch (2000px > 720px)
+        on_file_result=on_file_result,
+    )
+
+    assert captured["qa_list"] == fake_qa

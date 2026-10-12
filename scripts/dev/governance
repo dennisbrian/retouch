@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Repository governance checks. See scripts/dev/governance.py --help header
+# and docs/GOVERNANCE.md for the policy model.
+#
+# Usage:
+#   scripts/dev/governance             full audit (collects tests, slower)
+#   scripts/dev/governance --ci        fast PR checks, ERRORs only
+#   scripts/dev/governance --stats     print generated repo stats
+#   scripts/dev/governance --write-stats   regenerate docs/REPO_STATS.md
+#   scripts/dev/governance --strict    WARNINGs also fail
+set -euo pipefail
+project_root="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$project_root"
+
+if [[ -x "$project_root/.venv/bin/python" ]]; then
+    py="$project_root/.venv/bin/python"
+else
+    py="python3"
+fi
+exec "$py" scripts/dev/governance.py "$@"

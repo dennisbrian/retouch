@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Thin wrapper around cli.py so Claude Code can allowlist previews
+# without granting blanket `python3` execution.
+# Usage: scripts/retouch-preview <same args as cli.py>
+set -euo pipefail
+cd "$(dirname "$0")/.."
+exec python3 cli.py "$@"

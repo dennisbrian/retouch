@@ -1,0 +1,11 @@
+{
+  "description": "Clean, bright, commercial beauty",
+  "curves": {
+    "L": [[0, 5], [50, 55], [128, 140], [200, 210], [255, 255]]
+  },
+  "warmth": 0.01,
+  "saturation_boost": 0.03,
+  "shadow_lift": 3,
+  "vignette": 0.0,
+  "glow": 0.02
+}

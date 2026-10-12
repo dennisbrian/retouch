@@ -1,0 +1,7 @@
+{
+  "clarity": [0.0, 0.5, 1.0],
+  "smooth": [0.0, 0.5, 1.0],
+  "texture_opacity": [0.0, 0.5, 1.0],
+  "saturation": [0.0, 1.0],
+  "contrast": [0.0, 1.0]
+}

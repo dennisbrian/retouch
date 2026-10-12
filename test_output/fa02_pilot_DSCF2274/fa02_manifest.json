@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "purpose": "development_pilot",
+  "corpus": "portrait cases sourced from a corpus_manifest v3 registry",
+  "parameter_selection": "a priori research settings; not fitted to these cases",
+  "cases": [
+    {
+      "id": "ff47_DSCF2274_patch_01",
+      "kind": "portrait",
+      "split": "dev",
+      "person_ids": [
+        "subject_ff47_06"
+      ],
+      "session_id": "ff47_event_2026",
+      "arrays": "DSCF2274_arrays.npz",
+      "arrays_sha256": "23a64c5704b80de80554677d4b581b46430d235fb13563032058ade04478b061",
+      "inter_eye_distance_px": 210.0,
+      "face_width_px": 708.0,
+      "crop_xywh": [
+        1620,
+        1640,
+        512,
+        512
+      ],
+      "native_dimensions": [
+        4160,
+        6240
+      ],
+      "owner_mapping_reference": "Owner-confirmed: DSCF2274 depicts subject_ff47_06, 2026-09-06 session",
+      "support_acceptance_reference": "Owner visual review and crop/mask approval, 2026-09-06 session, this conversation",
+      "support_status": "externally_accepted",
+      "masks_provenance": "owner_approved",
+      "native_source_reference": "DSCF2274_native.jpg",
+      "source_sha256": "194d18c84d780e4be9717e5f22d95340578049e3652383934912fb81824da9b7",
+      "smoothing_provenance": "RetouchEngine recipe=natural, full native resolution (quality=full default), CLI cli.py invocation 2026-09-06",
+      "color_profile": "sRGB (JPEG, no embedded ICC profile detected)",
+      "resampled": false,
+      "previously_inspected": false,
+      "rois": [],
+      "pores": [],
+      "profiles": [],
+      "corpus_source": {
+        "manifest_path": "test_output/fa02_pilot_DSCF2274/corpus_manifest.json",
+        "asset_id": "ff47_DSCF2274",
+        "asset_sha256": "194d18c84d780e4be9717e5f22d95340578049e3652383934912fb81824da9b7",
+        "asset_split": "dev",
+        "asset_person_ids": [
+          "subject_ff47_06"
+        ],
+        "annotation_person_id": "subject_ff47_06"
+      },
+      "annotation": {
+        "schema_version": 1,
+        "asset_id": "ff47_DSCF2274",
+        "person_id": "subject_ff47_06",
+        "annotation_source": "owner_approved",
+        "reviewer": "dennis",
+        "native_dimensions": [
+          4160,
+          6240
+        ],
+        "native_roi_xywh": [
+          1620,
+          1640,
+          512,
+          512
+        ],
+        "native_source_reference": "DSCF2274_native.jpg",
+        "supports": {
+          "allow": {
+            "reference": "hand-painted rectangular exclusions in crop-local coordinates, read off the saved 512x512 crop preview: [0,0,512,155]; [0,0,235,512]; [235,230,160,130]; [280,300,232,212]; [0,360,512,152]; remainder (28965 px) is eligible skin -- the mid/right cheek between the wig line and the mouth",
+            "provenance": "owner_approved",
+            "description": "Eligible skin support for the FA-02 texture patch; excludes hair/wig, eye, lip, nose and prop intrusions visible in the crop preview"
+          },
+          "corrected": {
+            "reference": "none -- no known corrected defect in this patch",
+            "provenance": "owner_approved",
+            "description": "No correction applied or claimed in this patch; mask is all-zero",
+            "human_reference": "Owner visual review, 2026-09-06 session (ff47 event batch)"
+          },
+          "protected": {
+            "reference": "none -- no protected identity mark inside this crop; mask is all-zero",
+            "provenance": "owner_approved",
+            "description": "No permanent identity mark falls inside the selected clean-skin ROI, so nothing is held protected here. Applied-makeup edges present in this crop are recorded as makeup_edge_regions, which is a different claim."
+          }
+        },
+        "support_acceptance_reference": "Owner visual review and crop/mask approval, 2026-09-06 session, this conversation",
+        "review_regions": [],
+        "notes": "Sixth ff47-event subject (purple wig, warm-toned makeup, overcast light). Honestly zero ground-truth labels: the two candidate structures examined both resolve to nuisance (sensor grain, wig fibre) rather than pores or vellus hair, and are recorded as uncertainty_regions with the measurements that disqualified them.",
+        "uncertainty": "Examined at 8x nearest-neighbour magnification on the NATIVE crop (X, not S). Distinguishing lavender wig fibre from the subject's own hair at the hairline is genuinely ambiguous here; the conservative choice was to exclude that band from allow and to claim no fine-hair label at all.",
+        "pore_regions": [],
+        "fine_hair_regions": [],
+        "makeup_edge_regions": [],
+        "protected_identity_marks": [],
+        "corrected_defect_regions": [],
+        "noise_regions": [],
+        "uncertainty_regions": [
+          {
+            "id": "grain_not_pores_mid_cheek",
+            "xywh": [
+              250,
+              240,
+              90,
+              60
+            ],
+            "tags": [
+              "ambiguous",
+              "noise",
+              "pore_candidate"
+            ],
+            "notes": "highpass_std 2.71 at 8x, which is above the batch's smooth-skin floor (1.4), but the structure is isotropic per-pixel chroma grain with no repeating openings -- consistent with sensor noise under overcast light, not pore structure. Not labelled as pores, and not confidently enough dominated by noise to claim a noise_regions control either."
+          },
+          {
+            "id": "wig_strand_edge_not_vellus",
+            "xywh": [
+              300,
+              170,
+              80,
+              60
+            ],
+            "tags": [
+              "ambiguous",
+              "fine_hair_candidate"
+            ],
+            "notes": "highpass_std 3.18, but the strands are lavender WIG fibre crossing the skin boundary, not the subject's own vellus hair. Deliberately excluded from fine_hair_regions -- the category is about the subject's fine facial hair."
+          }
+        ]
+      },
+      "reviewer": "dennis"
+    }
+  ]
+}

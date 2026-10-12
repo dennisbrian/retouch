@@ -1,0 +1,18 @@
+{
+  "$schema": "https://retouch.dennisbrian.com/schemas/recipe-v1.json",
+  "name": "calibrated_natural_v1",
+  "version": "1.0",
+  "description": "Z1/Z2 prototype recipe. Conservative natural base whose feature-focal and chroma-evening strengths are designed to be modulated per image by measured facial contrast and skin homogeneity (scripts/spike_z_calibrated_recipe.py). Base values sit at the low end of each op's useful range; the spike raises them only toward measured within-face deficits, never past the profile caps.",
+  "author": "Fable research prototype (RESEARCH_PERCEPTUAL_CALIBRATION_Z_2026_07_17.md)",
+  "tags": ["prototype", "calibrated", "natural", "z-series"],
+  "params": {
+    "smooth": 0.25,
+    "blotch_reduction": 0.15,
+    "equalize": 0.05,
+    "skin_hue_unify": 0.2,
+    "skin_chroma_even": 0.15,
+    "eye_enhance": 0.1,
+    "lip_enhance": 0.08,
+    "blush": 4
+  }
+}

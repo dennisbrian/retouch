@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "asset_id": "nahida_DSCF6754",
+  "person_id": "subject_nahida_01",
+  "native_dimensions": [
+    4160,
+    6240
+  ],
+  "native_roi_xywh": [
+    900,
+    1900,
+    512,
+    512
+  ],
+  "native_source_reference": "DSCF6754_native.jpg",
+  "supports": {
+    "allow": {
+      "reference": "hand-painted exclusions: left band x<230 (hair strands), top band y<120 for x>=100 (ear/hair transition); remainder is upper-cheek/temple skin",
+      "provenance": "owner_approved",
+      "description": "Eligible skin support, bright/high-key lighting patch (source luma ~161.8 vs Priority for Printing's ~88)"
+    },
+    "corrected": {
+      "reference": "none",
+      "provenance": "owner_approved",
+      "description": "No correction claimed; mask all-zero",
+      "human_reference": "Owner visual review, 2026-09-06"
+    },
+    "protected": {
+      "reference": "none",
+      "provenance": "owner_approved",
+      "description": "No mark/makeup in this patch; mask all-zero"
+    }
+  },
+  "support_acceptance_reference": "Owner visual review and crop/mask approval, 2026-09-06 session, this conversation",
+  "annotation_source": "owner_approved",
+  "reviewer": "dennis",
+  "review_regions": [
+    {
+      "id": "fine_hair_left_band",
+      "xywh": [
+        0,
+        0,
+        230,
+        512
+      ],
+      "tags": [
+        "fine_hair_review"
+      ]
+    }
+  ],
+  "notes": "Third real-portrait FA-02 pilot case, new subject (subject_nahida_01), first genuinely different-lighting patch: bright/high-key studio setup, distinct from the Priority for Printing subject's flatter ~88 luma lighting. S produced by RetouchEngine natural recipe, full native resolution, same crop as X.",
+  "uncertainty": "Hair/skin boundary at left edge approximated with a straight vertical cut, not traced to the exact strand boundary."
+}

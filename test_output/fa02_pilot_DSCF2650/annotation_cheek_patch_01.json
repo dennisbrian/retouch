@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "asset_id": "priority_printing_DSCF2650",
+  "person_id": "subject_priority_printing_01",
+  "native_dimensions": [
+    4160,
+    6240
+  ],
+  "native_roi_xywh": [
+    2200,
+    2050,
+    512,
+    512
+  ],
+  "native_source_reference": "DSCF2650_native.jpg",
+  "supports": {
+    "allow": {
+      "reference": "hand-painted rectangular exclusion: right-edge hair strand band (x>=400) and bottom-left mouth-corner sliver (y>=440,x<140) excluded from eligible skin; rest of 512x512 patch is upper-cheek/temple skin",
+      "provenance": "owner_approved",
+      "description": "Eligible skin support for the FA-02 texture patch; excludes hair and mouth-edge intrusions visible in the crop preview"
+    },
+    "corrected": {
+      "reference": "none -- no known corrected defect in this patch",
+      "provenance": "owner_approved",
+      "description": "No correction applied or claimed in this patch; mask is all-zero",
+      "human_reference": "Owner visual review, 2026-09-06 session"
+    },
+    "protected": {
+      "reference": "none -- no mark/makeup requiring protection in this patch",
+      "provenance": "owner_approved",
+      "description": "No identity mark or makeup edge falls inside this crop; mask is all-zero"
+    }
+  },
+  "support_acceptance_reference": "Owner visual review and crop/mask approval, 2026-09-06 session, this conversation",
+  "annotation_source": "owner_approved",
+  "reviewer": "dennis",
+  "review_regions": [
+    {
+      "id": "fine_hair_right_edge",
+      "xywh": [
+        400,
+        0,
+        112,
+        512
+      ],
+      "tags": [
+        "fine_hair_review"
+      ]
+    }
+  ],
+  "notes": "First real-portrait FA-02 dev-split pilot case. Patch is upper-cheek/temple skin, subject's right side of frame, from DSCF2650 (Priority for Printing shoot). S produced by the actual RetouchEngine 'natural' recipe at full native resolution, same crop coordinates as X.",
+  "uncertainty": "Right-edge hair strands may partially overlap the excluded allow-mask band; no attempt made to trace hair boundary precisely, band is a conservative rectangular exclusion."
+}

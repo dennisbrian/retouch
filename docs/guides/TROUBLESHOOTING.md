@@ -1,0 +1,496 @@
+# Troubleshooting Guide
+
+Quick fixes for common issues. If your problem isn't here, open an issue on GitHub.
+
+---
+
+## Installation & Setup
+
+### ImportError: No module named 'retouch'
+**Cause:** Environment not set up, or a different Python is running.
+
+**Fix:** run `./setup` from the repository root and launch with `./run`, which
+always uses `.venv`. In a manual install:
+```bash
+source .venv/bin/activate
+python -m pip install -e .  # Install in editable mode
+```
+
+### MediaPipe or protobuf fails to install
+**Cause:** Python 3.12 or newer. MediaPipe 0.10.5 only has wheels up to 3.11.
+
+**Fix:** `./setup` uses the `.python-version` pin (3.11) automatically. For a
+manual install, create the venv with `python3.11 -m venv .venv`.
+
+### Models downloading slowly or failing
+**Cause:** The three core models (about 13 MB) download on first use into
+`~/.cache/retouch/models`. Offline mode (`RETOUCH_OFFLINE=1`) or a blocked
+network stops the download.
+
+**Fix:**
+1. ✅ Run `./setup` once while online; it pre-fetches and verifies them
+2. Or download them by hand with the `curl` commands in the [README](../../README.md#model-files) into `models/`
+3. Set `RETOUCH_CACHE_DIR` if the default cache location is not writable
+
+**Check status:**
+```bash
+ls -lh models/
+# Should have: face_landmarker.task, selfie_segmenter.tflite, resnet18.onnx
+```
+
+### CUDA/GPU not available (ONNX warning)
+**Cause:** ONNX Runtime falling back to CPU (normal behavior).
+
+**Fix:** GPU acceleration is optional. CPU-only is fine:
+```bash
+# No action needed — inference still works
+python3 gui.py  # Runs on CPU, slower but correct
+```
+
+**To enable GPU:**
+```bash
+pip install onnxruntime-gpu
+# Requires CUDA 11+ and cuDNN
+```
+
+---
+
+## Face Detection & Processing
+
+### No faces detected in image
+**Symptom:** "0 faces found" message, no processing applied.
+
+**Cause:** Image has extreme profile, heavy occlusion, or faces are tiny.
+
+**Fix (priority order):**
+1. ✅ Try `--global-only` flag (skips detection, applies only color grading)
+   ```bash
+   python3 cli.py image.jpg -o out.jpg --global-only
+   ```
+2. ✅ Verify face is front-ish (90°+ profile won't work)
+3. ✅ Try a closer crop if faces are distant
+4. ✅ Brighten image if it's very dark (detection struggles in low light)
+
+**Example:**
+```bash
+python3 cli.py distant_portrait.jpg -o out.jpg --global-only --recipe natural
+# Applies grading even without face detection
+```
+
+### Faces detected but processing looks wrong
+**Symptom:** Retouched face looks over-softened, colors are off, or artifacts appear.
+
+**Causes & fixes:**
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| Too soft/blurry | Using `fast=True` on high-res | Use `fast=False` for export, keep `fast=True` for GUI preview |
+| Color cast (too warm/cool) | Wrong recipe or white balance | Try different recipe: `--recipe natural` vs `--recipe cosplay_clear_v1` |
+| Patchiness or halos | Frequency separation artifact | Use `--recipe documentary_preserve_v1` (less aggressive smoothing) |
+| Eyes look weird | Over-enhancement | Reduce `eye_brightening` slider in GUI or CLI |
+
+---
+
+## Performance & Speed
+
+### GUI feels sluggish / slow previews
+**Symptom:** Preview takes 10+ seconds even for small images.
+
+**Cause:** `fast=False` on high-res image, or running on low-end machine.
+
+**Fix:**
+1. ✅ **Enable fast mode** (GUI default — check it's ON)
+   - Settings → Fast mode: ON
+   - Cuts 3-5× faster (but softer details)
+2. ✅ **For final export:** Turn off fast mode just before export
+3. ✅ **Close other apps** to free RAM
+
+**Typical timings (1080p image):**
+- `fast=True`: 2-3s preview ✅
+- `fast=False`: 5-10s final render
+
+### Batch processing is very slow
+**Symptom:** 50 images taking 30+ minutes to process.
+
+**Cause:** Only 1 worker processing serially, or `fast=False` on high-res.
+
+**Fix:**
+```bash
+# Increase workers (4-8 recommended for most machines)
+python3 cli.py ./photos -o ./out --workers 4
+
+# Or use fast mode for faster throughput
+python3 cli.py ./photos -o ./out --workers 4 --fast
+
+# For high-end machines (8+ cores)
+python3 cli.py ./photos -o ./out --workers 8
+```
+
+**Memory check:**
+```bash
+# Monitor while running
+top  # Watch %MEM column
+# 4 workers × 600 MB = 2.4 GB typical
+```
+
+### Out of memory on 4K images
+**Symptom:** `MemoryError` or system freezes on 24MP+ images.
+
+**Cause:** Insufficient RAM or proxy resolution not activating.
+
+**Fix (priority order):**
+1. ✅ **Check available RAM:**
+   ```bash
+   free -h  # Linux/Mac
+   ```
+   Need ≥1.2 GB free (2+ GB for safety)
+
+2. ✅ **Enable fast mode** (reduces to 800px)
+   ```bash
+   python3 cli.py image_4k.jpg -o out.jpg --fast
+   ```
+
+3. ✅ **Use --workers 1** (serial processing)
+   ```bash
+   python3 cli.py large_batch/ -o out/ --workers 1
+   ```
+
+4. ✅ **Verify proxy activates** (automatic for images > 2048px)
+   - Image automatically downscaled to 2048px internally
+   - Upscaled back to original on output
+   - Check with `--verbose` flag
+
+5. ❌ Last resort: close all other apps, restart machine
+
+---
+
+## Recipes & Presets
+
+### `--recipe`: invalid choice
+**Symptom:** `cli.py: error: argument --recipe: invalid choice: 'cosplay'` (or
+`anime_v2`, `astia`, `cyber_doll`, ...).
+
+**Cause:** `--recipe` and the GUI dropdowns only take the curated catalog
+(`CURATED_RECIPE_NAMES` in `retouch/recipes.py`). `python3 cli.py --list-recipes`
+lists every recipe in the cookbook, including older looks that are not curated.
+
+**Fix:**
+- Run `./run recipes` for the names `--recipe` accepts. The closest curated
+  match for `cosplay` is `cosplay_clear_v1`, which extends it.
+- To use a non-curated look anyway, call the Python API:
+  `engine.process(img, recipe="anime_v2")`.
+
+### Recipe not having any effect
+**Symptom:** Image looks identical before/after, wrong color, or recipe silently ignored.
+
+**Cause:** Recipe has errors, or live-editing a built-in recipe (overwrites not saved).
+
+**Fix:**
+1. ✅ **Try a different recipe** to verify engine works
+   ```bash
+   python3 cli.py image.jpg -o out1.jpg --recipe natural
+   python3 cli.py image.jpg -o out2.jpg --recipe cosplay_clear_v1
+   # Compare out1.jpg and out2.jpg — should look different
+   ```
+
+2. ✅ **Check recipe keys** (might have typos)
+   ```bash
+   python3 -c "from retouch.recipes import RECIPES; print(RECIPES['anime_v2'].keys())"
+   ```
+
+3. ✅ **Save custom recipes to a file** (don't edit built-ins)
+   - GUI: Export recipe → custom_recipe.json
+   - Load: Import recipe from file
+
+4. ✅ **Verify no dead keys** (silently ignored)
+   ```bash
+   python3 -m pytest tests/test_recipe_validation.py -v
+   # Catches recipes with unimplemented parameters
+   ```
+
+### Custom recipe won't load
+**Symptom:** "Invalid recipe" error, or recipe loads but parameters are ignored.
+
+**Cause:** Malformed JSON, or recipe keys don't map to known parameters.
+
+**Fix:**
+1. ✅ **Validate JSON syntax**
+   ```bash
+   jq . custom_recipe.json  # Should print without error
+   ```
+
+2. ✅ **Check key names** (must match PROCESSING_PARAMS registry)
+   ```bash
+   python3 -c "from retouch.params import PROCESSING_PARAMS; print([s.name for s in PROCESSING_PARAMS])" | head -20
+   ```
+
+3. ✅ **Compare to working recipe**
+   ```bash
+   python3 -c "from retouch.recipes import RECIPES; import json; print(json.dumps(RECIPES['anime_v2'], indent=2))" | head -30
+   ```
+
+4. ✅ **Use recipe validator** to catch errors
+   ```bash
+   python3 -m pytest tests/test_recipe_validation.py::test_no_dead_recipe_keys -v
+   ```
+
+---
+
+## GUI Issues
+
+### GUI won't start
+**Symptom:** Error when running `python3 gui.py`, or browser can't connect.
+
+**Cause:** Port 7860 in use, dependencies missing, or models not downloaded.
+
+**Fix:**
+1. ✅ **Check port is free**
+   ```bash
+   lsof -i :7860  # If something appears, kill it
+   kill -9 <PID>
+   ```
+
+2. ✅ **Reinstall dependencies**
+   ```bash
+   ./setup     # or, in a manual install: pip install --upgrade -r requirements/gui.txt
+   ```
+
+3. ✅ **"When localhost is not accessible, a shareable link must be created"**
+   Gradio raises this when its own page request fails. With Starlette 1.0 or
+   newer every page returns 500 (`unhashable type: 'dict'`), because Gradio 4
+   uses the older `TemplateResponse` call. The requirements cap Starlette
+   below 1.0; check with `pip show starlette` and re-run `./setup`.
+
+4. ✅ **Download models**
+   ```bash
+   ./setup     # re-fetches and verifies the core models
+   ```
+
+5. ✅ **Check browser compatibility** (Chrome/Safari/Firefox all work)
+
+### GUI slider changes not applying
+**Symptom:** Move slider, but preview doesn't update.
+
+**Cause:** FaceContext caching issue or GPU memory fragmentation.
+
+**Fix:**
+1. ✅ **Reload image** (forces re-detection and cache invalidation)
+   - Upload → Browse → select same image → OK
+
+2. ✅ **Restart GUI**
+   ```bash
+   # Ctrl+C to stop, then:
+   python3 gui.py
+   ```
+
+3. ✅ **Clear GPU cache** (if using ONNX GPU)
+   ```bash
+   python3 -c "import onnxruntime; onnxruntime.get_available_providers()"
+   # Should show CUDAExecutionProvider if GPU is working
+   ```
+
+### Export freezes or takes forever
+**Symptom:** Click "Export Full Quality" but nothing happens, or UI becomes unresponsive.
+
+**Cause:** Large image + full resolution (`fast=False`) processing.
+
+**Workaround:**
+- ✅ Expected behavior: Export can take 15-30s for 4K images
+- ✅ Check terminal for progress messages (if `--verbose` enabled)
+- ✅ Use `fast=True` for faster preview, then export in CLI for batches
+
+---
+
+## CLI Issues
+
+### CLI hangs on batch processing
+**Symptom:** Process starts but never finishes, 100% CPU.
+
+**Cause:** Model deadlock (rare), or worker pool issue.
+
+**Fix:**
+1. ✅ **Kill process** and retry with `--workers 1`
+   ```bash
+   Ctrl+C  # Stop current run
+   python3 cli.py ./batch --workers 1 -o ./out
+   ```
+
+2. ✅ **Check for zombie processes**
+   ```bash
+   ps aux | grep python  # Look for stuck processes
+   pkill -f "cli.py"     # Kill all Python CLI processes
+   ```
+
+3. ✅ **Reduce batch size** (process 10 images instead of 100)
+   ```bash
+   python3 cli.py ./batch --skip 100 --workers 4 -o ./out
+   # Or manually split directory
+   ```
+
+### CLI crashes with "broken pipe" error
+**Symptom:** Processing starts but crashes mid-run with broken pipe.
+
+**Cause:** Worker process died (OOM, model error, or filesystem issue).
+
+**Fix:**
+1. ✅ **Retry with fewer workers**
+   ```bash
+   python3 cli.py ./batch --workers 2 -o ./out
+   ```
+
+2. ✅ **Check disk space**
+   ```bash
+   df -h .  # Need ≥1 GB free for output
+   ```
+
+3. ✅ **Enable verbose logging**
+   ```bash
+   python3 cli.py ./batch --verbose --workers 1 -o ./out 2>&1 | tee batch.log
+   ```
+
+---
+
+## Color & Output Issues
+
+### Output colors don't match input (too saturated/desaturated)
+**Symptom:** Retouched image looks over-processed, colors are wrong.
+
+**Cause:** Wrong color space, LUT loading failed, or recipe over-adjusts.
+
+**Fix:**
+1. ✅ **Verify input color space** (sRGB expected)
+   ```bash
+   identify image.jpg  # Shows color space (should be sRGB)
+   ```
+
+2. ✅ **Try different recipe**
+   ```bash
+   python3 cli.py image.jpg -o out1.jpg --recipe natural
+   python3 cli.py image.jpg -o out2.jpg --recipe cosplay_clear_v1
+   # Compare — one may look better
+   ```
+
+3. ✅ **Disable color grading** (use --global-only)
+   ```bash
+   python3 cli.py image.jpg -o out_plain.jpg --global-only
+   # Should look minimal but correct
+   ```
+
+4. ✅ **Check ICC profile embedding**
+   ```bash
+   # Output should have sRGB ICC profile
+   identify -verbose out.jpg | grep -i "icc"
+   ```
+
+### Output is grayscale or very desaturated
+**Symptom:** Color completely lost or severely reduced in output.
+
+**Cause:** ICC profile mismatch, image decode error, or recipe desaturation too high.
+
+**Fix:**
+1. ✅ **Verify input has color**
+   ```bash
+   identify image.jpg  # Should show "sRGB" colorspace, not "Gray"
+   ```
+
+2. ✅ **Try without recipe** (test engine color handling)
+   ```bash
+   python3 cli.py image.jpg -o test.jpg --global-only
+   # Should preserve colors even without recipe
+   ```
+
+3. ✅ **Reduce saturation slider** in GUI if recipe is desaturating
+
+4. ✅ **Check output file** isn't corrupt
+   ```bash
+   file out.jpg  # Should say "JPEG image data"
+   ```
+
+---
+
+## Logs & Debugging
+
+### How do I enable debug logging?
+**Use `--verbose` flag:**
+```bash
+python3 cli.py image.jpg -o out.jpg --verbose
+# Prints: Detection: 150ms, Parsing: 200ms, Grading: 300ms, etc.
+```
+
+### Where are crash logs?
+Retouch keeps three local files. Nothing is uploaded.
+
+| File | What it holds | Location |
+|---|---|---|
+| `crash.log` | Python errors caught while processing an image, with private file paths redacted. New entries are appended. | The cache folder: `$RETOUCH_CACHE_DIR`, else `$XDG_CACHE_HOME/retouch`, else `~/.cache/retouch` (all platforms) |
+| `native-crash.log` | Tracebacks written by Python's `faulthandler` when the app dies inside native code (MediaPipe, onnxruntime, OpenCV), plus one "retouch started" line per launch. Truncated once it passes 1 MB. | The log folder below |
+| `retouch.log` | The app's rotating log (1 MB × 3), written by the GUI and desktop app | The log folder below |
+
+The log folder is `~/Library/Logs/ProMaxRetouch` on macOS,
+`%LOCALAPPDATA%\ProMaxRetouch\Logs` on Windows, and
+`~/.cache/promaxretouch/logs` elsewhere.
+
+If the desktop window closes without an error message, look at the end of
+`native-crash.log` first. The GUI's **Diagnostics** panel lists these
+paths and can clear them.
+
+```bash
+tail -n 50 ~/.cache/retouch/crash.log
+tail -n 50 ~/Library/Logs/ProMaxRetouch/native-crash.log   # macOS
+```
+
+### How to report a bug
+1. **Reproduce the issue** with a specific image
+2. **Enable debug logging** (`--verbose` or check crash logs)
+3. **Note the environment:**
+   ```bash
+   python3 --version
+   pip list | grep retouch
+   ```
+4. **Open an issue** with:
+   - Image (or representative sample)
+   - Exact command you ran
+   - Verbose output / crash log
+   - Environment (OS, Python version)
+
+---
+
+## Advanced Troubleshooting
+
+### How to profile performance
+```bash
+python3 scripts/bench/benchmark.py
+# Runs standard benchmark suite, shows per-stage timings
+```
+
+### How to test a specific module
+```bash
+python3 -m pytest tests/test_grading.py -v  # Just grading module
+python3 -m pytest tests/ -k detection -v    # All detection tests
+```
+
+### How to check test coverage
+```bash
+python3 -m pytest tests/ --cov=retouch --cov-report=html
+open htmlcov/index.html  # Detailed coverage report
+```
+
+### How to validate all recipes
+```bash
+python3 -m pytest tests/test_recipe_validation.py -v
+# Catches dead keys and malformed presets
+```
+
+---
+
+## Still Stuck?
+
+1. **Check docs/architecture/ARCHITECTURE.md** for pipeline design & module responsibilities
+2. **Check PERFORMANCE_TUNING.md** for speed/quality trade-offs
+3. **Re-read this guide's "Logs & Debugging" section above** for crash logging & common issues
+4. **Check docs/architecture/API.md** for Python API reference
+5. **Open an issue** with debug logs, environment, and reproduction steps
+
+---
+
+**Last Updated:** 2026-07-02  
+**Questions?** Open an issue or discussion on GitHub.

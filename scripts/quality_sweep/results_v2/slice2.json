@@ -1,0 +1,536 @@
+{
+  "slice": 2,
+  "num_slices": 4,
+  "recipe": "natural",
+  "corpus": "/Users/dennis/Library/CloudStorage/GoogleDrive-alexanderlooi88@gmail.com/My Drive/Photography/Remielle/Photos/Total",
+  "downscale": 0.25,
+  "n_images": 12,
+  "golden_gate": {
+    "base": {
+      "natural": {
+        "expected": "f5e23f232162160b",
+        "got": "f5e23f232162160b",
+        "match": true
+      },
+      "outdoor_harsh_sun_v1": {
+        "expected": "d488dd3cd55ba052",
+        "got": "d488dd3cd55ba052",
+        "match": true
+      },
+      "porcelain_unified_v1": {
+        "expected": "6fa5b84540b22f57",
+        "got": "6fa5b84540b22f57",
+        "match": true
+      }
+    },
+    "face": {
+      "natural": {
+        "expected": "77440b800440cae7",
+        "got": "77440b800440cae7",
+        "match": true
+      },
+      "outdoor_harsh_sun_v1": {
+        "expected": "439305ee3c6aedab",
+        "got": "439305ee3c6aedab",
+        "match": true
+      },
+      "porcelain_unified_v1": {
+        "expected": "6283ad2db51ac10f",
+        "got": "6283ad2db51ac10f",
+        "match": true
+      }
+    },
+    "ok": true
+  },
+  "baseline_runtime_s_mean": 1.4966,
+  "n_configs_total": 108,
+  "n_configs_this_slice": 27,
+  "results": [
+    {
+      "config_id": "clarity=0.0|contrast=0.0|saturation=0.0|smooth=0.0|texture_opacity=1.0",
+      "params": {
+        "clarity": 0.0,
+        "contrast": 0.0,
+        "saturation": 0.0,
+        "smooth": 0.0,
+        "texture_opacity": 1.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.981363,
+      "delta_e_face_vs_baseline": 2.654,
+      "runtime_s_mean": 1.3648,
+      "runtime_s_total": 16.3777
+    },
+    {
+      "config_id": "clarity=0.0|contrast=0.0|saturation=0.0|smooth=1.0|texture_opacity=0.0",
+      "params": {
+        "clarity": 0.0,
+        "contrast": 0.0,
+        "saturation": 0.0,
+        "smooth": 1.0,
+        "texture_opacity": 0.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.981312,
+      "delta_e_face_vs_baseline": 1.4887,
+      "runtime_s_mean": 1.4614,
+      "runtime_s_total": 17.5362
+    },
+    {
+      "config_id": "clarity=0.0|contrast=0.0|saturation=1.0|smooth=0.0|texture_opacity=0.5",
+      "params": {
+        "clarity": 0.0,
+        "contrast": 0.0,
+        "saturation": 1.0,
+        "smooth": 0.0,
+        "texture_opacity": 0.5
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.978871,
+      "delta_e_face_vs_baseline": 3.2454,
+      "runtime_s_mean": 1.5412,
+      "runtime_s_total": 18.4943
+    },
+    {
+      "config_id": "clarity=0.0|contrast=0.0|saturation=1.0|smooth=0.5|texture_opacity=1.0",
+      "params": {
+        "clarity": 0.0,
+        "contrast": 0.0,
+        "saturation": 1.0,
+        "smooth": 0.5,
+        "texture_opacity": 1.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.99372,
+      "delta_e_face_vs_baseline": 2.1207,
+      "runtime_s_mean": 1.4354,
+      "runtime_s_total": 17.2248
+    },
+    {
+      "config_id": "clarity=0.0|contrast=1.0|saturation=0.0|smooth=0.0|texture_opacity=0.0",
+      "params": {
+        "clarity": 0.0,
+        "contrast": 1.0,
+        "saturation": 0.0,
+        "smooth": 0.0,
+        "texture_opacity": 0.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.971821,
+      "delta_e_face_vs_baseline": 2.9305,
+      "runtime_s_mean": 1.6065,
+      "runtime_s_total": 19.278
+    },
+    {
+      "config_id": "clarity=0.0|contrast=1.0|saturation=0.0|smooth=0.5|texture_opacity=0.5",
+      "params": {
+        "clarity": 0.0,
+        "contrast": 1.0,
+        "saturation": 0.0,
+        "smooth": 0.5,
+        "texture_opacity": 0.5
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.991036,
+      "delta_e_face_vs_baseline": 1.7836,
+      "runtime_s_mean": 1.5842,
+      "runtime_s_total": 19.0098
+    },
+    {
+      "config_id": "clarity=0.0|contrast=1.0|saturation=0.0|smooth=1.0|texture_opacity=1.0",
+      "params": {
+        "clarity": 0.0,
+        "contrast": 1.0,
+        "saturation": 0.0,
+        "smooth": 1.0,
+        "texture_opacity": 1.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.994204,
+      "delta_e_face_vs_baseline": 1.7736,
+      "runtime_s_mean": 1.5848,
+      "runtime_s_total": 19.0172
+    },
+    {
+      "config_id": "clarity=0.0|contrast=1.0|saturation=1.0|smooth=0.5|texture_opacity=0.0",
+      "params": {
+        "clarity": 0.0,
+        "contrast": 1.0,
+        "saturation": 1.0,
+        "smooth": 0.5,
+        "texture_opacity": 0.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.980204,
+      "delta_e_face_vs_baseline": 2.264,
+      "runtime_s_mean": 1.5332,
+      "runtime_s_total": 18.3983
+    },
+    {
+      "config_id": "clarity=0.0|contrast=1.0|saturation=1.0|smooth=1.0|texture_opacity=0.5",
+      "params": {
+        "clarity": 0.0,
+        "contrast": 1.0,
+        "saturation": 1.0,
+        "smooth": 1.0,
+        "texture_opacity": 0.5
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.990695,
+      "delta_e_face_vs_baseline": 2.1468,
+      "runtime_s_mean": 1.8809,
+      "runtime_s_total": 22.571
+    },
+    {
+      "config_id": "clarity=0.5|contrast=0.0|saturation=0.0|smooth=0.0|texture_opacity=1.0",
+      "params": {
+        "clarity": 0.5,
+        "contrast": 0.0,
+        "saturation": 0.0,
+        "smooth": 0.0,
+        "texture_opacity": 1.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.975853,
+      "delta_e_face_vs_baseline": 3.7314,
+      "runtime_s_mean": 1.5527,
+      "runtime_s_total": 18.6324
+    },
+    {
+      "config_id": "clarity=0.5|contrast=0.0|saturation=0.0|smooth=1.0|texture_opacity=0.0",
+      "params": {
+        "clarity": 0.5,
+        "contrast": 0.0,
+        "saturation": 0.0,
+        "smooth": 1.0,
+        "texture_opacity": 0.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.975664,
+      "delta_e_face_vs_baseline": 2.7264,
+      "runtime_s_mean": 1.5092,
+      "runtime_s_total": 18.1102
+    },
+    {
+      "config_id": "clarity=0.5|contrast=0.0|saturation=1.0|smooth=0.0|texture_opacity=0.5",
+      "params": {
+        "clarity": 0.5,
+        "contrast": 0.0,
+        "saturation": 1.0,
+        "smooth": 0.0,
+        "texture_opacity": 0.5
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.973929,
+      "delta_e_face_vs_baseline": 3.9527,
+      "runtime_s_mean": 1.4785,
+      "runtime_s_total": 17.7417
+    },
+    {
+      "config_id": "clarity=0.5|contrast=0.0|saturation=1.0|smooth=0.5|texture_opacity=1.0",
+      "params": {
+        "clarity": 0.5,
+        "contrast": 0.0,
+        "saturation": 1.0,
+        "smooth": 0.5,
+        "texture_opacity": 1.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.988602,
+      "delta_e_face_vs_baseline": 2.9521,
+      "runtime_s_mean": 1.3635,
+      "runtime_s_total": 16.3622
+    },
+    {
+      "config_id": "clarity=0.5|contrast=1.0|saturation=0.0|smooth=0.0|texture_opacity=0.0",
+      "params": {
+        "clarity": 0.5,
+        "contrast": 1.0,
+        "saturation": 0.0,
+        "smooth": 0.0,
+        "texture_opacity": 0.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.96671,
+      "delta_e_face_vs_baseline": 3.6198,
+      "runtime_s_mean": 1.489,
+      "runtime_s_total": 17.8676
+    },
+    {
+      "config_id": "clarity=0.5|contrast=1.0|saturation=0.0|smooth=0.5|texture_opacity=0.5",
+      "params": {
+        "clarity": 0.5,
+        "contrast": 1.0,
+        "saturation": 0.0,
+        "smooth": 0.5,
+        "texture_opacity": 0.5
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.985662,
+      "delta_e_face_vs_baseline": 2.5604,
+      "runtime_s_mean": 1.5086,
+      "runtime_s_total": 18.1037
+    },
+    {
+      "config_id": "clarity=0.5|contrast=1.0|saturation=0.0|smooth=1.0|texture_opacity=1.0",
+      "params": {
+        "clarity": 0.5,
+        "contrast": 1.0,
+        "saturation": 0.0,
+        "smooth": 1.0,
+        "texture_opacity": 1.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.9888,
+      "delta_e_face_vs_baseline": 2.5363,
+      "runtime_s_mean": 1.3074,
+      "runtime_s_total": 15.6883
+    },
+    {
+      "config_id": "clarity=0.5|contrast=1.0|saturation=1.0|smooth=0.5|texture_opacity=0.0",
+      "params": {
+        "clarity": 0.5,
+        "contrast": 1.0,
+        "saturation": 1.0,
+        "smooth": 0.5,
+        "texture_opacity": 0.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.975171,
+      "delta_e_face_vs_baseline": 3.0166,
+      "runtime_s_mean": 1.3582,
+      "runtime_s_total": 16.2981
+    },
+    {
+      "config_id": "clarity=0.5|contrast=1.0|saturation=1.0|smooth=1.0|texture_opacity=0.5",
+      "params": {
+        "clarity": 0.5,
+        "contrast": 1.0,
+        "saturation": 1.0,
+        "smooth": 1.0,
+        "texture_opacity": 0.5
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.985559,
+      "delta_e_face_vs_baseline": 2.8953,
+      "runtime_s_mean": 1.3406,
+      "runtime_s_total": 16.0876
+    },
+    {
+      "config_id": "clarity=1.0|contrast=0.0|saturation=0.0|smooth=0.0|texture_opacity=1.0",
+      "params": {
+        "clarity": 1.0,
+        "contrast": 0.0,
+        "saturation": 0.0,
+        "smooth": 0.0,
+        "texture_opacity": 1.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.975798,
+      "delta_e_face_vs_baseline": 3.737,
+      "runtime_s_mean": 1.3611,
+      "runtime_s_total": 16.3329
+    },
+    {
+      "config_id": "clarity=1.0|contrast=0.0|saturation=0.0|smooth=1.0|texture_opacity=0.0",
+      "params": {
+        "clarity": 1.0,
+        "contrast": 0.0,
+        "saturation": 0.0,
+        "smooth": 1.0,
+        "texture_opacity": 0.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.975726,
+      "delta_e_face_vs_baseline": 2.7262,
+      "runtime_s_mean": 1.3478,
+      "runtime_s_total": 16.1738
+    },
+    {
+      "config_id": "clarity=1.0|contrast=0.0|saturation=1.0|smooth=0.0|texture_opacity=0.5",
+      "params": {
+        "clarity": 1.0,
+        "contrast": 0.0,
+        "saturation": 1.0,
+        "smooth": 0.0,
+        "texture_opacity": 0.5
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.973929,
+      "delta_e_face_vs_baseline": 3.9562,
+      "runtime_s_mean": 1.3623,
+      "runtime_s_total": 16.3478
+    },
+    {
+      "config_id": "clarity=1.0|contrast=0.0|saturation=1.0|smooth=0.5|texture_opacity=1.0",
+      "params": {
+        "clarity": 1.0,
+        "contrast": 0.0,
+        "saturation": 1.0,
+        "smooth": 0.5,
+        "texture_opacity": 1.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.988597,
+      "delta_e_face_vs_baseline": 2.9522,
+      "runtime_s_mean": 1.3194,
+      "runtime_s_total": 15.8324
+    },
+    {
+      "config_id": "clarity=1.0|contrast=1.0|saturation=0.0|smooth=0.0|texture_opacity=0.0",
+      "params": {
+        "clarity": 1.0,
+        "contrast": 1.0,
+        "saturation": 0.0,
+        "smooth": 0.0,
+        "texture_opacity": 0.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.966741,
+      "delta_e_face_vs_baseline": 3.6238,
+      "runtime_s_mean": 1.2653,
+      "runtime_s_total": 15.184
+    },
+    {
+      "config_id": "clarity=1.0|contrast=1.0|saturation=0.0|smooth=0.5|texture_opacity=0.5",
+      "params": {
+        "clarity": 1.0,
+        "contrast": 1.0,
+        "saturation": 0.0,
+        "smooth": 0.5,
+        "texture_opacity": 0.5
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.985723,
+      "delta_e_face_vs_baseline": 2.5609,
+      "runtime_s_mean": 1.3332,
+      "runtime_s_total": 15.9982
+    },
+    {
+      "config_id": "clarity=1.0|contrast=1.0|saturation=0.0|smooth=1.0|texture_opacity=1.0",
+      "params": {
+        "clarity": 1.0,
+        "contrast": 1.0,
+        "saturation": 0.0,
+        "smooth": 1.0,
+        "texture_opacity": 1.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.988791,
+      "delta_e_face_vs_baseline": 2.5381,
+      "runtime_s_mean": 1.3364,
+      "runtime_s_total": 16.0367
+    },
+    {
+      "config_id": "clarity=1.0|contrast=1.0|saturation=1.0|smooth=0.5|texture_opacity=0.0",
+      "params": {
+        "clarity": 1.0,
+        "contrast": 1.0,
+        "saturation": 1.0,
+        "smooth": 0.5,
+        "texture_opacity": 0.0
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.975242,
+      "delta_e_face_vs_baseline": 3.0166,
+      "runtime_s_mean": 1.3201,
+      "runtime_s_total": 15.8411
+    },
+    {
+      "config_id": "clarity=1.0|contrast=1.0|saturation=1.0|smooth=1.0|texture_opacity=0.5",
+      "params": {
+        "clarity": 1.0,
+        "contrast": 1.0,
+        "saturation": 1.0,
+        "smooth": 1.0,
+        "texture_opacity": 0.5
+      },
+      "recipe": "natural",
+      "n_images": 12,
+      "n_failures": 0,
+      "failures": [],
+      "ssim_face_vs_baseline": 0.98562,
+      "delta_e_face_vs_baseline": 2.8957,
+      "runtime_s_mean": 1.3154,
+      "runtime_s_total": 15.7848
+    }
+  ]
+}

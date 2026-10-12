@@ -1,0 +1,35 @@
+{
+  "valid": true,
+  "violations": [],
+  "corpus_manifest": "/Applications/htdocs/retouch/test_output/fa02_pilot_DSCF1423/corpus_manifest.json",
+  "fa02_manifest": "/Applications/htdocs/retouch/test_output/fa02_pilot_DSCF1423/fa02_manifest.json",
+  "purpose": "development_pilot",
+  "case_count": 1,
+  "arms": [
+    "A0_disabled",
+    "A1_raw",
+    "A2_dog",
+    "A3_multiscale",
+    "A4_orientation",
+    "A5_retouch_frequency"
+  ],
+  "arm_support_uniformity": {
+    "uniform": true,
+    "violations": [],
+    "cases": [
+      {
+        "case_id": "ff47_DSCF1423_patch_01",
+        "arms": [
+          "A0_disabled",
+          "A1_raw",
+          "A2_dog",
+          "A3_multiscale",
+          "A4_orientation",
+          "A5_retouch_frequency"
+        ],
+        "shared_support_signature": "619388f18cca9ca2b3eb0e258d3608dbccfdac40de3200edc3776822df90f931",
+        "eligible_pixels": 54730
+      }
+    ]
+  }
+}

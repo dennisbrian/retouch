@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "purpose": "development_pilot",
+  "corpus": "portrait cases sourced from a corpus_manifest v3 registry",
+  "parameter_selection": "a priori research settings; not fitted to these cases",
+  "cases": [
+    {
+      "id": "dscf9559_cheek_patch_01",
+      "kind": "portrait",
+      "split": "dev",
+      "person_ids": [
+        "subject_nahida_01"
+      ],
+      "session_id": "nahida_shoot_2026",
+      "arrays": "DSCF9559_arrays.npz",
+      "arrays_sha256": "87f2ddeba1e5b5865e274f83400cccd5674c9b12dfb949fc8e4115c7ef0dab38",
+      "inter_eye_distance_px": 300.0,
+      "face_width_px": 571.0,
+      "crop_xywh": [
+        4050,
+        1000,
+        512,
+        512
+      ],
+      "native_dimensions": [
+        6240,
+        4160
+      ],
+      "owner_mapping_reference": "Owner-confirmed: DSCF9559edited depicts subject_nahida_01 (same subject as DSCF6754), 2026-09-06 session",
+      "support_acceptance_reference": "Owner visual review and crop/mask approval, 2026-09-06 session, this conversation",
+      "support_status": "externally_accepted",
+      "masks_provenance": "owner_approved",
+      "native_source_reference": "DSCF9559_native.jpg",
+      "source_sha256": "290c5e172628c6827d830dee039075a3ab11e1160f89cae1fa5b8fc5959d734e",
+      "smoothing_provenance": "RetouchEngine recipe=natural, full native resolution (quality=full default), CLI cli.py invocation 2026-09-06",
+      "color_profile": "sRGB (JPEG, no embedded ICC profile detected)",
+      "resampled": false,
+      "previously_inspected": false,
+      "rois": [
+        {
+          "id": "cheek_nose_bridge_pore_field",
+          "xywh": [
+            20,
+            160,
+            260,
+            180
+          ],
+          "tags": [
+            "pore_review",
+            "texture"
+          ]
+        }
+      ],
+      "pores": [],
+      "profiles": [],
+      "corpus_source": {
+        "manifest_path": "test_output/fa02_pilot_DSCF9559/corpus_manifest.json",
+        "asset_id": "nahida_DSCF9559",
+        "asset_sha256": "290c5e172628c6827d830dee039075a3ab11e1160f89cae1fa5b8fc5959d734e",
+        "asset_split": "dev",
+        "asset_person_ids": [
+          "subject_nahida_01"
+        ],
+        "annotation_person_id": "subject_nahida_01"
+      },
+      "annotation": {
+        "schema_version": 1,
+        "asset_id": "nahida_DSCF9559",
+        "person_id": "subject_nahida_01",
+        "annotation_source": "owner_approved",
+        "reviewer": "dennis",
+        "native_dimensions": [
+          6240,
+          4160
+        ],
+        "native_roi_xywh": [
+          4050,
+          1000,
+          512,
+          512
+        ],
+        "native_source_reference": "DSCF9559_native.jpg",
+        "supports": {
+          "allow": {
+            "reference": "hand-painted exclusions: right band x>=300 (hair), top band y<140 (eye/eyebrow), bottom-left corner y>=350,x<180 (lip color); remainder is cheek/nose-bridge skin",
+            "provenance": "owner_approved"
+          },
+          "corrected": {
+            "reference": "none",
+            "provenance": "owner_approved",
+            "description": "No correction claimed; mask all-zero",
+            "human_reference": "Owner visual review, 2026-09-06"
+          },
+          "protected": {
+            "reference": "none",
+            "provenance": "owner_approved",
+            "description": "No mark/makeup in this patch; mask all-zero"
+          }
+        },
+        "support_acceptance_reference": "Owner visual review and crop/mask approval, 2026-09-06 session, this conversation",
+        "review_regions": [
+          {
+            "id": "cheek_nose_bridge_pore_field",
+            "xywh": [
+              20,
+              160,
+              260,
+              180
+            ],
+            "tags": [
+              "pore_review",
+              "texture"
+            ]
+          }
+        ],
+        "notes": "Fourth real-portrait FA-02 pilot case, same subject as DSCF6754 (subject_nahida_01), dim/low-key lighting patch -- the low end of this shoot's luma spread (103.3 vs DSCF6754's 161.8), giving the corpus its first real within-person lighting contrast. S produced by RetouchEngine natural recipe, full native resolution, same crop as X.",
+        "uncertainty": "Ambient shadow gradient across the patch is real scene lighting, not noise; low-light grain/compression may be present given the dimmer capture."
+      },
+      "reviewer": "dennis"
+    }
+  ]
+}

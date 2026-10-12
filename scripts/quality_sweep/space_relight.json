@@ -1,0 +1,5 @@
+{
+  "relight": [0.0, 0.5, 1.0],
+  "relight_azimuth": [0.0, 90.0, 180.0, 270.0],
+  "relight_elevation": [10.0, 45.0, 80.0]
+}

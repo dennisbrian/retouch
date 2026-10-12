@@ -1,0 +1,20 @@
+{
+  "description": "Warm film look (Kodak Portra style) with cyan shadows, lifted blacks, and grain",
+  "curves": {
+    "L": [[0, 10], [50, 45], [128, 130], [200, 215], [255, 245]]
+  },
+  "rgb_curves": {
+    "R": [[0, 0], [128, 132], [255, 255]],
+    "B": [[0, 5], [128, 122], [255, 250]]
+  },
+  "warmth": 0.03,
+  "saturation_boost": 0.10,
+  "shadow_lift": 10,
+  "vignette": 0.05,
+  "grain": 0.08,
+  "lut": "kodak",
+  "split_tone": {
+    "shadows": [120, 124],
+    "highlights": [131, 133]
+  }
+}

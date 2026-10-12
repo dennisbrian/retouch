@@ -1,0 +1,1448 @@
+{
+  "directories": [
+    {
+      "annotations": [
+        {
+          "annotation_source": "owner_approved",
+          "asset_id": "priority_printing_DSCF2650",
+          "legacy_review_regions": 1,
+          "path": "/Applications/htdocs/retouch/test_output/fa02_pilot_DSCF2650/annotation_cheek_patch_01.json",
+          "person_id": "subject_priority_printing_01",
+          "region_counts": {
+            "corrected_defect_regions": 0,
+            "fine_hair_regions": 0,
+            "makeup_edge_regions": 0,
+            "noise_regions": 0,
+            "pore_regions": 0,
+            "protected_identity_marks": 0,
+            "uncertainty_regions": 0
+          },
+          "reviewer": "dennis",
+          "valid": true
+        }
+      ],
+      "assets": [
+        {
+          "asset_id": "priority_printing_DSCF2650",
+          "person_ids": [
+            "subject_priority_printing_01"
+          ],
+          "split": "dev",
+          "strata": {
+            "face_scale": "close",
+            "lighting": "studio",
+            "pose": "three_quarter",
+            "skin_tone": "light"
+          },
+          "tags": [
+            "cosplay",
+            "marks"
+          ]
+        }
+      ],
+      "corpus_valid": true,
+      "directory": "/Applications/htdocs/retouch/test_output/fa02_pilot_DSCF2650",
+      "embedded_annotation_matches_standalone": false,
+      "fa02_manifest_present": true,
+      "gate_report": {
+        "case_count": 1,
+        "case_ids": [
+          "dscf2650_cheek_patch_01"
+        ],
+        "purpose": "development_pilot",
+        "valid": true,
+        "violation_codes": []
+      },
+      "problems": [],
+      "split_report": {
+        "coverage_by_split": {
+          "calibration": {
+            "strata": {},
+            "tags": {}
+          },
+          "dev": {
+            "strata": {
+              "face_scale": {
+                "close": [
+                  "priority_printing_DSCF2650"
+                ]
+              },
+              "lighting": {
+                "studio": [
+                  "priority_printing_DSCF2650"
+                ]
+              },
+              "pose": {
+                "three_quarter": [
+                  "priority_printing_DSCF2650"
+                ]
+              },
+              "skin_tone": {
+                "light": [
+                  "priority_printing_DSCF2650"
+                ]
+              }
+            },
+            "tags": {
+              "cosplay": [
+                "priority_printing_DSCF2650"
+              ],
+              "marks": [
+                "priority_printing_DSCF2650"
+              ]
+            }
+          },
+          "locked_test": {
+            "strata": {},
+            "tags": {}
+          }
+        },
+        "person_counts_by_split": {
+          "calibration": 0,
+          "dev": 1,
+          "locked_test": 0
+        },
+        "split_counts": {
+          "calibration": 0,
+          "dev": 1,
+          "locked_test": 0
+        }
+      }
+    },
+    {
+      "annotations": [
+        {
+          "annotation_source": "owner_approved",
+          "asset_id": "priority_printing_DSCF2709",
+          "legacy_review_regions": 2,
+          "path": "/Applications/htdocs/retouch/test_output/fa02_pilot_DSCF2709/annotation_nose_bridge_patch_01.json",
+          "person_id": "subject_priority_printing_01",
+          "region_counts": {
+            "corrected_defect_regions": 0,
+            "fine_hair_regions": 0,
+            "makeup_edge_regions": 0,
+            "noise_regions": 0,
+            "pore_regions": 0,
+            "protected_identity_marks": 0,
+            "uncertainty_regions": 0
+          },
+          "reviewer": "dennis",
+          "valid": true
+        }
+      ],
+      "assets": [
+        {
+          "asset_id": "priority_printing_DSCF2709",
+          "person_ids": [
+            "subject_priority_printing_01"
+          ],
+          "split": "dev",
+          "strata": {
+            "face_scale": "close",
+            "lighting": "studio",
+            "pose": "frontal",
+            "skin_tone": "light"
+          },
+          "tags": [
+            "cosplay",
+            "makeup"
+          ]
+        }
+      ],
+      "corpus_valid": true,
+      "directory": "/Applications/htdocs/retouch/test_output/fa02_pilot_DSCF2709",
+      "embedded_annotation_matches_standalone": false,
+      "fa02_manifest_present": true,
+      "gate_report": {
+        "case_count": 1,
+        "case_ids": [
+          "dscf2709_nose_bridge_patch_01"
+        ],
+        "purpose": "development_pilot",
+        "valid": true,
+        "violation_codes": []
+      },
+      "problems": [],
+      "split_report": {
+        "coverage_by_split": {
+          "calibration": {
+            "strata": {},
+            "tags": {}
+          },
+          "dev": {
+            "strata": {
+              "face_scale": {
+                "close": [
+                  "priority_printing_DSCF2709"
+                ]
+              },
+              "lighting": {
+                "studio": [
+                  "priority_printing_DSCF2709"
+                ]
+              },
+              "pose": {
+                "frontal": [
+                  "priority_printing_DSCF2709"
+                ]
+              },
+              "skin_tone": {
+                "light": [
+                  "priority_printing_DSCF2709"
+                ]
+              }
+            },
+            "tags": {
+              "cosplay": [
+                "priority_printing_DSCF2709"
+              ],
+              "makeup": [
+                "priority_printing_DSCF2709"
+              ]
+            }
+          },
+          "locked_test": {
+            "strata": {},
+            "tags": {}
+          }
+        },
+        "person_counts_by_split": {
+          "calibration": 0,
+          "dev": 1,
+          "locked_test": 0
+        },
+        "split_counts": {
+          "calibration": 0,
+          "dev": 1,
+          "locked_test": 0
+        }
+      }
+    },
+    {
+      "annotations": [
+        {
+          "annotation_source": "owner_approved",
+          "asset_id": "nahida_DSCF6754",
+          "legacy_review_regions": 1,
+          "path": "/Applications/htdocs/retouch/test_output/fa02_pilot_DSCF6754/annotation_cheek_patch_01.json",
+          "person_id": "subject_nahida_01",
+          "region_counts": {
+            "corrected_defect_regions": 0,
+            "fine_hair_regions": 0,
+            "makeup_edge_regions": 0,
+            "noise_regions": 0,
+            "pore_regions": 0,
+            "protected_identity_marks": 0,
+            "uncertainty_regions": 0
+          },
+          "reviewer": "dennis",
+          "valid": true
+        }
+      ],
+      "assets": [
+        {
+          "asset_id": "nahida_DSCF6754",
+          "person_ids": [
+            "subject_nahida_01"
+          ],
+          "split": "dev",
+          "strata": {
+            "face_scale": "close",
+            "lighting": "high_key",
+            "pose": "three_quarter",
+            "skin_tone": "very_light"
+          },
+          "tags": [
+            "cosplay"
+          ]
+        }
+      ],
+      "corpus_valid": true,
+      "directory": "/Applications/htdocs/retouch/test_output/fa02_pilot_DSCF6754",
+      "embedded_annotation_matches_standalone": false,
+      "fa02_manifest_present": true,
+      "gate_report": {
+        "case_count": 1,
+        "case_ids": [
+          "dscf6754_cheek_patch_01"
+        ],
+        "purpose": "development_pilot",
+        "valid": true,
+        "violation_codes": []
+      },
+      "problems": [],
+      "split_report": {
+        "coverage_by_split": {
+          "calibration": {
+            "strata": {},
+            "tags": {}
+          },
+          "dev": {
+            "strata": {
+              "face_scale": {
+                "close": [
+                  "nahida_DSCF6754"
+                ]
+              },
+              "lighting": {
+                "high_key": [
+                  "nahida_DSCF6754"
+                ]
+              },
+              "pose": {
+                "three_quarter": [
+                  "nahida_DSCF6754"
+                ]
+              },
+              "skin_tone": {
+                "very_light": [
+                  "nahida_DSCF6754"
+                ]
+              }
+            },
+            "tags": {
+              "cosplay": [
+                "nahida_DSCF6754"
+              ]
+            }
+          },
+          "locked_test": {
+            "strata": {},
+            "tags": {}
+          }
+        },
+        "person_counts_by_split": {
+          "calibration": 0,
+          "dev": 1,
+          "locked_test": 0
+        },
+        "split_counts": {
+          "calibration": 0,
+          "dev": 1,
+          "locked_test": 0
+        }
+      }
+    },
+    {
+      "annotations": [
+        {
+          "annotation_source": "owner_approved",
+          "asset_id": "nahida_DSCF9559",
+          "legacy_review_regions": 1,
+          "path": "/Applications/htdocs/retouch/test_output/fa02_pilot_DSCF9559/annotation_cheek_patch_01.json",
+          "person_id": "subject_nahida_01",
+          "region_counts": {
+            "corrected_defect_regions": 0,
+            "fine_hair_regions": 0,
+            "makeup_edge_regions": 0,
+            "noise_regions": 0,
+            "pore_regions": 0,
+            "protected_identity_marks": 0,
+            "uncertainty_regions": 0
+          },
+          "reviewer": "dennis",
+          "valid": true
+        }
+      ],
+      "assets": [
+        {
+          "asset_id": "nahida_DSCF9559",
+          "person_ids": [
+            "subject_nahida_01"
+          ],
+          "split": "dev",
+          "strata": {
+            "face_scale": "close",
+            "lighting": "low_key",
+            "pose": "three_quarter",
+            "skin_tone": "very_light"
+          },
+          "tags": [
+            "cosplay"
+          ]
+        }
+      ],
+      "corpus_valid": true,
+      "directory": "/Applications/htdocs/retouch/test_output/fa02_pilot_DSCF9559",
+      "embedded_annotation_matches_standalone": false,
+      "fa02_manifest_present": true,
+      "gate_report": {
+        "case_count": 1,
+        "case_ids": [
+          "dscf9559_cheek_patch_01"
+        ],
+        "purpose": "development_pilot",
+        "valid": true,
+        "violation_codes": []
+      },
+      "problems": [],
+      "split_report": {
+        "coverage_by_split": {
+          "calibration": {
+            "strata": {},
+            "tags": {}
+          },
+          "dev": {
+            "strata": {
+              "face_scale": {
+                "close": [
+                  "nahida_DSCF9559"
+                ]
+              },
+              "lighting": {
+                "low_key": [
+                  "nahida_DSCF9559"
+                ]
+              },
+              "pose": {
+                "three_quarter": [
+                  "nahida_DSCF9559"
+                ]
+              },
+              "skin_tone": {
+                "very_light": [
+                  "nahida_DSCF9559"
+                ]
+              }
+            },
+            "tags": {
+              "cosplay": [
+                "nahida_DSCF9559"
+              ]
+            }
+          },
+          "locked_test": {
+            "strata": {},
+            "tags": {}
+          }
+        },
+        "person_counts_by_split": {
+          "calibration": 0,
+          "dev": 1,
+          "locked_test": 0
+        },
+        "split_counts": {
+          "calibration": 0,
+          "dev": 1,
+          "locked_test": 0
+        }
+      }
+    },
+    {
+      "annotations": [
+        {
+          "annotation_source": "owner_approved",
+          "asset_id": "ff47_DSCF1058",
+          "legacy_review_regions": 0,
+          "path": "/Applications/htdocs/retouch/test_output/fa02_pilot_DSCF1058/annotation_cheek_patch_01.json",
+          "person_id": "subject_ff47_01",
+          "region_counts": {
+            "corrected_defect_regions": 0,
+            "fine_hair_regions": 1,
+            "makeup_edge_regions": 0,
+            "noise_regions": 0,
+            "pore_regions": 0,
+            "protected_identity_marks": 0,
+            "uncertainty_regions": 1
+          },
+          "reviewer": "dennis",
+          "valid": true
+        }
+      ],
+      "assets": [
+        {
+          "asset_id": "ff47_DSCF1058",
+          "person_ids": [
+            "subject_ff47_01"
+          ],
+          "split": "dev",
+          "strata": {
+            "face_scale": "close",
+            "lighting": "daylight",
+            "pose": "three_quarter",
+            "skin_tone": "light"
+          },
+          "tags": [
+            "cosplay",
+            "makeup",
+            "wig"
+          ]
+        }
+      ],
+      "corpus_valid": true,
+      "directory": "/Applications/htdocs/retouch/test_output/fa02_pilot_DSCF1058",
+      "embedded_annotation_matches_standalone": true,
+      "fa02_manifest_present": true,
+      "gate_report": {
+        "case_count": 1,
+        "case_ids": [
+          "ff47_DSCF1058_patch_01"
+        ],
+        "purpose": "development_pilot",
+        "valid": true,
+        "violation_codes": []
+      },
+      "problems": [],
+      "split_report": {
+        "coverage_by_split": {
+          "calibration": {
+            "strata": {},
+            "tags": {}
+          },
+          "dev": {
+            "strata": {
+              "face_scale": {
+                "close": [
+                  "ff47_DSCF1058"
+                ]
+              },
+              "lighting": {
+                "daylight": [
+                  "ff47_DSCF1058"
+                ]
+              },
+              "pose": {
+                "three_quarter": [
+                  "ff47_DSCF1058"
+                ]
+              },
+              "skin_tone": {
+                "light": [
+                  "ff47_DSCF1058"
+                ]
+              }
+            },
+            "tags": {
+              "cosplay": [
+                "ff47_DSCF1058"
+              ],
+              "makeup": [
+                "ff47_DSCF1058"
+              ],
+              "wig": [
+                "ff47_DSCF1058"
+              ]
+            }
+          },
+          "locked_test": {
+            "strata": {},
+            "tags": {}
+          }
+        },
+        "person_counts_by_split": {
+          "calibration": 0,
+          "dev": 1,
+          "locked_test": 0
+        },
+        "split_counts": {
+          "calibration": 0,
+          "dev": 1,
+          "locked_test": 0
+        }
+      }
+    },
+    {
+      "annotations": [
+        {
+          "annotation_source": "owner_approved",
+          "asset_id": "ff47_DSCF1423",
+          "legacy_review_regions": 0,
+          "path": "/Applications/htdocs/retouch/test_output/fa02_pilot_DSCF1423/annotation_star_makeup_cheek_patch_01.json",
+          "person_id": "subject_ff47_02",
+          "region_counts": {
+            "corrected_defect_regions": 0,
+            "fine_hair_regions": 0,
+            "makeup_edge_regions": 1,
+            "noise_regions": 0,
+            "pore_regions": 0,
+            "protected_identity_marks": 0,
+            "uncertainty_regions": 2
+          },
+          "reviewer": "dennis",
+          "valid": true
+        }
+      ],
+      "assets": [
+        {
+          "asset_id": "ff47_DSCF1423",
+          "person_ids": [
+            "subject_ff47_02"
+          ],
+          "split": "dev",
+          "strata": {
+            "face_scale": "close",
+            "lighting": "daylight",
+            "pose": "frontal",
+            "skin_tone": "light"
+          },
+          "tags": [
+            "cosplay",
+            "makeup",
+            "wig"
+          ]
+        }
+      ],
+      "corpus_valid": true,
+      "directory": "/Applications/htdocs/retouch/test_output/fa02_pilot_DSCF1423",
+      "embedded_annotation_matches_standalone": true,
+      "fa02_manifest_present": true,
+      "gate_report": {
+        "case_count": 1,
+        "case_ids": [
+          "ff47_DSCF1423_patch_01"
+        ],
+        "purpose": "development_pilot",
+        "valid": true,
+        "violation_codes": []
+      },
+      "problems": [],
+      "split_report": {
+        "coverage_by_split": {
+          "calibration": {
+            "strata": {},
+            "tags": {}
+          },
+          "dev": {
+            "strata": {
+              "face_scale": {
+                "close": [
+                  "ff47_DSCF1423"
+                ]
+              },
+              "lighting": {
+                "daylight": [
+                  "ff47_DSCF1423"
+                ]
+              },
+              "pose": {
+                "frontal": [
+                  "ff47_DSCF1423"
+                ]
+              },
+              "skin_tone": {
+                "light": [
+                  "ff47_DSCF1423"
+                ]
+              }
+            },
+            "tags": {
+              "cosplay": [
+                "ff47_DSCF1423"
+              ],
+              "makeup": [
+                "ff47_DSCF1423"
+              ],
+              "wig": [
+                "ff47_DSCF1423"
+              ]
+            }
+          },
+          "locked_test": {
+            "strata": {},
+            "tags": {}
+          }
+        },
+        "person_counts_by_split": {
+          "calibration": 0,
+          "dev": 1,
+          "locked_test": 0
+        },
+        "split_counts": {
+          "calibration": 0,
+          "dev": 1,
+          "locked_test": 0
+        }
+      }
+    },
+    {
+      "annotations": [
+        {
+          "annotation_source": "owner_approved",
+          "asset_id": "ff47_DSCF1606",
+          "legacy_review_regions": 0,
+          "path": "/Applications/htdocs/retouch/test_output/fa02_pilot_DSCF1606/annotation_noisy_cheek_drawn_mark_patch_01.json",
+          "person_id": "subject_ff47_03",
+          "region_counts": {
+            "corrected_defect_regions": 0,
+            "fine_hair_regions": 0,
+            "makeup_edge_regions": 1,
+            "noise_regions": 1,
+            "pore_regions": 0,
+            "protected_identity_marks": 0,
+            "uncertainty_regions": 1
+          },
+          "reviewer": "dennis",
+          "valid": true
+        }
+      ],
+      "assets": [
+        {
+          "asset_id": "ff47_DSCF1606",
+          "person_ids": [
+            "subject_ff47_03"
+          ],
+          "split": "dev",
+          "strata": {
+            "compression": "noisy",
+            "face_scale": "medium",
+            "lighting": "daylight",
+            "pose": "frontal",
+            "skin_tone": "light"
+          },
+          "tags": [
+            "cosplay",
+            "makeup",
+            "noise",
+            "props",
+            "wig"
+          ]
+        }
+      ],
+      "corpus_valid": true,
+      "directory": "/Applications/htdocs/retouch/test_output/fa02_pilot_DSCF1606",
+      "embedded_annotation_matches_standalone": true,
+      "fa02_manifest_present": true,
+      "gate_report": {
+        "case_count": 1,
+        "case_ids": [
+          "ff47_DSCF1606_patch_01"
+        ],
+        "purpose": "development_pilot",
+        "valid": true,
+        "violation_codes": []
+      },
+      "problems": [],
+      "split_report": {
+        "coverage_by_split": {
+          "calibration": {
+            "strata": {},
+            "tags": {}
+          },
+          "dev": {
+            "strata": {
+              "compression": {
+                "noisy": [
+                  "ff47_DSCF1606"
+                ]
+              },
+              "face_scale": {
+                "medium": [
+                  "ff47_DSCF1606"
+                ]
+              },
+              "lighting": {
+                "daylight": [
+                  "ff47_DSCF1606"
+                ]
+              },
+              "pose": {
+                "frontal": [
+                  "ff47_DSCF1606"
+                ]
+              },
+              "skin_tone": {
+                "light": [
+                  "ff47_DSCF1606"
+                ]
+              }
+            },
+            "tags": {
+              "cosplay": [
+                "ff47_DSCF1606"
+              ],
+              "makeup": [
+                "ff47_DSCF1606"
+              ],
+              "noise": [
+                "ff47_DSCF1606"
+              ],
+              "props": [
+                "ff47_DSCF1606"
+              ],
+              "wig": [
+                "ff47_DSCF1606"
+              ]
+            }
+          },
+          "locked_test": {
+            "strata": {},
+            "tags": {}
+          }
+        },
+        "person_counts_by_split": {
+          "calibration": 0,
+          "dev": 1,
+          "locked_test": 0
+        },
+        "split_counts": {
+          "calibration": 0,
+          "dev": 1,
+          "locked_test": 0
+        }
+      }
+    },
+    {
+      "annotations": [
+        {
+          "annotation_source": "owner_approved",
+          "asset_id": "ff47_DSCF2183",
+          "legacy_review_regions": 0,
+          "path": "/Applications/htdocs/retouch/test_output/fa02_pilot_DSCF2183/annotation_soft_light_cheek_patch_01.json",
+          "person_id": "subject_ff47_04",
+          "region_counts": {
+            "corrected_defect_regions": 0,
+            "fine_hair_regions": 0,
+            "makeup_edge_regions": 0,
+            "noise_regions": 0,
+            "pore_regions": 0,
+            "protected_identity_marks": 0,
+            "uncertainty_regions": 1
+          },
+          "reviewer": "dennis",
+          "valid": true
+        }
+      ],
+      "assets": [
+        {
+          "asset_id": "ff47_DSCF2183",
+          "person_ids": [
+            "subject_ff47_04"
+          ],
+          "split": "dev",
+          "strata": {
+            "exposure": "high_key",
+            "face_scale": "close",
+            "lighting": "high_key",
+            "pose": "three_quarter",
+            "skin_tone": "very_light"
+          },
+          "tags": [
+            "cosplay",
+            "high_key",
+            "makeup",
+            "wig"
+          ]
+        }
+      ],
+      "corpus_valid": true,
+      "directory": "/Applications/htdocs/retouch/test_output/fa02_pilot_DSCF2183",
+      "embedded_annotation_matches_standalone": true,
+      "fa02_manifest_present": true,
+      "gate_report": {
+        "case_count": 1,
+        "case_ids": [
+          "ff47_DSCF2183_patch_01"
+        ],
+        "purpose": "development_pilot",
+        "valid": true,
+        "violation_codes": []
+      },
+      "problems": [],
+      "split_report": {
+        "coverage_by_split": {
+          "calibration": {
+            "strata": {},
+            "tags": {}
+          },
+          "dev": {
+            "strata": {
+              "exposure": {
+                "high_key": [
+                  "ff47_DSCF2183"
+                ]
+              },
+              "face_scale": {
+                "close": [
+                  "ff47_DSCF2183"
+                ]
+              },
+              "lighting": {
+                "high_key": [
+                  "ff47_DSCF2183"
+                ]
+              },
+              "pose": {
+                "three_quarter": [
+                  "ff47_DSCF2183"
+                ]
+              },
+              "skin_tone": {
+                "very_light": [
+                  "ff47_DSCF2183"
+                ]
+              }
+            },
+            "tags": {
+              "cosplay": [
+                "ff47_DSCF2183"
+              ],
+              "high_key": [
+                "ff47_DSCF2183"
+              ],
+              "makeup": [
+                "ff47_DSCF2183"
+              ],
+              "wig": [
+                "ff47_DSCF2183"
+              ]
+            }
+          },
+          "locked_test": {
+            "strata": {},
+            "tags": {}
+          }
+        },
+        "person_counts_by_split": {
+          "calibration": 0,
+          "dev": 1,
+          "locked_test": 0
+        },
+        "split_counts": {
+          "calibration": 0,
+          "dev": 1,
+          "locked_test": 0
+        }
+      }
+    },
+    {
+      "annotations": [
+        {
+          "annotation_source": "owner_approved",
+          "asset_id": "ff47_DSCF2258",
+          "legacy_review_regions": 0,
+          "path": "/Applications/htdocs/retouch/test_output/fa02_pilot_DSCF2258/annotation_blush_cheek_patch_01.json",
+          "person_id": "subject_ff47_05",
+          "region_counts": {
+            "corrected_defect_regions": 0,
+            "fine_hair_regions": 0,
+            "makeup_edge_regions": 1,
+            "noise_regions": 0,
+            "pore_regions": 0,
+            "protected_identity_marks": 0,
+            "uncertainty_regions": 1
+          },
+          "reviewer": "dennis",
+          "valid": true
+        }
+      ],
+      "assets": [
+        {
+          "asset_id": "ff47_DSCF2258",
+          "person_ids": [
+            "subject_ff47_05"
+          ],
+          "split": "dev",
+          "strata": {
+            "face_scale": "close",
+            "lighting": "daylight",
+            "pose": "frontal",
+            "skin_tone": "light"
+          },
+          "tags": [
+            "cosplay",
+            "makeup",
+            "props"
+          ]
+        }
+      ],
+      "corpus_valid": true,
+      "directory": "/Applications/htdocs/retouch/test_output/fa02_pilot_DSCF2258",
+      "embedded_annotation_matches_standalone": true,
+      "fa02_manifest_present": true,
+      "gate_report": {
+        "case_count": 1,
+        "case_ids": [
+          "ff47_DSCF2258_patch_01"
+        ],
+        "purpose": "development_pilot",
+        "valid": true,
+        "violation_codes": []
+      },
+      "problems": [],
+      "split_report": {
+        "coverage_by_split": {
+          "calibration": {
+            "strata": {},
+            "tags": {}
+          },
+          "dev": {
+            "strata": {
+              "face_scale": {
+                "close": [
+                  "ff47_DSCF2258"
+                ]
+              },
+              "lighting": {
+                "daylight": [
+                  "ff47_DSCF2258"
+                ]
+              },
+              "pose": {
+                "frontal": [
+                  "ff47_DSCF2258"
+                ]
+              },
+              "skin_tone": {
+                "light": [
+                  "ff47_DSCF2258"
+                ]
+              }
+            },
+            "tags": {
+              "cosplay": [
+                "ff47_DSCF2258"
+              ],
+              "makeup": [
+                "ff47_DSCF2258"
+              ],
+              "props": [
+                "ff47_DSCF2258"
+              ]
+            }
+          },
+          "locked_test": {
+            "strata": {},
+            "tags": {}
+          }
+        },
+        "person_counts_by_split": {
+          "calibration": 0,
+          "dev": 1,
+          "locked_test": 0
+        },
+        "split_counts": {
+          "calibration": 0,
+          "dev": 1,
+          "locked_test": 0
+        }
+      }
+    },
+    {
+      "annotations": [
+        {
+          "annotation_source": "owner_approved",
+          "asset_id": "ff47_DSCF2274",
+          "legacy_review_regions": 0,
+          "path": "/Applications/htdocs/retouch/test_output/fa02_pilot_DSCF2274/annotation_warm_makeup_cheek_patch_01.json",
+          "person_id": "subject_ff47_06",
+          "region_counts": {
+            "corrected_defect_regions": 0,
+            "fine_hair_regions": 0,
+            "makeup_edge_regions": 0,
+            "noise_regions": 0,
+            "pore_regions": 0,
+            "protected_identity_marks": 0,
+            "uncertainty_regions": 2
+          },
+          "reviewer": "dennis",
+          "valid": true
+        }
+      ],
+      "assets": [
+        {
+          "asset_id": "ff47_DSCF2274",
+          "person_ids": [
+            "subject_ff47_06"
+          ],
+          "split": "dev",
+          "strata": {
+            "face_scale": "close",
+            "lighting": "overcast",
+            "pose": "frontal",
+            "skin_tone": "light"
+          },
+          "tags": [
+            "cosplay",
+            "makeup",
+            "wig"
+          ]
+        }
+      ],
+      "corpus_valid": true,
+      "directory": "/Applications/htdocs/retouch/test_output/fa02_pilot_DSCF2274",
+      "embedded_annotation_matches_standalone": true,
+      "fa02_manifest_present": true,
+      "gate_report": {
+        "case_count": 1,
+        "case_ids": [
+          "ff47_DSCF2274_patch_01"
+        ],
+        "purpose": "development_pilot",
+        "valid": true,
+        "violation_codes": []
+      },
+      "problems": [],
+      "split_report": {
+        "coverage_by_split": {
+          "calibration": {
+            "strata": {},
+            "tags": {}
+          },
+          "dev": {
+            "strata": {
+              "face_scale": {
+                "close": [
+                  "ff47_DSCF2274"
+                ]
+              },
+              "lighting": {
+                "overcast": [
+                  "ff47_DSCF2274"
+                ]
+              },
+              "pose": {
+                "frontal": [
+                  "ff47_DSCF2274"
+                ]
+              },
+              "skin_tone": {
+                "light": [
+                  "ff47_DSCF2274"
+                ]
+              }
+            },
+            "tags": {
+              "cosplay": [
+                "ff47_DSCF2274"
+              ],
+              "makeup": [
+                "ff47_DSCF2274"
+              ],
+              "wig": [
+                "ff47_DSCF2274"
+              ]
+            }
+          },
+          "locked_test": {
+            "strata": {},
+            "tags": {}
+          }
+        },
+        "person_counts_by_split": {
+          "calibration": 0,
+          "dev": 1,
+          "locked_test": 0
+        },
+        "split_counts": {
+          "calibration": 0,
+          "dev": 1,
+          "locked_test": 0
+        }
+      }
+    }
+  ],
+  "disclaimer": "Counts reflect DECLARED human annotations only. No region here was produced by image analysis, and no unlabelled metric was substituted for a missing label. Criteria marked automatically_checkable=false cannot be settled by any file on disk and require owner action.",
+  "promotion": {
+    "attained_stage": "dev_pilot_ready",
+    "criteria": {
+      "dev_pilot_ready": [
+        {
+          "automatically_checkable": true,
+          "criterion": "multiple_subjects",
+          "detail": "8 distinct person_id(s): subject_ff47_01, subject_ff47_02, subject_ff47_03, subject_ff47_04, subject_ff47_05, subject_ff47_06, subject_nahida_01, subject_priority_printing_01",
+          "met": true
+        },
+        {
+          "automatically_checkable": true,
+          "criterion": "human_reviewed_texture_annotations_exist",
+          "detail": "1 patch(es) carry a populated pore_regions/fine_hair_regions list from a manual/owner_approved annotation; 1 such region(s) corpus-wide. (5 legacy review_regions exist but are advisory 'look here' notes, NOT labels, and are not counted.)",
+          "met": true
+        },
+        {
+          "automatically_checkable": true,
+          "criterion": "all_provenance_and_promotion_gates_pass",
+          "detail": "10/10 pass",
+          "met": true
+        }
+      ],
+      "infrastructure_validated": [
+        {
+          "automatically_checkable": true,
+          "criterion": "at_least_one_pilot_case",
+          "detail": "10 FA-02 case(s) across 10 pilot director(ies)",
+          "met": true
+        },
+        {
+          "automatically_checkable": true,
+          "criterion": "all_promotion_gates_pass",
+          "detail": "10/10 gate report(s) pass (re-run live, not read from disk)",
+          "met": true
+        },
+        {
+          "automatically_checkable": true,
+          "criterion": "all_annotations_valid",
+          "detail": "10 valid annotation(s), 0 invalid",
+          "met": true
+        },
+        {
+          "automatically_checkable": true,
+          "criterion": "no_subject_crosses_splits",
+          "detail": "cross-file union check: no subject appears in two splits",
+          "met": true
+        }
+      ],
+      "production_candidate_ready": [
+        {
+          "automatically_checkable": true,
+          "criterion": "dev_subject_count",
+          "detail": "8 dev subject(s); target 8-12",
+          "met": true
+        },
+        {
+          "automatically_checkable": true,
+          "criterion": "reviewed_patch_count",
+          "detail": "10 reviewed patch(es); target 30-50",
+          "met": false
+        },
+        {
+          "automatically_checkable": true,
+          "criterion": "representative_nuisance_cases",
+          "detail": "1 labelled noise/compression region(s); a representation cannot be shown safe against nuisance that was never annotated",
+          "met": true
+        },
+        {
+          "automatically_checkable": false,
+          "criterion": "candidate_beats_A0_and_A1_on_texture_and_safety",
+          "detail": "NOT COMPUTABLE. This criterion requires labelled pore/fine-hair ground truth to score 'useful texture recovered' against; the corpus currently has 1 such label(s). The existing run summaries contain only unlabelled delta_rms/eligible-pixel numbers, which measure how much an arm CHANGED, not whether it restored real texture or amplified noise. No proxy is computed here on purpose: an arm ranking derived from unlabelled deltas would be indistinguishable from a ranking of raw gain. Populate pore_regions/fine_hair_regions and noise_regions first, then define the scoring rule BEFORE looking at the numbers.",
+          "met": null
+        }
+      ],
+      "production_ready": [
+        {
+          "automatically_checkable": true,
+          "criterion": "locked_test_split_populated_and_untouched",
+          "detail": "0 locked_test subject(s). Structure only: no check can prove an owner has never seen a subject -- that requires the owner's confirmed-untouched person mapping.",
+          "met": false
+        },
+        {
+          "automatically_checkable": true,
+          "criterion": "subject_separated_calibration_completed",
+          "detail": "0 calibration subject(s) (structural presence only; that tuning actually happened on them is not file-visible)",
+          "met": false
+        },
+        {
+          "automatically_checkable": false,
+          "criterion": "full_recipe_validation_completed",
+          "detail": "Requires an end-to-end RetouchEngine recipe run with the candidate representation wired in. No such integration exists (FA-02 is offline-harness only) and none is authorized by this workflow.",
+          "met": null
+        },
+        {
+          "automatically_checkable": false,
+          "criterion": "locked_test_evaluated_only_after_parameters_frozen",
+          "detail": "A sequencing property of how the work is done, not a file property. Requires a config lock dated before the locked_test run plus the owner's attestation that no locked_test result informed any parameter.",
+          "met": null
+        },
+        {
+          "automatically_checkable": false,
+          "criterion": "no_critical_identity_makeup_halo_or_defect_regressions",
+          "detail": "Requires labelled protected/makeup/corrected regions AND a human looking at real renders. The structural guard (zero delta in forbidden pixels) is already proven and is NOT this criterion.",
+          "met": null
+        },
+        {
+          "automatically_checkable": false,
+          "criterion": "runtime_and_memory_acceptable",
+          "detail": "Requires a benchmark of the candidate at native resolution inside the real pipeline. The harness's 512x512 offline timings do not answer it.",
+          "met": null
+        },
+        {
+          "automatically_checkable": false,
+          "criterion": "owner_review_passes",
+          "detail": "Inherently a human sign-off. There is no proxy for it and none is computed.",
+          "met": null
+        }
+      ]
+    },
+    "missing_for_next_stage": [
+      {
+        "automatically_checkable": true,
+        "criterion": "reviewed_patch_count",
+        "detail": "10 reviewed patch(es); target 30-50",
+        "met": false
+      }
+    ],
+    "next_stage": "production_candidate_ready",
+    "next_stage_requires_owner_action": [
+      {
+        "automatically_checkable": false,
+        "criterion": "candidate_beats_A0_and_A1_on_texture_and_safety",
+        "detail": "NOT COMPUTABLE. This criterion requires labelled pore/fine-hair ground truth to score 'useful texture recovered' against; the corpus currently has 1 such label(s). The existing run summaries contain only unlabelled delta_rms/eligible-pixel numbers, which measure how much an arm CHANGED, not whether it restored real texture or amplified noise. No proxy is computed here on purpose: an arm ranking derived from unlabelled deltas would be indistinguishable from a ranking of raw gain. Populate pore_regions/fine_hair_regions and noise_regions first, then define the scoring rule BEFORE looking at the numbers.",
+        "met": null
+      }
+    ],
+    "stages": [
+      "infrastructure_validated",
+      "dev_pilot_ready",
+      "production_candidate_ready",
+      "production_ready"
+    ]
+  },
+  "report": "fa02_readiness",
+  "schema_version": 1,
+  "totals": {
+    "asset_count": 10,
+    "control_region_total": 4,
+    "fa02_case_count": 10,
+    "gate_reports_passing": 10,
+    "gate_reports_run": 10,
+    "ground_truth_region_total": 1,
+    "human_labelled_patch_count": 1,
+    "invalid_annotation_count": 0,
+    "legacy_review_region_total": 5,
+    "legacy_review_regions_are_labels": false,
+    "patch_count": 10,
+    "pilot_directories": 10,
+    "problems": [],
+    "reviewed_patch_counts": {
+      "corrected_defect_regions": 0,
+      "fine_hair_regions": 1,
+      "makeup_edge_regions": 3,
+      "noise_regions": 1,
+      "pore_regions": 0,
+      "protected_identity_marks": 0,
+      "uncertainty_regions": 6
+    },
+    "reviewed_region_counts": {
+      "corrected_defect_regions": 0,
+      "fine_hair_regions": 1,
+      "makeup_edge_regions": 3,
+      "noise_regions": 1,
+      "pore_regions": 0,
+      "protected_identity_marks": 0,
+      "uncertainty_regions": 8
+    },
+    "strata_missing_assets": {
+      "compression": [
+        "ff47_DSCF1058",
+        "ff47_DSCF1423",
+        "ff47_DSCF2183",
+        "ff47_DSCF2258",
+        "ff47_DSCF2274",
+        "nahida_DSCF6754",
+        "nahida_DSCF9559",
+        "priority_printing_DSCF2650",
+        "priority_printing_DSCF2709"
+      ],
+      "exposure": [
+        "ff47_DSCF1058",
+        "ff47_DSCF1423",
+        "ff47_DSCF1606",
+        "ff47_DSCF2258",
+        "ff47_DSCF2274",
+        "nahida_DSCF6754",
+        "nahida_DSCF9559",
+        "priority_printing_DSCF2650",
+        "priority_printing_DSCF2709"
+      ],
+      "faces": [
+        "ff47_DSCF1058",
+        "ff47_DSCF1423",
+        "ff47_DSCF1606",
+        "ff47_DSCF2183",
+        "ff47_DSCF2258",
+        "ff47_DSCF2274",
+        "nahida_DSCF6754",
+        "nahida_DSCF9559",
+        "priority_printing_DSCF2650",
+        "priority_printing_DSCF2709"
+      ],
+      "lighting_difficulty": [
+        "ff47_DSCF1058",
+        "ff47_DSCF1423",
+        "ff47_DSCF1606",
+        "ff47_DSCF2183",
+        "ff47_DSCF2258",
+        "ff47_DSCF2274",
+        "nahida_DSCF6754",
+        "nahida_DSCF9559",
+        "priority_printing_DSCF2650",
+        "priority_printing_DSCF2709"
+      ],
+      "occlusion": [
+        "ff47_DSCF1058",
+        "ff47_DSCF1423",
+        "ff47_DSCF1606",
+        "ff47_DSCF2183",
+        "ff47_DSCF2258",
+        "ff47_DSCF2274",
+        "nahida_DSCF6754",
+        "nahida_DSCF9559",
+        "priority_printing_DSCF2650",
+        "priority_printing_DSCF2709"
+      ],
+      "texture": [
+        "ff47_DSCF1058",
+        "ff47_DSCF1423",
+        "ff47_DSCF1606",
+        "ff47_DSCF2183",
+        "ff47_DSCF2258",
+        "ff47_DSCF2274",
+        "nahida_DSCF6754",
+        "nahida_DSCF9559",
+        "priority_printing_DSCF2650",
+        "priority_printing_DSCF2709"
+      ]
+    },
+    "strata_tally": {
+      "compression": {
+        "noisy": 1
+      },
+      "exposure": {
+        "high_key": 1
+      },
+      "face_scale": {
+        "close": 9,
+        "medium": 1
+      },
+      "faces": {},
+      "lighting": {
+        "daylight": 4,
+        "high_key": 2,
+        "low_key": 1,
+        "overcast": 1,
+        "studio": 2
+      },
+      "lighting_difficulty": {},
+      "occlusion": {},
+      "pose": {
+        "frontal": 5,
+        "three_quarter": 5
+      },
+      "skin_tone": {
+        "light": 7,
+        "very_light": 3
+      },
+      "texture": {}
+    },
+    "subject_count": 8,
+    "subject_counts_by_split": {
+      "calibration": 0,
+      "dev": 8,
+      "locked_test": 0
+    },
+    "subjects": [
+      "subject_ff47_01",
+      "subject_ff47_02",
+      "subject_ff47_03",
+      "subject_ff47_04",
+      "subject_ff47_05",
+      "subject_ff47_06",
+      "subject_nahida_01",
+      "subject_priority_printing_01"
+    ],
+    "subjects_by_split": {
+      "calibration": [],
+      "dev": [
+        "subject_ff47_01",
+        "subject_ff47_02",
+        "subject_ff47_03",
+        "subject_ff47_04",
+        "subject_ff47_05",
+        "subject_ff47_06",
+        "subject_nahida_01",
+        "subject_priority_printing_01"
+      ],
+      "locked_test": []
+    },
+    "subjects_crossing_splits": []
+  }
+}

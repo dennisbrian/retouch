@@ -1,0 +1,130 @@
+{
+  "_TEMPLATE": "PLACEHOLDER VALUES ONLY -- NOT REAL DATA. Copy this file, replace every value below with owner-supplied provenance, and validate it with scripts/qa/fa02_portrait_manifest.py::validate_support_annotation. Every person_id here is a fake token; no real subject has been mapped. See docs/plans/EXPERIMENT_FA02_TEXTURE_REPRESENTATIONS_2026_09_06.md for what evidence is and is not currently available.",
+  "schema_version": 1,
+
+  "_asset_id": "Must match an asset_id in the corpus_manifest v3 registry this case is sourced from.",
+  "asset_id": "PLACEHOLDER_asset_0001",
+
+  "_person_id": "Must be one of that corpus asset's person_ids. Fake placeholder below.",
+  "person_id": "test_subject_001",
+
+  "_native_dimensions": "[width, height] of the ORIGINAL native capture, in native pixels. Not the crop.",
+  "native_dimensions": [6240, 4160],
+
+  "_native_roi_xywh": "[x, y, width, height] of this patch in NATIVE coordinates. Validated in-bounds against native_dimensions, and its width/height must equal the saved X/S canvas shape (no resize, no registration drift).",
+  "native_roi_xywh": [2100, 1400, 512, 512],
+
+  "_native_source_reference": "Path (relative to the FA-02 manifest directory) of the native capture the X/S pair was cut from. Checksummed by the harness.",
+  "native_source_reference": "PLACEHOLDER_native_source.tif",
+
+  "_supports": "Acceptance provenance for the three masks that already live in the case NPZ. This record does NOT redefine the masks; it says where they came from and who accepted them. provenance vocabulary: manual | synthetic | detector_derived | owner_approved. Only manual and owner_approved are promotable -- a raw detector output is recordable but is not an externally accepted support.",
+  "supports": {
+    "allow": {
+      "reference": "PLACEHOLDER: eligible-skin support, e.g. reviewer-painted mask file or review ticket ID",
+      "provenance": "manual"
+    },
+    "corrected": {
+      "reference": "PLACEHOLDER: known corrected-defect support reference",
+      "provenance": "manual",
+      "description": "PLACEHOLDER: what was corrected in X and why (e.g. 'retoucher removed a transient blemish at frame left cheek before capture of S')",
+      "human_reference": "PLACEHOLDER: who recorded the correction and where that record lives"
+    },
+    "protected": {
+      "reference": "PLACEHOLDER: protected mark/makeup region reference. NEVER a literal detector output -- a human decides what is protected.",
+      "provenance": "manual",
+      "description": "PLACEHOLDER: what is protected (e.g. 'permanent beauty mark and eyeliner edge, must not be altered')"
+    }
+  },
+
+  "_support_acceptance_reference": "Auditable pointer to the external acceptance of these supports. An assertion with provenance -- it is not automatic proof of human acceptance.",
+  "support_acceptance_reference": "PLACEHOLDER: acceptance record ID / signed review note",
+
+  "_annotation_source": "manual | synthetic | detector_derived | owner_approved. Records where THIS annotation came from.",
+  "annotation_source": "owner_approved",
+
+  "_reviewer": "Human identifier of whoever actually looked at this patch. REQUIRED when annotation_source is owner_approved.",
+  "reviewer": "PLACEHOLDER_reviewer_name",
+
+  "_review_regions": "OPTIONAL and ADVISORY ONLY. Small rectangles a reviewer flagged as 'someone should look here'. Its tags are free text and are NOT a semantic label -- a review_region tagged 'pore_review' does NOT assert that pores are present. For an actual labelled claim use the named category lists below. Coordinates are LOCAL TO THE SAVED CROP (not native). IDs must be filesystem-safe.",
+  "review_regions": [
+    {
+      "id": "look_here_upper_cheek",
+      "xywh": [64, 64, 128, 128],
+      "tags": ["needs_review", "texture"]
+    }
+  ],
+
+  "_texture_categories": "OPTIONAL semantic ground-truth categories, added 2026-09-06. Each is its own list, same {id, xywh, tags, notes?} shape as review_regions, coordinates LOCAL TO THE SAVED CROP. Unlike review_regions these are ASSERTIONS: putting a rectangle in pore_regions means a human looked at native pixels and says pores are visible there. Nothing in this repository may generate them -- use scripts/qa/fa02_annotation_workbench.py to LOOK, then type the coordinates here by hand. Rules: (a) every list is optional and may be omitted entirely (annotations predating these fields still validate); (b) region ids must be unique across ALL categories including review_regions; (c) if ANY of these lists is non-empty the annotation needs annotation_source in {manual, owner_approved} AND a named reviewer -- provenance is annotation-level, not per-region; (d) protected_identity_marks may not geometrically overlap corrected_defect_regions or noise_regions (contradictory claims about the same pixels); (e) pore_regions and fine_hair_regions MAY overlap each other and anything else -- real cheeks have both. Do not annotate an unresolved source as a recoverable pore; put it in uncertainty_regions instead.",
+
+  "_pore_regions": "Visible, resolvable skin pores. Ground truth for 'did the arm bring texture back'.",
+  "pore_regions": [
+    {
+      "id": "pore_field_upper_cheek",
+      "xywh": [64, 64, 128, 128],
+      "tags": ["pore"],
+      "notes": "PLACEHOLDER: e.g. 'clearly resolved pore field, ~40 countable pores at 1:1'"
+    }
+  ],
+
+  "_fine_hair_regions": "Vellus / fine facial hair the reviewer can actually resolve.",
+  "fine_hair_regions": [
+    {
+      "id": "fine_hair_temple",
+      "xywh": [320, 96, 96, 128],
+      "tags": ["fine_hair"],
+      "notes": "PLACEHOLDER: e.g. 'individual vellus hairs visible against skin'"
+    }
+  ],
+
+  "_makeup_edge_regions": "Boundaries of APPLIED makeup (liner, contour, lip edge). A nuisance edge a representation may over-sharpen. Distinct from protected_identity_marks, which is about what must not be altered.",
+  "makeup_edge_regions": [
+    {
+      "id": "liner_edge_outer_corner",
+      "xywh": [16, 16, 64, 40],
+      "tags": ["makeup_edge"]
+    }
+  ],
+
+  "_protected_identity_marks": "Marks a human decided are identity and must NEVER be altered. May not overlap corrected_defect_regions or noise_regions.",
+  "protected_identity_marks": [
+    {
+      "id": "beauty_mark_cheek",
+      "xywh": [200, 300, 24, 24],
+      "tags": ["identity_mark"]
+    }
+  ],
+
+  "_corrected_defect_regions": "Regions where a defect was ALREADY repaired before the S capture. Forbidden territory: a representation must not resurrect what was removed.",
+  "corrected_defect_regions": [
+    {
+      "id": "removed_transient_blemish",
+      "xywh": [420, 400, 32, 32],
+      "tags": ["corrected_defect"]
+    }
+  ],
+
+  "_noise_regions": "Sensor noise / JPEG blocking heavy enough to be the dominant local signal. The nuisance control: a representation that 'restores texture' here is restoring noise.",
+  "noise_regions": [
+    {
+      "id": "shadow_side_noise",
+      "xywh": [16, 400, 96, 96],
+      "tags": ["noise", "compression"]
+    }
+  ],
+
+  "_uncertainty_regions": "The reviewer LOOKED and could not decide. Recorded explicitly, because 'unlabeled' and 'unlabelABLE' are different evidence -- only the first is a coverage gap someone can close by annotating more. Does NOT count as ground truth for readiness.",
+  "uncertainty_regions": [
+    {
+      "id": "ambiguous_jaw_edge",
+      "xywh": [300, 440, 64, 64],
+      "tags": ["ambiguous"],
+      "notes": "PLACEHOLDER: e.g. 'cannot tell pore field from JPEG blocking at this magnification'"
+    }
+  ],
+
+  "_notes": "OPTIONAL free text.",
+  "notes": "PLACEHOLDER: any context a later reader needs.",
+
+  "_uncertainty": "OPTIONAL free text: what the reviewer was NOT sure about. Explicit observability gaps belong here.",
+  "uncertainty": "PLACEHOLDER: e.g. 'cannot distinguish makeup edge from a real mark at frame right jaw; treated as protected'"
+}

@@ -1,0 +1,92 @@
+{
+  "review_regions": [],
+  "pore_regions": [],
+  "fine_hair_regions": [],
+  "makeup_edge_regions": [
+    {
+      "id": "drawn_heart_mark_under_eye",
+      "xywh": [
+        148,
+        113,
+        44,
+        52
+      ],
+      "tags": [
+        "makeup_edge",
+        "drawn_mark"
+      ],
+      "notes": "Small red PAINTED heart-shaped mark under the eye, adjacent to a pointing finger. At 8x this is a drawn/applied cosmetic glyph with a wet-paint edge and a specular highlight, NOT a natural mole or beauty mark -- the task brief's 'small mole/beauty mark near mouth corner' description does not match the pixels. Classified as an applied makeup edge accordingly."
+    }
+  ],
+  "protected_identity_marks": [],
+  "corrected_defect_regions": [],
+  "noise_regions": [
+    {
+      "id": "iso_grain_right_cheek",
+      "xywh": [
+        280,
+        110,
+        140,
+        140
+      ],
+      "tags": [
+        "noise"
+      ],
+      "notes": "Dominant local signal is sensor/ISO luma+chroma grain, not skin structure: highpass_std 3.10 with lapvar 83 over a tonally flat cheek, visible as random per-pixel chroma mottling at 8x. Smallest face in the batch (420 px), so the grain is at the same spatial scale a texture arm would treat as pore detail."
+    }
+  ],
+  "uncertainty_regions": [
+    {
+      "id": "grain_vs_pore_ambiguity_cheek",
+      "xywh": [
+        300,
+        255,
+        110,
+        55
+      ],
+      "tags": [
+        "ambiguous",
+        "pore_candidate",
+        "noise"
+      ],
+      "notes": "Cannot separate a possible pore field from the ISO grain at this magnification; the two occupy the same spatial frequency here. Recorded as unlabelABLE rather than assigned to either category."
+    }
+  ],
+  "notes": "Third ff47-event subject (blue wig, lip piercing). Two deliberate deviations from the task brief, both evidence-driven: (1) the 'mole/beauty mark' is a PAINTED heart glyph, so it is logged as makeup_edge_regions rather than protected_identity_marks; (2) noise_regions is NOT empty here -- this frame is genuinely grainy (smallest face, highest effective ISO of the batch) and labelling observed noise is not fabrication. This is the corpus's first noise/nuisance control label.",
+  "uncertainty": "Examined at 8x nearest-neighbour magnification on the NATIVE crop (X, not S). Finger, mouth, piercings and wig were excluded from allow by rectangle; the finger boundary in particular is a coarse approximation. Face is only 420 px so a 512 crop necessarily spans the whole face, and the eligible skin fraction is low by construction.",
+  "supports": {
+    "allow": {
+      "reference": "hand-painted rectangular exclusions in crop-local coordinates, read off the saved 512x512 crop preview: [0,0,512,100]; [0,0,150,512]; [420,0,92,512]; [0,300,512,212]; [150,230,270,90]; [130,95,60,180]; remainder (29900 px) is eligible skin -- the mid/right cheek band between the eye line and the mouth",
+      "provenance": "owner_approved",
+      "description": "Eligible skin support for the FA-02 texture patch; excludes hair/wig, eye, lip, nose and prop intrusions visible in the crop preview"
+    },
+    "corrected": {
+      "reference": "none -- no known corrected defect in this patch",
+      "provenance": "owner_approved",
+      "description": "No correction applied or claimed in this patch; mask is all-zero",
+      "human_reference": "Owner visual review, 2026-09-06 session (ff47 event batch)"
+    },
+    "protected": {
+      "reference": "none -- no protected identity mark inside this crop; mask is all-zero",
+      "provenance": "owner_approved",
+      "description": "No permanent identity mark falls inside the selected clean-skin ROI, so nothing is held protected here. Applied-makeup edges present in this crop are recorded as makeup_edge_regions, which is a different claim."
+    }
+  },
+  "schema_version": 1,
+  "asset_id": "ff47_DSCF1606",
+  "person_id": "subject_ff47_03",
+  "native_dimensions": [
+    4160,
+    6240
+  ],
+  "native_roi_xywh": [
+    1700,
+    2450,
+    512,
+    512
+  ],
+  "native_source_reference": "DSCF1606_native.jpg",
+  "support_acceptance_reference": "Owner visual review and crop/mask approval, 2026-09-06 session, this conversation",
+  "annotation_source": "owner_approved",
+  "reviewer": "dennis"
+}

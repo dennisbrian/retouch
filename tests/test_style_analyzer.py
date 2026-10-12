@@ -1,0 +1,346 @@
+"""Tests for retouch/style.py — StyleProfile, StyleAnalyzer, StyleApplier, subject_aware_transfer."""
+import numpy as np
+import pytest
+from retouch.style import (
+    StyleProfile,
+    StyleAnalyzer,
+    StyleApplier,
+    weighted_mean_std,
+    reinhard_transfer_masked,
+)
+
+
+class TestWeightedMeanStd:
+    def test_uniform_weights(self):
+        data = np.random.randn(10, 10, 3).astype(np.float32) * 30 + 128
+        weights = np.ones((10, 10), dtype=np.float32)
+        mean, std = weighted_mean_std(data, weights)
+        assert mean.shape == (3,)
+        assert std.shape == (3,)
+
+    def test_weighted_mean_std_uniform_weights(self):
+        """Uniform weights should reproduce numpy mean/std (with small epsilon on std)."""
+        rng = np.random.default_rng(0)
+        data = rng.random((16, 16, 3), dtype=np.float32) * 255.0
+        weights = np.ones((16, 16), dtype=np.float32)
+
+        mean, std = weighted_mean_std(data, weights)
+
+        expected_mean = np.mean(data, axis=(0, 1))
+        # weighted_mean_std adds 1e-5 to the std for numerical stability
+        expected_std = np.std(data, axis=(0, 1)) + 1e-5
+        assert np.allclose(mean, expected_mean, atol=1e-4)
+        assert np.allclose(std, expected_std, atol=1e-3)
+
+    def test_weighted_mean_std_zero_weights_region(self):
+        """Mask with a zero region should compute stats over the non-zero region only."""
+        data = np.zeros((10, 10, 3), dtype=np.float32)
+        data[:, :5, :] = 50.0  # left half = 50
+        data[:, 5:, :] = 200.0  # right half = 200
+        weights = np.zeros((10, 10), dtype=np.float32)
+        weights[:, :5] = 1.0  # only the left half contributes
+
+        mean, std = weighted_mean_std(data, weights)
+        assert mean.shape == (3,)
+        # Mean over left half = 50, std ≈ 0 + epsilon
+        assert np.allclose(mean, 50.0, atol=1e-3)
+        assert np.all(std > 0)
+        assert np.all(std < 1.0)
+
+    def test_zero_weights(self):
+        data = np.random.randn(10, 10, 3).astype(np.float32) * 30 + 128
+        weights = np.zeros((10, 10), dtype=np.float32)
+        mean, std = weighted_mean_std(data, weights)
+        assert mean.shape == (3,)
+
+    def test_downsample_large(self):
+        data = np.random.randn(2048, 2048, 3).astype(np.float32) * 30 + 128
+        weights = np.ones((2048, 2048), dtype=np.float32)
+        mean, std = weighted_mean_std(data, weights)
+        assert mean.shape == (3,)
+
+
+class TestReinhardTransferMasked:
+    def test_same_images(self):
+        img = np.full((20, 20, 3), 128, dtype=np.uint8)
+        mask = np.ones((20, 20), dtype=np.float32)
+        result = reinhard_transfer_masked(img, img, mask, mask)
+        assert np.allclose(result, img, atol=2)
+
+    def test_different_images(self):
+        rng = np.random.default_rng(42)
+        src = np.clip(rng.normal(100, 15, (20, 20, 3)), 0, 255).astype(np.uint8)
+        ref = np.clip(rng.normal(180, 15, (20, 20, 3)), 0, 255).astype(np.uint8)
+        mask = np.ones((20, 20), dtype=np.float32)
+        result = reinhard_transfer_masked(src, ref, mask, mask)
+        assert not np.allclose(result, src)
+
+    def test_output_shape(self):
+        src = np.random.randint(0, 256, (20, 20, 3), dtype=np.uint8)
+        ref = np.random.randint(0, 256, (20, 20, 3), dtype=np.uint8)
+        mask = np.ones((20, 20), dtype=np.float32)
+        result = reinhard_transfer_masked(src, ref, mask, mask)
+        assert result.shape == (20, 20, 3)
+
+    def test_diff_masks(self):
+        src = np.random.randint(0, 256, (20, 20, 3), dtype=np.uint8)
+        ref = np.random.randint(0, 256, (20, 20, 3), dtype=np.uint8)
+        src_mask = np.zeros((20, 20), dtype=np.float32)
+        ref_mask = np.ones((20, 20), dtype=np.float32)
+        result = reinhard_transfer_masked(src, ref, src_mask, ref_mask)
+        assert np.all(result == src)
+
+    def test_low_std_guard(self):
+        src = np.full((20, 20, 3), 128, dtype=np.uint8)
+        ref = np.full((20, 20, 3), 200, dtype=np.uint8)
+        mask = np.ones((20, 20), dtype=np.float32)
+        result = reinhard_transfer_masked(src, ref, mask, mask)
+        assert result.shape == (20, 20, 3)
+
+    def test_ratio_clamping(self):
+        rng = np.random.default_rng(42)
+        src = np.clip(rng.normal(128, 1, (20, 20, 3)), 0, 255).astype(np.uint8)
+        ref = np.clip(rng.normal(128, 30, (20, 20, 3)), 0, 255).astype(np.uint8)
+        mask = np.ones((20, 20), dtype=np.float32)
+        result = reinhard_transfer_masked(src, ref, mask, mask)
+        assert result.shape == (20, 20, 3)
+
+    def test_reinhard_transfer_masked_basic(self):
+        """Synthetic 64x64 BGR images: output must be uint8 in the 0-255 range."""
+        rng = np.random.default_rng(7)
+        src = np.clip(rng.normal(80, 30, (64, 64, 3)), 0, 255).astype(np.uint8)
+        ref = np.clip(rng.normal(180, 25, (64, 64, 3)), 0, 255).astype(np.uint8)
+        mask = np.ones((64, 64), dtype=np.float32)
+        result = reinhard_transfer_masked(src, ref, mask, mask)
+        assert result.dtype == np.uint8
+        assert result.min() >= 0
+        assert result.max() <= 255
+
+    def test_reinhard_transfer_masked_preserves_shape(self):
+        """Output shape must match the source image regardless of ref image size."""
+        rng = np.random.default_rng(7)
+        src = np.clip(rng.normal(120, 30, (64, 64, 3)), 0, 255).astype(np.uint8)
+        ref = np.clip(rng.normal(150, 30, (64, 64, 3)), 0, 255).astype(np.uint8)
+        mask = np.ones((64, 64), dtype=np.float32)
+        result = reinhard_transfer_masked(src, ref, mask, mask)
+        assert result.shape == src.shape
+        assert result.shape == (64, 64, 3)
+
+
+class TestStyleProfile:
+    def test_default_values(self):
+        sp = StyleProfile()
+        assert sp.brightness_delta == 0.0
+        assert sp.contrast_delta == 0.0
+        assert sp.skin_smooth_strength == 0.0
+        assert sp.skin_texture_opacity == 1.0
+
+    def test_to_dict(self):
+        sp = StyleProfile(brightness_delta=10.5, contrast_delta=5.0)
+        d = sp.to_dict()
+        assert d["brightness_delta"] == 10.5
+        assert d["contrast_delta"] == 5.0
+
+    def test_to_json(self):
+        sp = StyleProfile(skin_l_mean_delta=3.0)
+        j = sp.to_json()
+        assert "skin_l_mean_delta" in j
+
+    def test_from_dict(self):
+        d = {"brightness_delta": 8.0, "contrast_delta": -3.0}
+        sp = StyleProfile.from_dict(d)
+        assert sp.brightness_delta == 8.0
+        assert sp.contrast_delta == -3.0
+
+    def test_from_json(self):
+        j = '{"brightness_delta": 5.0, "contrast_delta": 2.0}'
+        sp = StyleProfile.from_json(j)
+        assert sp.brightness_delta == 5.0
+
+    def test_save_and_load(self, tmp_path):
+        sp = StyleProfile(brightness_delta=12.0)
+        path = str(tmp_path / "profile.json")
+        sp.save(path)
+        loaded = StyleProfile.load(path)
+        assert loaded.brightness_delta == 12.0
+
+    def test_serialization_roundtrip(self):
+        sp = StyleProfile(
+            brightness_delta=5.0,
+            contrast_delta=3.2,
+            saturation_delta=10.0,
+            skin_l_mean_delta=2.5,
+            skin_a_mean_delta=1.0,
+            skin_b_mean_delta=-2.0,
+            skin_smooth_strength=0.75,
+            skin_mid_reduction=0.5,
+            skin_texture_opacity=0.8,
+        )
+        d = sp.to_dict()
+        sp2 = StyleProfile.from_dict(d)
+        for field in d:
+            assert getattr(sp, field) == getattr(sp2, field)
+
+    def test_style_profile_dataclass(self):
+        """StyleProfile is a dataclass: construction + attribute access work."""
+        sp = StyleProfile(
+            brightness_delta=1.5,
+            contrast_delta=-2.5,
+            saturation_delta=3.0,
+            skin_l_mean_delta=4.0,
+            skin_a_mean_delta=5.0,
+            skin_b_mean_delta=-6.0,
+            skin_smooth_strength=0.5,
+            skin_mid_reduction=0.4,
+            skin_texture_opacity=0.7,
+        )
+        # Each field is accessible and round-trips through repr-like access
+        assert sp.brightness_delta == 1.5
+        assert sp.contrast_delta == -2.5
+        assert sp.saturation_delta == 3.0
+        assert sp.skin_l_mean_delta == 4.0
+        assert sp.skin_a_mean_delta == 5.0
+        assert sp.skin_b_mean_delta == -6.0
+        assert sp.skin_smooth_strength == 0.5
+        assert sp.skin_mid_reduction == 0.4
+        assert sp.skin_texture_opacity == 0.7
+        # Equality between identical instances (dataclass __eq__)
+        assert sp == StyleProfile(
+            brightness_delta=1.5,
+            contrast_delta=-2.5,
+            saturation_delta=3.0,
+            skin_l_mean_delta=4.0,
+            skin_a_mean_delta=5.0,
+            skin_b_mean_delta=-6.0,
+            skin_smooth_strength=0.5,
+            skin_mid_reduction=0.4,
+            skin_texture_opacity=0.7,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests that need a RetouchEngine (skipped when face_landmarker.task is absent)
+# ---------------------------------------------------------------------------
+
+
+import os
+
+_LANDMARKER_MODEL = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)),
+    "models",
+    "face_landmarker.task",
+)
+_HAS_LANDMARKER = os.path.exists(_LANDMARKER_MODEL)
+
+
+@pytest.mark.skipif(
+    not _HAS_LANDMARKER, reason="face_landmarker.task model not available"
+)
+class TestSubjectAwareTransfer:
+    def test_subject_aware_transfer(self):
+        """Synthetic subject + reference images: transfer returns uint8 BGR of correct shape."""
+        from unittest.mock import patch
+
+        from retouch.engine import RetouchEngine
+        from retouch.style import subject_aware_transfer
+
+        eng = RetouchEngine()
+        try:
+            rng = np.random.default_rng(0)
+            target = np.clip(rng.normal(100, 20, (64, 64, 3)), 0, 255).astype(np.uint8)
+            ref = np.clip(rng.normal(180, 20, (64, 64, 3)), 0, 255).astype(np.uint8)
+            # Empty person mask → both target_bg_mask and ref_bg_mask = 1.0,
+            # so reinhard_transfer_masked is applied to the full image and
+            # the per-face branch is skipped.
+            target_person = np.zeros((64, 64), dtype=np.float32)
+
+            with patch.object(eng._detector, "detect", return_value=[]), \
+                 patch.object(eng._detector, "segment_person",
+                              return_value=target_person):
+                result = subject_aware_transfer(eng, target, ref)
+
+            assert result.shape == target.shape
+            assert result.dtype == np.uint8
+            assert result.min() >= 0
+            assert result.max() <= 255
+        finally:
+            eng.close()
+
+
+@pytest.mark.skipif(
+    not _HAS_LANDMARKER, reason="face_landmarker.task model not available"
+)
+class TestStyleAnalyzerExtract:
+    def test_style_analyzer_extract_handles_no_face(self):
+        """extract() must not crash and must return a StyleProfile with skin
+        deltas defaulted to 0.0 (opacity = 1.0) when no face is detected."""
+        from unittest.mock import patch
+
+        from retouch.engine import RetouchEngine
+        from retouch.style import StyleAnalyzer
+
+        eng = RetouchEngine()
+        try:
+            sa = StyleAnalyzer(engine=eng)
+            orig = np.full((50, 50, 3), 100, dtype=np.uint8)
+            edit = np.full((50, 50, 3), 150, dtype=np.uint8)
+
+            # Mock the detector to return no faces
+            with patch.object(eng._detector, "detect", return_value=[]):
+                profile = sa.extract(orig, edit)
+
+            assert isinstance(profile, StyleProfile)
+            # No face → skin deltas default to 0.0, opacity defaults to 1.0
+            assert profile.skin_l_mean_delta == 0.0
+            assert profile.skin_a_mean_delta == 0.0
+            assert profile.skin_b_mean_delta == 0.0
+            assert profile.skin_smooth_strength == 0.0
+            assert profile.skin_mid_reduction == 0.0
+            assert profile.skin_texture_opacity == 1.0
+            # Global deltas are still computed
+            assert profile.brightness_delta > 0.0
+        finally:
+            eng.close()
+
+
+@pytest.mark.skipif(
+    not _HAS_LANDMARKER, reason="face_landmarker.task model not available"
+)
+class TestStyleApplierApply:
+    def test_style_applier_apply_basic(self):
+        """StyleApplier.apply() with a simple StyleProfile returns a same-shape
+        uint8 BGR image, even when no face is detected (mocked)."""
+        from unittest.mock import patch
+
+        from retouch.engine import RetouchEngine
+        from retouch.style import StyleApplier
+
+        eng = RetouchEngine()
+        try:
+            sa = StyleApplier(engine=eng)
+            rng = np.random.default_rng(3)
+            img = np.clip(rng.normal(128, 30, (64, 64, 3)), 0, 255).astype(np.uint8)
+
+            # Small profile deltas — keep the skin tone shifts below the
+            # threshold that triggers an extra face-aware LAB pass.
+            profile = StyleProfile(
+                brightness_delta=2.0,
+                contrast_delta=1.0,
+                saturation_delta=0.0,
+                skin_l_mean_delta=0.1,
+                skin_a_mean_delta=0.1,
+                skin_b_mean_delta=-0.1,
+                skin_smooth_strength=0.0,
+                skin_mid_reduction=0.0,
+                skin_texture_opacity=1.0,
+            )
+
+            with patch.object(eng._detector, "detect", return_value=[]):
+                result = sa.apply(img, profile)
+
+            assert result.shape == img.shape
+            assert result.dtype == np.uint8
+            assert result.min() >= 0
+            assert result.max() <= 255
+        finally:
+            eng.close()

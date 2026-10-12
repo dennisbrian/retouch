@@ -1,1 +1,86 @@
-{}
+{
+  "schema_version": 1,
+  "models": {
+    "face_landmarker": {
+      "filename": "face_landmarker.task",
+      "url": "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task?generation=1683136941916318",
+      "sha256": "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff",
+      "size_bytes": 3758596,
+      "license": "Apache-2.0",
+      "availability": "downloadable",
+      "description": "MediaPipe FaceLandmarker (float16, 478 landmarks) — downloaded on demand into the verified user model cache and used by detection.py."
+    },
+    "selfie_segmenter": {
+      "filename": "selfie_segmenter.tflite",
+      "url": "https://storage.googleapis.com/download/storage/v1/b/mediapipe-models/o/image_segmenter%2Fselfie_segmenter%2Ffloat16%2Flatest%2Fselfie_segmenter.tflite?alt=media&generation=1683436453600523",
+      "sha256": "191ac9529ae506ee0beefa6b2c945a172dab9d07d1e802a290a4e4038226658b",
+      "size_bytes": 249537,
+      "license": "Apache-2.0",
+      "availability": "downloadable",
+      "description": "MediaPipe Selfie Segmenter (TFLite) — downloaded on demand into the verified user model cache for person/hair segmentation."
+    },
+    "selfie_multiclass": {
+      "filename": "selfie_multiclass_256x256.tflite",
+      "url": "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite?generation=1682480017063560",
+      "sha256": "c6748b1253a99067ef71f7e26ca71096cd449baefa8f101900ea23016507e0e0",
+      "size_bytes": 16371837,
+      "license": "Apache-2.0",
+      "availability": "downloadable",
+      "description": "MediaPipe Multi-class Selfie Segmenter (256x256; background, hair, body-skin, face-skin, clothes, accessories). Apache-2.0 per the Google model card. Downloaded on demand and used for hair/neck masks when BiSeNet face parsing is not installed."
+    },
+    "pose_landmarker_full": {
+      "filename": "pose_landmarker_full.task",
+      "url": "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task?generation=1682642785209422",
+      "sha256": "5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1",
+      "size_bytes": 9398198,
+      "license": "Apache-2.0",
+      "availability": "downloadable",
+      "description": "MediaPipe Pose Landmarker Full (float16) — verified on demand for body reshape."
+    },
+    "resnet18_bisenet": {
+      "filename": "resnet18.onnx",
+      "url": "",
+      "sha256": "0d9bd318e46987c3bdbfacae9e2c0f461cae1c6ac6ea6d43bbe541a91727e33f",
+      "size_bytes": 53205364,
+      "license": "MIT",
+      "availability": "unavailable",
+      "description": "BiSeNet face-parsing model (ResNet-18 backbone, ONNX) — not shipped in the wheel and has no controlled download URL; landmark-only masks are used until a release artifact is supplied."
+    },
+    "retinaface_mv1": {
+      "filename": "retinaface_mv1.onnx",
+      "url": "",
+      "sha256": "75c961aaf0aff03d13c074e9ec656e5510e174454dd4964a161aab4fe5f04153",
+      "size_bytes": 16638325,
+      "license": "MIT",
+      "availability": "unavailable",
+      "description": "RetinaFace MobileNetV1 (ONNX) — not shipped in the wheel and has no controlled download URL; the maintained detector path remains the capability reported by detection.py."
+    },
+    "lama_inpaint": {
+      "filename": "lama.onnx",
+      "url": "",
+      "sha256": "",
+      "size_bytes": 0,
+      "license": "Apache-2.0",
+      "availability": "unavailable",
+      "description": "LaMa large-region inpainting model (ONNX) — not bundled. Advanced Retouch reports the Telea fallback until a verified model and controlled release URL are supplied."
+    },
+    "sr_real_esrgan": {
+      "filename": "real_esrgan_x4.onnx",
+      "url": "",
+      "sha256": "",
+      "size_bytes": 0,
+      "license": "BSD-3-Clause",
+      "availability": "unavailable",
+      "description": "Real-ESRGAN x4plus super-resolution model (ONNX) — not bundled. AIEnhancer.super_resolve uses standard Lanczos resize and reports that AI SR is unavailable until a verified model and controlled release URL are supplied."
+    },
+    "denoise_nafnet": {
+      "filename": "nafnet_denoise.onnx",
+      "url": "https://github.com/dennisbrian/retouch/releases/download/models-nafnet-v1/nafnet_denoise.onnx",
+      "sha256": "4bab67c8618c722f57c90c0112f4ac57cfeea6dd83cbf5a7e8fbac5c0f995e65",
+      "size_bytes": 117316673,
+      "license": "MIT",
+      "availability": "downloadable",
+      "description": "NAFNet-SIDD-width32 denoise model (ONNX, opset 17, dynamic H/W, RGB [0,1] NCHW). Weights from megvii-research/NAFNet (MIT; trained on the SIDD smartphone-noise dataset). Built by .github/workflows/publish-models.yml and hosted on this repo's models-nafnet-v1 pre-release; downloaded into the verified user model cache the first time AI denoise runs."
+    }
+  }
+}
