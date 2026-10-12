@@ -156,10 +156,8 @@ class TestRejections:
 
 class TestUnsupportedIsExplicit:
     @pytest.mark.parametrize('extra', [
-        {'parentID': fx.IDS[2]},
-        {'maskSourceID': fx.IDS[2]},
         {'effects': {'stroke': {}}},
-        {'adjustment': {'kind': 'Invert'}},
+        {'adjustment': {'kind': 'Gaussian Blur'}},
         {'futureField': 1},
     ])
     def test_unmodelled_layer_fields(self, tmp_path, extra):
@@ -172,11 +170,10 @@ class TestUnsupportedIsExplicit:
     def test_folder(self, tmp_path):
         record = fx.layer_record(0, 'Folder', 2, 2, image=False, isGroup=True)
         path = fx.write_package(tmp_path / 'g.comp', 2, 2, [record])
-        with pytest.raises(UnsupportedFeature, match='folders'):
-            load_project(path)
+        assert load_project(path).layers[0].is_group
 
     @pytest.mark.parametrize('geometry', [
-        {'rotation': 15}, {'origin': [0.5, 0]}])
+        {'origin': [0.5, 0]}])
     def test_transformed_layers(self, tmp_path, geometry):
         record = fx.layer_record(0, 'Layer', 2, 2)
         record['transform'].update(geometry)

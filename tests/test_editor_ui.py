@@ -82,7 +82,7 @@ def test_open_requires_discard_and_failed_open_preserves_session(session, callba
         assert replacement.history.document.width == 3
         assert replacement.history.dirty
         assert not Path(session.workspace).exists()
-        assert len(loaded) == 19
+        assert len(loaded) == 33
     finally:
         replacement.close()
 
@@ -97,7 +97,7 @@ def test_save_and_export_gate_unapplied_strokes(session, callbacks, tmp_path):
         export(session, stroke_canvas())
     assert not target.exists() and session.history.dirty
     result = save(session, str(target), None)
-    assert len(result) == 18 and not session.history.dirty
+    assert len(result) == 32 and not session.history.dirty
     np.testing.assert_array_equal(composite(load_project(target)),
                                   composite(session.history.document))
     path = export(session, None)
@@ -109,7 +109,7 @@ def test_save_and_export_gate_unapplied_strokes(session, callbacks, tmp_path):
 def test_ui_edit_callbacks_change_layer_and_restore_with_undo(session, callbacks):
     edits = [fn for fn in callbacks if fn.__name__ == 'edit']
     result = edits[0](session, session.selected_id, None, 'New name', False, 50, True)
-    assert len(result) == 18
+    assert len(result) == 32
     layer = session.selected()
     assert (layer.name, layer.visible, layer.opacity) == ('New name', False, 0.5)
     undo = next(fn for fn in edits if fn.__kwdefaults__['operation'] == 'undo')
@@ -162,7 +162,7 @@ def test_reset_mask_callback_reveals_layer_and_undo_restores_coverage(session, c
     painted = composite(session.history.document)
     assert not np.array_equal(painted, expected)
     result = edits['reset_mask'](session, lid, None)
-    assert len(result) == 18 and session.selected_id == lid
+    assert len(result) == 32 and session.selected_id == lid
     assert session.selected().mask is None
     np.testing.assert_array_equal(composite(session.history.document), expected)
     session.history.save(tmp_path / 'reset.comp')
@@ -181,7 +181,7 @@ def test_proportional_resize_ui_uses_selected_axis_and_can_unlock(session, callb
     source = session.selected().pixels
     result = resize(session, lid, None, 16, 999, True, 'Width')
     assert session.selected().size == (16, 12)
-    assert result[-2:] == (16, 12)
+    assert result[16:18] == (16, 12)
     resize(session, lid, None, 999, 9, True, 'Height')
     assert session.selected().size == (12, 9)
     resize(session, lid, None, 5, 10, False, 'Width')
@@ -240,7 +240,7 @@ def test_recipe_callbacks_attach_one_masked_layer_and_block_overlapping_jobs(ses
     render_worker(session.job.directory, Engine)
     session.job.status = 'completed'
     result = finish(session, None)
-    assert len(result) == 21 and session.job.finalized
+    assert len(result) == 35 and session.job.finalized
     assert session.selected().name == 'Retouch · natural'
     assert session.selected().opacity == 0.5
     assert composite(session.history.document)[0, 0].tolist() == [150, 150, 150, 255]
@@ -375,7 +375,7 @@ def test_fit_callback_updates_size_and_position_and_gates_strokes(session, callb
     session.history.update_layer(lid, size=(4, 4), origin=(-3, 2))
     source = session.selected().pixels
     result = edits['fit'](session, lid, None)
-    assert result[12:14] == (1, 0) and result[-2:] == (6, 6)
+    assert result[12:14] == (1, 0) and result[16:18] == (6, 6)
     assert session.selected_id == lid and session.selected().pixels is source
     edits['undo'](session, lid, None)
     assert session.selected().size == (4, 4) and session.selected().origin == (-3, 2)
@@ -386,3 +386,43 @@ def test_fit_callback_updates_size_and_position_and_gates_strokes(session, callb
     session.history.remove_layer(lid)
     with pytest.raises(gr.Error, match='Select a layer'):
         edits['fit'](session, None, None)
+
+
+def test_finishing_controls_apply_selection_rotation_group_and_grading(session, callbacks, tmp_path):
+    edits = {fn.__kwdefaults__['operation']: fn for fn in callbacks if fn.__name__ == 'edit'}
+    base = session.selected_id
+    edits['transform'](session, base, None, 0, 0, False, False, 90)
+    assert session.selected().rotation == 90
+    edits['selection'](session, base, None, 'Rectangle', 2, 1, 3, 4, '[]', 0, 'Replace')
+    assert np.count_nonzero(session.selection) == 12
+    edits['selection_mask'](session, base, None, 'Replace')
+    assert session.selected().mask is not None
+    edits['group'](session, base, None, [base])
+    folder_id = session.selected_id
+    assert session.selected().is_group
+    edits['add_grade'](session, folder_id, None, 'Exposure', 1, 0, 1, 0, 255, 1, 1, 1)
+    assert session.selected().adjustment['kind'] == 'Exposure'
+    assert session.selected().parent_id == folder_id
+    edits['update_grade'](session, session.selected_id, None, 'Levels', 0, 0, 1.2, 0, 255, 1.1, 1, 1)
+    assert session.selected().adjustment['kind'] == 'Levels'
+    target = tmp_path / 'finishing.comp'
+    session.history.save(target)
+    np.testing.assert_array_equal(composite(load_project(target)), composite(session.history.document))
+    edits['clear_selection'](session, session.selected_id, None)
+    assert session.selection is None
+
+
+def test_folder_brush_and_invalid_links_preserve_history(session, callbacks):
+    edits = {fn.__kwdefaults__['operation']: fn for fn in callbacks if fn.__name__ == 'edit'}
+    base = session.selected_id
+    edits['group'](session, base, None, [base])
+    folder = session.selected_id
+    edits['mask'](session, folder, stroke_canvas())
+    assert session.selected().mask is not None
+    revision = session.history.revision
+    with pytest.raises(gr.Error):
+        edits['links'](session, folder, None, folder, '')
+    assert session.history.revision == revision
+    with pytest.raises(gr.Error):
+        edits['transform'](session, folder, stroke_canvas(), 0, 0, False, False, 90)
+    assert session.history.revision == revision

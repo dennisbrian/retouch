@@ -29,6 +29,7 @@ def _snapshot(document: Document) -> Document:
             detached.mask = _frozen(layer.mask, 2)
         detached.text = deepcopy(layer.text)
         detached.shape = deepcopy(layer.shape)
+        detached.adjustment = deepcopy(layer.adjustment)
         result.layers.append(detached)
     return result
 
@@ -154,12 +155,89 @@ class DocumentHistory:
         return self._edit('Add layer', lambda doc: doc.add_layer(detached, index))
 
     def remove_layer(self, layer_id: str) -> bool:
-        return self._edit('Remove layer', lambda doc: doc.remove_layer(layer_id))
+        def apply(doc):
+            removed = {item.id for item in doc.layers if item.id == layer_id
+                       or any(p.id == layer_id for p in doc.ancestors(item))}
+            doc.layers = [item for item in doc.layers if item.id not in removed]
+            for item in doc.layers:
+                if item.mask_source_id in removed:
+                    item.mask_source_id = None
+            if doc.active_layer_id in removed:
+                doc.active_layer_id = doc.layers[-1].id if doc.layers else None
+        return self._edit('Remove layer', apply)
+
+    def group_layers(self, layer_ids, name='Group') -> bool:
+        """Place sibling layers into a pass-through folder as one history edit."""
+        def apply(doc):
+            ids = set(layer_ids)
+            if not ids:
+                raise ValueError('Choose layers to group')
+            members = [doc.layer(item) for item in ids]
+            parents = {item.parent_id for item in members}
+            if len(parents) != 1:
+                raise ValueError('Only layers in the same folder can be grouped')
+            siblings = [item for item in doc.layers if item.parent_id == members[0].parent_id]
+            positions = [i for i, item in enumerate(siblings) if item.id in ids]
+            if max(positions) - min(positions) + 1 != len(ids):
+                raise ValueError('Choose adjacent sibling layers to preserve their stacking order')
+            group = Layer(name, size=(doc.width, doc.height), is_group=True,
+                          parent_id=members[0].parent_id)
+            doc.layers.insert(min(doc.index_of(item.id) for item in members), group)
+            for item in members:
+                item.parent_id = group.id
+            doc.active_layer_id = group.id
+        return self._edit('Group layers', apply)
+
+    def ungroup_layer(self, layer_id) -> bool:
+        def apply(doc):
+            folder = doc.layer(layer_id)
+            if not folder.is_group:
+                raise ValueError('Select a folder to ungroup')
+            if folder.mask is not None or folder.opacity != 1 or not folder.visible:
+                raise ValueError('Reset the folder mask, visibility and opacity before ungrouping')
+            ordered = doc.ordered_layers()
+            for item in ordered:
+                if item.parent_id == folder.id:
+                    item.parent_id = folder.parent_id
+            doc.layers = [item for item in ordered if item.id != layer_id]
+            doc.active_layer_id = next((item.id for item in doc.layers if item.parent_id == folder.parent_id), None)
+        return self._edit('Ungroup layers', apply)
+
+    def selection_mask(self, layer_id, selection, mode='Replace') -> bool:
+        """Project a document-space selection into the layer's native mask."""
+        from .selections import project_selection, combine
+        import cv2
+        def apply(doc):
+            layer = doc.layer(layer_id)
+            if selection.shape != (doc.height, doc.width):
+                raise ValueError('Selection does not match the document')
+            projected = project_selection(selection, layer)
+            old = (np.full(projected.shape, 255, np.uint8) if layer.mask is None else
+                   cv2.resize(layer.mask, (projected.shape[1], projected.shape[0])))
+            layer.set_mask(combine(old, projected, mode), True)
+        return self._edit('Selection to mask', apply)
 
     def duplicate_layer(self, layer_id: str) -> bool:
         """Insert an independent copy directly above the source and select it."""
         def apply(doc: Document) -> None:
             layer = doc.layer(layer_id)
+            if layer.is_group:
+                members = [item for item in doc.ordered_layers()
+                           if item.id == layer_id or any(p.id == layer_id for p in doc.ancestors(item))]
+                mapping = {item.id: new_id() for item in members}
+                insert = doc.index_of(layer_id) + 1
+                for original in members:
+                    duplicate = copy(original)
+                    duplicate.id = mapping[original.id]
+                    duplicate.parent_id = mapping.get(original.parent_id, original.parent_id)
+                    duplicate.mask_source_id = mapping.get(original.mask_source_id, original.mask_source_id)
+                    duplicate.adjustment = deepcopy(original.adjustment)
+                    duplicate.text, duplicate.shape = deepcopy(original.text), deepcopy(original.shape)
+                    duplicate.name = original.name.encode('utf-8')[:16_379].decode('utf-8', errors='ignore') + ' copy'
+                    doc.layers.insert(insert, duplicate)
+                    insert += 1
+                doc.active_layer_id = mapping[layer_id]
+                return
             duplicate = copy(layer)
             duplicate.id = new_id()
             # A maximal valid name must remain valid after adding the suffix.
@@ -168,6 +246,7 @@ class DocumentHistory:
                               .decode('utf-8', errors='ignore') + suffix)
             duplicate.text = deepcopy(layer.text)
             duplicate.shape = deepcopy(layer.shape)
+            duplicate.adjustment = deepcopy(layer.adjustment)
             doc.add_layer(duplicate, doc.index_of(layer_id) + 1)
         return self._edit('Duplicate layer', apply)
 
@@ -229,7 +308,8 @@ class DocumentHistory:
     def update_layer(self, layer_id: str, **changes) -> bool:
         """Set layer properties together as one undoable edit."""
         allowed = {'name', 'visible', 'opacity', 'blend_mode', 'origin',
-                   'size', 'flip_x', 'flip_y', 'sampling', 'mask_enabled'}
+                   'size', 'flip_x', 'flip_y', 'sampling', 'mask_enabled',
+                   'rotation', 'parent_id', 'mask_source_id', 'adjustment'}
         if set(changes) - allowed:
             raise ValueError('unsupported layer properties')
 
@@ -248,6 +328,27 @@ class DocumentHistory:
         def apply(doc: Document) -> None:
             layer = doc.layer(layer_id)
             width, height = layer.size
+            if layer.rotation % 360:
+                from .composite import _rotation_geometry
+                angle = math.radians(layer.rotation % 360)
+                c, s = abs(math.cos(angle)), abs(math.sin(angle))
+                factor = min(doc.width / (c * width + s * height),
+                             doc.height / (s * width + c * height))
+                # Reserve a pixel for centering/rotation rounding when needed.
+                fitted_width = max(1, int(math.floor(width * factor)))
+                fitted_height = max(1, int(math.floor(height * factor)))
+                while True:
+                    layer.size = (fitted_width, fitted_height)
+                    layer.origin = ((doc.width - fitted_width) // 2,
+                                    (doc.height - fitted_height) // 2)
+                    _, bounds, (x, y) = _rotation_geometry(layer)
+                    if x >= 0 and y >= 0 and x + bounds[0] <= doc.width and y + bounds[1] <= doc.height:
+                        return
+                    if fitted_width == fitted_height == 1:
+                        raise ValueError('Canvas is too small to contain the rotated layer')
+                    ratio = min((fitted_width - 1) / fitted_width if fitted_width > 1 else 1,
+                                (fitted_height - 1) / fitted_height if fitted_height > 1 else 1)
+                    fitted_width, fitted_height = max(1, int(fitted_width * ratio)), max(1, int(fitted_height * ratio))
             if width * doc.height >= height * doc.width:
                 fitted_width = doc.width
                 fitted_height = max(1, (doc.width * height + width // 2) // width)

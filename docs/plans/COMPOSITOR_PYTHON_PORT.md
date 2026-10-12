@@ -1,6 +1,6 @@
 # Compositor-derived Python editor with Retouch
 
-Date: 2026-10-07. Status: source inspected; staged implementation plan, not a completed port.
+Date: 2026-10-07. Updated: 2026-10-12. Status: working Gradio layer editor; expanded finishing tools implemented, with explicit native sampling and packaging gates.
 
 ## Objective and scope
 
@@ -10,16 +10,13 @@ layer, paint its mask, adjust opacity, make manual corrections, save a project,
 and export the reviewed composite. Keep Retouch's CLI, batch, current desktop
 launcher and video export usable throughout development.
 
-The user requested source copying and planning for a Python conversion. The
-upstream checkout is `/private/tmp/retouch-compositor-source`, pinned to
-`11d8d7a50992b24fd9a760a1c13b1c01b70aaf30`. This is a temporary reference
-checkout, not a published fork or a dependency installed inside Retouch.
-An exact source archive, including the upstream license, is saved at
-`/private/tmp/retouch-compositor-source-11d8d7a.tar.gz` (2.6 MB). Both reference
-locations are temporary; preserve the archive in durable project storage before
-depending on it for future development.
-Its app directory contains 142 Swift files and 9 C implementation files, plus
-headers and assets. This inventory is not an estimate of conversion effort.
+The upstream source is pinned to `11d8d7a50992b24fd9a760a1c13b1c01b70aaf30`.
+A durable source reference now lives in
+`third_party/compositor/source-11d8d7a.tar.gz`, with its origin, SHA-256 and
+MIT notice recorded in `third_party/compositor/PROVENANCE.md`. Temporary
+checkouts are disposable; development no longer depends on the original
+`/private/tmp` checkout or archive surviving. The archive is reference source,
+not a Python runtime dependency.
 
 Source: https://github.com/robbietilton/Compositor
 License: MIT, copyright 2026 Wonder Assembly LLC. Preserve the upstream
@@ -317,28 +314,54 @@ need a conflict prompt and must preserve manual work. Reloading the native app
 clears its undo history. Do not continually overwrite a user's working project.
 The first bridge therefore produces a new handoff per export.
 
-## Current local work and evidence
+## Current implementation and acceptance evidence
 
-Before the planning request, an initial `retouch/compositor.py` handoff writer,
-Advanced Retouch export button and focused tests were created locally. They
-remain uncommitted WIP, not the Python editor port. The writer includes a base,
-masked result and hidden Difference inspection layer, uses a conservative
-pixel budget and refuses existing targets. Its budget is an initial bridge
-policy, not a statement of current upstream limits.
+The original bridge was committed as `3819615`; it is no longer uncommitted
+WIP. The editor core, transactional history, Gradio UI, recipe workers, blend
+modes, resizing, placement, flips, duplicate/invert/reset masks and fit-to-canvas
+have since landed on main. Fast project saves and crash recovery also landed
+before the 2026-10-12 finishing extension.
 
-An earlier two-layer project was opened successfully in installed Compositor;
-an externally added mask and changed layer name appeared live. The new
-three-layer exporter generated a package, but its native-app visual verification
-and complete GUI interaction verification are still pending. This evidence
-does not establish feature parity or production readiness.
-Focused handoff and existing GUI tests: 155 passed. Syntax checks passed.
-The first sandboxed test run hit seven style-fixture permission errors; the
-authorized rerun completed successfully. These tests do not verify the new
-export button end to end in a browser or establish renderer parity.
+The 2026-10-12 extension adds clockwise rotation, document-space selections,
+pass-through folders and masks, live clipping links/stacks, and Exposure,
+Levels and Invert adjustment layers. Native assets remain unchanged; persistent
+edits use command history and the native version-11 manifest fields. Rectangle,
+ellipse and polygon selections can be combined, feathered and projected into a
+layer or folder mask through its resize, flips, placement and rotation. Temporary
+selections are not saved until applied to a mask. Exposure grades linear light;
+Levels uses individual channels followed by composite RGB. Adjustments preserve
+backdrop alpha. Folder opacity multiplies each child, and adjacent clipped
+siblings restore the base alpha after internal blending.
 
-Recommended next implementation: milestone 1 then the Python document/composite
-core, retaining `.comp` interoperability as an acceptance test. Do not begin
-with a wholesale UI rewrite or promise a one-click conversion.
+Folders can be duplicated with their descendants and internal clipping links,
+or removed with their descendants. Ungrouping requires a visible folder at
+full opacity without a mask, to avoid silently losing folder effects. Mask
+painting is available for folders and adjustments as well as pixel layers;
+the brush works in local unrotated orientation. Fit-to-canvas now includes the
+rotated extents. Graph cycles and dangling references fail before PNG decode;
+unsupported adjustments, effects, fractional placement and unlinked masks
+remain explicit rejections.
+
+See [the current evidence and remaining gates](../review/EDITOR_FINISHING_2026_10_12.md).
+The native app opened and exported the photo fixtures. The existing blend/
+resize fixture has at most two levels of opaque RGB error. The finishing
+fixture's alpha is exact, with localized rotated-mask sampling differences
+(up to 45 levels on 244 opaque pixels). This is measured interoperability and
+visual comparison, not pixel-exact native renderer parity.
+
+Native-resolution macOS profiling used three existing 22.7–26 MP photos, each
+with a photo layer, a rotated overlay, a pass-through folder and an Exposure
+adjustment. Preview took 0.15–0.19 s, full composition 1.87–2.12 s, first save
+2.31–2.54 s, metadata-only save 0.012–0.030 s and reopen 0.93–1.07 s. All reopened
+composites were exact. Peak process RSS was 0.76–0.96 GB. These are local
+measurements for this four-layer workload, not a cross-platform or maximum-size
+performance guarantee.
+
+Remaining separate gates: exact rotated-mask sampling parity, representative
+large stacks, packaged desktop recovery/interaction, Windows qualification,
+high-bit/color-managed editor export, dirty-tile caching and acceleration.
+The finishing backlog categories now have usable implementations; they do not
+cover every upstream adjustment, selection tool, effect or blend mode.
 
 ## Online agent handoff
 

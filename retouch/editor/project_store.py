@@ -4,8 +4,8 @@ Follows ``Compositor/IO/ProjectStore.swift`` and ``docs/project-format.md``:
 format versions 1-11 are read, version 11 is written, and the upstream checks
 (version gating, file naming, path safety, size limits, 8-bit PNGs, grayscale
 masks) reject a damaged package before any pixels are decoded. Constructs the
-port does not model yet (folders, adjustment layers, clipping links, layer
-effects, unlinked masks, scaled or rotated layers, unknown keys) raise
+port does not model yet (unsupported adjustment kinds, layer effects,
+unlinked masks, fractional placement and unknown keys) raise
 :class:`UnsupportedFeature` instead of being dropped on the next save.
 
 Saving builds the whole package beside the target and swaps it in with
@@ -139,6 +139,14 @@ def _check_manifest(manifest, version):
     if any(max(size) > MAX_SIDE for size in surfaces) or sum(
             width * height for width, height in surfaces) > MAX_SURFACE_PIXELS:
         raise ProjectError('rendered layers exceed the size limits')
+    # Validate graph dependencies before opening any referenced PNG.
+    metadata = [Layer(id=layer_id, **{key: value for key, value in fields.items()
+                                     if key not in ('image_file', 'mask_file')})
+                for layer_id, fields in parsed]
+    try:
+        Document(width, height, metadata, document_id=document_id).validate()
+    except ValueError as exc:
+        raise _invalid(str(exc)) from exc
     return width, height, resolution, guides, active, document_id, parsed
 
 
@@ -183,7 +191,7 @@ def _check_layer(record, version):
     if not isinstance(visible, bool):
         raise _invalid('isVisible')
     is_group = record.get('isGroup')
-    if is_group not in (None, False, True):
+    if is_group is not None and not isinstance(is_group, bool):
         raise _invalid('isGroup')
     if version == 1 and (record.get('parentID') is not None or is_group):
         raise _invalid('folders need format version 2')
@@ -220,23 +228,30 @@ def _check_layer(record, version):
     transform = _check_transform(record.get('transform'))
 
     # Valid upstream, not modelled here yet: refuse rather than drop.
-    for key, what in (('parentID', 'folders'), ('maskSourceID', 'clipping masks'),
-                      ('adjustment', 'adjustment layers'), ('effects', 'layer effects'),
+    for key, what in (('effects', 'layer effects'),
                       ('maskPlacement', 'unlinked masks')):
         if record.get(key) is not None:
             raise UnsupportedFeature(f'{what} are not supported yet (layer {name!r})')
-    if is_group:
-        raise UnsupportedFeature(f'folders are not supported yet (layer {name!r})')
+    if is_group and image_file is not None:
+        raise _invalid('folders cannot contain image assets')
+    adjustment = record.get('adjustment')
+    if adjustment is not None:
+        from .adjustments import validate_adjustment
+        validate_adjustment(adjustment)
+        if is_group or image_file is not None:
+            raise _invalid('invalid adjustment layer')
     if record.get('maskLinked') is False:
         raise UnsupportedFeature(f'unlinked masks are not supported yet (layer {name!r})')
     origin, size, rotation = transform['origin'], transform['size'], transform['rotation']
-    if rotation % 360 != 0:
-        raise UnsupportedFeature(f'layer {name!r} is rotated')
     if any(v != int(v) for v in origin + size):
         raise UnsupportedFeature(f'layer {name!r} has a fractional placement')
     return layer_id, {
         'name': name, 'visible': visible, 'opacity': float(opacity), 'blend_mode': blend,
         'origin': tuple(int(v) for v in origin), 'size': tuple(int(v) for v in size),
+        'rotation': float(rotation), 'is_group': bool(is_group),
+        'parent_id': _uuid(record['parentID']) if record.get('parentID') is not None else None,
+        'mask_source_id': _uuid(record['maskSourceID']) if record.get('maskSourceID') is not None else None,
+        'adjustment': adjustment,
         'flip_x': transform['flipX'], 'flip_y': transform['flipY'],
         'sampling': transform['sampling'],
         'mask_enabled': True if mask_enabled is None else mask_enabled,
@@ -509,11 +524,17 @@ def _encode(document):
 def _encode_layer(layer):
     record = {
         'id': layer.id, 'name': layer.name, 'isVisible': layer.visible,
-        'isGroup': False, 'opacity': layer.opacity, 'blendMode': layer.blend_mode,
+        'isGroup': layer.is_group, 'opacity': layer.opacity, 'blendMode': layer.blend_mode,
         'transform': {'origin': list(layer.origin), 'size': list(layer.size),
-                      'rotation': 0, 'flipX': layer.flip_x, 'flipY': layer.flip_y,
+                      'rotation': layer.rotation, 'flipX': layer.flip_x, 'flipY': layer.flip_y,
                       'sampling': layer.sampling},
     }
+    if layer.parent_id is not None:
+        record['parentID'] = layer.parent_id
+    if layer.mask_source_id is not None:
+        record['maskSourceID'] = layer.mask_source_id
+    if layer.adjustment is not None:
+        record['adjustment'] = layer.adjustment
     if layer.pixels is not None:
         record['imageFile'] = layer.id + '.png'
     if layer.mask is not None:

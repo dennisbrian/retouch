@@ -198,6 +198,8 @@ output verification.
 - `AGENTS.md` — Agent references
 
 ## Review & QA (`docs/review/`)
+- [Editor finishing and cleanup — 2026-10-12](review/EDITOR_FINISHING_2026_10_12.md) — implementation, native comparison, Mac profiling and retained work
+- [Historical feature count — June 18–October 7, 2026](review/FEATURE_COUNT_2026_06_18_TO_2026_10_07.md) — pinned historical audit; not the current capability count
 - `AUDIT_REPORT.md` — Security & coverage audit
 - `REVIEW_AMGDAY32026_RETOUCH_BATCH_2026_09_01.md` — Documentation-only visual,
   delivery, and deep-research closeout for the 22-photo Desktop batch; records measured

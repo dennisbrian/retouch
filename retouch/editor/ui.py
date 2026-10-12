@@ -77,6 +77,7 @@ class EditorSession:
     workspace: str
     job: object = None
     autosave: object = None
+    selection: object = None
 
     @classmethod
     def create(cls, document, saved=False, title='', recovery_id=None, recovery_root=None):
@@ -115,9 +116,12 @@ class EditorSession:
 
     def apply_mask(self, canvas):
         layer = self.selected()
-        if layer is None or layer.pixels is None:
-            raise ValueError('Select a pixel layer first')
-        width, height = layer.pixels.shape[1], layer.pixels.shape[0]
+        if layer is None:
+            raise ValueError('Select a layer first')
+        width, height = ((layer.pixels.shape[1], layer.pixels.shape[0])
+                         if layer.pixels is not None else layer.size)
+        if width * height > MAX_SURFACE_PIXELS or max(width, height) > 30000:
+            raise ValueError('Layer mask exceeds the surface budget')
         mask = (np.full((height, width), 255, np.uint8) if layer.mask is None
                 else cv2.resize(layer.mask, (width, height), interpolation=cv2.INTER_LINEAR))
         painted = False
@@ -149,16 +153,17 @@ def _view(session, message=''):
         return (None, None, gr.update(choices=[], value=None), '', True, 100,
                 True, None, gr.update(interactive=False), gr.update(interactive=False),
                 'Open a photo or project to start.', gr.update(choices=list(RENDER_BLEND_MODES), value='Normal'),
-                0, 0, False, False, 1, 1)
+                0, 0, False, False, 1, 1, *_tool_view(None))
     # Every edit path renders through here, so this is the one autosave hook.
     session.checkpoint()
     doc = session.history.document
     layer = session.selected()
     canvas = None
-    if layer is not None and layer.pixels is not None:
+    if layer is not None:
         scale = min(1, PREVIEW_SIDE / max(layer.size))
         size = tuple(max(1, round(v * scale)) for v in layer.size)
-        image = np.asarray(Image.fromarray(layer.pixels).resize(size))
+        image = (np.asarray(Image.fromarray(layer.pixels).resize(size)) if layer.pixels is not None
+                 else np.full((size[1], size[0], 4), 255, np.uint8))
         if layer.flip_y:
             image = image[::-1]
         if layer.flip_x:
@@ -166,7 +171,8 @@ def _view(session, message=''):
         canvas = {'background': image, 'layers': [], 'composite': image}
     state = 'Unsaved changes' if session.history.dirty else 'Saved'
     return (session, preview_document(doc),
-            gr.update(choices=[(l.name, l.id) for l in reversed(doc.layers)],
+            gr.update(choices=[(('  ' * len(doc.ancestors(l))) + ('Folder: ' if l.is_group else '') + l.name, l.id)
+                               for l in reversed(doc.ordered_layers())],
                       value=session.selected_id),
             layer.name if layer else '', layer.visible if layer else True,
             layer.opacity * 100 if layer else 100,
@@ -179,7 +185,30 @@ def _view(session, message=''):
                 value=layer.blend_mode if layer else 'Normal'),
             layer.origin[0] if layer else 0, layer.origin[1] if layer else 0,
             layer.flip_x if layer else False, layer.flip_y if layer else False,
-            layer.size[0] if layer else 1, layer.size[1] if layer else 1)
+            layer.size[0] if layer else 1, layer.size[1] if layer else 1, *_tool_view(session))
+
+
+def _tool_view(session):
+    doc = session.history.document if session else None
+    layer = session.selected() if session else None
+    folders = [('Canvas', '')] + ([(l.name, l.id) for l in doc.layers if l.is_group] if doc else [])
+    sources = [('None', '')] + ([(l.name, l.id) for l in doc.layers
+                               if not l.is_group and l.adjustment is None and (layer is None or l.id != layer.id)] if doc else [])
+    selected = session.selection if session else None
+    if selected is not None:
+        factor = min(1, PREVIEW_SIDE / max(selected.shape))
+        selected = cv2.resize(selected, (max(1, round(selected.shape[1] * factor)),
+                                        max(1, round(selected.shape[0] * factor))))
+    settings = layer.adjustment if layer and layer.adjustment else {}
+    exposure = settings.get('exposureSettings') or {}
+    ranges = (settings.get('levels') or {}).get('ranges') or [dict(black=0, white=255, gamma=1) for _ in range(4)]
+    return (layer.rotation if layer else 0,
+            gr.update(choices=folders, value=(layer.parent_id or '') if layer else ''),
+            gr.update(choices=sources, value=(layer.mask_source_id or '') if layer else ''),
+            gr.update(choices=[(l.name, l.id) for l in doc.ordered_layers()] if doc else [], value=[]),
+            selected, settings.get('kind', 'Exposure'), exposure.get('exposure', 0),
+            exposure.get('offset', 0), exposure.get('gamma', 1) if settings.get('kind') == 'Exposure' else ranges[0]['gamma'],
+            ranges[0]['black'], ranges[0]['white'], ranges[1]['gamma'], ranges[2]['gamma'], ranges[3]['gamma'])
 
 
 def build_editor_tab():
@@ -235,7 +264,7 @@ def build_editor_tab():
                             'A layer without a mask becomes fully masked out; '
                             'enable its mask to see the change. Reset mask removes '
                             'painted coverage and reveals the layer. Both can be undone.')
-                with gr.Accordion('Position & flips', open=False):
+                with gr.Accordion('Position, rotation & flips', open=False):
                     gr.Markdown('Position uses canvas pixels from the top-left. '
                                 'Negative positions are allowed; pixels outside the canvas are clipped. '
                                 'Flips move the mask with the layer.')
@@ -244,7 +273,10 @@ def build_editor_tab():
                         position_y = gr.Number(label='Y position', value=0, precision=0)
                     flip_x = gr.Checkbox(label='Flip horizontally', value=False)
                     flip_y = gr.Checkbox(label='Flip vertically', value=False)
-                    transform = gr.Button('Apply position & flips')
+                    rotation = gr.Number(label='Clockwise rotation (degrees)', value=0)
+                    transform = gr.Button('Apply transform')
+                    gr.Markdown('Rotation uses the layer center. The mask brush shows the unrotated layer; '
+                                'its strokes rotate with the pixels in the composite.')
                     with gr.Row():
                         layer_width = gr.Number(label='Layer width (pixels)', value=1, precision=0)
                         layer_height = gr.Number(label='Layer height (pixels)', value=1, precision=0)
@@ -259,6 +291,51 @@ def build_editor_tab():
                     gr.Markdown('Fit scales the current layer proportions to fit inside '
                                 'the canvas and centers it. Source pixels and masks are kept; '
                                 'size and position change together in one undo step.')
+                with gr.Accordion('Folders & clipping', open=False):
+                    parent_folder = gr.Dropdown(label='Parent folder', choices=[('Canvas', '')], value='')
+                    clipping_source = gr.Dropdown(label='Clip to layer alpha', choices=[('None', '')], value='')
+                    links = gr.Button('Apply folder & clipping')
+                    group_members = gr.Dropdown(label='Adjacent layers to group', choices=[], multiselect=True)
+                    group = gr.Button('Group selected layers')
+                    ungroup = gr.Button('Ungroup selected folder')
+                    gr.Markdown('Folders pass through: opacity and masks affect each child. '
+                                'Removing a folder removes its children. Duplicate copies the whole folder. '
+                                'Adjacent clipped siblings share the base alpha; other links act as live alpha masks.')
+                with gr.Accordion('Selections', open=False):
+                    selection_kind = gr.Radio(['Rectangle', 'Ellipse', 'Polygon'], value='Rectangle', label='Selection shape')
+                    with gr.Row():
+                        selection_x = gr.Number(label='Selection X', value=0)
+                        selection_y = gr.Number(label='Selection Y', value=0)
+                    with gr.Row():
+                        selection_width = gr.Number(label='Selection width', value=100)
+                        selection_height = gr.Number(label='Selection height', value=100)
+                    polygon = gr.Textbox(label='Polygon points [x, y]', value='[[0,0],[100,0],[50,100]]')
+                    feather = gr.Slider(0, 100, value=0, step=1, label='Feather (canvas pixels)')
+                    selection_mode = gr.Radio(['Replace', 'Add', 'Subtract', 'Intersect'], value='Replace', label='Combine selection')
+                    create_selection = gr.Button('Create selection')
+                    selection_preview = gr.Image(label='Selection coverage (white selected)', interactive=False, image_mode='L')
+                    with gr.Row():
+                        invert_selection = gr.Button('Invert selection')
+                        clear_selection = gr.Button('Clear selection')
+                    mask_mode = gr.Radio(['Replace', 'Add', 'Subtract', 'Intersect'], value='Replace', label='Combine with layer mask')
+                    mask_selection = gr.Button('Apply selection to selected layer mask')
+                    gr.Markdown('Selections use canvas coordinates and remain temporary. '
+                                'Apply to a layer or folder mask to save them; this is one undo step.')
+                with gr.Accordion('Grading adjustment layers', open=False):
+                    grade_kind = gr.Radio(['Exposure', 'Levels', 'Invert'], value='Exposure', label='Adjustment')
+                    grade_exposure = gr.Slider(-20, 20, value=0, step=.1, label='Exposure (stops)')
+                    grade_offset = gr.Slider(-.5, .5, value=0, step=.01, label='Exposure offset (linear light)')
+                    grade_gamma = gr.Slider(.1, 9.99, value=1, step=.01, label='Gamma')
+                    grade_black = gr.Slider(0, 254, value=0, step=1, label='Levels black point')
+                    grade_white = gr.Slider(1, 255, value=255, step=1, label='Levels white point')
+                    grade_red = gr.Slider(.1, 9.99, value=1, step=.01, label='Red gamma')
+                    grade_green = gr.Slider(.1, 9.99, value=1, step=.01, label='Green gamma')
+                    grade_blue = gr.Slider(.1, 9.99, value=1, step=.01, label='Blue gamma')
+                    add_grade = gr.Button('Add adjustment layer')
+                    update_grade = gr.Button('Update selected adjustment')
+                    gr.Markdown('Adjustments change the layers below and preserve alpha. '
+                                'Opacity and masks control coverage. Exposure uses stops, offset and gamma; '
+                                'Levels uses black/white points and RGB/channel gamma. Invert has no settings.')
                 with gr.Row():
                     up = gr.Button('Move up')
                     down = gr.Button('Move down')
@@ -281,7 +358,9 @@ def build_editor_tab():
         status = gr.Markdown('Open a photo or project to start.')
         outputs = [session, preview, layers, name, visible, opacity, mask_enabled,
                    canvas, undo, redo, status, blend, position_x, position_y, flip_x, flip_y,
-                   layer_width, layer_height]
+                   layer_width, layer_height, rotation, parent_folder, clipping_source, group_members,
+                   selection_preview, grade_kind, grade_exposure, grade_offset, grade_gamma, grade_black,
+                   grade_white, grade_red, grade_green, grade_blue]
 
         def recovery_choices():
             entries = list_recoveries()
@@ -365,7 +444,7 @@ def build_editor_tab():
                     current.selected_id = selected
                 else:
                     layer = current.selected()
-                    if operation in ('properties', 'transform', 'resize', 'fit', 'up', 'down', 'remove', 'mask', 'duplicate', 'invert_mask', 'reset_mask') and layer is None:
+                    if operation in ('properties', 'transform', 'resize', 'fit', 'up', 'down', 'remove', 'mask', 'duplicate', 'invert_mask', 'reset_mask', 'links', 'ungroup', 'selection_mask', 'update_grade') and layer is None:
                         raise ValueError('Select a layer first')
                     if operation == 'properties':
                         chosen_blend = args[4] if len(args) > 4 else layer.blend_mode
@@ -381,7 +460,46 @@ def build_editor_tab():
                                 raise ValueError('Layer positions must be whole pixel coordinates')
                         current.history.update_layer(layer.id,
                                                      origin=(int(args[0]), int(args[1])),
-                                                     flip_x=args[2], flip_y=args[3])
+                                                     flip_x=args[2], flip_y=args[3],
+                                                     rotation=args[4] if len(args) > 4 else layer.rotation)
+                    elif operation == 'links':
+                        current.history.update_layer(layer.id, parent_id=args[0] or None,
+                                                     mask_source_id=args[1] or None)
+                    elif operation == 'group':
+                        current.history.group_layers(args[0] or [])
+                        current.selected_id = current.history.document.active_layer_id
+                    elif operation == 'ungroup':
+                        current.history.ungroup_layer(layer.id)
+                        current.selected_id = current.history.document.active_layer_id
+                    elif operation == 'selection':
+                        from .selections import selection, combine
+                        doc = current.history.document
+                        new = selection(doc.width, doc.height, *args[:7])
+                        old = current.selection if current.selection is not None else np.zeros(new.shape, np.uint8)
+                        current.selection = combine(old, new, args[7])
+                    elif operation == 'clear_selection':
+                        current.selection = None
+                    elif operation == 'invert_selection':
+                        doc = current.history.document
+                        current.selection = (np.full((doc.height, doc.width), 255, np.uint8)
+                                             if current.selection is None else 255 - current.selection)
+                    elif operation == 'selection_mask':
+                        if current.selection is None:
+                            raise ValueError('Create a selection first')
+                        current.history.selection_mask(layer.id, current.selection, args[0])
+                    elif operation in ('add_grade', 'update_grade'):
+                        from .adjustments import adjustment
+                        settings = adjustment(*args)
+                        if operation == 'update_grade':
+                            if layer.adjustment is None:
+                                raise ValueError('Select an adjustment layer first')
+                            current.history.update_layer(layer.id, adjustment=settings)
+                        else:
+                            doc = current.history.document
+                            new = Layer(args[0], size=(doc.width, doc.height), adjustment=settings,
+                                        parent_id=(layer.id if layer.is_group else layer.parent_id) if layer else None)
+                            current.history.add_layer(new, doc.index_of(layer.id) + 1 if layer else None)
+                            current.selected_id = new.id
                     elif operation == 'resize':
                         current.history.resize_layer(layer.id, args[0], args[1],
                                                      keep_aspect=args[2] if len(args) > 2 else False,
@@ -425,13 +543,28 @@ def build_editor_tab():
                                   (remove, 'remove'), (apply_mask, 'mask'), (add, 'add'),
                                   (undo, 'undo'), (redo, 'redo'), (transform, 'transform'), (resize, 'resize'),
                                   (duplicate, 'duplicate'), (invert_mask, 'invert_mask'),
-                                  (reset_mask, 'reset_mask'), (fit, 'fit')):
+                                  (reset_mask, 'reset_mask'), (fit, 'fit'), (links, 'links'), (group, 'group'),
+                                  (ungroup, 'ungroup'), (create_selection, 'selection'),
+                                  (clear_selection, 'clear_selection'), (invert_selection, 'invert_selection'),
+                                  (mask_selection, 'selection_mask'), (add_grade, 'add_grade'),
+                                  (update_grade, 'update_grade')):
             def edit(current, selected, strokes, *args, operation=operation):
                 return action(current, selected, strokes, operation, *args)
-            extra = [name, visible, opacity, mask_enabled, blend] if operation == 'properties' else (
-                [position_x, position_y, flip_x, flip_y] if operation == 'transform' else (
-                    [layer_width, layer_height, keep_aspect, resize_axis] if operation == 'resize' else (
-                        [add_photo] if operation == 'add' else [])))
+            extras = {
+                'properties': [name, visible, opacity, mask_enabled, blend],
+                'transform': [position_x, position_y, flip_x, flip_y, rotation],
+                'resize': [layer_width, layer_height, keep_aspect, resize_axis],
+                'add': [add_photo], 'links': [parent_folder, clipping_source],
+                'group': [group_members],
+                'selection': [selection_kind, selection_x, selection_y, selection_width,
+                              selection_height, polygon, feather, selection_mode],
+                'selection_mask': [mask_mode],
+                'add_grade': [grade_kind, grade_exposure, grade_offset, grade_gamma,
+                              grade_black, grade_white, grade_red, grade_green, grade_blue],
+                'update_grade': [grade_kind, grade_exposure, grade_offset, grade_gamma,
+                                 grade_black, grade_white, grade_red, grade_green, grade_blue],
+            }
+            extra = extras.get(operation, [])
             button.click(edit, [session, layers, canvas] + extra, outputs, concurrency_id='layer-editor')
 
         def saving(current, path, strokes):

@@ -1,10 +1,10 @@
 """Document and layer records for the editor core.
 
 Mirrors the subset of Compositor's ``ProjectManifest`` / ``ProjectLayerRecord``
-(``Compositor/IO/ProjectStore.swift``) that milestone 2 composites: ungrouped
-pixel and blank layers, bottom-to-top order, visibility, opacity, blend-mode
-name, integer placement, resizing, flips and an 8-bit raster
-mask. Anything else is refused with :class:`UnsupportedFeature` rather than
+(``Compositor/IO/ProjectStore.swift``): pixel, blank, folder and supported
+adjustment layers, live clipping links, hierarchy and order, visibility, opacity,
+blend-mode name, integer placement, resizing, flips, center rotation and
+8-bit raster masks. Anything else is refused with :class:`UnsupportedFeature` rather than
 dropped. Pixel and mask arrays are read-only: an edit replaces the array, so
 the same buffers can later back undo history without copies.
 
@@ -98,6 +98,11 @@ class Layer:
     # Kept verbatim: their PNG is authoritative. Dropped when pixels change.
     text: dict = None
     shape: dict = None
+    rotation: float = 0           # clockwise about the unrotated rectangle center
+    parent_id: str = None
+    is_group: bool = False        # pass-through folder, never an isolated surface
+    mask_source_id: str = None    # live alpha link; adjacent siblings form a clipping stack
+    adjustment: dict = None
 
     def __post_init__(self):
         if self.pixels is not None:
@@ -126,6 +131,19 @@ class Layer:
         self.mask_enabled = bool(enabled)
 
     def validate(self):
+        if (not isinstance(self.rotation, (int, float)) or isinstance(self.rotation, bool)
+                or not math.isfinite(self.rotation)):
+            raise ValueError('layer rotation must be finite')
+        if not isinstance(self.is_group, bool):
+            raise ValueError('is_group must be boolean')
+        if self.is_group and (self.pixels is not None or self.adjustment is not None
+                              or self.mask_source_id is not None):
+            raise ValueError('folders cannot contain pixels, adjustments or clipping links')
+        if self.adjustment is not None:
+            from .adjustments import validate_adjustment
+            validate_adjustment(self.adjustment)
+            if self.pixels is not None:
+                raise ValueError('adjustment layers cannot contain pixels')
         if not self.name.strip() or len(self.name.encode('utf-8')) > 16_384:
             raise ValueError('layer name must be non-blank and at most 16 KiB')
         if not (math.isfinite(self.opacity) and 0 <= self.opacity <= 1):
@@ -138,7 +156,7 @@ class Layer:
             raise ValueError('layer origin out of range')
         if not all(1 <= v <= 300_000 for v in self.size):
             raise ValueError('layer size out of range')
-        if self.pixels is not None and any(v > MAX_SIDE for v in self.size):
+        if (self.pixels is not None or self.mask is not None) and any(v > MAX_SIDE for v in self.size):
             raise ValueError('rendered layer side exceeds %d px' % MAX_SIDE)
 
 
@@ -175,10 +193,37 @@ class Document:
 
     def remove_layer(self, layer_id):
         layer = self.layer(layer_id)
+        # Removing a folder keeps its children and their order.
+        for child in self.layers:
+            if child.parent_id == layer_id:
+                child.parent_id = layer.parent_id
+            if child.mask_source_id == layer_id:
+                child.mask_source_id = None
         self.layers.remove(layer)
         if self.active_layer_id == layer_id:
             self.active_layer_id = self.layers[-1].id if self.layers else None
         return layer
+
+    def ancestors(self, layer):
+        by_id = {item.id: item for item in self.layers}
+        result = []
+        while layer.parent_id is not None:
+            layer = by_id[layer.parent_id]
+            result.append(layer)
+        return result
+
+    def ordered_layers(self):
+        children = {}
+        for layer in self.layers:
+            children.setdefault(layer.parent_id, []).append(layer)
+        result = []
+        def visit(parent):
+            for layer in children.get(parent, []):
+                result.append(layer)
+                if layer.is_group:
+                    visit(layer.id)
+        visit(None)
+        return result
 
     def move_layer(self, layer_id, index):
         """Move a layer to ``index`` in the bottom-to-top order."""
@@ -209,9 +254,34 @@ class Document:
             ids.add(layer.id)
             if layer.pixels is not None:
                 image_pixels += layer.pixels.shape[0] * layer.pixels.shape[1]
-                rendered_pixels += layer.size[0] * layer.size[1]
+                from .composite import _rotation_geometry
+                _, bounds, _ = _rotation_geometry(layer)
+                rendered_pixels += bounds[0] * bounds[1]
             if layer.mask is not None:
                 mask_pixels += layer.mask.size
+                if layer.pixels is None:
+                    from .composite import _rotation_geometry
+                    _, bounds, _ = _rotation_geometry(layer)
+                    rendered_pixels += bounds[0] * bounds[1]
+        by_id = {layer.id: layer for layer in self.layers}
+        for layer in self.layers:
+            seen = {layer.id}
+            parent = layer.parent_id
+            while parent is not None:
+                if parent in seen or len(seen) > 64 or parent not in by_id or not by_id[parent].is_group:
+                    raise ValueError('invalid folder hierarchy')
+                seen.add(parent)
+                parent = by_id[parent].parent_id
+            seen = {layer.id}
+            source = layer.mask_source_id
+            while source is not None:
+                if source in seen or len(seen) > 256 or source not in by_id:
+                    raise ValueError('invalid or cyclic clipping link')
+                node = by_id[source]
+                if node.is_group or node.adjustment is not None:
+                    raise ValueError('clipping source must be a pixel or blank layer')
+                seen.add(source)
+                source = node.mask_source_id
         if max(image_pixels, mask_pixels, rendered_pixels) > MAX_SURFACE_PIXELS:
             raise ValueError('document exceeds the %d MP layer budget'
                              % (MAX_SURFACE_PIXELS // 1_000_000))
