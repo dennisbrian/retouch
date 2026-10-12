@@ -9,6 +9,7 @@ Wonder Assembly LLC for the translated cases.
 """
 import numpy as np
 import pytest
+import cv2
 from PIL import Image
 
 from retouch.editor import (
@@ -122,12 +123,29 @@ class TestUnsupported:
         assert composite(doc)[0, 0].tolist() == [1, 2, 3, 255]
 
 
-def test_png_export_carries_resolution(tmp_path):
+def test_png_export_carries_resolution_and_working_profile(tmp_path):
     doc = Document(2, 2, resolution=300)
     doc.add_image(fx.solid(2, 2, (5, 6, 7, 128)), 'Base')
     path = export_png(doc, tmp_path / 'flat.png')
     with Image.open(path) as image:
         assert image.mode == 'RGBA'
         assert round(image.info['dpi'][0]) == 300
+        assert image.info['icc_profile']
         np.testing.assert_array_equal(np.asarray(image), composite(doc))
     assert [p.name for p in tmp_path.iterdir()] == ['flat.png']
+
+
+def test_high_bit_export_widens_exact_pixels_and_keeps_alpha_and_icc(tmp_path):
+    doc = Document(2, 1, resolution=240)
+    source = np.array([[(0, 128, 255, 64), (5, 6, 7, 255)]], np.uint8)
+    doc.add_image(source, 'Base')
+    path = export_png(doc, tmp_path / 'flat.tif', bit_depth=16)
+
+    # Pillow exposes multichannel TIFF through an 8-bit convenience view; its
+    # tags and OpenCV's unchanged decoder verify the real stored samples.
+    with Image.open(path) as image:
+        assert image.tag_v2[258] == (16, 16, 16, 16)
+        assert image.info['icc_profile']
+    stored = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    expected = cv2.cvtColor(composite(doc), cv2.COLOR_RGBA2BGRA).astype(np.uint16) * 257
+    np.testing.assert_array_equal(stored, expected)

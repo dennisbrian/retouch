@@ -360,8 +360,11 @@ def build_editor_tab():
                 render_status = gr.Markdown('Recipe renderer ready.')
                 save_path = gr.Textbox(label='Save project folder', placeholder='/path/to/photo.comp')
                 save = gr.Button('Save project')
-                export = gr.Button('Export native PNG')
-                download = gr.File(label='PNG download', interactive=False)
+                export_format = gr.Dropdown(
+                    label='Export format', value='PNG (8-bit sRGB)',
+                    choices=['PNG (8-bit sRGB)', 'TIFF (16-bit sRGB)'])
+                export = gr.Button('Export flattened image')
+                download = gr.File(label='Export download', interactive=False)
         status = gr.Markdown('Open a photo or project to start.')
         outputs = [session, preview, layers, name, visible, opacity, mask_enabled,
                    canvas, undo, redo, status, blend, position_x, position_y, flip_x, flip_y,
@@ -587,15 +590,16 @@ def build_editor_tab():
             return _view(current, 'Project saved.')
         save.click(saving, [session, save_path, canvas], outputs, concurrency_id='layer-editor')
 
-        def exporting(current, strokes):
+        def exporting(current, strokes, chosen_format):
             if current is None:
                 raise gr.Error('Open a document first')
             if has_strokes(strokes):
                 raise gr.Error('Apply or erase brush strokes before exporting')
-            path = Path(current.workspace) / (uuid.uuid4().hex + '.png')
-            export_png(current.history.document, path)
+            bit_depth, suffix = (16, '.tif') if '16-bit' in chosen_format else (8, '.png')
+            path = Path(current.workspace) / (uuid.uuid4().hex + suffix)
+            export_png(current.history.document, path, bit_depth=bit_depth)
             return str(path)
-        export.click(exporting, [session, canvas], download, concurrency_id='layer-editor')
+        export.click(exporting, [session, canvas, export_format], download, concurrency_id='layer-editor')
 
         from .retouch_jobs import prepare_job, run_job, attach_result
 

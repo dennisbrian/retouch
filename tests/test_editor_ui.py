@@ -94,16 +94,22 @@ def test_save_and_export_gate_unapplied_strokes(session, callbacks, tmp_path):
     with pytest.raises(gr.Error):
         save(session, str(target), stroke_canvas())
     with pytest.raises(gr.Error):
-        export(session, stroke_canvas())
+        export(session, stroke_canvas(), 'PNG (8-bit sRGB)')
     assert not target.exists() and session.history.dirty
     result = save(session, str(target), None)
     assert len(result) == 32 and not session.history.dirty
     np.testing.assert_array_equal(composite(load_project(target)),
                                   composite(session.history.document))
-    path = export(session, None)
+    path = export(session, None, 'PNG (8-bit sRGB)')
     with Image.open(path) as image:
         assert image.size == (8, 6)
+        assert image.info['icc_profile']
         np.testing.assert_array_equal(np.asarray(image), composite(session.history.document))
+    high_bit = export(session, None, 'TIFF (16-bit sRGB)')
+    assert high_bit.endswith('.tif')
+    with Image.open(high_bit) as image:
+        assert image.tag_v2[258] == (16, 16, 16, 16)
+        assert image.info['icc_profile']
 
 
 def test_ui_edit_callbacks_change_layer_and_restore_with_undo(session, callbacks):

@@ -256,19 +256,38 @@ class _BandRenderer:
         return rgb, alpha
 
 
-def export_png(document, path):
-    """Write the flattened document as an RGBA PNG (replaced atomically)."""
+def export_png(document, path, *, bit_depth=8, icc_profile=None):
+    """Write the flattened document with the working sRGB profile embedded.
+
+    The compositor renders 8-bit sRGB straight alpha. Exporting through the
+    shared colour-managed writer tags the file with the sRGB ICC profile so a
+    colour-managed viewer reproduces the editor's intent instead of guessing,
+    and optionally widens to 16-bit PNG/TIFF (each output level scaled by 257,
+    the exact 8->16-bit lift) for downstream high-bit editing. ``bit_depth``
+    16 is only honoured for PNG/TIFF; others stay 8-bit, matching the native
+    Compositor exporter, which is 8-bit sRGB only.
+    """
+    from ..io import get_working_srgb_icc, write_image_with_icc
+
     path = Path(path)
     pixels = composite(document)
+    if icc_profile is None:
+        icc_profile = get_working_srgb_icc()
     temporary = path.with_name(f'.{path.name}.{uuid.uuid4().hex[:8]}.tmp')
+    # write_image_with_icc writes through its own atomic temp beside the target;
+    # stage under our temp name so the final replace stays on one filesystem.
+    staged = temporary.with_name(temporary.name + path.suffix)
     try:
-        Image.fromarray(pixels, 'RGBA').save(
-            temporary, format='PNG',
-            dpi=(document.resolution, document.resolution))
-        os.replace(temporary, path)
+        write_image_with_icc(
+            staged, cv2.cvtColor(pixels, cv2.COLOR_RGBA2BGRA),
+            icc_profile=icc_profile, bit_depth=bit_depth, float_range='byte',
+            dpi=(document.resolution, document.resolution),
+            resolution=document.resolution)
+        os.replace(staged, path)
     finally:
-        if temporary.exists():
-            temporary.unlink()
+        for leftover in (temporary, staged):
+            if leftover.exists():
+                leftover.unlink()
     return path
 
 
