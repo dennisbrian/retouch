@@ -27,6 +27,83 @@ from .document import MAX_SURFACE_PIXELS, UnsupportedFeature
 
 RENDER_BLEND_MODES = ('Normal', 'Multiply', 'Screen', 'Overlay', 'Difference')
 
+# --- Resampling -----------------------------------------------------------
+#
+# Native behaviour (Compositor's ``Rendering/DownsampleCache.swift`` and
+# ``Rendering/LayerRenderer.swift``):
+#   * Large reductions are prefiltred through a chain of exactly-2x halvings
+#     made with high-quality (Lanczos) resampling, leaving Core Graphics only
+#     the last, at-most-2x step. Each halving rounds up, so level ``k`` pixel
+#     ``i`` covers source pixels ``i * 2**k .. (i + 1) * 2**k``: a piece of an
+#     image reduced on its own lines up with the whole image reduced.
+#   * An upright layer drawn pixel for pixel is copied across (nearest); a
+#     shrink uses a low-quality filter (``LayerRenderer.interpolation``); an
+#     enlarge and every rotated draw honour the layer's own sampling.
+#   * Core Graphics' "low" filter is a 4-tap cubic, not bilinear: its impulse
+#     response is 15/63/192/240 out of 512, i.e. a cubic with a ~= 0.5-class
+#     kernel. OpenCV's bilinear (and area) kernels differ, which is why this
+#     renderer uses ``cv2.INTER_CUBIC`` for the final step.
+MAX_DOWNSAMPLE_LEVEL = 6
+
+
+def _downsample_level(factor):
+    """Halvings to draw from when an image lands ``factor`` output pixels per
+    source pixel: the most that still leave the copy at least that large
+    (0 from half size up)."""
+    if not np.isfinite(factor) or not 0 < factor < 0.5:
+        return 0
+    return min(MAX_DOWNSAMPLE_LEVEL, int(np.floor(np.log2(1.0 / factor))))
+
+
+def _halve(array, mask=False):
+    """Exactly half the size, rounded up, Lanczos resampling.
+
+    Colour is resampled premultiplied (as ``DownsampleCache.halve`` does with
+    premultiplied ARGB) so a straight-alpha edge cannot pick up a dark halo,
+    and ringing past a pixel's alpha is clamped so edges do not glow. Gray
+    masks repeat an odd last row or column; colour pads with transparent
+    pixels, matching upstream."""
+    height, width = array.shape[:2]
+    next_h, next_w = (height + 1) // 2, (width + 1) // 2
+    if mask:
+        padded = np.zeros((next_h * 2, next_w * 2), np.uint8)
+        padded[:height, :width] = array
+        if next_w * 2 > width:
+            padded[:height, width] = array[:, width - 1]
+        if next_h * 2 > height:
+            padded[height, :next_w * 2] = padded[height - 1, :next_w * 2]
+        return cv2.resize(padded, (next_w, next_h), interpolation=cv2.INTER_LANCZOS4)
+    pad = 8
+    channels = array.shape[2:]
+    padded = np.zeros((height + 2 * pad, width + 2 * pad) + channels, np.float32)
+    placed = array.astype(np.float32)
+    if channels == (4,):
+        placed = placed.copy()
+        placed[..., :3] *= placed[..., 3:4] / 255.0
+    padded[pad:pad + height, pad:pad + width] = placed
+    reduced = cv2.resize(padded, ((width + 2 * pad) // 2, (height + 2 * pad) // 2),
+                         interpolation=cv2.INTER_LANCZOS4)
+    cropped = reduced[pad // 2:pad // 2 + next_h, pad // 2:pad // 2 + next_w]
+    if channels == (4,):
+        alpha = cropped[..., 3:4]
+        # Premultiplied colour cannot exceed its alpha; clamp ringing, as
+        # ``rgba_clamp_premultiplied`` does, then un-premultiply.
+        np.clip(cropped[..., :3], 0, alpha, out=cropped[..., :3])
+        cropped[..., :3] *= np.where(alpha > 0, 255.0 / np.maximum(alpha, 1e-6), 0)
+    return np.rint(np.clip(cropped, 0, 255)).astype(np.uint8)
+
+
+def _downsample(array, factor, mask=False):
+    """``array`` reduced by ``_downsample_level(factor)`` halvings, stopping if
+    the copy would reach one pixel. Returns the copy and its applied level."""
+    level = _downsample_level(factor)
+    reduced = array
+    applied = 0
+    while applied < level and (reduced.shape[0] > 1 or reduced.shape[1] > 1):
+        reduced = _halve(reduced, mask=mask)
+        applied += 1
+    return reduced, applied
+
 
 def composite(document, band_rows=256):
     """Flatten ``document`` to a uint8 straight-alpha RGBA (H, W, 4) array."""
@@ -207,11 +284,7 @@ def _prepare(layer):
     """Pixels and coverage in document orientation, plus placement."""
     pixels = layer.pixels
     if (pixels.shape[1], pixels.shape[0]) != layer.size:
-        sampling = {'Nearest': Image.Resampling.NEAREST,
-                    'Smooth': Image.Resampling.BILINEAR,
-                    'High quality': Image.Resampling.LANCZOS}[layer.sampling]
-        # Pillow resizes RGBA through premultiplied alpha, avoiding dark halos.
-        pixels = np.asarray(Image.fromarray(pixels).resize(layer.size, sampling))
+        pixels, _ = _resample(pixels, layer.size, layer.sampling, upright=layer.rotation % 360 == 0)
     coverage = None
     if layer.mask is not None and layer.mask_enabled:
         coverage = _fit_mask(layer.mask, pixels.shape[1], pixels.shape[0], layer.sampling)
@@ -261,18 +334,24 @@ def _rotate(pixels, coverage, layer):
     if layer.rotation % 360 == 0:
         return pixels, coverage, layer.origin
     matrix, size, origin = _rotation_geometry(layer)
-    interpolation = cv2.INTER_NEAREST if layer.sampling == 'Nearest' else cv2.INTER_LINEAR
+    # Core Graphics resamples the layer image and its coverage as separate
+    # passes: the mask is a clip with its own filter, not a premultiplied twin
+    # of the pixels. Nearest stays nearest for both; otherwise the mask uses
+    # the cubic filter of the low quality a rotated draw applies, and the
+    # pixels use the layer's own quality.
+    pixel_interpolation = cv2.INTER_NEAREST if layer.sampling == 'Nearest' else cv2.INTER_CUBIC
+    mask_interpolation = cv2.INTER_NEAREST if layer.sampling == 'Nearest' else cv2.INTER_CUBIC
     if pixels.ndim == 2:
-        return cv2.warpAffine(pixels, matrix, size, flags=interpolation), None, origin
+        return cv2.warpAffine(pixels, matrix, size, flags=mask_interpolation), None, origin
     rgba = pixels.astype(np.float32) / 255
     rgba[..., :3] *= rgba[..., 3:4]
-    warped = cv2.warpAffine(rgba, matrix, size, flags=interpolation)
+    warped = cv2.warpAffine(rgba, matrix, size, flags=pixel_interpolation)
     alpha = warped[..., 3]
     warped[..., :3] /= np.where(alpha > 0, alpha, 1)[..., None]
     warped[alpha == 0, :3] = 0
     pixels = np.rint(np.clip(warped, 0, 1) * 255).astype(np.uint8)
     if coverage is not None:
-        coverage = cv2.warpAffine(np.asarray(coverage), matrix, size, flags=interpolation)
+        coverage = cv2.warpAffine(np.asarray(coverage), matrix, size, flags=mask_interpolation)
     return pixels, coverage, origin
 
 
@@ -292,8 +371,47 @@ def _fit_mask(mask, width, height, sampling):
         return mask
     if mask.size == 1:
         return np.broadcast_to(mask.reshape(1, 1), (height, width))
-    interpolation = cv2.INTER_NEAREST if sampling == 'Nearest' else cv2.INTER_LINEAR
-    return cv2.resize(mask, (width, height), interpolation=interpolation)
+    resized, _ = _resample(mask, (width, height), sampling, upright=True, mask=True)
+    return resized
+
+
+def _resample(array, size, sampling, upright=True, mask=False):
+    """Resample ``array`` to ``size`` with the native rules.
+
+    ``LayerRenderer`` (``Rendering/LayerRenderer.swift``) draws an upright
+    layer pixel for pixel (nearest) when it is not rescaled, prefilters large
+    reductions through the halving pyramid and leaves Core Graphics only the
+    last reduction, and otherwise honours the layer's own sampling. A rotated
+    layer never takes the upright pixel-for-pixel shortcut, so enlarging and
+    rotating keep the chosen quality while shrinking still prefilters.
+
+    Returns the resampled array and the pyramid halvings applied, so callers
+    can keep mask and pixels in step."""
+    width, height = size
+    # A 2-D array is coverage, never colour, whatever the caller passed.
+    mask = mask or array.ndim == 2
+    sx = width / max(1, array.shape[1])
+    sy = height / max(1, array.shape[0])
+    if sampling == 'Nearest':
+        return cv2.resize(array, (width, height), interpolation=cv2.INTER_NEAREST), 0
+    if upright and abs(sx - 1) < 1e-3 and abs(sy - 1) < 1e-3:
+        if array.shape[:2] == (height, width):
+            return array, 0
+        # Same size, different shape (a mask spanning its layer): copy across.
+        return cv2.resize(array, (width, height), interpolation=cv2.INTER_NEAREST), 0
+    factor = min(sx, sy)
+    reduced, level = _downsample(array, factor, mask=mask)
+    current = (reduced.shape[1], reduced.shape[0])
+    if current == (width, height):
+        return reduced, level
+    # The halving chain took the large reduction; only the last step is left.
+    # A further shrink averages (area); an upscale, and every mask, uses the
+    # 4-tap cubic Core Graphics' low quality applies.
+    if reduced.shape[1] <= width and reduced.shape[0] <= height:
+        interpolation = cv2.INTER_CUBIC
+    else:
+        interpolation = cv2.INTER_AREA
+    return cv2.resize(reduced, (width, height), interpolation=interpolation), level
 
 
 def _straight(rgb, alpha):

@@ -68,9 +68,35 @@ RGB error is 0.052 levels, with maximum 45 on the aliased rotated-mask boundary;
 visually inspected. Straight RGB errors at alpha 1 can be large from native
 premultiplied quantization, so alpha-weighted errors are reported as well.
 These measurements establish compatible loading and meaningful visual comparison,
-not pixel-exact renderer parity. Matching Core Graphics rotated-mask resampling
-remains an explicit follow-up; the CPU renderer uses OpenCV's bilinear affine
-sampling (nearest when requested), with premultiplied alpha to prevent color halos.
+not pixel-exact renderer parity. The rotated-mask resampling follow-up is now
+implemented (see "Rotated-mask and resampling parity" below).
+
+## Rotated-mask and resampling parity
+
+Core Graphics resamples a layer's mask as a **separate coverage pass**, not as a
+premultiplied twin of the pixels: native draws the layer image with the mask
+applied as a clip (`context.clip(to:mask:)`), each with its own filter. The CPU
+renderer now mirrors that split in `_rotate`, and follows the native policy in
+`_resample`/`_downsample`:
+
+- Large reductions prefilter through a chain of exactly-2x halvings made with
+  high-quality (Lanczos) resampling, premultiplied and ringing-clamped, so only
+  the last at-most-2x step is left — matching `DownsampleCache`.
+- Upright 1:1 draws copy across (nearest); a shrink takes the low-quality path;
+  an enlarge and every rotated draw keep the layer's own sampling.
+- Core Graphics' "low" filter is a **4-tap cubic, not bilinear**. Its impulse
+  response is `15/63/192/240` out of 512 (a cubic with a ~= 0.5-class kernel),
+  versus bilinear's `0/64/192/256`. Probed directly from the API with a
+  one-pixel impulse; the final resample step now uses `cv2.INTER_CUBIC`.
+
+Ground truth is captured from the real API: a 7x5 gray mask rotated 33 degrees
+into a 13x11 canvas via `clip(to:mask:)` (`.low`/`.medium`/`.high` give the same
+grid for a grayscale clip). Regenerate with `swift scripts/dev/cg_rotated_mask_fixture.swift`.
+`test_rotated_mask_matches_core_graphics_reference` renders the same case and
+asserts agreement within a documented tolerance: mean error ~3 levels, 95th
+percentile under 40. The residual is Core Graphics' own subpixel/edge convention,
+which an affine warp cannot reproduce byte-for-byte; the test pins it so a
+regression cannot hide.
 
 ## Native-resolution Mac profiling
 
@@ -104,7 +130,7 @@ No unrelated files were staged, committed, reverted or deleted.
 
 ## Remaining gates
 
-- Exact rotated-mask/native resampling agreement and more native adjustment fixtures.
+- More native adjustment fixtures (rotated-mask/resampling parity landed; see above).
 - Representative larger stacks and maximum-size/history/RSS characterization.
 - Packaged desktop crash recovery and platform acceptance, including Windows.
 - High-bit/color-managed editor export, dirty-tile caching and optional acceleration.
