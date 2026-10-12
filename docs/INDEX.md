@@ -28,6 +28,7 @@ output verification.
 - `SPLIT_SHOOT.md` — Split a shoot into folders by capture time before batching
 - `GROUP_BY_COSPLAYER.md` — Group a shoot by cosplayer (costume colours + capture time, no face recognition)
 - `DUPLICATES.md` — Find repeated shots of the same pose anywhere in a shoot and suggest keepers
+- `COVER_HOOK.md` — Rank a shoot's photos as Instagram covers and suggest the cover and slides 2-3
 - `PERFORMANCE_TUNING.md` — Optimization tips
 - `COLOR_DELIVERY_TRUTH.md` — Working-space, precision, preview, and export contracts
 - `CONTENT_CREDENTIALS.md` — Per-photo edit reports and signing outputs with Content Credentials (C2PA)

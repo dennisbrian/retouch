@@ -762,9 +762,70 @@ class ImageAnalyzer:
         return "outdoor"
 
 
+# Lab chroma (uint8 convention, a/b centred on 128) above which a pixel reads
+# as a vivid colour. Skin of any tone sits well below it (roughly 10-30), so
+# the score does not move with skin tone.
+COLOUR_POP_VIVID_CHROMA = 40.0
+# Share of the measured area that has to be vivid for a full score.
+COLOUR_POP_FULL_SHARE = 0.12
+_COLOUR_POP_HUE_BINS = 12
+
+
+def colour_pop_score(img: np.ndarray, mask: Optional[np.ndarray] = None,
+                     max_side: int = 256) -> Dict[str, float]:
+    """How strongly one vivid colour dominates ``img`` (or the ``mask`` area).
+
+    A standalone measure, deliberately not a field of :class:`ImageAnalysis`
+    (that dataclass feeds ``suggest_params`` / ``suggest_recipe``).
+
+    Returns ``score`` in [0, 1] plus what it is made of: ``vivid_share`` (share
+    of pixels whose Lab chroma is above :data:`COLOUR_POP_VIVID_CHROMA`),
+    ``hue_concentration`` (share of those pixels in the busiest hue sector and
+    its two neighbours; 1.0 = one colour, 0.25 = evenly spread) and
+    ``hue_deg`` (centre of that sector, CIELab hue angle; -1 without vivid
+    pixels). ``mask`` is an (H, W) float mask; pixels above 0.5 are measured.
+    """
+    img_f = _to_f32_bgr(img)
+    h, w = img_f.shape[:2]
+    scale = min(1.0, float(max_side) / max(h, w, 1))
+    size = (max(1, int(round(w * scale))), max(1, int(round(h * scale))))
+    if scale < 1.0:
+        img_f = cv2.resize(img_f, size, interpolation=cv2.INTER_AREA)
+    lab = _bgr_f32_to_lab_u8_conv(img_f)
+    a = lab[:, :, 1] - 128.0
+    b = lab[:, :, 2] - 128.0
+    keep = np.ones(a.shape, dtype=bool)
+    norm = _normalize_mask(mask, (h, w)) if mask is not None else None
+    if norm is not None:
+        small = cv2.resize(norm.astype(np.float32), size, interpolation=cv2.INTER_AREA)
+        if float((small > 0.5).mean()) >= 0.01:  # an empty mask measures the frame
+            keep = small > 0.5
+    chroma = np.hypot(a, b)[keep]
+    hue = np.degrees(np.arctan2(b, a))[keep] % 360.0
+    vivid = chroma > COLOUR_POP_VIVID_CHROMA
+    vivid_share = float(vivid.mean()) if vivid.size else 0.0
+    concentration, hue_deg = 0.0, -1.0
+    if vivid.any():
+        bins = _COLOUR_POP_HUE_BINS
+        hist = np.bincount((hue[vivid] / (360.0 / bins)).astype(np.int64) % bins,
+                           minlength=bins).astype(np.float64)
+        sectors = hist + np.roll(hist, 1) + np.roll(hist, -1)
+        top = int(np.argmax(sectors))
+        concentration = float(sectors[top] / hist.sum())
+        hue_deg = float((top + 0.5) * 360.0 / bins)
+    score = min(1.0, vivid_share / COLOUR_POP_FULL_SHARE) * (0.5 + 0.5 * concentration)
+    return {
+        "score": round(float(score), 4),
+        "vivid_share": round(vivid_share, 4),
+        "hue_concentration": round(concentration, 4),
+        "hue_deg": round(hue_deg, 1),
+    }
+
+
 __all__ = [
     "ImageAnalysis",
     "ImageAnalyzer",
     "SkinCondition",
     "LIGHTING_TYPES",
+    "colour_pop_score",
 ]
