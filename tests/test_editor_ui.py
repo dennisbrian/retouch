@@ -448,3 +448,32 @@ def test_folder_mask_propagates_to_composite_and_is_undoable():
         np.testing.assert_array_equal(composite(session.history.document), before)
     finally:
         session.close()
+
+
+@pytest.mark.parametrize('color', [[255,255,255], [255,51,102], [0,0,0]])
+def test_explicit_mask_action_overrides_palette_color_and_is_undoable(session, color):
+    stroke = np.zeros((6, 8, 4), np.uint8)
+    stroke[1:3, 2:4, :3] = color
+    stroke[1:3, 2:4, 3] = 255
+    before = composite(session.history.document)
+    session.apply_mask({'layers': [stroke]}, 'Hide')
+    mask = session.selected().mask
+    assert (mask[1:3, 2:4] == 0).all() and (mask[0] == 255).all()
+    session.apply_mask({'layers': [stroke]}, 'Reveal')
+    assert (session.selected().mask == 255).all()
+    assert session.history.undo()
+    assert (session.selected().mask[1:3, 2:4] == 0).all()
+    assert session.history.undo()
+    np.testing.assert_array_equal(composite(session.history.document), before)
+
+
+def test_mask_ui_callback_uses_explicit_action(session, callbacks):
+    edit = next(fn for fn in callbacks if fn.__name__ == 'edit'
+                and fn.__kwdefaults__['operation'] == 'mask')
+    stroke = np.full((6,8,4), [255,51,102,255], np.uint8)
+    edit(session, session.selected_id, {'layers':[stroke]}, 'Hide')
+    assert not session.selected().mask.any()
+    revision = session.history.revision
+    with pytest.raises(gr.Error):
+        edit(session, session.selected_id, {'layers':[stroke]}, 'Invalid')
+    assert session.history.revision == revision

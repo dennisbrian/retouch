@@ -44,7 +44,7 @@ from 30 to 45 degrees, created a canvas rectangle and applied it as a mask,
 added a 0.5-stop Exposure layer, saved and reopened the six-layer project,
 and exported a 640 × 640 PNG. The standalone preview used the compatibility
 shim already present in `gui.py`; no dependency or launcher changes were made.
-The normal application shell and packaged desktop remain separate acceptance checks.
+The normal application shell was then exercised for a real pointer-drawn mask stroke; packaged desktop remains a separate acceptance check.
 
 Local artifacts are under `test_output/editor_acceptance_2026_10_12/` (ignored):
 
@@ -106,9 +106,64 @@ No unrelated files were staged, committed, reverted or deleted.
 
 - Exact rotated-mask/native resampling agreement and more native adjustment fixtures.
 - Representative larger stacks and maximum-size/history/RSS characterization.
-- Real pointer-drawn mask acceptance in the normal full application shell.
 - Packaged desktop crash recovery and platform acceptance, including Windows.
 - High-bit/color-managed editor export, dirty-tile caching and optional acceleration.
 
 The saved stash and unique EXR worktree are retained work, not cleanup failures.
 They require their owners' context before retirement or integration.
+
+## Follow-up after the concurrent commits
+
+While this verification was running, another agent committed the finishing work
+as `d2aae51` and added a folder-mask propagation test as `23dcf12`; the local
+checkout moved to that committed main. The original untracked feature-count
+report was included in that concurrent commit. The retained stash and worktrees
+were not removed. The follow-up brush correction is a separate scoped change.
+
+Actual pointer interaction exposed a Gradio palette problem: selecting black
+still produced a white stroke, and the saved mask stayed entirely at 255.
+The editor now has an explicit Reveal/Hide action, with colored strokes showing
+coverage. Applying a stroke uses its alpha support and the selected action,
+independent of palette RGB. Color-based programmatic callers keep their existing
+behaviour. Tests cover white, black and colored strokes under both actions,
+undo, invalid-action rejection and the actual UI callback.
+
+The normal full Retouch shell on a separate loopback port opened the 400 × 600
+photo project, drew a Hide stroke with the pointer, applied it and saved. The
+saved mask ranges from 0 to 255, with 6,161 pixels below 255; exactly 6,161 composite
+pixels changed. Both layers' source arrays remain exact. Evidence:
+`brush-hide-fixed.comp`, `brush-hide-check.json`, `brush-hide-fixed.png` and
+`brush-photo-comparison.png` under the same ignored acceptance directory.
+
+The full shell also reports a pre-existing `denoise_nafnet` model checksum mismatch:
+expected `4bab67c8618c722f57c90c0112f4ac57cfeea6dd83cbf5a7e8fbac5c0f995e65`,
+actual `a2b1aa5a5c9d901779948faad92930e13a25b314c89b12cbee4d1e1d9f6cbbf7`.
+A manifest-pinned release copy was downloaded and verified in temporary storage.
+By the time replacement was considered, the local file already matched the
+expected hash (another process repaired it); this agent did not replace it.
+`retouch.model_fetch.verify_model('denoise_nafnet')` now succeeds for the local
+file, and its CPU inference returns finite output at shape `[1,3,32,32]`.
+This clears the observed integrity warning; it does not certify real-photo denoising.
+Evidence: `model-repair/report.json`. No dependencies or engine files were changed.
+
+`scripts/dev/local-gate` passed: 423 tests, governance 0 errors/0 warnings.
+Its full Quality Lab threshold step remains skipped by the fast gate, as the
+script reports; this is not a real-photo recipe-quality certification.
+
+Final focused editor/bridge suite before concurrent renderer edits: 256 passed.
+Governance: 0 errors/0 warnings; `git diff --check` clean. The real pointer mask
+can be undone and saved: its mask returns to absent and the reopened composite
+is exactly the pre-stroke composite (`brush-undo-fixed.comp`, with results added
+to `brush-hide-check.json`).
+
+At the end of this pass, another agent had uncommitted downsampling/resampling
+changes in `retouch/editor/composite.py`. The 256-test result and native comparison
+measurements above predate those edits and must not be treated as certification
+of that concurrent renderer revision. This agent's final follow-up files are
+`retouch/editor/ui.py`, `tests/test_editor_ui.py`, this report and the Compositor
+plan. Renderer ownership/validation is being coordinated with the user.
+
+Before the scoped brush commit, `tests/test_editor_ui.py` passed all 37 tests
+with the current shared workspace, and governance again reported zero errors
+and warnings. Concurrent renderer/resampling test edits are excluded from this
+commit; the broader native-parity qualification remains their owner's work.

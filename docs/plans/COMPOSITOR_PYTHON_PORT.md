@@ -337,7 +337,10 @@ Folders can be duplicated with their descendants and internal clipping links,
 or removed with their descendants. Ungrouping requires a visible folder at
 full opacity without a mask, to avoid silently losing folder effects. Mask
 painting is available for folders and adjustments as well as pixel layers;
-the brush works in local unrotated orientation. Fit-to-canvas now includes the
+the brush works in local unrotated orientation. An explicit Reveal/Hide action
+uses colored stroke coverage, avoiding palette-state drift in Gradio. The full
+Retouch shell received a real pointer-brush/save/undo check; source pixels
+were preserved. Fit-to-canvas now includes the
 rotated extents. Graph cycles and dangling references fail before PNG decode;
 unsupported adjustments, effects, fractional placement and unlinked masks
 remain explicit rejections.

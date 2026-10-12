@@ -114,7 +114,9 @@ class EditorSession:
             self.selected_id = doc.active_layer_id
         return doc.layer(self.selected_id) if self.selected_id else None
 
-    def apply_mask(self, canvas):
+    def apply_mask(self, canvas, action=None):
+        if action not in (None, 'Reveal', 'Hide'):
+            raise ValueError('Choose Reveal or Hide for mask strokes')
         layer = self.selected()
         if layer is None:
             raise ValueError('Select a layer first')
@@ -140,7 +142,10 @@ class EditorSession:
             if layer.flip_x:
                 rgba = rgba[:, ::-1]
             alpha = rgba[..., 3] / 255.0
-            value = rgba[..., :3].mean(axis=2)
+            # Explicit action avoids Gradio palette resets changing mask intent.
+            # The default preserves color-based callers and existing saved workflows.
+            value = (rgba[..., :3].mean(axis=2) if action is None
+                     else 255 if action == 'Reveal' else 0)
             mask = np.rint(mask * (1 - alpha) + value * alpha).astype(np.uint8)
             painted = True
         if painted:
@@ -216,7 +221,7 @@ def build_editor_tab():
     with gr.Tab('Layer Editor') as tab:
         session = gr.State(None, delete_callback=lambda value: value.close(keep_recovery=True)
                            if value else None)
-        gr.Markdown('Open a photo or local `.comp` folder. White reveals; black hides. '
+        gr.Markdown('Open a photo or local `.comp` folder. Choose Reveal or Hide for mask strokes. '
                     'Apply brush strokes before changing layers. Export keeps native resolution.')
         with gr.Row():
             with gr.Column():
@@ -239,14 +244,16 @@ def build_editor_tab():
         with gr.Row():
             with gr.Column(scale=2):
                 preview = gr.Image(label='Composite preview', interactive=False, image_mode='RGBA')
+                mask_action = gr.Radio(['Reveal', 'Hide'], value='Hide', label='Mask brush action')
                 canvas = gr.ImageEditor(label='Paint selected layer mask', type='numpy',
                                         image_mode='RGBA', sources=(), transforms=(),
                                         format='png',
-                                        brush=gr.Brush(colors=['#ffffff', '#000000'],
-                                                       color_mode='fixed', default_color='#ffffff'),
+                                        brush=gr.Brush(colors=['#ff3366'],
+                                                       color_mode='fixed', default_color='#ff3366'),
                                         height=450)
-                gr.Markdown('The canvas shows the layer before its mask. '
-                            'Paint white to reveal or black to hide; the eraser removes unapplied strokes.')
+                gr.Markdown('The canvas shows the layer before its mask. Colored strokes mark where '
+                            'the chosen Reveal or Hide action applies. The eraser removes unapplied strokes. '
+                            'Choose the action for these strokes before applying.')
                 apply_mask = gr.Button('Apply mask strokes')
             with gr.Column(scale=1):
                 layers = gr.Dropdown(label='Layers (top first)', choices=[])
@@ -519,7 +526,7 @@ def build_editor_tab():
                     elif operation == 'reset_mask':
                         current.history.reset_mask(layer.id)
                     elif operation == 'mask':
-                        current.apply_mask(strokes)
+                        current.apply_mask(strokes, args[0] if args else None)
                     elif operation == 'add':
                         if not args[0]:
                             raise ValueError('Choose a photo to add first')
@@ -555,6 +562,7 @@ def build_editor_tab():
                 'transform': [position_x, position_y, flip_x, flip_y, rotation],
                 'resize': [layer_width, layer_height, keep_aspect, resize_axis],
                 'add': [add_photo], 'links': [parent_folder, clipping_source],
+                'mask': [mask_action],
                 'group': [group_members],
                 'selection': [selection_kind, selection_x, selection_y, selection_width,
                               selection_height, polygon, feather, selection_mode],
