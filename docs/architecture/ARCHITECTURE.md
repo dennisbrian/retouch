@@ -272,6 +272,7 @@ per `AGENTS.md`.
 | `stray_hair.py` | Stray Hair Cleanup (`hair_remove_flyaways`, alias `flyaway_cleanup`): heals loose wig fibres and flyaways lying on face and neck skin from the skin beside them; runs right after spot healing in the per-face core. |
 | `eye_visibility.py` | Eye-occlusion gate (EAR + tone-adaptive contrast) gating eye ops on closed/occluded eyes. |
 | `duplicates.py` | Shoot-wide duplicate detection (pose + framing alignment, keeper ranking). |
+| `cover_hook.py` | Cover hook score: ranks a shoot's retouched photos as Instagram covers on six checks, suggests cover + slides 2-3, exports the cover's 4:5 crop (optional Claude look via `claude -p`). |
 | `watermark.py` | Watermark/credit overlay stamping into `<output>/watermarked/`. |
 | `xmp_sidecar.py` | XMP sidecars for picks, ratings, flags (merge-safe, never overwrites external ratings). |
 | `edit_report.py` | Per-photo JSON edit reports (`--edit-report`). |

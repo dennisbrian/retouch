@@ -28,6 +28,7 @@ commands:
 ./run crops ~/photos_out --formats 4:5,9:16,1:1  # export face-aware crops for Instagram, TikTok, etc.
 ./run review apply ~/photos_out decisions.json  # copy the picks you marked in review.html
 ./run dupes ~/shoots/2026-09-20            # find repeated shots of the same pose across a shoot
+./run cover ~/photos_out --vision          # rank photos as Instagram covers, suggest cover + slides 2-3
 ./run xmp review ~/photos_out decisions.json    # picks, rejects and QA flags as XMP for Lightroom
 ./run recipes                              # list the recipe names --recipe accepts
 ./run lut cosplay_feed_pop_v1 -o ~/luts    # save a recipe's colour look as a .cube LUT
@@ -540,6 +541,18 @@ Groups each cosplayer's photos, including a second session later in the day,
 from costume and wig colours plus capture time. No face recognition. People
 in matching colours can share a group, so check the report before handing
 photos over. See [GROUP_BY_COSPLAYER.md](docs/guides/GROUP_BY_COSPLAYER.md).
+### Pick the cover and slides 2-3
+
+```bash
+./run cover ~/photos_out                   # offline checks: crop safety, colour pop, light, face gate
+./run cover ~/photos_out --vision          # plus one Claude look per top candidate (photo vs poster, framing)
+```
+
+Ranks one shoot's retouched photos as Instagram covers on six checks, suggests
+a cover and slides 2-3 (no near-duplicates) and exports the cover's 4:5 crop
+to `cover-hook/`. The weights come from a small study and are weak leans; use
+the ranking as a shortlist. See [COVER_HOOK.md](docs/guides/COVER_HOOK.md).
+
 ### Find duplicates across a shoot
 
 ```bash
