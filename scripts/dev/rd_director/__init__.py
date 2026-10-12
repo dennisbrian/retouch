@@ -1,1 +1,0 @@
-"""R&D Director package."""

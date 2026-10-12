@@ -1,32 +1,4 @@
-# Model binaries stay untracked; the manifest is source-of-truth and IS tracked.
-# Anchored so scripts/models/ (export tooling) is not swallowed.
+test_output/
+experiments/
 /models/*
 !/models/manifest.json
-!/models/__init__.py
-*.task
-test_output/
-benchmark_results.json
-__pycache__/
-*.pyc
-.coverage
-htmlcov/
-.DS_Store
-*.egg-info/
-dist/
-build/
-!scripts/build/
-scripts/build/*
-!scripts/build/build_app.sh
-*.spec
-!scripts/build/retouch_app.spec
-.pytest_cache/
-.venv/
-.venv-face-aware/
-.quadcodeai/
-cc.json
-*_out/
-
-control-plane/attention.json
-control-plane/maintenance.json
-control-plane/rd.json
-control-plane/gate-cron.log
