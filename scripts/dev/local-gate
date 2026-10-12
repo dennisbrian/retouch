@@ -13,6 +13,11 @@ set -euo pipefail
 project_root="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$project_root"
 
+# A git hook (pre-push runs this gate) exports GIT_DIR, GIT_INDEX_FILE and
+# friends. Any `git` a test then runs in a temp folder would ignore its cwd and
+# write to the real repository. Drop them; git finds the repo from the cwd.
+unset $(git rev-parse --local-env-vars 2>/dev/null) 2>/dev/null || true
+
 full=0
 for arg in "$@"; do
     case "$arg" in

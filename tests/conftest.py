@@ -8,6 +8,30 @@ import cv2
 import pytest
 
 
+# Variables git exports to hooks (`git rev-parse --local-env-vars`). With them
+# set, a `git init` / `git commit` a test runs in a temp folder ignores its cwd
+# and writes to the repository being pushed: on 2026-10-12 that put "base"
+# commits on a pushed branch and set core.bare=true in the shared config.
+GIT_HOOK_ENV_VARS = (
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
+    "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE", "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE",
+    "GIT_COMMON_DIR", "GIT_NAMESPACE",
+)
+
+
+def strip_git_hook_env(environ=os.environ):
+    """Remove git's hook variables from ``environ``; returns the names removed."""
+    removed = [name for name in GIT_HOOK_ENV_VARS if name in environ]
+    for name in removed:
+        del environ[name]
+    return removed
+
+
+# At import, before any test or fixture can start a git subprocess.
+strip_git_hook_env()
+
+
 def pytest_addoption(parser):
     parser.addoption(
         "--update-snapshot",
