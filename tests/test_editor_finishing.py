@@ -1,6 +1,7 @@
 """Independent analytic contracts for finishing tools, graphs and native saves."""
 import json
 from copy import deepcopy
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -402,3 +403,69 @@ def test_compositor_preview_uses_downsample_for_large_reduction():
     # A 1/16 reduction (factor 0.0625) needs 4 halvings; the flat source and
     # mask survive intact, so the layer reads fully opaque.
     assert image[32, 32].tolist() == [120, 120, 120, 255]
+
+
+# Core Graphics-era native ground truth for the grader kernel. Captured by
+# ``scripts/dev/cg_adjustment_fixture.swift``, which drives Compositor's real
+# ``Rendering/LevelsPixels.c`` kernel (pinned 11d8d7a) over a 256-step RGB ramp
+# plus low-alpha edge colours. The kernel un-premultiplies each pixel,
+# interpolates a 256-entry curve table, and rounds ``result * alpha`` back into
+# premultiplied bytes; the Python compositor grades float straight-alpha. These
+# pixel bytes are the contract. Regenerate with ``swift`` (see the fixture's
+# header for the two build steps).
+CG_ADJUSTMENT_RAMP = [(i, 255 - i, (i * 7) % 256, 255) for i in range(256)] + [
+    (200, 100, 50, 1), (255, 0, 0, 128), (0, 255, 0, 64),
+    (128, 128, 128, 200), (64, 192, 32, 255), (10, 20, 30, 0)]
+
+
+def _cg_adjustment_reference():
+    """name -> native premultiplied uint8 output (N, 4) for the fixture ramp."""
+    text = (Path(__file__).parent / 'fixtures' / 'cg_adjustment_reference.txt').read_text()
+    return {name: np.frombuffer(bytes.fromhex(hexs), np.uint8).reshape(-1, 4)
+            for name, hexs in (line.split() for line in text.splitlines())}
+
+
+def _cg_adjustment_records():
+    """The same settings the Swift fixture used, as native records."""
+    records = {
+        'exp_1': adjustment('Exposure', exposure=1),
+        'exp_neg2_gamma2': adjustment('Exposure', exposure=-2, offset=0.1, gamma=2),
+        'exp_gamma05': adjustment('Exposure', gamma=0.5, offset=-0.2),
+        'lv_rgamma2': adjustment('Levels', red_gamma=2),
+        'lv_clamp_gamma': adjustment('Levels', gamma=4, red_gamma=2.5),
+        'lv_outputrange': adjustment('Levels'),
+        'invert': adjustment('Invert'),
+    }
+    # Native channel order: ranges[0] is the combined RGB pass, then R, G, B.
+    r = records['lv_clamp_gamma']['levels']['ranges']
+    r[0].update(black=20, white=200, gamma=0.5, outputBlack=5, outputWhite=255)
+    r[1].update(black=30, white=220, gamma=2.5, outputBlack=10, outputWhite=240)
+    records['lv_outputrange']['levels']['ranges'][1].update(outputBlack=20, outputWhite=235)
+    return records
+
+
+@pytest.mark.parametrize('name', [
+    'exp_1', 'exp_neg2_gamma2', 'exp_gamma05', 'lv_rgamma2',
+    'lv_clamp_gamma', 'lv_outputrange', 'invert',
+])
+def test_adjustment_pixels_match_native_kernel_fixture(name):
+    """Adjustment layers preserve native pixel results on a full byte ramp."""
+    native = _cg_adjustment_reference()[name]
+    source = np.array([CG_ADJUSTMENT_RAMP], dtype=np.uint8)
+    actual = composite(Document(source.shape[1], 1, [
+        Layer('Source', source),
+        Layer(name, size=(source.shape[1], 1), adjustment=_cg_adjustment_records()[name]),
+    ]))[0]
+
+    np.testing.assert_array_equal(actual[:, 3], native[:, 3])
+    opaque = native[:, 3] == 255
+    # Native uses a 256-entry table with linear interpolation. Python evaluates
+    # the same transfer continuously; the full opaque byte ramp stays within
+    # one output level, including non-default ranges and extreme gamma.
+    np.testing.assert_array_less(np.abs(actual[opaque, :3].astype(int)
+                                        - native[opaque, :3].astype(int)), 2)
+    # Premultiplied output is the native storage contract at translucent edges.
+    premult = np.rint(actual[:, :3].astype(np.float32)
+                      * actual[:, 3:4].astype(np.float32) / 255).astype(np.uint8)
+    np.testing.assert_array_less(np.abs(premult.astype(int)
+                                        - native[:, :3].astype(int)), 2)

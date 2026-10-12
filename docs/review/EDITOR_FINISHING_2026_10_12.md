@@ -98,6 +98,29 @@ percentile under 40. The residual is Core Graphics' own subpixel/edge convention
 which an affine warp cannot reproduce byte-for-byte; the test pins it so a
 regression cannot hide.
 
+### Adjustment-kernel parity
+
+`Retouch`'s Exposure / Levels / Invert records are now pinned against Compositor's
+real grader kernel, not a transcription. `scripts/dev/cg_adjustment_fixture.swift`
+links the actual `Rendering/LevelsPixels.c` (pinned 11d8d7a) and runs it over a
+256-step RGB ramp plus low-alpha edge colours for seven settings: three Exposure
+curves (including `-2` stops with offset and a `0.5` gamma), three Levels
+variants (per-channel gamma, non-default black/white and output range, combined
+RGB pass), and Invert. The captured premultiplied bytes live in
+`tests/fixtures/cg_adjustment_reference.txt`; `test_adjustment_pixels_match_native_kernel_fixture`
+drives the same ramp through the Python compositor and compares.
+
+Native contract confirmed from the kernel: un-premultiply `p*255/alpha`, index a
+256-entry curve table with linear interpolation, then `clamp(round(result*alpha))`
+back into premultiplied bytes; alpha is untouched and `alpha == 0` pixels are
+skipped. Python evaluates the same transfer continuously on float straight-alpha.
+On the opaque ramp the two agree within **one output level** for every setting
+(the residual is the table's own 1/255 interpolation, which `cv2`-free float
+evaluation does not round the same way) — a corrupted record (e.g. swapping red
+and blue gammas) moves an opaque pixel by 64 levels, so the fixture is not
+vacuous. Translucent pixels are compared as premultiplied bytes, the native
+storage form, and also land within one level.
+
 ## Native-resolution Mac profiling
 
 Each separate Python process used a pass-through folder, one native photo layer,
@@ -115,6 +138,31 @@ All three reopened composites have exactly the original composite SHA-256.
 Package sizes are 38.1, 29.3 and 26.9 MiB respectively. Larger/more numerous
 native layers and arbitrary rotated layers can use substantially more memory.
 
+### Large-stack / maximum-size characterization
+
+Measured with `scripts/dev/editor_scale_benchmark.py`; each case runs in its
+own process with synthetic uint8 layers, `ru_maxrss` in MiB. `MAX_SIDE` is
+30,000 px and `MAX_SURFACE_PIXELS` is 200 MP.
+
+| Case | Surface / layers | Composite | Peak RSS | Result |
+| --- | --- | ---: | ---: | --- |
+| `canvas_8000` | 64 MP / 1 | 1.50 s | 899.5 MiB | completed |
+| `canvas_12000` | 144 MP / 1 | 3.39 s | 1,619.1 MiB | completed |
+| `canvas_14142` | 200 MP / 1 | 4.80 s | 1,757.5 MiB | completed at pixel limit |
+| `canvas_200mp_4` | 200 MP / 4 × 50 MP | 14.98 s | 1,741.4 MiB | completed at pixel limit |
+| `stack_16` | 12 MP / 16 layers, 192 MP layer budget | 3.56 s | 987.3 MiB | completed |
+| `stack_64` | 12 MP / 64 × 0.75 MP, 48 MP layer budget | 11.26 s | 408.4 MiB | completed |
+| `stack_over_budget` | 12 MP / 64 × 12 MP, 768 MP layer budget | — | 2,362.0 MiB | refused: `document exceeds the 200 MP layer budget` |
+| `save_12000` | 144 MP / 1 | 3.23 s | 2,948.9 MiB peak incl. save | save 3.38 s; reload 1.68 s |
+
+Conclusion: banded composite keeps canvas working memory bounded enough to
+finish the 200 MP limit on this 18 GB Mac, but maximum-size save peaks near
+3 GB and deep stacks cost time more than canvas size (64 small layers at 12 MP
+out-pace 4 x 50 MP by composite count, not area). The 200 MP layer-budget guard
+rejects an oversized stack before composite. These are synthetic CPU editor
+limits, not a shipping OOM guarantee; packaged desktop recovery and Windows
+acceptance remain separate gates.
+
 ## Repository housekeeping disposition
 
 No unrelated files were staged, committed, reverted or deleted.
@@ -130,8 +178,9 @@ No unrelated files were staged, committed, reverted or deleted.
 
 ## Remaining gates
 
-- More native adjustment fixtures (rotated-mask/resampling parity landed; see above).
-- Representative larger stacks and maximum-size/history/RSS characterization.
+- More native adjustment fixtures: **closed** by the real-kernel ramp fixture above.
+- Representative larger stacks and maximum-size/RSS characterization: **closed**
+  for the CPU editor limits above; packaged desktop crash recovery remains.
 - Packaged desktop crash recovery and platform acceptance, including Windows.
 - High-bit/color-managed editor export, dirty-tile caching and optional acceleration.
 
