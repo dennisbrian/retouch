@@ -175,6 +175,11 @@ compares real composite pixels across cold/warm/replaced renders and counts
 the actual resize calls: two layer resizes plus one mask resize on cold render,
 zero on warm render, and one additional layer resize after replacement.
 
+The 16-bit TIFF delivery path now carries the same document resolution as PNG:
+tags 282/283 store X/Y pixels-per-inch and tag 296 declares inches. The export
+test verifies 16-bit samples, ICC profile, alpha, and all three resolution tags
+from the real encoded TIFF.
+
 ## Repository housekeeping disposition
 
 No unrelated files were staged, committed, reverted or deleted.

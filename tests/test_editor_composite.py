@@ -145,6 +145,9 @@ def test_high_bit_export_widens_exact_pixels_and_keeps_alpha_and_icc(tmp_path):
     # tags and OpenCV's unchanged decoder verify the real stored samples.
     with Image.open(path) as image:
         assert image.tag_v2[258] == (16, 16, 16, 16)
+        assert image.tag_v2[282] == 240
+        assert image.tag_v2[283] == 240
+        assert image.tag_v2[296] == 2
         assert image.info['icc_profile']
     stored = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     expected = cv2.cvtColor(composite(doc), cv2.COLOR_RGBA2BGRA).astype(np.uint16) * 257

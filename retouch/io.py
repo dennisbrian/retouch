@@ -18,6 +18,7 @@ import struct
 import subprocess
 import tempfile
 import zlib
+from fractions import Fraction
 from functools import lru_cache
 from dataclasses import replace
 from pathlib import Path
@@ -1424,6 +1425,7 @@ def _write_tiff_16bit(
     img_u16: np.ndarray,
     icc_profile: Optional[bytes],
     exif: Optional[bytes],
+    resolution: Optional[float] = None,
 ) -> None:
     """Write a lossless classic TIFF while retaining 16-bit RGB/RGBA data.
 
@@ -1435,7 +1437,7 @@ def _write_tiff_16bit(
     """
     if img_u16.dtype != np.uint16:
         raise ValueError("16-bit TIFF writer requires uint16 samples")
-    _write_tiff_samples(path, img_u16, icc_profile, exif)
+    _write_tiff_samples(path, img_u16, icc_profile, exif, resolution=resolution)
 
 
 def _write_tiff_samples(
@@ -1445,6 +1447,7 @@ def _write_tiff_samples(
     exif: Optional[bytes] = None,
     *,
     compress: bool = False,
+    resolution: Optional[float] = None,
 ) -> None:
     """Write BGR(A) uint16 or float32 samples as tagged RGB TIFF strips.
 
@@ -1491,6 +1494,13 @@ def _write_tiff_samples(
     _set_tiff_tag(ifd, 279, TiffTags.LONG, len(payload))
     _set_tiff_tag(ifd, 284, TiffTags.SHORT, 1)  # chunky/interleaved
     _set_tiff_tag(ifd, 339, TiffTags.SHORT, (3 if is_float else 1,) * samples)
+    if resolution is not None:
+        if not np.isfinite(resolution) or resolution <= 0:
+            raise ValueError("TIFF resolution must be a positive finite number")
+        dpi = Fraction(float(resolution)).limit_denominator(10000)
+        _set_tiff_tag(ifd, 282, TiffTags.RATIONAL, dpi)
+        _set_tiff_tag(ifd, 283, TiffTags.RATIONAL, dpi)
+        _set_tiff_tag(ifd, 296, TiffTags.SHORT, 2)  # inches
     if samples == 4:
         _set_tiff_tag(ifd, 338, TiffTags.SHORT, 2)  # unassociated alpha
     if icc_profile:
@@ -1601,6 +1611,7 @@ def write_image_with_icc(
     ext = path.suffix.lower()
     pil_format = kwargs.pop("format", _ICC_WRITE_FORMAT_MAP.get(ext))
     quality = int(kwargs.pop("quality", 95))
+    resolution = kwargs.pop("resolution", None)
     float_range = _resolve_float_range(img, str(kwargs.pop("float_range", "auto")))
 
     # BB3: EXR float32 export — scene-linear, uncompressed-equivalent HDR.
@@ -1632,7 +1643,7 @@ def write_image_with_icc(
             # temp before it is atomically published under the final name.
             with _atomic_output_path(path) as tmp_path:
                 if ext in (".tif", ".tiff"):
-                    _write_tiff_16bit(tmp_path, img_16, icc_profile, exif)
+                    _write_tiff_16bit(tmp_path, img_16, icc_profile, exif, resolution)
                 else:
                     # OpenCV is used only for the lossless pixel encoder. Metadata
                     # is inserted into the PNG container afterward without a
