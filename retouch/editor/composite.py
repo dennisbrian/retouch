@@ -276,9 +276,7 @@ class _BandRenderer:
 
 # --- Layer Effects -------------------------------------------------------------
 #
-# Compositor's LayerEffects (subset): drop shadow and color overlay.
-# Stroke, inner shadow, outer glow and inner glow are refused by the reader until
-# the morphological ring pass is available (``LayerEffectsRenderer`` upstream).
+# Compositor's LayerEffects subset: stroke, drop shadow and color overlay.
 #
 # Effects are drawn on a padded copy of the source (``_effects_source``): the
 # shadow's own silhouette, offset and blurred inside that padding, then the
@@ -290,6 +288,10 @@ class _BandRenderer:
 def _effect_margin(effects):
     """``LayerEffectsRenderer.margin`` for the subset this port renders."""
     margin = 0.0
+    if effects is not None and effects.stroke is not None:
+        stroke = effects.stroke
+        if stroke.enabled and not stroke.inside and stroke.opacity > 0:
+            margin = max(margin, stroke.size)
     if effects is not None and effects.shadow is not None:
         shadow = effects.shadow
         if shadow.enabled and shadow.opacity > 0:
@@ -322,6 +324,32 @@ def _blur(mask, radius):
     return cv2.GaussianBlur(mask, (kernel, kernel), sigma, borderType=cv2.BORDER_CONSTANT)
 
 
+def _stroke_coverage(alpha, stroke):
+    """Upstream square-reach morphology ring for an inside/outside stroke."""
+    reach = max(1, int(round(stroke.size)))
+    kernel = np.ones((reach * 2 + 1, reach * 2 + 1), np.uint8)
+    if stroke.inside:
+        moved = cv2.erode(alpha, kernel, borderType=cv2.BORDER_CONSTANT,
+                          borderValue=0)
+        return np.maximum(0, alpha - moved)
+    moved = cv2.dilate(alpha, kernel, borderType=cv2.BORDER_CONSTANT,
+                       borderValue=0)
+    return np.maximum(0, moved - alpha)
+
+
+def _fill_over(rgb, alpha, color, coverage):
+    """Flat straight RGB ``color`` through ``coverage``, source-over."""
+    out_a = coverage + alpha * (1 - coverage)
+    safe = np.where(out_a > 0, out_a, 1)[..., np.newaxis]
+    color = np.asarray(color, np.float32)
+    out_rgb = np.where(
+        out_a[..., np.newaxis] > 0,
+        (color * coverage[..., np.newaxis]
+         + rgb * (alpha * (1 - coverage))[..., np.newaxis]) / safe,
+        0.0)
+    return out_rgb, out_a
+
+
 def _apply_effects(rgb, alpha, effects):
     """Composite layer effects onto (rgb, alpha) straight float32 arrays.
 
@@ -344,7 +372,15 @@ def _apply_effects(rgb, alpha, effects):
         accum_rgb = np.broadcast_to(shadow_c, accum_rgb.shape).astype(np.float32)
         accum_alpha = shadow_a
 
-    # 2. Layer's own pixels drawn over the shadow (source-over).
+    # 2. Outside stroke sits behind the layer's own pixels.
+    stroke = effects.stroke
+    if (stroke is not None and stroke.enabled and not stroke.inside
+            and stroke.size > 0 and stroke.opacity > 0):
+        coverage = _stroke_coverage(layer_alpha, stroke) * stroke.opacity
+        accum_rgb, accum_alpha = _fill_over(
+            accum_rgb, accum_alpha, (stroke.red, stroke.green, stroke.blue), coverage)
+
+    # 3. Layer's own pixels drawn over the shadow/stroke (source-over).
     if layer_alpha.any():
         l_over = layer_alpha[..., np.newaxis]
         out_a = layer_alpha + accum_alpha * (1 - layer_alpha)
@@ -356,7 +392,7 @@ def _apply_effects(rgb, alpha, effects):
         )
         accum_alpha = out_a
 
-    # 3. Flat colour overlay sits over the layer; its shape is the unshadowed
+    # 4. Flat colour overlay sits over the layer; its shape is the unshadowed
     # silhouette (``coverage(shown, blur: 0)`` upstream), so it never tints the shadow.
     overlay = effects.colorOverlay
     if overlay is not None and overlay.enabled and overlay.opacity > 0 and layer_alpha.any():
@@ -371,6 +407,13 @@ def _apply_effects(rgb, alpha, effects):
             0.0
         )
         accum_alpha = out_a
+
+    # 5. Inside stroke is drawn last, over the layer and overlay.
+    if (stroke is not None and stroke.enabled and stroke.inside
+            and stroke.size > 0 and stroke.opacity > 0):
+        coverage = _stroke_coverage(layer_alpha, stroke) * stroke.opacity
+        accum_rgb, accum_alpha = _fill_over(
+            accum_rgb, accum_alpha, (stroke.red, stroke.green, stroke.blue), coverage)
 
     return accum_rgb.astype(np.float32), accum_alpha.astype(np.float32)
 

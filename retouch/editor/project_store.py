@@ -43,6 +43,7 @@ from .document import (
     Layer,
     LayerEffects,
     ShadowEffect,
+    StrokeEffect,
     UnsupportedFeature,
     validate_effects,
 )
@@ -288,8 +289,25 @@ def _check_effects(record, layer_name):
     if not isinstance(record, dict):
         raise _invalid('effects must be a dict')
     for key in record:
-        if key not in ('shadow', 'colorOverlay'):
+        if key not in ('stroke', 'shadow', 'colorOverlay'):
             raise UnsupportedFeature(f'effect kind {key!r} is not supported yet (layer {layer_name!r})')
+    stroke = None
+    stroke_rec = record.get('stroke')
+    if stroke_rec is not None:
+        if not isinstance(stroke_rec, dict):
+            raise _invalid('stroke must be a dict')
+        unknown = set(stroke_rec) - {'enabled', 'size', 'red', 'green', 'blue',
+                                     'opacity', 'inside'}
+        if unknown:
+            raise _invalid(f'unknown stroke keys: {sorted(unknown)}')
+        stroke = StrokeEffect(
+            size=float(stroke_rec.get('size', 4)),
+            red=float(stroke_rec.get('red', 0)),
+            green=float(stroke_rec.get('green', 0)),
+            blue=float(stroke_rec.get('blue', 0)),
+            opacity=float(stroke_rec.get('opacity', 1)),
+            inside=stroke_rec.get('inside', False),
+            enabled=stroke_rec.get('enabled', True))
     shadow = None
     shadow_rec = record.get('shadow')
     if shadow_rec is not None:
@@ -322,7 +340,7 @@ def _check_effects(record, layer_name):
             blue=float(overlay_rec.get('blue', 0)),
             opacity=float(overlay_rec.get('opacity', 1)),
             enabled=overlay_rec.get('enabled', True))
-    effects = LayerEffects(shadow=shadow, colorOverlay=overlay)
+    effects = LayerEffects(stroke=stroke, shadow=shadow, colorOverlay=overlay)
     try:
         validate_effects(effects)
     except ValueError as exc:
@@ -608,6 +626,13 @@ def _encode_layer(layer):
 def _encode_effects(effects):
     """Encode a :class:`LayerEffects` record matching upstream's schema."""
     out = {}
+    if effects.stroke is not None:
+        s = effects.stroke
+        rec = {'size': s.size, 'red': s.red, 'green': s.green, 'blue': s.blue,
+               'opacity': s.opacity, 'inside': s.inside}
+        if not s.enabled:
+            rec['enabled'] = False
+        out['stroke'] = rec
     if effects.shadow is not None:
         s = effects.shadow
         rec = {'angle': s.angle, 'distance': s.distance, 'blur': s.blur,

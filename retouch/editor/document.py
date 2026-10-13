@@ -36,10 +36,29 @@ BLEND_MODES = (
 SAMPLING = ('High quality', 'Smooth', 'Nearest')
 
 # LayerEffects: the subset of Compositor's LayerEffects this port renders
-# (``Compositor/Document/LayerEffects.swift``). Drop shadow and colour overlay
-# are modelled; stroke, inner shadow, outer glow and inner glow are refused
+# (``Compositor/Document/LayerEffects.swift``). Stroke, drop shadow and colour overlay
+# are modelled; inner shadow, outer glow and inner glow are refused
 # rather than dropped. ``enabled`` is upstream's optional flag: missing means
 # visible, so it round-trips as absent unless a project turns it off.
+
+
+class StrokeEffect:
+    """A square-reach line inside or outside the layer's shown alpha."""
+    __slots__ = ('enabled', 'size', 'red', 'green', 'blue', 'opacity', 'inside')
+
+    def __init__(self, size=4, red=0, green=0, blue=0, opacity=1,
+                 inside=False, enabled=True):
+        self.enabled = enabled
+        self.size = float(size)
+        self.red = float(red)
+        self.green = float(green)
+        self.blue = float(blue)
+        self.opacity = float(opacity)
+        self.inside = inside
+
+    def __eq__(self, other):
+        return (isinstance(other, StrokeEffect)
+                and all(getattr(self, key) == getattr(other, key) for key in self.__slots__))
 
 
 class ShadowEffect:
@@ -102,18 +121,19 @@ class ColorOverlayEffect:
 
 class LayerEffects:
     """What a layer draws around itself; kept with the layer, never baked in."""
-    __slots__ = ('shadow', 'colorOverlay')
+    __slots__ = ('stroke', 'shadow', 'colorOverlay')
 
-    def __init__(self, shadow=None, colorOverlay=None):
+    def __init__(self, stroke=None, shadow=None, colorOverlay=None):
+        self.stroke = stroke
         self.shadow = shadow
         self.colorOverlay = colorOverlay
 
     def is_empty(self):
-        return self.shadow is None and self.colorOverlay is None
+        return self.stroke is None and self.shadow is None and self.colorOverlay is None
 
     def __eq__(self, other):
         return (isinstance(other, LayerEffects)
-                and self.shadow == other.shadow
+                and self.stroke == other.stroke and self.shadow == other.shadow
                 and self.colorOverlay == other.colorOverlay)
 
     def __ne__(self, other):
@@ -123,8 +143,8 @@ class LayerEffects:
         return not self.is_empty()
 
     def __repr__(self):
-        return ('LayerEffects(shadow=%r, colorOverlay=%r)'
-                % (self.shadow, self.colorOverlay))
+        return ('LayerEffects(stroke=%r, shadow=%r, colorOverlay=%r)'
+                % (self.stroke, self.shadow, self.colorOverlay))
 
 
 def _effect_number(value, low, high):
@@ -136,6 +156,16 @@ def validate_effects(effects):
     """Check a :class:`LayerEffects` against upstream's ``isValid`` ranges."""
     if not isinstance(effects, LayerEffects):
         raise ValueError('effects must be a LayerEffects record')
+    stroke = effects.stroke
+    if stroke is not None:
+        if not isinstance(stroke, StrokeEffect):
+            raise ValueError('stroke must be a StrokeEffect record')
+        if (type(stroke.enabled) is not bool or type(stroke.inside) is not bool
+                or not (_effect_number(stroke.size, 0, 500)
+                        and _effect_number(stroke.opacity, 0, 1)
+                        and all(_effect_number(v, 0, 1) for v in
+                                (stroke.red, stroke.green, stroke.blue)))):
+            raise ValueError('stroke settings out of range')
     shadow = effects.shadow
     if shadow is not None:
         if not isinstance(shadow, ShadowEffect):

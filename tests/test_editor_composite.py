@@ -180,7 +180,47 @@ def test_high_bit_export_widens_exact_pixels_and_keeps_alpha_and_icc(tmp_path):
 
 
 class TestLayerEffectsPixels:
-    """Exact native pixel math contracts for layer effects (drop shadow, colour overlay)."""
+    """Exact native pixel math contracts for layer effects (stroke, drop shadow, colour overlay)."""
+
+    def test_outside_stroke_square_ring_geometry(self):
+        from retouch.editor.document import LayerEffects, StrokeEffect
+        doc = Document(5, 5)
+        layer = doc.add_image(np.array([[[255, 0, 0, 255]]], np.uint8), 'Pixel', origin=(2, 2))
+        layer.effects = LayerEffects(stroke=StrokeEffect(size=1, red=0, green=0, blue=1,
+                                                         opacity=1.0, inside=False))
+        out = composite(doc)
+        assert out[2, 2].tolist() == [255, 0, 0, 255]   # opaque layer covers its behind-stroke
+        # Square reach of 1: the full 8-neighbour ring is stroke blue.
+        for row, col in ((1, 1), (1, 2), (1, 3), (2, 1), (2, 3), (3, 1), (3, 2), (3, 3)):
+            assert out[row, col].tolist() == [0, 0, 255, 255], (row, col)
+        assert out[0, 2].tolist() == [0, 0, 0, 0]        # reach 1 stops at one pixel
+        assert out[0, 0].tolist() == [0, 0, 0, 0]        # corners of reach are covered, 2 away is not
+        assert out[4, 4].tolist() == [0, 0, 0, 0]
+
+    def test_inside_stroke_ring_keeps_interior_colour(self):
+        from retouch.editor.document import LayerEffects, StrokeEffect
+        doc = Document(5, 5)
+        pixels = np.zeros((3, 3, 4), np.uint8)
+        pixels[:] = (255, 255, 255, 255)
+        layer = doc.add_image(pixels, 'Box', origin=(1, 1))
+        layer.effects = LayerEffects(stroke=StrokeEffect(size=1, red=1, green=0, blue=0,
+                                                         opacity=1.0, inside=True))
+        out = composite(doc)
+        assert out[2, 2].tolist() == [255, 255, 255, 255]  # interior survives the erosion
+        for row, col in ((1, 1), (1, 2), (1, 3), (2, 1), (2, 3), (3, 1), (3, 2), (3, 3)):
+            assert out[row, col].tolist() == [255, 0, 0, 255], (row, col)
+        assert out[0, 2].tolist() == [0, 0, 0, 0]          # inside stroke never leaves the shape
+
+    def test_stroke_half_opacity_lands_at_half_coverage(self):
+        from retouch.editor.document import LayerEffects, StrokeEffect
+        doc = Document(3, 3)
+        layer = doc.add_image(np.array([[[0, 255, 0, 255]]], np.uint8), 'Pixel', origin=(1, 1))
+        layer.effects = LayerEffects(stroke=StrokeEffect(size=1, red=0, green=0, blue=1,
+                                                         opacity=0.5, inside=False))
+        out = composite(doc)
+        assert out[1, 1].tolist() == [0, 255, 0, 255]
+        # coverage 0.5 on transparent ground: straight alpha keeps full blue, alpha rint(127.5) = 128.
+        assert out[0, 1].tolist() == [0, 0, 255, 128]
 
     def test_color_overlay_analytic_source_over(self):
         from retouch.editor.document import LayerEffects, ColorOverlayEffect
@@ -238,10 +278,11 @@ class TestLayerEffectsPixels:
         assert out[0, 0].tolist() == [170, 170, 170, 192]
 
     def test_effects_band_invariance(self):
-        from retouch.editor.document import LayerEffects, ShadowEffect, ColorOverlayEffect
+        from retouch.editor.document import LayerEffects, StrokeEffect, ShadowEffect, ColorOverlayEffect
         doc = Document(16, 16)
         layer = doc.add_image(np.full((4, 4, 4), (200, 100, 50, 255), np.uint8), 'Box', origin=(6, 6))
         layer.effects = LayerEffects(
+            stroke=StrokeEffect(size=2, red=1, green=1, blue=0, opacity=0.7),
             shadow=ShadowEffect(angle=90, distance=4, blur=2, opacity=0.8, red=0, green=0, blue=0),
             colorOverlay=ColorOverlayEffect(red=0.1, green=0.2, blue=0.3, opacity=0.3),
         )
@@ -252,13 +293,14 @@ class TestLayerEffectsPixels:
         np.testing.assert_array_equal(c2, c16)
 
     def test_disabled_effects_produce_identical_pixels_to_none(self):
-        from retouch.editor.document import LayerEffects, ShadowEffect, ColorOverlayEffect
+        from retouch.editor.document import LayerEffects, StrokeEffect, ShadowEffect, ColorOverlayEffect
         doc_none = Document(8, 8)
         doc_none.add_image(np.full((4, 4, 4), (100, 150, 200, 255), np.uint8), 'Box', origin=(2, 2))
 
         doc_disabled = Document(8, 8)
         layer = doc_disabled.add_image(np.full((4, 4, 4), (100, 150, 200, 255), np.uint8), 'Box', origin=(2, 2))
         layer.effects = LayerEffects(
+            stroke=StrokeEffect(size=3, red=0, green=1, blue=0, opacity=1.0, enabled=False),
             shadow=ShadowEffect(angle=90, distance=3, blur=2, opacity=0.9, red=0, green=0, blue=0, enabled=False),
             colorOverlay=ColorOverlayEffect(red=1, green=0, blue=0, opacity=1.0, enabled=False),
         )

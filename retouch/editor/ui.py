@@ -251,19 +251,24 @@ def _tool_view(session):
     effects = layer.effects if layer and layer.effects else None
     shadow = effects.shadow if effects and effects.shadow else None
     overlay = effects.colorOverlay if effects and effects.colorOverlay else None
+    stroke = effects.stroke if effects and effects.stroke else None
     return (layer.rotation if layer else 0,
             gr.update(choices=folders, value=(layer.parent_id or '') if layer else ''),
             gr.update(choices=sources, value=(layer.mask_source_id or '') if layer else ''),
             gr.update(choices=[(l.name, l.id) for l in doc.ordered_layers()] if doc else [], value=[]),
             selected, settings.get('kind', 'Exposure'), exposure.get('exposure', 0),
-             exposure.get('offset', 0), exposure.get('gamma', 1) if settings.get('kind') == 'Exposure' else ranges[0]['gamma'],
-             ranges[0]['black'], ranges[0]['white'], ranges[1]['gamma'], ranges[2]['gamma'], ranges[3]['gamma'],
-             saturation, vibrance, temperature, tint, brightness, contrast, hue,
-             shadow is not None, shadow.angle if shadow else 90, shadow.distance if shadow else 20,
-            shadow.blur if shadow else 20, shadow.opacity if shadow else 0.5,
+            exposure.get('offset', 0), exposure.get('gamma', 1) if settings.get('kind') == 'Exposure' else ranges[0]['gamma'],
+            ranges[0]['black'], ranges[0]['white'], ranges[1]['gamma'], ranges[2]['gamma'], ranges[3]['gamma'],
+            saturation, vibrance, temperature, tint, brightness, contrast, hue,
+            stroke is not None, stroke.size if stroke else 4, stroke.inside if stroke else False,
+            round((stroke.opacity if stroke else 1) * 100),
+            gr.update(value=_hex_color(stroke.red, stroke.green, stroke.blue) if stroke else '#000000',
+                      visible=stroke is not None),
+            shadow is not None, shadow.angle if shadow else 90, shadow.distance if shadow else 20,
+            shadow.blur if shadow else 20, round((shadow.opacity if shadow else 0.5) * 100),
             gr.update(value=_hex_color(shadow.red, shadow.green, shadow.blue) if shadow else '#000000',
                       visible=shadow is not None),
-            overlay is not None, overlay.opacity if overlay else 1.0,
+            overlay is not None, round((overlay.opacity if overlay else 1) * 100),
             gr.update(value=_hex_color(overlay.red, overlay.green, overlay.blue) if overlay else '#000000',
                       visible=overlay is not None))
 
@@ -424,9 +429,20 @@ def build_editor_tab():
                                 'Opacity and masks control coverage. Exposure uses stops, offset and gamma; '
                                 'Levels uses black/white points and RGB/channel gamma. Other kinds expose one dedicated slider.')
                 with gr.Accordion('Layer effects (raster layers)', open=False):
-                    gr.Markdown('Drop shadow and colour overlay are kept with the layer and '
-                                'apply to everything it shows. Distance and blur are in layer '
-                                'pixels; angle is where the light comes from (90 is straight above).')
+                    gr.Markdown('Stroke, drop shadow and colour overlay are kept with the layer '
+                                'and apply to everything it shows. Distance, blur and size are in '
+                                'layer pixels; angle is where the light comes from '
+                                '(90 is straight above).')
+                    effect_stroke = gr.Checkbox(label='Stroke', value=False)
+                    with gr.Row():
+                        stroke_size = gr.Slider(0, 200, value=4, step=1,
+                                                label='Stroke size (pixels)', visible=False)
+                        stroke_inside = gr.Checkbox(label='Draw inside the edge', value=False,
+                                                    visible=False)
+                    stroke_opacity = gr.Slider(0, 100, value=100, step=1,
+                                               label='Stroke opacity (%)', visible=False)
+                    stroke_color = gr.ColorPicker(label='Stroke colour', value='#000000',
+                                                  visible=False)
                     effect_shadow = gr.Checkbox(label='Drop shadow', value=False)
                     shadow_angle = gr.Slider(-180, 180, value=90, step=1,
                                              label='Shadow angle (degrees)', visible=False)
@@ -443,7 +459,7 @@ def build_editor_tab():
                     overlay_color = gr.ColorPicker(label='Overlay colour', value='#000000', visible=False)
                     apply_effects = gr.Button('Apply layer effects')
                     clear_effects = gr.Button('Clear layer effects')
-                    gr.Markdown('Effects need a plain raster layer. Clear removes both effects; '
+                    gr.Markdown('Effects need a plain raster layer. Clear removes every effect; '
                                 'each apply is one undo step.')
                 with gr.Row():
                     up = gr.Button('Move up')
@@ -474,6 +490,7 @@ def build_editor_tab():
                    selection_preview, grade_kind, grade_exposure, grade_offset, grade_gamma, grade_black,
                    grade_white, grade_red, grade_green, grade_blue, grade_saturation, grade_vibrance,
                    grade_temperature, grade_tint, grade_brightness, grade_contrast, grade_hue,
+                   effect_stroke, stroke_size, stroke_inside, stroke_opacity, stroke_color,
                    effect_shadow, shadow_angle, shadow_distance, shadow_blur, shadow_opacity,
                    shadow_color, effect_overlay, overlay_opacity, overlay_color]
 
@@ -581,23 +598,31 @@ def build_editor_tab():
                         current.history.update_layer(layer.id, parent_id=args[0] or None,
                                                      mask_source_id=args[1] or None)
                     elif operation in ('apply_effects', 'clear_effects'):
-                        from .document import LayerEffects, ShadowEffect, ColorOverlayEffect
+                        from .document import (LayerEffects, StrokeEffect, ShadowEffect,
+                                               ColorOverlayEffect)
                         if operation == 'clear_effects':
                             effects = None
                         else:
-                            shadow = None
+                            stroke = None
                             if args[0]:
-                                red, green, blue = _rgb(args[5])
-                                shadow = ShadowEffect(angle=args[1], distance=args[2],
-                                                      blur=args[3], red=red, green=green,
-                                                      blue=blue, opacity=args[4] / 100)
+                                red, green, blue = _rgb(args[4])
+                                stroke = StrokeEffect(size=args[1], inside=args[2],
+                                                      red=red, green=green,
+                                                      blue=blue, opacity=args[3] / 100)
+                            shadow = None
+                            if args[5]:
+                                red, green, blue = _rgb(args[10])
+                                shadow = ShadowEffect(angle=args[6], distance=args[7],
+                                                      blur=args[8], red=red, green=green,
+                                                      blue=blue, opacity=args[9] / 100)
                             overlay = None
-                            if args[6]:
-                                red, green, blue = _rgb(args[8])
+                            if args[11]:
+                                red, green, blue = _rgb(args[13])
                                 overlay = ColorOverlayEffect(red=red, green=green, blue=blue,
-                                                             opacity=args[7] / 100)
-                            effects = LayerEffects(shadow=shadow, colorOverlay=overlay) if (
-                                shadow or overlay) else None
+                                                             opacity=args[12] / 100)
+                            effects = LayerEffects(stroke=stroke, shadow=shadow,
+                                                   colorOverlay=overlay) if (
+                                stroke or shadow or overlay) else None
                         if (effects is not None and (layer.is_group or layer.adjustment is not None
                                                      or layer.mask_source_id is not None)):
                             raise ValueError('Layer effects need a plain raster layer')
@@ -706,15 +731,19 @@ def build_editor_tab():
                                  grade_black, grade_white, grade_red, grade_green, grade_blue,
                                  grade_saturation, grade_vibrance, grade_temperature, grade_tint,
                                  grade_brightness, grade_contrast, grade_hue],
-                'apply_effects': [effect_shadow, shadow_angle, shadow_distance, shadow_blur,
-                                  shadow_opacity, shadow_color, effect_overlay, overlay_opacity,
-                                  overlay_color],
+                'apply_effects': [effect_stroke, stroke_size, stroke_inside, stroke_opacity,
+                                  stroke_color, effect_shadow, shadow_angle, shadow_distance,
+                                  shadow_blur, shadow_opacity, shadow_color, effect_overlay,
+                                  overlay_opacity, overlay_color],
                 'clear_effects': [],
             }
             extra = extras.get(operation, [])
             button.click(edit, [session, layers, canvas] + extra, outputs, concurrency_id='layer-editor')
 
         # Show a shadow's or overlay's settings only while its effect is on.
+        effect_stroke.change(
+            lambda on: [gr.update(visible=on)] * 4, effect_stroke,
+            [stroke_size, stroke_inside, stroke_opacity, stroke_color], queue=False)
         effect_shadow.change(
             lambda on: [gr.update(visible=on)] * 5, effect_shadow,
             [shadow_angle, shadow_distance, shadow_blur, shadow_opacity, shadow_color],

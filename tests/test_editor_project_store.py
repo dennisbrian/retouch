@@ -448,7 +448,7 @@ class TestLayerEffects:
         assert layer.effects.colorOverlay is not None
 
     def test_unsupported_effect_kind_raises(self, tmp_path):
-        # stroke, innerShadow, outerGlow, innerGlow are not modelled yet.
+        # innerShadow, outerGlow and innerGlow are not modelled yet.
         record = fx.layer_record(0, 'Layer', 4, 4,
                                  effects={'innerShadow': {'angle': 90, 'distance': 5,
                                                           'blur': 3, 'red': 0, 'green': 0,
@@ -459,10 +459,13 @@ class TestLayerEffects:
             load_project(path)
 
     def test_save_and_reopen_preserves_layer_effects(self, tmp_path):
-        from retouch.editor.document import LayerEffects, ShadowEffect, ColorOverlayEffect
+        from retouch.editor.document import (LayerEffects, StrokeEffect, ShadowEffect,
+                                             ColorOverlayEffect)
         doc = Document(8, 8)
         layer = doc.add_image(fx.solid(4, 4, (50, 100, 150, 255)), 'Box', origin=(2, 2))
         layer.effects = LayerEffects(
+            stroke=StrokeEffect(size=7, red=0.2, green=0.4, blue=0.6, opacity=0.8,
+                                inside=True, enabled=False),
             shadow=ShadowEffect(angle=45, distance=3, blur=1, red=0.1, green=0.2, blue=0.3, opacity=0.7),
             colorOverlay=ColorOverlayEffect(red=0.8, green=0.2, blue=0.1, opacity=0.5, enabled=False),
         )
@@ -470,8 +473,30 @@ class TestLayerEffects:
         save_project(doc, path)
         reopened = load_project(path)
         assert reopened.layers[0].effects == layer.effects
+        assert reopened.layers[0].effects.stroke.enabled is False
         assert reopened.layers[0].effects.colorOverlay.enabled is False
         np.testing.assert_array_equal(composite(reopened), composite(doc))
+
+    def test_stroke_record_round_trips_with_defaults(self, tmp_path):
+        record = fx.layer_record(0, 'Layer', 4, 4,
+                                 effects={'stroke': {'size': 4}})
+        path = fx.write_package(tmp_path / 'stroke.comp', 4, 4, [record],
+                                images={0: fx.solid(4, 4, (128, 128, 128, 255))})
+        stroke = load_project(path).layers[0].effects.stroke
+        assert (stroke.size, stroke.inside, stroke.enabled) == (4.0, False, True)
+        assert (stroke.opacity, stroke.red, stroke.green, stroke.blue) == (1.0, 0, 0, 0)
+
+    @pytest.mark.parametrize('bad', [
+        {'size': 501}, {'size': -1}, {'opacity': 1.5}, {'red': -0.1},
+        {'inside': 'yes'}, {'enabled': 1}, {'futureKey': 1},
+    ])
+    def test_invalid_stroke_records_refused(self, tmp_path, bad):
+        record = fx.layer_record(0, 'Layer', 4, 4,
+                                 effects={'stroke': dict({'size': 4}, **bad)})
+        path = fx.write_package(tmp_path / 'bad_stroke.comp', 4, 4, [record],
+                                images={0: fx.solid(4, 4, (1, 1, 1, 255))})
+        with pytest.raises(ProjectError):
+            load_project(path)
 
     def test_effects_on_folder_or_adjustment_refused(self, tmp_path):
         folder_rec = fx.layer_record(0, 'Folder', 4, 4, image=False, isGroup=True,
