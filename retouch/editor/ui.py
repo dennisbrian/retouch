@@ -241,6 +241,13 @@ def _tool_view(session):
     settings = layer.adjustment if layer and layer.adjustment else {}
     exposure = settings.get('exposureSettings') or {}
     ranges = (settings.get('levels') or {}).get('ranges') or [dict(black=0, white=255, gamma=1) for _ in range(4)]
+    saturation = (settings.get('saturationSettings') or {}).get('saturation', 0)
+    vibrance = (settings.get('vibranceSettings') or {}).get('vibrance', 0)
+    temperature = (settings.get('temperatureSettings') or {}).get('temperature', 0)
+    tint = (settings.get('tintSettings') or {}).get('tint', 0)
+    brightness = (settings.get('brightnessSettings') or {}).get('brightness', 0)
+    contrast = (settings.get('contrastSettings') or {}).get('contrast', 0)
+    hue = (settings.get('hueSettings') or {}).get('hue', 0)
     effects = layer.effects if layer and layer.effects else None
     shadow = effects.shadow if effects and effects.shadow else None
     overlay = effects.colorOverlay if effects and effects.colorOverlay else None
@@ -249,9 +256,10 @@ def _tool_view(session):
             gr.update(choices=sources, value=(layer.mask_source_id or '') if layer else ''),
             gr.update(choices=[(l.name, l.id) for l in doc.ordered_layers()] if doc else [], value=[]),
             selected, settings.get('kind', 'Exposure'), exposure.get('exposure', 0),
-            exposure.get('offset', 0), exposure.get('gamma', 1) if settings.get('kind') == 'Exposure' else ranges[0]['gamma'],
-            ranges[0]['black'], ranges[0]['white'], ranges[1]['gamma'], ranges[2]['gamma'], ranges[3]['gamma'],
-            shadow is not None, shadow.angle if shadow else 90, shadow.distance if shadow else 20,
+             exposure.get('offset', 0), exposure.get('gamma', 1) if settings.get('kind') == 'Exposure' else ranges[0]['gamma'],
+             ranges[0]['black'], ranges[0]['white'], ranges[1]['gamma'], ranges[2]['gamma'], ranges[3]['gamma'],
+             saturation, vibrance, temperature, tint, brightness, contrast, hue,
+             shadow is not None, shadow.angle if shadow else 90, shadow.distance if shadow else 20,
             shadow.blur if shadow else 20, shadow.opacity if shadow else 0.5,
             gr.update(value=_hex_color(shadow.red, shadow.green, shadow.blue) if shadow else '#000000',
                       visible=shadow is not None),
@@ -392,7 +400,9 @@ def build_editor_tab():
                     gr.Markdown('Selections use canvas coordinates and remain temporary. '
                                 'Apply to a layer or folder mask to save them; this is one undo step.')
                 with gr.Accordion('Grading adjustment layers', open=False):
-                    grade_kind = gr.Radio(['Exposure', 'Levels', 'Invert'], value='Exposure', label='Adjustment')
+                    grade_kind = gr.Radio(['Exposure', 'Levels', 'Invert', 'Saturation', 'Vibrance',
+                                           'Temperature', 'Tint', 'Brightness', 'Contrast', 'Hue'],
+                                          value='Exposure', label='Adjustment')
                     grade_exposure = gr.Slider(-20, 20, value=0, step=.1, label='Exposure (stops)')
                     grade_offset = gr.Slider(-.5, .5, value=0, step=.01, label='Exposure offset (linear light)')
                     grade_gamma = gr.Slider(.1, 9.99, value=1, step=.01, label='Gamma')
@@ -401,11 +411,18 @@ def build_editor_tab():
                     grade_red = gr.Slider(.1, 9.99, value=1, step=.01, label='Red gamma')
                     grade_green = gr.Slider(.1, 9.99, value=1, step=.01, label='Green gamma')
                     grade_blue = gr.Slider(.1, 9.99, value=1, step=.01, label='Blue gamma')
+                    grade_saturation = gr.Slider(-100, 100, value=0, step=1, label='Saturation')
+                    grade_vibrance = gr.Slider(-100, 100, value=0, step=1, label='Vibrance')
+                    grade_temperature = gr.Slider(-100, 100, value=0, step=1, label='Temperature')
+                    grade_tint = gr.Slider(-100, 100, value=0, step=1, label='Tint')
+                    grade_brightness = gr.Slider(-100, 100, value=0, step=1, label='Brightness')
+                    grade_contrast = gr.Slider(-100, 100, value=0, step=1, label='Contrast')
+                    grade_hue = gr.Slider(-180, 180, value=0, step=1, label='Hue (degrees)')
                     add_grade = gr.Button('Add adjustment layer')
                     update_grade = gr.Button('Update selected adjustment')
                     gr.Markdown('Adjustments change the layers below and preserve alpha. '
                                 'Opacity and masks control coverage. Exposure uses stops, offset and gamma; '
-                                'Levels uses black/white points and RGB/channel gamma. Invert has no settings.')
+                                'Levels uses black/white points and RGB/channel gamma. Other kinds expose one dedicated slider.')
                 with gr.Accordion('Layer effects (raster layers)', open=False):
                     gr.Markdown('Drop shadow and colour overlay are kept with the layer and '
                                 'apply to everything it shows. Distance and blur are in layer '
@@ -455,7 +472,8 @@ def build_editor_tab():
                    canvas, undo, redo, status, blend, position_x, position_y, flip_x, flip_y,
                    layer_width, layer_height, rotation, parent_folder, clipping_source, group_members,
                    selection_preview, grade_kind, grade_exposure, grade_offset, grade_gamma, grade_black,
-                   grade_white, grade_red, grade_green, grade_blue,
+                   grade_white, grade_red, grade_green, grade_blue, grade_saturation, grade_vibrance,
+                   grade_temperature, grade_tint, grade_brightness, grade_contrast, grade_hue,
                    effect_shadow, shadow_angle, shadow_distance, shadow_blur, shadow_opacity,
                    shadow_color, effect_overlay, overlay_opacity, overlay_color]
 
@@ -681,9 +699,13 @@ def build_editor_tab():
                               selection_height, polygon, feather, selection_mode],
                 'selection_mask': [mask_mode],
                 'add_grade': [grade_kind, grade_exposure, grade_offset, grade_gamma,
-                              grade_black, grade_white, grade_red, grade_green, grade_blue],
+                              grade_black, grade_white, grade_red, grade_green, grade_blue,
+                              grade_saturation, grade_vibrance, grade_temperature, grade_tint,
+                              grade_brightness, grade_contrast, grade_hue],
                 'update_grade': [grade_kind, grade_exposure, grade_offset, grade_gamma,
-                                 grade_black, grade_white, grade_red, grade_green, grade_blue],
+                                 grade_black, grade_white, grade_red, grade_green, grade_blue,
+                                 grade_saturation, grade_vibrance, grade_temperature, grade_tint,
+                                 grade_brightness, grade_contrast, grade_hue],
                 'apply_effects': [effect_shadow, shadow_angle, shadow_distance, shadow_blur,
                                   shadow_opacity, shadow_color, effect_overlay, overlay_opacity,
                                   overlay_color],
@@ -700,6 +722,30 @@ def build_editor_tab():
         effect_overlay.change(
             lambda on: [gr.update(visible=on)] * 2, effect_overlay,
             [overlay_opacity, overlay_color], queue=False)
+
+        def grade_visibility(kind):
+            levels = kind == 'Levels'
+            exposure = kind == 'Exposure'
+            return [
+                gr.update(visible=exposure),  # exposure
+                gr.update(visible=exposure),  # offset
+                gr.update(visible=exposure or levels),  # gamma
+                *([gr.update(visible=levels)] * 5),  # black, white, RGB gamma
+                gr.update(visible=kind == 'Saturation'),
+                gr.update(visible=kind == 'Vibrance'),
+                gr.update(visible=kind == 'Temperature'),
+                gr.update(visible=kind == 'Tint'),
+                gr.update(visible=kind == 'Brightness'),
+                gr.update(visible=kind == 'Contrast'),
+                gr.update(visible=kind == 'Hue'),
+            ]
+
+        grade_kind.change(
+            grade_visibility, grade_kind,
+            [grade_exposure, grade_offset, grade_gamma, grade_black, grade_white,
+             grade_red, grade_green, grade_blue, grade_saturation, grade_vibrance,
+             grade_temperature, grade_tint, grade_brightness, grade_contrast, grade_hue],
+            queue=False)
 
         def saving(current, path, strokes):
             if current is None or not path:

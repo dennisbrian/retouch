@@ -61,7 +61,7 @@ def validate_adjustment(record):
     if not isinstance(record, dict):
         raise ValueError('Adjustment must be a settings record')
     if record.get('kind') not in KINDS or set(record) - _KEYS:
-        raise UnsupportedFeature('Supported adjustments are Exposure, Levels, Invert, Saturation and Vibrance')
+        raise UnsupportedFeature('Supported adjustments are Exposure, Levels, Invert, Saturation, Vibrance, Temperature, Tint, Brightness, Contrast and Hue')
     if any(not _number(record.get(k), -lim, lim) for k, lim in
            (('hue', 360), ('saturation', 100), ('lightness', 100))):
         raise ValueError('Invalid adjustment color settings')
@@ -328,4 +328,3 @@ def _normalize_luminance(gains):
     """Scale per-channel gains so a neutral grey keeps its brightness."""
     total = float(np.dot(gains, _LUMINANCE_WEIGHTS))
     return gains / total if total > 0 else np.ones(3, np.float32)
-
