@@ -57,21 +57,32 @@ def test_effects_callbacks_build_stroke_shadow_and_overlay_and_are_undoable(sess
     before = composite(session.history.document)
 
     # (stroke on, size, inside, opacity%, colour, shadow on, angle, distance,
-    #  blur, opacity%, colour, overlay on, opacity%, colour)
+    #  blur, opacity%, colour, overlay on, opacity%, colour,
+    #  inner shadow on, angle, distance, blur, opacity%, colour,
+    #  outer glow on, size, opacity%, colour, inner glow on, size, opacity%, colour)
     result = edits['apply_effects'](session, lid, None, True, 2, False, 75, '#ff0000',
                                     True, 90, 3, 0, 100, '#000000',
-                                    True, 40, '#0000ff')
+                                    True, 40, '#0000ff',
+                                    True, 90, 1, 0, 100, '#000000',
+                                    True, 4, 100, '#00ff00',
+                                    True, 4, 100, '#ffff00')
     effects = session.selected().effects
     assert effects.stroke.size == 2 and effects.stroke.inside is False
     assert effects.stroke.opacity == 0.75 and effects.stroke.red == 1.0
     assert effects.shadow.distance == 3 and effects.shadow.opacity == 1.0
     assert (effects.colorOverlay.red, effects.colorOverlay.blue) == (0.0, 1.0)
     assert effects.colorOverlay.opacity == 0.4
+    assert effects.innerShadow.distance == 1 and effects.innerShadow.blur == 0
+    assert effects.outerGlow.size == 4 and effects.outerGlow.opacity == 1.0
+    assert (effects.innerGlow.red, effects.innerGlow.green) == (1.0, 1.0)
     painted = composite(session.history.document)
     assert not np.array_equal(painted, before)
     # The returned view exposes the new values back to the controls.
     assert result[44] is True and result[45] == 90  # shadow on, angle
     assert result[52]['value'] == '#0000ff'  # overlay colour
+    assert result[53] is True and result[54] == 90  # inner shadow on, angle
+    assert result[59] is True and result[60] == 4  # outer glow on, size
+    assert result[66]['value'] == '#ffff00'  # inner glow colour
 
     target = tmp_path / 'effects.comp'
     session.history.save(target)
@@ -82,7 +93,9 @@ def test_effects_callbacks_build_stroke_shadow_and_overlay_and_are_undoable(sess
     np.testing.assert_array_equal(composite(session.history.document), before)
 
     edits['apply_effects'](session, lid, None, False, 4, False, 100, '#000000',
-                           True, 90, 3, 0, 100, '#000000', False, 100, '#000000')
+                           True, 90, 3, 0, 100, '#000000', False, 100, '#000000',
+                           False, 90, 1, 0, 100, '#000000',
+                           False, 4, 100, '#00ff00', False, 4, 100, '#ffff00')
     assert session.selected().effects.colorOverlay is None
     edits['clear_effects'](session, lid, None)
     assert session.selected().effects is None
@@ -97,7 +110,9 @@ def test_effects_on_a_folder_are_rejected_before_mutation(session, callbacks):
     revision = session.history.revision
     with pytest.raises(gr.Error, match='raster layer'):
         edits['apply_effects'](session, folder, None, False, 4, False, 100, '#000000',
-                               True, 90, 3, 0, 100, '#000000', False, 100, '#000000')
+                               True, 90, 3, 0, 100, '#000000', False, 100, '#000000',
+                               False, 90, 1, 0, 100, '#000000',
+                               False, 4, 100, '#00ff00', False, 4, 100, '#ffff00')
     assert session.history.revision == revision and folder == session.selected_id
 
 
@@ -108,7 +123,9 @@ def test_effects_reject_invalid_colour_before_mutation(session, callbacks, color
     revision = session.history.revision
     with pytest.raises(gr.Error, match='#rrggbb'):
         edit(session, session.selected_id, None, True, 2, False, 75, color,
-             False, 90, 3, 0, 100, '#000000', False, 100, '#000000')
+             False, 90, 3, 0, 100, '#000000', False, 100, '#000000',
+             False, 90, 1, 0, 100, '#000000',
+             False, 4, 100, '#00ff00', False, 4, 100, '#ffff00')
     assert session.history.revision == revision
 
 
@@ -192,7 +209,7 @@ def test_open_requires_discard_and_failed_open_preserves_session(session, callba
         assert replacement.history.document.width == 3
         assert replacement.history.dirty
         assert not Path(session.workspace).exists()
-        assert len(loaded) == 54
+        assert len(loaded) == 68
     finally:
         replacement.close()
 
@@ -207,7 +224,7 @@ def test_save_and_export_gate_unapplied_strokes(session, callbacks, tmp_path):
         export(session, stroke_canvas(), 'PNG (8-bit sRGB)')
     assert not target.exists() and session.history.dirty
     result = save(session, str(target), None)
-    assert len(result) == 53 and not session.history.dirty
+    assert len(result) == 67 and not session.history.dirty
     np.testing.assert_array_equal(composite(load_project(target)),
                                   composite(session.history.document))
     path = export(session, None, 'PNG (8-bit sRGB)')
@@ -225,7 +242,7 @@ def test_save_and_export_gate_unapplied_strokes(session, callbacks, tmp_path):
 def test_ui_edit_callbacks_change_layer_and_restore_with_undo(session, callbacks):
     edits = [fn for fn in callbacks if fn.__name__ == 'edit']
     result = edits[0](session, session.selected_id, None, 'New name', False, 50, True)
-    assert len(result) == 53
+    assert len(result) == 67
     layer = session.selected()
     assert (layer.name, layer.visible, layer.opacity) == ('New name', False, 0.5)
     undo = next(fn for fn in edits if fn.__kwdefaults__['operation'] == 'undo')
@@ -278,7 +295,7 @@ def test_reset_mask_callback_reveals_layer_and_undo_restores_coverage(session, c
     painted = composite(session.history.document)
     assert not np.array_equal(painted, expected)
     result = edits['reset_mask'](session, lid, None)
-    assert len(result) == 53 and session.selected_id == lid
+    assert len(result) == 67 and session.selected_id == lid
     assert session.selected().mask is None
     np.testing.assert_array_equal(composite(session.history.document), expected)
     session.history.save(tmp_path / 'reset.comp')
@@ -356,7 +373,7 @@ def test_recipe_callbacks_attach_one_masked_layer_and_block_overlapping_jobs(ses
     render_worker(session.job.directory, Engine)
     session.job.status = 'completed'
     result = finish(session, None)
-    assert len(result) == 56 and session.job.finalized
+    assert len(result) == 70 and session.job.finalized
     assert session.selected().name == 'Retouch · natural'
     assert session.selected().opacity == 0.5
     assert composite(session.history.document)[0, 0].tolist() == [150, 150, 150, 255]

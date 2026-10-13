@@ -251,6 +251,9 @@ def _tool_view(session):
     effects = layer.effects if layer and layer.effects else None
     shadow = effects.shadow if effects and effects.shadow else None
     overlay = effects.colorOverlay if effects and effects.colorOverlay else None
+    inner_s = effects.innerShadow if effects and effects.innerShadow else None
+    glow_o = effects.outerGlow if effects and effects.outerGlow else None
+    glow_i = effects.innerGlow if effects and effects.innerGlow else None
     stroke = effects.stroke if effects and effects.stroke else None
     return (layer.rotation if layer else 0,
             gr.update(choices=folders, value=(layer.parent_id or '') if layer else ''),
@@ -268,9 +271,22 @@ def _tool_view(session):
             shadow.blur if shadow else 20, round((shadow.opacity if shadow else 0.5) * 100),
             gr.update(value=_hex_color(shadow.red, shadow.green, shadow.blue) if shadow else '#000000',
                       visible=shadow is not None),
-            overlay is not None, round((overlay.opacity if overlay else 1) * 100),
+    overlay is not None, round((overlay.opacity if overlay else 1) * 100),
             gr.update(value=_hex_color(overlay.red, overlay.green, overlay.blue) if overlay else '#000000',
-                      visible=overlay is not None))
+                      visible=overlay is not None),
+            inner_s is not None, inner_s.angle if inner_s else 90,
+            inner_s.distance if inner_s else 10, inner_s.blur if inner_s else 10,
+            round((inner_s.opacity if inner_s else 0.5) * 100),
+            gr.update(value=_hex_color(inner_s.red, inner_s.green, inner_s.blue) if inner_s else '#000000',
+                      visible=inner_s is not None),
+            glow_o is not None, glow_o.size if glow_o else 20,
+            round((glow_o.opacity if glow_o else 0.75) * 100),
+            gr.update(value=_hex_color(glow_o.red, glow_o.green, glow_o.blue) if glow_o else '#ffffff',
+                      visible=glow_o is not None),
+            glow_i is not None, glow_i.size if glow_i else 10,
+            round((glow_i.opacity if glow_i else 0.75) * 100),
+            gr.update(value=_hex_color(glow_i.red, glow_i.green, glow_i.blue) if glow_i else '#ffffff',
+                      visible=glow_i is not None))
 
 
 def _hex_color(red, green, blue):
@@ -457,6 +473,31 @@ def build_editor_tab():
                     overlay_opacity = gr.Slider(0, 100, value=100, step=1,
                                                 label='Overlay opacity (%)', visible=False)
                     overlay_color = gr.ColorPicker(label='Overlay colour', value='#000000', visible=False)
+                    effect_inner_shadow = gr.Checkbox(label='Inner shadow', value=False)
+                    inner_shadow_angle = gr.Slider(-180, 180, value=90, step=1,
+                                                   label='Inner shadow angle (degrees)', visible=False)
+                    inner_shadow_distance = gr.Slider(0, 200, value=10, step=1,
+                                                      label='Inner shadow distance (pixels)', visible=False)
+                    inner_shadow_blur = gr.Slider(0, 200, value=10, step=1,
+                                                  label='Inner shadow blur (pixels)', visible=False)
+                    inner_shadow_opacity = gr.Slider(0, 100, value=50, step=1,
+                                                     label='Inner shadow opacity (%)', visible=False)
+                    inner_shadow_color = gr.ColorPicker(label='Inner shadow colour', value='#000000',
+                                                        visible=False)
+                    effect_outer_glow = gr.Checkbox(label='Outer glow', value=False)
+                    outer_glow_size = gr.Slider(0, 200, value=20, step=1,
+                                                label='Outer glow size (pixels)', visible=False)
+                    outer_glow_opacity = gr.Slider(0, 100, value=75, step=1,
+                                                   label='Outer glow opacity (%)', visible=False)
+                    outer_glow_color = gr.ColorPicker(label='Outer glow colour', value='#ffffff',
+                                                      visible=False)
+                    effect_inner_glow = gr.Checkbox(label='Inner glow', value=False)
+                    inner_glow_size = gr.Slider(0, 200, value=10, step=1,
+                                                label='Inner glow size (pixels)', visible=False)
+                    inner_glow_opacity = gr.Slider(0, 100, value=75, step=1,
+                                                   label='Inner glow opacity (%)', visible=False)
+                    inner_glow_color = gr.ColorPicker(label='Inner glow colour', value='#ffffff',
+                                                      visible=False)
                     apply_effects = gr.Button('Apply layer effects')
                     clear_effects = gr.Button('Clear layer effects')
                     gr.Markdown('Effects need a plain raster layer. Clear removes every effect; '
@@ -492,7 +533,11 @@ def build_editor_tab():
                    grade_temperature, grade_tint, grade_brightness, grade_contrast, grade_hue,
                    effect_stroke, stroke_size, stroke_inside, stroke_opacity, stroke_color,
                    effect_shadow, shadow_angle, shadow_distance, shadow_blur, shadow_opacity,
-                   shadow_color, effect_overlay, overlay_opacity, overlay_color]
+                   shadow_color, effect_overlay, overlay_opacity, overlay_color,
+                   effect_inner_shadow, inner_shadow_angle, inner_shadow_distance,
+                   inner_shadow_blur, inner_shadow_opacity, inner_shadow_color,
+                   effect_outer_glow, outer_glow_size, outer_glow_opacity, outer_glow_color,
+                   effect_inner_glow, inner_glow_size, inner_glow_opacity, inner_glow_color]
 
         def recovery_choices():
             entries = list_recoveries()
@@ -599,7 +644,8 @@ def build_editor_tab():
                                                      mask_source_id=args[1] or None)
                     elif operation in ('apply_effects', 'clear_effects'):
                         from .document import (LayerEffects, StrokeEffect, ShadowEffect,
-                                               ColorOverlayEffect)
+                                               ColorOverlayEffect, InnerShadowEffect,
+                                               OuterGlowEffect, InnerGlowEffect)
                         if operation == 'clear_effects':
                             effects = None
                         else:
@@ -620,9 +666,30 @@ def build_editor_tab():
                                 red, green, blue = _rgb(args[13])
                                 overlay = ColorOverlayEffect(red=red, green=green, blue=blue,
                                                              opacity=args[12] / 100)
+                            inner_shadow = None
+                            if args[14]:
+                                red, green, blue = _rgb(args[19])
+                                inner_shadow = InnerShadowEffect(angle=args[15], distance=args[16],
+                                                                 blur=args[17], red=red, green=green,
+                                                                 blue=blue, opacity=args[18] / 100)
+                            outer_glow = None
+                            if args[20]:
+                                red, green, blue = _rgb(args[23])
+                                outer_glow = OuterGlowEffect(size=args[21], red=red,
+                                                             green=green, blue=blue,
+                                                             opacity=args[22] / 100)
+                            inner_glow = None
+                            if args[24]:
+                                red, green, blue = _rgb(args[27])
+                                inner_glow = InnerGlowEffect(size=args[25], red=red,
+                                                             green=green, blue=blue,
+                                                             opacity=args[26] / 100)
                             effects = LayerEffects(stroke=stroke, shadow=shadow,
-                                                   colorOverlay=overlay) if (
-                                stroke or shadow or overlay) else None
+                                                   colorOverlay=overlay, innerShadow=inner_shadow,
+                                                   outerGlow=outer_glow,
+                                                   innerGlow=inner_glow) if (
+                                stroke or shadow or overlay or inner_shadow
+                                or outer_glow or inner_glow) else None
                         if (effects is not None and (layer.is_group or layer.adjustment is not None
                                                      or layer.mask_source_id is not None)):
                             raise ValueError('Layer effects need a plain raster layer')
@@ -734,7 +801,13 @@ def build_editor_tab():
                 'apply_effects': [effect_stroke, stroke_size, stroke_inside, stroke_opacity,
                                   stroke_color, effect_shadow, shadow_angle, shadow_distance,
                                   shadow_blur, shadow_opacity, shadow_color, effect_overlay,
-                                  overlay_opacity, overlay_color],
+                                  overlay_opacity, overlay_color,
+                                  effect_inner_shadow, inner_shadow_angle, inner_shadow_distance,
+                                  inner_shadow_blur, inner_shadow_opacity, inner_shadow_color,
+                                  effect_outer_glow, outer_glow_size, outer_glow_opacity,
+                                  outer_glow_color,
+                                  effect_inner_glow, inner_glow_size, inner_glow_opacity,
+                                  inner_glow_color],
                 'clear_effects': [],
             }
             extra = extras.get(operation, [])
@@ -751,6 +824,16 @@ def build_editor_tab():
         effect_overlay.change(
             lambda on: [gr.update(visible=on)] * 2, effect_overlay,
             [overlay_opacity, overlay_color], queue=False)
+        effect_inner_shadow.change(
+            lambda on: [gr.update(visible=on)] * 5, effect_inner_shadow,
+            [inner_shadow_angle, inner_shadow_distance, inner_shadow_blur,
+             inner_shadow_opacity, inner_shadow_color], queue=False)
+        effect_outer_glow.change(
+            lambda on: [gr.update(visible=on)] * 3, effect_outer_glow,
+            [outer_glow_size, outer_glow_opacity, outer_glow_color], queue=False)
+        effect_inner_glow.change(
+            lambda on: [gr.update(visible=on)] * 3, effect_inner_glow,
+            [inner_glow_size, inner_glow_opacity, inner_glow_color], queue=False)
 
         def grade_visibility(kind):
             levels = kind == 'Levels'

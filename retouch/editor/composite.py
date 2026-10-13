@@ -295,10 +295,27 @@ def _effect_margin(effects):
         # stroke erodes the silhouette (context above), an outside one dilates.
         if stroke.enabled and stroke.opacity > 0:
             margin = max(margin, stroke.size)
+    if effects is not None and effects.outerGlow is not None:
+        glow = effects.outerGlow
+        if glow.enabled and glow.size > 0 and glow.opacity > 0:
+            margin = max(margin, glow.size * 3)
     if effects is not None and effects.shadow is not None:
         shadow = effects.shadow
         if shadow.enabled and shadow.opacity > 0:
             margin = max(margin, shadow.distance + shadow.blur * 3)
+    # Upstream's margin stops here: inner effects draw inside the silhouette.
+    # But this port renders in bands, and each band's extended window must
+    # carry enough of the layer's own alpha for the inner effects' blur to
+    # see real coverage instead of the window's zero padding, or their
+    # coverage would differ per band split (band-invariance contract).
+    if effects is not None and effects.innerShadow is not None:
+        inner_shadow = effects.innerShadow
+        if inner_shadow.enabled and inner_shadow.opacity > 0:
+            margin = max(margin, inner_shadow.distance + inner_shadow.blur * 3)
+    if effects is not None and effects.innerGlow is not None:
+        inner_glow = effects.innerGlow
+        if inner_glow.enabled and inner_glow.size > 0 and inner_glow.opacity > 0:
+            margin = max(margin, inner_glow.size * 3)
     return int(math.ceil(margin)) + 2
 
 
@@ -316,6 +333,20 @@ def _shift(array, dx, dy):
     if span_x > 0 and span_y > 0:
         out[ty:ty + span_y, tx:tx + span_x] = array[sy:sy + span_y, sx:sx + span_x]
     return out
+
+
+def _shift_float(array, dx, dy):
+    """Bilinear move by a fractional pixel amount, upstream's smooth shift.
+
+    ``effects_shift`` (Metal) and the fractionally placed CPU draw both blend
+    neighbours when the shadow's offset lands between pixels
+    (MetalLayerEffects.swift:278-289), so the same is done here on the
+    float coverage; the integer ``_shift`` stays for hard pixel moves.
+    """
+    matrix = np.float32([[1, 0, dx], [0, 1, dy]])
+    size = (array.shape[1], array.shape[0])  # the caller's buffer is already padded
+    return cv2.warpAffine(np.asarray(array, np.float32), matrix, size,
+                          flags=cv2.INTER_LINEAR)
 
 
 def _blur(mask, radius):
@@ -370,13 +401,22 @@ def _apply_effects(rgb, alpha, effects):
     shadow = effects.shadow
     if shadow is not None and shadow.enabled and shadow.opacity > 0:
         dx, dy = shadow.offset
-        moved = _blur(_shift(layer_alpha, int(round(dx)), int(round(dy))), shadow.blur)
+        moved = _blur(_shift_float(layer_alpha, dx, dy), shadow.blur)
         shadow_a = moved * shadow.opacity
         shadow_c = np.array([shadow.red, shadow.green, shadow.blue], np.float32)
         accum_rgb = np.broadcast_to(shadow_c, accum_rgb.shape).astype(np.float32)
         accum_alpha = shadow_a
 
-    # 2. Outside stroke sits behind the layer's own pixels.
+    # 2. Outer glow: blurred coverage, halo only outside the layer shape,
+    #    drawn over the shadow but still behind the layer's own pixels.
+    outer_glow = effects.outerGlow
+    if (outer_glow is not None and outer_glow.enabled
+            and outer_glow.size > 0 and outer_glow.opacity > 0):
+        halo = _blur(layer_alpha, outer_glow.size) * (1 - layer_alpha) * outer_glow.opacity
+        accum_rgb, accum_alpha = _fill_over(
+            accum_rgb, accum_alpha, (outer_glow.red, outer_glow.green, outer_glow.blue), halo)
+
+    # 3. Outside stroke sits behind the layer's own pixels.
     stroke = effects.stroke
     if (stroke is not None and stroke.enabled and not stroke.inside
             and stroke.size > 0 and stroke.opacity > 0):
@@ -384,7 +424,7 @@ def _apply_effects(rgb, alpha, effects):
         accum_rgb, accum_alpha = _fill_over(
             accum_rgb, accum_alpha, (stroke.red, stroke.green, stroke.blue), coverage)
 
-    # 3. Layer's own pixels drawn over the shadow/stroke (source-over).
+    # 4. Layer's own pixels drawn over the shadow/glow/stroke (source-over).
     if layer_alpha.any():
         l_over = layer_alpha[..., np.newaxis]
         out_a = layer_alpha + accum_alpha * (1 - layer_alpha)
@@ -396,7 +436,7 @@ def _apply_effects(rgb, alpha, effects):
         )
         accum_alpha = out_a
 
-    # 4. Flat colour overlay sits over the layer; its shape is the unshadowed
+    # 5. Flat colour overlay sits over the layer; its shape is the unshadowed
     # silhouette (``coverage(shown, blur: 0)`` upstream), so it never tints the shadow.
     overlay = effects.colorOverlay
     if overlay is not None and overlay.enabled and overlay.opacity > 0 and layer_alpha.any():
@@ -412,7 +452,25 @@ def _apply_effects(rgb, alpha, effects):
         )
         accum_alpha = out_a
 
-    # 5. Inside stroke is drawn last, over the layer and overlay.
+    # 6. Inner glow: coverage's blur complement, kept inside the shape.
+    inner_glow = effects.innerGlow
+    if (inner_glow is not None and inner_glow.enabled
+            and inner_glow.size > 0 and inner_glow.opacity > 0):
+        coverage = layer_alpha * (1 - _blur(layer_alpha, inner_glow.size)) * inner_glow.opacity
+        accum_rgb, accum_alpha = _fill_over(
+            accum_rgb, accum_alpha, (inner_glow.red, inner_glow.green, inner_glow.blue), coverage)
+
+    # 7. Inner shadow: the outside's softness, kept to the layer's own shape.
+    inner_shadow = effects.innerShadow
+    if (inner_shadow is not None and inner_shadow.enabled
+            and inner_shadow.opacity > 0):
+        dx, dy = inner_shadow.offset
+        moved = _blur(_shift_float(layer_alpha, dx, dy), inner_shadow.blur)
+        coverage = layer_alpha * (1 - moved) * inner_shadow.opacity
+        accum_rgb, accum_alpha = _fill_over(
+            accum_rgb, accum_alpha, (inner_shadow.red, inner_shadow.green, inner_shadow.blue), coverage)
+
+    # 8. Inside stroke is drawn last, over the layer and overlay.
     if (stroke is not None and stroke.enabled and stroke.inside
             and stroke.size > 0 and stroke.opacity > 0):
         coverage = _stroke_coverage(layer_alpha, stroke) * stroke.opacity

@@ -40,8 +40,11 @@ from .document import (
     SAMPLING,
     Document,
     ColorOverlayEffect,
+    InnerGlowEffect,
+    InnerShadowEffect,
     Layer,
     LayerEffects,
+    OuterGlowEffect,
     ShadowEffect,
     StrokeEffect,
     UnsupportedFeature,
@@ -291,7 +294,7 @@ def _check_effects(record, layer_name):
     if not isinstance(record, dict):
         raise _invalid('effects must be a dict')
     for key in record:
-        if key not in ('stroke', 'shadow', 'colorOverlay'):
+        if key not in ('stroke', 'shadow', 'colorOverlay', 'innerShadow', 'outerGlow', 'innerGlow'):
             raise UnsupportedFeature(f'effect kind {key!r} is not supported yet (layer {layer_name!r})')
     stroke = None
     stroke_rec = record.get('stroke')
@@ -342,7 +345,57 @@ def _check_effects(record, layer_name):
             blue=float(overlay_rec.get('blue', 0)),
             opacity=float(overlay_rec.get('opacity', 1)),
             enabled=overlay_rec.get('enabled', True))
-    effects = LayerEffects(stroke=stroke, shadow=shadow, colorOverlay=overlay)
+    inner_shadow = None
+    inner_rec = record.get('innerShadow')
+    if inner_rec is not None:
+        if not isinstance(inner_rec, dict):
+            raise _invalid('innerShadow must be a dict')
+        unknown = set(inner_rec) - {'enabled', 'angle', 'distance', 'blur',
+                                    'red', 'green', 'blue', 'opacity'}
+        if unknown:
+            raise _invalid(f'unknown innerShadow keys: {sorted(unknown)}')
+        inner_shadow = InnerShadowEffect(
+            angle=float(inner_rec.get('angle', 90)),
+            distance=float(inner_rec.get('distance', 10)),
+            blur=float(inner_rec.get('blur', 10)),
+            red=float(inner_rec.get('red', 0)),
+            green=float(inner_rec.get('green', 0)),
+            blue=float(inner_rec.get('blue', 0)),
+            opacity=float(inner_rec.get('opacity', 0.5)),
+            enabled=inner_rec.get('enabled', True))
+    outer_glow = None
+    outer_rec = record.get('outerGlow')
+    if outer_rec is not None:
+        if not isinstance(outer_rec, dict):
+            raise _invalid('outerGlow must be a dict')
+        unknown = set(outer_rec) - {'enabled', 'size', 'red', 'green', 'blue', 'opacity'}
+        if unknown:
+            raise _invalid(f'unknown outerGlow keys: {sorted(unknown)}')
+        outer_glow = OuterGlowEffect(
+            size=float(outer_rec.get('size', 20)),
+            red=float(outer_rec.get('red', 1)),
+            green=float(outer_rec.get('green', 1)),
+            blue=float(outer_rec.get('blue', 1)),
+            opacity=float(outer_rec.get('opacity', 0.75)),
+            enabled=outer_rec.get('enabled', True))
+    inner_glow = None
+    inner_glow_rec = record.get('innerGlow')
+    if inner_glow_rec is not None:
+        if not isinstance(inner_glow_rec, dict):
+            raise _invalid('innerGlow must be a dict')
+        unknown = set(inner_glow_rec) - {'enabled', 'size', 'red', 'green', 'blue', 'opacity'}
+        if unknown:
+            raise _invalid(f'unknown innerGlow keys: {sorted(unknown)}')
+        inner_glow = InnerGlowEffect(
+            size=float(inner_glow_rec.get('size', 10)),
+            red=float(inner_glow_rec.get('red', 1)),
+            green=float(inner_glow_rec.get('green', 1)),
+            blue=float(inner_glow_rec.get('blue', 1)),
+            opacity=float(inner_glow_rec.get('opacity', 0.75)),
+            enabled=inner_glow_rec.get('enabled', True))
+    effects = LayerEffects(stroke=stroke, shadow=shadow, colorOverlay=overlay,
+                           innerShadow=inner_shadow, outerGlow=outer_glow,
+                           innerGlow=inner_glow)
     try:
         validate_effects(effects)
     except ValueError as exc:
@@ -648,4 +701,18 @@ def _encode_effects(effects):
         if not o.enabled:
             rec['enabled'] = False
         out['colorOverlay'] = rec
+    if effects.innerShadow is not None:
+        s = effects.innerShadow
+        rec = {'angle': s.angle, 'distance': s.distance, 'blur': s.blur,
+               'red': s.red, 'green': s.green, 'blue': s.blue, 'opacity': s.opacity}
+        if not s.enabled:
+            rec['enabled'] = False
+        out['innerShadow'] = rec
+    for key, glow in (('outerGlow', effects.outerGlow), ('innerGlow', effects.innerGlow)):
+        if glow is not None:
+            rec = {'size': glow.size, 'red': glow.red, 'green': glow.green,
+                   'blue': glow.blue, 'opacity': glow.opacity}
+            if not glow.enabled:
+                rec['enabled'] = False
+            out[key] = rec
     return out

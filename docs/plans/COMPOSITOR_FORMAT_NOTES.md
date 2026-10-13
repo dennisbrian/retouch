@@ -39,7 +39,7 @@ the pixels are replaced, as upstream does on a destructive edit).
 
 Refused with `UnsupportedFeature` (valid upstream, not modelled yet):
 folders (`isGroup`, `parentID`), clipping masks (`maskSourceID`), adjustment
-layers, glow/inner-shadow effect kinds, unlinked masks
+layers, unlinked masks
 (`maskPlacement`, `maskLinked: false`), fractional layer sizes, unknown
 keys. Blend modes render for
 the full `RENDER_BLEND_MODES` set (all 24 separable and component modes);

@@ -36,8 +36,8 @@ BLEND_MODES = (
 SAMPLING = ('High quality', 'Smooth', 'Nearest')
 
 # LayerEffects: the subset of Compositor's LayerEffects this port renders
-# (``Compositor/Document/LayerEffects.swift``). Stroke, drop shadow and colour overlay
-# are modelled; inner shadow, outer glow and inner glow are refused
+# (``Compositor/Document/LayerEffects.swift``). Stroke, drop shadow, colour overlay,
+# inner shadow, outer glow and inner glow are modelled; anything else is refused
 # rather than dropped. ``enabled`` is upstream's optional flag: missing means
 # visible, so it round-trips as absent unless a project turns it off.
 
@@ -59,6 +59,61 @@ class StrokeEffect:
     def __eq__(self, other):
         return (isinstance(other, StrokeEffect)
                 and all(getattr(self, key) == getattr(other, key) for key in self.__slots__))
+
+
+class InnerShadowEffect:
+    """A shadow cast inside the layer's own edges (upstream InnerShadowEffect)."""
+    __slots__ = ('enabled', 'angle', 'distance', 'blur', 'red', 'green', 'blue', 'opacity')
+
+    def __init__(self, angle=90, distance=10, blur=10,
+                 red=0, green=0, blue=0, opacity=0.5, enabled=True):
+        self.enabled = enabled
+        self.angle = float(angle)
+        self.distance = float(distance)
+        self.blur = float(blur)
+        self.red = float(red)
+        self.green = float(green)
+        self.blue = float(blue)
+        self.opacity = float(opacity)
+
+    @property
+    def offset(self):
+        """Where the shadow falls, in layer pixels (y grows downward)."""
+        radians = math.radians(self.angle)
+        return -math.cos(radians) * self.distance, math.sin(radians) * self.distance
+
+    def __eq__(self, other):
+        return (isinstance(other, InnerShadowEffect)
+                and all(getattr(self, k) == getattr(other, k) for k in self.__slots__))
+
+
+class _GlowEffect:
+    """Shared shape for the omnidirectional glows (upstream has two structs)."""
+    __slots__ = ('enabled', 'size', 'red', 'green', 'blue', 'opacity')
+
+    def __init__(self, size, red, green, blue, opacity, enabled):
+        self.enabled = enabled
+        self.size = float(size)
+        self.red = float(red)
+        self.green = float(green)
+        self.blue = float(blue)
+        self.opacity = float(opacity)
+
+    def __eq__(self, other):
+        return (isinstance(other, type(self))
+                and all(getattr(self, k) == getattr(other, k) for k in self.__slots__))
+
+
+class OuterGlowEffect(_GlowEffect):
+    """A soft glow drawn around the outside of what the layer shows."""
+    def __init__(self, size=20, red=1, green=1, blue=1, opacity=0.75, enabled=True):
+        super().__init__(size, red, green, blue, opacity, enabled)
+
+
+class InnerGlowEffect(_GlowEffect):
+    """A glow emanating inward from the layer's boundary."""
+    def __init__(self, size=10, red=1, green=1, blue=1, opacity=0.75, enabled=True):
+        super().__init__(size, red, green, blue, opacity, enabled)
 
 
 class ShadowEffect:
@@ -121,20 +176,29 @@ class ColorOverlayEffect:
 
 class LayerEffects:
     """What a layer draws around itself; kept with the layer, never baked in."""
-    __slots__ = ('stroke', 'shadow', 'colorOverlay')
+    __slots__ = ('stroke', 'shadow', 'colorOverlay', 'innerShadow', 'outerGlow', 'innerGlow')
 
-    def __init__(self, stroke=None, shadow=None, colorOverlay=None):
+    def __init__(self, stroke=None, shadow=None, colorOverlay=None,
+                 innerShadow=None, outerGlow=None, innerGlow=None):
         self.stroke = stroke
         self.shadow = shadow
         self.colorOverlay = colorOverlay
+        self.innerShadow = innerShadow
+        self.outerGlow = outerGlow
+        self.innerGlow = innerGlow
 
     def is_empty(self):
-        return self.stroke is None and self.shadow is None and self.colorOverlay is None
+        return (self.stroke is None and self.shadow is None and self.colorOverlay is None
+                and self.innerShadow is None and self.outerGlow is None
+                and self.innerGlow is None)
 
     def __eq__(self, other):
         return (isinstance(other, LayerEffects)
                 and self.stroke == other.stroke and self.shadow == other.shadow
-                and self.colorOverlay == other.colorOverlay)
+                and self.colorOverlay == other.colorOverlay
+                and self.innerShadow == other.innerShadow
+                and self.outerGlow == other.outerGlow
+                and self.innerGlow == other.innerGlow)
 
     def __ne__(self, other):
         return not self.__eq__(other)
@@ -143,8 +207,10 @@ class LayerEffects:
         return not self.is_empty()
 
     def __repr__(self):
-        return ('LayerEffects(stroke=%r, shadow=%r, colorOverlay=%r)'
-                % (self.stroke, self.shadow, self.colorOverlay))
+        return ('LayerEffects(stroke=%r, shadow=%r, colorOverlay=%r, '
+                'innerShadow=%r, outerGlow=%r, innerGlow=%r)'
+                % (self.stroke, self.shadow, self.colorOverlay,
+                   self.innerShadow, self.outerGlow, self.innerGlow))
 
 
 def _effect_number(value, low, high):
@@ -187,6 +253,28 @@ def validate_effects(effects):
                 and all(_effect_number(v, 0, 1) for v in
                         (overlay.red, overlay.green, overlay.blue)))):
             raise ValueError('colorOverlay settings out of range')
+    inner_shadow = effects.innerShadow
+    if inner_shadow is not None:
+        if not isinstance(inner_shadow, InnerShadowEffect):
+            raise ValueError('innerShadow must be an InnerShadowEffect record')
+        if (type(inner_shadow.enabled) is not bool
+                or not (_effect_number(inner_shadow.angle, -360, 360)
+                and _effect_number(inner_shadow.distance, 0, 5000)
+                and _effect_number(inner_shadow.blur, 0, 500)
+                and _effect_number(inner_shadow.opacity, 0, 1)
+                and all(_effect_number(v, 0, 1) for v in
+                        (inner_shadow.red, inner_shadow.green, inner_shadow.blue)))):
+            raise ValueError('innerShadow settings out of range')
+    for glow, name in ((effects.outerGlow, 'outerGlow'), (effects.innerGlow, 'innerGlow')):
+        if glow is not None:
+            if not isinstance(glow, _GlowEffect):
+                raise ValueError(f'{name} must be a glow effect record')
+            if (type(glow.enabled) is not bool
+                    or not (_effect_number(glow.size, 0, 500)
+                    and _effect_number(glow.opacity, 0, 1)
+                    and all(_effect_number(v, 0, 1) for v in
+                            (glow.red, glow.green, glow.blue)))):
+                raise ValueError(f'{name} settings out of range')
 
 class UnsupportedFeature(ValueError):
     """A valid Compositor construct this port cannot represent or render yet."""

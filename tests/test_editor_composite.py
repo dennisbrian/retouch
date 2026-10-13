@@ -259,6 +259,21 @@ class TestLayerEffectsPixels:
         assert out[0, 2].tolist() == [0, 0, 0, 0]         # no shadow above
         assert out[2, 0].tolist() == [0, 0, 0, 0]         # no shadow to sides
 
+    def test_drop_shadow_fractional_offset_blends_not_snaps(self):
+        from retouch.editor.document import LayerEffects, ShadowEffect
+        doc = Document(4, 4)
+        layer = doc.add_image(np.array([[[255, 255, 255, 255]]], np.uint8), 'P', origin=(1, 1))
+        # angle 90, distance 1.5 -> dy = 1.5: upstream's effects_shift blends
+        # bilinearly between the rows (MetalLayerEffects.swift:278-289), it never
+        # snaps to whole pixels. Half coverage on each of the two rows below.
+        layer.effects = LayerEffects(shadow=ShadowEffect(angle=90, distance=1.5, blur=0,
+                                                          opacity=1.0, red=0, green=0, blue=0))
+        out = composite(doc)
+        assert out[1, 1].tolist() == [255, 255, 255, 255]  # layer pixel
+        assert out[2, 1].tolist() == [0, 0, 0, 128]        # rint(255*0.5)
+        assert out[3, 1].tolist() == [0, 0, 0, 128]
+        assert out[0, 1].tolist() == [0, 0, 0, 0]         # nothing above
+
     def test_drop_shadow_sits_behind_layer_pixels(self):
         from retouch.editor.document import LayerEffects, ShadowEffect
         doc = Document(1, 1)
@@ -279,7 +294,103 @@ class TestLayerEffectsPixels:
         # Analytic: a=128/255, out_a = a*(2 - a) = 48896/65025 -> 192/255; straight RGB = 255*255/382 -> 170
         assert out[0, 0].tolist() == [170, 170, 170, 192]
 
-    def test_effects_band_invariance(self):
+    def test_inner_shadow_zero_blur_geometry_and_placement(self):
+        from retouch.editor.document import LayerEffects, InnerShadowEffect
+        doc = Document(5, 5)
+        px = np.full((3, 3, 4), (255, 255, 255, 255), np.uint8)
+        layer = doc.add_image(px, 'Box', origin=(1, 1))
+        # Same offset as a drop shadow (angle 90 -> dy +1): the shifted-blurred
+        # coverage's complement, clipped inside the layer, darkens the top edge.
+        layer.effects = LayerEffects(innerShadow=InnerShadowEffect(
+            angle=90, distance=1, blur=0, opacity=1.0))
+        out = composite(doc)
+        for col in (1, 2, 3):
+            assert out[1, col].tolist() == [0, 0, 0, 255], col
+        assert out[2, 2].tolist() == [255, 255, 255, 255]  # interior untouched
+        assert out[0, 2].tolist() == [0, 0, 0, 0]  # never leaves the shape
+
+    def test_inner_shadow_half_opacity_analytic_source_over(self):
+        from retouch.editor.document import LayerEffects, InnerShadowEffect
+        doc = Document(5, 5)
+        layer = doc.add_image(np.full((3, 3, 4), (255, 255, 255, 255), np.uint8), 'Box', origin=(1, 1))
+        layer.effects = LayerEffects(innerShadow=InnerShadowEffect(
+            angle=90, distance=1, blur=0, opacity=0.5))
+        out = composite(doc)
+        # Black 0.5 over opaque white: rint(255*0.5) = 128.
+        assert out[1, 2].tolist() == [128, 128, 128, 255]
+        assert out[2, 2].tolist() == [255, 255, 255, 255]
+
+    def test_inner_shadow_zero_distance_full_silhouette_is_invisible(self):
+        from retouch.editor.document import LayerEffects, InnerShadowEffect
+        doc_plain = Document(3, 3)
+        doc_plain.add_image(np.full((3, 3, 4), (10, 200, 30, 255), np.uint8), 'Box')
+        doc_fx = Document(3, 3)
+        layer = doc_fx.add_image(np.full((3, 3, 4), (10, 200, 30, 255), np.uint8), 'Box')
+        # coverage = a * (1 - a) = 0 everywhere on an opaque layer.
+        layer.effects = LayerEffects(innerShadow=InnerShadowEffect(distance=0, blur=0, opacity=1))
+        np.testing.assert_array_equal(composite(doc_fx), composite(doc_plain))
+
+    def test_outer_glow_size_zero_is_invisible_behind_layer(self):
+        from retouch.editor.document import LayerEffects, OuterGlowEffect
+        doc_plain = Document(3, 3)
+        doc_plain.add_image(np.array([[[255, 0, 0, 255]]], np.uint8), 'P', origin=(1, 1))
+        doc_fx = Document(3, 3)
+        layer = doc_fx.add_image(np.array([[[255, 0, 0, 255]]], np.uint8), 'P', origin=(1, 1))
+        # sigma 0 -> glow equals the silhouette; masked by (1 - shape) it vanishes.
+        layer.effects = LayerEffects(outerGlow=OuterGlowEffect(size=0, opacity=1))
+        np.testing.assert_array_equal(composite(doc_fx), composite(doc_plain))
+
+    def test_outer_glow_blurred_halo_lands_outside_layer(self):
+        from retouch.editor.document import LayerEffects, OuterGlowEffect
+        doc = Document(5, 5)
+        layer = doc.add_image(np.array([[[255, 0, 0, 255]]], np.uint8), 'P', origin=(2, 2))
+        layer.effects = LayerEffects(outerGlow=OuterGlowEffect(
+            size=2, opacity=1, red=1, green=0, blue=0))
+        out = composite(doc)
+        assert out[2, 2].tolist() == [255, 0, 0, 255]  # layer pixel unchanged
+        assert out[1, 2, 3] > 0 and out[1, 2, :3].tolist() == [255, 0, 0]  # red halo
+        assert out[0, 2, 3] < out[1, 2, 3]  # halo fades with distance
+
+    def test_inner_glow_brightens_edges_from_inside(self):
+        from retouch.editor.document import LayerEffects, InnerGlowEffect
+        doc = Document(5, 5)
+        layer = doc.add_image(np.full((3, 3, 4), (0, 0, 0, 255), np.uint8), 'Box', origin=(1, 1))
+        layer.effects = LayerEffects(innerGlow=InnerGlowEffect(
+            size=6, opacity=1, red=1, green=1, blue=0))
+        out = composite(doc)
+        # Corners sit closer to the boundary than the center: brighter there.
+        assert out[1, 1, 0] > out[2, 2, 0] > 0
+        assert out[2, 2, 2] == 0  # pure yellow glow, no blue channel
+
+    def test_new_effect_kinds_in_band_invariance(self):
+        from retouch.editor.document import (LayerEffects, InnerShadowEffect,
+                                             OuterGlowEffect, InnerGlowEffect)
+        doc = Document(16, 16)
+        layer = doc.add_image(np.full((4, 4, 4), (200, 100, 50, 255), np.uint8), 'Box', origin=(6, 6))
+        layer.effects = LayerEffects(
+            innerShadow=InnerShadowEffect(angle=45, distance=2, blur=1, opacity=0.6),
+            outerGlow=OuterGlowEffect(size=3, opacity=0.7),
+            innerGlow=InnerGlowEffect(size=2, opacity=0.5))
+        c16 = composite(doc, band_rows=16)
+        c4 = composite(doc, band_rows=4)
+        c2 = composite(doc, band_rows=2)
+        np.testing.assert_array_equal(c4, c16)
+        np.testing.assert_array_equal(c2, c16)
+
+    def test_disabled_new_effect_kinds_render_as_none(self):
+        from retouch.editor.document import (LayerEffects, InnerShadowEffect,
+                                             OuterGlowEffect, InnerGlowEffect)
+        doc_plain = Document(8, 8)
+        doc_plain.add_image(np.full((4, 4, 4), (100, 150, 200, 255), np.uint8), 'Box', origin=(2, 2))
+        doc_fx = Document(8, 8)
+        layer = doc_fx.add_image(np.full((4, 4, 4), (100, 150, 200, 255), np.uint8), 'Box', origin=(2, 2))
+        layer.effects = LayerEffects(
+            innerShadow=InnerShadowEffect(distance=3, blur=2, opacity=0.9, enabled=False),
+            outerGlow=OuterGlowEffect(size=3, opacity=0.9, enabled=False),
+            innerGlow=InnerGlowEffect(size=3, opacity=0.9, enabled=False))
+        np.testing.assert_array_equal(composite(doc_fx), composite(doc_plain))
+
+
         from retouch.editor.document import LayerEffects, StrokeEffect, ShadowEffect, ColorOverlayEffect
         doc = Document(16, 16)
         layer = doc.add_image(np.full((4, 4, 4), (200, 100, 50, 255), np.uint8), 'Box', origin=(6, 6))

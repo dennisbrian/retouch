@@ -156,7 +156,7 @@ class TestRejections:
 
 class TestUnsupportedIsExplicit:
     @pytest.mark.parametrize('extra', [
-        {'effects': {'innerShadow': {'angle':90,'distance':10,'blur':10,'red':0,'green':0,'blue':0,'opacity':0.5}}},
+        {'effects': {'gradientOverlay': {'opacity': 0.5}}},
         {'adjustment': {'kind': 'Gaussian Blur'}},
         {'futureField': 1},
     ])
@@ -459,11 +459,9 @@ class TestLayerEffects:
         assert layer.effects.colorOverlay is not None
 
     def test_unsupported_effect_kind_raises(self, tmp_path):
-        # innerShadow, outerGlow and innerGlow are not modelled yet.
+        # gradientOverlay stays unmodelled: the UnsupportedFeature path stays covered.
         record = fx.layer_record(0, 'Layer', 4, 4,
-                                 effects={'innerShadow': {'angle': 90, 'distance': 5,
-                                                          'blur': 3, 'red': 0, 'green': 0,
-                                                          'blue': 0, 'opacity': 0.3}})
+                                 effects={'gradientOverlay': {'opacity': 0.5}})
         path = fx.write_package(tmp_path / 'bad.comp', 4, 4, [record],
                                images={0: fx.solid(4, 4, (128, 128, 128, 255))})
         with pytest.raises(UnsupportedFeature):
@@ -496,6 +494,93 @@ class TestLayerEffects:
         stroke = load_project(path).layers[0].effects.stroke
         assert (stroke.size, stroke.inside, stroke.enabled) == (4.0, False, True)
         assert (stroke.opacity, stroke.red, stroke.green, stroke.blue) == (1.0, 0, 0, 0)
+
+    def test_inner_shadow_round_trips_with_defaults(self, tmp_path):
+        record = fx.layer_record(0, 'Layer', 4, 4,
+                                 effects={'innerShadow': {'distance': 5}})
+        path = fx.write_package(tmp_path / 'inner.comp', 4, 4, [record],
+                                images={0: fx.solid(4, 4, (128, 128, 128, 255))})
+        inner = load_project(path).layers[0].effects.innerShadow
+        # Upstream InnerShadowEffect defaults: angle 90, blur 10, black, opacity 0.5.
+        assert (inner.angle, inner.distance, inner.blur, inner.enabled) == (90.0, 5.0, 10.0, True)
+        assert (inner.opacity, inner.red, inner.green, inner.blue) == (0.5, 0, 0, 0)
+
+    @pytest.mark.parametrize('kind, expected', [
+        ('outerGlow', (3.0, 1.0, 1.0, 1.0, 0.75)),   # upstream rest defaults: white, 0.75
+        ('innerGlow', (3.0, 1.0, 1.0, 1.0, 0.75)),
+    ])
+    def test_glow_round_trips_with_defaults(self, tmp_path, kind, expected):
+        record = fx.layer_record(0, 'Layer', 4, 4, effects={kind: {'size': 3}})
+        path = fx.write_package(tmp_path / f'{kind}.comp', 4, 4, [record],
+                                images={0: fx.solid(4, 4, (128, 128, 128, 255))})
+        glow = getattr(load_project(path).layers[0].effects, kind)
+        assert (glow.size, glow.red, glow.green, glow.blue, glow.opacity) == expected
+
+    def test_inner_shadow_and_glow_values_round_trip(self, tmp_path):
+        record = fx.layer_record(0, 'Layer', 4, 4, effects={
+            'innerShadow': {'angle': 135, 'distance': 10, 'blur': 5,
+                            'red': 0.1, 'green': 0.2, 'blue': 0.3, 'opacity': 0.4},
+            'outerGlow': {'size': 3, 'red': 1, 'green': 0.5, 'blue': 0, 'opacity': 0.6},
+            'innerGlow': {'size': 7, 'red': 0, 'green': 1, 'blue': 0.5, 'opacity': 0.8},
+        })
+        path = fx.write_package(tmp_path / 'fx.comp', 4, 4, [record],
+                                images={0: fx.solid(4, 4, (80, 100, 120, 255))})
+        effects = load_project(path).layers[0].effects
+        assert (effects.innerShadow.angle, effects.innerShadow.distance) == (135.0, 10.0)
+        assert (effects.innerShadow.red, effects.innerShadow.opacity) == (0.1, 0.4)
+        assert (effects.outerGlow.size, effects.outerGlow.green, effects.outerGlow.opacity) == (3.0, 0.5, 0.6)
+        assert (effects.innerGlow.size, effects.innerGlow.blue) == (7.0, 0.5)
+
+    def test_save_reopen_preserves_new_effect_kinds(self, tmp_path):
+        from retouch.editor.document import (LayerEffects, InnerShadowEffect,
+                                             OuterGlowEffect, InnerGlowEffect)
+        doc = Document(8, 8)
+        layer = doc.add_image(fx.solid(4, 4, (50, 100, 150, 255)), 'Box', origin=(2, 2))
+        layer.effects = LayerEffects(
+            innerShadow=InnerShadowEffect(angle=45, distance=3, blur=2, red=0.1,
+                                          green=0.2, blue=0.3, opacity=0.7, enabled=False),
+            outerGlow=OuterGlowEffect(size=5, red=1, green=0.5, blue=0, opacity=0.6),
+            innerGlow=InnerGlowEffect(size=4, red=0, green=1, blue=0.5, opacity=0.8),
+        )
+        path = tmp_path / 'saved.comp'
+        save_project(doc, path)
+        reopened = load_project(path)
+        assert reopened.layers[0].effects == layer.effects
+        assert reopened.layers[0].effects.innerShadow.enabled is False
+        np.testing.assert_array_equal(composite(reopened), composite(doc))
+
+    @pytest.mark.parametrize('kind, bads', [
+        ('innerShadow', [{'angle': 361}, {'distance': -1}, {'blur': 501},
+                         {'opacity': 1.5}, {'red': -0.1}, {'enabled': 1}]),
+        ('outerGlow', [{'size': 501}, {'size': -1}, {'opacity': 1.5},
+                       {'green': 2}, {'enabled': 1}]),
+        ('innerGlow', [{'size': 501}, {'opacity': -0.1}, {'blue': -1}]),
+    ])
+    def test_invalid_new_effect_records_refused(self, tmp_path, kind, bads):
+        base = {'innerShadow': {'distance': 5}, 'outerGlow': {'size': 3},
+                'innerGlow': {'size': 3}}[kind]
+        for i, bad in enumerate(bads):
+            record = fx.layer_record(0, 'Layer', 4, 4,
+                                     effects={kind: dict(base, **bad)})
+            path = fx.write_package(tmp_path / f'bad{i}.comp', 4, 4, [record],
+                                    images={0: fx.solid(4, 4, (1, 1, 1, 255))})
+            with pytest.raises(ProjectError):
+                load_project(path)
+
+    def test_unknown_new_effect_sub_keys_refused(self, tmp_path):
+        bad = fx.layer_record(0, 'Layer', 4, 4,
+                              effects={'innerShadow': {'angle': 90, 'futureKey': 1}})
+        path = fx.write_package(tmp_path / 'bad_inner.comp', 4, 4, [bad],
+                                images={0: fx.solid(4, 4, (1, 1, 1, 255))})
+        with pytest.raises(ProjectError, match='unknown innerShadow keys'):
+            load_project(path)
+
+    def test_new_effect_kinds_on_folder_refused(self, tmp_path):
+        folder_rec = fx.layer_record(0, 'Folder', 4, 4, image=False, isGroup=True,
+                                     effects={'innerShadow': {'distance': 5}})
+        path = fx.write_package(tmp_path / 'folder.comp', 4, 4, [folder_rec])
+        with pytest.raises(ProjectError, match='effects'):
+            load_project(path)
 
     @pytest.mark.parametrize('bad', [
         {'size': 501}, {'size': -1}, {'opacity': 1.5}, {'red': -0.1},
