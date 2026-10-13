@@ -342,7 +342,8 @@ uses colored stroke coverage, avoiding palette-state drift in Gradio. The full
 Retouch shell received a real pointer-brush/save/undo check; source pixels
 were preserved. Fit-to-canvas now includes the
 rotated extents. Graph cycles and dangling references fail before PNG decode;
-unsupported adjustments, glow/inner-shadow effect kinds, fractional placement
+unsupported adjustments, glow/inner-shadow effect kinds, fractional layer
+sizes
 and unlinked masks remain explicit rejections.
 
 See [the current evidence and remaining gates](../review/EDITOR_FINISHING_2026_10_12.md).

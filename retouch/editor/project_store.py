@@ -5,7 +5,7 @@ format versions 1-11 are read, version 11 is written, and the upstream checks
 (version gating, file naming, path safety, size limits, 8-bit PNGs, grayscale
 masks) reject a damaged package before any pixels are decoded. Constructs the
 port does not model yet (unsupported adjustment kinds, glow/inner-shadow
-effect kinds, unlinked masks, fractional placement and unknown keys) raise
+effect kinds, unlinked masks, fractional layer sizes and unknown keys) raise
 :class:`UnsupportedFeature` instead of being dropped on the next save.
 
 Saving builds the whole package beside the target and swaps it in with

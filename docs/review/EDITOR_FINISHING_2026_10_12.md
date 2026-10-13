@@ -26,8 +26,9 @@ this extension owns the editor package, focused tests and related handoff notes.
 - A durable pinned source archive and corrected current handoff text.
 
 The manifest stays at native format version 11; these use existing native fields.
-Unsupported adjustment kinds, inner shadow/glow effect kinds, unlinked masks
-and fractional placement are rejected explicitly. This is the requested
+Unsupported adjustment kinds, glow/inner-shadow effect kinds, unlinked masks
+and fractional layer sizes are rejected explicitly. Fractional origins are
+supported and rendered at subpixel accuracy. This is the requested
 category backlog, not every feature of the native app.
 
 ## Evidence

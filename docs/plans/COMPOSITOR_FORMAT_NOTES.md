@@ -29,8 +29,9 @@ blend mode from 3, masks from 4, guides from 8, text colour/font runs from
 10/11). Written: version 11.
 
 Supported: ungrouped pixel layers and blank layers, bottom-to-top order,
-visibility, opacity, any of the 24 blend-mode names (stored), resizing at
-an integer origin (layers may hang off the canvas), flips, an 8-bit raster
+visibility, opacity, any of the 24 blend-mode names (stored), resizing with
+fractional origins rendered at subpixel accuracy (layers may hang off the
+canvas), flips, an 8-bit raster
 mask with enabled flag (any mask size; 1×1 uniform masks broadcast), document
 resolution, active layer, guides (kept verbatim), text and shape metadata
 (kept verbatim; the PNG stays authoritative and the metadata is dropped when
@@ -38,8 +39,9 @@ the pixels are replaced, as upstream does on a destructive edit).
 
 Refused with `UnsupportedFeature` (valid upstream, not modelled yet):
 folders (`isGroup`, `parentID`), clipping masks (`maskSourceID`), adjustment
-layers, layer effects, unlinked masks (`maskPlacement`, `maskLinked: false`),
-rotated or fractionally placed layers, unknown keys. Blend modes render for
+layers, glow/inner-shadow effect kinds, unlinked masks
+(`maskPlacement`, `maskLinked: false`), fractional layer sizes, unknown
+keys. Blend modes render for
 the full `RENDER_BLEND_MODES` set (all 24 separable and component modes);
 hidden modes outside it are kept and skipped. The handoff's
 Difference inspection layer can now be revealed.
