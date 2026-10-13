@@ -10,18 +10,17 @@ import numpy as np
 
 from .document import UnsupportedFeature
 
-KINDS = ('Exposure', 'Levels', 'Invert')
-KINDS = ('Exposure', 'Levels', 'Invert', 'Saturation', 'Vibrance')
+KINDS = ('Exposure', 'Levels', 'Invert', 'Saturation', 'Vibrance', 'Temperature', 'Tint')
 CHANNELS = ('RGB', 'Red', 'Green', 'Blue')
 _KEYS = {'kind', 'hue', 'saturation', 'lightness', 'colorize', 'levels', 'curves',
-         'exposureSettings', 'saturationSettings', 'vibranceSettings'}
+         'exposureSettings', 'saturationSettings', 'vibranceSettings', 'temperatureSettings', 'tintSettings'}
 
 
 def adjustment(kind='Exposure', exposure=0, offset=0, gamma=1,
                black=0, white=255, red_gamma=1, green_gamma=1, blue_gamma=1,
-               saturation=0, vibrance=0):
+               saturation=0, vibrance=0, temperature=0, tint=0):
     """Build a native-format record; all channels use identity by default."""
-    if kind not in ('Levels', 'Saturation', 'Vibrance'):
+    if kind not in ('Levels', 'Saturation', 'Vibrance', 'Temperature', 'Tint'):
         black, white = 0, 255
         red_gamma = green_gamma = blue_gamma = 1
     ranges = [dict(black=black, white=white, gamma=gamma if kind == 'Levels' else 1,
@@ -38,6 +37,10 @@ def adjustment(kind='Exposure', exposure=0, offset=0, gamma=1,
         record['saturationSettings'] = dict(saturation=saturation)
     if kind == 'Vibrance':
         record['vibranceSettings'] = dict(vibrance=vibrance)
+    if kind == 'Temperature':
+        record['temperatureSettings'] = dict(temperature=temperature)
+    if kind == 'Tint':
+        record['tintSettings'] = dict(tint=tint)
     validate_adjustment(record)
     return deepcopy(record)
 
@@ -95,6 +98,14 @@ def validate_adjustment(record):
     if vib is not None and (not isinstance(vib, dict) or set(vib) != {'vibrance'}
             or not _number(vib['vibrance'], -100, 100)):
         raise ValueError('Invalid vibrance settings')
+    temp = record.get('temperatureSettings')
+    if temp is not None and (not isinstance(temp, dict) or set(temp) != {'temperature'}
+            or not _number(temp['temperature'], -100, 100)):
+        raise ValueError('Invalid temperature settings')
+    tnt = record.get('tintSettings')
+    if tnt is not None and (not isinstance(tnt, dict) or set(tnt) != {'tint'}
+            or not _number(tnt['tint'], -100, 100)):
+        raise ValueError('Invalid tint settings')
 
 
 def grade(rgb, record):
@@ -108,6 +119,12 @@ def grade(rgb, record):
     if kind == 'Vibrance':
         v = record.get('vibranceSettings', {}).get('vibrance', 0)
         return _grade_vibrance(rgb, v)
+    if kind == 'Temperature':
+        t = record.get('temperatureSettings', {}).get('temperature', 0)
+        return _grade_temperature(rgb, t)
+    if kind == 'Tint':
+        t = record.get('tintSettings', {}).get('tint', 0)
+        return _grade_tint(rgb, t)
     if kind == 'Exposure':
         s = record.get('exposureSettings') or dict(exposure=0, offset=0, gamma=1)
         linear = np.where(rgb <= .04045, rgb / 12.92, ((rgb + .055) / 1.055) ** 2.4)
@@ -188,3 +205,78 @@ def _grade_vibrance(rgb, amount):
     boost = np.log1p(headroom * 9) / np.log1p(9) * (amount / 100.0)
     hsl[..., 1] = np.clip(hsl[..., 1] * (1 + boost), 0, 1)
     return _hsl_to_rgb(hsl)
+
+
+def _grade_temperature(rgb, amount):
+    """Temperature: white balance toward amber (positive) or blue (negative).
+
+    Photos are lit; a temperature slider re-balances the channels so a warm
+    scene reads neutral and vice versa. Rec. 709 luminance is preserved, so
+    brightness does not shift as the colour drifts.
+    amount=-100 → cool, +100 → warm, 0 → identity.
+    """
+    if amount == 0:
+        return rgb
+    t = amount / 100.0
+    gains = np.array([1 + 0.30 * t, 1.0, 1 - 0.30 * t], np.float32)
+    return np.clip(rgb * _normalize_luminance(gains), 0, 1)
+
+
+def _grade_tint(rgb, amount):
+    """Tint: white balance along the green/magenta axis.
+
+    Standard white-balance convention: positive pushes green, negative pushes
+    magenta (Adobe Lightroom style). The adjustment is luminance-preserving
+    via Rec. 709 weights so brightness stays constant.
+    amount=-100 → magenta, +100 → green, 0 → identity.
+    """
+    if amount == 0:
+        return rgb
+    t = amount / 100.0
+    # Green (G) is increased; R and B are reduced symmetrically to compensate.
+    gains = np.array([1 - 0.15 * t, 1 + 0.30 * t, 1 - 0.15 * t], np.float32)
+    return np.clip(rgb * _normalize_luminance(gains), 0, 1)
+
+
+# Rec. 709 relative luminance weights: the eye is mostly green, least blue.
+_LUMINANCE_WEIGHTS = np.array([0.2126, 0.7152, 0.0722], np.float32)
+
+
+def _normalize_luminance(gains):
+    """Scale per-channel gains so a neutral grey keeps its brightness."""
+    total = float(np.dot(gains, _LUMINANCE_WEIGHTS))
+    return gains / total if total > 0 else np.ones(3, np.float32)
+
+
+def grade(rgb, record):
+    """Grade straight encoded RGB floats, preserving alpha in the caller."""
+    kind = record['kind']
+    if kind == 'Invert':
+        return 1 - rgb
+    if kind == 'Saturation':
+        s = record.get('saturationSettings', {}).get('saturation', 0)
+        return _grade_saturation(rgb, s)
+    if kind == 'Vibrance':
+        v = record.get('vibranceSettings', {}).get('vibrance', 0)
+        return _grade_vibrance(rgb, v)
+    if kind == 'Temperature':
+        t = record.get('temperatureSettings', {}).get('temperature', 0)
+        return _grade_temperature(rgb, t)
+    if kind == 'Tint':
+        t = record.get('tintSettings', {}).get('tint', 0)
+        return _grade_tint(rgb, t)
+    if kind == 'Exposure':
+        s = record.get('exposureSettings') or dict(exposure=0, offset=0, gamma=1)
+        linear = np.where(rgb <= .04045, rgb / 12.92, ((rgb + .055) / 1.055) ** 2.4)
+        linear = np.maximum(0, linear * 2 ** s['exposure'] + s['offset']) ** (1 / s['gamma'])
+        return np.clip(np.where(linear <= .0031308, 12.92 * linear,
+                                1.055 * linear ** (1 / 2.4) - .055), 0, 1)
+    def apply(values, r):
+        values = np.clip((values * 255 - r['black']) / (r['white'] - r['black']), 0, 1)
+        return (r['outputBlack'] + values ** (1 / r['gamma'])
+                * (r['outputWhite'] - r['outputBlack'])) / 255
+    ranges = record['levels']['ranges']
+    # Native Levels applies each color channel, then the combined RGB channel.
+    channels = np.stack([apply(rgb[..., i], ranges[i + 1]) for i in range(3)], axis=-1)
+    return apply(channels, ranges[0])
+

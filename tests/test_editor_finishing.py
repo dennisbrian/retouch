@@ -475,8 +475,7 @@ def test_adjustment_pixels_match_native_kernel_fixture(name):
 #
 # Saturation scales the HSL saturation channel by (100 + amount) / 100.
 # Vibrance boosts saturation logarithmically, protecting already-saturated pixels.
-from retouch.editor.adjustments import _rgb_to_hsl, _grade_vibrance
-
+from retouch.editor.adjustments import _rgb_to_hsl, _grade_vibrance, _grade_temperature, _grade_tint
 
 @pytest.mark.parametrize('kind', ['Saturation', 'Vibrance'])
 def test_saturation_vibrance_identity(kind):
@@ -558,3 +557,66 @@ def test_unsupported_adjustment_kind_raises():
                               channels=[[dict(p) for p in identity_points] for _ in range(4)]))
     with pytest.raises(UnsupportedFeature, match='Supported adjustments'):
         validate_adjustment(record)
+
+
+# --- Temperature and Tint --------------------------------------------------------
+#
+# Both are luminance-preserving white-balance adjustments using Rec. 709 weights.
+_LUM = np.array([0.2126, 0.7152, 0.0722])
+
+
+@pytest.mark.parametrize('kind', ['Temperature', 'Tint'])
+def test_temperature_tint_identity(kind):
+    gray = np.full((1, 1, 3), .5, np.float32)
+    result = grade(gray, adjustment(kind))
+    np.testing.assert_allclose(result, gray, atol=1e-6)
+
+
+def test_temperature_warms_and_cools_preserving_luminance():
+    gray = np.full((1, 1, 3), .5, np.float32)
+    warm = _grade_temperature(gray, 50)
+    cool = _grade_temperature(gray, -50)
+    lum_warm = np.dot(warm[0, 0], _LUM)
+    lum_cool = np.dot(cool[0, 0], _LUM)
+    # Warm: R > G > B.  Cool: B > G > R.
+    assert warm[0, 0, 0] > warm[0, 0, 1] > warm[0, 0, 2], f"warm: {warm[0,0].tolist()}"
+    assert cool[0, 0, 2] > cool[0, 0, 1] > cool[0, 0, 0], f"cool: {cool[0,0].tolist()}"
+    # Luminance preserved on gray.
+    assert abs(lum_warm - 0.5) < 0.01, f"warm lum={lum_warm}"
+    assert abs(lum_cool - 0.5) < 0.01, f"cool lum={lum_cool}"
+
+
+def test_tint_green_and_magenta_preserving_luminance():
+    gray = np.full((1, 1, 3), .5, np.float32)
+    green = _grade_tint(gray, 50)
+    magenta = _grade_tint(gray, -50)
+    # Green: G > R = B.  Magenta: R = B > G.
+    assert green[0, 0, 1] > green[0, 0, 0], f"green: {green[0,0].tolist()}"
+    assert magenta[0, 0, 0] > magenta[0, 0, 1], f"magenta: {magenta[0,0].tolist()}"
+    # Luminance preserved on gray.
+    assert abs(np.dot(green[0, 0], _LUM) - 0.5) < 0.01
+    assert abs(np.dot(magenta[0, 0], _LUM) - 0.5) < 0.01
+
+
+@pytest.mark.parametrize('kind, kwargs', [
+    ('Temperature', dict(temperature=50)),
+    ('Tint', dict(tint=-30)),
+])
+def test_temperature_tint_adjustment_layer_round_trips(kind, kwargs, tmp_path):
+    base = Layer('Base', solid((80, 100, 120), alpha=128))
+    settings = adjustment(kind, **kwargs)
+    adj = Layer(kind, size=(4, 4), adjustment=settings,
+                mask=selection(4, 4, 'Rectangle', 0, 0, 2, 4), opacity=.5)
+    h = DocumentHistory(Document(4, 4, [base]))
+    before = composite(h.document)
+    h.add_layer(adj)
+    image = composite(h.document)
+    np.testing.assert_array_equal(image[..., 3], before[..., 3])
+    np.testing.assert_array_equal(image[:, 2:], before[:, 2:])
+    assert not np.array_equal(image[:, :2], before[:, :2])
+    h.save(tmp_path / (kind + '.comp'))
+    again = load_project(tmp_path / (kind + '.comp'))
+    assert again.layers[-1].adjustment == settings
+    np.testing.assert_array_equal(composite(again), image)
+    h.undo()
+    np.testing.assert_array_equal(composite(h.document), before)
