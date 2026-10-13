@@ -298,7 +298,7 @@ def _effect_margin(effects):
     if effects is not None and effects.shadow is not None:
         shadow = effects.shadow
         if shadow.enabled and shadow.opacity > 0:
-            margin = shadow.distance + shadow.blur * 3
+            margin = max(margin, shadow.distance + shadow.blur * 3)
     return int(math.ceil(margin)) + 2
 
 
@@ -615,9 +615,42 @@ def _rotation_geometry(layer):
     return matrix, (width, height), (x, y)
 
 
+def _subpixel_shift(array, fx, fy, nearest):
+    """Translate by a fractional pixel amount, upstream's subpixel placement.
+
+    Core Graphics draws a fractionally placed 1:1 layer with antialiasing, so
+    each destination pixel blends its neighbours by the fractional coverage;
+    Nearest sampling disables that and duplicates/drops hard columns instead.
+    RGBA goes through premultiplied colour, as the rotation warp does.
+    """
+    matrix = np.float32([[1, 0, fx], [0, 1, fy]])
+    size = (array.shape[1] + 2, array.shape[0] + 2)  # one pixel of headroom each way
+    flags = cv2.INTER_NEAREST if nearest else cv2.INTER_LINEAR
+    if array.ndim == 2:
+        return cv2.warpAffine(np.asarray(array), matrix, size, flags=flags)
+    rgba = array.astype(np.float32) / 255
+    rgba[..., :3] *= rgba[..., 3:4]
+    warped = cv2.warpAffine(rgba, matrix, size, flags=flags)
+    alpha = warped[..., 3]
+    warped[..., :3] /= np.where(alpha > 0, alpha, 1)[..., None]
+    warped[alpha == 0, :3] = 0
+    return np.rint(np.clip(warped, 0, 1) * 255).astype(np.uint8)
+
+
 def _rotate(pixels, coverage, layer):
     if layer.rotation % 360 == 0:
-        return pixels, coverage, layer.origin
+        origin = layer.origin
+        fx, fy = origin[0] % 1, origin[1] % 1
+        base = (int(math.floor(origin[0])), int(math.floor(origin[1])))
+        if fx == 0 and fy == 0:
+            return pixels, coverage, base
+        # A fractionally placed upright layer: floor the canvas anchor and
+        # shift the layer content by the residual inside the prepared buffer.
+        nearest = layer.sampling == 'Nearest'
+        pixels = _subpixel_shift(pixels, fx, fy, nearest)
+        if coverage is not None:
+            coverage = _subpixel_shift(np.asarray(coverage), fx, fy, nearest)
+        return pixels, coverage, base
     matrix, size, origin = _rotation_geometry(layer)
     # Core Graphics resamples the layer image and its coverage as separate
     # passes: the mask is a clip with its own filter, not a premultiplied twin

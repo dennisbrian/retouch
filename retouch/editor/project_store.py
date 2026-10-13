@@ -250,11 +250,13 @@ def _check_layer(record, version):
     if record.get('maskLinked') is False:
         raise UnsupportedFeature(f'unlinked masks are not supported yet (layer {name!r})')
     origin, size, rotation = transform['origin'], transform['size'], transform['rotation']
-    if any(v != int(v) for v in origin + size):
-        raise UnsupportedFeature(f'layer {name!r} has a fractional placement')
+    # Fractional placements are valid upstream (typed values stay exact; only
+    # interactive dragging snaps), so they load and round-trip unchanged.
+    if any(v != int(v) for v in size):
+        raise UnsupportedFeature(f'layer {name!r} has a fractional size')
     return layer_id, {
         'name': name, 'visible': visible, 'opacity': float(opacity), 'blend_mode': blend,
-        'origin': tuple(int(v) for v in origin), 'size': tuple(int(v) for v in size),
+        'origin': tuple(float(v) for v in origin), 'size': tuple(int(v) for v in size),
         'rotation': float(rotation), 'is_group': bool(is_group),
         'parent_id': _uuid(record['parentID']) if record.get('parentID') is not None else None,
         'mask_source_id': _uuid(record['maskSourceID']) if record.get('maskSourceID') is not None else None,

@@ -172,8 +172,19 @@ class TestUnsupportedIsExplicit:
         path = fx.write_package(tmp_path / 'g.comp', 2, 2, [record])
         assert load_project(path).layers[0].is_group
 
+    def test_fractional_origin_loads_and_renders(self, tmp_path):
+        record = fx.layer_record(0, 'Layer', 2, 2)
+        record['transform']['origin'] = [0.5, 0]
+        path = fx.write_package(tmp_path / 'f.comp', 4, 2, [record],
+                                images={0: fx.solid(2, 2, (1, 1, 1, 255))})
+        doc = load_project(path)
+        assert doc.layers[0].origin == (0.5, 0.0)
+        out = composite(doc)
+        # 2px solid layer at x=0.5: col 0 half-covered, col 1 full, col 2 half.
+        assert out[0, 0, 3] == 128 and out[0, 1, 3] == 255 and out[0, 2, 3] == 128
+
     @pytest.mark.parametrize('geometry', [
-        {'origin': [0.5, 0]}])
+        {'size': [2.5, 2]}])
     def test_transformed_layers(self, tmp_path, geometry):
         record = fx.layer_record(0, 'Layer', 2, 2)
         record['transform'].update(geometry)

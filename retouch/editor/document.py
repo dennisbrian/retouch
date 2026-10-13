@@ -266,7 +266,9 @@ class Layer:
             self.mask = _frozen(self.mask, 2)
         if self.size is None:
             raise ValueError('a blank layer needs a transform size')
-        self.origin = tuple(int(v) for v in self.origin)
+        # Upstream keeps typed fractional placements exact (LayerTransform.swift:
+        # "a fraction can still be asked for by hand"); only dragging snaps.
+        self.origin = tuple(float(v) for v in self.origin)
         self.size = tuple(int(v) for v in self.size)
 
     def replace_pixels(self, pixels):
@@ -309,6 +311,8 @@ class Layer:
             raise ValueError(f'unknown blend mode {self.blend_mode!r}')
         if self.sampling not in SAMPLING:
             raise ValueError(f'unknown sampling {self.sampling!r}')
+        if not all(math.isfinite(v) for v in self.origin):
+            raise ValueError('layer origin must be finite')
         if any(abs(v) > 1_000_000 for v in self.origin):
             raise ValueError('layer origin out of range')
         if not all(1 <= v <= 300_000 for v in self.size):

@@ -423,7 +423,7 @@ def test_position_and_flips_are_undoable_and_saved(session, callbacks, tmp_path)
     np.testing.assert_array_equal(composite(session.history.document), rendered)
 
 
-@pytest.mark.parametrize('x, y', [(0.5, 0), (0, float('nan')), (None, 0), (True, 0), (1000001, 0)])
+@pytest.mark.parametrize('x, y', [(0, float('nan')), (None, 0), (True, 0), (1000001.5, 0)])
 def test_invalid_transform_preserves_document_and_history(session, callbacks, x, y):
     transform = next(fn for fn in callbacks if fn.__name__ == 'edit'
                      and fn.__kwdefaults__['operation'] == 'transform')
@@ -433,6 +433,21 @@ def test_invalid_transform_preserves_document_and_history(session, callbacks, x,
     assert session.history.revision == 0
     assert session.selected().origin == (0, 0)
     np.testing.assert_array_equal(composite(session.history.document), before)
+
+
+def test_fractional_position_moves_layer_and_round_trips(session, callbacks, tmp_path):
+    transform = next(fn for fn in callbacks if fn.__name__ == 'edit'
+                     and fn.__kwdefaults__['operation'] == 'transform')
+    transform(session, session.selected_id, None, 0.5, 0.25, False, False)
+    assert session.selected().origin == (0.5, 0.25)
+    # Half-pixel x, quarter-pixel y: col 0 covered 0.5, row 0 covered 0.75.
+    out = composite(session.history.document)
+    assert out[0, 0, 3] == 96 and out[0, 0, :3].tolist() == [100, 100, 100]
+    target = tmp_path / 'frac.comp'
+    session.history.save(target)
+    loaded = load_project(target)
+    assert loaded.layers[0].origin == (0.5, 0.25)
+    np.testing.assert_array_equal(composite(loaded), out)
 
 
 @pytest.mark.parametrize('flip_x, flip_y', [(True, False), (False, True), (True, True)])

@@ -588,10 +588,10 @@ def build_editor_tab():
                     elif operation == 'transform':
                         for value in args[:2]:
                             if (not isinstance(value, (int, float)) or isinstance(value, bool)
-                                    or not math.isfinite(value) or value != int(value)):
-                                raise ValueError('Layer positions must be whole pixel coordinates')
+                                    or not math.isfinite(value)):
+                                raise ValueError('Layer positions must be finite numbers')
                         current.history.update_layer(layer.id,
-                                                     origin=(int(args[0]), int(args[1])),
+                                                     origin=(float(args[0]), float(args[1])),
                                                      flip_x=args[2], flip_y=args[3],
                                                      rotation=args[4] if len(args) > 4 else layer.rotation)
                     elif operation == 'links':

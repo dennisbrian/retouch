@@ -292,7 +292,7 @@ def test_failed_save_keeps_dirty_state_and_save_point(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('changes', [dict(opacity=2), dict(visible='yes'),
-                                     dict(origin=(0.5, 0)), dict(id='new')])
+                                     dict(origin=(float('nan'), 0)), dict(id='new')])
 def test_rejected_edit_preserves_document_revision_and_redo(changes):
     h = history(saved=True)
     lid = h.document.layers[0].id
