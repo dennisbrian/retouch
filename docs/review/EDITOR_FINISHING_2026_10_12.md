@@ -163,6 +163,18 @@ rejects an oversized stack before composite. These are synthetic CPU editor
 limits, not a shipping OOM guarantee; packaged desktop recovery and Windows
 acceptance remain separate gates.
 
+### Dirty preview resampling
+
+`preview_document` now memoizes each scaled layer/mask by frozen source-buffer
+identity, source shape, and preview size. `DocumentHistory` snapshots share
+unchanged read-only buffers, so ordinary metadata edits reuse their preview
+pixels; replacing a layer buffer invalidates only that layer. Cache entries hold
+weak source references and are capped at 64, avoiding a second full-resolution
+undo-buffer budget. `test_preview_cache_reuses_unchanged_layers_and_invalidates_replaced_pixels`
+compares real composite pixels across cold/warm/replaced renders and counts
+the actual resize calls: two layer resizes plus one mask resize on cold render,
+zero on warm render, and one additional layer resize after replacement.
+
 ## Repository housekeeping disposition
 
 No unrelated files were staged, committed, reverted or deleted.
@@ -182,7 +194,9 @@ No unrelated files were staged, committed, reverted or deleted.
 - Representative larger stacks and maximum-size/RSS characterization: **closed**
   for the CPU editor limits above; packaged desktop crash recovery remains.
 - Packaged desktop crash recovery and platform acceptance, including Windows.
-- High-bit/color-managed editor export, dirty-tile caching and optional acceleration.
+- High-bit/color-managed editor export: **closed** by `f45176d`; dirty-preview
+  resampling cache now **closed** for the interactive preview path. Optional
+  native acceleration remains separate.
 
 The saved stash and unique EXR worktree are retained work, not cleanup failures.
 They require their owners' context before retirement or integration.

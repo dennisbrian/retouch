@@ -6,6 +6,7 @@ import tempfile
 import uuid
 import threading
 import time
+import weakref
 from copy import copy
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,13 +57,46 @@ def preview_document(document):
         layer.size = tuple(max(1, round(v * scale)) for v in original.size)
         if original.pixels is not None:
             # Pillow interpolates RGBA in premultiplied form.
-            layer.pixels = np.asarray(Image.fromarray(original.pixels).resize(
-                layer.size, Image.Resampling.LANCZOS))
+            layer.pixels = _preview_scaled(
+                original.pixels, layer.size, _preview_lanczos)
         if original.mask is not None:
-            layer.mask = cv2.resize(original.mask, layer.size,
-                                    interpolation=cv2.INTER_LINEAR)
+            layer.mask = _preview_scaled(original.mask, layer.size, _preview_mask)
         preview.layers.append(layer)
     return composite(preview)
+
+
+def _preview_lanczos(array, size):
+    return np.asarray(Image.fromarray(array).resize(size, Image.Resampling.LANCZOS))
+
+
+def _preview_mask(array, size):
+    return cv2.resize(array, size, interpolation=cv2.INTER_LINEAR)
+
+
+# Preview resampling is the interactive hot path: every edit re-renders the
+# whole document, but an unchanged layer's frozen source buffer is shared
+# across snapshots (commands._snapshot keeps pixel identity), so its resized
+# copy is reusable. Key on the buffer object itself plus the geometry that
+# changes the result. Keep only a weak reference to the source: cached previews
+# must not pin full-resolution undo buffers or defeat DocumentHistory's budget.
+_PREVIEW_CACHE = {}
+_PREVIEW_CACHE_LIMIT = 64
+
+
+def _preview_scaled(source, size, resize):
+    """Resized preview of ``source``, memoised while the source is unchanged."""
+    key = (id(source), source.shape, tuple(size))
+    cached = _PREVIEW_CACHE.get(key)
+    if cached is None or cached[0]() is not source:
+        cached = (weakref.ref(source), resize(source, size))
+        if len(_PREVIEW_CACHE) >= _PREVIEW_CACHE_LIMIT:
+            _PREVIEW_CACHE.pop(next(iter(_PREVIEW_CACHE)))
+        _PREVIEW_CACHE[key] = cached
+    return cached[1]
+
+
+def _clear_preview_cache():
+    _PREVIEW_CACHE.clear()
 
 
 def has_strokes(canvas):

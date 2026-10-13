@@ -7,7 +7,13 @@ import pytest
 from PIL import Image, ImageCms
 
 from retouch.editor import Document, load_project, composite
-from retouch.editor.ui import EditorSession, _photo, build_editor_tab, preview_document
+from retouch.editor.ui import (
+    EditorSession,
+    _clear_preview_cache,
+    _photo,
+    build_editor_tab,
+    preview_document,
+)
 
 
 @pytest.fixture
@@ -55,6 +61,49 @@ def test_preview_is_bounded_and_does_not_change_native_source():
     assert preview.shape == (512, 1024, 4)
     assert (doc.width, doc.height) == (2048, 1024)
     np.testing.assert_array_equal(layer.pixels, source)
+
+
+def test_preview_cache_reuses_unchanged_layers_and_invalidates_replaced_pixels(monkeypatch):
+    from retouch.editor import ui
+
+    _clear_preview_cache()
+    calls = {'pixels': 0, 'masks': 0}
+    original_pixels, original_masks = ui._preview_lanczos, ui._preview_mask
+
+    def count_pixels(array, size):
+        calls['pixels'] += 1
+        return original_pixels(array, size)
+
+    def count_masks(array, size):
+        calls['masks'] += 1
+        return original_masks(array, size)
+
+    monkeypatch.setattr(ui, '_preview_lanczos', count_pixels)
+    monkeypatch.setattr(ui, '_preview_mask', count_masks)
+    doc = Document(2048, 1024)
+    first = np.zeros((1024, 2048, 4), np.uint8)
+    first[..., 3] = 255
+    second = first.copy()
+    second[..., 1] = 180
+    layer_a = doc.add_image(first, 'A')
+    layer_b = doc.add_image(second, 'B')
+    mask = np.full((1024, 2048), 255, np.uint8)
+    layer_a.set_mask(mask)
+
+    uncached = preview_document(doc)
+    assert calls == {'pixels': 2, 'masks': 1}
+    cached = preview_document(doc)
+    np.testing.assert_array_equal(cached, uncached)
+    assert calls == {'pixels': 2, 'masks': 1}
+
+    replacement = second.copy()
+    replacement[..., 2] = 77
+    layer_b.replace_pixels(replacement)
+    changed = preview_document(doc)
+    assert calls == {'pixels': 3, 'masks': 1}
+    np.testing.assert_array_equal(changed, preview_document(doc))
+    np.testing.assert_array_equal(layer_a.pixels, first)
+    np.testing.assert_array_equal(layer_b.pixels, replacement)
 
 
 @pytest.fixture
