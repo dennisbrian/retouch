@@ -109,12 +109,6 @@ class TestSourceOver:
 
 
 class TestUnsupported:
-    def test_unimplemented_visible_blend_is_refused(self):
-        doc = Document(1, 1)
-        doc.add_image(fx.solid(1, 1, (1, 2, 3, 255)), 'Top').blend_mode = 'Hue'
-        with pytest.raises(UnsupportedFeature, match='Hue'):
-            composite(doc)
-
     def test_hidden_non_normal_blend_is_kept_but_not_drawn(self):
         doc = Document(1, 1)
         doc.add_image(fx.solid(1, 1, (1, 2, 3, 255)), 'Base')
@@ -139,6 +133,14 @@ class TestUnsupported:
     ('Exclusion', [173, 127, 173]),
     ('Subtract', [0, 0, 153]),
     ('Divide', [64, 255, 255]),
+    # Component modes (W3C/PDF non-separable formulas, as Core Image implements).
+    # Cb=(0.2, 0.502, 0.8) and Cs=(0.8, 0.502, 0.2) share Sat=0.6, so Hue's
+    # SetSat pass is the identity here and Hue matches Color exactly.
+    ('Hue', [175, 99, 22]),
+    # Saturation: SetSat(Cb, Sat(Cs))=Cb, SetLum back to its own luminance is a no-op.
+    ('Saturation', [51, 128, 204]),
+    ('Color', [175, 99, 22]),
+    ('Luminosity', [80, 157, 233]),
 ])
 def test_separable_native_blend_modes_render_real_pixels(mode, expected):
     doc = Document(1, 1)

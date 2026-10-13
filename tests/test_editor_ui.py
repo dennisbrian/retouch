@@ -391,15 +391,12 @@ def test_blend_selector_tracks_property_edits_and_undo(session, callbacks):
     assert session.selected().blend_mode == result[11]['value'] == 'Normal'
 
 
-def test_revealing_unsupported_mode_is_rejected_before_mutation(session, callbacks):
-    layer = session.selected()
-    session.history.update_layer(layer.id, blend_mode='Hue', visible=False)
-    revision = session.history.revision
+def test_component_blend_mode_round_trips_through_ui(session, callbacks):
     edit = next(fn for fn in callbacks if fn.__name__ == 'edit'
                 and fn.__kwdefaults__['operation'] == 'properties')
-    with pytest.raises(gr.Error, match='supported blend'):
-        edit(session, layer.id, None, 'Base', True, 100, True, 'Hue')
-    assert not session.selected().visible and session.history.revision == revision
+    result = edit(session, session.selected_id, None, 'Base', True, 100, True, 'Luminosity')
+    assert session.selected().blend_mode == 'Luminosity'
+    assert result[11]['value'] == 'Luminosity'
 
 
 def test_position_and_flips_are_undoable_and_saved(session, callbacks, tmp_path):

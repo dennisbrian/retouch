@@ -31,6 +31,7 @@ RENDER_BLEND_MODES = (
     'Screen', 'Color Dodge', 'Linear Dodge (Add)', 'Overlay', 'Soft Light',
     'Hard Light', 'Vivid Light', 'Linear Light', 'Pin Light', 'Hard Mix',
     'Difference', 'Exclusion', 'Subtract', 'Divide',
+    'Hue', 'Saturation', 'Color', 'Luminosity',
 )
 
 # --- Resampling -----------------------------------------------------------
@@ -290,7 +291,9 @@ def _effect_margin(effects):
     margin = 0.0
     if effects is not None and effects.stroke is not None:
         stroke = effects.stroke
-        if stroke.enabled and not stroke.inside and stroke.opacity > 0:
+        # Both stroke kinds need the kernel's full reach in context: an inside
+        # stroke erodes the silhouette (context above), an outside one dilates.
+        if stroke.enabled and stroke.opacity > 0:
             margin = max(margin, stroke.size)
     if effects is not None and effects.shadow is not None:
         shadow = effects.shadow
@@ -326,7 +329,8 @@ def _blur(mask, radius):
 
 def _stroke_coverage(alpha, stroke):
     """Upstream square-reach morphology ring for an inside/outside stroke."""
-    reach = max(1, int(round(stroke.size)))
+    # Upstream rounds half away from zero (Swift .rounded()), not banker's.
+    reach = max(1, int(math.floor(stroke.size + 0.5)))
     kernel = np.ones((reach * 2 + 1, reach * 2 + 1), np.uint8)
     if stroke.inside:
         moved = cv2.erode(alpha, kernel, borderType=cv2.BORDER_CONSTANT,
@@ -480,14 +484,64 @@ def _prepare(layer):
     return pixels, coverage, origin, layer.opacity, layer.blend_mode
 
 
-def _blend(backdrop, source, mode):
-    """Separable blend formulas in gamma-encoded sRGB space.
+def _lum(rgb):
+    """W3C/PDF relative luminance weights Core Image's blends use."""
+    return rgb[..., 0] * 0.3 + rgb[..., 1] * 0.59 + rgb[..., 2] * 0.11
 
-    Component modes (Hue, Saturation, Color and Luminosity) need a
-    non-separable colour-space pass and remain explicitly unsupported.
+
+def _sat(rgb):
+    """W3C ``Sat``: max - min per pixel."""
+    return np.max(rgb, axis=-1) - np.min(rgb, axis=-1)
+
+
+def _clip_color(rgb):
+    """W3C ``ClipColor``: pull out-of-gamut pixels back onto the gamut hull."""
+    lum = _lum(rgb)
+    n = np.min(rgb, axis=-1)
+    x = np.max(rgb, axis=-1)
+    out = rgb.copy()
+    below = n < 0
+    if below.any():
+        scale = np.where(below, lum / np.where(below, lum - n, 1), 1.0)[..., np.newaxis]
+        out = lum[..., np.newaxis] + (out - lum[..., np.newaxis]) * scale
+    x = np.max(out, axis=-1)
+    above = x > 1
+    if above.any():
+        scale = np.where(above, (1 - lum) / np.where(above, x - lum, 1), 1.0)[..., np.newaxis]
+        out = lum[..., np.newaxis] + (out - lum[..., np.newaxis]) * scale
+    return out
+
+
+def _set_lum(rgb, lum):
+    return _clip_color(rgb + (lum - _lum(rgb))[..., np.newaxis])
+
+
+def _set_sat(rgb, sat):
+    """W3C ``SetSat``: rescale chroma to ``sat``, keeping channel order."""
+    lo = np.min(rgb, axis=-1, keepdims=True)
+    hi = np.max(rgb, axis=-1, keepdims=True)
+    span = np.where(hi > lo, hi - lo, 1.0)
+    return np.where(hi > lo, (rgb - lo) * sat[..., np.newaxis] / span, 0.0)
+
+
+def _blend(backdrop, source, mode):
+    """Blend formulas in gamma-encoded sRGB space.
+
+    The component modes (Hue, Saturation, Color, Luminosity) follow the
+    W3C/PDF-32000 non-separable formulas behind Core Image's blend filters.
     """
     backdrop = np.asarray(backdrop, dtype=np.float32)
     source = np.asarray(source, dtype=np.float32)
+    if mode == 'Hue':
+        # Source hue over backdrop saturation and luminance.
+        return _set_lum(_set_sat(source, _sat(backdrop)), _lum(backdrop))
+    if mode == 'Saturation':
+        # Source saturation over backdrop hue and luminance.
+        return _set_lum(_set_sat(backdrop, _sat(source)), _lum(backdrop))
+    if mode == 'Color':
+        return _set_lum(source, _lum(backdrop))
+    if mode == 'Luminosity':
+        return _set_lum(backdrop, _lum(source))
     if mode == 'Darken':
         return np.minimum(backdrop, source)
     if mode == 'Multiply':

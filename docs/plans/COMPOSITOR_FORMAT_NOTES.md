@@ -39,9 +39,9 @@ the pixels are replaced, as upstream does on a destructive edit).
 Refused with `UnsupportedFeature` (valid upstream, not modelled yet):
 folders (`isGroup`, `parentID`), clipping masks (`maskSourceID`), adjustment
 layers, layer effects, unlinked masks (`maskPlacement`, `maskLinked: false`),
-rotated or fractionally placed layers, unknown keys. Compositing a
-visible layer with a blend mode outside Normal, Multiply, Screen, Overlay
-and Difference is refused too; hidden modes are kept and skipped. The handoff's
+rotated or fractionally placed layers, unknown keys. Blend modes render for
+the full `RENDER_BLEND_MODES` set (all 24 separable and component modes);
+hidden modes outside it are kept and skipped. The handoff's
 Difference inspection layer can now be revealed.
 
 Refused with `ProjectError` (invalid or over a limit), before any pixels are
@@ -52,15 +52,17 @@ the side, pixel or byte limits, masks with colour or alpha, non-8-bit PNGs.
 
 ## Colour and precision
 
-- The 2026-10-08 finishing slice adds Multiply, Screen, Overlay and Difference.
+- The 2026-10-08 finishing slice adds Multiply, Screen, Overlay and Difference;
+  a later slice extends to all 24 stored modes (20 separable plus the Hue,
+  Saturation, Color and Luminosity component modes, which use the W3C/PDF-32000
+  non-separable formulas behind Core Image's blend filters).
   Formulas follow [W3C Compositing and Blending Level 1](https://www.w3.org/TR/compositing-1/#blending):
   blend straight RGB only in overlapping source/backdrop coverage, then apply
   source-over with layer opacity and enabled mask. No backdrop means source
   colour is retained, even for Multiply. Overlay switches on backdrop colour.
   These operate in gamma-encoded sRGB. Existing Normal arithmetic is retained.
   Independent pixel/alpha checks, band invariance, save/reopen and undo are
-  tested. A five-mode sheet using the local 512-pixel genuine-engine contact
-  sheet was rendered and viewed; native Compositor parity remains unverified.
+  tested. Native Compositor parity for the newer modes remains unmeasured.
 - Resizing stores target width/height separately from unchanged source pixels.
   Nearest uses nearest-neighbour, Smooth uses bilinear, High quality uses Lanczos
   RGBA interpolation through premultiplied alpha. Masks span the rendered

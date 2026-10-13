@@ -342,8 +342,8 @@ uses colored stroke coverage, avoiding palette-state drift in Gradio. The full
 Retouch shell received a real pointer-brush/save/undo check; source pixels
 were preserved. Fit-to-canvas now includes the
 rotated extents. Graph cycles and dangling references fail before PNG decode;
-unsupported adjustments, effects, fractional placement and unlinked masks
-remain explicit rejections.
+unsupported adjustments, glow/inner-shadow effect kinds, fractional placement
+and unlinked masks remain explicit rejections.
 
 See [the current evidence and remaining gates](../review/EDITOR_FINISHING_2026_10_12.md).
 The native app opened and exported the photo fixtures. The existing blend/
@@ -364,7 +364,8 @@ Remaining separate gates: exact rotated-mask sampling parity, representative
 large stacks, packaged desktop recovery/interaction, Windows qualification,
 high-bit/color-managed editor export, dirty-tile caching and acceleration.
 The finishing backlog categories now have usable implementations; they do not
-cover every upstream adjustment, selection tool, effect or blend mode.
+cover every upstream adjustment, selection tool, effect kind (glow and inner
+shadow remain refused) or blend mode.
 
 ## Online agent handoff
 

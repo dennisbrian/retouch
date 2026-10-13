@@ -26,9 +26,9 @@ this extension owns the editor package, focused tests and related handoff notes.
 - A durable pinned source archive and corrected current handoff text.
 
 The manifest stays at native format version 11; these use existing native fields.
-Unsupported adjustment kinds, layer effects, unlinked masks and fractional
-placement are rejected explicitly. This is the requested category backlog,
-not every feature of the native app.
+Unsupported adjustment kinds, inner shadow/glow effect kinds, unlinked masks
+and fractional placement are rejected explicitly. This is the requested
+category backlog, not every feature of the native app.
 
 ## Evidence
 
@@ -202,6 +202,11 @@ No unrelated files were staged, committed, reverted or deleted.
 - High-bit/color-managed editor export: **closed** by `f45176d`; dirty-preview
   resampling cache now **closed** for the interactive preview path. Optional
   native acceleration remains separate.
+- Component blend modes (Hue/Saturation/Color/Luminosity) and the stroke,
+  drop-shadow, colour-overlay layer effects: implemented and verified against
+  the W3C/PDF-32000 formulas and the pinned upstream Swift source, plus band
+  invariance fuzzing. Native Compositor parity for these additions is
+  unmeasured; the existing five-mode contact-sheet fixture predates them.
 
 The saved stash and unique EXR worktree are retained work, not cleanup failures.
 They require their owners' context before retirement or integration.
