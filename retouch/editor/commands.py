@@ -30,6 +30,7 @@ def _snapshot(document: Document) -> Document:
         detached.text = deepcopy(layer.text)
         detached.shape = deepcopy(layer.shape)
         detached.adjustment = deepcopy(layer.adjustment)
+        detached.effects = deepcopy(layer.effects)
         result.layers.append(detached)
     return result
 
@@ -309,7 +310,8 @@ class DocumentHistory:
         """Set layer properties together as one undoable edit."""
         allowed = {'name', 'visible', 'opacity', 'blend_mode', 'origin',
                    'size', 'flip_x', 'flip_y', 'sampling', 'mask_enabled',
-                   'rotation', 'parent_id', 'mask_source_id', 'adjustment'}
+                   'rotation', 'parent_id', 'mask_source_id', 'adjustment',
+                   'effects'}
         if set(changes) - allowed:
             raise ValueError('unsupported layer properties')
 

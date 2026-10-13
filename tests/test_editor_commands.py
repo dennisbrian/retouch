@@ -2,7 +2,48 @@
 import numpy as np
 import pytest
 
-from retouch.editor import Document, DocumentHistory, Layer, composite, load_project
+from retouch.editor import (Document, DocumentHistory, Layer, composite,
+                            load_project, save_project)
+from retouch.editor.document import LayerEffects, ShadowEffect, ColorOverlayEffect
+
+
+def test_layer_effects_are_undoable_and_detached_from_snapshots():
+    """Effects merge into history like any other property: undo restores pixels,
+    and a returned snapshot cannot mutate the retained document."""
+    doc = Document(8, 8)
+    doc.add_image(np.full((4, 4, 4), (200, 100, 50, 255), np.uint8), 'Box', origin=(2, 2))
+    h = DocumentHistory(doc, saved=True)
+    layer_id = doc.layers[0].id
+    before = composite(h.document)
+
+    h.update_layer(layer_id, effects=LayerEffects(
+        shadow=ShadowEffect(angle=90, distance=3, blur=0, opacity=1.0),
+        colorOverlay=ColorOverlayEffect(red=0, green=0, blue=1, opacity=0.5)))
+    after = composite(h.document)
+    assert after[6, 3].tolist() != before[6, 3].tolist()  # shadow lands below the box
+    assert h.dirty
+
+    snapshot = h.document
+    snapshot.layers[0].effects.shadow.distance = 999
+    assert h.document.layers[0].effects.shadow.distance == 3
+
+    assert h.undo() and not h.dirty
+    np.testing.assert_array_equal(composite(h.document), before)
+    assert h.redo()
+    np.testing.assert_array_equal(composite(h.document), after)
+
+
+def test_layer_effects_round_trip_through_save(tmp_path):
+    doc = Document(8, 8)
+    doc.add_image(np.full((4, 4, 4), (200, 100, 50, 255), np.uint8), 'Box', origin=(2, 2))
+    h = DocumentHistory(doc, saved=True)
+    effects = LayerEffects(shadow=ShadowEffect(angle=135, distance=4, blur=2, red=0.25,
+                                               green=0.5, blue=0.75, opacity=0.6),
+                           colorOverlay=ColorOverlayEffect(red=1, green=0, blue=0, opacity=0.3))
+    h.update_layer(doc.layers[0].id, effects=effects)
+    np.testing.assert_array_equal(
+        composite(load_project(save_project(h.document, tmp_path / 'fx.comp'))),
+        composite(h.document))
 
 
 def history(**kwargs):
