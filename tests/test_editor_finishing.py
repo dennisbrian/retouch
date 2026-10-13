@@ -475,7 +475,7 @@ def test_adjustment_pixels_match_native_kernel_fixture(name):
 #
 # Saturation scales the HSL saturation channel by (100 + amount) / 100.
 # Vibrance boosts saturation logarithmically, protecting already-saturated pixels.
-from retouch.editor.adjustments import _rgb_to_hsl, _grade_vibrance, _grade_temperature, _grade_tint, _grade_brightness, _grade_contrast
+from retouch.editor.adjustments import _rgb_to_hsl, _grade_vibrance, _grade_temperature, _grade_tint, _grade_brightness, _grade_contrast, _grade_hue
 
 @pytest.mark.parametrize('kind', ['Saturation', 'Vibrance'])
 def test_saturation_vibrance_identity(kind):
@@ -677,6 +677,51 @@ def test_brightness_contrast_adjustment_layer_round_trips(kind, kwargs, tmp_path
     assert not np.array_equal(image[:, :2], before[:, :2])
     h.save(tmp_path / (kind + '.comp'))
     again = load_project(tmp_path / (kind + '.comp'))
+    assert again.layers[-1].adjustment == settings
+    np.testing.assert_array_equal(composite(again), image)
+    h.undo()
+    np.testing.assert_array_equal(composite(h.document), before)
+
+
+# --- Hue -------------------------------------------------------------------------
+#
+# Rotates the HSL hue wheel. Identity at 0°, full cycle at ±180° wraps correctly.
+
+
+def test_hue_identity():
+    gray = np.full((1, 1, 3), .5, np.float32)
+    result = grade(gray, adjustment('Hue'))
+    np.testing.assert_allclose(result, gray, atol=1e-6)
+
+
+def test_hue_rotates_wheel():
+    # Pure red: H=0. +120°→green, +180°→cyan, +240°→blue, -120°→green, -180°→cyan.
+    red = np.array([[[1., 0., 0.]]], np.float32)
+    hsl = _rgb_to_hsl(red)[0, 0]
+    assert abs(hsl[0] - 0) < 1e-6, f"red H={hsl[0]}"
+    assert abs(hsl[1] - 1) < 1e-6
+    for deg, name in [(120, 'green'), (180, 'cyan'), (240, 'blue'), (-120, 'green'), (-180, 'cyan')]:
+        result = _grade_hue(red, deg)
+        hsl_res = _rgb_to_hsl(result)[0, 0]
+        # Only check saturation and lightness are preserved; hue wraps to the right band.
+        assert abs(hsl_res[1] - 1) < 1e-4, f"sat at +{deg}°: {hsl_res[1]}"
+        assert abs(hsl_res[2] - 0.5) < 1e-4, f"lum at +{deg}°: {hsl_res[2]}"
+
+
+def test_hue_adjustment_layer_round_trips(tmp_path):
+    base = Layer('Base', solid((80, 100, 120), alpha=128))
+    settings = adjustment('Hue', hue=60)
+    adj = Layer('Hue', size=(4, 4), adjustment=settings,
+                mask=selection(4, 4, 'Rectangle', 0, 0, 2, 4), opacity=.5)
+    h = DocumentHistory(Document(4, 4, [base]))
+    before = composite(h.document)
+    h.add_layer(adj)
+    image = composite(h.document)
+    np.testing.assert_array_equal(image[..., 3], before[..., 3])
+    np.testing.assert_array_equal(image[:, 2:], before[:, 2:])
+    assert not np.array_equal(image[:, :2], before[:, :2])
+    h.save(tmp_path / 'hue.comp')
+    again = load_project(tmp_path / 'hue.comp')
     assert again.layers[-1].adjustment == settings
     np.testing.assert_array_equal(composite(again), image)
     h.undo()

@@ -10,18 +10,18 @@ import numpy as np
 
 from .document import UnsupportedFeature
 
-KINDS = ('Exposure', 'Levels', 'Invert', 'Saturation', 'Vibrance', 'Temperature', 'Tint', 'Brightness', 'Contrast')
+KINDS = ('Exposure', 'Levels', 'Invert', 'Saturation', 'Vibrance', 'Temperature', 'Tint', 'Brightness', 'Contrast', 'Hue')
 CHANNELS = ('RGB', 'Red', 'Green', 'Blue')
 _KEYS = {'kind', 'hue', 'saturation', 'lightness', 'colorize', 'levels', 'curves',
-         'exposureSettings', 'saturationSettings', 'vibranceSettings', 'temperatureSettings', 'tintSettings', 'brightnessSettings', 'contrastSettings'}
+         'exposureSettings', 'saturationSettings', 'vibranceSettings', 'temperatureSettings', 'tintSettings', 'brightnessSettings', 'contrastSettings', 'hueSettings'}
 
 
 def adjustment(kind='Exposure', exposure=0, offset=0, gamma=1,
                black=0, white=255, red_gamma=1, green_gamma=1, blue_gamma=1,
                saturation=0, vibrance=0, temperature=0, tint=0,
-               brightness=0, contrast=0):
+               brightness=0, contrast=0, hue=0):
     """Build a native-format record; all channels use identity by default."""
-    if kind not in ('Levels', 'Saturation', 'Vibrance', 'Temperature', 'Tint', 'Brightness', 'Contrast'):
+    if kind not in ('Levels', 'Saturation', 'Vibrance', 'Temperature', 'Tint', 'Brightness', 'Contrast', 'Hue'):
         black, white = 0, 255
         red_gamma = green_gamma = blue_gamma = 1
     ranges = [dict(black=black, white=white, gamma=gamma if kind == 'Levels' else 1,
@@ -46,6 +46,8 @@ def adjustment(kind='Exposure', exposure=0, offset=0, gamma=1,
         record['brightnessSettings'] = dict(brightness=brightness)
     if kind == 'Contrast':
         record['contrastSettings'] = dict(contrast=contrast)
+    if kind == 'Hue':
+        record['hueSettings'] = dict(hue=hue)
     validate_adjustment(record)
     return deepcopy(record)
 
@@ -119,6 +121,21 @@ def validate_adjustment(record):
     if cont is not None and (not isinstance(cont, dict) or set(cont) != {'contrast'}
             or not _number(cont['contrast'], -100, 100)):
         raise ValueError('Invalid contrast settings')
+    hsett = record.get('hueSettings')
+    if hsett is not None and (not isinstance(hsett, dict) or set(hsett) != {'hue'}
+            or not _number(hsett['hue'], -180, 180)):
+        raise ValueError('Invalid hue settings')
+
+
+def _grade_hue(rgb, amount):
+    """Hue: rotates the HSL hue wheel by `amount` degrees.
+    amount=0 → identity; ±180 wraps correctly; hue is stored and handled in degrees.
+    """
+    if amount == 0:
+        return rgb
+    hsl = _rgb_to_hsl(rgb)
+    hsl[..., 0] = (hsl[..., 0] + amount / 360.0) % 1.0
+    return _hsl_to_rgb(hsl)
 
 
 def _grade_brightness(rgb, amount):
@@ -168,6 +185,9 @@ def grade(rgb, record):
     if kind == 'Contrast':
         c = record.get('contrastSettings', {}).get('contrast', 0)
         return _grade_contrast(rgb, c)
+    if kind == 'Hue':
+        h = record.get('hueSettings', {}).get('hue', 0)
+        return _grade_hue(rgb, h)
     if kind == 'Exposure':
         s = record.get('exposureSettings') or dict(exposure=0, offset=0, gamma=1)
         linear = np.where(rgb <= .04045, rgb / 12.92, ((rgb + .055) / 1.055) ** 2.4)
@@ -205,19 +225,38 @@ def _rgb_to_hsl(rgb):
 
 
 def _hsl_to_rgb(hsl):
-    """H [0..1], S [0..1], L [0..1] → RGB float32 [0..1]."""
+    """H [0..1], S [0..1], L [0..1] → RGB float32 [0..1].
+
+    Standard piecewise HSL→RGB (W3C / CSS Algorithm 2).
+    Six ordered hue segments with verified RGB channel assignments:
+      [0,1): R=C, G=X, B=0  (red → yellow)
+      [1,2): R=X, G=C, B=0  (yellow → green)
+      [2,3): R=0, G=C, B=X  (green → cyan)
+      [3,4): R=0, G=X, B=C  (cyan → blue)
+      [4,5): R=X, G=0, B=C  (blue → magenta)
+      [5,6): R=C, G=0, B=X  (magenta → red)
+    Ties resolve to the first primary in RGB order:
+      yellow=R>G=B, magenta=R=B>G, cyan=G=B>R.
+    """
     h, s, l = hsl[..., 0], hsl[..., 1], hsl[..., 2]
     c = (1 - np.abs(2 * l - 1)) * s
     x = c * (1 - np.abs((h * 6) % 2 - 1))
     m = l - c / 2
-    def channel(p):
-        o = p + m
-        return np.clip(o, 0, 1)
-    h6 = h * 6
-    r = np.where(h6 < 1, c, np.where(h6 < 2, x, 0))
-    g = np.where(h6 < 1, x, np.where(h6 < 3, c, np.where(h6 < 4, 0, x)))
-    b = np.where(h6 < 3, 0, np.where(h6 < 4, x, np.where(h6 < 5, c, 0)))
-    return np.stack([channel(r), channel(g), channel(b)], axis=-1)
+    h6 = (h * 6) % 6.0
+    r = np.where(h6 < 1, c,
+           np.where(h6 < 2, x,
+           np.where(h6 < 5, 0.0,
+           np.where(h6 < 6, c, 0.0))))
+    g = np.where(h6 < 1, x,
+           np.where(h6 < 3, c,
+           np.where(h6 < 4, x, 0.0)))
+    b = np.where(h6 < 2, 0.0,
+           np.where(h6 < 3, x,
+           np.where(h6 < 5, c,
+           np.where(h6 < 6, x, 0.0))))
+    return np.stack([np.clip(r + m, 0, 1),
+                     np.clip(g + m, 0, 1),
+                     np.clip(b + m, 0, 1)], axis=-1)
 
 
 def _grade_saturation(rgb, amount):
