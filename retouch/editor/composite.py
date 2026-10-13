@@ -599,7 +599,19 @@ def _resample(array, size, sampling, upright=True, mask=False):
         interpolation = cv2.INTER_CUBIC
     else:
         interpolation = cv2.INTER_AREA
-    return cv2.resize(reduced, (width, height), interpolation=interpolation), level
+    if mask or reduced.ndim != 3 or reduced.shape[2] != 4:
+        return cv2.resize(reduced, (width, height), interpolation=interpolation), level
+    # Native draws RGBA through a premultiplied surface. Interpolating straight
+    # RGB leaks hidden transparent colours into visible edge pixels.
+    rgba = reduced.astype(np.float32) / 255.0
+    rgba[..., :3] *= rgba[..., 3:4]
+    resized = cv2.resize(rgba, (width, height), interpolation=interpolation)
+    alpha = resized[..., 3:4]
+    np.clip(resized[..., :3], 0, alpha, out=resized[..., :3])
+    resized[..., :3] = np.divide(
+        resized[..., :3], np.where(alpha > 0, alpha, 1),
+        out=np.zeros_like(resized[..., :3]), where=alpha > 0)
+    return np.rint(np.clip(resized, 0, 1) * 255).astype(np.uint8), level
 
 
 def _straight(rgb, alpha):

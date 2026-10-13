@@ -332,12 +332,12 @@ def test_blend_selector_tracks_property_edits_and_undo(session, callbacks):
 
 def test_revealing_unsupported_mode_is_rejected_before_mutation(session, callbacks):
     layer = session.selected()
-    session.history.update_layer(layer.id, blend_mode='Color Dodge', visible=False)
+    session.history.update_layer(layer.id, blend_mode='Hue', visible=False)
     revision = session.history.revision
     edit = next(fn for fn in callbacks if fn.__name__ == 'edit'
                 and fn.__kwdefaults__['operation'] == 'properties')
     with pytest.raises(gr.Error, match='supported blend'):
-        edit(session, layer.id, None, 'Base', True, 100, True, 'Color Dodge')
+        edit(session, layer.id, None, 'Base', True, 100, True, 'Hue')
     assert not session.selected().visible and session.history.revision == revision
 
 

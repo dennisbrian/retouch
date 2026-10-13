@@ -551,7 +551,7 @@ def test_unsupported_adjustment_kind_raises():
     from retouch.editor import UnsupportedFeature
     identity_points = [dict(x=0, y=0), dict(x=255, y=255)]
     identity_range = dict(black=0, white=255, gamma=1, outputBlack=0, outputWhite=255)
-    record = dict(kind='Hue', hue=30, saturation=0, lightness=0, colorize=False,
+    record = dict(kind='Gaussian Blur', hue=30, saturation=0, lightness=0, colorize=False,
                   levels=dict(channel='RGB', ranges=[dict(identity_range) for _ in range(4)]),
                   curves=dict(channel='RGB',
                               channels=[[dict(p) for p in identity_points] for _ in range(4)]))
