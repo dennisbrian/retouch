@@ -11,27 +11,33 @@ import numpy as np
 from .document import UnsupportedFeature
 
 KINDS = ('Exposure', 'Levels', 'Invert')
+KINDS = ('Exposure', 'Levels', 'Invert', 'Saturation', 'Vibrance')
 CHANNELS = ('RGB', 'Red', 'Green', 'Blue')
 _KEYS = {'kind', 'hue', 'saturation', 'lightness', 'colorize', 'levels', 'curves',
-         'exposureSettings'}
+         'exposureSettings', 'saturationSettings', 'vibranceSettings'}
 
 
 def adjustment(kind='Exposure', exposure=0, offset=0, gamma=1,
-               black=0, white=255, red_gamma=1, green_gamma=1, blue_gamma=1):
+               black=0, white=255, red_gamma=1, green_gamma=1, blue_gamma=1,
+               saturation=0, vibrance=0):
     """Build a native-format record; all channels use identity by default."""
-    if kind != 'Levels':
+    if kind not in ('Levels', 'Saturation', 'Vibrance'):
         black, white = 0, 255
         red_gamma = green_gamma = blue_gamma = 1
     ranges = [dict(black=black, white=white, gamma=gamma if kind == 'Levels' else 1,
                    outputBlack=0, outputWhite=255)]
     ranges += [dict(black=0, white=255, gamma=g, outputBlack=0, outputWhite=255)
                for g in (red_gamma, green_gamma, blue_gamma)]
-    record = dict(kind=kind, hue=0, saturation=0, lightness=0, colorize=False,
+    record = dict(kind=kind, hue=0, saturation=saturation, lightness=0, colorize=False,
                   levels=dict(channel='RGB', ranges=ranges),
                   curves=dict(channel='RGB', channels=[
                       [dict(x=0, y=0), dict(x=255, y=255)] for _ in range(4)]))
     if kind == 'Exposure':
         record['exposureSettings'] = dict(exposure=exposure, offset=offset, gamma=gamma)
+    if kind == 'Saturation':
+        record['saturationSettings'] = dict(saturation=saturation)
+    if kind == 'Vibrance':
+        record['vibranceSettings'] = dict(vibrance=vibrance)
     validate_adjustment(record)
     return deepcopy(record)
 
@@ -45,7 +51,7 @@ def validate_adjustment(record):
     if not isinstance(record, dict):
         raise ValueError('Adjustment must be a settings record')
     if record.get('kind') not in KINDS or set(record) - _KEYS:
-        raise UnsupportedFeature('Supported adjustments are Exposure, Levels and Invert')
+        raise UnsupportedFeature('Supported adjustments are Exposure, Levels, Invert, Saturation and Vibrance')
     if any(not _number(record.get(k), -lim, lim) for k, lim in
            (('hue', 360), ('saturation', 100), ('lightness', 100))):
         raise ValueError('Invalid adjustment color settings')
@@ -81,6 +87,14 @@ def validate_adjustment(record):
             or not _number(exposure['offset'], -.5, .5)
             or not _number(exposure['gamma'], .01, 9.99)):
         raise ValueError('Invalid exposure settings')
+    sat = record.get('saturationSettings')
+    if sat is not None and (not isinstance(sat, dict) or set(sat) != {'saturation'}
+            or not _number(sat['saturation'], -100, 100)):
+        raise ValueError('Invalid saturation settings')
+    vib = record.get('vibranceSettings')
+    if vib is not None and (not isinstance(vib, dict) or set(vib) != {'vibrance'}
+            or not _number(vib['vibrance'], -100, 100)):
+        raise ValueError('Invalid vibrance settings')
 
 
 def grade(rgb, record):
@@ -88,6 +102,12 @@ def grade(rgb, record):
     kind = record['kind']
     if kind == 'Invert':
         return 1 - rgb
+    if kind == 'Saturation':
+        s = record.get('saturationSettings', {}).get('saturation', 0)
+        return _grade_saturation(rgb, s)
+    if kind == 'Vibrance':
+        v = record.get('vibranceSettings', {}).get('vibrance', 0)
+        return _grade_vibrance(rgb, v)
     if kind == 'Exposure':
         s = record.get('exposureSettings') or dict(exposure=0, offset=0, gamma=1)
         linear = np.where(rgb <= .04045, rgb / 12.92, ((rgb + .055) / 1.055) ** 2.4)
@@ -102,3 +122,69 @@ def grade(rgb, record):
     # Native Levels applies each color channel, then the combined RGB channel.
     channels = np.stack([apply(rgb[..., i], ranges[i + 1]) for i in range(3)], axis=-1)
     return apply(channels, ranges[0])
+
+
+def _rgb_to_hsl(rgb):
+    """RGB float32 [0..1] → H (0..360), S, L each [0..1]. """
+    r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+    mx, mn = np.maximum.reduce([r, g, b]), np.minimum.reduce([r, g, b])
+    l = (mx + mn) / 2
+    delta = mx - mn
+    # Saturation
+    s = np.where(delta == 0, 0, delta / np.where(l > 0.5, 2 - mx - mn, mx + mn))
+    # Hue: 0=R, 120=G, 240=B  (standard HSL algorithm)
+    # When two channels tie for max, HSL convention uses the first in RGB order:
+    # yellow=R>G=B>0, magenta=R=B>G>0, cyan=G=B>R>0.
+    h = np.zeros_like(l)
+    safe = np.where(delta > 0, delta, 1)
+    mask_g = (mx == g) & (delta > 0)  # green is second in RGB order
+    h[mask_g] = ((b - r) / safe * 60 + 120)[mask_g]
+    mask_b = (mx == b) & ~mask_g & (delta > 0)  # blue third; excludes R=B=G
+    h[mask_b] = ((r - g) / safe * 60 + 240)[mask_b]
+    return np.stack([h / 360, s, l], axis=-1)
+
+
+def _hsl_to_rgb(hsl):
+    """H [0..1], S [0..1], L [0..1] → RGB float32 [0..1]."""
+    h, s, l = hsl[..., 0], hsl[..., 1], hsl[..., 2]
+    c = (1 - np.abs(2 * l - 1)) * s
+    x = c * (1 - np.abs((h * 6) % 2 - 1))
+    m = l - c / 2
+    def channel(p):
+        o = p + m
+        return np.clip(o, 0, 1)
+    h6 = h * 6
+    r = np.where(h6 < 1, c, np.where(h6 < 2, x, 0))
+    g = np.where(h6 < 1, x, np.where(h6 < 3, c, np.where(h6 < 4, 0, x)))
+    b = np.where(h6 < 3, 0, np.where(h6 < 4, x, np.where(h6 < 5, c, 0)))
+    return np.stack([channel(r), channel(g), channel(b)], axis=-1)
+
+
+def _grade_saturation(rgb, amount):
+    """Saturation: scales HSL saturation by (100 + amount) / 100.
+    amount=0 → identity, amount=-100 → desaturate, amount=+100 → double.
+    """
+    if amount == 0:
+        return rgb
+    scale = (100 + amount) / 100.0
+    hsl = _rgb_to_hsl(rgb)
+    hsl[..., 1] = np.clip(hsl[..., 1] * scale, 0, 1)
+    return _hsl_to_rgb(hsl)
+
+
+def _grade_vibrance(rgb, amount):
+    """Vibrance: logarithmic saturation boost that protects already-saturated pixels.
+    amount=0 → identity; positive boosts; negative reduces.  Skin-tone protection
+    comes from the log curve: saturated colours get less boost than neutral ones.
+    """
+    if amount == 0:
+        return rgb
+    hsl = _rgb_to_hsl(rgb)
+    mx = np.maximum.reduce([rgb[..., 0], rgb[..., 1], rgb[..., 2]])
+    mn = np.minimum.reduce([rgb[..., 0], rgb[..., 1], rgb[..., 2]])
+    # 1 - (saturation at max channel) gives headroom; log distributes boost to low-sat.
+    headroom = 1 - np.where(mx > 0, mx - mn, 0) / np.where(mx > 0, mx, 1)
+    # Map [0..1] headroom → [0..1] boost: 1 at grey, 0 at fully saturated.
+    boost = np.log1p(headroom * 9) / np.log1p(9) * (amount / 100.0)
+    hsl[..., 1] = np.clip(hsl[..., 1] * (1 + boost), 0, 1)
+    return _hsl_to_rgb(hsl)

@@ -469,3 +469,92 @@ def test_adjustment_pixels_match_native_kernel_fixture(name):
                       * actual[:, 3:4].astype(np.float32) / 255).astype(np.uint8)
     np.testing.assert_array_less(np.abs(premult.astype(int)
                                         - native[:, :3].astype(int)), 2)
+
+
+# --- Saturation and Vibrance -----------------------------------------------------
+#
+# Saturation scales the HSL saturation channel by (100 + amount) / 100.
+# Vibrance boosts saturation logarithmically, protecting already-saturated pixels.
+from retouch.editor.adjustments import _rgb_to_hsl, _grade_vibrance
+
+
+@pytest.mark.parametrize('kind', ['Saturation', 'Vibrance'])
+def test_saturation_vibrance_identity(kind):
+    gray = np.full((1, 1, 3), .5, np.float32)
+    result = grade(gray, adjustment(kind))
+    np.testing.assert_allclose(result, gray, atol=1e-6)
+
+
+def test_saturation_desaturates():
+    gray = np.full((1, 1, 3), .5, np.float32)
+    result = grade(gray, adjustment('Saturation', saturation=-100))
+    np.testing.assert_allclose(result[0, 0], gray[0, 0], atol=1e-4)
+
+
+def test_saturation_preserves_hue_on_saturated_pixel():
+    # Pure red [1,0,0]: H=0, S=1. Sat+100 scales S, clipped to 1. HSL preserves
+    # the red-primary hue; red channel stays dominant after the adjustment.
+    red = np.array([[[1.0, 0.0, 0.0]]], np.float32)
+    result = grade(red, adjustment('Saturation', saturation=100))
+    # Red-primary hue: H in [0..0.833]; after clamping S=1, the result stays vivid.
+    hsl = _rgb_to_hsl(result)
+    assert hsl[0, 0, 0] < 0.9   # hue is in the red-to-magenta zone
+    assert hsl[0, 0, 1] == 1.0  # saturation fully saturated
+
+
+def test_vibrance_boosts_dull_more_than_saturated():
+    # Vibrance boosts low-saturation colours more than vivid ones.
+    # Use blue (HSL hue 0.667) and a muted lavender: both clearly distinguishable.
+    blue = np.array([[[0.2, 0.2, 0.9]]], np.float32)   # vivid blue
+    muted = np.array([[[0.5, 0.4, 0.6]]], np.float32)  # muted blue-purple
+    blue_s0 = _rgb_to_hsl(blue)[0, 0, 1]
+    blue_s1 = _rgb_to_hsl(_grade_vibrance(blue, 50))[0, 0, 1]
+    muted_s0 = _rgb_to_hsl(muted)[0, 0, 1]
+    muted_s1 = _rgb_to_hsl(_grade_vibrance(muted, 50))[0, 0, 1]
+    blue_rel  = blue_s1  / blue_s0
+    muted_rel = muted_s1 / muted_s0
+    assert muted_rel > blue_rel, (
+        f"muted relative boost {muted_rel:.3f} should exceed vivid {blue_rel:.3f}")
+
+
+def test_vibrance_on_gray_is_identity():
+    gray = np.full((1, 1, 3), .5, np.float32)
+    result = grade(gray, adjustment('Vibrance', vibrance=100))
+    np.testing.assert_allclose(result[0, 0], gray[0, 0], atol=1e-4)
+
+
+@pytest.mark.parametrize('kind, kwargs', [
+    ('Saturation', dict(saturation=50)),
+    ('Vibrance', dict(vibrance=50)),
+])
+def test_saturation_vibrance_adjustment_layer_and_native_record(kind, kwargs, tmp_path):
+    base = Layer('Base', solid((80, 100, 120), alpha=128))
+    settings = adjustment(kind, **kwargs)
+    adj = Layer(kind, size=(4, 4), adjustment=settings,
+                mask=selection(4, 4, 'Rectangle', 0, 0, 2, 4), opacity=.5)
+    h = DocumentHistory(Document(4, 4, [base]))
+    before = composite(h.document)
+    h.add_layer(adj)
+    image = composite(h.document)
+    np.testing.assert_array_equal(image[..., 3], before[..., 3])
+    np.testing.assert_array_equal(image[:, 2:], before[:, 2:])
+    assert not np.array_equal(image[:, :2], before[:, :2])
+    h.save(tmp_path / (kind + '.comp'))
+    again = load_project(tmp_path / (kind + '.comp'))
+    assert again.layers[-1].adjustment == settings
+    np.testing.assert_array_equal(composite(again), image)
+    h.undo()
+    np.testing.assert_array_equal(composite(h.document), before)
+
+
+def test_unsupported_adjustment_kind_raises():
+    from retouch.editor.adjustments import validate_adjustment
+    from retouch.editor import UnsupportedFeature
+    identity_points = [dict(x=0, y=0), dict(x=255, y=255)]
+    identity_range = dict(black=0, white=255, gamma=1, outputBlack=0, outputWhite=255)
+    record = dict(kind='Hue', hue=30, saturation=0, lightness=0, colorize=False,
+                  levels=dict(channel='RGB', ranges=[dict(identity_range) for _ in range(4)]),
+                  curves=dict(channel='RGB',
+                              channels=[[dict(p) for p in identity_points] for _ in range(4)]))
+    with pytest.raises(UnsupportedFeature, match='Supported adjustments'):
+        validate_adjustment(record)
