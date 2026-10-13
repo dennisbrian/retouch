@@ -475,7 +475,7 @@ def test_adjustment_pixels_match_native_kernel_fixture(name):
 #
 # Saturation scales the HSL saturation channel by (100 + amount) / 100.
 # Vibrance boosts saturation logarithmically, protecting already-saturated pixels.
-from retouch.editor.adjustments import _rgb_to_hsl, _grade_vibrance, _grade_temperature, _grade_tint
+from retouch.editor.adjustments import _rgb_to_hsl, _grade_vibrance, _grade_temperature, _grade_tint, _grade_brightness, _grade_contrast
 
 @pytest.mark.parametrize('kind', ['Saturation', 'Vibrance'])
 def test_saturation_vibrance_identity(kind):
@@ -603,6 +603,67 @@ def test_tint_green_and_magenta_preserving_luminance():
     ('Tint', dict(tint=-30)),
 ])
 def test_temperature_tint_adjustment_layer_round_trips(kind, kwargs, tmp_path):
+    base = Layer('Base', solid((80, 100, 120), alpha=128))
+    settings = adjustment(kind, **kwargs)
+    adj = Layer(kind, size=(4, 4), adjustment=settings,
+                mask=selection(4, 4, 'Rectangle', 0, 0, 2, 4), opacity=.5)
+    h = DocumentHistory(Document(4, 4, [base]))
+    before = composite(h.document)
+    h.add_layer(adj)
+    image = composite(h.document)
+    np.testing.assert_array_equal(image[..., 3], before[..., 3])
+    np.testing.assert_array_equal(image[:, 2:], before[:, 2:])
+    assert not np.array_equal(image[:, :2], before[:, :2])
+    h.save(tmp_path / (kind + '.comp'))
+    again = load_project(tmp_path / (kind + '.comp'))
+    assert again.layers[-1].adjustment == settings
+    np.testing.assert_array_equal(composite(again), image)
+    h.undo()
+    np.testing.assert_array_equal(composite(h.document), before)
+
+
+# --- Brightness and Contrast -------------------------------------------------------
+#
+# Brightness: additive sRGB offset. Contrast: midpoint-anchored S-curve.
+# Endpoints and midpoint are fixed; the slope between them changes.
+
+
+@pytest.mark.parametrize('kind', ['Brightness', 'Contrast'])
+def test_brightness_contrast_identity(kind):
+    gray = np.full((1, 1, 3), .5, np.float32)
+    result = grade(gray, adjustment(kind))
+    np.testing.assert_allclose(result, gray, atol=1e-6)
+
+
+def test_brightness_shifts_luminance():
+    gray = np.full((1, 1, 3), .5, np.float32)
+    pos = _grade_brightness(gray, 40)
+    neg = _grade_brightness(gray, -40)
+    assert pos[0, 0, 0] > gray[0, 0, 0]
+    assert neg[0, 0, 0] < gray[0, 0, 0]
+
+
+def test_contrast_midpoint_anchored():
+    gray = np.full((1, 1, 3), .5, np.float32)
+    black = np.zeros((1, 1, 3), np.float32)
+    white = np.ones((1, 1, 3), np.float32)
+    result = _grade_contrast(gray, 50)
+    np.testing.assert_allclose(result, gray, atol=1e-6)  # midpoint fixed
+    np.testing.assert_allclose(_grade_contrast(black, 50), black, atol=1e-6)  # 0 fixed
+    np.testing.assert_allclose(_grade_contrast(white, 50), white, atol=1e-6)  # 1 fixed
+    dark = np.full((1, 1, 3), .3, np.float32)
+    light = np.full((1, 1, 3), .7, np.float32)
+    c50 = _grade_contrast(dark, 50)
+    l50 = _grade_contrast(light, 50)
+    assert c50[0, 0, 0] < dark[0, 0, 0]  # dark gets darker
+    assert l50[0, 0, 0] > light[0, 0, 0]  # light gets lighter
+
+
+@pytest.mark.parametrize('kind, kwargs', [
+    ('Brightness', dict(brightness=30)),
+    ('Contrast', dict(contrast=30)),
+])
+def test_brightness_contrast_adjustment_layer_round_trips(kind, kwargs, tmp_path):
     base = Layer('Base', solid((80, 100, 120), alpha=128))
     settings = adjustment(kind, **kwargs)
     adj = Layer(kind, size=(4, 4), adjustment=settings,

@@ -10,17 +10,18 @@ import numpy as np
 
 from .document import UnsupportedFeature
 
-KINDS = ('Exposure', 'Levels', 'Invert', 'Saturation', 'Vibrance', 'Temperature', 'Tint')
+KINDS = ('Exposure', 'Levels', 'Invert', 'Saturation', 'Vibrance', 'Temperature', 'Tint', 'Brightness', 'Contrast')
 CHANNELS = ('RGB', 'Red', 'Green', 'Blue')
 _KEYS = {'kind', 'hue', 'saturation', 'lightness', 'colorize', 'levels', 'curves',
-         'exposureSettings', 'saturationSettings', 'vibranceSettings', 'temperatureSettings', 'tintSettings'}
+         'exposureSettings', 'saturationSettings', 'vibranceSettings', 'temperatureSettings', 'tintSettings', 'brightnessSettings', 'contrastSettings'}
 
 
 def adjustment(kind='Exposure', exposure=0, offset=0, gamma=1,
                black=0, white=255, red_gamma=1, green_gamma=1, blue_gamma=1,
-               saturation=0, vibrance=0, temperature=0, tint=0):
+               saturation=0, vibrance=0, temperature=0, tint=0,
+               brightness=0, contrast=0):
     """Build a native-format record; all channels use identity by default."""
-    if kind not in ('Levels', 'Saturation', 'Vibrance', 'Temperature', 'Tint'):
+    if kind not in ('Levels', 'Saturation', 'Vibrance', 'Temperature', 'Tint', 'Brightness', 'Contrast'):
         black, white = 0, 255
         red_gamma = green_gamma = blue_gamma = 1
     ranges = [dict(black=black, white=white, gamma=gamma if kind == 'Levels' else 1,
@@ -41,6 +42,10 @@ def adjustment(kind='Exposure', exposure=0, offset=0, gamma=1,
         record['temperatureSettings'] = dict(temperature=temperature)
     if kind == 'Tint':
         record['tintSettings'] = dict(tint=tint)
+    if kind == 'Brightness':
+        record['brightnessSettings'] = dict(brightness=brightness)
+    if kind == 'Contrast':
+        record['contrastSettings'] = dict(contrast=contrast)
     validate_adjustment(record)
     return deepcopy(record)
 
@@ -106,6 +111,38 @@ def validate_adjustment(record):
     if tnt is not None and (not isinstance(tnt, dict) or set(tnt) != {'tint'}
             or not _number(tnt['tint'], -100, 100)):
         raise ValueError('Invalid tint settings')
+    bright = record.get('brightnessSettings')
+    if bright is not None and (not isinstance(bright, dict) or set(bright) != {'brightness'}
+            or not _number(bright['brightness'], -100, 100)):
+        raise ValueError('Invalid brightness settings')
+    cont = record.get('contrastSettings')
+    if cont is not None and (not isinstance(cont, dict) or set(cont) != {'contrast'}
+            or not _number(cont['contrast'], -100, 100)):
+        raise ValueError('Invalid contrast settings')
+
+
+def _grade_brightness(rgb, amount):
+    """Brightness: additive shift in sRGB space.
+    amount=-100 → black, amount=+100 → white, amount=0 → identity.
+    """
+    if amount == 0:
+        return rgb
+    return np.clip(rgb + amount / 100.0, 0, 1)
+
+
+def _grade_contrast(rgb, amount):
+    """Contrast: midpoint-anchored S-curve (Photoshop/Lightroom style).
+    amount=-100 → flat gray, amount=+100 → maximum contrast, amount=0 → identity.
+    The midpoint 0.5 stays fixed; endpoints 0/1 also stay fixed.
+    """
+    if amount == 0:
+        return rgb
+    # Convert to [0..1] slope; identity (amount=0) → slope=1.
+    # Using simple linear remapping: contrast=100 → slope=2 (steepest without clipping).
+    slope = 1 + amount / 100.0
+    midpoint = 0.5
+    result = midpoint + (rgb - midpoint) * slope
+    return np.clip(result, 0, 1)
 
 
 def grade(rgb, record):
@@ -125,6 +162,12 @@ def grade(rgb, record):
     if kind == 'Tint':
         t = record.get('tintSettings', {}).get('tint', 0)
         return _grade_tint(rgb, t)
+    if kind == 'Brightness':
+        b = record.get('brightnessSettings', {}).get('brightness', 0)
+        return _grade_brightness(rgb, b)
+    if kind == 'Contrast':
+        c = record.get('contrastSettings', {}).get('contrast', 0)
+        return _grade_contrast(rgb, c)
     if kind == 'Exposure':
         s = record.get('exposureSettings') or dict(exposure=0, offset=0, gamma=1)
         linear = np.where(rgb <= .04045, rgb / 12.92, ((rgb + .055) / 1.055) ** 2.4)
@@ -246,37 +289,4 @@ def _normalize_luminance(gains):
     """Scale per-channel gains so a neutral grey keeps its brightness."""
     total = float(np.dot(gains, _LUMINANCE_WEIGHTS))
     return gains / total if total > 0 else np.ones(3, np.float32)
-
-
-def grade(rgb, record):
-    """Grade straight encoded RGB floats, preserving alpha in the caller."""
-    kind = record['kind']
-    if kind == 'Invert':
-        return 1 - rgb
-    if kind == 'Saturation':
-        s = record.get('saturationSettings', {}).get('saturation', 0)
-        return _grade_saturation(rgb, s)
-    if kind == 'Vibrance':
-        v = record.get('vibranceSettings', {}).get('vibrance', 0)
-        return _grade_vibrance(rgb, v)
-    if kind == 'Temperature':
-        t = record.get('temperatureSettings', {}).get('temperature', 0)
-        return _grade_temperature(rgb, t)
-    if kind == 'Tint':
-        t = record.get('tintSettings', {}).get('tint', 0)
-        return _grade_tint(rgb, t)
-    if kind == 'Exposure':
-        s = record.get('exposureSettings') or dict(exposure=0, offset=0, gamma=1)
-        linear = np.where(rgb <= .04045, rgb / 12.92, ((rgb + .055) / 1.055) ** 2.4)
-        linear = np.maximum(0, linear * 2 ** s['exposure'] + s['offset']) ** (1 / s['gamma'])
-        return np.clip(np.where(linear <= .0031308, 12.92 * linear,
-                                1.055 * linear ** (1 / 2.4) - .055), 0, 1)
-    def apply(values, r):
-        values = np.clip((values * 255 - r['black']) / (r['white'] - r['black']), 0, 1)
-        return (r['outputBlack'] + values ** (1 / r['gamma'])
-                * (r['outputWhite'] - r['outputBlack'])) / 255
-    ranges = record['levels']['ranges']
-    # Native Levels applies each color channel, then the combined RGB channel.
-    channels = np.stack([apply(rgb[..., i], ranges[i + 1]) for i in range(3)], axis=-1)
-    return apply(channels, ranges[0])
 
