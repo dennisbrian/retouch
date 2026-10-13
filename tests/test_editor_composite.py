@@ -111,8 +111,8 @@ class TestSourceOver:
 class TestUnsupported:
     def test_unimplemented_visible_blend_is_refused(self):
         doc = Document(1, 1)
-        doc.add_image(fx.solid(1, 1, (1, 2, 3, 255)), 'Top').blend_mode = 'Color Dodge'
-        with pytest.raises(UnsupportedFeature, match='Color Dodge'):
+        doc.add_image(fx.solid(1, 1, (1, 2, 3, 255)), 'Top').blend_mode = 'Hue'
+        with pytest.raises(UnsupportedFeature, match='Hue'):
             composite(doc)
 
     def test_hidden_non_normal_blend_is_kept_but_not_drawn(self):
@@ -121,6 +121,31 @@ class TestUnsupported:
         diff = doc.add_image(fx.solid(1, 1, (9, 9, 9, 255)), 'Diff')
         diff.blend_mode, diff.visible = 'Difference', False
         assert composite(doc)[0, 0].tolist() == [1, 2, 3, 255]
+
+
+@pytest.mark.parametrize('mode, expected', [
+    ('Darken', [51, 128, 51]),
+    ('Color Burn', [0, 2, 0]),
+    ('Linear Burn', [0, 1, 0]),
+    ('Lighten', [204, 128, 204]),
+    ('Color Dodge', [255, 255, 255]),
+    ('Linear Dodge (Add)', [255, 255, 255]),
+    ('Soft Light', [89, 128, 180]),
+    ('Hard Light', [173, 128, 82]),
+    ('Vivid Light', [128, 129, 128]),
+    ('Linear Light', [204, 129, 51]),
+    ('Pin Light', [153, 128, 102]),
+    ('Hard Mix', [255, 255, 255]),
+    ('Exclusion', [173, 127, 173]),
+    ('Subtract', [0, 0, 153]),
+    ('Divide', [64, 255, 255]),
+])
+def test_separable_native_blend_modes_render_real_pixels(mode, expected):
+    doc = Document(1, 1)
+    doc.add_image(np.array([[[51, 128, 204, 255]]], np.uint8), 'Base')
+    layer = doc.add_image(np.array([[[204, 128, 51, 255]]], np.uint8), 'Top')
+    layer.blend_mode = mode
+    assert composite(doc)[0, 0].tolist() == expected + [255]
 
 
 def test_png_export_carries_resolution_and_working_profile(tmp_path):

@@ -25,7 +25,12 @@ from PIL import Image
 
 from .document import MAX_SURFACE_PIXELS, UnsupportedFeature
 
-RENDER_BLEND_MODES = ('Normal', 'Multiply', 'Screen', 'Overlay', 'Difference')
+RENDER_BLEND_MODES = (
+    'Normal', 'Darken', 'Multiply', 'Color Burn', 'Linear Burn', 'Lighten',
+    'Screen', 'Color Dodge', 'Linear Dodge (Add)', 'Overlay', 'Soft Light',
+    'Hard Light', 'Vivid Light', 'Linear Light', 'Pin Light', 'Hard Mix',
+    'Difference', 'Exclusion', 'Subtract', 'Divide',
+)
 
 # --- Resampling -----------------------------------------------------------
 #
@@ -319,16 +324,66 @@ def _prepare(layer):
 
 
 def _blend(backdrop, source, mode):
-    """W3C separable formulas in the document's gamma-encoded sRGB space."""
+    """Separable blend formulas in gamma-encoded sRGB space.
+
+    Component modes (Hue, Saturation, Color and Luminosity) need a
+    non-separable colour-space pass and remain explicitly unsupported.
+    """
+    backdrop = np.asarray(backdrop, dtype=np.float32)
+    source = np.asarray(source, dtype=np.float32)
+    if mode == 'Darken':
+        return np.minimum(backdrop, source)
     if mode == 'Multiply':
         return backdrop * source
+    if mode == 'Color Burn':
+        return np.where(source <= 0, 0, 1 - np.minimum(1, (1 - backdrop) / source))
+    if mode == 'Linear Burn':
+        return np.maximum(0, backdrop + source - 1)
+    if mode == 'Lighten':
+        return np.maximum(backdrop, source)
     if mode == 'Screen':
         return backdrop + source - backdrop * source
+    if mode == 'Color Dodge':
+        return np.where(source >= 1, 1, np.minimum(1, backdrop / np.maximum(1 - source, 1e-12)))
+    if mode == 'Linear Dodge (Add)':
+        return np.minimum(1, backdrop + source)
     if mode == 'Overlay':
         return np.where(backdrop <= 0.5, 2 * backdrop * source,
                         1 - 2 * (1 - backdrop) * (1 - source))
+    if mode == 'Soft Light':
+        d = np.where(backdrop <= 0.25,
+                     ((16 * backdrop - 12) * backdrop + 4) * backdrop,
+                     np.sqrt(backdrop))
+        return np.where(source <= 0.5,
+                        backdrop - (1 - 2 * source) * backdrop * (1 - backdrop),
+                        backdrop + (2 * source - 1) * (d - backdrop))
+    if mode == 'Hard Light':
+        return np.where(source <= 0.5, 2 * backdrop * source,
+                        1 - 2 * (1 - backdrop) * (1 - source))
+    if mode == 'Vivid Light':
+        burn = np.where(source <= 0, 0,
+                        1 - np.minimum(1, (1 - backdrop) / np.maximum(2 * source, 1e-12)))
+        dodge_source = 2 * (source - 0.5)
+        dodge = np.where(dodge_source >= 1, 1,
+                         np.minimum(1, backdrop / np.maximum(1 - dodge_source, 1e-12)))
+        return np.where(source <= 0.5, burn, dodge)
+    if mode == 'Linear Light':
+        return np.clip(backdrop + 2 * source - 1, 0, 1)
+    if mode == 'Pin Light':
+        return np.where(source <= 0.5,
+                        np.minimum(backdrop, 2 * source),
+                        np.maximum(backdrop, 2 * source - 1))
+    if mode == 'Hard Mix':
+        vivid = _blend(backdrop, source, 'Vivid Light')
+        return (vivid >= 0.5).astype(np.float32)
     if mode == 'Difference':
         return np.abs(backdrop - source)
+    if mode == 'Exclusion':
+        return backdrop + source - 2 * backdrop * source
+    if mode == 'Subtract':
+        return np.maximum(0, backdrop - source)
+    if mode == 'Divide':
+        return np.where(source <= 0, 1, np.minimum(1, backdrop / np.maximum(source, 1e-12)))
     raise UnsupportedFeature(f'blend mode {mode!r} is not composited yet')
 
 
