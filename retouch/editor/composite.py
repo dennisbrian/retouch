@@ -15,6 +15,7 @@ Work happens in horizontal bands, so the float working set is bounded by
 Derived from Compositor (MIT, Copyright (c) 2026 Wonder Assembly LLC), pinned
 at 11d8d7a; see ``third_party/compositor/``.
 """
+import math
 import os
 import uuid
 from pathlib import Path
@@ -243,6 +244,17 @@ class _BandRenderer:
                 adjust(layer, rgb, alpha)
                 continue
             source, a = self.own(layer, top, bottom)
+            if layer.effects is not None and not layer.effects.is_empty():
+                margin = _effect_margin(layer.effects)
+                ext_top = max(0, top - margin)
+                ext_bottom = min(self.doc.height, bottom + margin)
+                if ext_top != top or ext_bottom != bottom:
+                    ext_source, ext_a = self.own(layer, ext_top, ext_bottom)
+                else:
+                    ext_source, ext_a = source, a
+                eff_rgb, eff_a = _apply_effects(ext_source, ext_a, layer.effects)
+                source = eff_rgb[top - ext_top:bottom - ext_top]
+                a = eff_a[top - ext_top:bottom - ext_top]
             if layer.id in self.stacks:
                 # Native clipping stacks make the base opaque for internal blending,
                 # then restore its alpha before placing the stack on the backdrop.
@@ -259,6 +271,108 @@ class _BandRenderer:
             a *= self.folder_clip(layer, top, bottom)
             _over(rgb, alpha, source, a, layer.blend_mode)
         return rgb, alpha
+
+
+
+# --- Layer Effects -------------------------------------------------------------
+#
+# Compositor's LayerEffects (subset): drop shadow and color overlay.
+# Stroke, inner shadow, outer glow and inner glow are refused by the reader until
+# the morphological ring pass is available (``LayerEffectsRenderer`` upstream).
+#
+# Effects are drawn on a padded copy of the source (``_effects_source``): the
+# shadow's own silhouette, offset and blurred inside that padding, then the
+# layer's pixels through its blend mode, then the flat colour over them. The
+# coverage is taken from the unadjusted silhouette, as it is for adjustment
+# layers, so grading never feeds back into the shadow's shape.
+
+
+def _effect_margin(effects):
+    """``LayerEffectsRenderer.margin`` for the subset this port renders."""
+    margin = 0.0
+    if effects is not None and effects.shadow is not None:
+        shadow = effects.shadow
+        if shadow.enabled and shadow.opacity > 0:
+            margin = shadow.distance + shadow.blur * 3
+    return int(math.ceil(margin)) + 2
+
+
+def _shift(array, dx, dy):
+    """``array`` moved by ``dx`` columns and ``dy`` rows, filling with zeros.
+
+    Plain slicing, not ``np.roll``: a roll would wrap the far edge of the
+    layer's silhouette around into the padding the shadow is read from.
+    """
+    out = np.zeros_like(array)
+    height, width = array.shape[0], array.shape[1]
+    sx, tx = (0, dx) if dx >= 0 else (-dx, 0)
+    sy, ty = (0, dy) if dy >= 0 else (-dy, 0)
+    span_x, span_y = width - abs(dx), height - abs(dy)
+    if span_x > 0 and span_y > 0:
+        out[ty:ty + span_y, tx:tx + span_x] = array[sy:sy + span_y, sx:sx + span_x]
+    return out
+
+
+def _blur(mask, radius):
+    """Gaussian soften with upstream's blur radius (``coverage(... blur:)``)."""
+    if radius <= 0:
+        return mask
+    sigma = radius / 2.0
+    kernel = max(3, int(math.ceil(sigma * 6)) | 1)
+    return cv2.GaussianBlur(mask, (kernel, kernel), sigma, borderType=cv2.BORDER_CONSTANT)
+
+
+def _apply_effects(rgb, alpha, effects):
+    """Composite layer effects onto (rgb, alpha) straight float32 arrays.
+
+    Matches ``LayerEffectsRenderer.render`` (upstream):
+      1. Shadow sits behind the layer's own pixels (source-over).
+      2. Layer's own pixels drawn over the shadow.
+      3. Flat colour overlay sits over the layer, masked by the unshadowed
+         silhouette (``coverage(shown, blur: 0)`` upstream).
+    """
+    layer_rgb, layer_alpha = rgb, alpha
+    accum_rgb, accum_alpha = np.zeros_like(rgb), np.zeros_like(alpha)
+
+    # 1. Shadow sits behind the layer's own pixels.
+    shadow = effects.shadow
+    if shadow is not None and shadow.enabled and shadow.opacity > 0:
+        dx, dy = shadow.offset
+        moved = _blur(_shift(layer_alpha, int(round(dx)), int(round(dy))), shadow.blur)
+        shadow_a = moved * shadow.opacity
+        shadow_c = np.array([shadow.red, shadow.green, shadow.blue], np.float32)
+        accum_rgb = np.broadcast_to(shadow_c, accum_rgb.shape).astype(np.float32)
+        accum_alpha = shadow_a
+
+    # 2. Layer's own pixels drawn over the shadow (source-over).
+    if layer_alpha.any():
+        l_over = layer_alpha[..., np.newaxis]
+        out_a = layer_alpha + accum_alpha * (1 - layer_alpha)
+        safe = np.where(out_a > 0, out_a, 1)[..., np.newaxis]
+        accum_rgb = np.where(
+            out_a[..., np.newaxis] > 0,
+            (layer_rgb * l_over + accum_rgb * (accum_alpha[..., np.newaxis] * (1 - l_over))) / safe,
+            0.0
+        )
+        accum_alpha = out_a
+
+    # 3. Flat colour overlay sits over the layer; its shape is the unshadowed
+    # silhouette (``coverage(shown, blur: 0)`` upstream), so it never tints the shadow.
+    overlay = effects.colorOverlay
+    if overlay is not None and overlay.enabled and overlay.opacity > 0 and layer_alpha.any():
+        o_a = layer_alpha * overlay.opacity
+        o_over = o_a[..., np.newaxis]
+        out_a = o_a + accum_alpha * (1 - o_a)
+        safe = np.where(out_a > 0, out_a, 1)[..., np.newaxis]
+        over_c = np.array([overlay.red, overlay.green, overlay.blue], np.float32)
+        accum_rgb = np.where(
+            out_a[..., np.newaxis] > 0,
+            (over_c * o_over + accum_rgb * (accum_alpha[..., np.newaxis] * (1 - o_over))) / safe,
+            0.0
+        )
+        accum_alpha = out_a
+
+    return accum_rgb.astype(np.float32), accum_alpha.astype(np.float32)
 
 
 def export_png(document, path, *, bit_depth=8, icc_profile=None):

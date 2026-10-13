@@ -39,8 +39,12 @@ from .document import (
     MAX_SURFACE_PIXELS,
     SAMPLING,
     Document,
+    ColorOverlayEffect,
     Layer,
+    LayerEffects,
+    ShadowEffect,
     UnsupportedFeature,
+    validate_effects,
 )
 
 FORMAT = 'com.compositor.project'
@@ -228,12 +232,14 @@ def _check_layer(record, version):
     transform = _check_transform(record.get('transform'))
 
     # Valid upstream, not modelled here yet: refuse rather than drop.
-    for key, what in (('effects', 'layer effects'),
-                      ('maskPlacement', 'unlinked masks')):
+    for key, what in (('maskPlacement', 'unlinked masks'),):
         if record.get(key) is not None:
             raise UnsupportedFeature(f'{what} are not supported yet (layer {name!r})')
     if is_group and image_file is not None:
         raise _invalid('folders cannot contain image assets')
+    layer_effects = _check_effects(record.get('effects'), name)
+    if layer_effects is not None and (image_file is None or is_group):
+        raise _invalid('effects need an image layer')
     adjustment = record.get('adjustment')
     if adjustment is not None:
         from .adjustments import validate_adjustment
@@ -252,6 +258,7 @@ def _check_layer(record, version):
         'parent_id': _uuid(record['parentID']) if record.get('parentID') is not None else None,
         'mask_source_id': _uuid(record['maskSourceID']) if record.get('maskSourceID') is not None else None,
         'adjustment': adjustment,
+        'effects': layer_effects,
         'flip_x': transform['flipX'], 'flip_y': transform['flipY'],
         'sampling': transform['sampling'],
         'mask_enabled': True if mask_enabled is None else mask_enabled,
@@ -272,6 +279,55 @@ def _check_transform(transform):
     if transform['sampling'] not in SAMPLING:
         raise _invalid('transform sampling')
     return transform
+
+
+def _check_effects(record, layer_name):
+    """Decode upstream's ``effects`` dict, refusing unmodelled effect kinds."""
+    if record is None:
+        return None
+    if not isinstance(record, dict):
+        raise _invalid('effects must be a dict')
+    for key in record:
+        if key not in ('shadow', 'colorOverlay'):
+            raise UnsupportedFeature(f'effect kind {key!r} is not supported yet (layer {layer_name!r})')
+    shadow = None
+    shadow_rec = record.get('shadow')
+    if shadow_rec is not None:
+        if not isinstance(shadow_rec, dict):
+            raise _invalid('shadow must be a dict')
+        unknown = set(shadow_rec) - {'enabled', 'angle', 'distance', 'blur',
+                                     'red', 'green', 'blue', 'opacity'}
+        if unknown:
+            raise _invalid(f'unknown shadow keys: {sorted(unknown)}')
+        shadow = ShadowEffect(
+            angle=float(shadow_rec.get('angle', 90)),
+            distance=float(shadow_rec.get('distance', 20)),
+            blur=float(shadow_rec.get('blur', 20)),
+            red=float(shadow_rec.get('red', 0)),
+            green=float(shadow_rec.get('green', 0)),
+            blue=float(shadow_rec.get('blue', 0)),
+            opacity=float(shadow_rec.get('opacity', 0.5)),
+            enabled=shadow_rec.get('enabled', True))
+    overlay = None
+    overlay_rec = record.get('colorOverlay')
+    if overlay_rec is not None:
+        if not isinstance(overlay_rec, dict):
+            raise _invalid('colorOverlay must be a dict')
+        unknown = set(overlay_rec) - {'enabled', 'red', 'green', 'blue', 'opacity'}
+        if unknown:
+            raise _invalid(f'unknown colorOverlay keys: {sorted(unknown)}')
+        overlay = ColorOverlayEffect(
+            red=float(overlay_rec.get('red', 0)),
+            green=float(overlay_rec.get('green', 0)),
+            blue=float(overlay_rec.get('blue', 0)),
+            opacity=float(overlay_rec.get('opacity', 1)),
+            enabled=overlay_rec.get('enabled', True))
+    effects = LayerEffects(shadow=shadow, colorOverlay=overlay)
+    try:
+        validate_effects(effects)
+    except ValueError as exc:
+        raise _invalid(str(exc)) from exc
+    return effects
 
 
 def _check_guides(guides, version):
@@ -544,4 +600,25 @@ def _encode_layer(layer):
         record['text'] = layer.text
     if layer.shape is not None:
         record['shape'] = layer.shape
+    if layer.effects is not None and not layer.effects.is_empty():
+        record['effects'] = _encode_effects(layer.effects)
     return record
+
+
+def _encode_effects(effects):
+    """Encode a :class:`LayerEffects` record matching upstream's schema."""
+    out = {}
+    if effects.shadow is not None:
+        s = effects.shadow
+        rec = {'angle': s.angle, 'distance': s.distance, 'blur': s.blur,
+               'red': s.red, 'green': s.green, 'blue': s.blue, 'opacity': s.opacity}
+        if not s.enabled:
+            rec['enabled'] = False
+        out['shadow'] = rec
+    if effects.colorOverlay is not None:
+        o = effects.colorOverlay
+        rec = {'red': o.red, 'green': o.green, 'blue': o.blue, 'opacity': o.opacity}
+        if not o.enabled:
+            rec['enabled'] = False
+        out['colorOverlay'] = rec
+    return out

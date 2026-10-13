@@ -156,7 +156,7 @@ class TestRejections:
 
 class TestUnsupportedIsExplicit:
     @pytest.mark.parametrize('extra', [
-        {'effects': {'stroke': {}}},
+        {'effects': {'innerShadow': {'angle':90,'distance':10,'blur':10,'red':0,'green':0,'blue':0,'opacity':0.5}}},
         {'adjustment': {'kind': 'Gaussian Blur'}},
         {'futureField': 1},
     ])
@@ -394,3 +394,97 @@ class TestFastSave:
         monkeypatch.setattr(store.shutil, 'copyfile', broken)
         path = save_project(doc, tmp_path / 'copy.comp')
         np.testing.assert_array_equal(composite(load_project(path)), composite(doc))
+
+
+class TestLayerEffects:
+    """Effects (drop shadow, color overlay) round-trip and are refused for unsupported kinds."""
+
+    def test_drop_shadow_round_trips(self, tmp_path):
+        record = fx.layer_record(0, 'Layer', 4, 4,
+                                 effects={'shadow': {'angle': 135, 'distance': 10,
+                                                     'blur': 5, 'red': 0, 'green': 0,
+                                                     'blue': 0, 'opacity': 0.4}})
+        path = fx.write_package(tmp_path / 'shadow.comp', 4, 4, [record],
+                               images={0: fx.solid(4, 4, (80, 100, 120, 255))})
+        doc = load_project(path)
+        layer = doc.layers[0]
+        assert layer.effects is not None
+        assert layer.effects.shadow is not None
+        assert layer.effects.shadow.angle == 135
+        assert layer.effects.shadow.distance == 10
+        assert layer.effects.shadow.blur == 5
+        assert layer.effects.shadow.red == 0
+        assert layer.effects.shadow.green == 0
+        assert layer.effects.shadow.blue == 0
+        assert layer.effects.shadow.opacity == 0.4
+
+    def test_color_overlay_round_trips(self, tmp_path):
+        record = fx.layer_record(0, 'Layer', 4, 4,
+                                 effects={'colorOverlay': {'red': 1, 'green': 0.5,
+                                                          'blue': 0, 'opacity': 0.5}})
+        path = fx.write_package(tmp_path / 'overlay.comp', 4, 4, [record],
+                               images={0: fx.solid(4, 4, (80, 100, 120, 255))})
+        doc = load_project(path)
+        layer = doc.layers[0]
+        assert layer.effects is not None
+        assert layer.effects.colorOverlay is not None
+        assert layer.effects.colorOverlay.red == 1
+        assert layer.effects.colorOverlay.green == 0.5
+        assert layer.effects.colorOverlay.blue == 0
+        assert layer.effects.colorOverlay.opacity == 0.5
+
+    def test_shadow_and_overlay_combined_round_trip(self, tmp_path):
+        record = fx.layer_record(0, 'Layer', 4, 4,
+                                 effects={'shadow': {'angle': 90, 'distance': 5,
+                                                     'blur': 3, 'red': 0, 'green': 0,
+                                                     'blue': 0, 'opacity': 0.3},
+                                         'colorOverlay': {'red': 0, 'green': 0,
+                                                          'blue': 1, 'opacity': 0.2}})
+        path = fx.write_package(tmp_path / 'both.comp', 4, 4, [record],
+                               images={0: fx.solid(4, 4, (128, 128, 128, 255))})
+        doc = load_project(path)
+        layer = doc.layers[0]
+        assert layer.effects.shadow is not None
+        assert layer.effects.colorOverlay is not None
+
+    def test_unsupported_effect_kind_raises(self, tmp_path):
+        # stroke, innerShadow, outerGlow, innerGlow are not modelled yet.
+        record = fx.layer_record(0, 'Layer', 4, 4,
+                                 effects={'innerShadow': {'angle': 90, 'distance': 5,
+                                                          'blur': 3, 'red': 0, 'green': 0,
+                                                          'blue': 0, 'opacity': 0.3}})
+        path = fx.write_package(tmp_path / 'bad.comp', 4, 4, [record],
+                               images={0: fx.solid(4, 4, (128, 128, 128, 255))})
+        with pytest.raises(UnsupportedFeature):
+            load_project(path)
+
+    def test_save_and_reopen_preserves_layer_effects(self, tmp_path):
+        from retouch.editor.document import LayerEffects, ShadowEffect, ColorOverlayEffect
+        doc = Document(8, 8)
+        layer = doc.add_image(fx.solid(4, 4, (50, 100, 150, 255)), 'Box', origin=(2, 2))
+        layer.effects = LayerEffects(
+            shadow=ShadowEffect(angle=45, distance=3, blur=1, red=0.1, green=0.2, blue=0.3, opacity=0.7),
+            colorOverlay=ColorOverlayEffect(red=0.8, green=0.2, blue=0.1, opacity=0.5, enabled=False),
+        )
+        path = tmp_path / 'saved.comp'
+        save_project(doc, path)
+        reopened = load_project(path)
+        assert reopened.layers[0].effects == layer.effects
+        assert reopened.layers[0].effects.colorOverlay.enabled is False
+        np.testing.assert_array_equal(composite(reopened), composite(doc))
+
+    def test_effects_on_folder_or_adjustment_refused(self, tmp_path):
+        folder_rec = fx.layer_record(0, 'Folder', 4, 4, image=False, isGroup=True,
+                                     effects={'shadow': {'angle': 90, 'distance': 5, 'blur': 3,
+                                                         'red': 0, 'green': 0, 'blue': 0, 'opacity': 0.5}})
+        path = fx.write_package(tmp_path / 'folder.comp', 4, 4, [folder_rec])
+        with pytest.raises(ProjectError, match='effects'):
+            load_project(path)
+
+    def test_unknown_sub_keys_refused(self, tmp_path):
+        bad_shadow = fx.layer_record(0, 'Layer', 4, 4,
+                                     effects={'shadow': {'angle': 90, 'futureKey': 1}})
+        path = fx.write_package(tmp_path / 'bad_shadow.comp', 4, 4, [bad_shadow],
+                               images={0: fx.solid(4, 4, (1, 1, 1, 255))})
+        with pytest.raises(ProjectError, match='unknown shadow keys'):
+            load_project(path)

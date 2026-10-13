@@ -177,3 +177,89 @@ def test_high_bit_export_widens_exact_pixels_and_keeps_alpha_and_icc(tmp_path):
     stored = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     expected = cv2.cvtColor(composite(doc), cv2.COLOR_RGBA2BGRA).astype(np.uint16) * 257
     np.testing.assert_array_equal(stored, expected)
+
+
+class TestLayerEffectsPixels:
+    """Exact native pixel math contracts for layer effects (drop shadow, colour overlay)."""
+
+    def test_color_overlay_analytic_source_over(self):
+        from retouch.editor.document import LayerEffects, ColorOverlayEffect
+        doc = Document(1, 1)
+        layer = doc.add_image(np.array([[[200, 50, 50, 255]]], np.uint8), 'Base')
+        layer.effects = LayerEffects(colorOverlay=ColorOverlayEffect(red=0.0, green=0.0, blue=1.0, opacity=0.4))
+        out = composite(doc)
+        # Analytic: red 200 * 0.6 + 0 * 0.4 = 120; green 50 * 0.6 = 30; blue 50 * 0.6 + 255 * 0.4 = 132
+        assert out[0, 0].tolist() == [120, 30, 132, 255]
+
+    def test_color_overlay_respects_unshadowed_layer_silhouette(self):
+        from retouch.editor.document import LayerEffects, ColorOverlayEffect
+        doc = Document(2, 2)
+        pixels = np.zeros((2, 2, 4), np.uint8)
+        pixels[0, 0] = [200, 50, 50, 255]  # only top-left opaque
+        layer = doc.add_image(pixels, 'Base')
+        layer.effects = LayerEffects(colorOverlay=ColorOverlayEffect(red=0.0, green=0.0, blue=1.0, opacity=0.4))
+        out = composite(doc)
+        assert out[0, 0].tolist() == [120, 30, 132, 255]
+        # Transparent regions remain uncoloured
+        assert (out[0, 1:] == 0).all()
+        assert (out[1, :] == 0).all()
+
+    def test_drop_shadow_zero_blur_geometry_and_placement(self):
+        from retouch.editor.document import LayerEffects, ShadowEffect
+        doc = Document(5, 5)
+        layer = doc.add_image(np.array([[[255, 0, 0, 255]]], np.uint8), 'Pixel', origin=(2, 2))
+        # angle 90 = light from straight above -> shadow sits straight down (dy = +2, dx = 0)
+        layer.effects = LayerEffects(shadow=ShadowEffect(angle=90, distance=2, blur=0, opacity=1.0,
+                                                        red=0.0, green=0.0, blue=0.0))
+        out = composite(doc)
+        assert out[2, 2].tolist() == [255, 0, 0, 255]     # layer pixel unchanged
+        assert out[4, 2].tolist() == [0, 0, 0, 255]       # shadow cast 2 px down
+        assert out[0, 2].tolist() == [0, 0, 0, 0]         # no shadow above
+        assert out[2, 0].tolist() == [0, 0, 0, 0]         # no shadow to sides
+
+    def test_drop_shadow_sits_behind_layer_pixels(self):
+        from retouch.editor.document import LayerEffects, ShadowEffect
+        doc = Document(1, 1)
+        layer = doc.add_image(np.array([[[255, 255, 255, 255]]], np.uint8), 'White')
+        # Zero-distance black shadow directly under opaque white pixel
+        layer.effects = LayerEffects(shadow=ShadowEffect(angle=90, distance=0, blur=0, opacity=1.0,
+                                                        red=0.0, green=0.0, blue=0.0))
+        out = composite(doc)
+        assert out[0, 0].tolist() == [255, 255, 255, 255]  # white layer covers black shadow completely
+
+    def test_translucent_layer_reveals_shadow(self):
+        from retouch.editor.document import LayerEffects, ShadowEffect
+        doc = Document(1, 1)
+        layer = doc.add_image(np.array([[[255, 255, 255, 128]]], np.uint8), 'TranslucentWhite')
+        layer.effects = LayerEffects(shadow=ShadowEffect(angle=90, distance=0, blur=0, opacity=1.0,
+                                                        red=0.0, green=0.0, blue=0.0))
+        out = composite(doc)
+        # Analytic: a=128/255, out_a = a*(2 - a) = 48896/65025 -> 192/255; straight RGB = 255*255/382 -> 170
+        assert out[0, 0].tolist() == [170, 170, 170, 192]
+
+    def test_effects_band_invariance(self):
+        from retouch.editor.document import LayerEffects, ShadowEffect, ColorOverlayEffect
+        doc = Document(16, 16)
+        layer = doc.add_image(np.full((4, 4, 4), (200, 100, 50, 255), np.uint8), 'Box', origin=(6, 6))
+        layer.effects = LayerEffects(
+            shadow=ShadowEffect(angle=90, distance=4, blur=2, opacity=0.8, red=0, green=0, blue=0),
+            colorOverlay=ColorOverlayEffect(red=0.1, green=0.2, blue=0.3, opacity=0.3),
+        )
+        c16 = composite(doc, band_rows=16)  # single band
+        c8 = composite(doc, band_rows=8)    # two bands (split across shadow at row 8)
+        c2 = composite(doc, band_rows=2)    # fine bands
+        np.testing.assert_array_equal(c8, c16)
+        np.testing.assert_array_equal(c2, c16)
+
+    def test_disabled_effects_produce_identical_pixels_to_none(self):
+        from retouch.editor.document import LayerEffects, ShadowEffect, ColorOverlayEffect
+        doc_none = Document(8, 8)
+        doc_none.add_image(np.full((4, 4, 4), (100, 150, 200, 255), np.uint8), 'Box', origin=(2, 2))
+
+        doc_disabled = Document(8, 8)
+        layer = doc_disabled.add_image(np.full((4, 4, 4), (100, 150, 200, 255), np.uint8), 'Box', origin=(2, 2))
+        layer.effects = LayerEffects(
+            shadow=ShadowEffect(angle=90, distance=3, blur=2, opacity=0.9, red=0, green=0, blue=0, enabled=False),
+            colorOverlay=ColorOverlayEffect(red=1, green=0, blue=0, opacity=1.0, enabled=False),
+        )
+        np.testing.assert_array_equal(composite(doc_disabled), composite(doc_none))

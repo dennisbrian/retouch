@@ -35,6 +35,128 @@ BLEND_MODES = (
 )
 SAMPLING = ('High quality', 'Smooth', 'Nearest')
 
+# LayerEffects: the subset of Compositor's LayerEffects this port renders
+# (``Compositor/Document/LayerEffects.swift``). Drop shadow and colour overlay
+# are modelled; stroke, inner shadow, outer glow and inner glow are refused
+# rather than dropped. ``enabled`` is upstream's optional flag: missing means
+# visible, so it round-trips as absent unless a project turns it off.
+
+
+class ShadowEffect:
+    """The layer's shape repeated behind it, offset and softened.
+
+    ``angle`` is where the light comes from, counterclockwise from the right
+    (90 is straight above), ``distance`` and ``blur`` are in layer pixels and
+    ``opacity``/the colour are 0..1. Ranges match upstream ``isValid``.
+    """
+    __slots__ = ('enabled', 'angle', 'distance', 'blur', 'red', 'green', 'blue', 'opacity')
+
+    def __init__(self, angle=90, distance=20, blur=20,
+                 red=0, green=0, blue=0, opacity=0.5, enabled=True):
+        self.enabled = enabled
+        self.angle = float(angle)
+        self.distance = float(distance)
+        self.blur = float(blur)
+        self.red = float(red)
+        self.green = float(green)
+        self.blue = float(blue)
+        self.opacity = float(opacity)
+
+    @property
+    def offset(self):
+        """Where the shadow sits, in layer pixels (y grows downward)."""
+        radians = math.radians(self.angle)
+        return -math.cos(radians) * self.distance, math.sin(radians) * self.distance
+
+    def __eq__(self, other):
+        return (isinstance(other, ShadowEffect)
+                and self.__slots__ and all(getattr(self, k) == getattr(other, k)
+                                           for k in self.__slots__))
+
+    def __repr__(self):
+        return ('ShadowEffect(angle=%r, distance=%r, blur=%r, red=%r, green=%r, '
+                'blue=%r, opacity=%r, enabled=%r)'
+                % (self.angle, self.distance, self.blur, self.red, self.green,
+                   self.blue, self.opacity, self.enabled))
+
+
+class ColorOverlayEffect:
+    """A flat colour over everything the layer shows."""
+    __slots__ = ('enabled', 'red', 'green', 'blue', 'opacity')
+
+    def __init__(self, red=0, green=0, blue=0, opacity=1, enabled=True):
+        self.enabled = enabled
+        self.red = float(red)
+        self.green = float(green)
+        self.blue = float(blue)
+        self.opacity = float(opacity)
+
+    def __eq__(self, other):
+        return (isinstance(other, ColorOverlayEffect)
+                and all(getattr(self, k) == getattr(other, k) for k in self.__slots__))
+
+    def __repr__(self):
+        return ('ColorOverlayEffect(red=%r, green=%r, blue=%r, opacity=%r, enabled=%r)'
+                % (self.red, self.green, self.blue, self.opacity, self.enabled))
+
+
+class LayerEffects:
+    """What a layer draws around itself; kept with the layer, never baked in."""
+    __slots__ = ('shadow', 'colorOverlay')
+
+    def __init__(self, shadow=None, colorOverlay=None):
+        self.shadow = shadow
+        self.colorOverlay = colorOverlay
+
+    def is_empty(self):
+        return self.shadow is None and self.colorOverlay is None
+
+    def __eq__(self, other):
+        return (isinstance(other, LayerEffects)
+                and self.shadow == other.shadow
+                and self.colorOverlay == other.colorOverlay)
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def __bool__(self):
+        return not self.is_empty()
+
+    def __repr__(self):
+        return ('LayerEffects(shadow=%r, colorOverlay=%r)'
+                % (self.shadow, self.colorOverlay))
+
+
+def _effect_number(value, low, high):
+    return (type(value) in (int, float) and not isinstance(value, bool)
+            and math.isfinite(value) and low <= value <= high)
+
+
+def validate_effects(effects):
+    """Check a :class:`LayerEffects` against upstream's ``isValid`` ranges."""
+    if not isinstance(effects, LayerEffects):
+        raise ValueError('effects must be a LayerEffects record')
+    shadow = effects.shadow
+    if shadow is not None:
+        if not isinstance(shadow, ShadowEffect):
+            raise ValueError('shadow must be a ShadowEffect record')
+        if (type(shadow.enabled) is not bool
+                or not (_effect_number(shadow.angle, -360, 360)
+                and _effect_number(shadow.distance, 0, 5000)
+                and _effect_number(shadow.blur, 0, 500)
+                and _effect_number(shadow.opacity, 0, 1)
+                and all(_effect_number(v, 0, 1) for v in
+                        (shadow.red, shadow.green, shadow.blue)))):
+            raise ValueError('shadow settings out of range')
+    overlay = effects.colorOverlay
+    if overlay is not None:
+        if not isinstance(overlay, ColorOverlayEffect):
+            raise ValueError('colorOverlay must be a ColorOverlayEffect record')
+        if (type(overlay.enabled) is not bool
+                or not (_effect_number(overlay.opacity, 0, 1)
+                and all(_effect_number(v, 0, 1) for v in
+                        (overlay.red, overlay.green, overlay.blue)))):
+            raise ValueError('colorOverlay settings out of range')
 
 class UnsupportedFeature(ValueError):
     """A valid Compositor construct this port cannot represent or render yet."""
@@ -88,6 +210,7 @@ class Layer:
     visible: bool = True
     opacity: float = 1.0
     blend_mode: str = 'Normal'
+    effects: LayerEffects = None
     origin: tuple = (0, 0)         # document pixels, top-left
     size: tuple = None             # rendered rectangle; source pixels stay native
     flip_x: bool = False
@@ -144,6 +267,10 @@ class Layer:
             validate_adjustment(self.adjustment)
             if self.pixels is not None:
                 raise ValueError('adjustment layers cannot contain pixels')
+        if self.effects is not None:
+            validate_effects(self.effects)
+            if self.is_group or self.adjustment is not None or self.mask_source_id is not None:
+                raise ValueError('layer effects need a plain raster layer')
         if not self.name.strip() or len(self.name.encode('utf-8')) > 16_384:
             raise ValueError('layer name must be non-blank and at most 16 KiB')
         if not (math.isfinite(self.opacity) and 0 <= self.opacity <= 1):
