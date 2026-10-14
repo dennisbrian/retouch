@@ -22,6 +22,57 @@ def combine(old, new, mode):
     raise ValueError('Unknown selection combination')
 
 
+def wand_selection(rgba, x, y, tolerance=32, radius=0, contiguous=True):
+    """Magic-wand selection on a straight-alpha RGBA composite.
+
+    Samples a (2r+1)^2 box around the seed, compares every pixel to the
+    rounded box average per channel (alpha included), and either returns
+    all matches or a 4-connected flood from the seed. Returns the HxW
+    uint8 mask and the selected pixel count.
+    """
+    h, w = rgba.shape[:2]
+    if rgba.ndim != 3 or rgba.shape[2] != 4 or rgba.dtype != np.uint8:
+        raise ValueError('wand_selection needs an HxWx4 uint8 array')
+    if h * w > MAX_SURFACE_PIXELS:
+        raise ValueError('Selection exceeds the canvas budget')
+    for v in (x, y):
+        if isinstance(v, bool) or not isinstance(v, (int, float)) \
+                or not math.isfinite(v):
+            raise ValueError('Wand seed must be finite numbers')
+    x, y = int(x), int(y)
+    if not (0 <= x < w and 0 <= y < h):
+        return np.zeros((h, w), np.uint8), 0
+    if isinstance(tolerance, bool) or not isinstance(tolerance, (int, float)) \
+            or not math.isfinite(tolerance):
+        raise ValueError('Tolerance must be a finite number')
+    t = min(255, max(0, int(tolerance)))
+    if isinstance(radius, bool) or not isinstance(radius, (int, float)) \
+            or not math.isfinite(radius) or not 0 <= int(radius) <= 500:
+        raise ValueError('Sample radius must be 0-500 pixels')
+    r = int(radius)
+    x0, x1 = max(0, x - r), min(w - 1, x + r)
+    y0, y1 = max(0, y - r), min(h - 1, y + r)
+    box = rgba[y0:y1 + 1, x0:x1 + 1].astype(np.int64)
+    n = box.shape[0] * box.shape[1]
+    # Round-half-up like the C average (WandPixels.c): sum + n/2 over n.
+    ref = (box.sum(axis=(0, 1)) + n // 2) // n
+    diff = np.abs(rgba.astype(np.int64) - ref)
+    match = np.all(diff <= t, axis=2)
+    if not contiguous:
+        m = (match * np.uint8(255)).astype(np.uint8)
+        return m, int(match.sum())
+    if not match[y, x]:
+        return np.zeros((h, w), np.uint8), 0
+    # floodFill on the binary match image with FLOODFILL_MASK_ONLY;
+    # 4-connectivity, fill value 255.
+    fill = (match * np.uint8(255)).astype(np.uint8)
+    ff = np.zeros((h + 2, w + 2), np.uint8)
+    flags = 4 | (255 << 8) | cv2.FLOODFILL_MASK_ONLY
+    cv2.floodFill(fill, ff, (x, y), 255, loDiff=0, upDiff=0, flags=flags)
+    m = ff[1:-1, 1:-1]
+    return m, int((m > 0).sum())
+
+
 def selection(width, height, kind, x=0, y=0, box_width=1, box_height=1, points='[]', feather=0):
     if width * height > MAX_SURFACE_PIXELS:
         raise ValueError('Selection exceeds the canvas budget')

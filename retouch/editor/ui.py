@@ -24,6 +24,32 @@ from .recovery import Autosaver, discard_recovery, list_recoveries, load_recover
 
 PREVIEW_SIDE = 1024
 
+# Tier-1 hotkey parity with the native Compositor (KeyboardShortcuts.swift):
+# cmd/ctrl+Z undo, cmd/ctrl+shift+Z and cmd/ctrl+Y redo, cmd/ctrl+D clear
+# selection. Gradio 4.44 accepts `js` only on the root Blocks, so gui.py
+# passes this constant to its shell's Blocks(js=...). Keeping it
+# module-level means the wiring and the source-level test reference one
+# symbol.
+EDITOR_HOTKEYS_JS = """() => {
+    document.addEventListener('keydown', (e) => {
+        const t = e.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA'
+            || t.tagName === 'SELECT' || t.isContentEditable)) return;
+        const M = e.metaKey || e.ctrlKey;
+        if (!M) return;
+        const S = e.shiftKey;
+        const k = e.key.toLowerCase();
+        const hit = (id) => {
+            const btn = document.getElementById(id);
+            if (btn) { e.preventDefault(); btn.click(); }
+        };
+        if (M && S && k === 'z') return hit('editor-redo');
+        if (M && k === 'z') return hit('editor-undo');
+        if (M && k === 'y' && !S) return hit('editor-redo');
+        if (M && k === 'd') return hit('editor-clear-selection');
+    });
+}"""
+
 
 def _photo(path):
     with Image.open(path) as image:
@@ -465,7 +491,7 @@ def build_editor_tab():
                     selection_preview = gr.Image(label='Selection coverage (white selected)', interactive=False, image_mode='L')
                     with gr.Row():
                         invert_selection = gr.Button('Invert selection')
-                        clear_selection = gr.Button('Clear selection')
+                        clear_selection = gr.Button('Clear selection', elem_id='editor-clear-selection')
                     selection_amount = gr.Number(label='Expand / contract / border (px)', value=10, precision=0)
                     expand_selection = gr.Button('Expand selection')
                     contract_selection = gr.Button('Contract selection')
@@ -474,6 +500,13 @@ def build_editor_tab():
                         move_dx = gr.Number(label='Move dx', value=0)
                         move_dy = gr.Number(label='Move dy', value=0)
                     move_selection = gr.Button('Move selection')
+                    with gr.Row():
+                        wand_x = gr.Number(label='Wand X', value=0, precision=0)
+                        wand_y = gr.Number(label='Wand Y', value=0, precision=0)
+                    wand_tolerance = gr.Slider(0, 255, value=32, step=1, label='Wand tolerance')
+                    wand_sample = gr.Radio(['Point', '3x3', '5x5'], value='Point', label='Wand sample size')
+                    wand_contiguous = gr.Checkbox(label='Contiguous', value=True)
+                    wand_button = gr.Button('Magic wand selection')
                     mask_mode = gr.Radio(['Replace', 'Add', 'Subtract', 'Intersect'], value='Replace', label='Combine with layer mask')
                     mask_selection = gr.Button('Apply selection to selected layer mask')
                     gr.Markdown('Selections use canvas coordinates and remain temporary. '
@@ -567,8 +600,8 @@ def build_editor_tab():
                 add_photo = gr.File(label='Photo to add as layer', file_types=['image'], type='filepath')
                 add = gr.Button('Add photo layer')
                 with gr.Row():
-                    undo = gr.Button('Undo', interactive=False)
-                    redo = gr.Button('Redo', interactive=False)
+                    undo = gr.Button('Undo', interactive=False, elem_id='editor-undo')
+                    redo = gr.Button('Redo', interactive=False, elem_id='editor-redo')
                 from retouch.recipes import RECIPES
                 recipe = gr.Dropdown(label='Retouch recipe', choices=sorted(RECIPES), value='natural')
                 strength = gr.Slider(1, 100, value=100, step=1, label='Result layer strength')
@@ -768,6 +801,22 @@ def build_editor_tab():
                         new = selection(doc.width, doc.height, *args[:7])
                         old = current.selection if current.selection is not None else np.zeros(new.shape, np.uint8)
                         current.selection = combine(old, new, args[7])
+                    elif operation == 'wand':
+                        from .composite import composite
+                        from .selections import combine, wand_selection
+                        doc = current.history.document
+                        source = composite(doc)
+                        radius = {'Point': 0, '3x3': 1, '5x5': 2}[args[3]] \
+                            if isinstance(args[3], str) else int(args[3])
+                        new, count = wand_selection(source, args[0], args[1],
+                                                    tolerance=args[2], radius=radius,
+                                                    contiguous=args[4])
+                        old = current.selection if current.selection is not None \
+                            else np.zeros(new.shape, np.uint8)
+                        merged = combine(old, new, args[5])
+                        # An empty Replace deselects, matching invert_selection.
+                        current.selection = None if (not merged.any()
+                                                     and args[5] == 'Replace') else merged
                     elif operation == 'clear_selection':
                         current.selection = None
                     elif operation == 'invert_selection':
@@ -867,6 +916,7 @@ def build_editor_tab():
                                   (duplicate, 'duplicate'), (invert_mask, 'invert_mask'),
                                   (reset_mask, 'reset_mask'), (fit, 'fit'), (links, 'links'), (group, 'group'),
                                   (ungroup, 'ungroup'), (create_selection, 'selection'),
+                                  (wand_button, 'wand'),
                                   (crop_canvas, 'crop'), (crop_selection, 'crop_selection'),
                                   (clear_selection, 'clear_selection'), (invert_selection, 'invert_selection'),
                                   (expand_selection, 'expand_selection'),
@@ -889,6 +939,8 @@ def build_editor_tab():
                 'selection': [selection_kind, selection_x, selection_y, selection_width,
                               selection_height, polygon, feather, selection_mode],
                 'selection_mask': [mask_mode],
+                'wand': [wand_x, wand_y, wand_tolerance, wand_sample,
+                         wand_contiguous, selection_mode],
                 'expand_selection': [selection_amount],
                 'contract_selection': [selection_amount],
                 'border_selection': [selection_amount],

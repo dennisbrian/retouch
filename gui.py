@@ -175,6 +175,7 @@ from retouch.gui_inspection import (
 )
 from retouch.render_manifest import RenderManifest, canonical_sha256
 from retouch.gui_workspace import SessionWorkspace, cleanup_workspace
+from retouch.editor.ui import EDITOR_HOTKEYS_JS
 from gui_advanced import (
     ADVANCED_PREVIEW_MAX_DIM,
     ADVANCED_SNAPSHOT_MAX_COUNT,
@@ -3684,7 +3685,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         })();
     })();
     </script>
-""") as app:
+""", js=EDITOR_HOTKEYS_JS) as app:
 
     # Liquid Glass Header bar
     gr.HTML(f"""
