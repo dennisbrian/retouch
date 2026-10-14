@@ -210,8 +210,11 @@ def _ci_blend_reference():
     """
     import shutil
     import subprocess
+    import sys
     import tempfile
-    if shutil.which('swiftc'):
+    # The fixture imports CoreImage, which only macOS has; Linux runners can
+    # ship swiftc without it.
+    if sys.platform == 'darwin' and shutil.which('swiftc'):
         src = Path(__file__).parents[1] / 'scripts/dev/ci_blend_fixture.swift'
         with tempfile.TemporaryDirectory() as d:
             exe = Path(d) / 'fixture'
