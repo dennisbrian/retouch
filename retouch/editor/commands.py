@@ -381,8 +381,9 @@ class DocumentHistory:
             layer.mask_placement = placement
         return self._edit('Edit mask', apply)
 
-    def replace_pixels(self, layer_id: str, pixels: np.ndarray) -> bool:
-        return self._edit('Replace pixels', lambda doc: doc.layer(layer_id).replace_pixels(pixels))
+    def replace_pixels(self, layer_id: str, pixels: np.ndarray,
+                       label: str = 'Replace pixels') -> bool:
+        return self._edit(label, lambda doc: doc.layer(layer_id).replace_pixels(pixels))
 
     def canvas_resize(self, width, height, *, anchor=4, content_offset=None,
                       label='Canvas Size') -> bool:
