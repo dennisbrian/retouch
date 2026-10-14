@@ -608,7 +608,7 @@ class TestExrDeliveryContract:
         p = tmp_path / "ladder.exr"
         assert cv2.imwrite(str(p), ladder)
         with caplog.at_level("WARNING", logger="retouch.io"):
-            out = read_image_16bit(p)
+            out = read_image_16bit(p, allow_exr=True)
         np.testing.assert_allclose(out[0, :, 0], [187.516, 243.445, 255, 255, 255, 255], atol=0.01)
         msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
         assert any("hard-clipped" in m and "9/18" in m and "max 8" in m for m in msgs), msgs
@@ -617,7 +617,7 @@ class TestExrDeliveryContract:
         sdr = tmp_path / "sdr.exr"
         assert cv2.imwrite(str(sdr), np.float32([[[0.2, 0.5, 1.0]]]))
         with caplog.at_level("WARNING", logger="retouch.io"):
-            read_image_16bit(sdr)
+            read_image_16bit(sdr, allow_exr=True)
         assert not [r for r in caplog.records if "hard-clipped" in r.getMessage()]
 
     def test_pq_exr_write_warns_no_transfer_metadata(self, tmp_path, caplog):

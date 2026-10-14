@@ -135,6 +135,29 @@ def composite(document, band_rows=256):
         out[top:bottom] = _straight(rgb, alpha)
     return out
 
+def composite_16(document, band_rows=256):
+    """Flatten ``document`` to a uint16 straight-alpha RGBA (H, W, 4) array.
+
+    Same band renderer as :func:`composite`, but quantizes the float bands to
+    16-bit directly instead of lifting the 8-bit result by 257 — the float
+    pipeline already exists in ``_BandRenderer``, and the 8-bit detour would
+    throw that precision away before the high-bit quantize.
+    """
+    document.validate()
+    width, height = document.width, document.height
+    if width * height > MAX_SURFACE_PIXELS:
+        raise ValueError('canvas exceeds the %d MP export limit'
+                         % (MAX_SURFACE_PIXELS // 1_000_000))
+    if not isinstance(band_rows, int) or isinstance(band_rows, bool) or band_rows < 1:
+        raise ValueError('band_rows must be a positive integer')
+    renderer = _BandRenderer(document)
+    out = np.zeros((height, width, 4), np.uint16)
+    for top in range(0, height, band_rows):
+        bottom = min(height, top + band_rows)
+        rgb, alpha = renderer.render(top, bottom)
+        out[top:bottom] = _straight16(rgb, alpha)
+    return out
+
 
 def _over(rgb, alpha, source, a, mode):
     if mode != 'Normal':
@@ -584,15 +607,17 @@ def export_png(document, path, *, bit_depth=8, icc_profile=None):
     The compositor renders 8-bit sRGB straight alpha. Exporting through the
     shared colour-managed writer tags the file with the sRGB ICC profile so a
     colour-managed viewer reproduces the editor's intent instead of guessing,
-    and optionally widens to 16-bit PNG/TIFF (each output level scaled by 257,
-    the exact 8->16-bit lift) for downstream high-bit editing. ``bit_depth``
+    and optionally widens to 16-bit PNG/TIFF — rendered at true 16-bit
+    precision via :func:`composite_16` (the band renderer is float32
+    internally; an 8-bit detour would quantize twice) — for downstream
+    high-bit editing. ``bit_depth``
     16 is only honoured for PNG/TIFF; others stay 8-bit, matching the native
     Compositor exporter, which is 8-bit sRGB only.
     """
     from ..io import get_working_srgb_icc, write_image_with_icc
 
     path = Path(path)
-    pixels = composite(document)
+    pixels = composite_16(document) if bit_depth == 16 else composite(document)
     if icc_profile is None:
         icc_profile = get_working_srgb_icc()
     temporary = path.with_name(f'.{path.name}.{uuid.uuid4().hex[:8]}.tmp')
@@ -986,3 +1011,11 @@ def _straight(rgb, alpha):
     colour = np.rint(np.clip(rgb / safe[..., None], 0.0, 1.0) * 255.0)
     colour[a8 == 0] = 0
     return np.dstack([colour, a8]).astype(np.uint8)
+
+def _straight16(rgb, alpha):
+    """Premultiplied float band -> straight-alpha uint16 RGBA."""
+    a16 = np.rint(alpha * 65535.0)
+    safe = np.where(alpha > 0, alpha, 1.0)
+    colour = np.rint(np.clip(rgb / safe[..., None], 0.0, 1.0) * 65535.0)
+    colour[a16 == 0] = 0
+    return np.dstack([colour, a16]).astype(np.uint16)

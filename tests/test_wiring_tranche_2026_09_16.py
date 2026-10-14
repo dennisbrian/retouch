@@ -30,7 +30,7 @@ class TestExrRoundTrip:
         path = tmp_path / "sdr.exr"
         write_image_with_icc(str(path), img)
         assert path.exists() and path.stat().st_size > 0
-        back = read_image_16bit(path)
+        back = read_image_16bit(path, allow_exr=True)
         assert back.shape == img.shape
         assert back.dtype == np.float32
         err = np.abs(back - img.astype(np.float32))
@@ -42,7 +42,7 @@ class TestExrRoundTrip:
         hdr = np.float32([[[0.5, 1.0, 4.0]]])  # BGR
         path = tmp_path / "hdr.exr"
         assert cv2.imwrite(str(path), hdr)
-        out = read_image_16bit(path)
+        out = read_image_16bit(path, allow_exr=True)
         # B=0.5 linear -> sRGB(0.5)*255 ~ 187.5; G=1.0 -> 255; R=4.0 -> 255
         assert out[0, 0, 0] == pytest.approx(187.5, abs=1.0)
         assert out[0, 0, 1] == pytest.approx(255.0, abs=0.5)
@@ -52,7 +52,17 @@ class TestExrRoundTrip:
         bad = tmp_path / "bad.exr"
         bad.write_bytes(b"not an exr file")
         with pytest.raises(ValueError):
-            read_image_16bit(bad)
+            read_image_16bit(bad, allow_exr=True)
+
+    def test_exr_read_is_opt_in(self, tmp_path):
+        # Untrusted .exr must be denied without the explicit flag: OpenEXR
+        # has had crafted-file vulnerabilities and the codec is enabled
+        # process-wide for the trusted write path.
+        img = (np.random.rand(8, 8, 3) * 255).astype(np.uint8)
+        path = tmp_path / "untrusted.exr"
+        write_image_with_icc(str(path), img)
+        with pytest.raises(ValueError, match="opt-in"):
+            read_image_16bit(path)
 
 
 class TestExrPqExport:

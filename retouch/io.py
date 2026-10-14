@@ -434,6 +434,7 @@ def read_image_16bit(
     path: Union[str, Path],
     apply_exposure_bias: bool = True,
     decode_info: Optional[Dict[str, Any]] = None,
+    allow_exr: bool = False,
 ) -> np.ndarray:
     """Read a 16-bit PNG/TIFF/RAW image and return float32 BGR in [0, 255].
 
@@ -470,6 +471,16 @@ def read_image_16bit(
 
     ext = safe.suffix.lower()
     if ext == ".exr":
+        # EXR decode is OPT-IN: OpenEXR has had crafted-file
+        # vulnerabilities, and the codec is enabled process-wide for the
+        # trusted write path (OPENCV_IO_ENABLE_OPENEXR must be set before
+        # first codec use, so it cannot be scoped to a call). Callers must
+        # pass operator-trusted files only.
+        if not allow_exr:
+            raise ValueError(
+                "read_image_16bit: .exr decode is opt-in (pass allow_exr=True "
+                "for operator-trusted files); refusing %s" % safe
+            )
         # BB3: EXR stores scene-linear float32, frequently unbounded (HDR).
         # The engine contract is display-encoded [0, 255]. Linear [0, 1] is
         # kept exactly (SDR round-trip) and everything above 1.0 is HARD
@@ -1376,8 +1387,9 @@ def _embed_png_metadata(
     path: Union[str, Path],
     icc_profile: Optional[bytes],
     exif: Optional[bytes],
+    dpi: Optional[Tuple[float, float]] = None,
 ) -> None:
-    """Add ICC/EXIF chunks without decoding or re-encoding PNG pixels."""
+    """Add ICC/EXIF/DPI chunks without decoding or re-encoding PNG pixels."""
     target = Path(path)
     raw = target.read_bytes()
     signature = b"\x89PNG\r\n\x1a\n"
@@ -1394,6 +1406,12 @@ def _embed_png_metadata(
         # PNG eXIf omits the leading Exif\0\0 signature.
         exif_payload = normalised_exif[6:] if normalised_exif.startswith(b"Exif\0\0") else normalised_exif
         metadata.append(_png_chunk(b"eXIf", exif_payload))
+    if dpi:
+        # pHYs stores pixels per METRE, unit specifier 1 = metre. Upstream
+        # sets kCGImagePropertyDPIWidth/Height; cv2's PNG encoder has no DPI
+        # params, so the chunk is spliced with the metadata pass.
+        ppm = max(1, int(round(dpi[0] * 39.3701))), max(1, int(round(dpi[1] * 39.3701)))
+        metadata.append(_png_chunk(b"pHYs", struct.pack(">IIB", ppm[0], ppm[1], 1)))
 
     if not metadata:
         return
@@ -1411,7 +1429,7 @@ def _embed_png_metadata(
         kind = raw[pos + 4 : pos + 8]
         chunk = raw[pos:end]
         # Replace, rather than duplicate, metadata emitted by a prior pass.
-        if kind not in (b"iCCP", b"eXIf"):
+        if kind not in (b"iCCP", b"eXIf", b"pHYs"):
             chunks.append(chunk)
         if kind == b"IHDR" and not inserted:
             chunks.extend(metadata)
@@ -1685,7 +1703,8 @@ def write_image_with_icc(
                     # decode/re-encode, so the 16-bit samples remain untouched.
                     if not cv2.imwrite(str(tmp_path), img_16):
                         raise cv2.error(f"cv2.imwrite returned False for 16-bit write to {path}")
-                    _embed_png_metadata(tmp_path, icc_profile, exif)
+                    _embed_png_metadata(tmp_path, icc_profile, exif,
+                                        dpi=kwargs.get("dpi"))
             _drop_source_c2pa_manifest(path, c2pa_manifest)
             return
 
