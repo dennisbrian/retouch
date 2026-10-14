@@ -614,8 +614,31 @@ def test_folder_mask_propagates_to_composite_and_is_undoable():
         session.close()
 
 
-def test_unlinked_mask_painting_warps_into_mask_grid_and_keeps_placement():
-    # Layer 2x2 at origin (0,0); its mask lives on an offset 2x2 grid at
+def test_preview_scales_unlinked_mask_placement_with_the_canvas(monkeypatch):
+    # preview_document downscales a doc by scaling every layer's origin/size;
+    # an unlinked placement is document-space and must scale identically
+    # (upstream ImageResizer.swift:97), or the preview reveals the wrong
+    # window whenever scale < 1.
+    import retouch.editor.ui as ui
+    monkeypatch.setattr(ui, 'PREVIEW_SIDE', 4)
+    doc = Document(8, 8)
+    doc.add_image(np.full((4, 4, 4), (255, 0, 0, 255), np.uint8), 'Red')
+    layer = doc.layers[0]
+    layer.origin = (2.0, 2.0)
+    layer.set_mask(np.array([[255, 255], [0, 0]], np.uint8))
+    layer.mask_placement = {'origin': [2.0, 2.0], 'size': [4.0, 4.0],
+                            'rotation': 0.0, 'flipX': False, 'flipY': False,
+                            'sampling': 'Nearest'}
+    out = preview_document(doc)
+    assert out.shape[:2] == (4, 4)
+    # Scaled placement (1,1) 2x2 covers only the mask's top half (255), so the
+    # preview's bottom layer row hides. Without the fix the placement stays at
+    # full-doc (2,2) 4x4 and that row reveals via the dominant white border.
+    assert (out[1, 1:3, 3] == 255).all()
+    assert (out[2, 1:3, 3] == 0).all()
+
+
+def test_unlinked_mask_painting_warps_into_mask_grid_and_keeps_placement():    # Layer 2x2 at origin (0,0); its mask lives on an offset 2x2 grid at
     # (1,0). A Hide stroke covering the whole layer canvas must land as a
     # Hide in mask coordinates, and painting must preserve the placement
     # (set_mask alone clears it).

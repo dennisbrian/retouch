@@ -55,6 +55,13 @@ def preview_document(document):
         layer = copy(original)
         layer.origin = tuple(round(v * scale) for v in original.origin)
         layer.size = tuple(max(1, round(v * scale)) for v in original.size)
+        if original.mask_placement is not None:
+            # An unlinked placement is document-space; it must scale with the
+            # preview like the layer itself (upstream ImageResizer.swift:97).
+            p = original.mask_placement
+            layer.mask_placement = {**p,
+                'origin': tuple(round(v * scale) for v in p['origin']),
+                'size': tuple(max(1, round(v * scale)) for v in p['size'])}
         if original.pixels is not None:
             # Pillow interpolates RGBA in premultiplied form.
             layer.pixels = _preview_scaled(
