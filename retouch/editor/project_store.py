@@ -24,6 +24,7 @@ import os
 import shutil
 import struct
 import threading
+import time
 import uuid
 import weakref
 from concurrent.futures import ThreadPoolExecutor
@@ -69,6 +70,10 @@ _PNG_SIGNATURE = b'\x89PNG\r\n\x1a\n'
 # faster than Pillow's default 6 for ~20% larger files; flattened exports
 # (composite.export_png) keep the default.
 ASSET_COMPRESS_LEVEL = 1
+
+# Staging dirs older than this are crash leftovers, not concurrent saves.
+_STALE_SAVING_SECONDS = 60 * 60
+
 _ENCODE_WORKERS = max(1, min(4, os.cpu_count() or 1))
 
 
@@ -668,7 +673,15 @@ def _sweep_interrupted_saves(target):
                     shutil.rmtree(best, ignore_errors=True)
                 best = entry
         elif entry.name.startswith(f'.{target.name}.saving-'):
-            shutil.rmtree(entry, ignore_errors=True)
+            # Only crash leftovers: a concurrent writer's staging dir matches
+            # this prefix for its whole write window, so sweeping by name
+            # alone would delete a live save out from under it. Age-gate
+            # instead — no legitimate save takes an hour.
+            try:
+                if entry.stat().st_mtime < time.time() - _STALE_SAVING_SECONDS:
+                    shutil.rmtree(entry, ignore_errors=True)
+            except FileNotFoundError:
+                pass
     if best is not None and not target.exists():
         os.rename(best, target)
     elif best is not None:

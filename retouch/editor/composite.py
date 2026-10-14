@@ -814,8 +814,13 @@ def _place_mask(mask, layer):
     except np.linalg.LinAlgError:
         return np.full((lh, lw), 255, np.uint8)
     # cv2.warpAffine maps source -> destination, so feed the forward
-    # composition: mask pixels -> document -> layer pixels.
+    # composition: mask pixels -> document -> layer pixels. _doc_matrix is
+    # center-convention (pixel centers at +0.5) while warpAffine samples
+    # from pixel corners, so apply the same half-pixel translation _rotate
+    # performs — without it every rotated/flipped placement is off by the
+    # sub-pixel difference between the two conventions.
     warp = (np.vstack([l_inv, [0, 0, 1]]) @ np.vstack([m_doc, [0, 0, 1]]))[:2].astype(np.float32)
+    warp[:, 2] += (warp[:, :2] @ np.array([0.5, 0.5], np.float32)) - 0.5
     # Dominant border gray: white when most border pixels reveal.
     border = np.concatenate([mask[0], mask[-1], mask[:, 0], mask[:, -1]])
     background = 255.0 if border.mean() >= 127.5 else 0.0

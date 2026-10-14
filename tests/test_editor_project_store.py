@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 
 import os
+import time
 from PIL import Image
 
 from retouch.compositor import export_project
@@ -233,9 +234,26 @@ class TestRejections:
         stale = tmp_path / '.p.comp.saving-deadbeef'
         (stale / 'images').mkdir(parents=True)
         (stale / 'manifest.json').write_text('{}')
+        # Crash leftovers are aged; a fresh dir could be a concurrent save.
+        old = time.time() - 7200
+        os.utime(stale, (old, old))
         reopened = load_project(path)
         assert reopened.layers[0].name == 'Green'
         assert not stale.exists()
+
+    def test_fresh_saving_staging_dir_is_a_live_save(self, tmp_path):
+        # A concurrent writer's staging dir matches the sweep prefix for its
+        # whole write window; sweeping by name alone deletes a live save.
+        doc = Document(2, 2)
+        doc.add_image(fx.solid(2, 2, (0, 255, 0, 255)), 'Green')
+        path = tmp_path / 'p.comp'
+        save_project(doc, path)
+        live = tmp_path / '.p.comp.saving-live'
+        (live / 'images').mkdir(parents=True)
+        (live / 'manifest.json').write_text('{}')
+        reopened = load_project(path)
+        assert reopened.layers[0].name == 'Green'
+        assert live.exists()  # untouched — only aged dirs are swept
 
     def test_mask_with_alpha_is_invalid(self, tmp_path):
         path = fx.red_with_mask(tmp_path / 'm.comp')

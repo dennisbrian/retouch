@@ -29,8 +29,8 @@ def selection(width, height, kind, x=0, y=0, box_width=1, box_height=1, points='
            or not math.isfinite(v) or abs(v) > 1_000_000
            for v in (x, y, box_width, box_height, feather)):
         raise ValueError('Selection geometry must be finite')
-    if not 0 <= feather <= 100:
-        raise ValueError('Feather must be between 0 and 100 pixels')
+    if not 0 <= feather <= 250:
+        raise ValueError('Feather must be between 0 and 250 pixels')
     mask = np.zeros((height, width), np.uint8)
     if kind in ('Rectangle', 'Ellipse'):
         if box_width <= 0 or box_height <= 0:
@@ -62,7 +62,10 @@ def selection(width, height, kind, x=0, y=0, box_width=1, box_height=1, points='
     else:
         raise ValueError('Choose Rectangle, Ellipse or Polygon')
     if feather:
-        mask = cv2.GaussianBlur(mask, (0, 0), feather, borderType=cv2.BORDER_CONSTANT)
+        # Upstream feathers with sigma = feather / 2 (Selection.swift:27) on
+        # an extent-clamped image, so the fade extends either side of the
+        # outline; BORDER_REPLICATE is the cv2 equivalent of the clamp.
+        mask = cv2.GaussianBlur(mask, (0, 0), feather / 2, borderType=cv2.BORDER_REPLICATE)
     return mask
 
 

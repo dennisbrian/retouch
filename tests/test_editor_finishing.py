@@ -148,6 +148,19 @@ def test_selection_shapes_combinations_and_projection():
     np.testing.assert_array_equal(projected, expected)
 
 
+def test_selection_feather_cap_and_upstream_sigma():
+    # Upstream: sigma = feather / 2 (Selection.swift:27), cap 250.
+    with pytest.raises(ValueError):
+        selection(8, 8, 'Rectangle', 2, 2, 4, 4, feather=251)
+    soft = selection(128, 128, 'Rectangle', 16, 16, 96, 96, feather=40)
+    assert 0 < soft[8, 63] < 255         # fade extends well past the outline
+    assert soft[63, 63] > 200           # centre stays (nearly) fully selected
+    # sigma=feather/2: feather 2 (sigma 1) on a 2-wide strip leaves the
+    # outermost row at roughly the half-power point, not near zero.
+    strip = selection(6, 6, 'Rectangle', 2, 2, 2, 2, feather=2)
+    assert 30 < strip[2, 2] < 225
+
+
 def test_selection_to_mask_preserves_pixels_and_round_trips(tmp_path):
     layer = Layer('Base', solid((20, 30, 40)), origin=(2, 2), rotation=90)
     h = DocumentHistory(Document(8, 8, [layer]))

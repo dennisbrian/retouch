@@ -533,6 +533,24 @@ def test_fit_callback_updates_size_and_position_and_gates_strokes(session, callb
         edits['fit'](session, None, None)
 
 
+def test_invert_selection_noop_and_deselect_match_upstream(session, callbacks):
+    # Upstream invertSelection (Selection.swift:354-361): inverting no
+    # selection is a no-op, and the inverse of everything deselects
+    # entirely rather than leaving an invisible all-zero mask.
+    edits = {fn.__kwdefaults__['operation']: fn for fn in callbacks if fn.__name__ == 'edit'}
+    assert session.selection is None
+    edits['invert_selection'](session, session.selected_id, None)
+    assert session.selection is None
+    session.selection = np.full((6, 8), 255, np.uint8)
+    edits['invert_selection'](session, session.selected_id, None)
+    assert session.selection is None
+    session.selection = np.zeros((6, 8), np.uint8)
+    session.selection[0, 0] = 255
+    edits['invert_selection'](session, session.selected_id, None)
+    assert session.selection is not None
+    assert session.selection[0, 0] == 0 and session.selection[5, 7] == 255
+
+
 def test_finishing_controls_apply_selection_rotation_group_and_grading(session, callbacks, tmp_path):
     edits = {fn.__kwdefaults__['operation']: fn for fn in callbacks if fn.__name__ == 'edit'}
     base = session.selected_id

@@ -447,7 +447,7 @@ def build_editor_tab():
                         selection_width = gr.Number(label='Selection width', value=100)
                         selection_height = gr.Number(label='Selection height', value=100)
                     polygon = gr.Textbox(label='Polygon points [x, y]', value='[[0,0],[100,0],[50,100]]')
-                    feather = gr.Slider(0, 100, value=0, step=1, label='Feather (canvas pixels)')
+                    feather = gr.Slider(0, 250, value=0, step=1, label='Feather (canvas pixels)')
                     selection_mode = gr.Radio(['Replace', 'Add', 'Subtract', 'Intersect'], value='Replace', label='Combine selection')
                     create_selection = gr.Button('Create selection')
                     selection_preview = gr.Image(label='Selection coverage (white selected)', interactive=False, image_mode='L')
@@ -747,9 +747,13 @@ def build_editor_tab():
                     elif operation == 'clear_selection':
                         current.selection = None
                     elif operation == 'invert_selection':
-                        doc = current.history.document
-                        current.selection = (np.full((doc.height, doc.width), 255, np.uint8)
-                                             if current.selection is None else 255 - current.selection)
+                        # Upstream invertSelection: no selection is a no-op,
+                        # and the inverse of everything deselects entirely
+                        # (Selection.swift:354-361) rather than leaving an
+                        # invisible empty mask.
+                        if current.selection is not None:
+                            inverse = 255 - current.selection
+                            current.selection = inverse if inverse.any() else None
                     elif operation == 'selection_mask':
                         if current.selection is None:
                             raise ValueError('Create a selection first')
