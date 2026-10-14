@@ -10,6 +10,7 @@ Wonder Assembly LLC for the translated cases.
 import numpy as np
 import pytest
 import cv2
+from pathlib import Path
 from PIL import Image
 
 from retouch.editor import (
@@ -194,6 +195,58 @@ def test_separable_native_blend_modes_render_real_pixels(mode, expected):
     layer = doc.add_image(np.array([[[204, 128, 51, 255]]], np.uint8), 'Top')
     layer.blend_mode = mode
     assert composite(doc)[0, 0].tolist() == expected + [255]
+
+
+CI_BLEND_PROBES = [(0.0, 1.0), (1 / 255.0, 1.0), (0.3, 0.15), (0.3, 0.6),
+                   (1.0, 0.0), (0.8, 0.25), (0.9, 0.4),
+                   (0.3, 0.7), (0.95, 0.05), (0.85, 0.15), (0.9, 0.1)]
+
+
+def _ci_blend_reference():
+    """Capture real Core Image values, or fall back to the recorded bytes.
+
+    Mirrors the cg_adjustment_fixture pattern: swiftc if present (macOS dev
+    machine / CI runner with Xcode), recorded file otherwise.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+    if shutil.which('swiftc'):
+        src = Path(__file__).parents[1] / 'scripts/dev/ci_blend_fixture.swift'
+        with tempfile.TemporaryDirectory() as d:
+            exe = Path(d) / 'fixture'
+            subprocess.run(['swiftc', '-O', str(src), '-o', str(exe)], check=True)
+            out = subprocess.run([str(exe)], check=True, capture_output=True, text=True).stdout
+    else:
+        out = (Path(__file__).parent / 'fixtures/ci_blend_reference.txt').read_text()
+    reference = {}
+    for line in out.splitlines():
+        parts = line.split()
+        reference[parts[0]] = [int(h, 16) for h in parts[1:]]
+    return reference
+
+
+@pytest.mark.parametrize('mode', ['Color Dodge', 'Color Burn', 'Vivid Light'])
+def test_singular_corners_match_core_image(mode):
+    # The singular corners of dodge/burn (and vivid, which inherits both) are
+    # ambiguous in the W3C spec; real Core Image resolves them as
+    # dodge(Cb=0,Cs=1)=0 / burn(Cb=1,Cs=0)=1, and the port follows CI, not
+    # spec-literal. Hard-mix ties ride on vivid's float32 result and were
+    # verified to match CI across the full Cb+Cs=1 line.
+    from retouch.editor.composite import _blend
+    ref = _ci_blend_reference()[mode.lower().replace(' ', '_')]
+    for (cb, cs), expected in zip(CI_BLEND_PROBES, ref):
+        got = _blend(np.float32(cb), np.float32(cs), mode)
+        assert int(np.rint(got * 255)) == expected, (mode, cb, cs)
+
+
+def test_hard_mix_ties_match_core_image():
+    from retouch.editor.composite import _blend
+    for cb, cs, expected in [(0.3, 0.7, 255), (0.95, 0.05, 0),
+                             (0.85, 0.15, 255), (0.9, 0.1, 0)]:
+        vivid = _blend(np.float32(cb), np.float32(cs), 'Vivid Light')
+        assert int(np.rint(vivid * 255)) in (127, 128)  # f32 lands at the tie
+        assert (vivid >= 0.5) == (expected == 255), (cb, cs)
 
 
 def test_png_export_carries_resolution_and_working_profile(tmp_path):

@@ -615,7 +615,10 @@ def _blend(backdrop, source, mode):
     if mode == 'Multiply':
         return backdrop * source
     if mode == 'Color Burn':
-        return np.where(source <= 0, 0, 1 - np.minimum(1, (1 - backdrop) / source))
+        # Core Image kernel corner: Cs==0 -> (Cb==1 ? 1 : 0); interior
+        # unchanged. Verified against CIColorBurnBlendMode, null color space.
+        return np.where(source <= 0, (backdrop == 1).astype(np.float32),
+                        1 - np.minimum(1, (1 - backdrop) / source))
     if mode == 'Linear Burn':
         return np.maximum(0, backdrop + source - 1)
     if mode == 'Lighten':
@@ -623,7 +626,10 @@ def _blend(backdrop, source, mode):
     if mode == 'Screen':
         return backdrop + source - backdrop * source
     if mode == 'Color Dodge':
-        return np.where(source >= 1, 1, np.minimum(1, backdrop / np.maximum(1 - source, 1e-12)))
+        # Core Image kernel corner: Cs==1 -> (Cb>0 ? 1 : 0); interior
+        # unchanged. Verified against CIColorDodgeBlendMode, null color space.
+        return np.where(source >= 1, (backdrop > 0).astype(np.float32),
+                        np.minimum(1, backdrop / np.maximum(1 - source, 1e-12)))
     if mode == 'Linear Dodge (Add)':
         return np.minimum(1, backdrop + source)
     if mode == 'Overlay':
@@ -640,10 +646,11 @@ def _blend(backdrop, source, mode):
         return np.where(source <= 0.5, 2 * backdrop * source,
                         1 - 2 * (1 - backdrop) * (1 - source))
     if mode == 'Vivid Light':
-        burn = np.where(source <= 0, 0,
+        # Inherits both CI kernel corners from burn/dodge (see above).
+        burn = np.where(source <= 0, (backdrop == 1).astype(np.float32),
                         1 - np.minimum(1, (1 - backdrop) / np.maximum(2 * source, 1e-12)))
         dodge_source = 2 * (source - 0.5)
-        dodge = np.where(dodge_source >= 1, 1,
+        dodge = np.where(dodge_source >= 1, (backdrop > 0).astype(np.float32),
                          np.minimum(1, backdrop / np.maximum(1 - dodge_source, 1e-12)))
         return np.where(source <= 0.5, burn, dodge)
     if mode == 'Linear Light':

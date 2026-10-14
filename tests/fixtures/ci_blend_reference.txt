@@ -1,0 +1,3 @@
+color_dodge 00 ff 5a bf ff ff ff ff ff ff ff
+color_burn 00 01 00 00 ff 33 bf 00 00 00 00
+vivid_light 00 ff 00 60 ff 99 df 80 7f 80 7f
