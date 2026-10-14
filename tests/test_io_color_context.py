@@ -188,3 +188,23 @@ def test_export_uses_working_profile_by_default_and_restores_source_only_explici
     np.testing.assert_allclose(roundtrip_bgr, working_bgr, atol=1)
     assert roundtrip_context.source_profile == adobe_icc
     assert roundtrip_context.conversion_applied is True
+
+
+def test_exr_export_refuses_non_srgb_source_profile(tmp_path: Path) -> None:
+    """E3: EXR cannot record primaries; preserved Adobe RGB pixels would be mislabeled."""
+    adobe_icc = _adobe_rgb_icc()
+    source_path = tmp_path / "adobe.png"
+    Image.fromarray(_synth_patch(), mode="RGB").save(source_path, icc_profile=adobe_icc)
+    working_bgr, context = imread_exif_with_context(source_path)
+
+    with pytest.raises(ValueError, match="EXR export cannot preserve"):
+        write_image_with_color_context(
+            tmp_path / "out.exr", working_bgr, context, preserve_source_profile=True,
+        )
+    assert not (tmp_path / "out.exr").exists()
+
+    # The default working-space EXR export still writes linear sRGB.
+    ok_path = tmp_path / "ok.exr"
+    write_image_with_color_context(ok_path, working_bgr, context)
+    raw = cv2.imread(str(ok_path), cv2.IMREAD_UNCHANGED)
+    assert raw is not None and 0.0 <= raw.min() and raw.max() <= 1.0

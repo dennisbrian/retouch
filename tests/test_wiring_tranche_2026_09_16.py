@@ -36,8 +36,9 @@ class TestExrRoundTrip:
         err = np.abs(back - img.astype(np.float32))
         assert err.max() < 0.01  # float noise only, no quantization
 
-    def test_hdr_shoulder_not_clipped_to_flat(self, tmp_path):
-        # Linear values above 1.0 must compress smoothly, not hard-clip.
+    def test_hdr_above_one_is_clipped_to_white(self, tmp_path):
+        # Linear values above 1.0 are hard-clipped (no roll-off contract has
+        # been chosen yet; the clip is logged — see tests/test_io.py).
         hdr = np.float32([[[0.5, 1.0, 4.0]]])  # BGR
         path = tmp_path / "hdr.exr"
         assert cv2.imwrite(str(path), hdr)

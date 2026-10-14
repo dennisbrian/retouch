@@ -471,9 +471,15 @@ def read_image_16bit(
     ext = safe.suffix.lower()
     if ext == ".exr":
         # BB3: EXR stores scene-linear float32, frequently unbounded (HDR).
-        # The engine contract is display-encoded [0, 255]. Tone-map unbounded
-        # values with a soft shoulder (Reinhard) so highlights survive the
-        # range fold instead of hard-clipping, then sRGB-encode.
+        # The engine contract is display-encoded [0, 255]. Linear [0, 1] is
+        # kept exactly (SDR round-trip) and everything above 1.0 is HARD
+        # CLIPPED to white: no identity-preserving monotone map into [0, 1]
+        # can keep values >1 distinct, and choosing a real shoulder (headroom
+        # below 1, exposure change, or an HDR path) is an open contract
+        # decision. The clip is logged so HDR detail loss is never silent.
+        # The file is always decoded as linear sRGB/Rec.709: PQ-encoded EXRs
+        # (write_image_with_icc(pq_encode=True)) carry no transfer metadata
+        # and are NOT decoded correctly here.
         img = cv2.imread(str(safe), cv2.IMREAD_UNCHANGED)
         if img is None:
             raise ValueError(f"read_image_16bit: failed to decode EXR {safe} "
@@ -483,10 +489,16 @@ def read_image_16bit(
             out = cv2.cvtColor(out, cv2.COLOR_GRAY2BGR)
         elif out.ndim == 3 and out.shape[2] == 4:
             out = cv2.cvtColor(out, cv2.COLOR_BGRA2BGR)
-        luminance = np.clip(out, 0.0, None)
-        # Identity in [0, 1]; smooth Reinhard-style shoulder only above 1.0
-        # so SDR-range pixels round-trip exactly and HDR highlights compress.
-        mapped = luminance / (1.0 + np.maximum(luminance - 1.0, 0.0))
+        over = out > 1.0
+        n_over = int(np.count_nonzero(over))
+        if n_over:
+            logger.warning(
+                "read_image_16bit: %s has %d/%d samples above linear 1.0 "
+                "(max %.4g); they are hard-clipped to white (no HDR "
+                "highlight roll-off is implemented)",
+                safe.name, n_over, out.size, float(out[over].max()),
+            )
+        mapped = np.clip(out, 0.0, 1.0)
         # cv2.imread returns BGR already; only sRGB-encode, no channel flip.
         return np.ascontiguousarray(
             linear_to_srgb(mapped) * 255.0, dtype=np.float32,
@@ -1597,6 +1609,16 @@ def write_image_with_icc(
             and color_context.working_profile is not None
             and color_context.source_profile != color_context.working_profile
         )
+        if source_conversion and path.suffix.lower() == ".exr":
+            # The EXR writer (cv2) cannot record chromaticities or embed ICC,
+            # and read_image_16bit decodes every EXR as linear sRGB/Rec.709.
+            # Source-profile pixels would be silently mislabeled; refuse.
+            raise ValueError(
+                "EXR export cannot preserve a non-sRGB source profile: the "
+                "file cannot record its primaries (no chromaticities/ICC). "
+                "Export EXR with preserve_source_profile=False (linear "
+                "sRGB/Rec.709), or use 16-bit PNG/TIFF to keep the source profile"
+            )
         img, icc_profile = prepare_color_managed_export(
             img,
             color_context,
@@ -1616,12 +1638,25 @@ def write_image_with_icc(
 
     # BB3: EXR float32 export — scene-linear, uncompressed-equivalent HDR.
     # K7: optional ST 2084 PQ encode of the linear signal before write.
+    # Samples are linear sRGB/Rec.709 primaries; no ICC, chromaticities or
+    # transfer attribute is written (cv2 cannot), so a PQ file is not
+    # self-describing and read_image_16bit will decode it as linear.
     if ext == ".exr":
         pq_encode = bool(kwargs.pop("pq_encode", False))
         if pq_encode and linear_to_pq is None:  # pragma: no cover
             raise RuntimeError("PQ encode requires retouch.color_science.linear_to_pq")
-        unit = img.astype(np.float32, copy=False) / 255.0
-        linear = srgb_to_linear(np.clip(unit, 0.0, 1.0))
+        if pq_encode:
+            logger.warning(
+                "%s: PQ-encoded EXR carries no transfer-function metadata; "
+                "readers (including read_image_16bit) will treat the samples "
+                "as linear", path,
+            )
+        if icc_profile:
+            logger.info("ICC profile is not embedded in EXR output %s "
+                        "(samples are linear sRGB/Rec.709)", path)
+        # Honor the resolved input range (uint8/uint16/unit/byte float).
+        unit = _to_unit_bgr_for_color_transform(img, float_range)
+        linear = srgb_to_linear(unit)
         samples = linear_to_pq(linear) if pq_encode else linear
         with _atomic_output_path(path) as tmp_path:
             if not cv2.imwrite(str(tmp_path), np.ascontiguousarray(samples)):

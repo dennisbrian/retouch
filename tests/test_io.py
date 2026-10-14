@@ -576,3 +576,56 @@ class TestOpenImageFormats:
         Image.new("RGB", (8, 6)).save(path, format="PCX")
         with pytest.raises(UnidentifiedImageError):
             imread_exif(path)
+
+
+class TestExrDeliveryContract:
+    """E1-E3 (RESEARCH_RETOUCH_IMPROVEMENTS_2026_09_21 §4): EXR range/metadata truth."""
+
+    def test_exr_writer_honours_unit_float_range(self, tmp_path):
+        # E2: unit-range float must not be divided by 255 a second time.
+        import cv2
+        from retouch.io import write_image_with_icc
+
+        byte = np.float32([[[64.0, 128.0, 200.0]]])
+        stored = {}
+        for name, img, fr in [("byte", byte, "byte"), ("unit", byte / 255.0, "unit"),
+                              ("uint8", byte.astype(np.uint8), "auto"),
+                              ("uint16", (byte * 257.0).astype(np.uint16), "auto")]:
+            p = tmp_path / f"{name}.exr"
+            write_image_with_icc(str(p), img, float_range=fr)
+            stored[name] = cv2.imread(str(p), cv2.IMREAD_UNCHANGED)[0, 0]
+        np.testing.assert_allclose(stored["byte"], [0.05127, 0.21586, 0.57758], atol=1e-4)
+        for name in ("unit", "uint8", "uint16"):
+            np.testing.assert_allclose(stored[name], stored["byte"], atol=1e-4, err_msg=name)
+
+    def test_exr_reader_highlight_clip_is_logged_not_silent(self, tmp_path, caplog):
+        # E1: values above linear 1.0 are clipped (no roll-off exists); the
+        # loss must be reported, and SDR-range input must stay silent.
+        import cv2
+        from retouch.io import read_image_16bit
+
+        ladder = np.float32([[[v] * 3 for v in (0.5, 0.9, 1.0, 1.5, 3.0, 8.0)]])
+        p = tmp_path / "ladder.exr"
+        assert cv2.imwrite(str(p), ladder)
+        with caplog.at_level("WARNING", logger="retouch.io"):
+            out = read_image_16bit(p)
+        np.testing.assert_allclose(out[0, :, 0], [187.516, 243.445, 255, 255, 255, 255], atol=0.01)
+        msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert any("hard-clipped" in m and "9/18" in m and "max 8" in m for m in msgs), msgs
+
+        caplog.clear()
+        sdr = tmp_path / "sdr.exr"
+        assert cv2.imwrite(str(sdr), np.float32([[[0.2, 0.5, 1.0]]]))
+        with caplog.at_level("WARNING", logger="retouch.io"):
+            read_image_16bit(sdr)
+        assert not [r for r in caplog.records if "hard-clipped" in r.getMessage()]
+
+    def test_pq_exr_write_warns_no_transfer_metadata(self, tmp_path, caplog):
+        # E3: the file cannot identify PQ and the repo reader decodes it as
+        # linear, so the writer must say so.
+        from retouch.io import write_image_with_icc
+
+        img = np.full((2, 2, 3), 128, dtype=np.uint8)
+        with caplog.at_level("WARNING", logger="retouch.io"):
+            write_image_with_icc(str(tmp_path / "pq.exr"), img, pq_encode=True)
+        assert any("no transfer-function metadata" in r.getMessage() for r in caplog.records)
