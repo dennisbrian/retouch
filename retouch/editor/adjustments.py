@@ -12,7 +12,8 @@ from .document import UnsupportedFeature
 
 KINDS = ('Exposure', 'Levels', 'Curves', 'Invert', 'Saturation', 'Vibrance', 'Temperature', 'Tint', 'Brightness', 'Contrast', 'Hue')
 CHANNELS = ('RGB', 'Red', 'Green', 'Blue')
-_KEYS = {'kind', 'hue', 'saturation', 'lightness', 'colorize', 'levels', 'curves',
+_KIND_RANGES = ('master', 'reds', 'yellows', 'greens', 'cyans', 'blues', 'magentas')
+_KEYS = {'kind', 'hue', 'saturation', 'lightness', 'colorize', 'range', 'invertRange', 'levels', 'curves',
          'exposureSettings', 'saturationSettings', 'vibranceSettings', 'temperatureSettings', 'tintSettings', 'brightnessSettings', 'contrastSettings', 'hueSettings'}
 
 
@@ -29,6 +30,7 @@ def adjustment(kind='Exposure', exposure=0, offset=0, gamma=1,
     ranges += [dict(black=0, white=255, gamma=g, outputBlack=0, outputWhite=255)
                for g in (red_gamma, green_gamma, blue_gamma)]
     record = dict(kind=kind, hue=0, saturation=saturation, lightness=0, colorize=False,
+                  range='master', invertRange=False,
                   levels=dict(channel='RGB', ranges=ranges),
                   curves=dict(channel='RGB', channels=[
                       [dict(x=0, y=0), dict(x=255, y=255)] for _ in range(4)]))
@@ -67,6 +69,10 @@ def validate_adjustment(record):
         raise ValueError('Invalid adjustment color settings')
     if not isinstance(record.get('colorize'), bool):
         raise ValueError('Invalid adjustment colorize setting')
+    if record.get('range') not in _KIND_RANGES:
+        raise ValueError('Invalid adjustment range setting')
+    if not isinstance(record.get('invertRange'), bool):
+        raise ValueError('Invalid adjustment invertRange setting')
     levels = record.get('levels')
     if (not isinstance(levels, dict) or set(levels) != {'channel', 'ranges'}
             or levels['channel'] not in CHANNELS or not isinstance(levels['ranges'], list)
@@ -127,15 +133,201 @@ def validate_adjustment(record):
         raise ValueError('Invalid hue settings')
 
 
-def _grade_hue(rgb, amount):
-    """Hue: rotates the HSL hue wheel by `amount` degrees.
-    amount=0 → identity; ±180 wraps correctly; hue is stored and handled in degrees.
+# --- Hue/Saturation ------------------------------------------------------------
+#
+# Native HueSaturation.swift port: one (hue, saturation, lightness) triple over
+# a hue band (trapezoid weight), or colorize; applied through a 33^3
+# trilinear cube built once per record and cached, because grade() runs per
+# composite band (composite.py) and a ~0.15 s rebuild per band would dominate.
+_HUE_DIM = 33
+_HUE_STEP = _HUE_DIM - 1
+_HUE_CHUNK = 1_500_000  # pixels per apply slice, bounding trilerp scratch
+_HUE_BANDS = {
+    'master': (0, 0, 360, 360),
+    'reds': (315, 345, 15, 45),
+    'yellows': (15, 45, 75, 105),
+    'greens': (75, 105, 135, 165),
+    'cyans': (135, 165, 195, 225),
+    'blues': (195, 225, 255, 285),
+    'magentas': (255, 285, 315, 345),
+}
+# Cache key -> flat float32 cube, channel-major: ((channel*33 + blue)*33 + green)*33 + red.
+_HUE_CUBE_CACHE = {}
+_HUE_CUBE_CACHE_MAX = 16
+
+
+def _fwd(a, b):
+    return (b - a) % 360.0
+
+
+def _band_weight(band, hue):
+    """Trapezoid: linear ramp in, plateau, linear ramp out, per HueBand.swift."""
+    fs, rs, re_, fe = band
+    span = _fwd(fs, fe)
+    if span <= 0:
+        return 1.0
+    pos = _fwd(fs, hue)
+    if pos > span:
+        return 0.0
+    ramp_in = _fwd(fs, rs)
+    plateau_end = _fwd(fs, re_)
+    if pos < ramp_in:
+        return pos / ramp_in if ramp_in > 0 else 1.0
+    if pos <= plateau_end:
+        return 1.0
+    ramp_out = span - plateau_end
+    return (span - pos) / ramp_out if ramp_out > 0 else 1.0
+
+
+def _hue_response(hue, saturation, lightness, rng, invert):
+    """Per-degree weighted (shift, sat, light) table, as hueResponse() upstream."""
+    table = []
+    for deg in range(361):
+        w = 1.0 if rng == 'master' else _band_weight(_HUE_BANDS[rng], float(deg))
+        if invert and rng != 'master':
+            w = 1.0 - w
+        table.append((hue * w, saturation * w, lightness * w))
+    return table
+
+
+def _to_hsl(r, g, b):
+    high, low = max(r, g, b), min(r, g, b)
+    lightness = (high + low) / 2
+    delta = high - low
+    if delta <= 0:
+        return (0.0, 0.0, lightness)
+    sat = delta / (1 - abs(2 * lightness - 1))
+    if high == r:
+        hue = (g - b) / delta
+    elif high == g:
+        hue = (b - r) / delta + 2
+    else:
+        hue = (r - g) / delta + 4
+    hue *= 60
+    if hue < 0:
+        hue += 360
+    return (hue, min(1.0, sat), lightness)
+
+
+def _to_rgb(hue, sat, lightness):
+    if sat <= 0:
+        return (lightness, lightness, lightness)
+    chroma = (1 - abs(2 * lightness - 1)) * sat
+    sector = hue / 60
+    second = chroma * (1 - abs(sector % 2 - 1))
+    base = lightness - chroma / 2
+    s = int(sector)
+    rgb = ((chroma, second, 0), (second, chroma, 0), (0, chroma, second),
+           (0, second, chroma), (second, 0, chroma), (chroma, 0, second))[min(s, 5)]
+    return tuple(min(1, max(0, c + base)) for c in rgb)
+
+
+def _adjusted_saturation(saturation, amount):
+    amount = min(1, max(-1, amount / 100))
+    if amount <= 0:
+        return max(0.0, saturation * (1 + amount))
+    if amount >= 1:
+        return 1.0 if saturation > 0 else 0.0
+    return min(1.0, saturation / (1 - amount))
+
+
+def _adjust_pixel(r, g, b, table, colorize, hue, saturation, lightness):
+    hue_, sat, lightness_ = _to_hsl(r, g, b)
+    if colorize:
+        hue_ = hue % 360.0
+        sat = min(1, max(0, saturation / 100))
+        light_amount = lightness / 100
+    else:
+        idx = min(360, max(0, int(math.floor(hue_ + 0.5))))  # Int(hue.rounded())
+        shift, s_amt, l_amt = table[idx]
+        light_amount = l_amt / 100
+        hue_ = (hue_ + shift) % 360.0
+        sat = _adjusted_saturation(sat, s_amt)
+    amount = min(1, max(-1, light_amount))
+    lightness_ = lightness_ + (1 - lightness_) * amount if amount >= 0 \
+        else lightness_ * (1 + amount)
+    return _to_rgb(hue_, sat, min(1, max(0, lightness_)))
+
+
+def _build_hue_cube(key):
+    """Channel-major flat cube: ((channel*33 + blue)*33 + green)*33 + red.
+    Channel-major puts each channel's plane contiguously, so the per-channel
+    gather loop in ``_apply_hue_cube`` streams one plane instead of striding
+    by 4 (this layout alone cut 12 MP apply from ~2.1 s to ~0.7 s)."""
+    hue, saturation, lightness, colorize, rng, invert = key
+    table = None if colorize else _hue_response(hue, saturation, lightness, rng, invert)
+    grid = np.empty((4, _HUE_DIM, _HUE_DIM, _HUE_DIM), np.float32)
+    for blue in range(_HUE_DIM):
+        for green in range(_HUE_DIM):
+            for red in range(_HUE_DIM):
+                c = _adjust_pixel(red / _HUE_STEP, green / _HUE_STEP, blue / _HUE_STEP,
+                                  table, colorize, hue, saturation, lightness)
+                grid[:3, blue, green, red] = c
+                grid[3, blue, green, red] = 1.0
+    return grid.reshape(-1)
+
+
+# Neighbour offsets of a cube cell in the flat channel-major layout.
+_HUE_OFFS = (0, 1, _HUE_DIM, _HUE_DIM + 1,
+             _HUE_DIM ** 2, _HUE_DIM ** 2 + 1,
+             _HUE_DIM ** 2 + _HUE_DIM, _HUE_DIM ** 2 + _HUE_DIM + 1)
+
+
+def _hue_cube(key):
+    cube = _HUE_CUBE_CACHE.get(key)
+    if cube is None:
+        if len(_HUE_CUBE_CACHE) >= _HUE_CUBE_CACHE_MAX:
+            _HUE_CUBE_CACHE.pop(next(iter(_HUE_CUBE_CACHE)))
+        cube = _HUE_CUBE_CACHE[key] = _build_hue_cube(key)
+    return cube
+
+
+def _apply_hue_cube(rgb, cube):
+    """Trilinear cube lookup on float RGB (..., 3), chunked to bound scratch.
+
+    Per channel: eight (N,) corner gathers weighted-accumulated — one output
+    column at a time keeps every temporary (N,) sized, so the whole apply is
+    a stream of 1-D passes.
     """
-    if amount == 0:
+    flat = np.ascontiguousarray(rgb, dtype=np.float32).reshape(-1, 3)
+    out = np.empty_like(flat)
+    plane = _HUE_DIM ** 3
+    for start in range(0, len(flat), _HUE_CHUNK):
+        f = flat[start:start + _HUE_CHUNK]
+        p = np.clip(f * np.float32(_HUE_STEP), 0.0, np.float32(_HUE_STEP))
+        lo = p.astype(np.int32)
+        np.clip(lo, 0, _HUE_DIM - 2, out=lo)
+        frac = p - lo
+        fx, fy, fz = frac[:, 0], frac[:, 1], frac[:, 2]
+        ux, uy, uz = 1.0 - fx, 1.0 - fy, 1.0 - fz
+        weights = (ux * uy * uz, fx * uy * uz, ux * fy * uz, fx * fy * uz,
+                   ux * uy * fz, fx * uy * fz, ux * fy * fz, fx * fy * fz)
+        cell = (lo[:, 2].astype(np.int64) * _HUE_DIM + lo[:, 1]) * _HUE_DIM + lo[:, 0]
+        sl = slice(start, start + len(f))
+        for channel in range(3):
+            base = cell + channel * plane
+            acc = cube[base + _HUE_OFFS[0]] * weights[0]
+            for offset, weight in zip(_HUE_OFFS[1:], weights[1:]):
+                acc += cube[base + offset] * weight
+            out[sl, channel] = acc
+    return out.reshape(rgb.shape)
+
+
+def _grade_hue_sat(rgb, hue, saturation, lightness, colorize=False,
+                   rng='master', invert=False):
+    """Hue/Saturation: hue shift in degrees, saturation and lightness in
+    [-100, 100] over one hue band (or colorize). Identity when everything is
+    zero/neutral. Applied through the 33^3 trilinear cube, as native does."""
+    if not colorize and hue == 0 and saturation == 0 and lightness == 0:
         return rgb
-    hsl = _rgb_to_hsl(rgb)
-    hsl[..., 0] = (hsl[..., 0] + amount / 360.0) % 1.0
-    return _hsl_to_rgb(hsl)
+    cube = _hue_cube((float(hue), float(saturation), float(lightness),
+                      bool(colorize), rng, bool(invert)))
+    return _apply_hue_cube(rgb, cube)
+
+
+def _grade_hue(rgb, amount):
+    """Back-compat single-argument hue shift (master band)."""
+    return _grade_hue_sat(rgb, amount, 0, 0)
 
 
 def _grade_brightness(rgb, amount):
@@ -186,8 +378,15 @@ def grade(rgb, record):
         c = record.get('contrastSettings', {}).get('contrast', 0)
         return _grade_contrast(rgb, c)
     if kind == 'Hue':
-        h = record.get('hueSettings', {}).get('hue', 0)
-        return _grade_hue(rgb, h)
+        s = record.get('hueSettings') or {}
+        # Colorize takes its hue from the top-level `hue` field (0..360, as
+        # native does); the band shift lives in hueSettings (-180..180).
+        hue = record.get('hue', 0) if record.get('colorize') else s.get('hue', 0)
+        return _grade_hue_sat(rgb, hue, record.get('saturation', 0),
+                              record.get('lightness', 0),
+                              colorize=record.get('colorize', False),
+                              rng=record.get('range', 'master'),
+                              invert=record.get('invertRange', False))
     if kind == 'Curves':
         return _grade_curves(rgb, record['curves'])
     if kind == 'Exposure':
