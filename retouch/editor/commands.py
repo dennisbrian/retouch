@@ -31,6 +31,8 @@ def _snapshot(document: Document) -> Document:
         detached.shape = deepcopy(layer.shape)
         detached.adjustment = deepcopy(layer.adjustment)
         detached.effects = deepcopy(layer.effects)
+        if layer.mask_placement is not None:
+            detached.mask_placement = dict(layer.mask_placement)
         result.layers.append(detached)
     return result
 
@@ -215,7 +217,9 @@ class DocumentHistory:
             projected = project_selection(selection, layer)
             old = (np.full(projected.shape, 255, np.uint8) if layer.mask is None else
                    cv2.resize(layer.mask, (projected.shape[1], projected.shape[0])))
+            placement = layer.mask_placement  # combining keeps where the mask sits
             layer.set_mask(combine(old, projected, mode), True)
+            layer.mask_placement = placement
         return self._edit('Selection to mask', apply)
 
     def duplicate_layer(self, layer_id: str) -> bool:
@@ -260,7 +264,9 @@ class DocumentHistory:
             layer = doc.layer(layer_id)
             mask = (np.zeros((1, 1), np.uint8) if layer.mask is None
                     else 255 - layer.mask)
+            placement = layer.mask_placement  # inversion keeps where the mask sits
             layer.set_mask(mask, layer.mask_enabled)
+            layer.mask_placement = placement
         return self._edit('Invert mask', apply)
 
     def reset_mask(self, layer_id: str) -> bool:

@@ -56,6 +56,52 @@ class TestUpstreamPixelChecks:
         out = _rgba(load_project(fx.red_with_mask(tmp_path / 'a.comp', mask=mask)))
         assert out[..., 3].ravel().tolist() == alphas
 
+    def test_unlinked_mask_same_placement_renders_as_linked(self, tmp_path):
+        # Upstream clipImage: a placement equal to the layer's transform is the
+        # linked case — identical pixels.
+        linked = _rgba(load_project(fx.red_with_mask(tmp_path / 'l.comp')))
+        extra = {'maskFile': fx.IDS[0] + '.mask.png', 'maskLinked': False,
+                 'maskPlacement': fx.transform(2, 2, sampling='Nearest')}
+        record = fx.layer_record(0, 'Red', 2, 2, **extra)
+        record['transform'] = fx.transform(2, 2, sampling='Nearest')
+        path = fx.write_package(tmp_path / 'u.comp', 2, 2, [record],
+                                images={0: fx.solid(2, 2, (255, 0, 0, 255))},
+                                masks={0: fx.MASK_2X2})
+        np.testing.assert_array_equal(_rgba(load_project(path)), linked)
+
+    def test_unlinked_mask_shift_moves_reveal_window(self):
+        # Mask [255,0 / 128,255] placed one pixel right of the layer: layer
+        # column x samples mask column x-1, so the reveal window slides right.
+        # Outside the mask's rect the dominant (white) border keeps revealing.
+        doc = Document(4, 4)
+        layer = doc.add_image(np.full((2, 2, 4), (255, 0, 0, 255), np.uint8), 'Red')
+        layer.set_mask(np.array([[255, 0], [128, 255]], np.uint8))
+        layer.mask_placement = fx.transform(2, 2, origin=(1, 0), sampling='Nearest')
+        out = composite(doc)
+        # Col 0 samples off-rect (white background); col 1 samples mask col 0.
+        assert out[0, 0, 3] == 255 and out[1, 0, 3] == 255
+        assert out[0, 1, 3] == 255 and out[1, 1, 3] == 128
+
+    def test_unlinked_mask_background_is_dominant_border_gray(self):
+        # Mask [255,0 / 0,255] shrunk onto a 1x1 rect at the layer's corner:
+        # that single pixel averages to 128, and the dominant white border
+        # keeps revealing everywhere else (upstream LayerMask.background).
+        doc = Document(4, 4)
+        layer = doc.add_image(np.full((2, 2, 4), (255, 0, 0, 255), np.uint8), 'Red')
+        layer.set_mask(np.array([[255, 0], [0, 255]], np.uint8))
+        layer.mask_placement = fx.transform(1, 1, origin=(0, 0), sampling='Nearest')
+        out = composite(doc)
+        assert out[0, 0, 3] == 128
+        assert out[0, 1, 3] == 255 and out[1, 0, 3] == 255 and out[1, 1, 3] == 255
+
+    def test_unlinked_mask_black_border_keeps_hiding_outside(self):
+        doc = Document(4, 4)
+        layer = doc.add_image(np.full((2, 2, 4), (255, 0, 0, 255), np.uint8), 'Red')
+        layer.set_mask(np.zeros((2, 2), np.uint8))
+        layer.mask_placement = fx.transform(1, 1, origin=(0, 0), sampling='Nearest')
+        out = composite(doc)
+        assert out[..., 3].max() == 0  # black border: hide everywhere on the layer
+
     def test_flip_moves_the_mask_with_the_layer(self, tmp_path):
         out = _rgba(load_project(fx.red_with_mask(tmp_path / 'a.comp', flip_x=True)))
         assert out[..., 3].ravel().tolist() == [0, 255, 255, 128]

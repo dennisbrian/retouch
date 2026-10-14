@@ -342,8 +342,12 @@ uses colored stroke coverage, avoiding palette-state drift in Gradio. The full
 Retouch shell received a real pointer-brush/save/undo check; source pixels
 were preserved. Fit-to-canvas now includes the
 rotated extents. Graph cycles and dangling references fail before PNG decode;
-unsupported adjustments, fractional layer sizes
-and unlinked masks remain explicit rejections.
+unsupported adjustments and fractional layer sizes remain explicit
+rejections. Unlinked image-layer masks (`maskPlacement`) render: the placed
+mask is warped into the layer's pixel grid over its dominant border gray
+(upstream `LayerMask.clipImage`) and then follows the layer's transform;
+`maskLinked` round-trips. Folder-mask placements stay refused, matching the
+export path.
 
 See [the current evidence and remaining gates](../review/EDITOR_FINISHING_2026_10_12.md).
 The native app opened and exported the photo fixtures. The existing blend/

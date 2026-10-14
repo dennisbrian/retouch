@@ -531,6 +531,8 @@ def _prepare(layer):
     coverage = None
     if layer.mask is not None and layer.mask_enabled:
         coverage = _fit_mask(layer.mask, pixels.shape[1], pixels.shape[0], layer.sampling)
+        if layer.mask_placement is not None:
+            coverage = _place_mask(coverage, layer)
     # A flip mirrors the layer's local rectangle; its mask follows the layer.
     if layer.flip_y:
         pixels = pixels[::-1]
@@ -727,12 +729,20 @@ def _rotate(pixels, coverage, layer):
     warped[alpha == 0, :3] = 0
     pixels = np.rint(np.clip(warped, 0, 1) * 255).astype(np.uint8)
     if coverage is not None:
-        coverage = cv2.warpAffine(np.asarray(coverage), matrix, size, flags=mask_interpolation)
+        # A full-coverage mask must stay full after the rotation warp: the
+        # bbox corners would otherwise read border-zero and clip the layer's
+        # alpha, so replicate the edge (Core Graphics clips to the layer's own
+        # extent, it never samples a border beyond it).
+        coverage = cv2.warpAffine(np.asarray(coverage), matrix, size,
+                                  flags=mask_interpolation,
+                                  borderMode=cv2.BORDER_REPLICATE)
     return pixels, coverage, origin
 
 
 def _prepare_mask(layer):
     mask = _fit_mask(layer.mask, *layer.size, layer.sampling)
+    if layer.mask_placement is not None:
+        mask = _place_mask(mask, layer)
     if layer.flip_y:
         mask = mask[::-1]
     if layer.flip_x:
@@ -749,6 +759,63 @@ def _fit_mask(mask, width, height, sampling):
         return np.broadcast_to(mask.reshape(1, 1), (height, width))
     resized, _ = _resample(mask, (width, height), sampling, upright=True, mask=True)
     return resized
+
+
+def _doc_matrix(origin, size, rotation, flip_x, flip_y):
+    """The 2x3 affine taking a rectangle's own pixels into document space.
+
+    Mirrors ``BrushRaster.pixelToDocument`` upstream: a pixel at ``p`` lands at
+    ``origin + center + R*F*(p - center)`` — flip about the centre, rotate
+    clockwise about it, place the rectangle's top-left at ``origin``.
+    """
+    w, h = size
+    centre = np.array([w / 2, h / 2], np.float64)
+    angle = np.deg2rad(rotation % 360)
+    c, s = float(np.cos(angle)), float(np.sin(angle))
+    rot = np.array([[c, -s], [s, c]], np.float64)
+    fx, fy = (-1.0 if flip_x else 1.0, -1.0 if flip_y else 1.0)
+    a = rot @ np.array([[fx, 0], [0, fy]], np.float64)
+    b = np.array(origin, np.float64) + centre - a @ centre
+    return np.array([[a[0, 0], a[0, 1], b[0]],
+                     [a[1, 0], a[1, 1], b[1]]], np.float64)
+
+
+def _place_mask(mask, layer):
+    """Warp an unlinked mask into its layer's own pixel grid.
+
+    Upstream ``LayerMask.clipImage`` resamples the placed mask through
+    ``pixelToDocument(placement) * pixelToDocument(layer).inverted()`` into a
+    layer-grid clip before the layer draws with it, filling everything outside
+    the mask's rect with the dominant gray of its border (a reveal-all mask
+    keeps revealing, a hide-all one keeps hiding). The warped grid then rides
+    the layer's own transform exactly like a linked mask.
+    """
+    placement = layer.mask_placement
+    pw, ph = placement['size']
+    base = _fit_mask(np.asarray(mask), int(round(pw)), int(round(ph)), layer.sampling)
+    mh, mw = base.shape[:2]
+    lw, lh = layer.size
+    # Mask pixel -> document, composed with layer pixel -> document inverted.
+    m_doc = _doc_matrix(placement['origin'], placement['size'],
+                        placement['rotation'], placement['flipX'], placement['flipY'])
+    l_doc = _doc_matrix(layer.origin, layer.size, layer.rotation,
+                        layer.flip_x, layer.flip_y)
+    l_inv = np.vstack([l_doc, [0, 0, 1]])
+    try:
+        l_inv = np.linalg.inv(l_inv)[:2]
+    except np.linalg.LinAlgError:
+        return np.full((lh, lw), 255, np.uint8)
+    # cv2.warpAffine maps source -> destination, so feed the forward
+    # composition: mask pixels -> document -> layer pixels.
+    warp = (np.vstack([l_inv, [0, 0, 1]]) @ np.vstack([m_doc, [0, 0, 1]]))[:2].astype(np.float32)
+    # Dominant border gray: white when most border pixels reveal.
+    border = np.concatenate([mask[0], mask[-1], mask[:, 0], mask[:, -1]])
+    background = 255.0 if border.mean() >= 127.5 else 0.0
+    nearest = placement['sampling'] == 'Nearest' or layer.sampling == 'Nearest'
+    flags = cv2.INTER_NEAREST if nearest else cv2.INTER_CUBIC
+    return np.rint(cv2.warpAffine(base.astype(np.float32), warp, (lw, lh),
+                                  flags=flags, borderMode=cv2.BORDER_CONSTANT,
+                                  borderValue=background)).astype(np.uint8)
 
 
 def _resample(array, size, sampling, upright=True, mask=False):

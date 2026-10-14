@@ -120,6 +120,80 @@ class TestRejections:
         with pytest.raises(ProjectError):
             load_project(path)
 
+    def test_unlinked_mask_round_trips(self, tmp_path):
+        mask = np.zeros((2, 2), np.uint8)
+        mask[0, :] = 255  # reveal the mask rect's top row; border is white
+        extra = {'maskFile': fx.IDS[0] + '.mask.png', 'maskLinked': False,
+                 'maskPlacement': fx.transform(2, 2, origin=(1, 0), sampling='Nearest')}
+        record = fx.layer_record(0, 'Red', 2, 2, **extra)
+        record['transform'] = fx.transform(2, 2, origin=(0, 0), sampling='Nearest')
+        path = fx.write_package(tmp_path / 'u.comp', 4, 4, [record],
+                                images={0: fx.solid(2, 2, (255, 0, 0, 255))},
+                                masks={0: mask})
+        layer = load_project(path).layers[0]
+        assert layer.mask_placement is not None
+        assert tuple(layer.mask_placement['origin']) == (1.0, 0.0)
+        assert layer.mask_linked is False
+        # The mask's reveal row lands on the layer's top row; the layer's
+        # bottom-right pixel samples the mask's hidden row. Its white border
+        # keeps revealing beyond the mask's rect.
+        out = composite(load_project(path))
+        np.testing.assert_array_equal(
+            out[:2, :2, 3], np.array([[255, 255], [255, 0]], np.uint8))
+
+    def test_mask_linked_defaults_to_true_when_absent(self, tmp_path):
+        path = fx.red_with_mask(tmp_path / 'm.comp')
+        layer = load_project(path).layers[0]
+        assert layer.mask_linked is True and layer.mask_placement is None
+
+    def test_save_reopen_preserves_unlinked_mask(self, tmp_path):
+        doc = Document(4, 4)
+        layer = doc.add_image(fx.solid(2, 2, (255, 0, 0, 255)), 'Red', origin=(0, 0))
+        layer.set_mask(np.array([[0, 255], [0, 255]], np.uint8))
+        layer.mask_placement = fx.transform(2, 2, origin=(1, 0), sampling='Nearest')
+        layer.mask_linked = False
+        path = tmp_path / 'saved.comp'
+        save_project(doc, path)
+        reopened = load_project(path)
+        r = reopened.layers[0]
+        assert r.mask_placement == layer.mask_placement
+        assert r.mask_linked is False
+        np.testing.assert_array_equal(composite(reopened), composite(doc))
+
+    def test_mask_placement_needs_mask_file(self, tmp_path):
+        record = fx.layer_record(0, 'Red', 2, 2,
+                                 maskPlacement=fx.transform(2, 2))
+        path = fx.write_package(tmp_path / 'np.comp', 4, 4, [record],
+                                images={0: fx.solid(2, 2, (255, 0, 0, 255))})
+        with pytest.raises(ProjectError):
+            load_project(path)
+
+    def test_mask_placement_needs_full_transform(self, tmp_path):
+        extra = {'maskFile': fx.IDS[0] + '.mask.png',
+                 'maskPlacement': {'origin': [0, 0], 'size': [2, 2]}}
+        record = fx.layer_record(0, 'Red', 2, 2, **extra)
+        path = fx.write_package(tmp_path / 'nt.comp', 4, 4, [record],
+                                images={0: fx.solid(2, 2, (255, 0, 0, 255))},
+                                masks={0: fx.MASK_2X2})
+        with pytest.raises(ProjectError):
+            load_project(path)
+
+    def test_mask_linked_false_without_mask_file_refused(self, tmp_path):
+        record = fx.layer_record(0, 'Red', 2, 2, maskLinked=False)
+        path = fx.write_package(tmp_path / 'nl.comp', 4, 4, [record],
+                                images={0: fx.solid(2, 2, (255, 0, 0, 255))})
+        with pytest.raises(ProjectError):
+            load_project(path)
+
+    def test_unlinked_folder_mask_refused(self, tmp_path):
+        record = fx.layer_record(0, 'Folder', 2, 2, image=False, isGroup=True,
+                                 maskFile=fx.IDS[0] + '.mask.png',
+                                 maskPlacement=fx.transform(2, 2))
+        path = fx.write_package(tmp_path / 'f.comp', 4, 4, [record],
+                                masks={0: fx.MASK_2X2})
+        with pytest.raises(UnsupportedFeature):
+            load_project(path)
+
     def test_mask_with_alpha_is_invalid(self, tmp_path):
         path = fx.red_with_mask(tmp_path / 'm.comp')
         Image.new('LA', (2, 2)).save(path / 'images' / (fx.IDS[0] + '.mask.png'))

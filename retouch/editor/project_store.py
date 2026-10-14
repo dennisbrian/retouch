@@ -236,9 +236,11 @@ def _check_layer(record, version):
     transform = _check_transform(record.get('transform'))
 
     # Valid upstream, not modelled here yet: refuse rather than drop.
-    for key, what in (('maskPlacement', 'unlinked masks'),):
-        if record.get(key) is not None:
-            raise UnsupportedFeature(f'{what} are not supported yet (layer {name!r})')
+    if is_group and record.get('maskPlacement') is not None:
+        # Upstream's export path ignores a folder mask's placement, but the
+        # manifest still validates it; the port keeps the same refuse-not-drop
+        # rule for the unmodelled folder case.
+        raise UnsupportedFeature(f'unlinked folder masks are not supported yet (layer {name!r})')
     if is_group and image_file is not None:
         raise _invalid('folders cannot contain image assets')
     layer_effects = _check_effects(record.get('effects'), name)
@@ -250,8 +252,15 @@ def _check_layer(record, version):
         validate_adjustment(adjustment)
         if is_group or image_file is not None:
             raise _invalid('invalid adjustment layer')
-    if record.get('maskLinked') is False:
-        raise UnsupportedFeature(f'unlinked masks are not supported yet (layer {name!r})')
+    if record.get('maskLinked') is False and record.get('maskFile') is None:
+        # maskLinked only rides along (it governs interactive moves upstream,
+        # not rendering); it still needs a mask to belong to.
+        raise _invalid('maskLinked needs a maskFile')
+    mask_placement = None
+    if record.get('maskPlacement') is not None:
+        if mask_file is None:
+            raise _invalid('maskPlacement needs a maskFile')
+        mask_placement = _check_transform(record.get('maskPlacement'))
     origin, size, rotation = transform['origin'], transform['size'], transform['rotation']
     # Fractional placements are valid upstream (typed values stay exact; only
     # interactive dragging snaps), so they load and round-trip unchanged.
@@ -268,6 +277,8 @@ def _check_layer(record, version):
         'flip_x': transform['flipX'], 'flip_y': transform['flipY'],
         'sampling': transform['sampling'],
         'mask_enabled': True if mask_enabled is None else mask_enabled,
+        'mask_placement': mask_placement,
+        'mask_linked': record.get('maskLinked') is not False,
         'text': text, 'shape': shape, 'image_file': image_file is not None,
         'mask_file': mask_file is not None}
 
@@ -669,6 +680,16 @@ def _encode_layer(layer):
     if layer.mask is not None:
         record['maskFile'] = layer.id + '.mask.png'
         record['maskEnabled'] = layer.mask_enabled
+        if layer.mask_placement is not None:
+            record['maskPlacement'] = {
+                'origin': list(layer.mask_placement['origin']),
+                'size': list(layer.mask_placement['size']),
+                'rotation': float(layer.mask_placement['rotation']),
+                'flipX': bool(layer.mask_placement['flipX']),
+                'flipY': bool(layer.mask_placement['flipY']),
+                'sampling': layer.mask_placement['sampling']}
+        if not layer.mask_linked:
+            record['maskLinked'] = False
     if layer.text is not None:
         record['text'] = layer.text
     if layer.shape is not None:

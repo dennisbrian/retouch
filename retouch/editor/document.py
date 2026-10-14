@@ -336,6 +336,10 @@ class Layer:
     sampling: str = 'High quality'
     mask: object = None            # read-only uint8 (h, w): white reveals
     mask_enabled: bool = True
+    # A mask moved apart from its layer (upstream ``maskPlacement``): its own
+    # document placement while it is unlinked. None = linked, spans the layer.
+    mask_placement: dict = None
+    mask_linked: bool = True
     # Kept verbatim: their PNG is authoritative. Dropped when pixels change.
     text: dict = None
     shape: dict = None
@@ -369,9 +373,14 @@ class Layer:
         self.pixels, self.text, self.shape = pixels, None, None
 
     def set_mask(self, mask, enabled=True):
-        """Attach an 8-bit coverage mask (None removes it)."""
+        """Attach an 8-bit coverage mask (None removes it).
+
+        A fresh mask spans the layer's own rectangle again (upstream's
+        placement collapses to nil), so any unlinked placement goes with it.
+        """
         self.mask = None if mask is None else _frozen(mask, 2)
         self.mask_enabled = bool(enabled)
+        self.mask_placement = None
 
     def validate(self):
         if (not isinstance(self.rotation, (int, float)) or isinstance(self.rotation, bool)
@@ -382,6 +391,16 @@ class Layer:
         if self.is_group and (self.pixels is not None or self.adjustment is not None
                               or self.mask_source_id is not None):
             raise ValueError('folders cannot contain pixels, adjustments or clipping links')
+        if self.mask_placement is not None:
+            p = self.mask_placement
+            if (not isinstance(p, dict)
+                    or set(p) != {'origin', 'size', 'rotation', 'flipX', 'flipY', 'sampling'}
+                    or len(tuple(p['origin'])) != 2 or len(tuple(p['size'])) != 2
+                    or not all(isinstance(p[k], bool) for k in ('flipX', 'flipY'))
+                    or not isinstance(p['sampling'], str)):
+                raise ValueError('mask placement must be a full transform record')
+            if self.is_group:
+                raise ValueError('folder masks cannot be unlinked')
         if self.adjustment is not None:
             from .adjustments import validate_adjustment
             validate_adjustment(self.adjustment)

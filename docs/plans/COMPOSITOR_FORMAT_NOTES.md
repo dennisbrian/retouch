@@ -39,9 +39,13 @@ the pixels are replaced, as upstream does on a destructive edit).
 
 Refused with `UnsupportedFeature` (valid upstream, not modelled yet):
 folders (`isGroup`, `parentID`), clipping masks (`maskSourceID`), adjustment
-layers, unlinked masks
-(`maskPlacement`, `maskLinked: false`), fractional layer sizes, unknown
-keys. Blend modes render for
+layers, unlinked folder masks, fractional layer sizes, unknown
+keys. Unlinked image-layer masks render: `maskPlacement` is a full
+`LayerTransform`; the mask is resampled into the layer's own pixel grid
+(`pixelToDocument(placement) * pixelToDocument(layer).inverted()`) over a
+dominant-border-gray background, then rides the layer's transform like a
+linked one (upstream `LayerMask.clipImage`). `maskLinked` rides along
+round-trip; it governs interactive moves upstream, not rendering. Blend modes render for
 the full `RENDER_BLEND_MODES` set (all 24 separable and component modes);
 hidden modes outside it are kept and skipped. The handoff's
 Difference inspection layer can now be revealed.

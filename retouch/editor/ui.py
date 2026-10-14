@@ -158,6 +158,10 @@ class EditorSession:
                          if layer.pixels is not None else layer.size)
         if width * height > MAX_SURFACE_PIXELS or max(width, height) > 30000:
             raise ValueError('Layer mask exceeds the surface budget')
+        if layer.mask_placement is not None:
+            # The brush canvas shows the layer's own rectangle; an unlinked mask
+            # sits elsewhere on the document, so strokes would land wrong.
+            raise ValueError('Re-link the mask before painting it (unlinked placement)')
         mask = (np.full((height, width), 255, np.uint8) if layer.mask is None
                 else cv2.resize(layer.mask, (width, height), interpolation=cv2.INTER_LINEAR))
         painted = False
