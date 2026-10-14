@@ -53,6 +53,11 @@ RENDER_BLEND_MODES = (
 MAX_DOWNSAMPLE_LEVEL = 6
 _MAX_EFFECTS_WINDOW_PIXELS = 80_000_000  # upstream LayerEffectsSurface.swift:47
 
+# Full-canvas effect planes are cached at 16 B/px; cap admission so a
+# renderer holds at most ~384 MB per effects layer. Larger canvases fall
+# back to the per-band window path above.
+_MAX_EFFECTS_CACHE_PIXELS = 24_000_000
+
 
 def _downsample_level(factor):
     """Halvings to draw from when an image lands ``factor`` output pixels per
@@ -150,6 +155,7 @@ class _BandRenderer:
         self.visible = [l for l in document.ordered_layers() if not l.is_group
                         and l.visible and all(p.visible for p in self.parents[l.id])]
         self.prepared = {}
+        self.effect_planes = {}
         self.stacks, self.stacked = {}, set()
         for i, base in enumerate(self.visible):
             if base.mask_source_id is not None or base.adjustment is not None:
@@ -247,23 +253,38 @@ class _BandRenderer:
                 continue
             source, a = self.own(layer, top, bottom)
             if layer.effects is not None and not layer.effects.is_empty():
-                margin = _effect_margin(layer.effects)
-                ext_top = max(0, top - margin)
-                ext_bottom = min(self.doc.height, bottom + margin)
-                # Port-only guard: upstream budgets the effects surface
-                # (LayerEffectsSurface.swift:47, 80 MP); this port's band
-                # window is its equivalent, so budget it the same way.
-                if (ext_bottom - ext_top) * self.doc.width > _MAX_EFFECTS_WINDOW_PIXELS:
-                    raise ValueError(
-                        'layer effects window exceeds the %d MP live budget'
-                        % (_MAX_EFFECTS_WINDOW_PIXELS // 1_000_000))
-                if ext_top != top or ext_bottom != bottom:
-                    ext_source, ext_a = self.own(layer, ext_top, ext_bottom)
+                if (self.doc.width * self.doc.height <= _MAX_EFFECTS_CACHE_PIXELS
+                        and layer.id not in self.stacks):
+                    # Effects are computed once over the whole canvas and
+                    # cached: per-band recomputation re-blurs the same margin
+                    # overlap band_rows times over, which dominates the run at
+                    # small band_rows (25x at band_rows=1). The plane costs
+                    # 16 B/px, so admission is capped at 24 MP; stack bases
+                    # stay per-band (their source is mutated in place).
+                    if layer.id not in self.effect_planes:
+                        plane_src, plane_a = self.own(layer, 0, self.doc.height)
+                        self.effect_planes[layer.id] = _apply_effects_plane(
+                            plane_src, plane_a, layer.effects)
+                    source = self.effect_planes[layer.id][0][top:bottom]
+                    a = self.effect_planes[layer.id][1][top:bottom]
                 else:
-                    ext_source, ext_a = source, a
-                eff_rgb, eff_a = _apply_effects(ext_source, ext_a, layer.effects)
-                source = eff_rgb[top - ext_top:bottom - ext_top]
-                a = eff_a[top - ext_top:bottom - ext_top]
+                    margin = _effect_margin(layer.effects)
+                    ext_top = max(0, top - margin)
+                    ext_bottom = min(self.doc.height, bottom + margin)
+                    # Port-only guard: upstream budgets the effects surface
+                    # (LayerEffectsSurface.swift:47, 80 MP); this port's band
+                    # window is its equivalent, so budget it the same way.
+                    if (ext_bottom - ext_top) * self.doc.width > _MAX_EFFECTS_WINDOW_PIXELS:
+                        raise ValueError(
+                            'layer effects window exceeds the %d MP live budget'
+                            % (_MAX_EFFECTS_WINDOW_PIXELS // 1_000_000))
+                    if ext_top != top or ext_bottom != bottom:
+                        ext_source, ext_a = self.own(layer, ext_top, ext_bottom)
+                    else:
+                        ext_source, ext_a = source, a
+                    eff_rgb, eff_a = _apply_effects(ext_source, ext_a, layer.effects)
+                    source = eff_rgb[top - ext_top:bottom - ext_top]
+                    a = eff_a[top - ext_top:bottom - ext_top]
             if layer.id in self.stacks:
                 # Native clipping stacks make the base opaque for internal blending,
                 # then restore its alpha before placing the stack on the backdrop.
@@ -391,6 +412,35 @@ def _fill_over(rgb, alpha, color, coverage):
          + rgb * (alpha * (1 - coverage))[..., np.newaxis]) / safe,
         0.0)
     return out_rgb, out_a
+
+
+_EFFECT_PLANE_CHUNK_ROWS = 512
+
+
+def _apply_effects_plane(rgb, alpha, effects):
+    """Full-canvas effects plane, row-chunked inside margin windows.
+
+    Every effect step is row-local within ``_effect_margin`` (Gaussian kernel
+    reach, morphology reach and the bilinear shift all stay inside it), so a
+    chunk's margin context is bit-identical to the full plane's and the
+    outputs are exact — this only bounds the ``_apply_effects`` transient,
+    which peaks near 1 GB at 12 MP unchunked.
+    """
+    height = rgb.shape[0]
+    if height <= _EFFECT_PLANE_CHUNK_ROWS * 2:
+        return _apply_effects(rgb, alpha, effects)
+    margin = _effect_margin(effects)
+    out_rgb, out_alpha = np.empty_like(rgb), np.empty_like(alpha)
+    top = 0
+    while top < height:
+        bottom = min(height, top + _EFFECT_PLANE_CHUNK_ROWS)
+        c_top, c_bottom = max(0, top - margin), min(height, bottom + margin)
+        chunk_rgb, chunk_alpha = _apply_effects(
+            rgb[c_top:c_bottom], alpha[c_top:c_bottom], effects)
+        out_rgb[top:bottom] = chunk_rgb[top - c_top:bottom - c_top]
+        out_alpha[top:bottom] = chunk_alpha[top - c_top:bottom - c_top]
+        top = bottom
+    return out_rgb, out_alpha
 
 
 def _apply_effects(rgb, alpha, effects):

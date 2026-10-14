@@ -530,3 +530,45 @@ class TestLayerEffectsPixels:
             colorOverlay=ColorOverlayEffect(red=1, green=0, blue=0, opacity=1.0, enabled=False),
         )
         np.testing.assert_array_equal(composite(doc_disabled), composite(doc_none))
+
+
+class TestEffectsPlaneCache:
+    def test_cache_is_band_invariant_and_matches_fallback(self):
+        # The cached full-canvas plane sliced per band must reproduce the
+        # per-band render bit for bit at every band_rows.
+        import importlib
+        _cm = importlib.import_module('retouch.editor.composite')
+        from retouch.editor.document import LayerEffects, ShadowEffect, OuterGlowEffect
+        doc = Document(90, 120)
+        layer = doc.add_image(np.full((30, 40, 4), (255, 120, 0, 255), np.uint8),
+                              'Fx', origin=(17.3, 21.9))
+        layer.rotation = 17.3
+        layer.effects = LayerEffects(
+            shadow=ShadowEffect(angle=90, distance=5, blur=4, opacity=0.7),
+            outerGlow=OuterGlowEffect(size=6, opacity=0.5, red=1, green=0, blue=0))
+        ref = composite(doc, band_rows=256)
+        for band_rows in (37, 7, 1):
+            assert np.array_equal(ref, composite(doc, band_rows=band_rows))
+        # Forced per-band fallback (cache admission zeroed) is identical.
+        saved = _cm._MAX_EFFECTS_CACHE_PIXELS
+        _cm._MAX_EFFECTS_CACHE_PIXELS = 0
+        try:
+            assert np.array_equal(ref, composite(doc, band_rows=7))
+        finally:
+            _cm._MAX_EFFECTS_CACHE_PIXELS = saved
+
+    def test_guard_still_fires_on_fallback_path(self, monkeypatch):
+        # The 80 MP window guard protects the per-band path the cache
+        # replaced; a cache-admissible canvas forced to fallback must still
+        # refuse an extreme margin window.
+        import importlib
+        _cm = importlib.import_module('retouch.editor.composite')
+        from retouch.editor.document import LayerEffects, ShadowEffect
+        monkeypatch.setattr(_cm, '_MAX_EFFECTS_CACHE_PIXELS', 0)
+        monkeypatch.setattr(_cm, '_MAX_EFFECTS_WINDOW_PIXELS', 2_000_000)
+        doc = Document(3000, 4000)  # 12 MP: would be cache-admissible
+        layer = doc.add_image(np.full((4, 4, 4), (255, 0, 0, 255), np.uint8), 'Tiny')
+        layer.effects = LayerEffects(shadow=ShadowEffect(angle=90, distance=5000,
+                                                          blur=500, opacity=0.6))
+        with pytest.raises(ValueError, match='live budget'):
+            composite(doc)
