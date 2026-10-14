@@ -10,7 +10,7 @@ Upstream: https://github.com/robbietilton/Compositor at
 LLC, MIT License (full text in ``third_party/compositor/LICENSE``; per-module
 origins in ``third_party/compositor/PROVENANCE.md``).
 """
-from .composite import composite, export_png
+from .composite import composite, export_jpeg, export_png
 from .commands import DocumentHistory
 from .document import Document, Layer, UnsupportedFeature
 from .project_store import ProjectError, load_project, save_project
@@ -22,6 +22,7 @@ __all__ = [
     'ProjectError',
     'UnsupportedFeature',
     'composite',
+    'export_jpeg',
     'export_png',
     'load_project',
     'save_project',

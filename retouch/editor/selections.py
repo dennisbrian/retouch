@@ -69,6 +69,65 @@ def selection(width, height, kind, x=0, y=0, box_width=1, box_height=1, points='
     return mask
 
 
+def _round_kernel(radius):
+    """Disk-shaped uint8 structuring element of the given radius."""
+    coords = np.arange(-radius, radius + 1)
+    return ((coords[:, None] ** 2 + coords[None, :] ** 2) <= radius * radius).astype(np.uint8)
+
+
+def _morph(mask, amount, iterations, op):
+    # Upstream grows in fixed kernel passes; capping the radius keeps each
+    # cv2 call inside its size limits while ceil-iterating stays exact.
+    # erode defaults to a +inf border (edges never shrink); we pass 0 so
+    # canvas edges erode like an unbounded canvas would.
+    kernel = _round_kernel(min(amount, 16))
+    return op(mask, kernel, iterations=iterations,
+              borderType=cv2.BORDER_CONSTANT, borderValue=0)
+
+
+def _check_amount(op_name, amount):
+    if isinstance(amount, bool) or not isinstance(amount, (int, float)) \
+            or not math.isfinite(amount) or not 1 <= amount <= 500:
+        raise ValueError(f'{op_name} needs 1-500 pixels')
+
+
+def expand(mask, amount):
+    """Grow a selection by amount pixels (round-kernel dilate)."""
+    _check_amount('Expand', amount)
+    return _morph(mask, int(amount), math.ceil(int(amount) / 16), cv2.dilate)
+
+
+def contract(mask, amount):
+    """Shrink a selection by amount pixels (round-kernel erode).
+
+    Canvas edges erode too, matching the parity of upstream's unbounded
+    erode rather than treating off-canvas as selected.
+    """
+    _check_amount('Contract', amount)
+    return _morph(mask, int(amount), math.ceil(int(amount) / 16), cv2.erode)
+
+
+def move(mask, dx, dy):
+    """Translate a selection, filling exposed canvas with zeros."""
+    for v in (dx, dy):
+        if isinstance(v, bool) or not isinstance(v, (int, float)) \
+                or not math.isfinite(v) or abs(v) > 1_000_000:
+            raise ValueError('Selection offsets must be finite numbers')
+    matrix = np.float32([[1, 0, round(dx)], [0, 1, round(dy)]])
+    return cv2.warpAffine(mask, matrix, (mask.shape[1], mask.shape[0]),
+                          flags=cv2.INTER_NEAREST,
+                          borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+
+
+def border(mask, amount):
+    """Ring of pixels within amount of the selection outline."""
+    _check_amount('Border', amount)
+    radius = int(amount)
+    grown = _morph(mask, radius, math.ceil(radius / 16), cv2.dilate)
+    shrunk = _morph(mask, radius, math.ceil(radius / 16), cv2.erode)
+    return cv2.subtract(grown, shrunk)
+
+
 def project_selection(mask, layer):
     """Sample a canvas selection at source-pixel centers through the full transform."""
     w, h = ((layer.pixels.shape[1], layer.pixels.shape[0]) if layer.pixels is not None

@@ -538,6 +538,46 @@ def _apply_effects(rgb, alpha, effects):
     return accum_rgb.astype(np.float32), accum_alpha.astype(np.float32)
 
 
+def export_jpeg(document, path, *, quality=0.85, background=(1.0, 1.0, 1.0), icc_profile=None):
+    """Write the document flattened over an opaque background as JPEG.
+
+    Upstream ``ImageExporter.swift:125-133`` fills an opaque sRGB context with
+    the background colour and draws the straight-alpha composite over it, so
+    flattening happens in gamma-encoded sRGB space (``rgb*a + bg*(1-a)``, no
+    linearisation). The shared colour-managed writer embeds the sRGB ICC
+    profile, honours ``quality`` (0..1 mapped to Pillow's 0-100) and 4:4:4
+    subsampling, and carries the document resolution.
+    """
+    from ..io import get_working_srgb_icc, write_image_with_icc
+
+    if not 0.0 <= float(quality) <= 1.0:
+        raise ValueError(f'quality must be 0..1, got {quality!r}')
+    path = Path(path)
+    rgba = composite(document)
+    if icc_profile is None:
+        icc_profile = get_working_srgb_icc()
+    rgb = rgba[..., :3].astype(np.float32) / 255.0
+    alpha = rgba[..., 3:4].astype(np.float32) / 255.0
+    bg = np.asarray(background, np.float32)
+    flat = rgb * alpha + bg * (1.0 - alpha)
+    flat = np.rint(np.clip(flat, 0.0, 1.0) * 255.0).astype(np.uint8)
+    temporary = path.with_name(f'.{path.name}.{uuid.uuid4().hex[:8]}.tmp')
+    staged = temporary.with_name(temporary.name + path.suffix)
+    try:
+        write_image_with_icc(
+            staged, cv2.cvtColor(flat, cv2.COLOR_RGB2BGR),
+            icc_profile=icc_profile,
+            quality=int(round(float(quality) * 100)), float_range='byte',
+            dpi=(document.resolution, document.resolution),
+            resolution=document.resolution)
+        os.replace(staged, path)
+    finally:
+        for leftover in (temporary, staged):
+            if leftover.exists():
+                leftover.unlink()
+    return path
+
+
 def export_png(document, path, *, bit_depth=8, icc_profile=None):
     """Write the flattened document with the working sRGB profile embedded.
 

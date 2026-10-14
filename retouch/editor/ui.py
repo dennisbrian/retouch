@@ -17,7 +17,7 @@ import numpy as np
 from PIL import Image, ImageCms, ImageOps
 
 from .commands import DocumentHistory
-from .composite import RENDER_BLEND_MODES, composite, export_png
+from .composite import RENDER_BLEND_MODES, composite, export_jpeg, export_png
 from .document import Document, Layer, MAX_SURFACE_PIXELS
 from .project_store import load_project
 from .recovery import Autosaver, discard_recovery, list_recoveries, load_recovery
@@ -454,6 +454,14 @@ def build_editor_tab():
                     with gr.Row():
                         invert_selection = gr.Button('Invert selection')
                         clear_selection = gr.Button('Clear selection')
+                    selection_amount = gr.Number(label='Expand / contract / border (px)', value=10, precision=0)
+                    expand_selection = gr.Button('Expand selection')
+                    contract_selection = gr.Button('Contract selection')
+                    border_selection = gr.Button('Border selection')
+                    with gr.Row():
+                        move_dx = gr.Number(label='Move dx', value=0)
+                        move_dy = gr.Number(label='Move dy', value=0)
+                    move_selection = gr.Button('Move selection')
                     mask_mode = gr.Radio(['Replace', 'Add', 'Subtract', 'Intersect'], value='Replace', label='Combine with layer mask')
                     mask_selection = gr.Button('Apply selection to selected layer mask')
                     gr.Markdown('Selections use canvas coordinates and remain temporary. '
@@ -561,6 +569,10 @@ def build_editor_tab():
                     label='Export format', value='PNG (8-bit sRGB)',
                     choices=['PNG (8-bit sRGB)', 'TIFF (16-bit sRGB)'])
                 export = gr.Button('Export flattened image')
+                export_jpeg_button = gr.Button('Export JPEG')
+                jpeg_quality = gr.Slider(
+                    label='JPEG quality', minimum=1, maximum=100, step=1, value=85)
+                jpeg_background = gr.ColorPicker(label='JPEG background', value='#ffffff')
                 download = gr.File(label='Export download', interactive=False)
         status = gr.Markdown('Open a photo or project to start.')
         outputs = [session, preview, layers, name, visible, opacity, mask_enabled,
@@ -754,6 +766,21 @@ def build_editor_tab():
                         if current.selection is not None:
                             inverse = 255 - current.selection
                             current.selection = inverse if inverse.any() else None
+                    elif operation in ('expand_selection', 'contract_selection', 'border_selection'):
+                        if current.selection is None:
+                            raise ValueError('Create a selection first')
+                        from .selections import border as selection_border
+                        from .selections import contract as selection_contract
+                        from .selections import expand as selection_expand
+                        ops = {'expand_selection': selection_expand,
+                               'contract_selection': selection_contract,
+                               'border_selection': selection_border}
+                        current.selection = ops[operation](current.selection, args[0])
+                    elif operation == 'move_selection':
+                        if current.selection is None:
+                            raise ValueError('Create a selection first')
+                        from .selections import move as selection_move
+                        current.selection = selection_move(current.selection, args[0], args[1])
                     elif operation == 'selection_mask':
                         if current.selection is None:
                             raise ValueError('Create a selection first')
@@ -817,6 +844,10 @@ def build_editor_tab():
                                   (reset_mask, 'reset_mask'), (fit, 'fit'), (links, 'links'), (group, 'group'),
                                   (ungroup, 'ungroup'), (create_selection, 'selection'),
                                   (clear_selection, 'clear_selection'), (invert_selection, 'invert_selection'),
+                                  (expand_selection, 'expand_selection'),
+                                  (contract_selection, 'contract_selection'),
+                                  (border_selection, 'border_selection'),
+                                  (move_selection, 'move_selection'),
                                   (mask_selection, 'selection_mask'), (add_grade, 'add_grade'),
                                   (update_grade, 'update_grade'),
                                   (apply_effects, 'apply_effects'), (clear_effects, 'clear_effects')):
@@ -832,6 +863,10 @@ def build_editor_tab():
                 'selection': [selection_kind, selection_x, selection_y, selection_width,
                               selection_height, polygon, feather, selection_mode],
                 'selection_mask': [mask_mode],
+                'expand_selection': [selection_amount],
+                'contract_selection': [selection_amount],
+                'border_selection': [selection_amount],
+                'move_selection': [move_dx, move_dy],
                 'add_grade': [grade_kind, grade_exposure, grade_offset, grade_gamma,
                               grade_black, grade_white, grade_red, grade_green, grade_blue,
                               grade_saturation, grade_vibrance, grade_temperature, grade_tint,
@@ -923,6 +958,23 @@ def build_editor_tab():
             export_png(current.history.document, path, bit_depth=bit_depth)
             return str(path)
         export.click(exporting, [session, canvas, export_format], download, concurrency_id='layer-editor')
+
+        def exporting_jpeg(current, strokes, quality, background):
+            if current is None:
+                raise gr.Error('Open a document first')
+            if has_strokes(strokes):
+                raise gr.Error('Apply or erase brush strokes before exporting')
+            if not background:
+                background = '#ffffff'
+            channels = tuple(int(background.lstrip('#')[i:i + 2], 16) / 255.0
+                             for i in (0, 2, 4))
+            path = Path(current.workspace) / (uuid.uuid4().hex + '.jpg')
+            export_jpeg(current.history.document, path,
+                        quality=float(quality) / 100.0, background=channels)
+            return str(path)
+        export_jpeg_button.click(
+            exporting_jpeg, [session, canvas, jpeg_quality, jpeg_background],
+            download, concurrency_id='layer-editor')
 
         from .retouch_jobs import prepare_job, run_job, attach_result
 
