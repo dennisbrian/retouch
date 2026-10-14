@@ -284,9 +284,11 @@ def _rgb_to_hsl(rgb):
     # yellow=R>G=B>0, magenta=R=B>G>0, cyan=G=B>R>0.
     h = np.zeros_like(l)
     safe = np.where(delta > 0, delta, 1)
-    mask_g = (mx == g) & (delta > 0)  # green is second in RGB order
+    mask_r = (mx == r) & (delta > 0)  # red first: covers red and both red ties
+    h[mask_r] = (((g - b) / safe * 60) % 360)[mask_r]
+    mask_g = (mx == g) & ~mask_r  # green second in RGB order
     h[mask_g] = ((b - r) / safe * 60 + 120)[mask_g]
-    mask_b = (mx == b) & ~mask_g & (delta > 0)  # blue third; excludes R=B=G
+    mask_b = (mx == b) & ~mask_r & ~mask_g  # blue third; excludes R=B=G
     h[mask_b] = ((r - g) / safe * 60 + 240)[mask_b]
     return np.stack([h / 360, s, l], axis=-1)
 
@@ -312,8 +314,9 @@ def _hsl_to_rgb(hsl):
     h6 = (h * 6) % 6.0
     r = np.where(h6 < 1, c,
            np.where(h6 < 2, x,
-           np.where(h6 < 5, 0.0,
-           np.where(h6 < 6, c, 0.0))))
+           np.where(h6 < 4, 0.0,
+           np.where(h6 < 5, x,
+           np.where(h6 < 6, c, 0.0)))))
     g = np.where(h6 < 1, x,
            np.where(h6 < 3, c,
            np.where(h6 < 4, x, 0.0)))

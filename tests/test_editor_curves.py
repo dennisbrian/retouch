@@ -101,3 +101,29 @@ def test_curves_record_never_renders_as_levels(monkeypatch):
                         tuple(k for k in adjustments.KINDS if k != 'Curves'))
     with pytest.raises((ValueError, UnsupportedFeature)):
         adjustments.validate_adjustment(record)
+
+
+def test_rgb_to_hsl_red_max_branch_wraps_and_masks():
+    # Regression: the red-max branch dropped its mask and the % 360 wrap, so
+    # magenta-family hues (g < b in the red-max branch) computed as 0.
+    from retouch.editor.adjustments import _rgb_to_hsl
+    magenta = _rgb_to_hsl(np.array([[[213/255, 42/255, 211/255]]], np.float32))
+    assert 300 < magenta[0, 0, 0] * 360 < 302
+    # hue continuity across the wrap: r>g=b tie resolves to red (hue 0)
+    tie = _rgb_to_hsl(np.array([[[255/255, 128/255, 128/255]]], np.float32))
+    assert tie[0, 0, 0] * 360 == 0
+
+
+def test_hsl_to_rgb_sector_four_receives_its_x():
+    # Regression: sector 4 (hue 240-300, blue -> magenta) never received x,
+    # collapsing the whole violet band to pure blue.
+    from retouch.editor.adjustments import _hsl_to_rgb
+    violet = _hsl_to_rgb(np.array([[[270/360, 1.0, 0.5]]], np.float32))
+    np.testing.assert_allclose(violet[0, 0], [0.5, 0, 1], atol=1e-6)
+    # round trip stays tight across the full hue wheel
+    from retouch.editor.adjustments import _rgb_to_hsl
+    hue = np.linspace(0, 1, 720, endpoint=False, dtype=np.float32)
+    hsl = np.stack([hue, np.full_like(hue, .8), np.full_like(hue, .5)], -1)
+    px = _hsl_to_rgb(hsl)
+    back = _rgb_to_hsl(px)
+    np.testing.assert_allclose(back[..., 0], (hue + .5/720) % 1, atol=5e-3)
