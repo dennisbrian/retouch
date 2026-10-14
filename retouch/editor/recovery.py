@@ -27,7 +27,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .project_store import load_project, save_project
+from .project_store import (_STALE_SAVING_SECONDS, _sweep_interrupted_saves,
+                            load_project, save_project)
 
 _logger = logging.getLogger(__name__)
 
@@ -102,6 +103,9 @@ def list_recoveries(root: Path | None = None, now: float | None = None
         if not _valid_id(entry_id) or entry_id in active:
             continue
         package, _ = _paths(root, entry_id)
+        # Repair a package stranded by a crash between the swap renames
+        # before deciding the entry is gone.
+        _sweep_interrupted_saves(package)
         try:
             meta = json.loads(meta_path.read_text('utf-8'))
             entry = RecoveryEntry(entry_id, str(meta['title']), int(meta['width']),
@@ -113,11 +117,23 @@ def list_recoveries(root: Path | None = None, now: float | None = None
             _remove(root, entry_id)
         else:
             entries.append(entry)
-    # Staging folders of interrupted writes (a crash mid-autosave).
+    # Staging folders of interrupted writes (a crash mid-autosave). A fresh
+    # one may belong to a concurrent autosave in another process, so only
+    # aged dirs are removed.
     for staging in root.glob('.*.comp.saving-*'):
         owner = staging.name[1:].split('.comp.saving-')[0]
         if owner not in active:
+            try:
+                if staging.stat().st_mtime >= now - _STALE_SAVING_SECONDS:
+                    continue
+            except FileNotFoundError:
+                continue
             shutil.rmtree(staging, ignore_errors=True)
+    # Retired packages orphaned by a crash (their entry is long gone).
+    for retired in root.glob('.*.comp.replaced-*'):
+        owner = retired.name[1:].split('.comp.replaced-')[0]
+        if not (root / f'{owner}.json').is_file():
+            shutil.rmtree(retired, ignore_errors=True)
     return sorted(entries, key=lambda e: e.updated, reverse=True)
 
 
@@ -127,7 +143,12 @@ def load_recovery(entry_id: str, root: Path | None = None):
     if not _valid_id(entry_id):
         raise ValueError('Choose an autosaved document first')
     package, meta_path = _paths(root, entry_id)
-    if not meta_path.is_file() or not package.is_dir():
+    if not meta_path.is_file():
+        raise ValueError('That autosave no longer exists')
+    # A crash between the swap renames leaves the target missing with the
+    # only copy under ".replaced-"; repair before refusing.
+    _sweep_interrupted_saves(package)
+    if not package.is_dir():
         raise ValueError('That autosave no longer exists')
     return load_project(package)
 

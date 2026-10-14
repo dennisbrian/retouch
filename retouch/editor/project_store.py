@@ -668,7 +668,10 @@ def _sweep_interrupted_saves(target):
     best = None
     for entry in parent.iterdir():
         if entry.name.startswith(f'.{target.name}.replaced-'):
-            if best is None or entry.stat().st_mtime > best.stat().st_mtime:
+            # (mtime, name) so tied mtimes resolve deterministically to one
+            # survivor and the non-best ties get cleaned in the same pass.
+            if best is None or (entry.stat().st_mtime, entry.name) > \
+                    (best.stat().st_mtime, best.name):
                 if best is not None:
                     shutil.rmtree(best, ignore_errors=True)
                 best = entry

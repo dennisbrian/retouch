@@ -1,5 +1,6 @@
 """Layer Editor crash recovery: autosave unsaved work and offer it back."""
 import json
+import os
 import subprocess
 import sys
 import textwrap
@@ -159,6 +160,9 @@ def test_expired_partial_and_interrupted_entries_are_cleaned(tmp_path):
         {'title': 'x', 'width': 1, 'height': 1, 'layers': 1, 'updated': time.time()}))
     staging = tmp_path / f'.{"e" * 32}.comp.saving-abc'
     staging.mkdir()
+    from retouch.editor.project_store import _STALE_SAVING_SECONDS
+    old = time.time() - _STALE_SAVING_SECONDS - 1
+    os.utime(staging, (old, old))  # crash leftover, not a concurrent write
     (tmp_path / 'notes.json').write_text('{}')  # not ours: left alone
     assert [e.entry_id for e in list_recoveries(tmp_path)] == [entry.entry_id]
     assert not (tmp_path / f'{orphan}.json').exists()
@@ -251,3 +255,57 @@ def test_ui_discarding_open_deletes_previous_autosave(tmp_path):
     view = _callbacks()['load'][0](session, str(image_path), '', True, None)
     view[0].close()
     assert list_recoveries(recovery_dir()) == []
+
+
+def _crash_between_swap_renames(tmp_path, eid):
+    """Emulate a process killed between _swap_in's two renames."""
+    history, _ = _edited_history()
+    saver = Autosaver('crashed', tmp_path, entry_id=eid)
+    saver.checkpoint(history)
+    assert saver.flush(30)
+    from retouch.editor import recovery as recovery_module
+    with recovery_module._active_lock:
+        recovery_module._active_ids.discard(eid)
+    package = tmp_path / f'{eid}.comp'
+    retired = package.with_name(f'.{package.name}.replaced-tok')
+    os.rename(package, retired)  # crash: target gone, .replaced- survives
+    return history, retired
+
+
+def test_crash_between_swap_renames_is_listed_and_restorable(tmp_path):
+    eid = 'a' * 32
+    history, retired = _crash_between_swap_renames(tmp_path, eid)
+    # Before the fix the listing dropped the entry and deleted the .json.
+    [entry] = list_recoveries(tmp_path)
+    assert entry.entry_id == eid
+    restored = load_recovery(eid, tmp_path)
+    np.testing.assert_array_equal(composite(restored), composite(history.document))
+    assert not retired.exists()  # repaired in place, no leftovers
+    assert not [p for p in tmp_path.iterdir() if p.name.startswith('.')]
+
+
+def test_orphaned_replaced_sibling_is_cleaned(tmp_path):
+    orphan = 'b' * 32
+    package = tmp_path / f'{orphan}.comp'
+    retired = package.with_name(f'.{package.name}.replaced-x')
+    retired.mkdir()
+    (retired / 'manifest.json').write_text('{}')
+    list_recoveries(tmp_path)
+    assert not retired.exists()  # no .json owner: pure leak, remove
+
+
+def test_live_staging_dir_survives_listing(tmp_path):
+    from retouch.editor.project_store import _STALE_SAVING_SECONDS
+    eid = 'c' * 32
+    (tmp_path / f'{eid}.json').write_text(json.dumps(
+        {'title': 'x', 'width': 1, 'height': 1, 'layers': 1, 'updated': time.time()}))
+    package = tmp_path / f'{eid}.comp'
+    package.mkdir()
+    live = tmp_path / f'.{eid}.comp.saving-live'
+    live.mkdir()  # fresh: another process may be writing
+    stale = tmp_path / f'.{eid}.comp.saving-old'
+    stale.mkdir()
+    old = time.time() - _STALE_SAVING_SECONDS - 1
+    os.utime(stale, (old, old))
+    assert [e.entry_id for e in list_recoveries(tmp_path)] == [eid]
+    assert live.exists() and not stale.exists()
