@@ -205,7 +205,7 @@ def test_16bit_png_failure_leaves_no_final_and_no_temp(tmp_path, img_f32, monkey
 def test_16bit_png_metadata_failure_leaves_no_final(tmp_path, img_f32, monkeypatch):
     """The metadata pass re-opens the encoded file; a failure there must not
     publish the metadata-less (or truncated) intermediate."""
-    def bad_embed(path, icc, exif):
+    def bad_embed(path, icc, exif, dpi=None):
         Path(path).write_bytes(b"\x89PNG\r\n\x1a\n trunc")
         raise _EncoderBoom("metadata pass failed")
 
