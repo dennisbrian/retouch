@@ -26,9 +26,13 @@ this extension owns the editor package, focused tests and related handoff notes.
 - A durable pinned source archive and corrected current handoff text.
 
 The manifest stays at native format version 11; these use existing native fields.
-Unsupported adjustment kinds, glow/inner-shadow effect kinds, unlinked masks
-and fractional layer sizes are rejected explicitly. Fractional origins are
-supported and rendered at subpixel accuracy. This is the requested
+Unsupported adjustment kinds, fractional layer sizes and unlinked folder masks
+are rejected explicitly. Fractional origins are supported and rendered at
+subpixel accuracy; unlinked image-layer masks (`maskPlacement`) render and
+round-trip. All seven upstream layer effect kinds (stroke, drop shadow,
+colour overlay, inner shadow, outer glow, inner glow) render with upstream's
+compose order, margins and sigma conventions, and shadow offsets shift
+bilinearly like upstream's `effects_shift`. This is the requested
 category backlog, not every feature of the native app.
 
 ## Evidence
@@ -208,6 +212,25 @@ No unrelated files were staged, committed, reverted or deleted.
   the W3C/PDF-32000 formulas and the pinned upstream Swift source, plus band
   invariance fuzzing. Native Compositor parity for these additions is
   unmeasured; the existing five-mode contact-sheet fixture predates them.
+- Inner shadow, outer glow and inner glow (`7868c9f`): the remaining effect
+  kinds render with upstream's compose order (shadow → outer glow → outside
+  stroke → layer → overlay → inner glow → inner shadow → inside stroke),
+  margin math (`ceil(max(...))+2`, outer-glow `size*3` plus the port's own
+  band-margin terms for inner effects) and `sigma = size/2` glows. Verified
+  by an upstream line-by-line math audit (sigmas, coverage formulas, masks,
+  defaults, validation ranges) and a 300-doc randomized fuzz; the fuzz
+  also caught and fixed whole-pixel shadow-offset snapping (now bilinear
+  `_shift_float`, matching `effects_shift`) and band-margin misses.
+- Unlinked image-layer masks (`da25dca`): `maskPlacement` renders per the
+  export path's `LayerMask.clipImage` — the mask is fitted to its placement
+  size, warped into the layer's pixel grid through
+  `pixelToDocument(placement) * pixelToDocument(layer).inverted()` over its
+  dominant border gray, then rides the layer's transform. `maskLinked`
+  round-trips (it governs interactive moves upstream, not rendering).
+  Folder placements stay refused, matching the export path. Fuzzing here
+  also fixed a pre-existing `_rotate` bug: rotated coverage warps with
+  `BORDER_REPLICATE` now (a full-coverage mask used to clip the layer's
+  alpha at the rotation bounding-box corners).
 
 The saved stash and unique EXR worktree are retained work, not cleanup failures.
 They require their owners' context before retirement or integration.
