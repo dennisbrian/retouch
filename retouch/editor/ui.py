@@ -158,12 +158,29 @@ class EditorSession:
                          if layer.pixels is not None else layer.size)
         if width * height > MAX_SURFACE_PIXELS or max(width, height) > 30000:
             raise ValueError('Layer mask exceeds the surface budget')
-        if layer.mask_placement is not None:
-            # The brush canvas shows the layer's own rectangle; an unlinked mask
-            # sits elsewhere on the document, so strokes would land wrong.
-            raise ValueError('Re-link the mask before painting it (unlinked placement)')
-        mask = (np.full((height, width), 255, np.uint8) if layer.mask is None
-                else cv2.resize(layer.mask, (width, height), interpolation=cv2.INTER_LINEAR))
+        placement = layer.mask_placement
+        if placement is not None:
+            # The brush canvas shows the layer's rectangle, but an unlinked mask
+            # lives in its own grid: warp each stroke's coverage from layer
+            # coordinates into mask coordinates (upstream BrushStroke keeps the
+            # mask's placement as the stroke's base transform for the same
+            # reason). Strokes clamp to the mask's own rect.
+            from .composite import _doc_matrix
+            mw, mh = (int(round(placement['size'][0])), int(round(placement['size'][1])))
+            mask = (np.full((mh, mw), 255, np.uint8) if layer.mask is None
+                    else cv2.resize(layer.mask, (mw, mh), interpolation=cv2.INTER_LINEAR))
+            m_doc = _doc_matrix(placement['origin'], placement['size'],
+                                placement['rotation'], placement['flipX'], placement['flipY'])
+            l_doc = _doc_matrix(layer.origin, layer.size, layer.rotation,
+                                layer.flip_x, layer.flip_y)
+            # Layer-grid stroke pixel -> mask pixel (doc round trip).
+            to_mask = (np.linalg.inv(np.vstack([m_doc, [0, 0, 1]]))
+                       @ np.vstack([l_doc, [0, 0, 1]]))[:2].astype(np.float32)
+            border = np.concatenate([mask[0], mask[-1], mask[:, 0], mask[:, -1]])
+            background = 255.0 if border.mean() >= 127.5 else 0.0
+        else:
+            mask = (np.full((height, width), 255, np.uint8) if layer.mask is None
+                    else cv2.resize(layer.mask, (width, height), interpolation=cv2.INTER_LINEAR))
         painted = False
         for stroke in (canvas or {}).get('layers', []):
             stroke = np.asarray(stroke)
@@ -180,14 +197,24 @@ class EditorSession:
             if layer.flip_x:
                 rgba = rgba[:, ::-1]
             alpha = rgba[..., 3] / 255.0
+            if placement is not None:
+                alpha = cv2.warpAffine(alpha.astype(np.float32), to_mask, (mw, mh),
+                                       flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT,
+                                       borderValue=0.0)
+                if not alpha.any():
+                    continue  # stroke missed the mask's rectangle entirely
             # Explicit action avoids Gradio palette resets changing mask intent.
             # The default preserves color-based callers and existing saved workflows.
             value = (rgba[..., :3].mean(axis=2) if action is None
-                     else 255 if action == 'Reveal' else 0)
+                     else np.full(alpha.shape, 255.0 if action == 'Reveal' else 0.0,
+                                  np.float32))
+            if placement is not None:
+                value = cv2.warpAffine(value, to_mask, (mw, mh), flags=cv2.INTER_LINEAR,
+                                      borderMode=cv2.BORDER_CONSTANT, borderValue=background)
             mask = np.rint(mask * (1 - alpha) + value * alpha).astype(np.uint8)
             painted = True
         if painted:
-            self.history.set_mask(layer.id, mask, layer.mask_enabled)
+            self.history.set_mask(layer.id, mask, layer.mask_enabled, placement)
         return painted
 
 

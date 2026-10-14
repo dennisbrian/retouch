@@ -10,6 +10,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+
+import os
 from PIL import Image
 
 from retouch.compositor import export_project
@@ -193,6 +195,35 @@ class TestRejections:
                                 masks={0: fx.MASK_2X2})
         with pytest.raises(UnsupportedFeature):
             load_project(path)
+
+    def test_crash_between_swap_renames_recovers_old_package(self, tmp_path):
+        # Simulate a process killed between _swap_in's two renames: the old
+        # package sits retired under .replaced-<token>, target missing.
+        doc = Document(2, 2)
+        doc.add_image(fx.solid(2, 2, (255, 0, 0, 255)), 'Red')
+        path = tmp_path / 'p.comp'
+        save_project(doc, path)
+        doc.layers[0].name = 'Renamed'
+        save_project(doc, path)  # retired sibling is rmtree'd on success
+        retired = tmp_path / '.p.comp.replaced-crash'
+        os.rename(path, retired)
+        # A load of the missing target sweeps the interrupted save aside and
+        # restores the retired (older but complete) package.
+        recovered = load_project(path)
+        assert recovered.layers[0].name == 'Renamed'
+        assert not retired.exists()
+
+    def test_stale_saving_staging_dirs_are_swept(self, tmp_path):
+        doc = Document(2, 2)
+        doc.add_image(fx.solid(2, 2, (0, 255, 0, 255)), 'Green')
+        path = tmp_path / 'p.comp'
+        save_project(doc, path)
+        stale = tmp_path / '.p.comp.saving-deadbeef'
+        (stale / 'images').mkdir(parents=True)
+        (stale / 'manifest.json').write_text('{}')
+        reopened = load_project(path)
+        assert reopened.layers[0].name == 'Green'
+        assert not stale.exists()
 
     def test_mask_with_alpha_is_invalid(self, tmp_path):
         path = fx.red_with_mask(tmp_path / 'm.comp')

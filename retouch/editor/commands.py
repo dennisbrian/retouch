@@ -32,7 +32,7 @@ def _snapshot(document: Document) -> Document:
         detached.adjustment = deepcopy(layer.adjustment)
         detached.effects = deepcopy(layer.effects)
         if layer.mask_placement is not None:
-            detached.mask_placement = dict(layer.mask_placement)
+            detached.mask_placement = deepcopy(layer.mask_placement)
         result.layers.append(detached)
     return result
 
@@ -252,6 +252,8 @@ class DocumentHistory:
             duplicate.text = deepcopy(layer.text)
             duplicate.shape = deepcopy(layer.shape)
             duplicate.adjustment = deepcopy(layer.adjustment)
+            duplicate.effects = deepcopy(layer.effects)
+            duplicate.mask_placement = deepcopy(layer.mask_placement)
             doc.add_layer(duplicate, doc.index_of(layer_id) + 1)
         return self._edit('Duplicate layer', apply)
 
@@ -369,8 +371,14 @@ class DocumentHistory:
         return self._edit('Fit layer to canvas', apply)
 
     def set_mask(self, layer_id: str, mask: Optional[np.ndarray],
-                 enabled: bool = True) -> bool:
-        return self._edit('Edit mask', lambda doc: doc.layer(layer_id).set_mask(mask, enabled))
+                 enabled: bool = True, placement: Optional[dict] = None) -> bool:
+        """``placement`` re-attaches an unlinked mask placement that painting
+        and other coverage edits keep, unlike a fresh :meth:`set_mask`."""
+        def apply(doc: Document) -> None:
+            layer = doc.layer(layer_id)
+            layer.set_mask(mask, enabled)
+            layer.mask_placement = placement
+        return self._edit('Edit mask', apply)
 
     def replace_pixels(self, layer_id: str, pixels: np.ndarray) -> bool:
         return self._edit('Replace pixels', lambda doc: doc.layer(layer_id).replace_pixels(pixels))

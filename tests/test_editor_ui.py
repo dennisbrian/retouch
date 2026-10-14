@@ -614,6 +614,57 @@ def test_folder_mask_propagates_to_composite_and_is_undoable():
         session.close()
 
 
+def test_unlinked_mask_painting_warps_into_mask_grid_and_keeps_placement():
+    # Layer 2x2 at origin (0,0); its mask lives on an offset 2x2 grid at
+    # (1,0). A Hide stroke covering the whole layer canvas must land as a
+    # Hide in mask coordinates, and painting must preserve the placement
+    # (set_mask alone clears it).
+    doc = Document(4, 4)
+    doc.add_image(np.full((2, 2, 4), (255, 0, 0, 255), np.uint8), 'Red')
+    session = EditorSession.create(doc)
+    try:
+        layer = session.selected()
+        placement = {'origin': [1.0, 0.0], 'size': [2.0, 2.0], 'rotation': 0.0,
+                     'flipX': False, 'flipY': False, 'sampling': 'Nearest'}
+        session.history.set_mask(layer.id, np.full((2, 2), 255, np.uint8), True, placement)
+        stroke = np.full((2, 2, 4), [0, 0, 0, 255], np.uint8)
+        assert session.apply_mask({'layers': [stroke]}, 'Hide')
+        layer = session.selected()  # history edits replace every layer object
+        # The mask's rect (doc x 1-3) only overlaps the layer's right half
+        # (doc x 0-2), so the stroke lands in mask column 0; column 1 is
+        # outside the layer and stays untouched.
+        assert (layer.mask[:, 0] == 0).all()
+        assert (layer.mask[:, 1] == 255).all()
+        # Painting is the one mask path that keeps an unlinked placement.
+        assert layer.mask_placement is not None
+        assert tuple(layer.mask_placement['origin']) == (1.0, 0.0)
+        session.history.undo()
+        layer = session.selected()
+        assert (layer.mask == 255).all()
+        assert layer.mask_placement is not None
+    finally:
+        session.close()
+
+
+def test_unlinked_mask_paint_stroke_missing_mask_rect_is_noop():
+    doc = Document(4, 4)
+    doc.add_image(np.full((2, 2, 4), (255, 0, 0, 255), np.uint8), 'Red')
+    session = EditorSession.create(doc)
+    try:
+        layer = session.selected()
+        placement = {'origin': [2.0, 2.0], 'size': [2.0, 2.0], 'rotation': 0.0,
+                     'flipX': False, 'flipY': False, 'sampling': 'Nearest'}
+        session.history.set_mask(layer.id, np.full((2, 2), 255, np.uint8), True, placement)
+        before = session.selected().mask.copy()
+        # Stroke on the layer's left column maps outside the mask's rect.
+        stroke = np.zeros((2, 2, 4), np.uint8)
+        stroke[:, 0] = [0, 0, 0, 255]
+        assert not session.apply_mask({'layers': [stroke]}, 'Hide')
+        np.testing.assert_array_equal(session.selected().mask, before)
+    finally:
+        session.close()
+
+
 @pytest.mark.parametrize('color', [[255,255,255], [255,51,102], [0,0,0]])
 def test_explicit_mask_action_overrides_palette_color_and_is_undoable(session, color):
     stroke = np.zeros((6, 8, 4), np.uint8)

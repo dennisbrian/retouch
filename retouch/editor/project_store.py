@@ -86,6 +86,7 @@ def _invalid(why):
 def load_project(path):
     """Read a ``.comp`` package into a :class:`Document`."""
     package = Path(path)
+    _sweep_interrupted_saves(package)
     manifest, version = _read_manifest(package)
     return _decode(manifest, version, package)
 
@@ -645,6 +646,33 @@ def _swap_in(staging, target, token):
         os.rename(retired, target)
         raise
     shutil.rmtree(retired, ignore_errors=True)
+
+
+def _sweep_interrupted_saves(target):
+    """Recover a package stranded by a crash between ``_swap_in``'s renames.
+
+    A process killed after the old package was retired but before the new one
+    was swapped in leaves the target missing and the only surviving copy under
+    ``.<name>.replaced-<token>``. Restore the newest such sibling (the old
+    package — a complete, valid state) and drop stale staging dirs. Old-or-new
+    then holds across process crashes, not just exceptions.
+    """
+    parent = target.parent
+    if not parent.is_dir():
+        return
+    best = None
+    for entry in parent.iterdir():
+        if entry.name.startswith(f'.{target.name}.replaced-'):
+            if best is None or entry.stat().st_mtime > best.stat().st_mtime:
+                if best is not None:
+                    shutil.rmtree(best, ignore_errors=True)
+                best = entry
+        elif entry.name.startswith(f'.{target.name}.saving-'):
+            shutil.rmtree(entry, ignore_errors=True)
+    if best is not None and not target.exists():
+        os.rename(best, target)
+    elif best is not None:
+        shutil.rmtree(best, ignore_errors=True)
 
 
 def _encode(document):
