@@ -267,6 +267,32 @@ class LintDustStage(_EngineStage):
         )
 
 
+class CostumeShineStage(_EngineStage):
+    """Stage 4.4: Costume Shine (opt-in).
+
+    Runs after global tone and before Costume Clarity, so clarity does not
+    sharpen the glare it is about to take away.
+    """
+
+    name = "costume_shine"
+    phase = "global"
+
+    def enabled(self, state: PipelineState) -> bool:
+        return (getattr(state.ctx, "costume_shine", 0.0) or 0.0) > 0
+
+    def _call(self, state: PipelineState) -> np.ndarray:
+        return self._engine._stage_costume_shine(
+            state.img,
+            state.ctx,
+            state.faces,
+            state.person_mask,
+            state.acc_skin,
+            acc_skin_hair=state.acc_skin_hair,
+            acc_lips=state.acc_lips,
+            acc_hair_only=state.acc_hair_only,
+        )
+
+
 class CostumeClarityStage(_EngineStage):
     """Stage 4.5: Costume Clarity (opt-in).
 
@@ -395,6 +421,7 @@ def build_global_registry(engine: "RetouchEngine") -> "StageRegistry":
     registry.add(ProstheticBlendStage(engine))
     registry.add(LintDustStage(engine))
     registry.add(GlobalStage(engine))
+    registry.add(CostumeShineStage(engine))
     registry.add(CostumeClarityStage(engine))
     registry.add(GradeStage(engine))
     registry.add(LocalAdjustmentsStage(engine))

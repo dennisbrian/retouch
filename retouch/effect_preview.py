@@ -8,6 +8,7 @@ EFFECT_LABELS = {
     "body_skin_even": "Body Skin Evening",
     "neck_tone_match": "Neck Tone Match",
     "costume_clarity": "Costume Clarity",
+    "costume_shine": "Costume Shine",
     "backdrop_cleanup": "Lint & Dust Cleanup",
     "hair_remove_flyaways": "Stray Hair Cleanup",
 }
