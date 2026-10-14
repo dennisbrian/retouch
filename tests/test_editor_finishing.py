@@ -739,3 +739,91 @@ def test_hue_adjustment_layer_round_trips(tmp_path):
     np.testing.assert_array_equal(composite(again), image)
     h.undo()
     np.testing.assert_array_equal(composite(h.document), before)
+# Float-path adjustment native fixture: mirrors test_adjustment_pixels_match
+# _native_kernel_fixture, but for the kinds graded in float space (Saturation,
+# Vibrance, Temperature, Tint, Brightness, Contrast, Hue). Recorded bytes only:
+# regenerating needs the pinned Compositor tarball's AdjustPixels.c/LensPixels.c
+# next to scripts/dev/cg_float_adjustment_fixture.swift (see its header for the
+# build). Sources: two native kernels pinned at Compositor 11d8d7a — Camera
+# Raw's adjust_camera_raw (Vibrance/Temperature/Tint/Contrast) and Photoshop's
+# Hue/SaturationFilter (Saturation/Hue). Brightness has no native additive
+# counterpart; `brightness_ref` records the port's own shift as reference.
+
+# (fixture kind, params-as-printed, grade() record, recorded max byte deviation).
+# * Saturation -50 / Contrast / brightness_ref: exact to a rounding tie (the
+#   port's float32 and Swift's half-away-from-zero rounding cross a .5 byte).
+# * Saturation >0 / Vibrance / Temperature / Tint: the native algorithms
+#   genuinely differ (Photoshop divide-rule saturation, luminance-anchored
+#   vibrance, linear-light temperature/tint); the maxima pin that divergence
+#   — drifting either way is a grading change.
+# * Hue: the port routes through the 33^3 trilinear cube, so ~2 bytes of
+#   interpolation error ride on the exact response.
+CG_FLOAT_SWEEPS = [
+    ('saturation_native', 'saturation=-50', lambda: adjustment('Saturation', saturation=-50), 1),
+    ('saturation_native', 'saturation=50', lambda: adjustment('Saturation', saturation=50), 31),
+    ('saturation_native', 'saturation=100', lambda: adjustment('Saturation', saturation=100), 126),
+    ('vibrance_native', 'vibrance=50.0', lambda: adjustment('Vibrance', vibrance=50), 18),
+    ('vibrance_native', 'vibrance=-50.0', lambda: adjustment('Vibrance', vibrance=-50), 21),
+    ('vibrance_native', 'vibrance=100.0', lambda: adjustment('Vibrance', vibrance=100), 31),
+    ('temperature_native', 'temperature=30', lambda: adjustment('Temperature', temperature=30), 14),
+    ('temperature_native', 'temperature=-30', lambda: adjustment('Temperature', temperature=-30), 14),
+    ('temperature_native', 'temperature=60', lambda: adjustment('Temperature', temperature=60), 26),
+    ('tint_native', 'tint=30', lambda: adjustment('Tint', tint=30), 28),
+    ('tint_native', 'tint=-30', lambda: adjustment('Tint', tint=-30), 29),
+    ('contrast_native', 'contrast=50.0', lambda: adjustment('Contrast', contrast=50), 0),
+    ('contrast_native', 'contrast=-50.0', lambda: adjustment('Contrast', contrast=-50), 0),
+    ('hue_native', 'hue=30', lambda: adjustment('Hue', hue=30), 2),
+    ('hue_native', 'hue=-90', lambda: adjustment('Hue', hue=-90), 2),
+    ('hue_native', 'hue=180', lambda: adjustment('Hue', hue=180), 1),
+    ('brightness_ref', 'amount=30', lambda: adjustment('Brightness', brightness=30), 1),
+    ('brightness_ref', 'amount=-30', lambda: adjustment('Brightness', brightness=-30), 1),
+]
+
+
+def _cg_float_reference():
+    """(kind, params) -> (source uint8 (N,3), native uint8 (N,3)).
+
+    Temperature/Tint sweeps print no params (their gains live in the native
+    call, not the line), so those lines carry only kind/src/dst and are keyed
+    by kind plus an index in fixture order (30, -30, 60 / 30, -30).
+    """
+    text = (Path(__file__).parent / 'fixtures' / 'cg_float_adjustment_reference.txt').read_text()
+    keyed, ordered = {}, {}
+    for line in text.splitlines():
+        p = line.split()
+        if len(p) == 4:                      # kind params src dst
+            keyed.setdefault((p[0], p[1]), []).append((p[2], p[3]))
+        elif len(p) == 3:                    # kind src dst (no params)
+            ordered.setdefault(p[0], []).append((p[1], p[2]))
+    ref = {k: (np.array([[int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)]
+                         for h, _ in rows], np.uint8),
+                np.array([[int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)]
+                          for _, h in rows], np.uint8))
+           for k, rows in keyed.items()}
+    # Split the param-less sweeps into per-amount chunks by probe count.
+    n = len(ref[('saturation_native', 'saturation=-50')][0])
+    amounts = {'temperature_native': ('temperature=30', 'temperature=-30', 'temperature=60'),
+               'tint_native': ('tint=30', 'tint=-30')}
+    for kind, keys in amounts.items():
+        rows = ordered[kind]
+        for i, key in enumerate(keys):
+            chunk = rows[i * n:(i + 1) * n]
+            ref[(kind, key)] = (
+                np.array([[int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)]
+                          for h, _ in chunk], np.uint8),
+                np.array([[int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)]
+                          for _, h in chunk], np.uint8))
+    return ref
+
+
+@pytest.mark.parametrize('spec', CG_FLOAT_SWEEPS,
+                         ids=lambda s: f'{s[0]}-{s[1]}' if isinstance(s, tuple) else s)
+def test_float_adjustment_matches_native_fixture(spec):
+    """Float grading stays at its verified native deviation on every sweep."""
+    label, params, build, maxdev = spec
+    src, native = _cg_float_reference()[(label, params)]
+    graded = np.clip(grade(src.reshape(1, -1, 3).astype(np.float32) / 255,
+                           build()), 0, 1).reshape(-1, 3) * 255
+    dev = int(np.abs(np.rint(graded).astype(np.int32)
+                     - native.astype(np.int32)).max())
+    assert dev == maxdev, (label, params, dev, maxdev)
