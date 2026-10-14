@@ -428,6 +428,18 @@ def build_editor_tab():
                     gr.Markdown('Fit scales the current layer proportions to fit inside '
                                 'the canvas and centers it. Source pixels and masks are kept; '
                                 'size and position change together in one undo step.')
+                with gr.Accordion('Image & canvas size', open=False):
+                    with gr.Row():
+                        crop_x = gr.Number(label='Crop X', value=0, precision=0)
+                        crop_y = gr.Number(label='Crop Y', value=0, precision=0)
+                    with gr.Row():
+                        crop_width = gr.Number(label='Crop width (pixels)', value=100, precision=0)
+                        crop_height = gr.Number(label='Crop height (pixels)', value=100, precision=0)
+                    crop_canvas = gr.Button('Crop canvas')
+                    crop_selection = gr.Button('Crop to selection bbox')
+                    gr.Markdown('Crops re-square the canvas; layers, masks and guides keep '
+                                'their pixels and shift together. Cropping clears the '
+                                'selection.')
                 with gr.Accordion('Folders & clipping', open=False):
                     parent_folder = gr.Dropdown(label='Parent folder', choices=[('Canvas', '')], value='')
                     clipping_source = gr.Dropdown(label='Clip to layer alpha', choices=[('None', '')], value='')
@@ -798,6 +810,18 @@ def build_editor_tab():
                                         parent_id=(layer.id if layer.is_group else layer.parent_id) if layer else None)
                             current.history.add_layer(new, doc.index_of(layer.id) + 1 if layer else None)
                             current.selected_id = new.id
+                    elif operation in ('crop', 'crop_selection'):
+                        from .selections import selection_bbox
+                        if operation == 'crop':
+                            current.history.crop_document(args[0], args[1], args[2], args[3])
+                        else:
+                            if current.selection is None:
+                                raise ValueError('Create a selection first')
+                            box = selection_bbox(current.selection)
+                            if box is None:
+                                raise ValueError('Create a selection first')
+                            current.history.crop_document(*box)
+                        current.selection = None
                     elif operation == 'resize':
                         current.history.resize_layer(layer.id, args[0], args[1],
                                                      keep_aspect=args[2] if len(args) > 2 else False,
@@ -843,6 +867,7 @@ def build_editor_tab():
                                   (duplicate, 'duplicate'), (invert_mask, 'invert_mask'),
                                   (reset_mask, 'reset_mask'), (fit, 'fit'), (links, 'links'), (group, 'group'),
                                   (ungroup, 'ungroup'), (create_selection, 'selection'),
+                                  (crop_canvas, 'crop'), (crop_selection, 'crop_selection'),
                                   (clear_selection, 'clear_selection'), (invert_selection, 'invert_selection'),
                                   (expand_selection, 'expand_selection'),
                                   (contract_selection, 'contract_selection'),
@@ -858,6 +883,7 @@ def build_editor_tab():
                 'transform': [position_x, position_y, flip_x, flip_y, rotation],
                 'resize': [layer_width, layer_height, keep_aspect, resize_axis],
                 'add': [add_photo], 'links': [parent_folder, clipping_source],
+                'crop': [crop_x, crop_y, crop_width, crop_height],
                 'mask': [mask_action],
                 'group': [group_members],
                 'selection': [selection_kind, selection_x, selection_y, selection_width,

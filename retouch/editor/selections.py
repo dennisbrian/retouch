@@ -128,6 +128,16 @@ def border(mask, amount):
     return cv2.subtract(grown, shrunk)
 
 
+def selection_bbox(mask):
+    """Document-space (x, y, w, h) covered by a selection, or None if empty."""
+    rows = np.nonzero(mask.any(axis=1))[0]
+    if not rows.size:
+        return None
+    columns = np.nonzero(mask.any(axis=0))[0]
+    return (int(columns[0]), int(rows[0]),
+            int(columns[-1] - columns[0] + 1), int(rows[-1] - rows[0] + 1))
+
+
 def project_selection(mask, layer):
     """Sample a canvas selection at source-pixel centers through the full transform."""
     w, h = ((layer.pixels.shape[1], layer.pixels.shape[0]) if layer.pixels is not None

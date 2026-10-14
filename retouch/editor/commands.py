@@ -14,6 +14,7 @@ from typing import Callable, Optional
 import numpy as np
 
 from .document import Document, Layer, _frozen, new_id, rgba_from
+from .document import MAX_SIDE, MAX_SURFACE_PIXELS
 from .project_store import CURRENT_VERSION, _check_manifest, _encode, save_project
 
 
@@ -382,6 +383,75 @@ class DocumentHistory:
 
     def replace_pixels(self, layer_id: str, pixels: np.ndarray) -> bool:
         return self._edit('Replace pixels', lambda doc: doc.layer(layer_id).replace_pixels(pixels))
+
+    def canvas_resize(self, width, height, *, anchor=4, content_offset=None,
+                      label='Canvas Size') -> bool:
+        """Re-square the canvas; layers, masks and guides keep their pixels.
+
+        ``anchor`` is the 3x3 numpad position the existing content pins to
+        (upstream ``ResizeViewModel.anchor``); ``content_offset`` overrides it
+        with an explicit document-space shift. A no-change call records
+        nothing. Layers fully outside the new canvas are kept, shifted.
+        """
+        for name, value in (('width', width), ('height', height)):
+            if (not isinstance(value, int) or isinstance(value, bool)
+                    or not 1 <= value <= MAX_SIDE):
+                raise ValueError(f'Canvas {name} must be a whole number of '
+                                 f'pixels within 1..{MAX_SIDE}')
+        if width * height > MAX_SURFACE_PIXELS:
+            raise ValueError('Canvas exceeds the surface budget')
+        if content_offset is None:
+            offset = None
+        else:
+            if (len(tuple(content_offset)) != 2
+                    or not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                               and math.isfinite(v) and abs(v) <= 1_000_000
+                               for v in content_offset)):
+                raise ValueError('Content offset must be two finite offsets '
+                                 'within ±1,000,000 pixels')
+            offset = tuple(int(v) for v in content_offset)
+        if not (isinstance(anchor, int) and not isinstance(anchor, bool)
+                and 0 <= anchor <= 8):
+            raise ValueError('Anchor must be a numpad position 0..8')
+
+        def apply(doc: Document) -> None:
+            shift = offset if offset is not None else (
+                ((width - doc.width) * (anchor % 3)) // 2,
+                ((height - doc.height) * (anchor // 3)) // 2)
+            if (doc.width, doc.height) == (width, height) and shift == (0, 0):
+                return
+            doc.width, doc.height = width, height
+            for layer in doc.layers:
+                layer.origin = (layer.origin[0] + shift[0],
+                                layer.origin[1] + shift[1])
+                if layer.mask_placement is not None:
+                    origin = list(layer.mask_placement['origin'])
+                    origin[0] += shift[0]
+                    origin[1] += shift[1]
+                    layer.mask_placement['origin'] = origin
+            if doc.guides:
+                for guide in doc.guides:
+                    guide['position'] += (shift[0] if guide['axis'] == 'vertical'
+                                          else shift[1])
+        return self._edit(label, apply)
+
+    def crop_document(self, x, y, width, height) -> bool:
+        """Crop to a document-space rectangle as one undo step."""
+        for name, value in (('x', x), ('y', y)):
+            if (not isinstance(value, (int, float)) or isinstance(value, bool)
+                    or not math.isfinite(value) or abs(value) > 1_000_000):
+                raise ValueError(f'Crop {name} must be finite and within ±1,000,000')
+        for name, value in (('width', width), ('height', height)):
+            if (not isinstance(value, (int, float)) or isinstance(value, bool)
+                    or not math.isfinite(value) or value != int(value)
+                    or not 1 <= int(value) <= MAX_SIDE):
+                raise ValueError(f'Crop {name} must be a whole number of '
+                                 f'pixels within 1..{MAX_SIDE}')
+        if int(width) * int(height) > MAX_SURFACE_PIXELS:
+            raise ValueError('Crop exceeds the surface budget')
+        return self.canvas_resize(int(width), int(height),
+                                  content_offset=(-int(round(x)), -int(round(y))),
+                                  label='Crop')
 
     def undo(self) -> bool:
         if not self.can_undo:
