@@ -744,3 +744,25 @@ class TestLayerEffects:
                                images={0: fx.solid(4, 4, (1, 1, 1, 255))})
         with pytest.raises(ProjectError, match='unknown shadow keys'):
             load_project(path)
+
+
+def test_known_file_callback_does_not_deadlock_under_the_lock(tmp_path):
+    """A registered array freed while the registry lock is held (garbage
+    collection can run a weakref callback at any allocation, including inside
+    _remember) must not deadlock on the lock."""
+    import threading
+    from retouch.editor import project_store as ps
+
+    path = tmp_path / 'm.png'
+    Image.fromarray(np.zeros((2, 2), np.uint8)).save(path)
+
+    def run():
+        arr = np.zeros((2, 2), np.uint8)
+        ps._remember(arr, path)
+        with ps._KNOWN_LOCK:
+            del arr  # refcount drop runs the weakref callback right here
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(5)
+    assert not worker.is_alive()
