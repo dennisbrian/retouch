@@ -404,6 +404,18 @@ out. It is off by default; start near 50. A beige or tan costume part the
 same colour as the wearer's skin may be treated as skin and left alone, and a
 white costume part right next to white face paint can be left out too.
 
+Costume Shine (`--costume-shine 0-100` in the CLI, the "Costume Shine" slider
+under Structure & Effects in the app, or `fabric.costume_shine` in a recipe,
+where 0.5 = 50) calms the bright glare streaks that flash and softboxes throw
+on vinyl, latex, PVC, satin and armour, back into the material's own colour.
+Some gloss stays, even at 100. It works on the same costume area as Costume
+Clarity, so skin, face paint, hair and wigs are never touched, and it leaves
+white bows and collars, skin seen through fishnet, white print and rhinestone
+sparkle alone. It is off by default; start near 50. A broad satin sheen wider
+than about a sixteenth of the face is treated as the material and kept, and a
+thin white trim or stitch line on black or grey vinyl can be dimmed as if it
+were a highlight.
+
 Keep Nose Shape (`--nose-shape 0-100` in the CLI, the "Keep Nose Shape" slider
 under Skin Tone in the app, or `skin.nose_shape` in a recipe, where 0.5 = 50)
 puts back the broad nose shading that skin smoothing flattens, so the nose
