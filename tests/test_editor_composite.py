@@ -292,6 +292,19 @@ class TestLayerEffectsPixels:
         assert (out[0, 1:] == 0).all()
         assert (out[1, :] == 0).all()
 
+    def test_extreme_effect_margin_is_budget_checked(self):
+        # A max-range shadow (distance 5000, blur 500 -> margin ~6502) on a
+        # 200 MP canvas would allocate a multi-GB band window; the port-only
+        # live budget (upstream LayerEffectsSurface.swift:47, 80 MP) refuses.
+        from retouch.editor.document import LayerEffects, ShadowEffect
+        doc = Document(20000, 10000)
+        layer = doc.add_image(np.full((4, 4, 4), (255, 0, 0, 255), np.uint8),
+                              'Tiny', origin=(0, 0))
+        layer.effects = LayerEffects(shadow=ShadowEffect(angle=90, distance=5000,
+                                                         blur=500, opacity=0.6))
+        with pytest.raises(ValueError, match='live budget'):
+            composite(doc)
+
     def test_drop_shadow_zero_blur_geometry_and_placement(self):
         from retouch.editor.document import LayerEffects, ShadowEffect
         doc = Document(5, 5)

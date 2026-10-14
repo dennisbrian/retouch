@@ -399,6 +399,15 @@ class Layer:
                     or not all(isinstance(p[k], bool) for k in ('flipX', 'flipY'))
                     or not isinstance(p['sampling'], str)):
                 raise ValueError('mask placement must be a full transform record')
+            # Port-only guard: upstream clips through the layer's own grid
+            # (LayerMask.clipImage) and never materializes the placement, but
+            # this port resamples the mask to the placement size first, so
+            # the placement itself must stay finite and inside the budget.
+            if (not all(math.isfinite(v) for v in tuple(p['origin']) + tuple(p['size']))
+                    or not math.isfinite(p['rotation'])
+                    or not all(1 <= v <= 300_000 for v in tuple(p['size']))
+                    or p['size'][0] * p['size'][1] > MAX_SURFACE_PIXELS):
+                raise ValueError('mask placement out of range')
             if self.is_group:
                 raise ValueError('folder masks cannot be unlinked')
         if self.adjustment is not None:

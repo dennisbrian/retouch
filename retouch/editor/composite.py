@@ -51,6 +51,7 @@ RENDER_BLEND_MODES = (
 #     kernel. OpenCV's bilinear (and area) kernels differ, which is why this
 #     renderer uses ``cv2.INTER_CUBIC`` for the final step.
 MAX_DOWNSAMPLE_LEVEL = 6
+_MAX_EFFECTS_WINDOW_PIXELS = 80_000_000  # upstream LayerEffectsSurface.swift:47
 
 
 def _downsample_level(factor):
@@ -249,6 +250,13 @@ class _BandRenderer:
                 margin = _effect_margin(layer.effects)
                 ext_top = max(0, top - margin)
                 ext_bottom = min(self.doc.height, bottom + margin)
+                # Port-only guard: upstream budgets the effects surface
+                # (LayerEffectsSurface.swift:47, 80 MP); this port's band
+                # window is its equivalent, so budget it the same way.
+                if (ext_bottom - ext_top) * self.doc.width > _MAX_EFFECTS_WINDOW_PIXELS:
+                    raise ValueError(
+                        'layer effects window exceeds the %d MP live budget'
+                        % (_MAX_EFFECTS_WINDOW_PIXELS // 1_000_000))
                 if ext_top != top or ext_bottom != bottom:
                     ext_source, ext_a = self.own(layer, ext_top, ext_bottom)
                 else:

@@ -196,6 +196,18 @@ class TestRejections:
         with pytest.raises(UnsupportedFeature):
             load_project(path)
 
+    def test_oversized_mask_placement_refused_before_decode(self, tmp_path):
+        # _place_mask would resample the mask to the placement size first
+        # (upstream never materializes it), so a crafted 300000^2 placement
+        # must die at validation before any PNG decode or allocation.
+        record = fx.layer_record(0, 'L', 2, 2,
+                                  maskFile=fx.IDS[0] + '.mask.png',
+                                  maskPlacement=fx.transform(300000, 300000))
+        path = fx.write_package(tmp_path / 'huge.comp', 4, 4, [record],
+                                masks={0: fx.MASK_2X2})
+        with pytest.raises((ValueError, UnsupportedFeature)):
+            load_project(path)
+
     def test_crash_between_swap_renames_recovers_old_package(self, tmp_path):
         # Simulate a process killed between _swap_in's two renames: the old
         # package sits retired under .replaced-<token>, target missing.
