@@ -10,7 +10,7 @@ import numpy as np
 
 from .document import UnsupportedFeature
 
-KINDS = ('Exposure', 'Levels', 'Invert', 'Saturation', 'Vibrance', 'Temperature', 'Tint', 'Brightness', 'Contrast', 'Hue')
+KINDS = ('Exposure', 'Levels', 'Curves', 'Invert', 'Saturation', 'Vibrance', 'Temperature', 'Tint', 'Brightness', 'Contrast', 'Hue')
 CHANNELS = ('RGB', 'Red', 'Green', 'Blue')
 _KEYS = {'kind', 'hue', 'saturation', 'lightness', 'colorize', 'levels', 'curves',
          'exposureSettings', 'saturationSettings', 'vibranceSettings', 'temperatureSettings', 'tintSettings', 'brightnessSettings', 'contrastSettings', 'hueSettings'}
@@ -188,6 +188,8 @@ def grade(rgb, record):
     if kind == 'Hue':
         h = record.get('hueSettings', {}).get('hue', 0)
         return _grade_hue(rgb, h)
+    if kind == 'Curves':
+        return _grade_curves(rgb, record['curves'])
     if kind == 'Exposure':
         s = record.get('exposureSettings') or dict(exposure=0, offset=0, gamma=1)
         linear = np.where(rgb <= .04045, rgb / 12.92, ((rgb + .055) / 1.055) ** 2.4)
@@ -202,6 +204,71 @@ def grade(rgb, record):
     # Native Levels applies each color channel, then the combined RGB channel.
     channels = np.stack([apply(rgb[..., i], ranges[i + 1]) for i in range(3)], axis=-1)
     return apply(channels, ranges[0])
+
+
+def _curve_value(x, points):
+    """Monotone-cubic Hermite curve evaluation (Curves.swift:18-32)."""
+    p = points
+    i = min(len(p) - 2, max(0, max(j for j in range(len(p)) if p[j]['x'] <= x)))
+    d = [(p[j + 1]['y'] - p[j]['y']) / (p[j + 1]['x'] - p[j]['x'])
+         for j in range(len(p) - 1)]
+
+    def slope(j):
+        if j == 0:
+            return d[0]
+        if j == len(p) - 1:
+            return d[-1]
+        if d[j - 1] * d[j] <= 0:
+            return 0
+        return 2 / (1 / d[j - 1] + 1 / d[j])
+
+    h = p[i + 1]['x'] - p[i]['x']
+    t = (x - p[i]['x']) / h if h else 0
+    t = min(1, max(0, t))
+    y = ((2 * t ** 3 - 3 * t ** 2 + 1) * p[i]['y']
+         + (t ** 3 - 2 * t ** 2 + t) * h * slope(i)
+         + (-2 * t ** 3 + 3 * t ** 2) * p[i + 1]['y']
+         + (t ** 3 - t ** 2) * h * slope(i + 1))
+    return min(255, max(0, y))
+
+
+def _identity_points(points):
+    return (len(points) == 2 and points[0]['x'] == 0 and points[0]['y'] == 0
+            and points[1]['x'] == 255 and points[1]['y'] == 255)
+
+
+def _curves_lut(curves):
+    """Composite 3x256 float64 tables: channel curve then RGB curve, baked
+    at integers like Curves.apply (Curves.swift:37); /255 like levels_apply."""
+    channels = curves['channels']
+    if all(_identity_points(points) for points in channels):
+        return None
+    rgb = [_curve_value(i, channels[0]) for i in range(256)]
+    luts = []
+    for ch in range(1, 4):
+        lut = np.empty(256, np.float64)
+        for i in range(256):
+            v = _curve_value(i, channels[ch])
+            j = min(255, max(0, int(v // 1)))
+            lut[i] = rgb[j] + (v - j) * (rgb[min(255, j + 1)] - rgb[j])
+        luts.append(lut / 255)
+    return luts
+
+
+def _grade_curves(rgb, curves):
+    """Apply baked LUTs with linear interpolation between entries, mirroring
+    levels_apply (LevelsPixels.c:3-14) on the band's float pixels."""
+    luts = _curves_lut(curves)
+    if luts is None:
+        return rgb
+    out = np.empty_like(rgb)
+    for i in range(3):
+        t = luts[i]
+        v = rgb[..., i] * 255
+        j = np.clip(v, 0, 255).astype(np.int32)
+        frac = v - j
+        out[..., i] = t[j] + frac * (t[np.minimum(j + 1, 255)] - t[j])
+    return out
 
 
 def _rgb_to_hsl(rgb):
