@@ -10,17 +10,34 @@ import numpy as np
 
 from .document import UnsupportedFeature
 
-KINDS = ('Exposure', 'Levels', 'Curves', 'Invert', 'Saturation', 'Vibrance', 'Temperature', 'Tint', 'Brightness', 'Contrast', 'Hue')
+KINDS = ('Exposure', 'Levels', 'Curves', 'Invert', 'Saturation', 'Vibrance', 'Temperature', 'Tint', 'Brightness', 'Contrast', 'Hue', 'Grain', 'Add Noise')
 CHANNELS = ('RGB', 'Red', 'Green', 'Blue')
 _KIND_RANGES = ('master', 'reds', 'yellows', 'greens', 'cyans', 'blues', 'magentas')
-_KEYS = {'kind', 'hue', 'saturation', 'lightness', 'colorize', 'range', 'invertRange', 'levels', 'curves',
-         'exposureSettings', 'saturationSettings', 'vibranceSettings', 'temperatureSettings', 'tintSettings', 'brightnessSettings', 'contrastSettings', 'hueSettings'}
+_COMMON_KEYS = {'kind', 'hue', 'saturation', 'lightness', 'colorize', 'range', 'invertRange', 'levels', 'curves'}
+_SETTINGS_KEYS = {'exposureSettings', 'saturationSettings', 'vibranceSettings', 'temperatureSettings',
+                  'tintSettings', 'brightnessSettings', 'contrastSettings', 'hueSettings',
+                  'grainSettings', 'noiseAmount', 'noiseGaussian', 'noiseMonochromatic', 'noiseSeed'}
+# A record carries the union of every kind's keys (upstream stores one struct
+# with every settings object optional), but each settings object belongs to
+# one kind: only its own kind's settings may be present.
+_KEYS = _COMMON_KEYS | _SETTINGS_KEYS
+_KEYS_BY_KIND = {
+    'Exposure': {'exposureSettings'}, 'Levels': set(), 'Curves': set(), 'Invert': set(),
+    'Saturation': {'saturationSettings'}, 'Vibrance': {'vibranceSettings'},
+    'Temperature': {'temperatureSettings'}, 'Tint': {'tintSettings'},
+    'Brightness': {'brightnessSettings'}, 'Contrast': {'contrastSettings'},
+    'Hue': {'hueSettings'},
+    'Grain': {'grainSettings'},
+    'Add Noise': {'noiseAmount', 'noiseGaussian', 'noiseMonochromatic', 'noiseSeed'},
+}
 
 
 def adjustment(kind='Exposure', exposure=0, offset=0, gamma=1,
                black=0, white=255, red_gamma=1, green_gamma=1, blue_gamma=1,
                saturation=0, vibrance=0, temperature=0, tint=0,
-               brightness=0, contrast=0, hue=0):
+               brightness=0, contrast=0, hue=0,
+               amount=25, size=1.5, roughness=50, seed=0,
+               gaussian=False, monochromatic=False):
     """Build a native-format record; all channels use identity by default."""
     if kind not in ('Levels', 'Saturation', 'Vibrance', 'Temperature', 'Tint', 'Brightness', 'Contrast', 'Hue'):
         black, white = 0, 255
@@ -50,6 +67,11 @@ def adjustment(kind='Exposure', exposure=0, offset=0, gamma=1,
         record['contrastSettings'] = dict(contrast=contrast)
     if kind == 'Hue':
         record['hueSettings'] = dict(hue=hue)
+    if kind == 'Grain':
+        record['grainSettings'] = dict(amount=amount, size=size, roughness=roughness, seed=seed)
+    if kind == 'Add Noise':
+        record.update(noiseAmount=amount, noiseGaussian=gaussian,
+                      noiseMonochromatic=monochromatic, noiseSeed=seed)
     validate_adjustment(record)
     return deepcopy(record)
 
@@ -131,6 +153,27 @@ def validate_adjustment(record):
     if hsett is not None and (not isinstance(hsett, dict) or set(hsett) != {'hue'}
             or not _number(hsett['hue'], -180, 180)):
         raise ValueError('Invalid hue settings')
+    grain = record.get('grainSettings')
+    if grain is not None and (not isinstance(grain, dict)
+            or set(grain) != {'amount', 'size', 'roughness', 'seed'}
+            or not _number(grain['amount'], 0, 100)
+            or not _number(grain['size'], .5, 20)
+            or not _number(grain['roughness'], 0, 100)
+            or not isinstance(grain['seed'], int) or isinstance(grain['seed'], bool)
+            or not 0 <= grain['seed'] <= 0xFFFFFFFF):
+        raise ValueError('Invalid grain settings')
+    if 'noiseAmount' in record and not _number(record.get('noiseAmount'), .1, 400):
+        raise ValueError('Invalid noise settings')
+    if 'noiseGaussian' in record and not isinstance(record.get('noiseGaussian'), bool):
+        raise ValueError('Invalid noise settings')
+    if 'noiseMonochromatic' in record and not isinstance(record.get('noiseMonochromatic'), bool):
+        raise ValueError('Invalid noise settings')
+    if 'noiseSeed' in record and (not isinstance(record.get('noiseSeed'), int)
+            or isinstance(record['noiseSeed'], bool) or not 0 <= record['noiseSeed'] <= 0xFFFFFFFF):
+        raise ValueError('Invalid noise settings')
+    # Every settings object belongs to one kind; a record may only carry its own.
+    if set(record) & _SETTINGS_KEYS - _KEYS_BY_KIND.get(record.get('kind'), set()):
+        raise UnsupportedFeature('Adjustment settings do not match its kind')
 
 
 # --- Hue/Saturation ------------------------------------------------------------
@@ -354,8 +397,146 @@ def _grade_contrast(rgb, amount):
     return np.clip(result, 0, 1)
 
 
-def grade(rgb, record):
-    """Grade straight encoded RGB floats, preserving alpha in the caller."""
+# --- Grain and Add Noise -----------------------------------------------------------
+#
+# Ports of Compositor's C kernels ``adjust_grain`` (Rendering/AdjustPixels.c)
+# and ``noise_add_at`` (Rendering/NoisePixels.c), both derived from the same
+# hash chain (``mix32``). Lattice placement stays in float64 (the C kernels
+# compute their field coordinates in double), everything after in float32;
+# every hash wraps modulo 2**32 exactly like C uint32 arithmetic.
+
+_U32 = np.uint32
+
+
+def _u32(values):
+    """Truncate to uint32, as C unsigned arithmetic wraps (two's complement)."""
+    return (np.asarray(values, np.int64) & np.int64(0xFFFFFFFF)).astype(_U32)
+
+
+def _mix32(x):
+    x = x.astype(_U32, copy=False)
+    x = _u32(x ^ (x >> _U32(16)))
+    x = _u32(x * _U32(0x7feb352d))
+    x = _u32(x ^ (x >> _U32(15)))
+    x = _u32(x * _U32(0x846ca68b))
+    return _u32(x ^ (x >> _U32(16)))
+
+
+def _grain_field(u, v, scale, seed):
+    """Smooth value-noise lattice, C ``grain_field`` in double coords/float32 math."""
+    fx = np.floor(u / scale)
+    fy = np.floor(v / scale)
+    ix, iy = fx.astype(np.int64), fy.astype(np.int64)
+    tx = (u / scale - fx).astype(np.float32)
+    ty = (v / scale - fy).astype(np.float32)
+    tx = tx * tx * (np.float32(3) - np.float32(2) * tx)
+    ty = ty * ty * (np.float32(3) - np.float32(2) * ty)
+
+    def lattice(ix, iy):
+        h = _mix32(_u32(ix.astype(_U32) * _U32(0x9E3779B1))
+                   ^ _mix32(_u32(iy.astype(_U32) * _U32(0x85EBCA77)) ^ _U32(seed)))
+        return h.astype(np.uint16).astype(np.float32) / np.float32(65535.0) \
+            + (h >> _U32(16)).astype(np.float32) / np.float32(65535.0) - np.float32(1.0)
+
+    n00, n10 = lattice(ix, iy), lattice(ix + 1, iy)
+    n01, n11 = lattice(ix, iy + 1), lattice(ix + 1, iy + 1)
+    top = n00 + (n10 - n00) * tx
+    bottom = n01 + (n11 - n01) * tx
+    return (top + (bottom - top) * ty) * np.float32(1.6)
+
+
+def _grade_grain(rgb, a, settings, x0=0.0, y0=0.0, units_per_pixel=1.0):
+    """Film grain: two lattice octaves weighted by tonal level, C ``adjust_grain``.
+
+    ``rgb`` is straight [0..1] float32, ``a`` the matching coverage in [0..1]
+    float32; the kernel runs in the C byte domain (where its rounding lives),
+    through the same 255/alpha unpremultiply-repremultiply chain. ``x0``/``y0``
+    place the band in document space so the pattern stays fixed however the
+    canvas splits its drawing; grain only touches covered pixels.
+    """
+    amount, size, roughness, seed = (settings['amount'], settings['size'],
+                                     settings['roughness'], settings['seed'])
+    if amount <= 0 or units_per_pixel <= 0:
+        return rgb
+    height, width = rgb.shape[:2]
+    strength = np.float32(1.0 if amount > 100 else amount / 100.0) \
+        * np.float32(0.35) * np.float32(255.0)
+    rough = np.float32(0.0 if roughness < 0 else 1.0 if roughness > 100
+                      else roughness / 100.0)
+    fine_seed = int(_mix32(np.array([_U32(seed) ^ _U32(0xA511E9B3)], _U32))[0])
+    detail_size = max(0.5, size * 0.35)
+    u = x0 + (np.arange(width, dtype=np.float64) + 0.5) * units_per_pixel
+    v = y0 + (np.arange(height, dtype=np.float64) + 0.5) * units_per_pixel
+    coords = u[None, :], v[:, None]
+    smooth = _grain_field(*coords, size, seed)
+    fine = _grain_field(*coords, detail_size, fine_seed)
+    noise = smooth + (fine - smooth) * rough
+    a8 = np.rint(a * np.float32(255.0)).astype(np.uint8)
+    a32 = a8.astype(np.float32)
+    unpre = np.where(a8 == 255, np.float32(1.0), np.float32(255.0) / a32)[..., None]
+    s = np.rint(np.clip(rgb, 0, 1) * np.float32(255.0)).astype(np.uint8).astype(np.float32)
+    r = s * unpre
+    level = (np.float32(0.2126) * r[..., 0] + np.float32(0.7152) * r[..., 1]
+             + np.float32(0.0722) * r[..., 2]) / np.float32(255.0)
+    level = np.minimum(level, np.float32(1.0))
+    delta = noise * strength * (np.float32(0.4)
+                                + np.float32(2.4) * level * (np.float32(1.0) - level))
+    val = np.clip(r + delta[..., None], 0, 255)
+    coverage = a32[..., None] / np.float32(255.0)
+    res = (val * coverage + np.float32(0.5)).astype(np.uint8)
+    # The band's coverage rounds back to exactly the a it was given.
+    mask = (a > 0)[..., None]
+    return np.where(mask, res.astype(np.float32) / np.float32(255.0), rgb)
+
+
+def _grade_noise(rgb, a, settings, x0=0, y0=0):
+    """Add Noise: per-pixel hash noise, uniform or Box-Muller Gaussian, C ``noise_add_at``.
+
+    Same byte-domain discipline as ``_grade_grain``: the C kernel rounds in the
+    premultiplied domain, so the band's coverage goes through the identical
+    255/alpha unpremultiply-repremultiply chain.
+    """
+    amount = np.float32(settings['noiseAmount'])
+    spread = amount / np.float32(100.0) * np.float32(127.5)
+    height, width = rgb.shape[:2]
+    seed = _U32(settings['noiseSeed'])
+    px = _u32(x0 + np.arange(width, dtype=np.int64))[None, :]
+    py = _u32(y0 + np.arange(height, dtype=np.int64))[:, None]
+    base = _mix32(seed ^ _mix32(_u32(px * _U32(0x9e3779b9))
+                                ^ _mix32(_u32(py * _U32(0x85ebca6b)))))
+    base = np.broadcast_to(base, (height, width))
+
+    def unit(key):
+        return (_mix32(key) >> _U32(8)).astype(np.float32) * np.float32(1.0 / 16777216.0)
+
+    a8 = np.rint(a * np.float32(255.0)).astype(np.uint8)
+    a32 = a8.astype(np.float32)
+    straight = np.rint(np.clip(rgb, 0, 1) * np.float32(255.0)).astype(np.uint8).astype(np.float32)
+    out = rgb.copy()
+    for c in range(3):
+        key = base if settings['noiseMonochromatic'] \
+            else _u32(base + _u32(c * 0x9e3779b9))
+        if settings['noiseGaussian']:
+            u1, u2 = unit(key), unit(_u32(key ^ _U32(0x68e31da4)))
+            n = np.sqrt(np.float32(-2.0) * np.log(np.float32(1.0) - u1)) \
+                * np.cos(np.float32(6.2831853) * u2) * spread * np.float32(2.0 / 3.0)
+        else:
+            n = (unit(key) * np.float32(2.0) - np.float32(1.0)) * spread
+        value = straight[..., c] * np.float32(255.0) / a32 + n
+        value = np.clip(value, 0, 255)
+        pre = value * a32 / np.float32(255.0)
+        out[..., c] = np.where(a > 0, np.floor(pre + np.float32(0.5)) / np.float32(255.0),
+                               rgb[..., c])
+    return out
+
+
+def grade(rgb, record, x0=0.0, y0=0.0, units_per_pixel=1.0):
+    """Grade straight encoded RGB floats, preserving alpha in the caller.
+
+    ``x0``/``y0``/``units_per_pixel`` place the band in document space; only
+    the field adjustments (Grain, Add Noise) read them, so the pattern stays
+    fixed however the canvas splits its drawing.
+    """
     kind = record['kind']
     if kind == 'Invert':
         return 1 - rgb
@@ -389,6 +570,16 @@ def grade(rgb, record):
                               invert=record.get('invertRange', False))
     if kind == 'Curves':
         return _grade_curves(rgb, record['curves'])
+    if kind == 'Grain':
+        settings = record.get('grainSettings') or dict(amount=25, size=1.5, roughness=50, seed=0)
+        return _grade_grain(rgb, np.ones(rgb.shape[:2], np.float32), settings,
+                            x0, y0, units_per_pixel)
+    if kind == 'Add Noise':
+        settings = dict(noiseAmount=record.get('noiseAmount', 10),
+                        noiseGaussian=record.get('noiseGaussian', False),
+                        noiseMonochromatic=record.get('noiseMonochromatic', False),
+                        noiseSeed=record.get('noiseSeed', 0))
+        return _grade_noise(rgb, np.ones(rgb.shape[:2], np.float32), settings, int(x0), int(y0))
     if kind == 'Exposure':
         s = record.get('exposureSettings') or dict(exposure=0, offset=0, gamma=1)
         linear = np.where(rgb <= .04045, rgb / 12.92, ((rgb + .055) / 1.055) ** 2.4)
