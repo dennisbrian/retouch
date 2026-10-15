@@ -209,7 +209,7 @@ def test_open_requires_discard_and_failed_open_preserves_session(session, callba
         assert replacement.history.document.width == 3
         assert replacement.history.dirty
         assert not Path(session.workspace).exists()
-        assert len(loaded) == 68
+        assert len(loaded) == 80
     finally:
         replacement.close()
 
@@ -224,7 +224,7 @@ def test_save_and_export_gate_unapplied_strokes(session, callbacks, tmp_path):
         export(session, stroke_canvas(), 'PNG (8-bit sRGB)')
     assert not target.exists() and session.history.dirty
     result = save(session, str(target), None)
-    assert len(result) == 67 and not session.history.dirty
+    assert len(result) == 79 and not session.history.dirty
     np.testing.assert_array_equal(composite(load_project(target)),
                                   composite(session.history.document))
     path = export(session, None, 'PNG (8-bit sRGB)')
@@ -242,7 +242,7 @@ def test_save_and_export_gate_unapplied_strokes(session, callbacks, tmp_path):
 def test_ui_edit_callbacks_change_layer_and_restore_with_undo(session, callbacks):
     edits = [fn for fn in callbacks if fn.__name__ == 'edit']
     result = edits[0](session, session.selected_id, None, 'New name', False, 50, True)
-    assert len(result) == 67
+    assert len(result) == 79
     layer = session.selected()
     assert (layer.name, layer.visible, layer.opacity) == ('New name', False, 0.5)
     undo = next(fn for fn in edits if fn.__kwdefaults__['operation'] == 'undo')
@@ -295,7 +295,7 @@ def test_reset_mask_callback_reveals_layer_and_undo_restores_coverage(session, c
     painted = composite(session.history.document)
     assert not np.array_equal(painted, expected)
     result = edits['reset_mask'](session, lid, None)
-    assert len(result) == 67 and session.selected_id == lid
+    assert len(result) == 79 and session.selected_id == lid
     assert session.selected().mask is None
     np.testing.assert_array_equal(composite(session.history.document), expected)
     session.history.save(tmp_path / 'reset.comp')
@@ -373,7 +373,7 @@ def test_recipe_callbacks_attach_one_masked_layer_and_block_overlapping_jobs(ses
     render_worker(session.job.directory, Engine)
     session.job.status = 'completed'
     result = finish(session, None)
-    assert len(result) == 70 and session.job.finalized
+    assert len(result) == 82 and session.job.finalized
     assert session.selected().name == 'Retouch · natural'
     assert session.selected().opacity == 0.5
     assert composite(session.history.document)[0, 0].tolist() == [150, 150, 150, 255]
@@ -592,6 +592,207 @@ def test_new_adjustment_kinds_are_available_through_ui(session, callbacks, kind,
     settings = session.selected().adjustment
     assert settings['kind'] == kind
     assert expected_key in settings
+
+
+def _texture_curve_args(kind):
+    tables = [[[0, 0], [128, 170], [255, 255]],
+              [[0, 0], [128, 145], [255, 255]],
+              [[0, 0], [255, 255]], [[0, 0], [255, 255]]]
+    return [kind, 0, 0, 1, 0, 255, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0,
+            *tables, 35, 2.5, 65, 12345, 12.5, True, True]
+
+
+def test_adjustment_visibility_callbacks_match_their_registered_outputs():
+    from retouch.editor.adjustments import KINDS
+    with gr.Blocks() as app:
+        with gr.Tabs():
+            build_editor_tab()
+    kind = next(component for component in app.blocks.values()
+                if isinstance(component, gr.Radio) and component.label == 'Adjustment')
+    assert [choice[0] for choice in kind.choices] == list(KINDS)
+    visibility = [event for event in app.fns.values()
+                  if event.inputs == [kind] and event.fn]
+    assert len(visibility) == 2
+    for event in visibility:
+        for value in KINDS:
+            assert len(event.fn(value)) == len(event.outputs)
+
+
+def test_updating_imported_curves_preserves_hidden_settings(session, callbacks):
+    from retouch.editor.adjustments import adjustment
+    from retouch.editor.document import Layer
+    record = adjustment('Curves')
+    record['curves']['channel'] = 'Blue'
+    record['levels']['ranges'][0]['outputBlack'] = 12
+    record['hue'] = 8
+    layer = Layer('Imported curves', size=(8, 6), adjustment=record)
+    session.history.add_layer(layer)
+    session.selected_id = layer.id
+    update = next(fn for fn in callbacks if fn.__name__ == 'edit'
+                  and fn.__kwdefaults__['operation'] == 'update_grade')
+    update(session, layer.id, None, *_texture_curve_args('Curves'))
+    settings = session.selected().adjustment
+    assert settings['curves']['channel'] == 'Blue'
+    assert settings['levels']['ranges'][0]['outputBlack'] == 12
+    assert settings['hue'] == 8
+    assert record['curves']['channels'][0] == [{'x': 0, 'y': 0}, {'x': 255, 'y': 255}]
+
+
+@pytest.mark.parametrize('kind', ['Curves', 'Grain', 'Add Noise'])
+def test_curve_texture_controls_render_reload_update_and_undo(session, callbacks, tmp_path, kind):
+    from retouch.editor.adjustment_controls import curve_tables
+    edits = {fn.__kwdefaults__['operation']: fn for fn in callbacks if fn.__name__ == 'edit'}
+    base = session.selected().pixels.copy()
+    before = composite(session.history.document)
+    args = _texture_curve_args(kind)
+    view = edits['add_grade'](session, session.selected_id, None, *args)
+    layer_id = session.selected_id
+    settings = session.selected().adjustment
+    np.testing.assert_array_equal(session.history.document.layers[0].pixels, base)
+    rendered = composite(session.history.document)
+    assert not np.array_equal(rendered, before)
+    assert view[23] == kind
+    assert view[67:71] == tuple(curve_tables(settings))
+    assert '<svg' in view[78]
+    if kind == 'Grain':
+        assert view[71:75] == (35, 2.5, 65, 12345)
+    elif kind == 'Add Noise':
+        assert view[74:78] == (12345, 12.5, True, True)
+    else:
+        assert settings['curves']['channels'][1][1]['y'] == 145
+    target = tmp_path / (kind + '.comp')
+    session.history.save(target)
+    reopened = load_project(target)
+    assert reopened.layer(layer_id).adjustment == settings
+    np.testing.assert_array_equal(composite(reopened), rendered)
+    args[16] = [[0, 0], [128, 60], [255, 255]]
+    args[20] = 70
+    args[24] = 30
+    edits['update_grade'](session, layer_id, None, *args)
+    assert not np.array_equal(composite(session.history.document), rendered)
+    edits['undo'](session, layer_id, None)
+    np.testing.assert_array_equal(composite(session.history.document), rendered)
+    edits['redo'](session, layer_id, None)
+    assert not np.array_equal(composite(session.history.document), rendered)
+
+
+@pytest.mark.parametrize('points', [[], [[0, 0]], [[1, 0], [255, 255]],
+                                   [[0, 0], [128, 20], [128, 30], [255, 255]],
+                                   [[0, 0], [255, float('nan')]],
+                                   [[0, 0], [255, 256]], [[0, 0], [255, None]]])
+def test_invalid_curve_controls_preserve_history(session, callbacks, points):
+    add = next(fn for fn in callbacks if fn.__name__ == 'edit'
+               and fn.__kwdefaults__['operation'] == 'add_grade')
+    args = _texture_curve_args('Curves')
+    args[16] = points
+    revision = session.history.revision
+    with pytest.raises(gr.Error, match='curve'):
+        add(session, session.selected_id, None, *args)
+    assert session.history.revision == revision
+
+
+@pytest.mark.parametrize('seed', [-1, 2.5, float('inf'), 4294967296])
+def test_invalid_texture_seed_preserves_history(session, callbacks, seed):
+    add = next(fn for fn in callbacks if fn.__name__ == 'edit'
+               and fn.__kwdefaults__['operation'] == 'add_grade')
+    args = _texture_curve_args('Grain')
+    args[23] = seed
+    revision = session.history.revision
+    with pytest.raises(gr.Error, match='Seed'):
+        add(session, session.selected_id, None, *args)
+    assert session.history.revision == revision
+
+
+@pytest.mark.parametrize('mode', ['Replace', 'Add', 'Subtract', 'Intersect'])
+def test_automatic_selection_combines_without_editing_pixels(session, callbacks, monkeypatch, mode):
+    from retouch.editor import semantic_selection as sem
+    from retouch.editor.selections import combine
+    edit = next(fn for fn in callbacks if fn.__name__ == 'edit'
+                and fn.__kwdefaults__['operation'] == 'automatic_selection')
+    old = np.zeros((6, 8), np.uint8)
+    old[:, :4] = 255
+    new = np.zeros_like(old)
+    new[2:5, 2:6] = 128
+    session.selection = old.copy()
+    revision = session.history.revision
+    source = composite(session.history.document)
+    def infer(rgba, region, feather, workspace):
+        np.testing.assert_array_equal(rgba, source)
+        assert region == 'Skin' and feather == 3 and workspace == session.workspace
+        return new
+    monkeypatch.setattr(sem, 'automatic_selection', infer)
+    edit(session, session.selected_id, None, 'Skin', 3, mode)
+    np.testing.assert_array_equal(session.selection, combine(old, new, mode))
+    assert session.history.revision == revision
+    np.testing.assert_array_equal(composite(session.history.document), source)
+
+
+def test_automatic_selection_failure_and_stale_result_preserve_selection(session, callbacks, monkeypatch):
+    from retouch.editor import semantic_selection as sem
+    edit = next(fn for fn in callbacks if fn.__name__ == 'edit'
+                and fn.__kwdefaults__['operation'] == 'automatic_selection')
+    old = np.full((6, 8), 99, np.uint8)
+    session.selection = old.copy()
+    def fail(*args):
+        raise ValueError('No faces detected')
+    monkeypatch.setattr(sem, 'automatic_selection', fail)
+    revision = session.history.revision
+    with pytest.raises(gr.Error, match='No faces'):
+        edit(session, session.selected_id, None, 'Skin', 0, 'Replace')
+    assert session.history.revision == revision
+    np.testing.assert_array_equal(session.selection, old)
+    def stale(*args):
+        session.history.update_layer(session.selected_id, name='Concurrent edit')
+        return np.full((6, 8), 255, np.uint8)
+    monkeypatch.setattr(sem, 'automatic_selection', stale)
+    with pytest.raises(gr.Error, match='Document changed'):
+        edit(session, session.selected_id, None, 'Skin', 0, 'Replace')
+    np.testing.assert_array_equal(session.selection, old)
+
+
+def test_automatic_selection_applies_as_undoable_mask(session, callbacks, monkeypatch, tmp_path):
+    from retouch.editor import semantic_selection as sem
+    edits = {fn.__kwdefaults__['operation']: fn for fn in callbacks if fn.__name__ == 'edit'}
+    mask = np.zeros((6, 8), np.uint8)
+    mask[1:5, 2:6] = 255
+    monkeypatch.setattr(sem, 'automatic_selection', lambda *args: mask)
+    edits['automatic_selection'](session, session.selected_id, None, 'Eyes', 0, 'Replace')
+    pixels = session.selected().pixels.copy()
+    edits['selection_mask'](session, session.selected_id, None, 'Replace')
+    np.testing.assert_array_equal(session.selected().mask, mask)
+    np.testing.assert_array_equal(session.selected().pixels, pixels)
+    session.history.save(tmp_path / 'auto.comp')
+    np.testing.assert_array_equal(load_project(tmp_path / 'auto.comp').layer(session.selected_id).mask, mask)
+    session.history.undo()
+    assert session.selected().mask is None
+
+
+def test_local_retouch_callbacks_load_apply_save_and_reject_stale_drafts(session, callbacks, tmp_path):
+    load = next(fn for fn in callbacks if fn.__name__ == 'loading_local')
+    apply = next(fn for fn in callbacks if fn.__name__ == 'applying_local')
+    canvas, captured, _, discarded = load(session, None, None, False)
+    assert discarded is False and canvas['background'].shape == (6, 8, 4)
+    strokes = np.zeros((6, 8, 4), np.uint8)
+    strokes[2:4, 3:5] = [255, 0, 0, 128]
+    draft = {'layers': [strokes]}
+    with pytest.raises(gr.Error, match='Discard local strokes'):
+        load(session, None, draft, False)
+    with pytest.raises(gr.Error, match='layer-mask strokes'):
+        load(session, stroke_canvas(), None, False)
+    with pytest.raises(gr.Error, match='Create a selection'):
+        apply(session, captured, draft, None, 'Dodge', 100, 'Telea', True)
+    result = apply(session, captured, draft, None, 'Dodge', 100, 'Telea', False)
+    assert len(result) == 82
+    assert session.selected().name == 'Dodge'
+    assert result[-3]['layers'] == [] and result[-2].revision == session.history.revision
+    assert result[-2].revision != captured.revision
+    with pytest.raises(gr.Error, match='Document changed'):
+        apply(session, captured, draft, None, 'Dodge', 100, 'Telea', False)
+    path = tmp_path / 'local.comp'
+    session.history.save(path)
+    np.testing.assert_array_equal(composite(load_project(path)), composite(session.history.document))
+    assert session.history.undo()
+    assert len(session.history.document.layers) == 1
 
 
 def test_folder_brush_and_invalid_links_preserve_history(session, callbacks):

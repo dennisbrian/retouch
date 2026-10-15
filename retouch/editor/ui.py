@@ -16,6 +16,8 @@ import gradio as gr
 import numpy as np
 from PIL import Image, ImageCms, ImageOps
 
+from .adjustment_controls import controls_adjustment, curve_graph, curve_tables
+from .adjustments import CHANNELS, KINDS
 from .commands import DocumentHistory
 from .composite import RENDER_BLEND_MODES, composite, export_jpeg, export_png
 from .document import Document, Layer, MAX_SURFACE_PIXELS
@@ -312,6 +314,9 @@ def _tool_view(session):
     brightness = (settings.get('brightnessSettings') or {}).get('brightness', 0)
     contrast = (settings.get('contrastSettings') or {}).get('contrast', 0)
     hue = (settings.get('hueSettings') or {}).get('hue', 0)
+    tables = curve_tables(settings)
+    grain = settings.get('grainSettings') or {}
+    seed = grain.get('seed', 0) if settings.get('kind') == 'Grain' else settings.get('noiseSeed', 0)
     effects = layer.effects if layer and layer.effects else None
     shadow = effects.shadow if effects and effects.shadow else None
     overlay = effects.colorOverlay if effects and effects.colorOverlay else None
@@ -350,7 +355,11 @@ def _tool_view(session):
             glow_i is not None, glow_i.size if glow_i else 10,
             round((glow_i.opacity if glow_i else 0.75) * 100),
             gr.update(value=_hex_color(glow_i.red, glow_i.green, glow_i.blue) if glow_i else '#ffffff',
-                      visible=glow_i is not None))
+                      visible=glow_i is not None),
+            *tables, grain.get('amount', 25), grain.get('size', 1.5),
+            grain.get('roughness', 50), seed, settings.get('noiseAmount', 25),
+            settings.get('noiseGaussian', False), settings.get('noiseMonochromatic', False),
+            curve_graph(*tables))
 
 
 def _hex_color(red, green, blue):
@@ -507,13 +516,20 @@ def build_editor_tab():
                     wand_sample = gr.Radio(['Point', '3x3', '5x5'], value='Point', label='Wand sample size')
                     wand_contiguous = gr.Checkbox(label='Contiguous', value=True)
                     wand_button = gr.Button('Magic wand selection')
+                    from .semantic_selection import REGIONS
+                    semantic_region = gr.Dropdown(list(REGIONS), value='Skin', label='Automatic selection region')
+                    auto_select = gr.Button('Create automatic selection')
+                    gr.Markdown('Selects from the visible opaque composite, across all detected faces. '
+                                'Uses the Feather and Combine selection settings above. '
+                                'Masks are estimated at up to 2048 pixels and scaled to the canvas. '
+                                'Skin selects facial skin. Check the coverage preview, apply it to a layer mask, then refine '
+                                'with Reveal/Hide strokes. Hair and eye boundaries may need correction.')
                     mask_mode = gr.Radio(['Replace', 'Add', 'Subtract', 'Intersect'], value='Replace', label='Combine with layer mask')
                     mask_selection = gr.Button('Apply selection to selected layer mask')
                     gr.Markdown('Selections use canvas coordinates and remain temporary. '
                                 'Apply to a layer or folder mask to save them; this is one undo step.')
                 with gr.Accordion('Grading adjustment layers', open=False):
-                    grade_kind = gr.Radio(['Exposure', 'Levels', 'Invert', 'Saturation', 'Vibrance',
-                                           'Temperature', 'Tint', 'Brightness', 'Contrast', 'Hue'],
+                    grade_kind = gr.Radio(list(KINDS),
                                           value='Exposure', label='Adjustment')
                     grade_exposure = gr.Slider(-20, 20, value=0, step=.1, label='Exposure (stops)')
                     grade_offset = gr.Slider(-.5, .5, value=0, step=.01, label='Exposure offset (linear light)')
@@ -530,6 +546,34 @@ def build_editor_tab():
                     grade_brightness = gr.Slider(-100, 100, value=0, step=1, label='Brightness')
                     grade_contrast = gr.Slider(-100, 100, value=0, step=1, label='Contrast')
                     grade_hue = gr.Slider(-180, 180, value=0, step=1, label='Hue (degrees)')
+                    with gr.Group(visible=False) as curves_controls:
+                        gr.Markdown('Edit input/output points (0–255). Keep the first input at 0 '
+                                    'and the last at 255; add up to 32 rows in increasing input order. '
+                                    'RGB applies to all channels. The graph previews the curves; '
+                                    'click Add or Update to apply them to the image.')
+                        curve_inputs = []
+                        with gr.Tabs():
+                            for channel in CHANNELS:
+                                with gr.Tab(channel):
+                                    curve_inputs.append(gr.Dataframe(
+                                        value=[[0, 0], [255, 255]], headers=['Input', 'Output'],
+                                        datatype=['number', 'number'], type='array',
+                                        row_count=(2, 'dynamic'), col_count=(2, 'fixed'),
+                                        interactive=True, label=channel + ' curve'))
+                        curves_plot = gr.HTML(curve_graph(*curve_tables({})))
+                        reset_curves = gr.Button('Reset all curves to identity')
+                    with gr.Group(visible=False) as grain_controls:
+                        grain_amount = gr.Slider(0, 100, value=25, step=.1, label='Grain amount')
+                        grain_size = gr.Slider(.5, 20, value=1.5, step=.1, label='Grain size')
+                        grain_roughness = gr.Slider(0, 100, value=50, step=.1, label='Grain roughness')
+                    with gr.Group(visible=False) as noise_controls:
+                        noise_amount = gr.Slider(.1, 400, value=25, step=.1, label='Noise amount')
+                        noise_gaussian = gr.Checkbox(label='Gaussian noise', value=False)
+                        noise_monochromatic = gr.Checkbox(label='Monochromatic noise', value=False)
+                    with gr.Group(visible=False) as seed_controls:
+                        texture_seed = gr.Number(label='Grain / noise seed', value=0, precision=0,
+                                                 minimum=0, maximum=4294967295)
+                        gr.Markdown('The same seed keeps the texture repeatable after saving and reopening.')
                     add_grade = gr.Button('Add adjustment layer')
                     update_grade = gr.Button('Update selected adjustment')
                     gr.Markdown('Adjustments change the layers below and preserve alpha. '
@@ -619,6 +663,25 @@ def build_editor_tab():
                     label='JPEG quality', minimum=1, maximum=100, step=1, value=85)
                 jpeg_background = gr.ColorPicker(label='JPEG background', value='#ffffff')
                 download = gr.File(label='Export download', interactive=False)
+        with gr.Accordion('Local healing, dodge & burn', open=False):
+            local_capture = gr.State(None)
+            gr.Markdown('Load the visible composite, then paint the area to change. '
+                        'Apply creates a separate masked layer at native resolution. '
+                        'Local strokes are drafts until applied; saving keeps applied layers. '
+                        'If the document changes, reload and repaint.')
+            discard_local = gr.Checkbox(label='Discard local strokes when loading', value=False)
+            load_local = gr.Button('Load composite for local retouch')
+            local_canvas = gr.ImageEditor(
+                label='Paint local retouch region', type='numpy', image_mode='RGBA',
+                sources=(), transforms=(), format='png', height=500,
+                brush=gr.Brush(colors=['#ff3366'], color_mode='fixed', default_color='#ff3366'))
+            with gr.Row():
+                local_operation = gr.Radio(['Heal', 'Dodge', 'Burn'], value='Heal', label='Local operation')
+                heal_method = gr.Radio(['Telea', 'Navier-Stokes'], value='Telea', label='Healing method')
+            local_opacity = gr.Slider(1, 100, value=100, step=1, label='Local result opacity (%)')
+            limit_local = gr.Checkbox(label='Limit local strokes to the current selection', value=False)
+            apply_local = gr.Button('Apply local retouch as new layer')
+            local_status = gr.Markdown('Load a composite to start local retouch.')
         status = gr.Markdown('Open a photo or project to start.')
         outputs = [session, preview, layers, name, visible, opacity, mask_enabled,
                    canvas, undo, redo, status, blend, position_x, position_y, flip_x, flip_y,
@@ -632,7 +695,55 @@ def build_editor_tab():
                    effect_inner_shadow, inner_shadow_angle, inner_shadow_distance,
                    inner_shadow_blur, inner_shadow_opacity, inner_shadow_color,
                    effect_outer_glow, outer_glow_size, outer_glow_opacity, outer_glow_color,
-                   effect_inner_glow, inner_glow_size, inner_glow_opacity, inner_glow_color]
+                   effect_inner_glow, inner_glow_size, inner_glow_opacity, inner_glow_color,
+                   *curve_inputs, grain_amount, grain_size, grain_roughness, texture_seed,
+                   noise_amount, noise_gaussian, noise_monochromatic, curves_plot]
+
+        def loading_local(current, strokes, local_strokes, discard):
+            from .local_retouch import capture_composite
+            if current is None:
+                raise gr.Error('Open a document first')
+            if has_strokes(strokes):
+                raise gr.Error('Apply or erase the layer-mask strokes first.')
+            if has_strokes(local_strokes) and not discard:
+                raise gr.Error('Apply local retouch or choose Discard local strokes when loading.')
+            try:
+                brush, captured = capture_composite(current.history)
+            except (ValueError, OSError, cv2.error) as exc:
+                raise gr.Error(str(exc)) from exc
+            return brush, captured, 'Composite loaded. Paint the region to heal, dodge or burn.', False
+
+        load_local.click(loading_local, [session, canvas, local_canvas, discard_local],
+                         [local_canvas, local_capture, local_status, discard_local],
+                         concurrency_id='layer-editor')
+
+        def applying_local(current, captured, local_strokes, strokes, operation,
+                           amount, method, limit):
+            from .local_retouch import apply_local_retouch, capture_composite
+            if current is None:
+                raise gr.Error('Open a document first')
+            if has_strokes(strokes):
+                raise gr.Error('Apply or erase the layer-mask strokes first.')
+            if limit and current.selection is None:
+                raise gr.Error('Create a selection first, or turn off the selection limit.')
+            try:
+                layer_id = apply_local_retouch(
+                    current.history, captured, local_strokes, operation, amount, method,
+                    selection=current.selection if limit else None)
+                current.selected_id = layer_id
+                brush, captured = capture_composite(current.history)
+            except (ValueError, OSError, cv2.error) as exc:
+                raise gr.Error(str(exc)) from exc
+            return (*_view(current), brush, captured, operation + ' added as a masked layer. Undo restores the previous image.')
+
+        apply_local.click(applying_local,
+                          [session, local_capture, local_canvas, canvas, local_operation,
+                           local_opacity, heal_method, limit_local],
+                          outputs + [local_canvas, local_capture, local_status], concurrency_id='layer-editor')
+        local_operation.change(
+            lambda value: (gr.update(visible=value == 'Heal'),
+                           gr.update(value=100 if value == 'Heal' else 25)),
+            local_operation, [heal_method, local_opacity], queue=False)
 
         def recovery_choices():
             entries = list_recoveries()
@@ -802,7 +913,6 @@ def build_editor_tab():
                         old = current.selection if current.selection is not None else np.zeros(new.shape, np.uint8)
                         current.selection = combine(old, new, args[7])
                     elif operation == 'wand':
-                        from .composite import composite
                         from .selections import combine, wand_selection
                         doc = current.history.document
                         source = composite(doc)
@@ -817,6 +927,17 @@ def build_editor_tab():
                         # An empty Replace deselects, matching invert_selection.
                         current.selection = None if (not merged.any()
                                                      and args[5] == 'Replace') else merged
+                    elif operation == 'automatic_selection':
+                        from .semantic_selection import automatic_selection
+                        from .selections import combine
+                        doc = current.history.document
+                        captured = (doc.document_id, current.history.revision)
+                        new = automatic_selection(composite(doc), args[0], args[1], current.workspace)
+                        if captured != (current.history.document.document_id, current.history.revision):
+                            raise ValueError('Document changed; create the automatic selection again.')
+                        old = current.selection if current.selection is not None else np.zeros(new.shape, np.uint8)
+                        merged = combine(old, new, args[2])
+                        current.selection = merged if merged.any() else None
                     elif operation == 'clear_selection':
                         current.selection = None
                     elif operation == 'invert_selection':
@@ -847,8 +968,11 @@ def build_editor_tab():
                             raise ValueError('Create a selection first')
                         current.history.selection_mask(layer.id, current.selection, args[0])
                     elif operation in ('add_grade', 'update_grade'):
-                        from .adjustments import adjustment
-                        settings = adjustment(*args)
+                        control_args = ((*args[:16], list(args[16:20]), *args[20:])
+                                        if len(args) > 16 else args)
+                        settings = controls_adjustment(
+                            *control_args, existing=layer.adjustment
+                            if operation == 'update_grade' and layer else None)
                         if operation == 'update_grade':
                             if layer.adjustment is None:
                                 raise ValueError('Select an adjustment layer first')
@@ -916,7 +1040,7 @@ def build_editor_tab():
                                   (duplicate, 'duplicate'), (invert_mask, 'invert_mask'),
                                   (reset_mask, 'reset_mask'), (fit, 'fit'), (links, 'links'), (group, 'group'),
                                   (ungroup, 'ungroup'), (create_selection, 'selection'),
-                                  (wand_button, 'wand'),
+                                  (wand_button, 'wand'), (auto_select, 'automatic_selection'),
                                   (crop_canvas, 'crop'), (crop_selection, 'crop_selection'),
                                   (clear_selection, 'clear_selection'), (invert_selection, 'invert_selection'),
                                   (expand_selection, 'expand_selection'),
@@ -939,6 +1063,7 @@ def build_editor_tab():
                 'selection': [selection_kind, selection_x, selection_y, selection_width,
                               selection_height, polygon, feather, selection_mode],
                 'selection_mask': [mask_mode],
+                'automatic_selection': [semantic_region, feather, selection_mode],
                 'wand': [wand_x, wand_y, wand_tolerance, wand_sample,
                          wand_contiguous, selection_mode],
                 'expand_selection': [selection_amount],
@@ -948,11 +1073,15 @@ def build_editor_tab():
                 'add_grade': [grade_kind, grade_exposure, grade_offset, grade_gamma,
                               grade_black, grade_white, grade_red, grade_green, grade_blue,
                               grade_saturation, grade_vibrance, grade_temperature, grade_tint,
-                              grade_brightness, grade_contrast, grade_hue],
+                              grade_brightness, grade_contrast, grade_hue,
+                              *curve_inputs, grain_amount, grain_size, grain_roughness, texture_seed,
+                              noise_amount, noise_gaussian, noise_monochromatic],
                 'update_grade': [grade_kind, grade_exposure, grade_offset, grade_gamma,
                                  grade_black, grade_white, grade_red, grade_green, grade_blue,
                                  grade_saturation, grade_vibrance, grade_temperature, grade_tint,
-                                 grade_brightness, grade_contrast, grade_hue],
+                                 grade_brightness, grade_contrast, grade_hue,
+                                 *curve_inputs, grain_amount, grain_size, grain_roughness, texture_seed,
+                                 noise_amount, noise_gaussian, noise_monochromatic],
                 'apply_effects': [effect_stroke, stroke_size, stroke_inside, stroke_opacity,
                                   stroke_color, effect_shadow, shadow_angle, shadow_distance,
                                   shadow_blur, shadow_opacity, shadow_color, effect_overlay,
@@ -967,6 +1096,21 @@ def build_editor_tab():
             }
             extra = extras.get(operation, [])
             button.click(edit, [session, layers, canvas] + extra, outputs, concurrency_id='layer-editor')
+
+        grade_kind.change(
+            lambda kind: [gr.update(visible=kind == 'Curves'),
+                          gr.update(visible=kind == 'Grain'),
+                          gr.update(visible=kind == 'Add Noise'),
+                          gr.update(visible=kind in ('Grain', 'Add Noise'))],
+            grade_kind, [curves_controls, grain_controls, noise_controls, seed_controls], queue=False)
+        for table in curve_inputs:
+            table.input(curve_graph, curve_inputs, curves_plot, queue=False)
+
+        def reset_curve_controls():
+            tables = curve_tables({})
+            return (*tables, curve_graph(*tables))
+
+        reset_curves.click(reset_curve_controls, None, curve_inputs + [curves_plot], queue=False)
 
         # Show a shadow's or overlay's settings only while its effect is on.
         effect_stroke.change(

@@ -316,6 +316,90 @@ The first bridge therefore produces a new handoff per export.
 
 ## Current implementation and acceptance evidence
 
+### Local healing, dodge & burn — ✅ DONE 2026-10-15
+
+Layer Editor now has a dedicated composite brush canvas for Heal (Telea or
+Navier-Stokes), Dodge and Burn. Load the composite, paint, optionally limit
+strokes to the current selection, and apply. Each result is a cropped raster
+patch at native document coordinates, on a new top-level masked layer, using
+the existing `heal_region`/`apply_local_adjustment` implementations. Originals
+are untouched; changes are confined exactly to painted support. Soft stroke
+coverage is baked once, and layer opacity remains adjustable. Heal defaults
+to 100% result opacity; switching to Dodge/Burn defaults to 25%.
+
+`retouch/editor/local_retouch.py` validates the captured document/revision,
+brush dimensions, options and selection. Stale drafts cannot be applied to
+another revision. Reloading painted drafts requires explicit discard;
+applied layers participate in existing undo/redo, mask refinement and `.comp`
+save/reopen. Local drafts are not project data until applied. Transparent
+composites are refused. These are classical small-region healing tools;
+generative object removal and clone-source painting are outside this slice.
+
+Real-photo checks used the existing portrait crop, with a clearly labeled
+planted dust speck for healing and rectangular soft-alpha strokes for Dodge/
+Burn. Each operation preserved source pixels and all output outside its brush
+support, reopened pixel-exactly, and undid exactly. Browser pointer painting
+created a real Heal layer; its saved project has 655 changed pixels, preserves
+the source exactly, and preserves every pixel outside its 659-pixel mask.
+Temporary evidence: `/tmp/retouch-local-retouch/`.
+
+Delivery checks: editor/Compositor suites: **629 passed, 1 skipped, 3 deselected**.
+The three existing Swift-built native blend probes are excluded because of the
+local SDK/compiler mismatch; their recorded-fixture fallback passes separately.
+The fast repository gate passes
+423 tests with governance 0 errors/0 warnings. The fast gate skips Quality Lab
+threshold checks. No native renderer parity or broad photographic-quality
+certification is implied by these checks.
+
+### Automatic region selections — ✅ DONE 2026-10-15
+
+Layer Editor → Selections exposes Skin (facial skin), Hair, Eyes, Lips, Face,
+Person and Background. Create automatic selection samples the visible opaque
+composite, unions the requested region across detected faces, and combines it
+with the current document-space selection using Replace/Add/Subtract/Intersect.
+Existing feathering, selection-to-mask projection and Reveal/Hide brushing
+provide refinement. Creating a selection does not edit pixels or history;
+applying it to a layer mask is one undoable, saveable edit.
+
+`retouch/editor/semantic_selection.py` reuses Advanced Retouch's detector/parser
+masks in a separate main-thread worker. Inference is bounded to 2048 pixels on
+the long side, then scaled to native canvas coordinates; the worker has a
+120-second timeout and explicit model teardown. Failed/empty inference and
+changed document revisions preserve the old selection. Whole-frame person-mask
+fallbacks are refused. Transparent composites are explicitly unsupported.
+No detector, parser, engine, model or renderer changes.
+
+Focused selection/UI/recipe-worker suites: **154 passed**. Real-model Skin,
+Hair and Eyes overlays were inspected on a 1080 × 1440 cosplay contact sheet
+and a 360 × 480 individual portrait crop. Detection missed faces on the contact
+sheet; hair includes some headpiece coverage, so masks are reviewable estimates,
+not certified subject/edge accuracy. Temporary evidence lives in
+`/tmp/retouch-semantic-selection/`. Browser verification covers generating the
+facial-skin selection, applying it to an Exposure layer mask and saving.
+
+### Adjustment controls — ✅ DONE 2026-10-15
+
+`retouch/editor/ui.py` now exposes Curves, Grain and Add Noise in the adjustment
+picker. Curves use editable RGB/Red/Green/Blue input/output tables (2–32 points,
+0–255) with a graph using the renderer's interpolation and an identity reset.
+Grain exposes amount, size and roughness; noise exposes amount, Gaussian and
+monochromatic options. Both expose a repeatable seed. Selecting a layer restores
+its settings; Add/Update use existing history, masks, opacity and project saving.
+The graph updates while editing; image changes require Add or Update. Point
+tables are editable; dragging points directly on the graph is not implemented.
+
+Translation/validation is in `retouch/editor/adjustment_controls.py`; imported
+Curves' ancillary settings are retained on update. No renderer or engine changes.
+Focused UI/Curves/Grain/Noise suite: **117 passed, 1 skipped**. The broader
+editor/bridge run before the final visibility-wiring correction: **585 passed,
+1 skipped, 3 failed**; those three existing Core Image blend tests could not
+compile Swift fixtures with the local SDK/toolchain. All three pass using their
+existing recorded-fixture fallback. Syntax, governance and diff checks pass.
+Real-photo 1080 × 1440 composition with all three adjustments saves/reopens
+pixel-exactly. Browser verification in the editor preview covers loaded curve
+tables/graph, identity reset, Update, Save and Grain/Noise control visibility.
+Temporary evidence: `/tmp/retouch-adjustment-controls/` (not a tracked artifact).
+
 The original bridge was committed as `3819615`; it is no longer uncommitted
 WIP. The editor core, transactional history, Gradio UI, recipe workers, blend
 modes, resizing, placement, flips, duplicate/invert/reset masks and fit-to-canvas
