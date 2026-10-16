@@ -316,6 +316,29 @@ The first bridge therefore produces a new handoff per export.
 
 ## Current implementation and acceptance evidence
 
+### Click-to-place clone anchors — 2026-10-16
+
+After loading the local composite, choose Clone and **Load clone source picker**.
+Click the source texture on the photo (green cross), then the destination (pink
+cross). Source selection switches the picker to Destination automatically. The
+two points set the existing native-pixel X/Y offsets; numeric refinement remains
+available. Paint around the destination on the local retouch canvas and apply.
+The markers are preview annotations and never enter saved or sampled pixels.
+Changing either anchor recalculates the aligned offset. Reloading the picker
+clears anchors and offsets; document edits invalidate its captured revision.
+Anchor choices are temporary session controls, not saved project data.
+
+`retouch/editor/clone_picker.py` maps preview pixel centers into native document
+coordinates and retains a server-rendered preview. The picker never trusts
+browser image pixels. Focused picker/local-retouch/UI/recipe/worker checks:
+**159 passed**. Real-photo testing uses clicked anchors to repair a labeled
+planted background speck; donor pixels, untouched source, outside-stroke pixels,
+save/reopen and undo/redo remain exact. Full portrait and enlarged repair were
+inspected. Browser pointer clicks selected Source `(185, 171)` and Destination
+`(233, 219)`, producing offsets `(-48, -48)` and both markers. Temporary evidence:
+`/tmp/retouch-clone-picker/`. This is manual aligned cloning; automatic donor
+matching and a live moving donor overlay are outside this slice.
+
 ### Local clone tool — 2026-10-16
 
 Local retouch now offers **Clone**. Load the composite, choose Clone, set the
@@ -328,8 +351,8 @@ exist for every painted destination remaining after the optional selection limit
 
 The result is a cropped masked layer with adjustable opacity and existing
 save/reopen/undo support. Soft coverage is baked once. Pixels outside painted
-support and original source layers remain exact. Source placement currently
-uses numeric offsets; click-to-set anchors and a donor preview are not included.
+support and original source layers remain exact. Initial source placement used
+numeric offsets; the follow-up above adds click-to-set anchors on a preview.
 This is direct pixel copying, so matching donor texture and lighting is manual.
 
 Focused local-retouch, editor UI, recipe-layer and worker suites: **148 passed**.

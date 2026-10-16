@@ -849,6 +849,23 @@ def test_clone_controls_apply_offsets_and_refresh_capture(session, callbacks, tm
     np.testing.assert_array_equal(composite(session.history.document), before)
 
 
+def test_clone_picker_callbacks_map_clicks_and_refuse_stale_state(session, callbacks):
+    load_local = next(fn for fn in callbacks if fn.__name__ == 'loading_local')
+    load_picker = next(fn for fn in callbacks if fn.__name__ == 'loading_clone_picker')
+    pick = next(fn for fn in callbacks if fn.__name__ == 'picking_clone_point')
+    _, captured, _, _ = load_local(session, None, None, False)
+    image, placement, x, y, _, mode = load_picker(session, captured)
+    assert image.shape == (6, 8, 4) and (x, y, mode) == (0, 0, 'Source')
+    result = pick(session, placement, mode, gr.SelectData(None, dict(index=[1, 2], value=None)))
+    assert result[-1] == 'Destination'
+    result = pick(session, result[1], result[-1], gr.SelectData(None, dict(index=[5, 3], value=None)))
+    assert result[2:4] == (-4, -1)
+    assert session.history.revision == captured.revision
+    session.history.update_layer(session.selected_id, name='Changed')
+    with pytest.raises(gr.Error, match='Document changed'):
+        pick(session, result[1], 'Source', gr.SelectData(None, dict(index=[2, 2], value=None)))
+
+
 def test_extra_recipe_controls_are_independent_and_reload_after_reopen(session, callbacks, tmp_path):
     from retouch.editor import DocumentHistory
     from retouch.editor.retouch_jobs import render_worker

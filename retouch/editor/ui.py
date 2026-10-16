@@ -710,6 +710,15 @@ def build_editor_tab():
                             'copies texture from 50 pixels left. Out-of-canvas sources are refused.')
                 clone_x = gr.Number(value=0, precision=0, label='Clone source offset X (pixels)')
                 clone_y = gr.Number(value=0, precision=0, label='Clone source offset Y (pixels)')
+                show_clone_picker = gr.Button('Load clone source picker')
+                clone_placement = gr.State(None)
+                clone_target = gr.Radio(['Source', 'Destination'], value='Source', label='Point to pick')
+                clone_picker_image = gr.Image(label='Click source, then destination', type='numpy',
+                                              interactive=False, sources=(), format='png', height=400,
+                                              show_download_button=False)
+                clone_picker_status = gr.Markdown('Load the local composite, then load this picker. '
+                                                  'Green marks the source; pink marks the destination. '
+                                                  'Paint on the local retouch canvas above.')
             local_opacity = gr.Slider(1, 100, value=100, step=1, label='Local result opacity (%)')
             limit_local = gr.Checkbox(label='Limit local strokes to the current selection', value=False)
             apply_local = gr.Button('Apply local retouch as new layer')
@@ -778,6 +787,36 @@ def build_editor_tab():
                            gr.update(value=100 if value in ('Heal', 'Clone') else 25),
                            gr.update(visible=value == 'Clone')),
             local_operation, [heal_method, local_opacity, clone_controls], queue=False)
+
+        def loading_clone_picker(current, captured):
+            from .clone_picker import prepare_clone_picker
+            if current is None:
+                raise gr.Error('Open a document first')
+            try:
+                placement = prepare_clone_picker(current.history, captured)
+            except ValueError as exc:
+                raise gr.Error(str(exc)) from exc
+            return (placement.preview, placement, 0, 0, 'Click the source texture, then its destination.',
+                    'Source')
+
+        def picking_clone_point(current, placement, target, evt: gr.SelectData):
+            from .clone_picker import pick_clone_point
+            if current is None:
+                raise gr.Error('Open a document first')
+            try:
+                placement, image, offset, message = pick_clone_point(
+                    current.history, placement, evt.index, target)
+            except ValueError as exc:
+                raise gr.Error(str(exc)) from exc
+            return (image, placement, *offset, message,
+                    'Destination' if target == 'Source' else target)
+
+        clone_picker_outputs = [clone_picker_image, clone_placement, clone_x, clone_y,
+                                clone_picker_status, clone_target]
+        show_clone_picker.click(loading_clone_picker, [session, local_capture],
+                                clone_picker_outputs, concurrency_id='layer-editor')
+        clone_picker_image.select(picking_clone_point, [session, clone_placement, clone_target],
+                                  clone_picker_outputs, concurrency_id='layer-editor')
 
         def recovery_choices():
             entries = list_recoveries()
