@@ -1,4 +1,4 @@
-"""Brush-driven healing and dodge/burn as small, undoable overlay layers."""
+"""Brush-driven healing, cloning and dodge/burn as undoable overlay layers."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -60,7 +60,8 @@ def painted_mask(canvas: Any, capture: LocalCapture) -> np.ndarray:
 
 def apply_local_retouch(history: DocumentHistory, capture: LocalCapture, canvas: Any,
                         operation: str, opacity: float = 100, method: str = 'Telea',
-                        selection: np.ndarray | None = None) -> str:
+                        selection: np.ndarray | None = None,
+                        clone_offset: tuple[int, int] = (0, 0)) -> str:
     """Bake the existing op once into a masked patch; preserve all source layers."""
     doc = history.document
     if not isinstance(capture, LocalCapture):
@@ -68,13 +69,22 @@ def apply_local_retouch(history: DocumentHistory, capture: LocalCapture, canvas:
     if (capture.document_id, capture.revision, capture.size) != (
             doc.document_id, history.revision, (doc.width, doc.height)):
         raise ValueError('Document changed. Reload the composite and repaint before applying local retouch.')
-    if operation not in ('Heal', 'Dodge', 'Burn'):
-        raise ValueError('Choose Heal, Dodge or Burn.')
+    if operation not in ('Heal', 'Clone', 'Dodge', 'Burn'):
+        raise ValueError('Choose Heal, Clone, Dodge or Burn.')
     if (isinstance(opacity, bool) or not isinstance(opacity, (int, float))
             or not math.isfinite(opacity) or not 0 < opacity <= 100):
         raise ValueError('Result opacity must be greater than 0 and at most 100.')
     if method not in ('Telea', 'Navier-Stokes'):
         raise ValueError('Choose Telea or Navier-Stokes healing.')
+    if operation == 'Clone':
+        if (not isinstance(clone_offset, (tuple, list)) or len(clone_offset) != 2
+                or any(isinstance(v, bool) or not isinstance(v, (int, float))
+                       or not math.isfinite(v) or v != int(v)
+                       or abs(v) >= limit for v, limit in zip(clone_offset, capture.size))):
+            raise ValueError('Clone source offsets must be whole pixels within the canvas dimensions.')
+        dx, dy = map(int, clone_offset)
+        if dx == dy == 0:
+            raise ValueError('Set a nonzero clone source offset, then paint the destination.')
     mask = painted_mask(canvas, capture)
     if selection is not None:
         if selection.dtype != np.uint8 or selection.shape != mask.shape:
@@ -86,19 +96,30 @@ def apply_local_retouch(history: DocumentHistory, capture: LocalCapture, canvas:
     if not (pixels[..., 3] == 255).all():
         raise ValueError('Local retouch currently requires an opaque composite.')
     x, y, width, height = cv2.boundingRect(mask)
+    if operation == 'Clone' and (x + dx < 0 or y + dy < 0
+            or x + width + dx > doc.width or y + height + dy > doc.height):
+        raise ValueError('The clone source falls outside the canvas. Adjust the offset or repaint.')
     padding = max(32, 4 * _auto_radius(mask)) if operation == 'Heal' else 0
     left, top = max(0, x - padding), max(0, y - padding)
     right, bottom = min(doc.width, x + width + padding), min(doc.height, y + height + padding)
     coverage = mask[top:bottom, left:right]
     original = pixels[top:bottom, left:right]
-    bgr = cv2.cvtColor(original, cv2.COLOR_RGBA2BGR)
-    if operation == 'Heal':
-        result = heal_region(bgr, coverage.astype(np.float32) / 255,
-                             method='telea' if method == 'Telea' else 'ns')
+    if operation == 'Clone':
+        # Always sample the captured revision, including when source and target
+        # overlap. Blend soft strokes once; the layer mask carries support only.
+        donor = pixels[top + dy:bottom + dy, left + dx:right + dx]
+        alpha = coverage[..., None].astype(np.uint32)
+        result = ((donor.astype(np.uint32) * alpha
+                   + original.astype(np.uint32) * (255 - alpha) + 127) // 255).astype(np.uint8)
     else:
-        result = apply_local_adjustment(bgr, coverage.astype(np.float32) / 255,
-                                        operation.lower(), 1.0)
-    result = cv2.cvtColor(result, cv2.COLOR_BGR2RGBA)
+        bgr = cv2.cvtColor(original, cv2.COLOR_RGBA2BGR)
+        if operation == 'Heal':
+            result = heal_region(bgr, coverage.astype(np.float32) / 255,
+                                 method='telea' if method == 'Telea' else 'ns')
+        else:
+            result = apply_local_adjustment(bgr, coverage.astype(np.float32) / 255,
+                                            operation.lower(), 1.0)
+        result = cv2.cvtColor(result, cv2.COLOR_BGR2RGBA)
     support = coverage > 0
     # LAB round trips and healer feathering may touch other pixels. Enforce the
     # painted support exactly and do not multiply its soft alpha a second time.

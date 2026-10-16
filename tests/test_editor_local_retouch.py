@@ -142,3 +142,47 @@ def test_blank_canvas_does_not_create_a_healing_layer():
     with pytest.raises(ValueError, match='no visible change'):
         apply_local_retouch(edits, captured, brush(captured), 'Heal')
     assert edits.revision == revision
+
+
+@pytest.mark.parametrize('offset,alpha', [((-12, 0), 255), ((4, -9), 128), ((1, 0), 1)])
+def test_clone_samples_original_snapshot_with_exact_soft_coverage(tmp_path, offset, alpha):
+    doc = Document(96, 80)
+    rng = np.random.default_rng(8)
+    doc.add_image(rng.integers(0, 256, (80, 96, 3), dtype=np.uint8), 'Texture')
+    edits = DocumentHistory(doc, saved=True)
+    before = composite(edits.document)
+    source = doc.layers[0].pixels.copy()
+    _, captured = capture_composite(edits, preview_side=48)
+    strokes = brush(captured, alpha)
+    selection = np.zeros((80, 96), np.uint8)
+    selection[:, :48] = 255
+    mask = np.minimum(painted_mask(strokes, captured), selection)
+    ys, xs = np.nonzero(mask)
+    expected = before.copy()
+    a = mask[ys, xs, None].astype(np.uint32)
+    donor = before[ys + offset[1], xs + offset[0]].astype(np.uint32)
+    expected[ys, xs] = ((donor * a + before[ys, xs].astype(np.uint32) * (255-a) + 127) // 255)
+    lid = apply_local_retouch(edits, captured, strokes, 'Clone', selection=selection,
+                             clone_offset=offset)
+    np.testing.assert_array_equal(composite(edits.document), expected)
+    np.testing.assert_array_equal(edits.document.layers[0].pixels, source)
+    assert edits.document.layer(lid).name == 'Clone'
+    path = tmp_path / 'clone.comp'
+    edits.save(path)
+    np.testing.assert_array_equal(composite(load_project(path)), expected)
+    edits.undo()
+    np.testing.assert_array_equal(composite(edits.document), before)
+    edits.redo()
+    np.testing.assert_array_equal(composite(edits.document), expected)
+
+
+@pytest.mark.parametrize('offset', [(0, 0), (1.5, 0), (True, 0), (float('nan'), 0),
+                                    (float('inf'), 0), (96, 0), (-40, 0), (0, 60), (1,), None])
+def test_invalid_clone_source_preserves_document(offset):
+    edits = history()
+    before = composite(edits.document)
+    _, captured = capture_composite(edits)
+    with pytest.raises(ValueError, match='clone|Clone'):
+        apply_local_retouch(edits, captured, brush(captured), 'Clone', clone_offset=offset)
+    assert edits.revision == captured.revision and len(edits.document.layers) == 1
+    np.testing.assert_array_equal(composite(edits.document), before)

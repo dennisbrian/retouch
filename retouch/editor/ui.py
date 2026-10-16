@@ -22,6 +22,7 @@ from .commands import DocumentHistory
 from .composite import RENDER_BLEND_MODES, composite, export_jpeg, export_png
 from .document import Document, Layer, MAX_SURFACE_PIXELS
 from .project_store import load_project
+from .recipe_state import EXTRA_RECIPE_CONTROLS, RECIPE_OVERRIDE_SPECS
 from .recovery import Autosaver, discard_recovery, list_recoveries, load_recovery
 
 PREVIEW_SIDE = 1024
@@ -652,9 +653,22 @@ def build_editor_tab():
                 strength = gr.Slider(1, 100, value=100, step=1, label='Result layer strength')
                 recipe_mode = gr.Radio(['New layer', 'Regenerate selected recipe layer'],
                                        value='New layer', label='Recipe render target')
-                recipe_override = gr.Checkbox(label='Override recipe skin settings', value=False)
+                recipe_override = gr.Checkbox(label='Override smoothing and whitening', value=False)
                 recipe_smooth = gr.Slider(0, 100, value=30, step=1, label='Recipe skin smoothing', interactive=False)
                 recipe_whiten = gr.Slider(0, 100, value=0, step=1, label='Recipe skin whitening', interactive=False)
+                extra_recipe_inputs = []
+                with gr.Accordion('Eyes, blush, shadow fill and skin detail', open=False):
+                    gr.Markdown('Enable only the settings you want to override. Disabled settings '
+                                'use the chosen recipe. Skin detail retention runs from 0 to 1.')
+                    for control_name, label in EXTRA_RECIPE_CONTROLS.items():
+                        spec = RECIPE_OVERRIDE_SPECS[control_name]
+                        enabled = gr.Checkbox(label='Override ' + label.lower(), value=False)
+                        slider = gr.Slider(spec.min_val, spec.max_val, value=spec.default,
+                                           step=.01 if spec.max_val == 1 else 1,
+                                           label=label, interactive=False)
+                        enabled.change(lambda on: gr.update(interactive=on), enabled, slider,
+                                       queue=False)
+                        extra_recipe_inputs.extend([enabled, slider])
                 load_recipe = gr.Button('Load selected recipe settings')
                 gr.Markdown('New layers keep the original composite for later regeneration. '
                             'Regeneration uses that saved source, preserving the selected layer’s '
@@ -674,7 +688,7 @@ def build_editor_tab():
                     label='JPEG quality', minimum=1, maximum=100, step=1, value=85)
                 jpeg_background = gr.ColorPicker(label='JPEG background', value='#ffffff')
                 download = gr.File(label='Export download', interactive=False)
-        with gr.Accordion('Local healing, dodge & burn', open=False):
+        with gr.Accordion('Local healing, clone, dodge & burn', open=False):
             local_capture = gr.State(None)
             gr.Markdown('Load the visible composite, then paint the area to change. '
                         'Apply creates a separate masked layer at native resolution. '
@@ -687,8 +701,15 @@ def build_editor_tab():
                 sources=(), transforms=(), format='png', height=500,
                 brush=gr.Brush(colors=['#ff3366'], color_mode='fixed', default_color='#ff3366'))
             with gr.Row():
-                local_operation = gr.Radio(['Heal', 'Dodge', 'Burn'], value='Heal', label='Local operation')
+                local_operation = gr.Radio(['Heal', 'Clone', 'Dodge', 'Burn'], value='Heal', label='Local operation')
                 heal_method = gr.Radio(['Telea', 'Navier-Stokes'], value='Telea', label='Healing method')
+            with gr.Column(visible=False) as clone_controls:
+                gr.Markdown('Paint the destination. Each painted pixel copies from the visible '
+                            'composite at that pixel plus this source offset, in native image pixels. '
+                            'Negative X samples left; negative Y samples above. For example, X = -50 '
+                            'copies texture from 50 pixels left. Out-of-canvas sources are refused.')
+                clone_x = gr.Number(value=0, precision=0, label='Clone source offset X (pixels)')
+                clone_y = gr.Number(value=0, precision=0, label='Clone source offset Y (pixels)')
             local_opacity = gr.Slider(1, 100, value=100, step=1, label='Local result opacity (%)')
             limit_local = gr.Checkbox(label='Limit local strokes to the current selection', value=False)
             apply_local = gr.Button('Apply local retouch as new layer')
@@ -722,14 +743,14 @@ def build_editor_tab():
                 brush, captured = capture_composite(current.history)
             except (ValueError, OSError, cv2.error) as exc:
                 raise gr.Error(str(exc)) from exc
-            return brush, captured, 'Composite loaded. Paint the region to heal, dodge or burn.', False
+            return brush, captured, 'Composite loaded. Paint the region to heal, clone, dodge or burn.', False
 
         load_local.click(loading_local, [session, canvas, local_canvas, discard_local],
                          [local_canvas, local_capture, local_status, discard_local],
                          concurrency_id='layer-editor')
 
         def applying_local(current, captured, local_strokes, strokes, operation,
-                           amount, method, limit):
+                           amount, method, limit, source_x=0, source_y=0):
             from .local_retouch import apply_local_retouch, capture_composite
             if current is None:
                 raise gr.Error('Open a document first')
@@ -740,7 +761,8 @@ def build_editor_tab():
             try:
                 layer_id = apply_local_retouch(
                     current.history, captured, local_strokes, operation, amount, method,
-                    selection=current.selection if limit else None)
+                    selection=current.selection if limit else None,
+                    clone_offset=(source_x, source_y))
                 current.selected_id = layer_id
                 brush, captured = capture_composite(current.history)
             except (ValueError, OSError, cv2.error) as exc:
@@ -749,12 +771,13 @@ def build_editor_tab():
 
         apply_local.click(applying_local,
                           [session, local_capture, local_canvas, canvas, local_operation,
-                           local_opacity, heal_method, limit_local],
+                           local_opacity, heal_method, limit_local, clone_x, clone_y],
                           outputs + [local_canvas, local_capture, local_status], concurrency_id='layer-editor')
         local_operation.change(
             lambda value: (gr.update(visible=value == 'Heal'),
-                           gr.update(value=100 if value == 'Heal' else 25)),
-            local_operation, [heal_method, local_opacity], queue=False)
+                           gr.update(value=100 if value in ('Heal', 'Clone') else 25),
+                           gr.update(visible=value == 'Clone')),
+            local_operation, [heal_method, local_opacity, clone_controls], queue=False)
 
         def recovery_choices():
             entries = list_recoveries()
@@ -1217,7 +1240,8 @@ def build_editor_tab():
         from .retouch_jobs import prepare_job, run_job, attach_result
 
         def prepare_recipe(current, chosen_recipe, chosen_strength, strokes,
-                           target_mode='New layer', use_overrides=False, smooth=30, whiten=0):
+                           target_mode='New layer', use_overrides=False, smooth=30, whiten=0,
+                           *extra_values):
             if current is None:
                 raise gr.Error('Open a document first')
             if has_strokes(strokes):
@@ -1231,6 +1255,12 @@ def build_editor_tab():
                 if target_mode != 'New layer' and target is None:
                     raise ValueError('Select a recipe layer first')
                 overrides = dict(smooth=smooth, whiten=whiten) if use_overrides else {}
+                if extra_values and len(extra_values) != len(extra_recipe_inputs):
+                    raise ValueError('Incomplete recipe controls; reload the editor')
+                for name, enabled, value in zip(EXTRA_RECIPE_CONTROLS,
+                                                extra_values[::2], extra_values[1::2]):
+                    if enabled:
+                        overrides[name] = value
                 current.job = prepare_job(current.history, current.workspace, chosen_recipe,
                                           chosen_strength, target_layer_id=target, overrides=overrides)
             except (ValueError, OSError) as exc:
@@ -1274,13 +1304,20 @@ def build_editor_tab():
             layer = current.selected()
             settings = layer.recipe_settings
             overrides = settings['overrides']
-            return (settings['recipe'], layer.opacity * 100, bool(overrides),
-                    overrides.get('smooth', 30), overrides.get('whiten', 0),
-                    'Regenerate selected recipe layer', 'Saved recipe settings loaded.')
+            extras = []
+            for name in EXTRA_RECIPE_CONTROLS:
+                enabled = name in overrides
+                extras.extend([enabled, gr.update(value=overrides.get(name, RECIPE_OVERRIDE_SPECS[name].default),
+                                                  interactive=enabled)])
+            skin_enabled = 'smooth' in overrides or 'whiten' in overrides
+            return (settings['recipe'], layer.opacity * 100, skin_enabled,
+                    gr.update(value=overrides.get('smooth', 30), interactive=skin_enabled),
+                    gr.update(value=overrides.get('whiten', 0), interactive=skin_enabled),
+                    'Regenerate selected recipe layer', 'Saved recipe settings loaded.', *extras)
 
         load_recipe.click(loading_recipe_settings, session,
                           [recipe, strength, recipe_override, recipe_smooth, recipe_whiten,
-                           recipe_mode, render_status], concurrency_id='layer-editor')
+                           recipe_mode, render_status] + extra_recipe_inputs, concurrency_id='layer-editor')
 
         def cancel_recipe(current):
             if current is None or current.job is None:
@@ -1289,7 +1326,7 @@ def build_editor_tab():
             return 'Cancellation requested; no cancelled result will be attached.'
 
         render.click(prepare_recipe, [session, recipe, strength, canvas, recipe_mode,
-                                      recipe_override, recipe_smooth, recipe_whiten],
+                                      recipe_override, recipe_smooth, recipe_whiten] + extra_recipe_inputs,
                      [session, render_status, render, cancel], concurrency_id='layer-editor').success(
             rendering, session, render_status, concurrency_id='layer-editor-recipe').then(
             finish_recipe, [session, canvas], outputs + [render_status, render, cancel],

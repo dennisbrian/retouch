@@ -811,7 +811,11 @@ def test_recipe_controls_reload_and_regenerate_selected_layer(session, callbacks
     session.job.status = 'completed'
     finish(session, None)
     lid = session.selected_id
-    assert load(session)[:6] == ('natural', 60, True, 20, 5, 'Regenerate selected recipe layer')
+    loaded = load(session)
+    assert loaded[:3] == ('natural', 60, True)
+    assert loaded[3]['value'] == 20 and loaded[4]['value'] == 5
+    assert loaded[3]['interactive'] and loaded[4]['interactive']
+    assert loaded[5] == 'Regenerate selected recipe layer'
     prepare(session, 'natural', 100, None, 'Regenerate selected recipe layer', True, 20, 5)
     render_worker(session.job.directory, Engine)
     session.job.status = 'completed'
@@ -819,6 +823,65 @@ def test_recipe_controls_reload_and_regenerate_selected_layer(session, callbacks
     assert session.selected_id == lid and len(session.history.document.layers) == 2
     assert session.selected().opacity == .6
     assert 'regenerated' in result[-3]
+
+
+def test_clone_controls_apply_offsets_and_refresh_capture(session, callbacks, tmp_path):
+    load = next(fn for fn in callbacks if fn.__name__ == 'loading_local')
+    apply = next(fn for fn in callbacks if fn.__name__ == 'applying_local')
+    image = np.full((6, 8, 3), 100, np.uint8)
+    image[:, :3] = [30, 60, 90]
+    from retouch.editor.document import Layer
+    session.history.add_layer(Layer('Texture', pixels=image))
+    before = composite(session.history.document)
+    _, captured, _, _ = load(session, None, None, False)
+    strokes = np.zeros((6, 8, 4), np.uint8)
+    strokes[2:4, 4:6] = [255, 0, 0, 255]
+    result = apply(session, captured, {'layers': [strokes]}, None,
+                   'Clone', 100, 'Telea', False, -3, 0)
+    assert session.selected().name == 'Clone'
+    assert result[-2].revision == session.history.revision
+    after = composite(session.history.document)
+    np.testing.assert_array_equal(after[2:4, 4:6], before[2:4, 1:3])
+    np.testing.assert_array_equal(after[strokes[..., 3] == 0], before[strokes[..., 3] == 0])
+    session.history.save(tmp_path / 'clone.comp')
+    np.testing.assert_array_equal(composite(load_project(tmp_path / 'clone.comp')), after)
+    session.history.undo()
+    np.testing.assert_array_equal(composite(session.history.document), before)
+
+
+def test_extra_recipe_controls_are_independent_and_reload_after_reopen(session, callbacks, tmp_path):
+    from retouch.editor import DocumentHistory
+    from retouch.editor.retouch_jobs import render_worker
+    prepare = next(fn for fn in callbacks if fn.__name__ == 'prepare_recipe')
+    finish = next(fn for fn in callbacks if fn.__name__ == 'finish_recipe')
+    load = next(fn for fn in callbacks if fn.__name__ == 'loading_recipe_settings')
+    expected = dict(iris_pop=35, blush=0, face_shadow_fill=40, texture_opacity=.65)
+    class Engine:
+        def process(self, image, recipe, quality, **overrides):
+            assert overrides == expected  # disabled controls retain recipe values; zero is explicit
+            return np.full_like(image, 160)
+    extras = (True, 35, False, 99, True, 0, False, 99, True, 40, True, .65)
+    prepare(session, 'natural', 80, None, 'New layer', False, 30, 0, *extras)
+    render_worker(session.job.directory, Engine)
+    session.job.status = 'completed'
+    finish(session, None)
+    lid = session.selected_id
+    target = tmp_path / 'expanded.comp'
+    session.history.save(target)
+    session.history = DocumentHistory(load_project(target), saved=True)
+    loaded = load(session)
+    assert loaded[2] is False
+    assert loaded[7::2] == (True, False, True, False, True, True)
+    for update, enabled, value in zip(loaded[8::2], extras[::2], extras[1::2]):
+        assert update['interactive'] is enabled
+        if enabled:
+            assert update['value'] == value
+    prepare(session, 'natural', 100, None, 'Regenerate selected recipe layer', False, 30, 0, *extras)
+    render_worker(session.job.directory, Engine)
+    session.job.status = 'completed'
+    finish(session, None)
+    assert session.selected_id == lid and len(session.history.document.layers) == 2
+    assert session.selected().recipe_settings['overrides'] == expected
 
 
 def test_folder_brush_and_invalid_links_preserve_history(session, callbacks):

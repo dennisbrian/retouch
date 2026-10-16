@@ -9,6 +9,18 @@ from retouch.editor import Document, DocumentHistory, composite, load_project
 from retouch.editor.retouch_jobs import prepare_job, render_worker, attach_result
 
 
+@pytest.mark.parametrize('name,value', [
+    ('iris_pop', -1), ('catchlight', 101), ('blush', True),
+    ('nose_tip_blush', float('nan')), ('face_shadow_fill', float('inf')),
+    ('texture_opacity', 1.01), ('texture_opacity', -0.01), ('arbitrary', 5),
+])
+def test_invalid_recipe_overrides_rejected_before_job_files(tmp_path, name, value):
+    history = DocumentHistory(Document(8, 6))
+    with pytest.raises(ValueError):
+        prepare_job(history, tmp_path, 'natural', 100, overrides={name: value})
+    assert list(tmp_path.iterdir()) == []
+
+
 class Engine:
     def process(self, bgr, recipe, quality, **overrides):
         assert bgr[0, 0].tolist() == [80, 40, 10]  # always the original composite

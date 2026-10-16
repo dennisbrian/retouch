@@ -316,6 +316,54 @@ The first bridge therefore produces a new handoff per export.
 
 ## Current implementation and acceptance evidence
 
+### Local clone tool — 2026-10-16
+
+Local retouch now offers **Clone**. Load the composite, choose Clone, set the
+source X/Y offset in native document pixels, paint the destination and apply.
+Negative X samples left; negative Y samples above. The offset stays aligned
+across the stroke. Sampling uses the visible composite at the captured revision,
+including overlapping donor/destination areas. Zero, fractional, invalid or
+out-of-canvas source offsets are refused without changing history. Sources must
+exist for every painted destination remaining after the optional selection limit.
+
+The result is a cropped masked layer with adjustable opacity and existing
+save/reopen/undo support. Soft coverage is baked once. Pixels outside painted
+support and original source layers remain exact. Source placement currently
+uses numeric offsets; click-to-set anchors and a donor preview are not included.
+This is direct pixel copying, so matching donor texture and lighting is manual.
+
+Focused local-retouch, editor UI, recipe-layer and worker suites: **148 passed**.
+Governance: **0 errors, 0 warnings**. Tests cover overlapping donors, soft alpha,
+native coordinates from a reduced preview, selections and invalid sources. A
+real portrait with a labeled planted background speck changed exactly 49 pixels;
+donor pixels, outside support, source preservation, save/reopen and undo/redo
+were exact. The full portrait and enlarged repair were inspected. Browser checks
+loaded the composite, selected Clone, exposed its source controls, hid the
+healing-method picker and accepted a negative X offset. Browser pointer painting
+was not repeated for this slice; callback tests exercise apply/save/undo. Temporary
+evidence: `/tmp/retouch-clone/`.
+
+### Expanded editable recipe controls — 2026-10-16
+
+The recipe section now includes independent overrides for Iris Pop, eye
+catchlights, cheek blush, nose tip blush, face shadow fill and skin detail
+retention (`texture_opacity`, 0–1). Disabled controls defer to the chosen recipe;
+enabled zero values explicitly disable that effect. Smoothing/whitening retain
+their existing shared override switch. Engine ParamSpec ranges and defaults
+drive the new controls and saved-setting validation. Loading a saved recipe
+restores both values and enabled states, including slider interactivity.
+Existing smoothing/whitening-only projects still load.
+
+Focused editor UI, recipe-layer and worker checks: **115 passed**; governance:
+**0 errors, 0 warnings**. A real portrait rendered with all six new overrides,
+saved/reopened and regenerated the same layer: 11,286 pixels differed from
+the recipe-only render; original source, save/reopen composite and undo were
+exact. Both rendered images were inspected. This verifies this portrait and
+settings path, rather than broad photographic quality. Browser verification
+restored all six saved values and override switches, and disabling Iris Pop
+disabled only its own slider. Temporary evidence:
+`/tmp/retouch-expanded-controls/`.
+
 ### Re-editable recipe layers — ✅ DONE 2026-10-16
 
 New recipe results retain the original captured composite and versioned recipe
