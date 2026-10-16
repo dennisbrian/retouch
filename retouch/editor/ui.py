@@ -81,6 +81,7 @@ def preview_document(document):
     preview.layers = []
     for original in document.layers:
         layer = copy(original)
+        layer.recipe_source = layer.recipe_settings = None  # preview-only raster copies
         layer.origin = tuple(round(v * scale) for v in original.origin)
         layer.size = tuple(max(1, round(v * scale)) for v in original.size)
         if original.mask_placement is not None:
@@ -649,7 +650,17 @@ def build_editor_tab():
                 from retouch.recipes import RECIPES
                 recipe = gr.Dropdown(label='Retouch recipe', choices=sorted(RECIPES), value='natural')
                 strength = gr.Slider(1, 100, value=100, step=1, label='Result layer strength')
-                render = gr.Button('Render recipe into new layer')
+                recipe_mode = gr.Radio(['New layer', 'Regenerate selected recipe layer'],
+                                       value='New layer', label='Recipe render target')
+                recipe_override = gr.Checkbox(label='Override recipe skin settings', value=False)
+                recipe_smooth = gr.Slider(0, 100, value=30, step=1, label='Recipe skin smoothing', interactive=False)
+                recipe_whiten = gr.Slider(0, 100, value=0, step=1, label='Recipe skin whitening', interactive=False)
+                load_recipe = gr.Button('Load selected recipe settings')
+                gr.Markdown('New layers keep the original composite for later regeneration. '
+                            'Regeneration uses that saved source, preserving the selected layer’s '
+                            'mask, opacity, placement and name. Later edits underneath are not '
+                            'included; choose New layer to capture a fresh composite.')
+                render = gr.Button('Render recipe')
                 cancel = gr.Button('Cancel recipe render', interactive=False)
                 render_status = gr.Markdown('Recipe renderer ready.')
                 save_path = gr.Textbox(label='Save project folder', placeholder='/path/to/photo.comp')
@@ -1198,9 +1209,15 @@ def build_editor_tab():
             exporting_jpeg, [session, canvas, jpeg_quality, jpeg_background],
             download, concurrency_id='layer-editor')
 
+        recipe_mode.change(lambda mode: gr.update(interactive=mode == 'New layer'),
+                           recipe_mode, strength, queue=False)
+        recipe_override.change(lambda enabled: [gr.update(interactive=enabled)] * 2,
+                               recipe_override, [recipe_smooth, recipe_whiten], queue=False)
+
         from .retouch_jobs import prepare_job, run_job, attach_result
 
-        def prepare_recipe(current, chosen_recipe, chosen_strength, strokes):
+        def prepare_recipe(current, chosen_recipe, chosen_strength, strokes,
+                           target_mode='New layer', use_overrides=False, smooth=30, whiten=0):
             if current is None:
                 raise gr.Error('Open a document first')
             if has_strokes(strokes):
@@ -1208,7 +1225,14 @@ def build_editor_tab():
             if current.job and not current.job.finalized:
                 raise gr.Error('A recipe render is already active')
             try:
-                current.job = prepare_job(current.history, current.workspace, chosen_recipe, chosen_strength)
+                if target_mode not in ('New layer', 'Regenerate selected recipe layer'):
+                    raise ValueError('Choose a recipe render target')
+                target = current.selected_id if target_mode != 'New layer' else None
+                if target_mode != 'New layer' and target is None:
+                    raise ValueError('Select a recipe layer first')
+                overrides = dict(smooth=smooth, whiten=whiten) if use_overrides else {}
+                current.job = prepare_job(current.history, current.workspace, chosen_recipe,
+                                          chosen_strength, target_layer_id=target, overrides=overrides)
             except (ValueError, OSError) as exc:
                 raise gr.Error(str(exc)) from exc
             return (current, 'Recipe and document revision captured.',
@@ -1233,7 +1257,8 @@ def build_editor_tab():
                         current.job.status = 'stale'
                         raise ValueError('Unapplied strokes changed the canvas; apply them and rerun the recipe')
                     current.selected_id = attach_result(current.history, current.job)
-                    message = 'Recipe result added as a new masked layer.'
+                    message = ('Recipe layer regenerated; its mask and properties were preserved.'
+                               if current.job.target_layer_id else 'Recipe result added as a new masked layer.')
                 except (ValueError, OSError) as exc:
                     message = str(exc)
             # Keep unapplied strokes on rejection; never silently clear the canvas.
@@ -1243,13 +1268,28 @@ def build_editor_tab():
             current.job.finalized = True
             return (*view, message, gr.update(interactive=True), gr.update(interactive=False))
 
+        def loading_recipe_settings(current):
+            if current is None or current.selected() is None or current.selected().recipe_settings is None:
+                raise gr.Error('Select a recipe layer with saved settings first')
+            layer = current.selected()
+            settings = layer.recipe_settings
+            overrides = settings['overrides']
+            return (settings['recipe'], layer.opacity * 100, bool(overrides),
+                    overrides.get('smooth', 30), overrides.get('whiten', 0),
+                    'Regenerate selected recipe layer', 'Saved recipe settings loaded.')
+
+        load_recipe.click(loading_recipe_settings, session,
+                          [recipe, strength, recipe_override, recipe_smooth, recipe_whiten,
+                           recipe_mode, render_status], concurrency_id='layer-editor')
+
         def cancel_recipe(current):
             if current is None or current.job is None:
                 return 'No active recipe render.'
             current.job.cancel()
             return 'Cancellation requested; no cancelled result will be attached.'
 
-        render.click(prepare_recipe, [session, recipe, strength, canvas],
+        render.click(prepare_recipe, [session, recipe, strength, canvas, recipe_mode,
+                                      recipe_override, recipe_smooth, recipe_whiten],
                      [session, render_status, render, cancel], concurrency_id='layer-editor').success(
             rendering, session, render_status, concurrency_id='layer-editor-recipe').then(
             finish_recipe, [session, canvas], outputs + [render_status, render, cancel],

@@ -316,6 +316,41 @@ The first bridge therefore produces a new handoff per export.
 
 ## Current implementation and acceptance evidence
 
+### Re-editable recipe layers — ✅ DONE 2026-10-16
+
+New recipe results retain the original captured composite and versioned recipe
+settings. Select the result, click **Load selected recipe settings**, choose a
+recipe and optional smoothing/whitening overrides, then render with **Regenerate
+selected recipe layer**. The result replaces that layer in one undo step,
+preserving its ID, name, mask, opacity, transform, clipping and folder placement.
+Regeneration always uses the stored original, including after save/reopen; it
+does not repeatedly retouch the previous result or include later lower-layer
+edits. New layer captures a fresh composite. Older raster-only results cannot
+recover a missing original source and are explicitly refused for regeneration.
+
+The native version-11 manifest is unchanged. Retouch writes a validated
+`retouch-recipes.json` extension plus `<layer-id>.recipe-source.png` assets in
+the transactional project package. Document/layer binding, checksums, path
+safety, schema validation and PNG limits prevent changed/missing/foreign source
+data from being used. Other apps may discard this Retouch-specific extension;
+if they retain it while changing raster pixels, reopening refuses the mismatch.
+Recipe names use the installed recipe definitions; this is not a frozen engine
+or recipe-definition archive. Original buffers count toward document and undo
+memory budgets. Duplication and recovery retain editability; explicit generic
+pixel replacement drops it. Preview-only raster copies exclude provenance.
+
+Editor/Compositor checks: **644 passed, 1 skipped, 3 deselected** (existing Swift
+compiler/SDK mismatch; native renderer code is unchanged). A real-photo render
+at smoothing 10 was saved/reopened and regenerated at 60: 2,514 pixels changed;
+stored source and layer identity remained exact, save/reopen was pixel-exact,
+and undo restored the prior output exactly. Browser verification loaded the
+saved controls, changed smoothing to 60, regenerated the same layer and saved;
+independent reopening matched the real-engine output exactly. Temporary evidence:
+`/tmp/retouch-recipe-layer/`. Focused tests additionally cover changed masks and
+transforms, detached metadata, duplicate layers, memory accounting, missing and
+tampered sources, invalid sidecars and stale jobs. No broader photo-quality or
+native-app round-trip certification is implied.
+
 ### Local healing, dodge & burn — ✅ DONE 2026-10-15
 
 Layer Editor now has a dedicated composite brush canvas for Heal (Telea or

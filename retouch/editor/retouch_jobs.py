@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import cv2
@@ -19,6 +19,7 @@ from PIL import Image
 
 from .composite import composite
 from .document import Layer
+from .recipe_state import validate_overrides
 
 
 @dataclass
@@ -32,6 +33,9 @@ class RetouchJob:
     attached: bool = False
     finished: bool = False
     finalized: bool = False
+    target_layer_id: str = None
+    overrides: dict = field(default_factory=dict)
+    source_revision: int = 0
 
     @property
     def stop(self):
@@ -42,21 +46,35 @@ class RetouchJob:
             self.stop.touch(exist_ok=True)
 
 
-def prepare_job(history, workspace, recipe, strength):
+def prepare_job(history, workspace, recipe, strength, target_layer_id=None, overrides=None):
     from retouch.recipes import RECIPES
     if recipe not in RECIPES:
         raise ValueError('Choose an available recipe')
     if not np.isfinite(strength) or not 0 < strength <= 100:
         raise ValueError('Result strength must be greater than 0 and at most 100')
+    overrides = dict(overrides) if overrides is not None else {}
+    validate_overrides(overrides)
+    revision = history.revision
     document = history.document
-    pixels = composite(document)
+    source_revision = revision
+    if target_layer_id is not None:
+        layer = document.layer(target_layer_id)
+        if layer.recipe_source is None:
+            raise ValueError('Select a recipe layer with a saved source; older raster results cannot be regenerated')
+        pixels = layer.recipe_source
+        source_revision = layer.recipe_settings['source_revision']
+    else:
+        pixels = composite(document)
     if not (pixels[..., 3] == 255).all():
         raise ValueError('Recipe rendering currently requires an opaque composite')
+    if (history.document.document_id, history.revision) != (document.document_id, revision):
+        raise ValueError('Document changed while capturing the recipe source; try again')
     directory = Path(workspace) / ('recipe-' + uuid.uuid4().hex)
     directory.mkdir()
     Image.fromarray(pixels).save(directory / 'input.png')
-    (directory / 'settings.json').write_text(json.dumps({'recipe': recipe}))
-    return RetouchJob(directory, document.document_id, history.revision, recipe, float(strength))
+    (directory / 'settings.json').write_text(json.dumps({'recipe': recipe, 'overrides': overrides}))
+    return RetouchJob(directory, document.document_id, revision, recipe, float(strength),
+                      target_layer_id=target_layer_id, overrides=overrides, source_revision=source_revision)
 
 
 def render_worker(directory, engine_factory=None):
@@ -68,6 +86,8 @@ def render_worker(directory, engine_factory=None):
             raise InterruptedError('Recipe job cancelled')
     checkpoint()
     settings = json.loads((directory / 'settings.json').read_text())
+    overrides = settings.get('overrides', {})
+    validate_overrides(overrides)
     with Image.open(directory / 'input.png') as image:
         rgba = np.asarray(image.convert('RGBA'))
     if engine_factory is None:
@@ -77,8 +97,13 @@ def render_worker(directory, engine_factory=None):
     engine = engine_factory()
     checkpoint()
     print('Rendering recipe: ' + settings['recipe'], flush=True)
-    result = engine.process(cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGR),
-                            recipe=settings['recipe'], quality='full')
+    try:
+        result = engine.process(cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGR),
+                                recipe=settings['recipe'], quality='full', **overrides)
+    finally:
+        close = getattr(engine, 'close', None)
+        if callable(close):
+            close()
     checkpoint()
     if result.dtype != np.uint8 or result.shape != rgba[..., :3].shape:
         raise ValueError('Engine returned unexpected pixel dimensions or precision')
@@ -161,17 +186,27 @@ def attach_result(history, job):
     if (document.document_id, history.revision) != (job.document_id, job.revision):
         job.status = 'stale'
         raise ValueError('Document changed while rendering; rerun the recipe on the current revision')
+    with Image.open(job.directory / 'input.png') as image:
+        source = np.asarray(image.convert('RGBA'))
     with Image.open(job.directory / 'result.png') as image:
-        if image.size != (document.width, document.height):
+        if image.size != (source.shape[1], source.shape[0]):
             raise ValueError('Recipe result dimensions do not match the captured document')
         pixels = np.asarray(image.convert('RGBA'))
     if not (pixels[..., 3] == 255).all():
         raise ValueError('Recipe result is not opaque')
-    layer = Layer('Retouch · ' + job.recipe, pixels=pixels, opacity=job.strength / 100,
-                  mask=np.full((document.height, document.width), 255, np.uint8))
-    history.add_layer(layer)
+    settings = dict(version=1, recipe=job.recipe, overrides=dict(job.overrides),
+                    source_revision=job.source_revision)
+    if job.target_layer_id:
+        history.replace_recipe_result(job.target_layer_id, pixels, source, settings)
+        layer_id = job.target_layer_id
+    else:
+        layer = Layer('Retouch · ' + job.recipe, pixels=pixels, opacity=job.strength / 100,
+                      mask=np.full(source.shape[:2], 255, np.uint8),
+                      recipe_source=source, recipe_settings=settings)
+        history.add_layer(layer)
+        layer_id = layer.id
     job.attached = True
-    return layer.id
+    return layer_id
 
 
 if __name__ == '__main__':

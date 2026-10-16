@@ -30,6 +30,9 @@ def _snapshot(document: Document) -> Document:
             detached.mask = _frozen(layer.mask, 2)
         detached.text = deepcopy(layer.text)
         detached.shape = deepcopy(layer.shape)
+        detached.recipe_settings = deepcopy(layer.recipe_settings)
+        if layer.recipe_source is not None:
+            detached.recipe_source = rgba_from(layer.recipe_source)
         detached.adjustment = deepcopy(layer.adjustment)
         detached.effects = deepcopy(layer.effects)
         if layer.mask_placement is not None:
@@ -52,7 +55,7 @@ def _same(left: Document, right: Document) -> bool:
     for a, b in zip(left.layers, right.layers):
         for key, value in vars(a).items():
             other = getattr(b, key)
-            if key in ('pixels', 'mask'):
+            if key in ('pixels', 'mask', 'recipe_source'):
                 if value is not other:
                     return False
             elif value != other:
@@ -125,7 +128,7 @@ class DocumentHistory:
         buffers = {}
         for state in self._states:
             for layer in state.document.layers:
-                for array in (layer.pixels, layer.mask):
+                for array in (layer.pixels, layer.mask, layer.recipe_source):
                     if array is not None:
                         # Count the whole backing ndarray, even for a view.
                         while isinstance(array.base, np.ndarray):
@@ -154,8 +157,8 @@ class DocumentHistory:
     def add_layer(self, layer: Layer, index: Optional[int] = None) -> bool:
         # Reconstruct to freeze any caller-supplied writable buffers.
         detached = Layer(**deepcopy({k: v for k, v in vars(layer).items()
-                                    if k not in ('pixels', 'mask')}),
-                         pixels=layer.pixels, mask=layer.mask)
+                                    if k not in ('pixels', 'mask', 'recipe_source')}),
+                         pixels=layer.pixels, mask=layer.mask, recipe_source=layer.recipe_source)
         return self._edit('Add layer', lambda doc: doc.add_layer(detached, index))
 
     def remove_layer(self, layer_id: str) -> bool:
@@ -237,6 +240,7 @@ class DocumentHistory:
                     duplicate.id = mapping[original.id]
                     duplicate.parent_id = mapping.get(original.parent_id, original.parent_id)
                     duplicate.mask_source_id = mapping.get(original.mask_source_id, original.mask_source_id)
+                    duplicate.recipe_settings = deepcopy(original.recipe_settings)
                     duplicate.adjustment = deepcopy(original.adjustment)
                     duplicate.text, duplicate.shape = deepcopy(original.text), deepcopy(original.shape)
                     duplicate.name = original.name.encode('utf-8')[:16_379].decode('utf-8', errors='ignore') + ' copy'
@@ -252,6 +256,7 @@ class DocumentHistory:
                               .decode('utf-8', errors='ignore') + suffix)
             duplicate.text = deepcopy(layer.text)
             duplicate.shape = deepcopy(layer.shape)
+            duplicate.recipe_settings = deepcopy(layer.recipe_settings)
             duplicate.adjustment = deepcopy(layer.adjustment)
             duplicate.effects = deepcopy(layer.effects)
             duplicate.mask_placement = deepcopy(layer.mask_placement)
@@ -383,6 +388,15 @@ class DocumentHistory:
 
     def replace_pixels(self, layer_id: str, pixels: np.ndarray) -> bool:
         return self._edit('Replace pixels', lambda doc: doc.layer(layer_id).replace_pixels(pixels))
+
+    def replace_recipe_result(self, layer_id, pixels, source, settings):
+        """One undo step; preserve the target's mask, placement and properties."""
+        def apply(doc):
+            layer = doc.layer(layer_id)
+            layer.replace_pixels(pixels)
+            layer.recipe_source = rgba_from(source)
+            layer.recipe_settings = deepcopy(settings)
+        return self._edit('Regenerate recipe layer', apply)
 
     def canvas_resize(self, width, height, *, anchor=4, content_offset=None,
                       label='Canvas Size') -> bool:

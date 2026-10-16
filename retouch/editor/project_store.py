@@ -168,6 +168,7 @@ def _decode(manifest, version, package):
     width, height, resolution, guides, active, document_id, parsed = (
         _check_manifest(manifest, version))
 
+    recipes = _read_recipes(package, document_id, {lid for lid, _ in parsed})
     budget = {'image': 0, 'mask': 0}
     layers = []
     for layer_id, fields in parsed:
@@ -176,13 +177,25 @@ def _decode(manifest, version, package):
             pixels = _read_png(package, layer_id + '.png', budget, 'image')
         if fields.pop('mask_file'):
             mask = _read_png(package, layer_id + '.mask.png', budget, 'mask')
+        source = None
+        saved = recipes.get(layer_id)
+        if saved:
+            from .recipe_state import pixel_digest
+            if pixels is None:
+                raise _invalid('recipe settings require a raster layer')
+            source = _read_png(package, layer_id + '.recipe-source.png', budget, 'image')
+            if (pixel_digest(source) != saved['source_sha256']
+                    or pixel_digest(pixels) != saved['result_sha256']):
+                raise _invalid('recipe source/result changed outside Retouch')
         size = fields.pop('size')
         layers.append(Layer(id=layer_id, pixels=pixels, mask=mask, size=size,
+                            recipe_source=source, recipe_settings=saved['settings'] if saved else None,
                             **fields))
     images = package / 'images'
     for layer in layers:
         _remember(layer.pixels, images / (layer.id + '.png'))
         _remember(layer.mask, images / (layer.id + '.mask.png'))
+        _remember(layer.recipe_source, images / (layer.id + '.recipe-source.png'))
     document = Document(width=width, height=height, layers=layers,
                         resolution=float(resolution),
                         document_id=document_id,
@@ -526,6 +539,8 @@ def save_project(document, path):
         try:
             existing, version = _read_manifest(target)
             _check_manifest(existing, version)
+            _read_recipes(target, _uuid(existing['documentID']),
+                          {_uuid(layer['id']) for layer in existing['layers']})
         except (ValueError, OSError) as exc:
             raise FileExistsError(
                 f'{target} exists and is not a supported Compositor project') from exc
@@ -546,6 +561,12 @@ def save_project(document, path):
         assets = _assets(document)
         _write_assets(assets, images)
         (staging / 'manifest.json').write_bytes(payload)
+        recipes = _encode_recipes(document)
+        if recipes:
+            encoded = json.dumps(recipes, indent=2, sort_keys=True).encode('utf-8')
+            if len(encoded) > MAX_MANIFEST_BYTES:
+                raise ProjectError('recipe extension exceeds 4 MiB')
+            (staging / 'retouch-recipes.json').write_bytes(encoded)
         _swap_in(staging, target, token)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
@@ -555,11 +576,47 @@ def save_project(document, path):
     return target
 
 
+def _encode_recipes(document):
+    from .recipe_state import pixel_digest
+    layers = {layer.id: dict(settings=layer.recipe_settings,
+                            source_sha256=pixel_digest(layer.recipe_source),
+                            result_sha256=pixel_digest(layer.pixels))
+              for layer in document.layers if layer.recipe_settings is not None}
+    return dict(version=1, documentID=document.document_id, layers=layers) if layers else None
+
+
+def _read_recipes(package, document_id, layer_ids):
+    from .recipe_state import validate_state
+    path = package / 'retouch-recipes.json'
+    if not path.exists() and not path.is_symlink():
+        return {}
+    try:
+        record = json.loads(_read_file(path, package, MAX_MANIFEST_BYTES))
+        if (not isinstance(record, dict) or set(record) != {'version', 'documentID', 'layers'}
+                or type(record['version']) is not int or record['version'] != 1
+                or record['documentID'] != document_id or not isinstance(record['layers'], dict)
+                or set(record['layers']) - layer_ids):
+            raise ValueError('invalid recipe extension header')
+        for saved in record['layers'].values():
+            if not isinstance(saved, dict) or set(saved) != {'settings', 'source_sha256', 'result_sha256'}:
+                raise ValueError('invalid recipe extension layer')
+            validate_state(saved['settings'])
+            for key in ('source_sha256', 'result_sha256'):
+                value = saved[key]
+                if not isinstance(value, str) or len(value) != 64 or set(value) - set('0123456789abcdef'):
+                    raise ValueError('invalid recipe asset checksum')
+        return record['layers']
+    except (ValueError, TypeError) as exc:
+        raise _invalid('Retouch recipe extension: ' + str(exc)) from exc
+
+
 def _assets(document):
     assets = []
     for layer in document.layers:
         if layer.pixels is not None:
             assets.append((layer.id + '.png', layer.pixels, 'RGBA'))
+        if layer.recipe_source is not None:
+            assets.append((layer.id + '.recipe-source.png', layer.recipe_source, 'RGBA'))
         if layer.mask is not None:
             assets.append((layer.id + '.mask.png', layer.mask, 'L'))
     return assets

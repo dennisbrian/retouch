@@ -795,6 +795,32 @@ def test_local_retouch_callbacks_load_apply_save_and_reject_stale_drafts(session
     assert len(session.history.document.layers) == 1
 
 
+def test_recipe_controls_reload_and_regenerate_selected_layer(session, callbacks):
+    from retouch.editor.retouch_jobs import render_worker
+    prepare = next(fn for fn in callbacks if fn.__name__ == 'prepare_recipe')
+    finish = next(fn for fn in callbacks if fn.__name__ == 'finish_recipe')
+    load = next(fn for fn in callbacks if fn.__name__ == 'loading_recipe_settings')
+    class Engine:
+        def process(self, image, **settings):
+            assert settings['smooth'] == 20 and settings['whiten'] == 5
+            return np.full_like(image, 180)
+    with pytest.raises(gr.Error, match='saved settings'):
+        load(session)
+    prepare(session, 'natural', 60, None, 'New layer', True, 20, 5)
+    render_worker(session.job.directory, Engine)
+    session.job.status = 'completed'
+    finish(session, None)
+    lid = session.selected_id
+    assert load(session)[:6] == ('natural', 60, True, 20, 5, 'Regenerate selected recipe layer')
+    prepare(session, 'natural', 100, None, 'Regenerate selected recipe layer', True, 20, 5)
+    render_worker(session.job.directory, Engine)
+    session.job.status = 'completed'
+    result = finish(session, None)
+    assert session.selected_id == lid and len(session.history.document.layers) == 2
+    assert session.selected().opacity == .6
+    assert 'regenerated' in result[-3]
+
+
 def test_folder_brush_and_invalid_links_preserve_history(session, callbacks):
     edits = {fn.__kwdefaults__['operation']: fn for fn in callbacks if fn.__name__ == 'edit'}
     base = session.selected_id

@@ -348,12 +348,16 @@ class Layer:
     is_group: bool = False        # pass-through folder, never an isolated surface
     mask_source_id: str = None    # live alpha link; adjacent siblings form a clipping stack
     adjustment: dict = None
+    recipe_source: object = None  # immutable original composite; Retouch extension
+    recipe_settings: dict = None
 
     def __post_init__(self):
         if self.pixels is not None:
             self.pixels = rgba_from(self.pixels)
             if self.size is None:
                 self.size = (self.pixels.shape[1], self.pixels.shape[0])
+        if self.recipe_source is not None:
+            self.recipe_source = rgba_from(self.recipe_source)
         if self.mask is not None:
             self.mask = _frozen(self.mask, 2)
         if self.size is None:
@@ -371,6 +375,7 @@ class Layer:
         if (pixels.shape[1], pixels.shape[0]) != source_size:
             raise ValueError('replacement pixels must match the source size')
         self.pixels, self.text, self.shape = pixels, None, None
+        self.recipe_source = self.recipe_settings = None
 
     def set_mask(self, mask, enabled=True):
         """Attach an 8-bit coverage mask (None removes it).
@@ -383,6 +388,15 @@ class Layer:
         self.mask_placement = None
 
     def validate(self):
+        if (self.recipe_source is None) != (self.recipe_settings is None):
+            raise ValueError('Recipe source and settings must be stored together')
+        if self.recipe_settings is not None:
+            from .recipe_state import validate_state
+            validate_state(self.recipe_settings)
+            if (self.pixels is None or self.is_group or self.adjustment is not None
+                    or self.recipe_source.shape != self.pixels.shape
+                    or not (self.recipe_source[..., 3] == 255).all()):
+                raise ValueError('Recipe source must match an opaque raster layer')
         if (not isinstance(self.rotation, (int, float)) or isinstance(self.rotation, bool)
                 or not math.isfinite(self.rotation)):
             raise ValueError('layer rotation must be finite')
@@ -534,6 +548,8 @@ class Document:
                 from .composite import _rotation_geometry
                 _, bounds, _ = _rotation_geometry(layer)
                 rendered_pixels += bounds[0] * bounds[1]
+            if layer.recipe_source is not None:
+                image_pixels += layer.recipe_source.shape[0] * layer.recipe_source.shape[1]
             if layer.mask is not None:
                 mask_pixels += layer.mask.size
                 if layer.pixels is None:
