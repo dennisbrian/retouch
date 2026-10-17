@@ -723,6 +723,30 @@ def build_editor_tab():
             limit_local = gr.Checkbox(label='Limit local strokes to the current selection', value=False)
             apply_local = gr.Button('Apply local retouch as new layer')
             local_status = gr.Markdown('Load a composite to start local retouch.')
+        with gr.Accordion('Paint colour on a layer', open=False):
+            paint_target = gr.State(None)
+            gr.Markdown('Paint colour onto the selected image layer\'s own pixels, or erase them. '
+                        'New paint layer adds an empty layer above the selected one and loads it. '
+                        'The canvas shows the visible image under the layer; strokes are drafts '
+                        'until applied, then one undo step. Paint stays inside the layer\'s rectangle.')
+            with gr.Row():
+                new_paint_layer = gr.Button('New paint layer')
+                load_paint = gr.Button('Load selected layer for painting')
+            discard_paint = gr.Checkbox(label='Discard paint strokes when loading', value=False)
+            paint_canvas = gr.ImageEditor(
+                label='Paint on layer', type='numpy', image_mode='RGBA',
+                sources=(), transforms=(), format='png', height=500,
+                brush=gr.Brush(colors=['#000000'], color_mode='fixed', default_color='#000000'))
+            with gr.Row():
+                paint_mode = gr.Radio(['Paint', 'Erase'], value='Paint', label='Brush')
+                paint_color = gr.ColorPicker(label='Paint colour', value='#000000')
+            with gr.Row():
+                paint_opacity = gr.Slider(1, 100, value=100, step=1, label='Brush opacity (%)')
+                paint_softness = gr.Slider(0, 100, value=0, step=1,
+                                           label='Edge softness (layer pixels)')
+            limit_paint = gr.Checkbox(label='Limit paint strokes to the current selection', value=False)
+            apply_paint = gr.Button('Apply paint strokes')
+            paint_status = gr.Markdown('Select an image layer and load it, or add a new paint layer.')
         status = gr.Markdown('Open a photo or project to start.')
         outputs = [session, preview, layers, name, visible, opacity, mask_enabled,
                    canvas, undo, redo, status, blend, position_x, position_y, flip_x, flip_y,
@@ -787,6 +811,97 @@ def build_editor_tab():
                            gr.update(value=100 if value in ('Heal', 'Clone') else 25),
                            gr.update(visible=value == 'Clone')),
             local_operation, [heal_method, local_opacity, clone_controls], queue=False)
+
+        def _paint_load(current, layer):
+            from .layer_paint import paint_canvas_background
+            if layer is None:
+                raise ValueError('Select a layer first')
+            if layer.is_group or layer.adjustment is not None:
+                raise ValueError('Folders and adjustment layers have no pixels to paint. '
+                                 'Select an image layer, or add a new paint layer.')
+            return (paint_canvas_background(current.history.document, layer, PREVIEW_SIDE),
+                    layer.id)
+
+        def loading_paint(current, strokes, paint_strokes, discard):
+            if current is None:
+                raise gr.Error('Open a document first')
+            if has_strokes(paint_strokes) and not discard:
+                raise gr.Error('Apply the paint strokes or choose Discard paint strokes when loading.')
+            try:
+                brush, target = _paint_load(current, current.selected())
+            except (ValueError, OSError, cv2.error) as exc:
+                raise gr.Error(str(exc)) from exc
+            name = current.history.document.layer(target).name
+            return brush, target, f'Painting on **{name}**.', False
+
+        load_paint.click(loading_paint, [session, canvas, paint_canvas, discard_paint],
+                         [paint_canvas, paint_target, paint_status, discard_paint],
+                         concurrency_id='layer-editor')
+
+        def adding_paint_layer(current, strokes, paint_strokes, discard):
+            if current is None:
+                raise gr.Error('Open a document first')
+            if has_strokes(strokes):
+                raise gr.Error('Apply or erase the layer-mask strokes first.')
+            if has_strokes(paint_strokes) and not discard:
+                raise gr.Error('Apply the paint strokes or choose Discard paint strokes when loading.')
+            doc = current.history.document
+            layer = current.selected()
+            new = Layer('Paint', size=(doc.width, doc.height),
+                        parent_id=(layer.id if layer.is_group else layer.parent_id) if layer else None)
+            try:
+                current.history.add_layer(new, doc.index_of(layer.id) + 1 if layer else None)
+                current.selected_id = new.id
+                brush, target = _paint_load(current, current.selected())
+            except (ValueError, OSError, cv2.error) as exc:
+                raise gr.Error(str(exc)) from exc
+            return (*_view(current), brush, target,
+                    'Added an empty **Paint** layer. Paint on it, then apply.', False)
+
+        new_paint_layer.click(adding_paint_layer, [session, canvas, paint_canvas, discard_paint],
+                              outputs + [paint_canvas, paint_target, paint_status, discard_paint],
+                              concurrency_id='layer-editor')
+
+        def applying_paint(current, target, paint_strokes, strokes, mode, color,
+                           amount, softness, limit):
+            from .layer_paint import paint_layer
+            if current is None:
+                raise gr.Error('Open a document first')
+            if has_strokes(strokes):
+                raise gr.Error('Apply or erase the layer-mask strokes first.')
+            if target is None or target not in {l.id for l in current.history.document.layers}:
+                raise gr.Error('Load a layer for painting first.')
+            if limit and current.selection is None:
+                raise gr.Error('Create a selection first, or turn off the selection limit.')
+            try:
+                changed = paint_layer(current.history, target, paint_strokes, color=_rgb(color),
+                                      opacity=amount, mode=mode, softness=softness,
+                                      selection=current.selection if limit else None)
+                if not changed:
+                    raise ValueError('Paint on the canvas first.')
+                current.selected_id = target
+                brush, target = _paint_load(current, current.selected())
+            except (ValueError, OSError, cv2.error) as exc:
+                raise gr.Error(str(exc)) from exc
+            verb = 'Erased' if mode == 'Erase' else 'Painted'
+            return (*_view(current), brush, target, f'{verb}. Undo restores the previous pixels.')
+
+        apply_paint.click(applying_paint,
+                          [session, paint_target, paint_canvas, canvas, paint_mode, paint_color,
+                           paint_opacity, paint_softness, limit_paint],
+                          outputs + [paint_canvas, paint_target, paint_status],
+                          concurrency_id='layer-editor')
+        # Show strokes in the paint colour; erase strokes in a neutral marker.
+        paint_color.change(
+            lambda value, mode: gr.update(brush=gr.Brush(
+                colors=[value if mode == 'Paint' else '#ff3366'], color_mode='fixed',
+                default_color=value if mode == 'Paint' else '#ff3366')),
+            [paint_color, paint_mode], paint_canvas, queue=False)
+        paint_mode.change(
+            lambda mode, value: gr.update(brush=gr.Brush(
+                colors=[value if mode == 'Paint' else '#ff3366'], color_mode='fixed',
+                default_color=value if mode == 'Paint' else '#ff3366')),
+            [paint_mode, paint_color], paint_canvas, queue=False)
 
         def loading_clone_picker(current, captured):
             from .clone_picker import prepare_clone_picker
