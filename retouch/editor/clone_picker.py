@@ -1,4 +1,6 @@
 """Revision-bound clone anchors on a server-rendered preview."""
+from __future__ import annotations
+
 from dataclasses import dataclass, replace
 
 import cv2
