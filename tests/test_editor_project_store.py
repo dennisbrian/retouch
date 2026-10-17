@@ -744,3 +744,25 @@ class TestLayerEffects:
                                images={0: fx.solid(4, 4, (1, 1, 1, 255))})
         with pytest.raises(ProjectError, match='unknown shadow keys'):
             load_project(path)
+
+
+def test_dead_array_callback_under_held_lock_does_not_deadlock(tmp_path):
+    """A weakref callback that fires while the cache lock is held (garbage
+    collection inside _remember, same thread) must not deadlock."""
+    import threading
+
+    from retouch.editor import project_store as ps
+
+    path = tmp_path / 'a.png'
+    path.write_bytes(b'x')
+    holder = {'a': np.zeros(4, np.uint8)}
+    ps._remember(holder['a'], path)
+
+    def drop_under_lock():
+        with ps._KNOWN_LOCK:
+            del holder['a']          # refcount hits 0: _forget runs here
+
+    worker = threading.Thread(target=drop_under_lock, daemon=True)
+    worker.start()
+    worker.join(5)
+    assert not worker.is_alive()

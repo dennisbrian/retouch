@@ -1,5 +1,6 @@
 """Hue/Saturation: 33^3 trilerp cube port of HueSaturation.swift (MIT,
 Copyright 2026 Wonder Assembly LLC), pinned at 11d8d7a."""
+import os
 import time
 
 import numpy as np
@@ -100,5 +101,7 @@ def test_perf_12mp():
     t0 = time.time()
     grade(rgb, hs_record(hue=30, band='reds'))
     # Generous bound: the measured range is 0.74-0.93 s, but parallel test
-    # load can add a third again before the scheduler yields.
-    assert time.time() - t0 < 1.5
+    # load can add a third again before the scheduler yields. GitHub's
+    # runners are 2-3x slower than a dev Mac (1.95-2.8 s observed).
+    budget = 3.5 if os.environ.get('CI') else 1.5
+    assert time.time() - t0 < budget
