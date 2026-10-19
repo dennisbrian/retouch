@@ -217,6 +217,7 @@ per `AGENTS.md`.
 |-------|-----------|----------------|
 | 0 Detection | `detection.py` | `FaceDetector`, `FaceData`, `FaceContext`, `_LandmarkCompat` |
 | 0 Parsing | `parsing.py` | `FaceParser`, `FaceRegions` (28-region `__slots__` object) |
+| 0 Parsing | `skin_objects.py` | `foreign_object_mask`, `exclude_foreign_objects` (cut clips, props, frames and hair strands that enter from the face outline out of the skin mask) |
 | 1 Reshape | `geometry.py` | `FaceReshaper` |
 | 2 Frequency | `frequency.py` | `FrequencySeparator`, `FrequencyLayers`, `_texture_adaptation_factor` |
 | 2 Skin | `skin.py` | `SkinProcessor` (smooth/flatten/restore_micro_texture/micro_dodge_burn/redness_even/equalize/unify_hue_line/unify_tone/whiten/shine_removal/quantize_tones/apply_specular_bloom/dodge_burn/wrinkle_soften/texture_transplant/local_clarity/harmonize_neck) |

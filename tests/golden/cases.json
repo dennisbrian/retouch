@@ -1,0 +1,81 @@
+{
+  "background_poster_face": {
+    "kind": "simulated",
+    "objects_mask": "masks/background_poster_face.png",
+    "persons": 1,
+    "source": "portrait.jpg + mozart_square.jpg",
+    "why": "Framed portrait poster on the wall behind the subject (background face, not a person)."
+  },
+  "brighter_exposure": {
+    "kind": "simulated",
+    "persons": 1,
+    "source": "portrait.jpg",
+    "why": "Portrait at 1.5x linear exposure (lighter capture, near-clipped highlights)."
+  },
+  "darker_exposure": {
+    "kind": "simulated",
+    "persons": 1,
+    "source": "portrait.jpg",
+    "why": "Portrait at 0.45x linear exposure (tone invariance, darker capture)."
+  },
+  "glasses_frames": {
+    "kind": "simulated",
+    "object_gap": "Dark, neutral frames have the colour of shadowed skin, so the skin mask keeps the rims that rest on the face; 2-14% of the frame changes under most recipes. Cutting dark neutral pixels also cut real creases and beard shadow on darker skin, so it is left as a known gap.",
+    "objects_mask": "masks/glasses_frames.png",
+    "persons": 1,
+    "source": "portrait.jpg",
+    "why": "Dark frames resting on the skin: a non-skin object inside the skin area."
+  },
+  "hair_clip_temple": {
+    "kind": "simulated",
+    "objects_mask": "masks/hair_clip_temple.png",
+    "persons": 1,
+    "source": "portrait.jpg",
+    "why": "Pink plastic clip at the temple, half on hair and half on skin (the albedo_even hair-clip frame)."
+  },
+  "painted_pale_face": {
+    "kind": "real",
+    "persons": 1,
+    "source": "mozart_square.jpg",
+    "why": "Painted, powder-pale face with a white wig and a blue ribbon."
+  },
+  "pet_false_face": {
+    "kind": "real",
+    "known_gap": "No model available offline separates a dog's face from a person's: the selfie segmenter, the multiclass face-skin class and the pose landmarker all accept the poodle. Expected to fail until a real person/animal classifier is added.",
+    "persons": 0,
+    "source": "cats_and_dogs.jpg",
+    "why": "Cats and dogs, no person: FaceMesh finds the dogs' faces and the selfie and pose models call them people."
+  },
+  "portrait_studio": {
+    "kind": "real",
+    "persons": 1,
+    "source": "portrait.jpg",
+    "why": "Baseline studio portrait; red-striped flag and red curtains in the frame."
+  },
+  "red_prop_jaw": {
+    "kind": "simulated",
+    "objects_mask": "masks/red_prop_jaw.png",
+    "persons": 1,
+    "source": "portrait.jpg",
+    "why": "Red rose against the jaw plus red cheek blotches (the redness_even leak case)."
+  },
+  "small_face_full_body": {
+    "kind": "real",
+    "persons": 1,
+    "source": "pose.jpg",
+    "why": "Full-body shot, small face, darker skin, bright beach."
+  },
+  "two_people": {
+    "kind": "simulated",
+    "persons": 2,
+    "source": "portrait.jpg",
+    "why": "Two subjects side by side (one darker): both must be processed."
+  },
+  "white_wig_clip": {
+    "kind": "simulated",
+    "objects_mask": "masks/white_wig_clip.png",
+    "persons": 1,
+    "source": "mozart_square.jpg",
+    "why": "Pink clip on a white wig beside a pale face."
+  }
+}
