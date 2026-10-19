@@ -255,6 +255,64 @@ class EditorSession:
         return painted
 
 
+    def stroke_coverage(self, canvas, layer):
+        """Unapplied brush strokes as 8-bit coverage over the layer's own pixels."""
+        height, width = layer.pixels.shape[:2]
+        coverage = np.zeros((height, width), np.float32)
+        for stroke in (canvas or {}).get('layers', []):
+            stroke = np.asarray(stroke)
+            if stroke.dtype != np.uint8 or stroke.ndim != 3 or stroke.shape[2] != 4:
+                raise ValueError('Invalid brush data')
+            if not stroke[..., 3].any():
+                continue
+            alpha = cv2.resize(stroke[..., 3].astype(np.float32), (width, height),
+                               interpolation=cv2.INTER_LINEAR)
+            # The canvas shows the layer flipped like the composite; pixels are stored unflipped.
+            if layer.flip_y:
+                alpha = alpha[::-1]
+            if layer.flip_x:
+                alpha = alpha[:, ::-1]
+            coverage = np.maximum(coverage, alpha)
+        return np.rint(coverage).astype(np.uint8)
+
+    def paint_pixels(self, canvas, tool, heal_mode='Content-Aware', opacity=100,
+                     offset=(0, 0), softness=0):
+        """Spot Healing or Clone Stamp the brushed area of the selected pixel layer."""
+        from .healing import clone_stamp, spot_heal
+        layer = self.selected()
+        if layer is None:
+            raise ValueError('Select a layer first')
+        if layer.pixels is None or layer.is_group or layer.adjustment is not None:
+            raise ValueError('Healing and cloning need a photo or pixel layer')
+        for value in (opacity, softness, *offset):
+            if (not isinstance(value, (int, float)) or isinstance(value, bool)
+                    or not math.isfinite(value)):
+                raise ValueError('Healing and clone settings must be finite numbers')
+        coverage = self.stroke_coverage(canvas, layer)
+        if not coverage.any():
+            raise ValueError('Brush over the area first')
+        if softness < 0:
+            raise ValueError('Edge softness cannot be negative')
+        if softness > 0:
+            # The canvas brush is hard; a soft tip (native Clone Stamp's default)
+            # fades the copy in over about ``softness`` layer pixels.
+            coverage = np.rint(cv2.GaussianBlur(coverage.astype(np.float32), (0, 0),
+                                                softness / 2)).astype(np.uint8)
+        if tool == 'heal':
+            pixels = spot_heal(layer.pixels, coverage, heal_mode, opacity / 100,
+                               seed=self.history.revision)
+            label = 'Spot Healing'
+        elif tool == 'clone':
+            pixels = clone_stamp(layer.pixels, coverage,
+                                 (int(round(offset[0])), int(round(offset[1]))), opacity / 100)
+            label = 'Clone Stamp'
+        else:
+            raise ValueError('Unknown pixel tool')
+        if np.array_equal(pixels, layer.pixels):
+            return False
+        return self.history.replace_pixels(layer.id, pixels, label=label)
+
+
 def _view(session, message=''):
     if session is None:
         return (None, None, gr.update(choices=[], value=None), '', True, 100,
@@ -422,6 +480,26 @@ def build_editor_tab():
                             'the chosen Reveal or Hide action applies. The eraser removes unapplied strokes. '
                             'Choose the action for these strokes before applying.')
                 apply_mask = gr.Button('Apply mask strokes')
+                with gr.Accordion('Spot healing & clone stamp', open=False):
+                    gr.Markdown('Brush over a spot on the canvas above, then heal or clone instead '
+                                'of applying a mask. These change the selected layer\'s own pixels '
+                                '(at full resolution) as one undo step; nothing outside the strokes changes.')
+                    heal_mode = gr.Radio(['Content-Aware', 'Create Texture', 'Proximity Match'],
+                                         value='Content-Aware', label='Healing mode')
+                    heal_opacity = gr.Slider(1, 100, value=100, step=1, label='Opacity (%)')
+                    heal = gr.Button('Spot heal strokes')
+                    gr.Markdown('Content-Aware copies texture from the nearby patch that best matches '
+                                'the edge of the spot; Proximity Match takes the closest good patch; '
+                                'Create Texture fills smoothly from the edges and adds matching grain.')
+                    with gr.Row():
+                        clone_dx = gr.Number(label='Clone from X offset (layer pixels)', value=0, precision=0)
+                        clone_dy = gr.Number(label='Clone from Y offset (layer pixels)', value=0, precision=0)
+                    clone_softness = gr.Slider(0, 200, value=20, step=1,
+                                               label='Clone edge softness (layer pixels)')
+                    clone = gr.Button('Clone stamp strokes')
+                    gr.Markdown('Each brushed pixel copies the layer pixel that far away (positive X '
+                                'is right, positive Y is down, in the layer\'s unflipped pixels). '
+                                'The offset stays until you change it, like aligned Clone Stamp.')
             with gr.Column(scale=1):
                 layers = gr.Dropdown(label='Layers (top first)', choices=[])
                 name = gr.Textbox(label='Layer name')
@@ -1006,7 +1084,7 @@ def build_editor_tab():
         def action(current, selected, strokes, operation, *args):
             if current is None:
                 raise gr.Error('Open a document first')
-            if has_strokes(strokes) and operation != 'mask':
+            if has_strokes(strokes) and operation not in ('mask', 'heal', 'clone'):
                 raise gr.Error('Apply or erase the current brush strokes first.')
             previous_selection = current.selected_id
             try:
@@ -1203,6 +1281,12 @@ def build_editor_tab():
                         current.history.reset_mask(layer.id)
                     elif operation == 'mask':
                         current.apply_mask(strokes, args[0] if args else None)
+                    elif operation == 'heal':
+                        current.paint_pixels(strokes, 'heal', heal_mode=args[0], opacity=args[1])
+                    elif operation == 'clone':
+                        current.paint_pixels(strokes, 'clone', opacity=args[0],
+                                             offset=(args[1], args[2]),
+                                             softness=args[3] if len(args) > 3 else 0)
                     elif operation == 'add':
                         if not args[0]:
                             raise ValueError('Choose a photo to add first')
@@ -1223,7 +1307,7 @@ def build_editor_tab():
             return action(current, selected, strokes, 'select')
         layers.input(select, [session, layers, canvas], outputs, concurrency_id='layer-editor')
         for button, operation in ((properties, 'properties'), (up, 'up'), (down, 'down'),
-                                  (remove, 'remove'), (apply_mask, 'mask'), (add, 'add'),
+                                  (remove, 'remove'), (apply_mask, 'mask'), (heal, 'heal'), (clone, 'clone'), (add, 'add'),
                                   (undo, 'undo'), (redo, 'redo'), (transform, 'transform'), (resize, 'resize'),
                                   (duplicate, 'duplicate'), (invert_mask, 'invert_mask'),
                                   (reset_mask, 'reset_mask'), (fit, 'fit'), (links, 'links'), (group, 'group'),
@@ -1247,6 +1331,8 @@ def build_editor_tab():
                 'add': [add_photo], 'links': [parent_folder, clipping_source],
                 'crop': [crop_x, crop_y, crop_width, crop_height],
                 'mask': [mask_action],
+                'heal': [heal_mode, heal_opacity],
+                'clone': [heal_opacity, clone_dx, clone_dy, clone_softness],
                 'group': [group_members],
                 'selection': [selection_kind, selection_x, selection_y, selection_width,
                               selection_height, polygon, feather, selection_mode],

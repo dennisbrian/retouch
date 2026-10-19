@@ -1188,6 +1188,19 @@ _FACE_FEATURE_PARAMS = [
         max_val=100,
     ),
     ParamSpec(
+        # Costume Shine: mattes specular glare on glossy costume parts (vinyl,
+        # latex, satin, armour) into the material's own colour, costume only
+        # (retouch/costume_shine.py). Opt-in, 0 = off.
+        name="costume_shine",
+        cli_flag="costume-shine",
+        cli_type=int,
+        default=0,
+        recipe_key="fabric.costume_shine",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
         name="eye_iris_saturate",
         cli_flag="eye-iris-saturate",
         cli_type=int,

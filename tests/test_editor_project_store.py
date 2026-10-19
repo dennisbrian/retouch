@@ -746,23 +746,23 @@ class TestLayerEffects:
             load_project(path)
 
 
-def test_dead_array_callback_under_held_lock_does_not_deadlock(tmp_path):
-    """A weakref callback that fires while the cache lock is held (garbage
-    collection inside _remember, same thread) must not deadlock."""
+def test_known_file_callback_does_not_deadlock_under_the_lock(tmp_path):
+    """A registered array freed while the registry lock is held (garbage
+    collection can run a weakref callback at any allocation, including inside
+    _remember) must not deadlock on the lock."""
     import threading
-
     from retouch.editor import project_store as ps
 
-    path = tmp_path / 'a.png'
-    path.write_bytes(b'x')
-    holder = {'a': np.zeros(4, np.uint8)}
-    ps._remember(holder['a'], path)
+    path = tmp_path / 'm.png'
+    Image.fromarray(np.zeros((2, 2), np.uint8)).save(path)
 
-    def drop_under_lock():
+    def run():
+        arr = np.zeros((2, 2), np.uint8)
+        ps._remember(arr, path)
         with ps._KNOWN_LOCK:
-            del holder['a']          # refcount hits 0: _forget runs here
+            del arr  # refcount drop runs the weakref callback right here
 
-    worker = threading.Thread(target=drop_under_lock, daemon=True)
+    worker = threading.Thread(target=run, daemon=True)
     worker.start()
     worker.join(5)
     assert not worker.is_alive()

@@ -205,14 +205,15 @@ CI_BLEND_PROBES = [(0.0, 1.0), (1 / 255.0, 1.0), (0.3, 0.15), (0.3, 0.6),
 def _ci_blend_reference():
     """Capture real Core Image values, or fall back to the recorded bytes.
 
-    Mirrors the cg_adjustment_fixture pattern: swiftc on macOS (dev machine /
-    CI runner with Xcode), recorded file otherwise. Linux runners ship swiftc
-    too, but without Core Image the fixture cannot build there.
+    Mirrors the cg_adjustment_fixture pattern: swiftc if present (macOS dev
+    machine / CI runner with Xcode), recorded file otherwise.
     """
     import shutil
     import subprocess
     import sys
     import tempfile
+    # The fixture imports CoreImage, which only macOS has; Linux runners can
+    # ship swiftc without it.
     if sys.platform == 'darwin' and shutil.which('swiftc'):
         src = Path(__file__).parents[1] / 'scripts/dev/ci_blend_fixture.swift'
         with tempfile.TemporaryDirectory() as d:

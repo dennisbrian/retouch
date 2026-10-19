@@ -654,9 +654,9 @@ def _write_assets(assets, images):
 # untouched since it was read or written. Keyed by id() and checked against a
 # weak reference, so a recycled id never matches and arrays are not kept alive.
 _KNOWN = {}
-# Re-entrant: a dead array's weakref callback (_forget) can run on this same
-# thread while the lock is held, when garbage collection fires inside
-# _remember. A plain Lock deadlocked there (seen on CI, Python 3.10).
+# Re-entrant: a weakref callback (_forget) can run on this thread whenever
+# garbage collection fires, including while _remember already holds the lock;
+# a plain Lock deadlocked the test suite that way.
 _KNOWN_LOCK = threading.RLock()
 
 
