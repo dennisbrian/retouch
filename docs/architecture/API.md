@@ -139,6 +139,7 @@ def process(
     costume_shine: Optional[int] = None,
     eye_iris_saturate: Optional[int] = None,
     iris_pop: Optional[int] = None,
+    teeth_brighten: Optional[int] = None,
     eye_iris_hue_shift: Optional[int] = None,
     eye_iris_brightness: Optional[int] = None,
     teeth_whiten: Optional[int] = None,
@@ -446,6 +447,7 @@ Passing an explicit value override to these parameters takes precedence over the
 *   **`eye_gate`** (Type: `bool`, Default: `True`, Recipe key: `eyes.gate`): Per-eye occlusion gate — skip enhancing eyes detected as closed/occluded (prevents painting an iris onto hair or a closed lid).
 *   **`eye_iris_saturate`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `eye.iris_saturate`): Adjusts the eye iris saturate parameter.
 *   **`iris_pop`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `eyes.iris_pop`): Iris Pop. Colour (vibrance-style chroma gain, hue kept, capped at 1.6x the iris's own p90 chroma), pattern detail (log-luminance, exposure invariant) and depth (darker limbal ring, lifted lower iris) inside the visible iris, measured from the image so a circle lens wider than the iris landmarks is included. Pupil, lashes and catchlights are faded out relative to the iris's own brightness; closed or gated eyes are skipped. Composited back at full weight. Off by default; start near 50.
+*   **`teeth_brighten`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `eyes.teeth_brighten`): Teeth Brightening (`retouch/teeth_brighten.py`). Teeth are found by colour on a band around the inner-lip landmark line inside the outer lip line: least red bright pixels (relative to this mouth's lips), tooth-sized, brighter than the mouth around them. Yellow and red are pulled toward a warm-ivory floor and the teeth get a linear-light lift (up to +0.6 stop) with a shoulder toward white, so shade and gaps are kept and nothing clips. Lips, gums and skin are untouched; composited back at full weight. Separate from `teeth_whiten`. Off by default; start near 50.
 *   **`eye_iris_hue_shift`** (Type: `int`, Default: `0`, Range: `-30` to `30`, Recipe key: `eye.iris_hue_shift`): Adjusts the eye iris hue shift parameter.
 *   **`eye_iris_brightness`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `eye.iris_brightness`): Adjusts the eye iris brightness parameter.
 *   **`teeth_whiten`** (Type: `int`, Default: `5`, Range: `0` to `100`, Recipe key: `eyes.whites`): Adjusts the teeth whiten parameter.

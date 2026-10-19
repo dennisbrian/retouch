@@ -373,6 +373,7 @@ class ProcessingContext:
     nose_highlight: float = 0.0
     nose_tip_blush: float = 0.0
     iris_pop: float = 0.0
+    teeth_brighten: float = 0.0
     skin_sss: float = 0.0
     freckle_removal: float = 0.0
     heal_engine: str = "telea"
@@ -1666,6 +1667,7 @@ class RetouchEngine:
         nose_highlight: Optional[float] = None,
         nose_tip_blush: Optional[float] = None,
         iris_pop: Optional[float] = None,
+        teeth_brighten: Optional[float] = None,
         skin_sss: Optional[float] = None,
         regional_modulation: Optional[float] = None,
         smooth_engine: Optional[str] = None,
@@ -1995,6 +1997,7 @@ class RetouchEngine:
             "nose_highlight": nose_highlight,
             "nose_tip_blush": nose_tip_blush,
             "iris_pop": iris_pop,
+            "teeth_brighten": teeth_brighten,
             "skin_sss": skin_sss,
             "lut": lut,
             "skin_locus": skin_locus,

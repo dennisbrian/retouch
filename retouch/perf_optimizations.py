@@ -1358,6 +1358,23 @@ def _process_face_core(
             tint=ctx.lip_tint, finish=ctx.lip_finish,
         )
 
+    # ---- Teeth Brightening (opt-in): see retouch/teeth_brighten.py ----
+    # Runs after the lips so lip statistics (taken over a mask that can
+    # include the teeth) don't shift with it.
+    # Teeth sit outside the skin and lips masks the face is composited back
+    # through, so the edit's support joins eye_edit_mask (the face's extra
+    # full-weight composite support).
+    _teeth_brighten = float(getattr(ctx, 'teeth_brighten', 0) or 0)
+    if _teeth_brighten > 0 and shifted_face.landmarks is not None:
+        canvas = _tr('teeth_brighten', canvas)
+        from .teeth_brighten import brighten_teeth
+        if eye_edit_mask is None:
+            eye_edit_mask = np.zeros(canvas.shape[:2], np.float32)
+        canvas = brighten_teeth(
+            canvas, shifted_face.landmarks, _teeth_brighten,
+            regions.mouth_interior, support_out=eye_edit_mask,
+        )
+
     # ---- Blush ----
     # Nose Tip Blush (opt-in slider) replaces the legacy nose_blush disc,
     # which only ran with cheek blush on and barely tinted the tip.
