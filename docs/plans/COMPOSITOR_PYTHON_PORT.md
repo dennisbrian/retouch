@@ -345,6 +345,35 @@ The first bridge therefore produces a new handoff per export.
 
 ## Current implementation and acceptance evidence
 
+### Colour brush on layer pixels — 2026-10-17
+
+Open **Paint colour on a layer**. **New paint layer** adds an empty layer above
+the selected one and loads it; **Load selected layer for painting** loads any
+image layer. The canvas shows the visible image under the layer's rectangle in
+its displayed orientation. Choose Paint or Erase, a colour, brush opacity and
+edge softness, paint, then **Apply paint strokes**: one undo step
+(`Paint on layer` / `Erase on layer`) that saves and reopens like any pixel edit.
+
+`retouch/editor/layer_paint.py` ports the colour path of upstream
+`Document/BrushStroke.swift`: stroke coverage is capped at the brush opacity
+(overlapping strokes never exceed it) and recomposed as premultiplied
+source-over of one sRGB colour, 8 bits per channel; Erase takes
+`coverage x opacity` out of alpha (`destinationOut`) and leaves colour alone.
+The current selection can clip strokes (mapped through the layer's placement,
+scale, flips and rotation). Zero-coverage pixels stay bit-identical. Folders,
+adjustment layers, text and shape layers are refused with a message.
+Deliberate differences: the browser rasterises a hard round tip, so softness
+blurs coverage instead of upstream's per-dab Gaussian falloff; paint stays
+inside the layer's rectangle (upstream grows a painted layer to the canvas).
+
+Tests: `tests/test_editor_layer_paint.py` (12), including a Porter-Duff
+oracle (Pillow `alpha_composite`, within 2 levels), opacity cap on overlaps,
+native-grid mapping from a reduced preview, flips, placed selections, undo and
+`.comp` round trip, and the UI callbacks. Browser check on DSCF3503 (headless
+Chromium): new paint layer, colour change updates the brush live, a stroke
+applied, then part of it erased; evidence in
+`/mnt/project-files/retouch/layer-paint/`. Not compared with the Mac app.
+
 ### Click-to-place clone anchors — 2026-10-16
 
 After loading the local composite, choose Clone and **Load clone source picker**.
