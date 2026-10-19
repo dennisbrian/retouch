@@ -387,6 +387,7 @@ class ProcessingContext:
     backdrop_cleanup: float = 0.0
     fabric_wrinkle_smooth: float = 0.0
     costume_clarity: float = 0.0
+    costume_shine: float = 0.0
     dark_circles: float = 0.0
     undereye_darken_removal: float = 0.0
     undereye_puffiness_reduction: float = 0.0
@@ -1533,6 +1534,7 @@ class RetouchEngine:
         backdrop_cleanup: Optional[float] = None,
         fabric_wrinkle_smooth: Optional[float] = None,
         costume_clarity: Optional[float] = None,
+        costume_shine: Optional[float] = None,
         dark_circles: Optional[float] = None,
         undereye_darken_removal: Optional[float] = None,
         undereye_puffiness_reduction: Optional[float] = None,
@@ -1869,6 +1871,7 @@ class RetouchEngine:
             "backdrop_cleanup": backdrop_cleanup,
             "fabric_wrinkle_smooth": fabric_wrinkle_smooth,
             "costume_clarity": costume_clarity,
+            "costume_shine": costume_shine,
             "dark_circles": dark_circles,
             "undereye_darken_removal": undereye_darken_removal,
             "undereye_puffiness_reduction": undereye_puffiness_reduction,
@@ -5313,6 +5316,60 @@ class RetouchEngine:
         }
         capture(ctx, "backdrop_cleanup", img, out,
                 reasons.get(diag.get("reason"), "Skipped — no lint or dust specks found."))
+        return out
+
+    def _stage_costume_shine(
+        self,
+        img: np.ndarray,
+        ctx: ProcessingContext,
+        faces,
+        person_mask: Optional[np.ndarray],
+        acc_skin: Optional[np.ndarray],
+        acc_skin_hair: Optional[np.ndarray] = None,
+        acc_lips: Optional[np.ndarray] = None,
+        acc_hair_only: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """Costume Shine: matte specular glare on glossy costume parts.
+
+        Opt-in (``ctx.costume_shine`` 0-100). Skin, painted skin, hair and
+        the face are left alone; see ``retouch/costume_shine.py``.
+        """
+        from .costume_shine import apply_costume_shine
+
+        _emit_stage("costume_shine")
+        h_img, w_img = img.shape[:2]
+        boxes = []
+        for face in faces or []:
+            x, y, fw, fh = (int(v) for v in face.bbox)
+            if fw > 0 and fh > 0 and x < w_img and y < h_img:
+                boxes.append((max(0, x), max(0, y), fw, fh))
+        protect = None
+        for m in (acc_skin, acc_skin_hair, acc_lips, acc_hair_only):
+            if m is not None and m.shape[:2] == (h_img, w_img):
+                m2 = squeeze_mask(normalize_mask(m))
+                protect = m2 if protect is None else np.maximum(protect, m2)
+        skin = squeeze_mask(normalize_mask(acc_skin)) if acc_skin is not None else None
+        pm = squeeze_mask(normalize_mask(person_mask)) if person_mask is not None else None
+        out, diag = apply_costume_shine(
+            img,
+            float(ctx.costume_shine) / 100.0,
+            boxes,
+            segment_classes=self._parser._segment_classes,
+            hair_full=self._parser.parse_hair_full_image,
+            person_mask=pm,
+            protect=protect,
+            face_skin=skin,
+        )
+        ctx._runtime_diagnostics["costume_shine"] = diag
+        from .effect_preview import capture
+        reasons = {
+            "no_segmentation": "Skipped — no reliable person or costume segmentation available.",
+            "no_skin_model": "Skipped — no reliable skin colour sample to protect skin.",
+            "no_costume": "Skipped — no confident costume region found.",
+            "no_shine": "Skipped — no glossy shine found on the costume.",
+        }
+        capture(ctx, "costume_shine", img, out,
+                reasons.get(diag.get("reason"), "Skipped — no costume shine to calm."))
         return out
 
     def _stage_costume_clarity(
