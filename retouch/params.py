@@ -1253,6 +1253,19 @@ _FACE_FEATURE_PARAMS = [
         max_val=100,
     ),
     ParamSpec(
+        # Teeth Brightening: lift and de-yellow the visible teeth, keeping
+        # their own shade; lips and gums untouched (retouch/teeth_brighten.py).
+        # Opt-in, 0 = off. Separate from teeth_whiten, which recipes set.
+        name="teeth_brighten",
+        cli_flag="teeth-brighten",
+        cli_type=int,
+        default=0,
+        recipe_key="eyes.teeth_brighten",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
+    ),
+    ParamSpec(
         name="lip_enhance",
         cli_flag="lip-enhance",
         cli_type=int,

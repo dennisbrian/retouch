@@ -473,6 +473,15 @@ the eye's own colour and brightness, so it works the same on darker and
 lighter skin. Closed eyes, and eyes the Eye Occlusion Gate skips, are left
 alone. Start near 50; it is off by default and uses no model.
 
+Teeth Brightening (`--teeth-brighten 0-100` in the CLI, the "Teeth
+Brightening" slider under Eyes & Lips, or `eyes.teeth_brighten` in a recipe,
+where 0.5 = 50) makes visible teeth brighter and less yellow while keeping
+their own shade and the dark gaps between them. It finds the teeth by
+colour inside the lips, so lips, gums and skin are left alone, and its
+checks are relative to the mouth's own colour and brightness, so darker
+skin and darker exposures get the same treatment. A closed mouth is left
+alone. Start near 50; it is off by default and uses no model.
+
 Set `RETOUCH_OFFLINE=1` before launching the GUI to disable update checks and
 prevent model downloads; the Advanced Retouch status panel shows the mode.
 

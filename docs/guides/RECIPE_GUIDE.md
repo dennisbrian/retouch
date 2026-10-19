@@ -86,6 +86,7 @@ These keys are defined inside nested dictionary blocks inside a recipe.
 | `eyes` | `sclera_vessel_remove` | 0 to 100 | `0` | `eye_sclera_vessel_remove` |
 | `eyes` | `gate` | bool | `true` | `eye_gate` |
 | `eyes` | `iris_pop` | 0.0 to 1.0 | `0` | `iris_pop` |
+| `eyes` | `teeth_brighten` | 0.0 to 1.0 | `0` | `teeth_brighten` |
 | `eyes` | `undereye_shadow_strength` | 0.0 to 1.0 | `0.0` | `undereye_shadow_strength` |
 | `eyes` | `whites` | 0 to 100 | `5` | `eye_enhance` |
 | `eyes` | `whites` | 0 to 100 | `5` | `teeth_whiten` |
@@ -410,6 +411,7 @@ and 0–360 for split-toning hue).
 | Eye Iris Hue Shift | `eye.iris_hue_shift` | direct |
 | Eye Iris Saturate | `eye.iris_saturate` | ÷ 100 |
 | Iris Pop | `eyes.iris_pop` | ÷ 100 |
+| Teeth Brightening | `eyes.teeth_brighten` | ÷ 100 |
 | Eye Sclera Brighten | `eye.sclera_brighten` | ÷ 100 |
 | Bloodshot Eye Whites (Eye Sclera Vessel Remove) | `eyes.sclera_vessel_remove` | ÷ 100 |
 | Fabric Wrinkle Smooth | `fabric.wrinkle_smooth` | ÷ 100 |

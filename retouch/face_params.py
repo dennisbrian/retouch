@@ -36,7 +36,7 @@ FACE_LOCAL_PARAM_NAMES: frozenset[str] = frozenset({
     "undereye_darken_removal", "undereye_puffiness_reduction",
     "undereye_shadow_strength", "catchlight", "eye_sclera_brighten",
     "eye_iris_saturate", "eye_iris_hue_shift", "eye_iris_brightness", "iris_pop",
-    "lip_enhance", "lip_tint", "lip_finish", "teeth_whiten",
+    "lip_enhance", "lip_tint", "lip_finish", "teeth_whiten", "teeth_brighten",
     "blush", "nose_blush", "nose_tip_blush", "under_eye_blush",
     "hair_enhance", "hair_deglare", "hair_ring_position", "hair_ring_tint",
     "hair_remove_flyaways",
