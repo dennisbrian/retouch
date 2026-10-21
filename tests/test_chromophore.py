@@ -102,3 +102,52 @@ def test_phase_accepts_hue_map():
     phase = hemoglobin_breakdown_phase(hemoglobin, hue)
     assert phase.dtype == np.uint8
     assert np.unique(phase).size == 1
+
+
+def test_tone_invariance_deep_vs_pale():
+    """A23 fairness: identical pigment *differences* must decompose to
+    comparable chromophore signals on deep and pale skin.
+
+    Build each synthetic patch by adding the same hemoglobin/redness delta on
+    top of a deep-skin and a pale-skin base. After the per-image floor (and
+    with the sRGB linearization), the hemoglobin delta between lesion and base
+    must be within a small relative tolerance across tones; with the old
+    absolute clip(0) + nonlinear input the deep-skin delta collapsed toward 0.
+    """
+    rng = np.random.default_rng(7)
+    # Base reflectances: deep skin vs pale skin (BGR), same chromaticity ratio.
+    deep = np.array([60, 40, 35], dtype=np.float32)
+    pale = np.array([210, 165, 145], dtype=np.float32)
+    # Same physical redness lesion: multiplicative bump in R (BGR order).
+    lesion_scale = np.array([1.35, 0.95, 0.95], dtype=np.float32)
+
+    def delta_hemoglobin(base: np.ndarray) -> float:
+        b = np.tile(base, (16, 16, 1))
+        l = np.tile(np.clip(base * lesion_scale, 0, 255), (16, 16, 1))
+        img = np.hstack([b, l])  # (16, 32, 3): left base, right lesion
+        noise = rng.normal(0, 1.5, img.shape).astype(np.float32)
+        img = np.clip(img + noise, 0, 255).astype(np.uint8)
+        _, hb = decompose_chromophores(img)
+        return float(hb[:, 16:].mean() - hb[:, :16].mean())
+
+    d_deep = delta_hemoglobin(deep)
+    d_pale = delta_hemoglobin(pale)
+    assert d_deep > 0.0, "lesion must raise hemoglobin on deep skin"
+    assert d_pale > 0.0, "lesion must raise hemoglobin on pale skin"
+    # Scale-normalized comparison: signals within ~2x of each other.
+    scale = max(d_deep, d_pale)
+    assert min(d_deep, d_pale) / scale > 0.5, (
+        f"hemoglobin signal tone-dependent: deep={d_deep:.4f} pale={d_pale:.4f}"
+    )
+
+
+def test_melanin_floor_preserves_relative_differences():
+    """Floor is a shift, not a clip: a uniform patch must decompose to an
+    exactly constant map (zero spread), with no negative values and no
+    absolute-clip noise."""
+    img = _patch(80, 45, 25)
+    melanin, hemoglobin = decompose_chromophores(img)
+    assert melanin.min() >= 0.0
+    assert hemoglobin.min() >= 0.0
+    assert float(melanin.max() - melanin.min()) < 1e-3
+    assert float(hemoglobin.max() - hemoglobin.min()) < 1e-3
