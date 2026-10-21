@@ -1539,6 +1539,7 @@ class SkinProcessor:
         skin_mask: Optional[np.ndarray],
         strength: int = 0,
         eyes_mask: Optional[np.ndarray] = None,
+        ied: Optional[float] = None,
     ) -> np.ndarray:
         """Shine / oil removal via specular detection and local median reconstruction.
 
@@ -1556,6 +1557,9 @@ class SkinProcessor:
             strength: 0–100 shine removal intensity. 0 returns input unchanged.
             eyes_mask: Optional (H, W) float mask marking eye regions to exclude.
                        Regions marked here will not be modified.
+            ied: Optional inter-eye distance in pixels. When given, small dark
+                 marks (beauty marks, drawn moles) on the matted skin keep
+                 their depth (see ``dark_marks.py``).
 
         Returns:
             (H, W, 3) uint8 or float32 BGR image, matching input dtype.
@@ -1676,6 +1680,13 @@ class SkinProcessor:
         s = strength / 100.0
         amount = np.clip(shine_mask * s * 0.70, 0.0, 0.70)
         L_new = L - L_excess * amount
+        if ied is not None and ied > 0:
+            from .dark_marks import find_dark_marks, fine_spread, restore_dark_marks
+            eyes_n = None
+            if eyes_mask is not None:
+                eyes_n = normalize_mask(eyes_mask.astype(np.float32, copy=False))
+            marks = find_dark_marks(L, skin_indices, ied, fine_spread(L, skin_indices, ied), eyes_mask=eyes_n)
+            L_new = restore_dark_marks(L_new, marks)
 
         # --- Reconstruct chroma from the surrounding diffuse skin ---
         a_new = a + (a_base - a) * amount

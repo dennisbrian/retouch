@@ -40,6 +40,7 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from .dark_marks import find_dark_marks, restore_dark_marks
 from .utils import bgr_f32_to_lab_f32, lab_f32_to_bgr_f32, normalize_mask
 
 # Broad-form baseline scale, fraction of the inter-eye distance (IED).
@@ -121,13 +122,20 @@ def powder_finish(
     gate = cv2.GaussianBlur(gate, (0, 0), max(0.8, fine))
 
     protect = sk
+    em_raw = None
     if eyes_mask is not None:
         em = normalize_mask(eyes_mask)
         if em is not None and em.shape == sk.shape and em.max() > 0:
+            em_raw = em
             r = max(1, int(round(ied * 0.06)))
             k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
             em = cv2.GaussianBlur(cv2.dilate(em, k), (0, 0), r * 0.5 + 0.5)
             protect = sk * (1.0 - np.clip(em, 0.0, 1.0))
+
+    # Small dark marks (beauty marks, drawn moles, freckles) are put back at
+    # their own depth at the end, so matting the lit skin around one
+    # doesn't fade it (see dark_marks.py).
+    marks = find_dark_marks(L, core, ied, spread, eyes_mask=em_raw)
 
     amount = np.clip(gate * s * _MAX_PULL, 0.0, _MAX_PULL) * protect
     L_new = L - excess * amount
@@ -144,6 +152,8 @@ def powder_finish(
     # Velvet: trim the bright side of fine sheen only.
     hp2 = L_new - cv2.GaussianBlur(L_new, (0, 0), fine)
     L_new = L_new - np.maximum(hp2, 0.0) * (s * _VELVET) * protect
+
+    L_new = restore_dark_marks(L_new, marks, protect)
 
     out_lab = np.stack([np.clip(L_new, 0, 255), a_new, b_new], axis=-1).astype(np.float32)
     out = lab_f32_to_bgr_f32(out_lab)

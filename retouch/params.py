@@ -977,7 +977,7 @@ _SKIN_PARAMS = [
     ),
     ParamSpec(
         # Porcelain "reference look" macro (perf_optimizations._face_polish_ctx).
-        # 0 = off. Raises the floor of shine_removal, shadow_lift,
+        # 0 = off. Raises the floor of shine_removal, face_shadow_fill,
         # face_exposure, sculpt and eye_enhance together; an explicit higher
         # value for any of those still wins.
         name="face_polish",

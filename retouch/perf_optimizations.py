@@ -208,9 +208,16 @@ def _ctx_get(ctx: Any, name: str, default: Any = None) -> Any:
 # these faces), eye_enhance (iris crispness already matched the references)
 # and the "powder" specular finish (subtracts equal B/G/R, so broad lit
 # cheeks went grey on pale skin, and it barely acted on darker skin).
+# 2026-10-21: the shadow component moved from Shadow Lift (60) to Face
+# Shadow Fill (60). Shadow Lift lifts any pixel below a whole-crop blur in
+# fixed Lab units, so it faded drawn beauty marks and lash lines and smoothed
+# texture (rednote shrine photo: tear-mole depth 12.2 -> 7.6 L at polish 100,
+# fine texture -8%). Shadow Fill lifts only broad shade in stops: the same
+# shadow-depth reduction on the fox, shrine and bunny photos (within 1-2 L),
+# texture kept, mark kept (with shine removal's mark guard: 11.2).
 _FACE_POLISH_COMPONENTS: Tuple[Tuple[str, float], ...] = (
     ("shine_removal", 100.0),
-    ("shadow_lift", 60.0),
+    ("face_shadow_fill", 60.0),
     ("face_exposure", 8.0),
 )
 
@@ -1010,7 +1017,7 @@ def _process_face_core(
             _norm_mask(regions.left_eye) if regions.left_eye is not None else np.zeros((roi_h, roi_w), dtype=np.float32),
             _norm_mask(regions.right_eye) if regions.right_eye is not None else np.zeros((roi_h, roi_w), dtype=np.float32),
         )
-        canvas = skin.shine_removal(canvas, regions.skin, int(ctx.shine_removal), eyes_mask=eyes_mask)
+        canvas = skin.shine_removal(canvas, regions.skin, int(ctx.shine_removal), eyes_mask=eyes_mask, ied=shifted_face.ied)
 
     # ---- R12: Specular finish re-render (matte / powder / dewy / glass_skin) ----
     # Default ("matte", 0.5, 0) is a no-op-equivalent (post-S4 specular ~ 0),
