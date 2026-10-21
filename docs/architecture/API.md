@@ -204,6 +204,7 @@ def process(
     chromatic_aberration: Optional[float] = None,
     grain: Optional[float] = None,
     halation: Optional[float] = None,
+    halation_mode: Optional[str] = None,
     lut: Optional[str] = None,
     tonal_curve_strength: Optional[float] = None,
     skin_protect_strength: Optional[float] = None,
@@ -502,6 +503,7 @@ Passing an explicit value override to these parameters takes precedence over the
 *   **`chromatic_aberration`** (Type: `float`, Default: `0.0`, Range: None, Recipe key: `chromatic_aberration`): Adjusts the chromatic aberration parameter.
 *   **`grain`** (Type: `float`, Default: `0.0`, Range: None, Recipe key: `grain`): Adjusts the grain parameter.
 *   **`halation`** (Type: `float`, Default: `0.0`, Range: None, Recipe key: `halation`): Adjusts the halation parameter.
+*   **`halation_mode`** (Type: `str`, Default: `classic`, Choices: `classic`, `point_light`, Recipe key: `halation_mode`): Recipe-only. `point_light` swaps the classic grey>200 glow for a film-style red-orange glow around near-white lights brighter than their surroundings (skin never seeds it; size scales with the photo). Used by `cosplay_night_film_v1`.
 
 ##### **Color Grading & LUTs**
 

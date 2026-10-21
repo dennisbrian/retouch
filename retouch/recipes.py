@@ -2822,6 +2822,168 @@ RECIPES["cosplay_feed_pop_v1"] = {
     "slimming": 0.0,
 }
 
+# ---------------------------------------------------------------------------
+# 2026-10-21 cosplay look set: four looks the curated catalog had no answer
+# for, picked by Alex from the "New recipe research" report. Pastel Soft
+# (magical girl / idol / lolita; the archive cosplay_pastel_dream_v1 is a
+# different look: a pink_dream grade over the face on glass skin), Ink Wash (hanfu / wuxia / Genshin Liyue),
+# Anime Sky (anime-film daylight skies) and Night Film (CineStill 800T style
+# night shoots). Same rules as the 2026-09-25 scene set: real face/body shape
+# kept (slimming 0), the cosplay base's pink nose / under-eye blush off, and
+# no color_harmony grade (it grades the face too). Colour moves come from
+# split toning, per-hue HSL bands and finish ops, with skin_protect keeping
+# grade colour off skin. skin_protect's mask is a hue/chroma one (chroma > 8),
+# so white face paint is not covered by it: tints stay small for that reason.
+# ---------------------------------------------------------------------------
+
+RECIPES["cosplay_pastel_soft_v1"] = {
+    # Soft pastel "kawaii" finish: milky lifted blacks, low contrast, colours
+    # softened toward pastel, peach-pink highlights and lavender-blue shadows,
+    # a gentle glow. Scaled down from a published pastel recipe (contrast +10,
+    # shadows +25, blacks +15, saturation -15, split 35/210) so faces hold.
+    # No global saturation or negative vibrance: both run on the whole frame
+    # with no skin mask, and the first version (saturation -10, contrast -4)
+    # took 22% of the chroma out of natural skin and 27% at 0.45x exposure,
+    # which reads ashy on darker skin. Muting is in the green / cyan bands
+    # only: the HSV band op adds a fixed amount, so cutting blue / purple /
+    # magenta greyed the faint lavender of white face paint (C* 10 -> 4 on
+    # Alex's bunny photos). Pink and lavender costumes are pastel already.
+    "extends": "cosplay_clear_v1",
+    "skin": {"warmth": 0.25},
+    "color_harmony": {"amount": 0.0},
+    "finish": {"fade_toe": 25.0, "airy_haze": 8.0},
+    "contrast": -2.0,
+    "shadows": 6.0,
+    "highlights": -8.0,
+    "hsl_adjustments": {
+        "saturation": {"green": -15.0, "cyan": -15.0},
+    },
+    "highlight_hue": 350.0,
+    "highlight_sat": 6.0,
+    "shadow_hue": 235.0,
+    "shadow_sat": 10.0,
+    "skin_protect": 0.5,
+    "bloom": {"opacity": 0.06, "threshold": 205.0, "softness": 40.0},
+    "highlight_rolloff": 0.45,
+    "blush": 15.0,
+    "nose_blush": False,
+    "under_eye_blush": False,
+    "slimming": 0.0,
+}
+
+RECIPES["cosplay_ink_wash_v1"] = {
+    # Chinese ancient-style (gufeng) look for hanfu, wuxia, xianxia and
+    # Genshin Liyue characters: lower contrast, greens turned to a muted jade
+    # cyan, a slight cool cast so the frame reads ink / grey / jade, soft
+    # person-aware haze, fine grain. Reds and oranges are left alone: red is
+    # the accent (like the seal on an ink painting) and orange is where skin
+    # of every tone sits. The source guide also brightens + desaturates orange
+    # for "fair" skin; that is a whitening push that greys darker skin, so it
+    # is deliberately not here (whiten stays its own slider).
+    "extends": "cosplay_clear_v1",
+    "color_harmony": {"amount": 0.0},
+    "finish": {"airy_haze": 10.0},
+    "lips": {"tint": None},
+    # No global saturation and only a light contrast cut: both run on the
+    # whole frame without a skin mask, and the first version (saturation -8,
+    # contrast -6) took 28% of the chroma out of natural skin. The muting is
+    # in the green / cyan / yellow bands instead.
+    "contrast": -2.0,
+    # Sheer white hanfu clips first; highlights + rolloff hold it.
+    "highlights": -8.0,
+    "shadows": 6.0,
+    "blacks": -4.0,
+    "hsl_adjustments": {
+        "hue": {"green": 15.0},
+        "saturation": {"green": -30.0, "cyan": -15.0, "yellow": -10.0},
+        "luminance": {"green": 10.0},
+    },
+    # Cool cast in the shadows only; a midtone tint pulled skin a* down.
+    "shadow_hue": 195.0,
+    "shadow_sat": 8.0,
+    "skin_protect": 0.6,
+    "grain_strength": 0.05,
+    "vignette": 6.0,
+    "highlight_rolloff": 0.50,
+    "blush": 10.0,
+    "nose_blush": False,
+    "under_eye_blush": False,
+    "slimming": 0.0,
+}
+
+RECIPES["cosplay_anime_sky_v1"] = {
+    # Anime-film daylight (Shinkai-style): deep clean blue sky, bright
+    # clouds, warm sunlit highlights, cool lifted shadows, slight glow on
+    # bright edges. Unlike cosplay_kitsune_daylight_v1 (a blue_dream grade
+    # over the whole frame, face included) this moves only the blue / cyan /
+    # green bands, so faces keep their own colour. Blue and teal wigs get the
+    # same push as the sky; gamut compression keeps them from clipping.
+    "extends": "cosplay_clear_v1",
+    "color_harmony": {"amount": 0.0},
+    "hsl_adjustments": {
+        "hue": {"cyan": 8.0},
+        # No blue luminance cut: the HSL bands don't gate on chroma, so it
+        # dimmed bluish-white face paint by ~4 L on a real photo.
+        # Small: the HSV band add is a fixed amount, so near-neutral bluish
+        # pixels (white face paint, grey walls) gain the most relative tint.
+        "saturation": {"blue": 10.0, "cyan": 6.0, "green": 6.0},
+    },
+    "highlight_hue": 45.0,
+    "highlight_sat": 8.0,
+    "shadow_hue": 215.0,
+    "shadow_sat": 8.0,
+    "vibrance": 12.0,
+    "clarity": 6.0,
+    "contrast": 4.0,
+    "highlights": -12.0,
+    "highlight_rolloff": 0.45,
+    "gamut_compress": True,
+    "skin_protect": 0.5,
+    "bloom": {"opacity": 0.05, "threshold": 215.0},
+    "blush": 10.0,
+    "nose_blush": False,
+    "under_eye_blush": False,
+    "slimming": 0.0,
+}
+
+RECIPES["cosplay_night_film_v1"] = {
+    # CineStill 800T at night: cool and a little muted, greens toward teal,
+    # teal shadows, and a red-orange glow around bulbs, neon and street lamps
+    # against dark surroundings, plus grain. Different from
+    # cosplay_neon_night_v1, which keeps the scene's own colour and has no
+    # film character. The glow is the point-light halation
+    # (retouch/halation.py): sized to the photo and never seeded by skin, so
+    # pale faces, white paint and white wigs don't halo the way the classic
+    # grey>200 halation makes them. The cool grade would turn skin cyan, so
+    # Skin Warmth holds it (tone-relative chroma floor) with skin_protect.
+    "extends": "cosplay_clear_v1",
+    "skin": {"warmth": 0.30},
+    "color_harmony": {"amount": 0.0},
+    "halation": 0.5,
+    "halation_mode": "point_light",
+    "hsl_adjustments": {
+        "hue": {"green": 15.0},
+        "saturation": {"green": -10.0},
+    },
+    "shadow_hue": 190.0,
+    "shadow_sat": 16.0,
+    "highlight_hue": 25.0,
+    "highlight_sat": 6.0,
+    "contrast": 4.0,
+    "highlights": -8.0,
+    "blacks": -6.0,
+    "vibrance": -4.0,
+    "skin_protect": 0.5,
+    # 0.10 clumped into dark blotches on deep red velvet at 26 MP; 0.04
+    # still reads as film grain without them.
+    "grain_strength": 0.04,
+    "highlight_rolloff": 0.40,
+    "blush": 10.0,
+    "nose_blush": False,
+    "under_eye_blush": False,
+    "slimming": 0.0,
+}
+
 RECIPES["studio_porcelain_clear_v1"] = {
     # Studio portrait on the porcelain base + new primitives. The porcelain
     # base unifies skin tone; anisotropic + region-aware smooth then clean the
@@ -4538,6 +4700,10 @@ CURATED_RECIPE_NAMES: List[str] = [
     "cosplay_neon_night_v1",
     "cosplay_dark_villain_v1",
     "cosplay_feed_pop_v1",
+    "cosplay_pastel_soft_v1",
+    "cosplay_ink_wash_v1",
+    "cosplay_anime_sky_v1",
+    "cosplay_night_film_v1",
     "game_character_v1",
     "game_character_v2",
     "game_character_v3",

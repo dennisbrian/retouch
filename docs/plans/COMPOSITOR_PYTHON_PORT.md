@@ -111,6 +111,30 @@ automatically preserved by a Python translation.
 
 ### Progress
 
+- 2026-10-21, milestone 6 dirty-band caching: after an edit that only swaps
+  a layer's pixels or mask (brush, eraser, heal, clone, colour brush, undo of
+  those) or changes a raster layer's opacity, visibility or blend mode, the
+  compositor re-renders only the 256-row bands the edit reaches and copies the
+  rest from the previous result (`composite.py` `_patch_previous`). Changed
+  rows come from diffing the old and new buffers when the layer lands 1:1 on
+  document rows, otherwise from the layer's transformed extent; blur-based
+  adjustment and layer-effect margins widen them. Structure, folders,
+  adjustment/effect records, geometry, clip-base visibility and whole-plane
+  kinds (Scanlines) still render in full. The bands drawn are the ones a full
+  render draws, so the output is byte-identical (tests compare every case,
+  plus a 25-step random edit sequence, against fresh full renders). The
+  memo now keeps one entry per canvas size (two at most), so the reduced
+  preview and the native composite no longer evict each other, and covers
+  canvases up to 50 MP (was 24 MP). Measured in the cloud sandbox on the two
+  4160 x 6240 bunny photos (photo + masked 80% layer + Exposure adjustment,
+  a 300 x 150 mask stroke): native composite 3.2 s -> 0.6-0.7 s, identical
+  bytes; an unchanged re-composite at that size is now a cache hit. Most of
+  what remains is copying the 104 MB previous result and diffing the mask.
+  Seen while testing: main's Tonal Contrast/Bloom blur
+  (`adjustments._gaussian_blur_3`) runs along rows only, so their vertical
+  margin is never used; not changed here. Tests:
+  `tests/test_editor_dirty_bands.py` (19). Not profiled on a Mac or Windows.
+
 - 2026-10-11, milestone 6 crash recovery: the Layer Editor autosaves unsaved
   work. After any edit that leaves the document dirty, `retouch/editor/recovery.py`
   writes the current revision in a background thread as an ordinary `.comp`
@@ -691,7 +715,8 @@ performance guarantee.
 
 Remaining separate gates: exact rotated-mask sampling parity, representative
 large stacks, packaged desktop recovery/interaction, Windows qualification,
-high-bit/color-managed editor export, dirty-tile caching and acceleration.
+high-bit/color-managed editor export and acceleration (dirty-band caching
+landed 2026-10-21, see Progress).
 The finishing backlog categories now have usable implementations; they do not
 cover every upstream adjustment, selection tool or blend mode. All seven layer
 effect kinds render (stroke, drop shadow, colour overlay, inner shadow, outer

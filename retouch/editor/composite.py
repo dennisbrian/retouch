@@ -59,50 +59,201 @@ _MAX_EFFECTS_WINDOW_PIXELS = 80_000_000  # upstream LayerEffectsSurface.swift:47
 # back to the per-band window path above.
 _MAX_EFFECTS_CACHE_PIXELS = 24_000_000
 
-# --- Composite memo ----------------------------------------------------------
-# Single-slot content digest: re-compositing an unchanged document (the UI's
-# read-render loop after every edit callback) returned identical output, so
-# the plain 8-bit composite of the same state is served from cache. The key
-# digests every field the band renderer reads; margin windows and whole-plane
-# adjustments derive purely from the digested adjustment/effects records.
-# Frozen pixel/mask buffers are shared across snapshots
-# (``commands._snapshot`` keeps buffer identity), so ``id()`` is stable while
-# any history state retains the buffer; the entry keeps weak references to
-# the key's buffers, and a dead weakref is a miss, so a freed buffer whose
-# address a later array reuses can never alias to a false hit. Direct pixel
-# mutation cannot corrupt the key: buffers are frozen read-only
-# (``document._frozen``), and property edits change the digest. Results are
-# returned read-only; every caller copies before writing (audited).
+# --- Composite memo and dirty bands --------------------------------------------
+# Re-compositing an unchanged document (the UI's read-render loop after every
+# edit callback) returns identical output, so the plain 8-bit composite of the
+# same state is served from cache. The key digests every field the band
+# renderer reads; margin windows and whole-plane adjustments derive purely
+# from the digested adjustment/effects records. Frozen pixel/mask buffers are
+# shared across snapshots (``commands._snapshot`` keeps buffer identity), so
+# ``id()`` is stable while any history state retains the buffer; the entry
+# keeps weak references to the key's buffers, and a dead weakref is a miss, so
+# a freed buffer whose address a later array reuses can never alias to a false
+# hit. Direct pixel mutation cannot corrupt the key: buffers are frozen
+# read-only (``document._frozen``), and property edits change the digest.
+# Results are returned read-only; every caller copies before writing (audited).
+#
+# One entry is kept per (document, canvas size), two at most, so the reduced
+# preview and the native composite (local retouch, selections, recipe capture)
+# no longer evict each other.
+#
+# Dirty bands (milestone 6): when the cached entry is for the same layer stack
+# and an edit only changed pixel buffers, masks, opacity, visibility or blend
+# mode of plain raster layers, only the 256-row bands those changes reach are
+# re-rendered; the rest is copied from the previous result. The bands are the
+# ones a full render would draw, with a fresh renderer, so the result is the
+# same bytes a full composite gives (tests compare them). Changed rows come
+# from the old and new buffers themselves when a layer is drawn pixel for
+# pixel, otherwise from the layer's whole transformed extent; blur-based
+# adjustments and layer effects widen them by their margins. Anything else
+# (structure, folders, adjustment or effect records, geometry, whole-plane
+# kinds) renders in full.
 _COMPOSITE_MEMO = {}
+_MEMO_SLOTS = 2
+# A 50 MP RGBA result is 200 MB; larger canvases are rendered every time.
+_MEMO_MAX_PIXELS = 50_000_000
+# Above this share of rows a full render is as cheap as patching.
+_DIRTY_MAX_SHARE = 0.6
+_BAND = 256
+
+_PROPERTY_FIELDS = (4, 5, 6, 13)  # visible, opacity, blend_mode, mask_enabled
+
+
+def _layer_key(layer):
+    return (layer.id, id(layer.pixels), id(layer.mask), id(layer.recipe_source),
+            layer.visible, layer.opacity, layer.blend_mode, layer.origin,
+            layer.size, layer.rotation, layer.flip_x, layer.flip_y,
+            layer.sampling, layer.mask_enabled, layer.mask_source_id,
+            layer.parent_id, layer.is_group, repr(layer.adjustment),
+            repr(layer.effects), repr(layer.mask_placement), repr(layer.text),
+            repr(layer.shape))
+
 
 def _composite_key(document):
     """Digest of every field the band renderer reads."""
     return (document.document_id, document.width, document.height,
-            tuple((layer.id, id(layer.pixels), id(layer.mask),
-                   id(layer.recipe_source), layer.visible, layer.opacity,
-                   layer.blend_mode, layer.origin, layer.size, layer.rotation,
-                   layer.flip_x, layer.flip_y, layer.sampling, layer.mask_enabled,
-                   layer.mask_source_id, layer.parent_id, layer.is_group,
-                   repr(layer.adjustment), repr(layer.effects),
-                   repr(layer.mask_placement), repr(layer.text),
-                   repr(layer.shape))
-                  for layer in document.layers))
+            tuple(_layer_key(layer) for layer in document.layers))
 
-def _memo_hit(key):
-    entry = _COMPOSITE_MEMO.get('entry')
-    if entry is None or entry[0] != key:
+
+def _slot(document):
+    return (document.document_id, document.width, document.height)
+
+
+def _layer_refs(document):
+    return [tuple(None if a is None else weakref.ref(a)
+                  for a in (layer.pixels, layer.mask))
+            for layer in document.layers]
+
+
+def _memo_hit(key, slot):
+    entry = _COMPOSITE_MEMO.get(slot)
+    if entry is None or entry['key'] != key:
         return None
-    if any(ref() is None for ref in entry[2]):
+    if any(ref() is None for ref in entry['buffers']):
         return None  # a key buffer died; its id() may have been reused
-    return entry[1]
+    _COMPOSITE_MEMO[slot] = _COMPOSITE_MEMO.pop(slot)  # most recently used
+    return entry['rgba']
 
-def _memo_store(key, rgba, document):
+
+def _memo_store(key, slot, rgba, document):
     buffers = [weakref.ref(a) for layer in document.layers
                for a in (layer.pixels, layer.mask, layer.recipe_source)
                if a is not None]
     rgba = rgba.view()  # read-only result: callers copy before writing
     rgba.flags.writeable = False
-    _COMPOSITE_MEMO['entry'] = (key, rgba, buffers)
+    _COMPOSITE_MEMO.pop(slot, None)
+    while len(_COMPOSITE_MEMO) >= _MEMO_SLOTS:
+        _COMPOSITE_MEMO.pop(next(iter(_COMPOSITE_MEMO)))
+    _COMPOSITE_MEMO[slot] = {'key': key, 'rgba': rgba, 'buffers': buffers,
+                             'layers': _layer_refs(document)}
+    return rgba
+
+
+def _layer_rows(layer, height):
+    """Document rows [top, bottom) a raster layer can draw on, any transform."""
+    w, h = layer.size
+    matrix = _doc_matrix(layer.origin, layer.size, layer.rotation,
+                         layer.flip_x, layer.flip_y)
+    ys = [matrix[1, 0] * x + matrix[1, 1] * y + matrix[1, 2]
+          for x, y in ((0, 0), (w, 0), (0, h), (w, h))]
+    # Two rows of slack for resampling kernels at a fractional edge.
+    return max(0, int(math.floor(min(ys))) - 2), min(height, int(math.ceil(max(ys))) + 2)
+
+
+def _changed_rows(old, new):
+    """Rows (of the buffer) where ``old`` and ``new`` differ, as (first, last+1)."""
+    diff = old != new
+    if diff.ndim == 3:
+        diff = diff.any(axis=2)
+    rows = np.flatnonzero(diff.any(axis=1))
+    if rows.size == 0:
+        return None
+    return int(rows[0]), int(rows[-1]) + 1
+
+
+def _buffer_rows(layer, old, new, height):
+    """Document rows a buffer swap on ``layer`` can change, or None if none.
+
+    Exact rows when the buffer lands 1:1 on document rows (upright, no
+    vertical flip, integer row origin, no resampling, a linked mask);
+    otherwise the layer's whole transformed extent."""
+    extent = _layer_rows(layer, height)
+    if old is None or new is None or old.shape != new.shape:
+        return extent
+    w, h = layer.size
+    oy = layer.origin[1]
+    if (layer.rotation % 360 != 0 or layer.flip_y or new.shape[:2] != (h, w)
+            or not float(oy).is_integer()
+            or (new.ndim == 2 and layer.mask_placement is not None)):
+        return extent
+    rows = _changed_rows(old, new)
+    if rows is None:
+        return None
+    return max(0, int(oy) + rows[0]), min(height, int(oy) + rows[1])
+
+
+def _dirty_rows(entry, key, document):
+    """Row intervals an edit since ``entry`` can change, or None for 'all'."""
+    from .adjustments import adjustment_margin
+    old_layers = entry['key'][3]
+    new_layers = key[3]
+    if (len(old_layers) != len(new_layers)
+            or any(o[0] != n[0] for o, n in zip(old_layers, new_layers))):
+        return None
+    margin, effect_margin = 0, 0
+    sources = {l.mask_source_id for l in document.layers if l.mask_source_id}
+    for layer in document.layers:
+        if layer.adjustment is not None:
+            if _adjustment_needs_whole_plane(layer.adjustment):
+                return None
+            margin += adjustment_margin(layer.adjustment)
+        if layer.effects is not None and not layer.effects.is_empty():
+            effect_margin = max(effect_margin, _effect_margin(layer.effects))
+    margin += effect_margin
+    height = document.height
+    intervals = []
+    for index, (old, new) in enumerate(zip(old_layers, new_layers)):
+        layer = document.layers[index]
+        refs = entry['layers'][index]
+        for field, ref, buffer in zip((1, 2), refs, (layer.pixels, layer.mask)):
+            # An equal id is only the same buffer while the old one lives;
+            # a freed buffer's address can be reused by a new array.
+            if old[field] == new[field] and ref is not None and ref() is not buffer:
+                return None
+        if old == new:
+            continue
+        if layer.is_group:
+            return None  # folder masks and visibility reach every child
+        changed = [i for i in range(4, len(new)) if old[i] != new[i]]
+        if any(i not in _PROPERTY_FIELDS for i in changed):
+            return None  # geometry, hierarchy, records: render in full
+        if 4 in changed and layer.id in sources:
+            return None  # showing/hiding a clip base re-forms its stack
+        if changed:
+            intervals.append(_layer_rows(layer, height))
+        for slot, (field, ref) in enumerate(zip((1, 2), refs)):
+            if old[field] == new[field]:
+                continue
+            old_buffer = None if ref is None else ref()
+            if ref is not None and old_buffer is None:
+                return None  # the old buffer is gone: nothing to diff against
+            new_buffer = layer.pixels if slot == 0 else layer.mask
+            rows = _buffer_rows(layer, old_buffer, new_buffer, height)
+            if rows is not None:
+                intervals.append(rows)
+    rows = []
+    for top, bottom in intervals:
+        if bottom > top:
+            rows.append((max(0, top - margin), min(height, bottom + margin)))
+    return rows
+
+
+def _dirty_bands(rows):
+    """256-row bands (the full render's own split) touching ``rows``."""
+    bands = set()
+    for top, bottom in rows:
+        bands.update(range(top // _BAND * _BAND, bottom, _BAND))
+    return sorted(bands)
 
 
 def _downsample_level(factor):
@@ -173,20 +324,45 @@ def composite(document, band_rows=256):
                          % (MAX_SURFACE_PIXELS // 1_000_000))
     if not isinstance(band_rows, int) or isinstance(band_rows, bool) or band_rows < 1:
         raise ValueError('band_rows must be a positive integer')
-    if band_rows == 256 and width * height <= _MAX_EFFECTS_CACHE_PIXELS:
-        key = _composite_key(document)
-        cached = _memo_hit(key)
+    memo = band_rows == _BAND and width * height <= _MEMO_MAX_PIXELS
+    if memo:
+        key, slot = _composite_key(document), _slot(document)
+        cached = _memo_hit(key, slot)
         if cached is not None:
             return cached
+        patched = _patch_previous(document, key, slot)
+        if patched is not None:
+            return _memo_store(key, slot, patched, document)
     renderer = _BandRenderer(document)
     out = np.zeros((height, width, 4), np.uint8)
     for top in range(0, height, band_rows):
         bottom = min(height, top + band_rows)
         rgb, alpha = renderer.render(top, bottom)
         out[top:bottom] = _straight(rgb, alpha)
-    if band_rows == 256 and width * height <= _MAX_EFFECTS_CACHE_PIXELS:
-        _memo_store(key, out, document)
-        return _COMPOSITE_MEMO['entry'][1]
+    if memo:
+        return _memo_store(key, slot, out, document)
+    return out
+
+
+def _patch_previous(document, key, slot):
+    """The previous composite with only the dirty bands re-rendered, or None."""
+    entry = _COMPOSITE_MEMO.get(slot)
+    if entry is None:
+        return None
+    rows = _dirty_rows(entry, key, document)
+    if rows is None:
+        return None
+    height = document.height
+    bands = _dirty_bands(rows)
+    if len(bands) * _BAND > _DIRTY_MAX_SHARE * height:
+        return None
+    out = entry['rgba'].copy()
+    if bands:
+        renderer = _BandRenderer(document)
+        for top in bands:
+            bottom = min(height, top + _BAND)
+            rgb, alpha = renderer.render(top, bottom)
+            out[top:bottom] = _straight(rgb, alpha)
     return out
 
 def composite_16(document, band_rows=256):

@@ -1735,11 +1735,11 @@ def main() -> None:
                         help="Optional RFC 3161 timestamp server for signatures")
     parser.add_argument("--fail-on-qa", action="store_true",
                         help="Exit with code 1 if any QA detector flags an artifact")
-    parser.add_argument("--social-crops", nargs="?", const="4:5,9:16,1:1", default=None,
+    parser.add_argument("--social-crops", nargs="?", const="3:4,4:5,9:16,1:1", default=None,
                         metavar="FORMATS",
                         help="After the batch, export face-aware crops for posting into "
                              "<output>/social/ (4:5, 9:16, 1:1, 3:4 or 'all'; "
-                             "default with no value: 4:5,9:16,1:1)")
+                             "default with no value: 3:4,4:5,9:16,1:1)")
     parser.add_argument("--social-size", choices=["platform", "full"], default="platform",
                         help="Social crop size: platform = 1080 px wide (default), "
                              "full = native crop resolution")

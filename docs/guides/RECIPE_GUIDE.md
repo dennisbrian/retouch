@@ -265,6 +265,7 @@ These keys are defined directly at the top level of a recipe dictionary.
 | `grain_strength` | 0.0 to 1.0 | `0.0` | `--film-grain` if applicable |
 | `grain` | 0.0 to 1.0 | `0.0` | `--grain` if applicable |
 | `halation` | 0.0 to 1.0 | `0.0` | None |
+| `halation_mode` | classic / point_light | `classic` | None (recipe only; `point_light` = film glow around lamps) |
 | `highlight_hue` | 0.0 to 1.0 | `0.0` | None |
 | `highlight_rolloff` | 0.0 to 1.0 | `0.0` | `--highlight-rolloff` if applicable |
 | `highlight_rolloff_strength` | 0.0 to 1.0 | `0.0` | `--highlight-rolloff` if applicable |

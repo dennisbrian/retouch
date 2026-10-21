@@ -719,14 +719,20 @@ def list_photos(folder: Union[str, Path], *, recursive: bool = False) -> List[Pa
 
 
 def export_cover_crop(cover: Union[str, Path], out_dir: Union[str, Path], detector=None) -> Optional[Path]:
-    """Write the cover's 4:5 crop with the social-crop exporter; returns its path or None."""
+    """Write the cover's 4:5 and 3:4 crops with the social-crop exporter; returns the 4:5 path or None.
+
+    The 3:4 (1080x1440) crop sits next to it: Instagram shows 3:4 feed posts natively.
+    """
     from retouch.social_crops import export_social_crops
 
-    for res in export_social_crops(cover, out_dir, [FORMATS["4:5"]], detector=detector, force=True):
-        if res.status == "done":
-            return res.path
-        _logger.warning("cover hook: 4:5 crop failed: %s", res.error)
-    return None
+    found = None
+    for res in export_social_crops(cover, out_dir, [FORMATS["4:5"], FORMATS["3:4"]],
+                                   detector=detector, force=True):
+        if res.status != "done":
+            _logger.warning("cover hook: %s crop failed: %s", res.fmt_key, res.error)
+        elif res.fmt_key == "4:5":
+            found = res.path
+    return found
 
 
 def write_scores(ranked: Sequence[CoverScore], suggestion: CoverSuggestion, out_dir: Union[str, Path],
