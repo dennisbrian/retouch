@@ -99,6 +99,7 @@ def skin_warmth(
     skin_mask: np.ndarray,
     strength: float,
     person_mask: Optional[np.ndarray] = None,
+    exclude_mask: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Warm natural skin toward peach. See the module docstring.
 
@@ -109,6 +110,9 @@ def skin_warmth(
         strength: 0-100; 0 returns ``img`` unchanged.
         person_mask: optional (H, W) person mask; when given, same-coloured
             body skin inside it is warmed with the face.
+        exclude_mask: optional (H, W) mask (the whole-frame hair mask) the
+            colour key must not reach: a white or blonde wig can match pale
+            skin's a*/b* and would otherwise be warmed with it.
 
     Returns:
         Image of the same dtype and range as ``img``.
@@ -130,6 +134,12 @@ def skin_warmth(
         pm = _norm(person_mask)
         if pm.shape != m.shape:
             pm = None
+
+    keep_out = None
+    if exclude_mask is not None:
+        ex = _norm(exclude_mask)
+        if ex.shape == m.shape and float(ex.max()) > 0.0:
+            keep_out = np.float32(1.0) - ex
 
     n, labels, stats, _ = cv2.connectedComponentsWithStats((m > 0.5).astype(np.uint8), 8)
     min_px = max(200, int(0.00002 * m.size))
@@ -180,6 +190,8 @@ def skin_warmth(
         kd = max(3, face_w // 8) | 1
         own = m * cv2.dilate(sel.astype(np.uint8), np.ones((kd, kd), np.uint8)).astype(np.float32)
         key *= reach
+        if keep_out is not None:
+            key *= keep_out
         w_i = np.maximum(own, key, out=key)
         w_i *= np.float32(gate)
         cv2.scaleAdd(w_i, float(sa), da, dst=da)
