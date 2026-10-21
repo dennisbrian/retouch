@@ -356,6 +356,21 @@ def test_warp_rejects_stale_capture(operation):
     assert len(edits.document.layers) == 1
 
 
+@pytest.mark.parametrize('operation', ['Smudge', 'Liquify'])
+def test_single_click_warp_tells_user_to_drag(operation):
+    edits = edge_history()
+    before = composite(edits.document)
+    _, captured = capture_composite(edits)
+    width, height = captured.preview_size
+    strokes = np.zeros((height, width, 4), np.uint8)
+    strokes[50, 100] = [255, 0, 0, 255]  # a click-sized dot, no drag
+    with pytest.raises(ValueError, match='Drag to move pixels'):
+        apply_local_retouch(edits, captured, {'layers': [strokes]}, operation,
+                            brush_size=24, brush_strength=90)
+    assert edits.revision == captured.revision
+    np.testing.assert_array_equal(composite(edits.document), before)
+
+
 def test_warp_selection_limits_the_stroke():
     edits = edge_history()
     _, captured = capture_composite(edits)

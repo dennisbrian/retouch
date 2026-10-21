@@ -370,14 +370,35 @@ def _atomic_write(path: Path, data: bytes) -> None:
         raise
 
 
-def write_sidecar(image: PathLike, fields: XmpFields) -> Optional[Path]:
+def _check_sidecar_target(target: Path, root: Optional[PathLike] = None) -> None:
+    """Refuse to write a sidecar through a symlink or outside *root*.
+
+    The image path (and so the sidecar path) can come from a review-record
+    ``source`` field or a manifest, i.e. data retouch did not generate, so a
+    pre-planted symlink or ``..`` traversal must not turn a sidecar write into
+    an arbitrary-file overwrite.
+    """
+    if target.is_symlink():
+        raise XmpError(f"sidecar target is a symlink: {target}")
+    if root is not None:
+        boundary = Path(root).expanduser().resolve()
+        resolved = target.resolve()
+        if boundary not in (resolved, *resolved.parents):
+            raise XmpError(f"sidecar target escapes {boundary}: {target}")
+
+
+def write_sidecar(image: PathLike, fields: XmpFields,
+                  root: Optional[PathLike] = None) -> Optional[Path]:
     """Create or merge the ``.xmp`` sidecar for *image*.
 
     Returns the sidecar path when it was written, ``None`` when nothing
     changed. Raises :class:`XmpError` when an existing sidecar is not
-    readable XMP (it is left untouched).
+    readable XMP (it is left untouched), when the sidecar path is a symlink
+    (including a symlinked ``.xmp.orig`` backup) or, when *root* is given,
+    when the sidecar would land outside *root*.
     """
     target = sidecar_path(image)
+    _check_sidecar_target(target, root)
     existing: Optional[str] = None
     if target.exists():
         existing = target.read_text(encoding="utf-8-sig", errors="strict")
@@ -388,6 +409,8 @@ def write_sidecar(image: PathLike, fields: XmpFields) -> Optional[Path]:
         return None
     if existing is not None and not read_fields(existing)["managed"]:
         backup = target.with_name(target.name + ".orig")
+        if backup.is_symlink():
+            raise XmpError(f"sidecar backup is a symlink: {backup}")
         if not backup.exists():
             shutil.copy2(target, backup)
     _atomic_write(target, text.encode("utf-8"))
@@ -411,6 +434,8 @@ def _jpeg_segments(data: bytes) -> Iterable[Tuple[int, int, int]]:
             continue
         length = struct.unpack(">H", data[pos + 2:pos + 4])[0]
         end = pos + 2 + length
+        if length < 2 or end > len(data):
+            raise XmpError("corrupt JPEG header")
         yield marker, pos, end
         if marker == 0xDA:  # start of scan: header ends
             return
@@ -578,9 +603,9 @@ def _empty_counts() -> Dict[str, int]:
     return {"sidecars": 0, "embedded": 0, "unchanged": 0, "missing": 0, "errors": 0}
 
 
-def _write_one(counts: Dict[str, int], kind: str, func, path: Path, fields: XmpFields) -> None:
+def _write_one(counts: Dict[str, int], kind: str, func, path: Path, fields: XmpFields, **kw) -> None:
     try:
-        written = func(path, fields)
+        written = func(path, fields, **kw)
     except (OSError, XmpError, ValueError) as exc:
         logger.warning("XMP not written for %s: %s", path, exc)
         counts["errors"] += 1
@@ -616,6 +641,8 @@ def write_review_xmp(root: PathLike, decisions: Optional[Union[PathLike, Mapping
         source = Path(record.source)
         if sources:
             if source.is_file():
+                # Sources sit outside the review root by design; write_sidecar
+                # still refuses a symlinked sidecar target.
                 _write_one(counts, "sidecars", write_sidecar, source, fields)
             else:
                 counts["missing"] += 1
@@ -624,8 +651,10 @@ def write_review_xmp(root: PathLike, decisions: Optional[Union[PathLike, Mapping
             if output.is_file():
                 embeddable = (output.suffix.lower() in (".jpg", ".jpeg")
                               and not has_content_credentials(output))
-                kind = "embedded" if embeddable else "sidecars"
-                _write_one(counts, kind, write_output_metadata, output, fields)
+                if embeddable:
+                    _write_one(counts, "embedded", embed_in_jpeg, output, fields)
+                else:
+                    _write_one(counts, "sidecars", write_sidecar, output, fields, root=root)
             else:
                 counts["missing"] += 1
     return counts
@@ -643,7 +672,7 @@ def write_shoot_xmp(manifest: Union[PathLike, Any]) -> Dict[str, int]:
         if not getattr(asset, "present", True) or not source.is_file():
             counts["missing"] += 1
             continue
-        _write_one(counts, "sidecars", write_sidecar, source, fields_for_shoot_asset(asset))
+        _write_one(counts, "sidecars", write_sidecar, source, fields_for_shoot_asset(asset), root=root)
     return counts
 
 

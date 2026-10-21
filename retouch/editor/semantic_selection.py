@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import traceback
 from typing import Any
 
 import cv2
@@ -144,6 +145,8 @@ if __name__ == '__main__':
     directory = arguments.parse_args().directory
     try:
         render_worker(directory)
-    except (ValueError, RuntimeError, OSError) as exc:
-        (directory / 'error.json').write_text(json.dumps({'error': str(exc)}))
+    except Exception as exc:
+        (directory / 'error.json').write_text(
+            json.dumps({'error': str(exc) or exc.__class__.__name__,
+                        'traceback': traceback.format_exc()}))
         raise SystemExit(1)

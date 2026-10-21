@@ -29,6 +29,9 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 CACHE_SCHEMA_VERSION = 1
 DEFAULT_MAX_ENTRIES = 4
 DEFAULT_MAX_FACE_CONTEXTS = 32
+# ponytail: total-bytes ceiling across all entries (runtime arrays dominate).
+# 512MB default; lower it when session count grows (bytes are per-session).
+DEFAULT_MAX_TOTAL_BYTES = 512 * 1024 * 1024
 _MAX_COMPACT_DEPTH = 6
 _MAX_COMPACT_ITEMS = 64
 _MAX_COMPACT_STRING = 2048
@@ -230,7 +233,13 @@ class SourceIdentity:
     ) -> "SourceIdentity":
         canonical_path = os.path.realpath(os.path.abspath(os.fsdecode(os.fspath(path))))
         stat_result = os.stat(canonical_path)
-        digest = content_sha256 or _sha256_file(canonical_path)
+        # ponytail: stat-first identity — a file rewritten with identical size
+        # AND identical mtime_ns is an accepted rare stale hit (coarse-mtime
+        # filesystems). Upgrade path: hash content when st_mtime_ns granularity
+        # is known to be coarse, or when an explicit content_sha256 is passed.
+        digest = content_sha256 or _sha256_bytes(
+            ("stat:%d:%d" % (stat_result.st_mtime_ns, stat_result.st_size)).encode("utf-8")
+        )
         return cls(
             path=canonical_path,
             mtime_ns=int(stat_result.st_mtime_ns),
@@ -423,6 +432,25 @@ def _compact_mapping(value: Any) -> Dict[str, Any]:
     return {"value": compacted}
 
 
+def _estimated_bytes(value: Any) -> int:
+    """Rough memory estimate for byte-budget accounting; no exactness claim."""
+
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return 64 if value is None else 64 + len(str(value))
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return 64 + memoryview(value).nbytes
+    nbytes = getattr(value, "nbytes", None)
+    if isinstance(nbytes, int) and nbytes >= 0:
+        return 64 + nbytes
+    if isinstance(value, Mapping):
+        return 64 + sum(
+            _estimated_bytes(k) + _estimated_bytes(v) for k, v in value.items()
+        )
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return 64 + sum(_estimated_bytes(item) for item in value)
+    return 128
+
+
 def _compact_reference(value: Any, kind: str) -> Optional[Dict[str, Any]]:
     if value is None:
         return None
@@ -519,14 +547,20 @@ class GuiPreviewCache:
         *,
         max_entries: int = DEFAULT_MAX_ENTRIES,
         max_face_contexts: int = DEFAULT_MAX_FACE_CONTEXTS,
+        max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES,
     ) -> None:
         if int(max_entries) < 1:
             raise ValueError("max_entries must be at least 1")
         if int(max_face_contexts) < 1:
             raise ValueError("max_face_contexts must be at least 1")
+        if int(max_total_bytes) < 1:
+            raise ValueError("max_total_bytes must be at least 1")
         self.max_entries = int(max_entries)
         self.max_face_contexts = int(max_face_contexts)
+        self.max_total_bytes = int(max_total_bytes)
         self._entries: Dict[str, PreviewCacheEntry] = {}
+        self._access_order: List[str] = []
+        self._entry_bytes: Dict[str, int] = {}
         self._access_order: List[str] = []
         self._latest_render: Dict[str, Any] = {}
         self._latest_render_face_contexts: Tuple[Any, ...] = ()
@@ -537,6 +571,28 @@ class GuiPreviewCache:
     @property
     def size(self) -> int:
         return len(self)
+
+    @property
+    def total_bytes(self) -> int:
+        return sum(self._entry_bytes.values())
+
+    def _entry_footprint(self, entry: PreviewCacheEntry) -> int:
+        return (
+            _estimated_bytes(entry.decoded_source)
+            + _estimated_bytes(entry.runtime_face_contexts)
+            + _estimated_bytes(entry.runtime_color_context)
+            + _estimated_bytes(entry.decoded_source_metadata)
+            + _estimated_bytes(entry.face_contexts)
+            + _estimated_bytes(entry.preview_reference)
+            + _estimated_bytes(entry.checkpoint_reference)
+            + 256
+        )
+
+    def _evict_over_budget(self) -> None:
+        while self._access_order and self.total_bytes > self.max_total_bytes:
+            evicted = self._access_order.pop(0)
+            self._entries.pop(evicted, None)
+            self._entry_bytes.pop(evicted, None)
 
     @staticmethod
     def _digest_for(key: Union[PreviewCacheKey, str]) -> str:
@@ -604,13 +660,17 @@ class GuiPreviewCache:
             runtime_color_context=copy.deepcopy(runtime_color_context),
         )
         digest = key.digest
+        old_bytes = self._entry_bytes.get(digest, 0)
         self._entries[digest] = entry
+        self._entry_bytes[digest] = self._entry_footprint(entry)
         if digest in self._access_order:
             self._access_order.remove(digest)
         self._access_order.append(digest)
         while len(self._access_order) > self.max_entries:
             evicted = self._access_order.pop(0)
             self._entries.pop(evicted, None)
+            self._entry_bytes.pop(evicted, None)
+        self._evict_over_budget()
         return copy.deepcopy(entry)
 
     def invalidate(
@@ -664,6 +724,7 @@ class GuiPreviewCache:
             removed = len(self._entries)
             self._entries.clear()
             self._access_order.clear()
+            self._entry_bytes.clear()
             return removed
 
         removed = 0
@@ -686,6 +747,7 @@ class GuiPreviewCache:
             if normalized_optical is not _MISSING and entry.optical_correction_key != normalized_optical:
                 continue
             self._entries.pop(digest, None)
+            self._entry_bytes.pop(digest, None)
             self._access_order.remove(digest)
             removed += 1
         return removed
@@ -745,6 +807,7 @@ class GuiPreviewCache:
             if include_resolution and entry.render_resolution_key != key.render_resolution_key:
                 continue
             self._entries.pop(digest, None)
+            self._entry_bytes.pop(digest, None)
             self._access_order.remove(digest)
             removed += 1
         return removed
@@ -796,6 +859,7 @@ class GuiPreviewCache:
             "schema_version": CACHE_SCHEMA_VERSION,
             "max_entries": self.max_entries,
             "max_face_contexts": self.max_face_contexts,
+            "max_total_bytes": self.max_total_bytes,
             "entries": entries,
             "latest_render": copy.deepcopy(self._latest_render),
             "latest_render_face_contexts": copy.deepcopy(
@@ -811,6 +875,7 @@ class GuiPreviewCache:
         memo[id(self)] = clone
         clone._entries = copy.deepcopy(self._entries, memo)
         clone._access_order = copy.deepcopy(self._access_order, memo)
+        clone._entry_bytes = dict(self._entry_bytes)
         clone._latest_render = copy.deepcopy(self._latest_render, memo)
         clone._latest_render_face_contexts = copy.deepcopy(
             self._latest_render_face_contexts, memo
@@ -833,6 +898,7 @@ class GuiPreviewCache:
         cache = cls(
             max_entries=int(state.get("max_entries", DEFAULT_MAX_ENTRIES)),
             max_face_contexts=int(state.get("max_face_contexts", DEFAULT_MAX_FACE_CONTEXTS)),
+            max_total_bytes=int(state.get("max_total_bytes", DEFAULT_MAX_TOTAL_BYTES)),
         )
 
         raw_entries = state.get("entries", ())
@@ -908,11 +974,14 @@ class GuiPreviewCache:
                 runtime_color_context=None,
             )
             cache._entries[cache_key] = entry
+            cache._entry_bytes[cache_key] = cache._entry_footprint(entry)
             cache._access_order.append(cache_key)
 
         while len(cache._access_order) > cache.max_entries:
             evicted = cache._access_order.pop(0)
             cache._entries.pop(evicted, None)
+            cache._entry_bytes.pop(evicted, None)
+        cache._evict_over_budget()
         cache._latest_render = _compact_mapping(state.get("latest_render", {}))
         raw_latest_contexts = state.get("latest_render_face_contexts", ())
         if isinstance(raw_latest_contexts, (str, bytes)):

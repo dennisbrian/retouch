@@ -333,7 +333,7 @@ class TestFaceDetectorInit:
             assert "native probe failed" in detector.unavailable_reason
             image = np.zeros((12, 16, 3), dtype=np.uint8)
             assert detector.detect(image) == []
-            assert np.all(detector.segment_person(image) == 1.0)
+            assert np.all(detector.segment_person(image) == 0.0)
         finally:
             detector.close()
 
@@ -841,10 +841,10 @@ class TestFaceDetectorSegmentPerson:
         assert mask.max() == pytest.approx(0.7)
         assert mock_segmenter.segment.called
 
-    def test_segment_person_with_no_segmenter_returns_ones(self):
+    def test_segment_person_with_no_segmenter_returns_zeros(self):
         """When the segmenter was not loaded (model file missing),
-        ``segment_person`` must short-circuit and return a full-ones
-        float32 mask of the right shape."""
+        ``segment_person`` must short-circuit and return a full-zeros
+        float32 mask of the right shape (person absent, never all-person)."""
         h, w = 100, 200
         img = np.zeros((h, w, 3), dtype=np.uint8)
         mock_landmarker = MagicMock()
@@ -862,11 +862,12 @@ class TestFaceDetectorSegmentPerson:
         assert isinstance(mask, np.ndarray)
         assert mask.shape == (h, w)
         assert mask.dtype == np.float32
-        assert np.all(mask == 1.0)
+        assert np.all(mask == 0.0)
 
-    def test_segment_person_with_empty_confidence_masks_returns_ones(self):
+    def test_segment_person_with_empty_confidence_masks_returns_zeros(self):
         """If the segmenter ran but produced no confidence masks, the
-        function must fall back to a full-ones mask rather than crash."""
+        function must fall back to a full-zeros mask (person absent)
+        rather than crash or claim a whole-frame person."""
         h, w = 100, 200
         img = np.zeros((h, w, 3), dtype=np.uint8)
 
@@ -888,7 +889,7 @@ class TestFaceDetectorSegmentPerson:
                 detector.close()
 
         assert mask.shape == (h, w)
-        assert np.all(mask == 1.0)
+        assert np.all(mask == 0.0)
 
 
 class TestDelegateSelection:
@@ -955,7 +956,12 @@ def _bare_detector(landmarker=None):
     detector._legacy_mesh = None
     detector._legacy_segmenter = None
     detector._landmarker = landmarker if landmarker is not None else MagicMock()
-    detector._segmenter = None
+    # segment_person's real no-segmenter fallback now returns zeros (person
+    # absent), which the person gate would treat as "no person anywhere" and
+    # veto every face. These tests synthesize faces the mask must keep, so
+    # stub a whole-frame person like the old all-ones fallback did. The gate
+    # resizes the mask to image shape, so 2x2 ones suffices.
+    detector.segment_person = lambda _img: np.ones((2, 2), dtype=np.float32)
     return detector
 
 

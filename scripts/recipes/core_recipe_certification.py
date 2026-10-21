@@ -23,6 +23,7 @@ import json
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
@@ -664,13 +665,15 @@ def _module_render_artifact(
     output_path: Path,
     row: Mapping[str, Any],
     recipe: str,
+    observed: Optional[Mapping[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Use the canonical v2 artifact builder when it is available."""
     module = _optional_module("retouch.certification_evidence_v2")
     builder = getattr(module, "build_render_artifact_evidence", None) if module else None
     if not callable(builder):
         return None
-    observed = _decode_image(output_path) if output_path.is_file() else {"decoded": False}
+    if observed is None:
+        observed = _decode_image(output_path) if output_path.is_file() else {"decoded": False}
     dimensions = [observed.get("width"), observed.get("height")]
     supplied = row.get("render_evidence")
     if isinstance(supplied, Mapping):
@@ -729,6 +732,7 @@ def _render_evidence(
     outputs = case_manifest.get("outputs")
     reasons: List[str] = []
     rows: List[Dict[str, Any]] = []
+    source_sha256 = _sha256_file(source_path)
     if not isinstance(outputs, list) or len(outputs) != len(expected_recipes):
         reasons.append("output_count_mismatch")
         outputs = outputs if isinstance(outputs, list) else []
@@ -745,7 +749,7 @@ def _render_evidence(
             "status": row.get("status"),
             "output_sha256": _sha256_file(output_path) if _path_within(output_path, case_output) else None,
             "output_bytes": output_path.stat().st_size if _path_within(output_path, case_output) and output_path.is_file() else 0,
-            "source_sha256": _sha256_file(source_path),
+            "source_sha256": source_sha256,
             "row": _json_safe(row),
         }
         if recipe not in expected_recipes:
@@ -764,7 +768,7 @@ def _render_evidence(
             reasons.append(f"output_hash_mismatch:{recipe}")
         module_artifact = None
         if output_path.is_file() and _path_within(output_path, case_output):
-            module_artifact = _module_render_artifact(output_path, row, recipe)
+            module_artifact = _module_render_artifact(output_path, row, recipe, artifact["decode"])
             if module_artifact is not None:
                 artifact["canonical_v2"] = module_artifact
                 artifact["render_completed"] = bool(module_artifact.get("render_completed"))
@@ -801,7 +805,7 @@ def _render_evidence(
     return {
         "passed": not reasons,
         "reasons": reasons,
-        "source_sha256": _sha256_file(source_path),
+        "source_sha256": source_sha256,
         "outputs": rows,
         "contact_sheet": contact,
     }
@@ -1318,6 +1322,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Generate a diagnostic matrix without the required six-case corpus gate",
     )
     parser.add_argument("--stop-on-fail", action="store_true")
+    parser.add_argument(
+        "--serial",
+        action="store_true",
+        help="Run cases sequentially (debugging; parallel renders are the default)",
+    )
     return parser
 
 
@@ -1392,8 +1401,8 @@ def run(args: argparse.Namespace) -> int:
     output = Path(args.output).expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
     recipes = ",".join(CORE_RECIPE_NAMES)
-    rows: List[Dict[str, object]] = []
-    for case_name, image_path in cases:
+
+    def _run_case(case_name: str, image_path: Path) -> Tuple[Dict[str, object], int]:
         case_output = output / case_name
         command = [
             sys.executable,
@@ -1491,9 +1500,24 @@ def run(args: argparse.Namespace) -> int:
                     human_review="pending",
                 ),
             }
-        rows.append(row)
-        if completed.returncode != 0 and args.stop_on_fail:
-            break
+        return row, completed.returncode
+
+    serial = bool(getattr(args, "serial", False)) or bool(args.stop_on_fail)
+    worker_count = min(len(cases), max(1, min(os.cpu_count() or 1, 8)))
+    collected: List[Optional[Tuple[Dict[str, object], int]]] = [None] * len(cases)
+    if serial or worker_count <= 1:
+        for index, (case_name, image_path) in enumerate(cases):
+            collected[index] = _run_case(case_name, image_path)
+            if collected[index][1] != 0 and args.stop_on_fail:
+                break
+    else:
+        # Each case renders inside its own recipe_sweep.py child process,
+        # so threads here only wait on subprocess I/O; rows keep case order.
+        with ThreadPoolExecutor(max_workers=worker_count) as pool:
+            futures = [pool.submit(_run_case, name, path) for name, path in cases]
+            for index, future in enumerate(futures):
+                collected[index] = future.result()
+    rows: List[Dict[str, object]] = [item[0] for item in collected if item is not None]
 
     matrix = {
         "version": V2_SCHEMA_VERSION if v2 else 1,

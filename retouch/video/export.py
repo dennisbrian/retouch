@@ -243,16 +243,24 @@ def main(argv=None):
     def progress(event):
         if event['frames']%10==0 or event['frames']==1 or event['phase'] in ('verifying','completed'):
             print(f"{event['phase']}: {event['frames']}/{event['total'] or '?'} frames ({event['elapsed_s']:.1f}s)",flush=True)
+    def clear_cancel_file():
+        # only on the cancellation path: the file provably belongs to this job;
+        # deleting at start would swallow an intentional cancel for a queued run.
+        if args.cancel_file is None: return
+        try: args.cancel_file.unlink()
+        except OSError: pass
     try:
         params=RenderParams(args.smooth,args.whiten,args.parse_every,args.max_crop_dim)
         result=export_video(args.video,args.out,stable_path=args.stable,params=params,crf=args.crf,
                             lossless=args.lossless,qa=not args.no_qa,progress=progress,
                             cancelled=lambda:args.cancel_file is not None and args.cancel_file.exists())
     except (VideoExportCancelled,KeyboardInterrupt):
+        clear_cancel_file()
         print('Cancelled; no partial video published.',flush=True)
         return 130
     except (ValueError,OSError) as exc:
         parser.exit(2,f'Video export failed: {exc}\n')
+    clear_cancel_file()  # a file appearing after the final check would kill the next job
     print(f"wrote {args.out}: {result['frames_written']} frames; review {args.out}.qa/manifest.json",flush=True)
     return 0
 

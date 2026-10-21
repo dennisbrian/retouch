@@ -339,6 +339,7 @@ class BackgroundReplacer:
         person_mask: np.ndarray,
         background_img: np.ndarray,
         strength: float = 1.0,
+        hair_mask: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Composite the subject over a new background image.
 
@@ -351,11 +352,19 @@ class BackgroundReplacer:
             strength: 0.0 = no-op (return original), 1.0 = full replace.
                 Intermediate values blend the new background in through
                 the background mask.
+            hair_mask: Optional (H, W) hair evidence for the alpha-matte
+                trimap (same contract as ``blur_background``).
 
         Returns:
             (H, W, 3) image, same dtype as ``img``.
         """
         if strength <= 0.0:
+            return img
+
+        # No-matte fast path: no person mask means no subject to keep, so
+        # there is nothing to protect — return the source unchanged (the
+        # pre-matte code produced exactly this via an all-zero bg mask).
+        if person_mask is None:
             return img
 
         h, w = img.shape[:2]
@@ -368,10 +377,22 @@ class BackgroundReplacer:
         bg_f, bg_was_float = self._to_f32_255(bg)
         bg_f = bg_f.astype(np.float32, copy=False)
 
-        bg_mask = self._background_mask(person_mask, (h, w))
-        # strength gates the background swap; the subject is always kept.
-        m = (bg_mask * float(strength))[:, :, np.newaxis]
-        out = src_f * (1.0 - m) + bg_f * m
+        # Z3 phase 3: matte-composite like blur_background/grade_background.
+        # The naive ``src*(1-m)+bg*m`` drags the old background's colour
+        # through translucent hair pixels and leaves a fringe; the matte path
+        # unmixes the foreground first.  ``_composite_alpha`` falls back to
+        # the feathered mask when the solve is unavailable or person_mask is
+        # None (all-subject no-op), so behaviour is never worse than before.
+        # strength gates the background swap; the subject is always kept —
+        # applied to the background layer itself so the matte blend at the
+        # edge band is unaffected by intermediate strengths.
+        s = float(strength)
+        if s < 1.0:
+            mixed_bg = src_f * (1.0 - s) + bg_f * s
+        else:
+            mixed_bg = bg_f
+        alpha = self._composite_alpha(src_f, person_mask, hair_mask)
+        out = self._composite_over(src_f, mixed_bg, alpha)
         return self._restore_dtype(out, src_was_float)
 
     def relight_scene(

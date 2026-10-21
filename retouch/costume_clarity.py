@@ -505,6 +505,88 @@ def painted_skin_mask(
     return paint_region_mask(ok, painted, painted_skins, person_mask), len(painted)
 
 
+# Cache for :func:`costume_prepass` (the work-resolution segmentation / mask
+# pass shared by Costume Clarity and Costume Shine). Keyed by a content
+# signature of every input, so an entry is reused only when the caller would
+# have computed the exact same masks; one entry kept (the pipeline processes
+# one image at a time, and the two costume stages run back to back).
+_PREPASS_CACHE: Dict[Tuple, Tuple] = {}
+
+
+def _mask_sig(m: Optional[np.ndarray]) -> Optional[Tuple]:
+    if m is None:
+        return None
+    m = np.asarray(m)
+    return (m.shape, str(m.dtype), float(m.sum()))
+
+
+def _prepass_sig(
+    img, boxes, segment_classes, hair_full, person_mask, protect, face_skin,
+):
+    return (
+        img.shape, float(img[..., 0].sum()), float(img[..., 1].sum()),
+        float(img[..., 2].sum()),
+        tuple(boxes), id(segment_classes), id(hair_full),
+        _mask_sig(person_mask), _mask_sig(protect), _mask_sig(face_skin),
+    )
+
+
+def costume_prepass(
+    img: np.ndarray,
+    face_boxes: Sequence[Tuple[int, int, int, int]],
+    segment_classes=None,
+    hair_full=None,
+    person_mask: Optional[np.ndarray] = None,
+    protect: Optional[np.ndarray] = None,
+    face_skin: Optional[np.ndarray] = None,
+) -> Dict[str, Any]:
+    """Shared work-resolution costume pre-pass for Clarity and Shine.
+
+    Scales the image to the work resolution, runs the segmenter and hair
+    masks, detects painted skin and builds the costume mask — the identical
+    computation ``apply_costume_clarity`` and ``apply_costume_shine`` each
+    did on their own. Results are cached against a content signature of the
+    inputs, so when both ops run in the same pass over the same pixels the
+    second call reuses the first's masks bit-for-bit (no numeric change);
+    any change to the image or masks recomputes from scratch.
+
+    Returns a dict with keys ``work``, ``size``, ``scale``, ``probs``,
+    ``hair``, ``paint``, ``n_painted``, ``mask``, ``model``, ``diag``.
+    """
+    H, W = img.shape[:2]
+    fw_full = float(np.median([b[2] for b in face_boxes])) if face_boxes else 0.1 * min(H, W)
+    scale = min(1.0, _WORK_FACE_WIDTH / max(fw_full, 1.0))
+    size = (max(16, int(round(W * scale))), max(16, int(round(H * scale))))
+    sig = _prepass_sig(img, tuple(face_boxes), segment_classes, hair_full,
+                       person_mask, protect, face_skin)
+    hit = _PREPASS_CACHE.get("sig") == sig and _PREPASS_CACHE.get("res") is not None
+    if hit:
+        return _PREPASS_CACHE["res"]
+    work = img if scale >= 1.0 else cv2.resize(img, size, interpolation=cv2.INTER_AREA)
+    work = np.clip(work, 0.0, 1.0).astype(np.float32)
+    work_u8 = (work * 255.0 + 0.5).astype(np.uint8)
+    boxes_s = [
+        (int(x * scale), int(y * scale), max(1, int(bw * scale)), max(1, int(bh * scale)))
+        for (x, y, bw, bh) in face_boxes
+    ]
+    probs = segment_classes(work_u8) if segment_classes is not None else None
+    hair = hair_full(work_u8) if hair_full is not None else None
+    paint, n_painted = painted_skin_mask(work, boxes_s, _as_2d(face_skin, size), _as_2d(person_mask, size))
+    mask, model, mdiag = costume_mask(
+        work, boxes_s, probs, person_mask=person_mask, hair_mask=hair,
+        protect=protect, face_skin=face_skin, paint_mask=paint,
+    )
+    res = {
+        "work": work, "size": size, "scale": scale, "probs": probs, "hair": hair,
+        "paint": paint, "n_painted": n_painted, "mask": mask, "model": model,
+        "diag": mdiag,
+    }
+    _PREPASS_CACHE.clear()
+    _PREPASS_CACHE["sig"] = sig
+    _PREPASS_CACHE["res"] = res
+    return res
+
+
 def apply_costume_clarity(
     img: np.ndarray,
     strength: float,
@@ -533,32 +615,19 @@ def apply_costume_clarity(
         return img, diag
     H, W = img.shape[:2]
     fw_full = float(np.median([b[2] for b in face_boxes])) if face_boxes else 0.1 * min(H, W)
-    scale = min(1.0, _WORK_FACE_WIDTH / max(fw_full, 1.0))
-    size = (max(16, int(round(W * scale))), max(16, int(round(H * scale))))
-    work = img if scale >= 1.0 else cv2.resize(img, size, interpolation=cv2.INTER_AREA)
-    work = np.clip(work, 0.0, 1.0).astype(np.float32)
-    work_u8 = (work * 255.0 + 0.5).astype(np.uint8)
-    boxes_s = [
-        (int(x * scale), int(y * scale), max(1, int(bw * scale)), max(1, int(bh * scale)))
-        for (x, y, bw, bh) in face_boxes
-    ]
-
-    probs = segment_classes(work_u8) if segment_classes is not None else None
-    hair = hair_full(work_u8) if hair_full is not None else None
-
-    paint, n_painted = painted_skin_mask(work, boxes_s, _as_2d(face_skin, size), _as_2d(person_mask, size))
-    if n_painted:
-        diag["painted_faces"] = n_painted
-
-    mask_s, model, mdiag = costume_mask(
-        work, boxes_s, probs, person_mask=person_mask, hair_mask=hair,
-        protect=protect, face_skin=face_skin, paint_mask=paint,
+    pre = costume_prepass(
+        img, face_boxes, segment_classes, hair_full,
+        person_mask=person_mask, protect=protect, face_skin=face_skin,
     )
-    diag.update(mdiag)
+    scale = pre["scale"]
+    if pre["n_painted"]:
+        diag["painted_faces"] = pre["n_painted"]
+    diag.update(pre["diag"])
+    mask_s = pre["mask"]
     if mask_s is None:
         return img, diag
     mask = mask_s if scale >= 1.0 else cv2.resize(mask_s, (W, H), interpolation=cv2.INTER_LINEAR)
-    out, ediag = enhance_costume(img, np.clip(mask, 0.0, 1.0), strength, fw_full, model)
+    out, ediag = enhance_costume(img, np.clip(mask, 0.0, 1.0), strength, fw_full, pre["model"])
     diag.update(ediag)
     diag["applied"] = out is not img
     if diag["applied"]:

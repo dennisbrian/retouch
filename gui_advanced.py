@@ -712,7 +712,7 @@ def advanced_apply_handler(
             editor_for_apply,
             mode,
             operation,
-            float(strength or 0.0),
+            0.0 if strength is None else float(strength),
             semantic,
             selection,
             reshape,
@@ -752,7 +752,8 @@ def advanced_apply_handler(
             )
         new_history = compact_history.to_state()
         new_log = compact_history.current_edit_log()
-        overlay = mask_overlay(result.image_rgb, result.mask, float(overlay_opacity or 42) / 100.0) if overlay_visible else result.image_rgb
+        op = 42 if overlay_opacity is None else float(overlay_opacity)
+        overlay = mask_overlay(result.image_rgb, result.mask, op / 100.0) if overlay_visible else result.image_rgb
         return result.image_rgb, result.image_rgb, new_history, new_log, result.mask, overlay, before_after(source_rgb, result.image_rgb), result.status
     except Exception as exc:
         _logger.warning("Advanced Retouch action failed: %s", exc)
@@ -825,7 +826,8 @@ def advanced_overlay_handler(
     if current_rgb is None:
         overlay = None
     else:
-        overlay = mask_overlay(current_rgb, mask, float(opacity or 0) / 100.0) if visible and mask is not None else current_rgb
+        ov_op = 0.0 if opacity is None else float(opacity)
+        overlay = mask_overlay(current_rgb, mask, ov_op / 100.0) if visible and mask is not None else current_rgb
     if rebase_review_required and not advanced_rebase_overlay_is_reviewable(visible, opacity):
         return overlay, gr.update(value=False, interactive=False)
     if rebase_review_required:

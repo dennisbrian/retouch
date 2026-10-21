@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Dict
 
@@ -79,9 +80,27 @@ def _load_snapshots() -> Dict[str, str]:
     return {}
 
 
+_SNAPSHOT_UPDATES: list = []  # (recipe, old_hash, new_hash) recorded in --update-snapshot mode
+
+
 def _save_snapshots(snapshots: Dict[str, str]) -> None:
-    with open(SNAPSHOT_PATH, "w") as f:
+    # Atomic write: dump to tempfile in same dir, then os.replace, so a
+    # crash mid-write can't truncate the snapshot file.
+    tmp_path = SNAPSHOT_PATH.with_name(SNAPSHOT_PATH.name + ".tmp")
+    with open(tmp_path, "w") as f:
         json.dump(snapshots, f, indent=2, sort_keys=True)
+    os.replace(tmp_path, SNAPSHOT_PATH)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _snapshot_update_report():
+    """Session-end visibility for --update-snapshot runs: print every hash
+    change so updates are never silent greens."""
+    yield
+    if _SNAPSHOT_UPDATES:
+        print("\n[golden face snapshot updates this session]")
+        for recipe, old, new in _SNAPSHOT_UPDATES:
+            print(f"  {recipe}: {old} -> {new}")
 
 
 @pytest.mark.slow
@@ -99,14 +118,19 @@ def test_golden_face_output_stable(engine, synthetic_face_img, face_context, rec
     assert np.asarray(result).dtype == synthetic_face_img.dtype
 
     if request.config.getoption("--update-snapshot"):
+        old_hash = snapshots.get(recipe_name)
         snapshots[recipe_name] = actual_hash
         _save_snapshots(snapshots)
+        _SNAPSHOT_UPDATES.append((recipe_name, old_hash, actual_hash))
+        assert old_hash is not None, (
+            f"--update-snapshot found no existing baseline for {recipe_name} "
+            f"(got {actual_hash}) — a 'new' baseline in update mode means the "
+            f"stored snapshot file is missing an entry; investigate before trusting it."
+        )
         pytest.skip(f"Snapshot updated for {recipe_name}: {actual_hash}")
 
     if recipe_name not in snapshots:
-        snapshots[recipe_name] = actual_hash
-        _save_snapshots(snapshots)
-        pytest.skip(f"New snapshot created for {recipe_name}: {actual_hash}")
+        pytest.fail(f"no baseline for {recipe_name}; run --update-snapshot to create")
 
     expected_hash = snapshots[recipe_name]
     assert actual_hash == expected_hash, (

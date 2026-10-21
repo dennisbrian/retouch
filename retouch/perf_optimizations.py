@@ -77,26 +77,6 @@ def _build_smooth_mask(
 
     return smooth_mask
 
-try:
-    import numba
-    HAS_NUMBA = True
-except ImportError:
-    HAS_NUMBA = False
-
-if HAS_NUMBA:
-    from numba import prange
-    numba_module = numba
-else:
-    prange = range
-    class DummyNumbaModule:
-        prange = range
-        def jit(self, *args, **kwargs):
-            def decorator(func):
-                return func
-            return decorator
-    numba_module = DummyNumbaModule()
-    numba = numba_module
-
 logger = logging.getLogger(__name__)
 
 
@@ -209,49 +189,6 @@ class _FaceResult:
 # can call it without creating a circular import: engine imports parsing imports
 # perf_optimizations, so the worker cannot reach back into engine.
 # ──────────────────────────────────────────────────────────────────────────────
-
-# TEMPORARY E1 dtype tracing / quantization bisect (remove before finishing)
-_E1_TRACE = os.environ.get("E1_TRACE") == "1"
-_E1_QUANT = set(filter(None, os.environ.get("E1_QUANT", "").split(",")))
-_E1_ROUND = os.environ.get("E1_ROUND", "trunc")  # trunc|rint
-
-
-def _e1_to_u8(canvas: np.ndarray) -> np.ndarray:
-    """Final float32 [0,255] -> uint8 conversion for the per-face canvas.
-
-    'trunc' matches the legacy per-op convention (`np.clip(x,0,255).astype(uint8)`
-    truncated at every op in the uint8 chain), keeping outputs maximally close
-    to the pre-E1 baseline. 'rint' is available for comparison.
-    """
-    c = np.clip(canvas, 0, 255)
-    if _E1_ROUND == "rint":
-        c = np.rint(c)
-    return c.astype(np.uint8)
-
-
-_E1_U8_FROM = os.environ.get("E1_U8_FROM", "")
-_E1_CHAIN_ORDER = ['makeup_coverage_even', 'albedo_even', 'post_freq', 'flatten', 'restore_micro_texture', 'micro_dodge_burn',
-                   'redness_even', 'hb_even', 'hb_shift', 'hemoglobin_smooth', 'vein_attenuate', 'equalize', 'unify_hue_line', 'unify_tone', 'whiten',
-                   'shine_removal', 'relight', 'sculpt', 'apply_sss', 'quantize_tones',
-                   'apply_specular_bloom', 'blemish.remove', 'undereye.repair',
-                   'harmonize_neck', 'eyes.enhance', 'teeth.whiten', 'lips.enhance',
-                   'makeup.apply_blush', 'hair.enhance', 'dodge_burn', 'wrinkle_soften',
-                   'texture_transplant', 'local_clarity']
-
-
-def _tr(op: str, canvas: np.ndarray) -> np.ndarray:
-    if _E1_TRACE:
-        print(f"E1TRACE {op} canvas_dtype={canvas.dtype}", flush=True)
-    if (op in _E1_QUANT or "all" in _E1_QUANT) and canvas.dtype == np.float32:
-        canvas = _e1_to_u8(canvas).astype(np.float32)
-    if _E1_U8_FROM and canvas.dtype == np.float32:
-        try:
-            if _E1_CHAIN_ORDER.index(op) >= _E1_CHAIN_ORDER.index(_E1_U8_FROM):
-                canvas = _e1_to_u8(canvas)  # real uint8: legacy path downstream
-        except ValueError:
-            pass
-    return canvas
-
 
 def _ctx_get(ctx: Any, name: str, default: Any = None) -> Any:
     """Read a field from a ProcessingContext or its pickled dict form."""
@@ -509,7 +446,6 @@ def _process_face_core(
     # work on skin instead of a flat white patch. White face paint, props
     # and features are left alone. See retouch/highlight_repair.py.
     if _hl_repair > 0 and skin_n is not None:
-        canvas = _tr('highlight_repair', canvas)
         from .highlight_repair import repair_blown_highlights
 
         canvas, _hl_diags = repair_blown_highlights(
@@ -525,7 +461,6 @@ def _process_face_core(
     # are excluded. See retouch/spot_heal_auto.py.
     _spot = float(getattr(ctx, "spot_heal", 0.0) or 0.0)
     if _spot > 0 and skin_n is not None:
-        canvas = _tr('spot_heal', canvas)
         from .spot_heal_auto import heal_spots
 
         canvas, _spot_diags = heal_spots(
@@ -555,7 +490,6 @@ def _process_face_core(
             from .effect_preview import skipped
             skipped(preview_ctx, "hair_remove_flyaways", "Skipped — no face skin mask available to search for stray hairs.")
     if _stray > 0 and skin_n is not None:
-        canvas = _tr('hair.remove_flyaways', canvas)
         from .stray_hair import exclusion_from_regions, remove_stray_hairs
 
         _stray_skin = skin_n if neck_n is None else np.maximum(skin_n, neck_n)
@@ -576,7 +510,6 @@ def _process_face_core(
     _mce = float(getattr(ctx, "makeup_coverage_even", 0.0) or 0.0)
     _mcr = float(getattr(ctx, "makeup_cake_reduce", 0.0) or 0.0)
     if _mce > 0 or _mcr > 0:
-        canvas = _tr('makeup_coverage_even', canvas)
         from .makeup_unmix import apply_makeup_coverage_even
         excl = None
         try:
@@ -601,7 +534,6 @@ def _process_face_core(
 
     # ---- R9: Even-albedo (condition input before frequency separation) ----
     if ctx.albedo_even > 0:
-        canvas = _tr('albedo_even', canvas)
         canvas = skin.apply_albedo_even(canvas, regions.skin, ctx.albedo_even, face_width)
 
     # ---- Frequency separation ----
@@ -730,7 +662,6 @@ def _process_face_core(
     # reach the nose. See retouch/nose_shape.py.
     _nose_shape = float(getattr(ctx, 'nose_shape', 0) or 0)
     if _nose_shape > 0 and regions.nose is not None:
-        canvas = _tr('nose_shape', canvas)
         from .nose_shape import keep_nose_shape
         canvas = keep_nose_shape(
             canvas, pre_smooth_canvas, regions.nose, _nose_shape,
@@ -806,11 +737,9 @@ def _process_face_core(
     if lock > 0 and skin_n is not None:
         canvas = _apply_exposure_lock(canvas, pre_smooth_canvas, skin_n, lock)
 
-    canvas = _tr('post_freq', canvas)
 
     # ---- Edge-preserving cel flatten ----
     if ctx.skin_flatten > 0:
-        canvas = _tr('flatten', canvas)
         canvas = skin.flatten(canvas, skin_n_marks_protected, int(ctx.skin_flatten))
 
     # ---- Adaptive micro-texture restoration ----
@@ -843,7 +772,6 @@ def _process_face_core(
         _fa02_mode = 'legacy'
     fa02_diagnostics: Optional[Dict[str, Any]] = None
     if ctx.micro_restore > 0 and _fa02_mode == 'legacy':
-        canvas = _tr('restore_micro_texture', canvas)
         canvas = skin.restore_micro_texture(
             canvas,
             pre_smooth_canvas,
@@ -930,7 +858,6 @@ def _process_face_core(
                 # restoration, making "raw_residual" NOT the existing op. The
                 # op already confines itself to its own mask, so no extra
                 # containment is needed or wanted here.
-                canvas = _tr('restore_micro_texture', canvas)
                 canvas = skin.restore_micro_texture(
                     canvas,
                     pre_smooth_canvas,
@@ -947,7 +874,6 @@ def _process_face_core(
                 # confined to a mask. Only the *detail extraction* differs, so
                 # this is an architectural comparison of representations rather
                 # than a comparison of two differently-composited ops.
-                canvas = _tr('restore_micro_texture', canvas)
                 _fa02_residual = pre_smooth_canvas.astype(np.float32) - canvas.astype(np.float32)
                 _fa02_detail = extract_detail(_fa02_residual, _fa02_mode, face_width)
                 _fa02_amount = (ctx.micro_restore / 100.0) * float(ctx.smooth / 100.0)
@@ -1017,12 +943,10 @@ def _process_face_core(
 
     # ---- Micro dodge & burn (blotch evening) ----
     if ctx.micro_dodge_burn > 0:
-        canvas = _tr('micro_dodge_burn', canvas)
         canvas = skin.micro_dodge_burn(canvas, skin_n_marks_protected, ctx.micro_dodge_burn, face_width)
 
     # ---- Redness evening (color blotch on a/b channels) ----
     if ctx.redness_even > 0:
-        canvas = _tr('redness_even', canvas)
         canvas = skin.redness_even(canvas, skin_n_marks_protected, ctx.redness_even, face_width, lips_mask=_norm_mask(regions.lips))
 
     # ---- X2: Relative hemoglobin edits in linear optical density ----
@@ -1044,7 +968,6 @@ def _process_face_core(
                 # Variance-reducing (evening) op: mark-policy protected, like
                 # the other 8 ops in this block. hb_shift below is a global
                 # shading op and deliberately uses the unprotected _skin_mask.
-                canvas = _tr('hb_even', canvas)
                 canvas = reduce_hemoglobin_variance(
                     canvas, min(_hb_even, 1.0), skin_mask=skin_n_marks_protected, decomposition=_dec,
                 )
@@ -1052,7 +975,6 @@ def _process_face_core(
                     canvas, skin_mask=_skin_mask, axes_rgb=_dec.axes_rgb,
                 )
             if _hb_shift != 0.0:
-                canvas = _tr('hb_shift', canvas)
                 canvas = shift_hemoglobin(
                     canvas, float(np.clip(_hb_shift, -1.0, 1.0)),
                     skin_mask=_skin_mask, decomposition=_dec,
@@ -1060,37 +982,30 @@ def _process_face_core(
 
     # ---- R10: Hemoglobin-guided smoothing (edge-preserving freckle-aware smoothing) ----
     if ctx.hemoglobin_smooth > 0:
-        canvas = _tr('hemoglobin_smooth', canvas)
         canvas = skin.apply_hemoglobin_guided_smooth(canvas, skin_n_marks_protected, ctx.hemoglobin_smooth)
 
     # ---- R10: Vein attenuation (reduce blue-green veins) ----
     if ctx.vein_attenuate > 0:
-        canvas = _tr('vein_attenuate', canvas)
         canvas = skin.apply_vein_attenuate(canvas, skin_n_marks_protected, ctx.vein_attenuate)
 
     # ---- Skin equalization ----
     if ctx.equalize > 0:
-        canvas = _tr('equalize', canvas)
         canvas = skin.equalize(canvas, skin_n_marks_protected, ctx.equalize, ref_lab=original_lab)
 
     # ---- Skin hue-line unification (preferred-locus pull) ----
     if ctx.skin_hue_unify > 0 or ctx.skin_chroma_even > 0:
-        canvas = _tr('unify_hue_line', canvas)
         canvas = skin.unify_hue_line(canvas, skin_n_marks_protected, int(ctx.skin_hue_unify), int(ctx.skin_chroma_even), locus=ctx.skin_locus)
 
     # ---- Skin hue/chroma unification (anime) ----
     if ctx.skin_unify > 0:
-        canvas = _tr('unify_tone', canvas)
         canvas = skin.unify_tone(canvas, skin_n_marks_protected, int(ctx.skin_unify), target_hue=ctx.skin_unify_hue)
 
     # ---- Foundation / whitening ----
     if ctx.whiten != 0:
-        canvas = _tr('whiten', canvas)
         canvas = skin.whiten(canvas, regions.skin, ctx.whiten, tone=ctx.whiten_tone, hue_stable=bool(ctx.whiten_hue_stable))
 
     # ---- Shine / oil removal (before relight so intentional glow isn't removed) ----
     if ctx.shine_removal > 0:
-        canvas = _tr('shine_removal', canvas)
         eyes_mask = np.maximum(
             _norm_mask(regions.left_eye) if regions.left_eye is not None else np.zeros((roi_h, roi_w), dtype=np.float32),
             _norm_mask(regions.right_eye) if regions.right_eye is not None else np.zeros((roi_h, roi_w), dtype=np.float32),
@@ -1106,7 +1021,6 @@ def _process_face_core(
         or abs(ctx.specular_finish_strength - 0.5) > 1e-6
         or ctx.specular_recolor != 0.0
     ):
-        canvas = _tr('specular_finish', canvas)
         canvas = skin.apply_specular_finish(
             canvas,
             regions.skin,
@@ -1122,7 +1036,6 @@ def _process_face_core(
     # so intentional glow isn't matted away. See retouch/powder_finish.py.
     _powder = float(getattr(ctx, 'powder_finish', 0) or 0)
     if _powder > 0 and regions.skin is not None:
-        canvas = _tr('powder_finish', canvas)
         from .powder_finish import powder_finish
         _pf_eyes = None
         if regions.left_eye is not None or regions.right_eye is not None:
@@ -1136,7 +1049,6 @@ def _process_face_core(
 
     # ---- Virtual studio relighting ----
     if ctx.relight > 0:
-        canvas = _tr('relight', canvas)
         canvas = relighter.relight(
             canvas,
             shifted_face.landmarks,
@@ -1149,12 +1061,10 @@ def _process_face_core(
 
     # ---- Face exposure lift (flat skin-L luminance, beyond relight ceiling) ----
     if ctx.face_exposure > 0:
-        canvas = _tr('face_exposure', canvas)
         canvas = skin.face_exposure_lift(canvas, regions.skin, ctx.face_exposure)
 
     # ---- Facial structure sculpting (C2: low-band shaping, form-frequency modulation) ----
     if ctx.sculpt > 0:
-        canvas = _tr('sculpt', canvas)
         # Coherence rule: when relight is actively shading this face, sculpt
         # must follow the same explicit azimuth/elevation — shading two ops
         # in different directions would look physically incoherent. Only
@@ -1193,19 +1103,16 @@ def _process_face_core(
     # quantize/specular so cel bands and highlights stay crisp on top.
     skin_sss_v = getattr(ctx, 'skin_sss', 0) or 0
     if skin_sss_v > 0:
-        canvas = _tr('apply_sss', canvas)
         canvas = skin.apply_sss(
             canvas, regions.skin, skin_sss_v / 100.0, face_width=face_width
         )
 
     # ---- Tone quantization (cel shading bands) ----
     if ctx.skin_quantize > 0:
-        canvas = _tr('quantize_tones', canvas)
         canvas = skin.quantize_tones(canvas, regions.skin, int(ctx.skin_quantize))
 
     # ---- Specular bloom ----
     if ctx.specular_bloom > 0:
-        canvas = _tr('apply_specular_bloom', canvas)
         canvas = skin.apply_specular_bloom(
             canvas, regions.skin, ctx.specular_bloom, tone=ctx.specular_bloom_tone
         )
@@ -1240,7 +1147,6 @@ def _process_face_core(
 
     # ---- Blemish removal ----
     if ctx.blemish > 0:
-        canvas = _tr('blemish.remove', canvas)
         canvas = blemish.remove(
             canvas, blemish_skin_mask, ctx.blemish,
             heal_engine=getattr(ctx, 'heal_engine', 'telea'),
@@ -1248,7 +1154,6 @@ def _process_face_core(
 
     # ---- Under-eye repair ----
     if ctx.dark_circles > 0 or ctx.undereye_darken_removal > 0 or ctx.undereye_puffiness_reduction > 0:
-        canvas = _tr('undereye.repair', canvas)
         # `dark_circles` (legacy, eyes.dark_circles) and `undereye_darken_removal`
         # (undereye.darken_removal) drive the SAME UndereyeProcessor darken pass on
         # the same masks. Applying both sequentially double-brightened the under-eye
@@ -1282,7 +1187,6 @@ def _process_face_core(
     # The Neck Tone Match slider replaces this automatic pass when it is on
     # (retouch/neck_tone_match.py, run in the global phase on the full frame).
     if (ctx.whiten != 0 or ctx.equalize > 0 or ctx.skin_hue_unify > 0 or ctx.skin_chroma_even > 0 or ctx.redness_even > 0) and getattr(ctx, "neck_tone_match", 0) <= 0:
-        canvas = _tr('harmonize_neck', canvas)
         canvas = skin.harmonize_neck(
             canvas,
             shifted_face.landmarks,
@@ -1296,7 +1200,6 @@ def _process_face_core(
     if (ctx.eye_enhance > 0 or ctx.catchlight > 0
             or ctx.eye_sclera_vessel_remove > 0
             or getattr(ctx, "corneal_shading", 0.0) > 0):
-        canvas = _tr('eyes.enhance', canvas)
         canvas = eyes.enhance(canvas, regions, ctx.eye_enhance,
                               catchlight_strength=ctx.catchlight if ctx.catchlight > 0 else None,
                               vessel_strength=ctx.eye_sclera_vessel_remove,
@@ -1310,7 +1213,6 @@ def _process_face_core(
     eye_v0_active = (ctx.eye_sclera_brighten > 0 or ctx.eye_iris_saturate > 0 or
                      ctx.eye_iris_hue_shift != 0 or ctx.eye_iris_brightness > 0)
     if eye_v0_active:
-        canvas = _tr('eye_enhancement.enhance', canvas)
         from .eye_enhancement import EyeEnhancer as EyeEnhancerV0
         eye_enhancer_v0 = EyeEnhancerV0()
         # EyeEnhancerV0 dispatches on dtype internally (bgr_to_lab_f32 /
@@ -1336,7 +1238,6 @@ def _process_face_core(
     _iris_pop = float(getattr(ctx, 'iris_pop', 0) or 0)
     eye_edit_mask = None
     if _iris_pop > 0 and shifted_face.landmarks is not None:
-        canvas = _tr('iris_pop', canvas)
         from .iris_pop import iris_pop
         eye_edit_mask = np.zeros(canvas.shape[:2], np.float32)
         canvas = iris_pop(
@@ -1347,12 +1248,10 @@ def _process_face_core(
 
     # ---- Teeth whitening ----
     if ctx.teeth_whiten > 0:
-        canvas = _tr('teeth.whiten', canvas)
         canvas = teeth.whiten(canvas, regions.mouth_interior, ctx.teeth_whiten)
 
     # ---- Lip enhancement ----
     if ctx.lip_enhance > 0:
-        canvas = _tr('lips.enhance', canvas)
         canvas = lips.enhance(
             canvas, regions.lips, ctx.lip_enhance,
             tint=ctx.lip_tint, finish=ctx.lip_finish,
@@ -1366,7 +1265,6 @@ def _process_face_core(
     # full-weight composite support).
     _teeth_brighten = float(getattr(ctx, 'teeth_brighten', 0) or 0)
     if _teeth_brighten > 0 and shifted_face.landmarks is not None:
-        canvas = _tr('teeth_brighten', canvas)
         from .teeth_brighten import brighten_teeth
         if eye_edit_mask is None:
             eye_edit_mask = np.zeros(canvas.shape[:2], np.float32)
@@ -1380,7 +1278,6 @@ def _process_face_core(
     # which only ran with cheek blush on and barely tinted the tip.
     _nose_tip_blush = float(getattr(ctx, 'nose_tip_blush', 0) or 0)
     if ctx.blush > 0:
-        canvas = _tr('makeup.apply_blush', canvas)
         canvas = makeup.apply_blush(
             canvas, shifted_face.landmarks, face_width, ctx.blush,
             regions=regions,
@@ -1393,7 +1290,6 @@ def _process_face_core(
     # masked, nostrils faded relative to the tip's own skin. See
     # retouch/nose_tip_blush.py.
     if _nose_tip_blush > 0 and shifted_face.landmarks is not None:
-        canvas = _tr('nose_tip_blush', canvas)
         from .nose_tip_blush import add_nose_tip_blush
         canvas = add_nose_tip_blush(
             canvas, shifted_face.landmarks, _nose_tip_blush,
@@ -1408,7 +1304,6 @@ def _process_face_core(
 
         # Eyeshadow
         if ctx.mv2_eyeshadow > 0:
-            canvas = _tr('makeup_v2.apply_eyeshadow', canvas)
             canvas_u8_for_makeup = makeup_v2.apply_eyeshadow(
                 canvas_u8_for_makeup, shifted_face.landmarks,
                 color=ctx.mv2_eyeshadow_color,
@@ -1418,7 +1313,6 @@ def _process_face_core(
 
         # Eyeliner
         if ctx.mv2_eyeliner > 0:
-            canvas = _tr('makeup_v2.apply_eyeliner', canvas)
             canvas_u8_for_makeup = makeup_v2.apply_eyeliner(
                 canvas_u8_for_makeup, shifted_face.landmarks,
                 color=ctx.mv2_eyeliner_color,
@@ -1428,7 +1322,6 @@ def _process_face_core(
 
         # Contour
         if ctx.mv2_contour > 0:
-            canvas = _tr('makeup_v2.apply_contour', canvas)
             canvas_u8_for_makeup = makeup_v2.apply_contour(
                 canvas_u8_for_makeup, shifted_face.landmarks,
                 strength=ctx.mv2_contour,
@@ -1436,7 +1329,6 @@ def _process_face_core(
 
         # Brows
         if ctx.mv2_brows > 0:
-            canvas = _tr('makeup_v2.apply_brows', canvas)
             canvas_u8_for_makeup = makeup_v2.apply_brows(
                 canvas_u8_for_makeup, shifted_face.landmarks,
                 color=ctx.mv2_brows_color,
@@ -1445,7 +1337,6 @@ def _process_face_core(
 
         # Ombre lips
         if ctx.mv2_ombre:
-            canvas = _tr('makeup_v2.apply_ombre_lips', canvas)
             canvas_u8_for_makeup = makeup_v2.apply_ombre_lips(
                 canvas_u8_for_makeup, shifted_face.landmarks,
                 color1=ctx.mv2_ombre_color1,
@@ -1472,7 +1363,6 @@ def _process_face_core(
                 canvas_u8_for_flow, hair_mask=_norm_mask(regions.hair)
             )
             if hair_deglare_v > 0:
-                canvas = _tr('hair.deglare', canvas)
                 eb = None
                 if regions.left_eyebrow is not None or regions.right_eyebrow is not None:
                     eb = np.zeros((roi_h, roi_w), dtype=np.float32)
@@ -1486,8 +1376,8 @@ def _process_face_core(
                     eyebrow_mask=eb,
                 )
             if hair_ring_strength > 0:
-                canvas = _tr('hair.ring', canvas)
-                ring_pos = int(getattr(ctx, 'hair_ring_position', 30) or 30)
+                _hrp = getattr(ctx, 'hair_ring_position', 30)
+                ring_pos = 30 if _hrp is None else int(round(_hrp))
                 ring_tint = int(getattr(ctx, 'hair_ring_tint', 40) or 40)
                 canvas = add_angel_ring(
                     canvas, _norm_mask(regions.hair), orientation, coherence,
@@ -1496,7 +1386,6 @@ def _process_face_core(
                     landmarks=shifted_face.landmarks,
                 )
         else:
-            canvas = _tr('hair.enhance', canvas)
             canvas = hair.enhance(
                 canvas, roi_person_mask, regions.face_oval,
                 shifted_face.bbox, hair_ring_strength, regions.hair,
@@ -1504,7 +1393,6 @@ def _process_face_core(
 
     # ---- Dodge & burn ----
     if ctx.dodge_burn > 0:
-        canvas = _tr('dodge_burn', canvas)
         canvas = skin.dodge_burn(canvas, regions, ctx.dodge_burn)
 
     # ---- Nose bridge highlight (opt-in) ----
@@ -1514,7 +1402,6 @@ def _process_face_core(
     # retouch/nose_highlight.py.
     _nose_highlight = float(getattr(ctx, 'nose_highlight', 0) or 0)
     if _nose_highlight > 0 and shifted_face.landmarks is not None:
-        canvas = _tr('nose_highlight', canvas)
         from .nose_highlight import add_nose_highlight
         canvas = add_nose_highlight(
             canvas, shifted_face.landmarks, _nose_highlight,
@@ -1530,7 +1417,6 @@ def _process_face_core(
     # gentle local lift as skin, instead of being left untouched.
     if ctx.shadow_lift > 0:
         from .shadow_lift import ShadowLifter
-        canvas = _tr('shadow_lift', canvas)
         shadow_lifter = ShadowLifter()
         lift_mask = regions.skin
         if regions.hair is not None:
@@ -1542,7 +1428,6 @@ def _process_face_core(
     # as a linear-light gain from the face's own illumination map.
     _face_shadow_fill = float(getattr(ctx, 'face_shadow_fill', 0) or 0)
     if _face_shadow_fill > 0 and skin_n is not None:
-        canvas = _tr('face_shadow_fill', canvas)
         from .face_shadow_fill import face_shadow_fill
         _features = [_norm_mask(m) for m in (
             regions.left_eye, regions.right_eye, regions.left_eyebrow,
@@ -1559,21 +1444,18 @@ def _process_face_core(
         "neck": ctx.wrinkle_soften_neck,
     }
     if ctx.wrinkle_soften > 0 or any(v > 0 for v in region_strengths.values()):
-        canvas = _tr('wrinkle_soften', canvas)
         canvas = skin.wrinkle_soften(
             canvas, regions, ctx.wrinkle_soften, region_strengths=region_strengths
         )
 
     # ---- Texture transplant (pore realism v2) ----
     if ctx.texture_transplant > 0:
-        canvas = _tr('texture_transplant', canvas)
         canvas = skin.texture_transplant(
             canvas, regions.skin, ctx.texture_transplant, face_width=face_width
         )
 
     # ---- Local clarity (nose/lips/eyes pop) ----
     if ctx.clarity > 0:
-        canvas = _tr('local_clarity', canvas)
         # F8.2: radius scales with face_width so the high-pass baseband is at
         # the same physical feature scale at native res as at proxy res.
         # 20px was the original fixed value at ~500px proxy face width.
@@ -1620,18 +1502,21 @@ def _process_face_core(
     # ---- Nose restore (opt-in) ----
     # Blends the nose region back toward the pre-retouch original, so an
     # already-good real nose shadow isn't left reading over-defined against
-    # now-smoother surrounding skin. See canvas_original above. Uses
+    # now-smoother surrounding skin. See pre_smooth_canvas above. Uses
     # regions.nose (full nose landmark polygon), not regions.nose_bridge
     # (a near-empty 4-point sliver meant for dodge_burn's thin highlight
     # strip, not broad enough to cover the actual shadow area).
+    # Blends toward pre_smooth_canvas (post-heal baseline), NOT the pristine
+    # canvas_original: blending the pristine copy back would reintroduce
+    # blown highlights/spot blemishes/stray hairs the heal ops removed.
     nose_restore = getattr(ctx, 'nose_restore', 0) or 0
     if nose_restore > 0 and regions.nose is not None:
         blend_amount = np.clip(nose_restore / 100.0, 0.0, 1.0) * _norm_mask(regions.nose)
-        canvas = canvas * (1.0 - blend_amount[:, :, None]) + canvas_original * blend_amount[:, :, None]
+        canvas = canvas * (1.0 - blend_amount[:, :, None]) + pre_smooth_canvas * blend_amount[:, :, None]
 
     # ---- E1: Convert canvas back to uint8 once at the end ----
     if canvas.dtype == np.float32:
-        canvas = _e1_to_u8(canvas)
+        canvas = np.clip(canvas, 0, 255).astype(np.uint8)
 
     if bool(getattr(ctx, "safe_auto", True)):
         skin_area = float(np.mean(skin_n > 0.1)) if skin_n is not None else 0.0
@@ -1724,6 +1609,7 @@ def _get_worker_processors() -> dict[str, Any]:
         from .makeup_v2 import MakeupEngineV2
         from .hair import HairEnhancer
         from .relight import Relighter
+        from .frequency import FrequencySeparator
         _WORKER_PROCESSORS = {
             "skin": SkinProcessor(),
             "relighter": Relighter(),
@@ -1735,6 +1621,12 @@ def _get_worker_processors() -> dict[str, Any]:
             "makeup": MakeupEngine(),
             "makeup_v2": MakeupEngineV2(),
             "hair": HairEnhancer(),
+            # Parity with engine.py's inline processor dict: 'frequency' was
+            # previously omitted here and _process_face_core silently fell
+            # back to a transient FrequencySeparator() per face. The class is
+            # stateless and its constructor takes no config, so one shared
+            # worker-process instance is exactly equivalent.
+            "frequency": FrequencySeparator(),
         }
     return _WORKER_PROCESSORS
 

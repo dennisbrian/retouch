@@ -28,6 +28,17 @@ def _crop(image, box):
 def temporal_report(source, result, null, stable, *, check_cancel=lambda: None, samples_dir=None):
     """Compare synchronized decoded frames, resetting comparisons at cuts/gaps."""
     tracks = {f.frame: f for f in stable.frames}
+    # Fixed crop window per shot (union of tracked bboxes): per-frame box jitter
+    # must not leak motion into the flicker metric. Windows never change mid-shot.
+    windows = {}
+    for rec in stable.frames:
+        if rec.weight <= 0:
+            continue
+        x, y, w, h = rec.bbox
+        box = windows.get(rec.shot)
+        windows[rec.shot] = (x, y, x + w, y + h) if box is None else (
+            min(box[0], x), min(box[1], y), max(box[2], x + w), max(box[3], y + h))
+    windows = {shot: (x0, y0, x1 - x0, y1 - y0) for shot, (x0, y0, x1, y1) in windows.items()}
     energy, flicker, motion = [], [], []
     null_energy, null_flicker = [], []
     previous = None
@@ -53,7 +64,7 @@ def temporal_report(source, result, null, stable, *, check_cancel=lambda: None, 
             if record is None or record.weight <= 0:
                 previous = None
             else:
-                a, b, c = [_crop(item.image, record.bbox) for item in (src, out, baseline)]
+                a, b, c = [_crop(item.image, windows[record.shot]) for item in (src, out, baseline)]
                 effect, codec = b-a, c-a
                 energy.append(float(np.abs(effect).mean()))
                 null_energy.append(float(np.abs(codec).mean()))

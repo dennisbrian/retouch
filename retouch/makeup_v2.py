@@ -52,6 +52,9 @@ EYESHADOW_COLORS = {
     "brown":    (90, 110, 150),
     "plum":     (110, 70, 130),
     "gold":     (90, 170, 210),
+    # Lip-compatible entries (match lips.py LIP_TINTS) for ombre lips defaults.
+    "red":      (80, 80, 210),
+    "pink":     (160, 140, 210),
 }
 
 EYELINER_COLORS = {

@@ -58,6 +58,12 @@ _MIN_SAMPLES = 128
 # an RGB or luminance threshold.
 MAX_HEMOGLOBIN_DELTA_E = 2.4
 
+# ponytail: above this bounding-box dimension the ΔE scale search runs on an
+# INTER_AREA-downsampled copy (hemoglobin corrections are low-frequency) and is
+# re-verified at full resolution.  Raise to 0 to always force the exact
+# full-resolution search when byte-exactness with the old code is required.
+_DELTA_E_SEARCH_MAX_DIM = 256
+
 
 @dataclass(frozen=True)
 class ChromophoreV2Decomposition:
@@ -202,29 +208,159 @@ def _bounded_hemoglobin_edit(
     The search scales the hemoglobin-coordinate delta before recomposition,
     rather than blending in Lab. This preserves the decomposition's melanin
     coordinate exactly (up to the existing float reconstruction tolerance).
+
+    The ΔE-capped scale search is the expensive part (each bisection step is a
+    full recompose + Lab conversion).  For boxes larger than
+    ``_DELTA_E_SEARCH_MAX_DIM`` the 16-step bisection runs on an
+    INTER_AREA-downsampled copy — hemoglobin corrections are low-frequency, so
+    the low-res maximum ΔE tracks the full-res one — and the chosen scale is
+    then re-verified (and corrected, if needed) at full resolution.  The
+    returned image is therefore always inside the AA5 budget, but for large
+    images the applied scale can differ slightly from a full-resolution
+    search.  Small images take the original exact search unchanged.
+
+    ponytail: ceiling — the full-res verification loop assumes max ΔE is
+    near-linear in scale, so it converges in a couple of steps; a pathological
+    image could need the conservative fallback (scale 0 = unchanged pixels
+    inside the mask).  Upgrade path is a vectorised per-pixel scale map, which
+    changes the melanin-preservation contract and needs a baseline refresh.
     """
-    change = proposed_hemoglobin.astype(np.float32) - decomposition.hemoglobin
+    # Restrict every per-pixel computation to the mask's bounding box.  All
+    # math below is position-independent per pixel, and alpha == 0 outside the
+    # box makes the blend return bgr255 exactly, so this is bit-exact.
+    rows = np.flatnonzero(np.any(alpha > 0.0, axis=1))
+    cols = np.flatnonzero(np.any(alpha > 0.0, axis=0))
+    r0, r1 = int(rows[0]), int(rows[-1]) + 1
+    c0, c1 = int(cols[0]), int(cols[-1]) + 1
+    b = bgr255[r0:r1, c0:c1]
+    a = alpha[r0:r1, c0:c1]
+    dec = ChromophoreV2Decomposition(
+        melanin=decomposition.melanin[r0:r1, c0:c1],
+        hemoglobin=decomposition.hemoglobin[r0:r1, c0:c1],
+        shading=decomposition.shading[r0:r1, c0:c1],
+        axes_rgb=decomposition.axes_rgb,
+        confidence=decomposition.confidence,
+        used_fallback=decomposition.used_fallback,
+    )
+    proposed = proposed_hemoglobin[r0:r1, c0:c1]
 
-    def compose(scale: float) -> np.ndarray:
+    def compose_full(scale: float) -> np.ndarray:
         edited = recompose_chromophores_v2(
-            decomposition,
-            hemoglobin=decomposition.hemoglobin + np.float32(scale) * change,
+            dec,
+            hemoglobin=dec.hemoglobin + np.float32(scale) * (proposed - dec.hemoglobin),
         )
-        return (bgr255 * (1.0 - alpha[..., None]) + edited * alpha[..., None]).astype(np.float32)
+        return (b * (1.0 - a[..., None]) + edited * a[..., None]).astype(np.float32)
 
-    full = compose(1.0)
-    if float(delta_e_76(bgr255, full, skin_mask=alpha).max()) <= MAX_HEMOGLOBIN_DELTA_E:
-        return full
+    box_h, box_w = b.shape[:2]
+    factor = max(1, int(-(-max(box_h, box_w) // _DELTA_E_SEARCH_MAX_DIM)))
+    if factor == 1:
+        ref_lab = _bgr255_to_lab(b)
 
-    lo, hi = 0.0, 1.0
-    for _ in range(16):
-        mid = (lo + hi) * 0.5
-        candidate = compose(mid)
-        if float(delta_e_76(bgr255, candidate, skin_mask=alpha).max()) <= MAX_HEMOGLOBIN_DELTA_E:
-            lo = mid
+        def max_delta_e_full(candidate: np.ndarray) -> float:
+            delta = _bgr255_to_lab(candidate) - ref_lab
+            return float((np.sqrt(np.sum(delta * delta, axis=2)) * a).max())
+
+        full = compose_full(1.0)
+        if max_delta_e_full(full) <= MAX_HEMOGLOBIN_DELTA_E:
+            out = full
         else:
-            hi = mid
-    return compose(lo)
+            lo, hi, best = 0.0, 1.0, None
+            for _ in range(16):
+                mid = (lo + hi) * 0.5
+                candidate = compose_full(mid)
+                if max_delta_e_full(candidate) <= MAX_HEMOGLOBIN_DELTA_E:
+                    lo, best = mid, candidate
+                else:
+                    hi = mid
+            out = best if best is not None else compose_full(0.0)
+        result = bgr255.copy()
+        result[r0:r1, c0:c1] = out
+        return result
+
+    # -- accelerated path: bisect on a downsampled copy -------------------
+    # ponytail: the low-res reference is recomposed from the *resized*
+    # decomposition maps rather than resizing the sRGB image — sRGB encode is
+    # nonlinear, so resize(bgr) is inconsistent with resize(od) and would add
+    # a spurious ΔE floor that starves the bracket down to scale 0.
+    small_h, small_w = max(1, -(-box_h // factor)), max(1, -(-box_w // factor))
+    small_a = cv2.resize(a, (small_w, small_h), interpolation=cv2.INTER_AREA)
+    small_dec = ChromophoreV2Decomposition(
+        melanin=cv2.resize(dec.melanin, (small_w, small_h), interpolation=cv2.INTER_LINEAR),
+        hemoglobin=cv2.resize(dec.hemoglobin, (small_w, small_h), interpolation=cv2.INTER_LINEAR),
+        shading=cv2.resize(dec.shading, (small_w, small_h), interpolation=cv2.INTER_LINEAR),
+        axes_rgb=dec.axes_rgb,
+        confidence=dec.confidence,
+        used_fallback=dec.used_fallback,
+    )
+    small_proposed = cv2.resize(np.asarray(proposed, dtype=np.float32),
+                                (small_w, small_h), interpolation=cv2.INTER_LINEAR)
+    small_b = recompose_chromophores_v2(small_dec)
+    small_ref_lab = _bgr255_to_lab(small_b)
+
+    def compose_small(scale: float) -> np.ndarray:
+        edited = recompose_chromophores_v2(
+            small_dec,
+            hemoglobin=small_dec.hemoglobin
+            + np.float32(scale) * (small_proposed - small_dec.hemoglobin),
+        )
+        return (small_b * (1.0 - small_a[..., None])
+                + edited * small_a[..., None]).astype(np.float32)
+
+    def max_delta_e_small(candidate: np.ndarray) -> float:
+        delta = _bgr255_to_lab(candidate) - small_ref_lab
+        return float((np.sqrt(np.sum(delta * delta, axis=2)) * small_a).max())
+
+    # Low-resolution bracket for the largest scale inside the ΔE budget.
+    scale = 1.0
+    if max_delta_e_small(compose_small(1.0)) > MAX_HEMOGLOBIN_DELTA_E:
+        lo, hi = 0.0, 1.0
+        for _ in range(16):
+            mid = (lo + hi) * 0.5
+            if max_delta_e_small(compose_small(mid)) <= MAX_HEMOGLOBIN_DELTA_E:
+                lo = mid
+            else:
+                hi = mid
+        scale = lo
+
+    # Full-resolution verification.  Every emitted candidate is measured at
+    # full resolution, so the AA5 budget holds exactly regardless of how the
+    # low-res bracket behaved.
+    ref_lab = _bgr255_to_lab(b)
+
+    def max_delta_e_full(candidate: np.ndarray) -> float:
+        delta = _bgr255_to_lab(candidate) - ref_lab
+        return float((np.sqrt(np.sum(delta * delta, axis=2)) * a).max())
+
+    candidate = compose_full(scale)
+    err = max_delta_e_full(candidate)
+    if err > MAX_HEMOGLOBIN_DELTA_E:
+        # Shrink with a near-linear model, re-verify each step.
+        for _ in range(4):
+            scale *= MAX_HEMOGLOBIN_DELTA_E / max(err, _EPS) * 0.95
+            candidate = compose_full(scale)
+            err = max_delta_e_full(candidate)
+            if err <= MAX_HEMOGLOBIN_DELTA_E:
+                break
+        if err > MAX_HEMOGLOBIN_DELTA_E:
+            # Pathological non-linearity: fall back to the guaranteed-safe
+            # no-op edit inside the mask rather than exceeding the budget.
+            candidate = compose_full(0.0)
+            err = 0.0
+    else:
+        # Recover strength the low-res bracket may have left on the table.
+        while scale < 1.0 and err < 0.8 * MAX_HEMOGLOBIN_DELTA_E:
+            new_scale = min(1.0, scale * MAX_HEMOGLOBIN_DELTA_E / max(err, _EPS))
+            if new_scale <= scale * 1.001:
+                break
+            new_candidate = compose_full(new_scale)
+            new_err = max_delta_e_full(new_candidate)
+            if new_err > MAX_HEMOGLOBIN_DELTA_E:
+                break
+            scale, candidate, err = new_scale, new_candidate, new_err
+
+    result = bgr255.copy()
+    result[r0:r1, c0:c1] = candidate
+    return result
 
 
 def _project_chromatic(od_rgb: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

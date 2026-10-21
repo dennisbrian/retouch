@@ -2898,6 +2898,29 @@ def param_names() -> List[str]:
     return [p.name for p in PROCESSING_PARAMS]
 
 
+# PROCESS_INPUT_KEYS — the ordered list of inputs the process_image() Gradio
+# event handler expects.  Generated from PROCESSING_PARAMS (in declaration
+# order) so the slider order stays in lock-step with the spec, plus the
+# fixed-prefix transport / session keys at the end.  Lives here (pure data,
+# no GUI dependency) so non-GUI modules can import it without pulling gradio.
+PROCESS_INPUT_KEYS = (
+    ["img_paths", "recipe"]
+    + [n for n in param_names() if n not in ("color_transfer_intensity", "freckle_preserve_mask")]
+    + [
+        "color_ref_img", "color_ref_strength",
+        "set_match_hero_img",
+        "show_compare",
+        "export_fmt", "export_quality", "export_res",
+        "quality_tier",
+        "debug_mode",
+        "optical_correction",
+        "look_params",
+        "face_params",
+        "face_params_json",
+    ]
+)
+
+
 # ---------------------------------------------------------------------------
 # Recipe → params
 # ---------------------------------------------------------------------------
@@ -3243,6 +3266,7 @@ __all__ = [
     "PROCESSING_PARAMS",
     "get_param",
     "param_names",
+    "PROCESS_INPUT_KEYS",
     "recipe_to_params",
     "gui_values_to_engine_kwargs",
 ]

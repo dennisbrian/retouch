@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -164,6 +165,45 @@ class TestSidecar:
         assert changed
         fields = xs.read_fields(text)
         assert fields["rating"] == 2 and fields["label"] == "Green"
+
+    def test_symlinked_sidecar_target_rejected(self, tmp_path):
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        victim = outside / "victim.xmp"
+        victim.write_text("keep me")
+        src = tmp_path / "g.RAF"
+        src.write_bytes(b"raw")
+        (tmp_path / "g.xmp").symlink_to(victim)
+        with pytest.raises(xs.XmpError):
+            xs.write_sidecar(src, xs.XmpFields(label="Red"))
+        assert victim.read_text() == "keep me"
+
+    def test_traversal_outside_root_rejected(self, tmp_path):
+        outside = tmp_path.parent / "outside_xmp"
+        outside.mkdir()
+        try:
+            src = outside / "h.RAF"
+            src.write_bytes(b"raw")
+            with pytest.raises(xs.XmpError):
+                xs.write_sidecar(src, xs.XmpFields(label="Red"), root=tmp_path)
+            assert not (outside / "h.xmp").exists()
+        finally:
+            shutil.rmtree(outside, ignore_errors=True)
+
+    def test_symlinked_backup_not_followed(self, tmp_path):
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        victim = outside / "victim.orig"
+        victim.write_text("keep me")
+        src = tmp_path / "i.RAF"
+        src.write_bytes(b"raw")
+        side = tmp_path / "i.xmp"
+        side.write_text(LIGHTROOM_SIDECAR)
+        (tmp_path / "i.xmp.orig").symlink_to(victim)
+        with pytest.raises(xs.XmpError):
+            xs.write_sidecar(src, xs.XmpFields(label="Red"))
+        assert victim.read_text() == "keep me"
+        assert side.read_text() == LIGHTROOM_SIDECAR
 
 
 class TestJpegEmbed:

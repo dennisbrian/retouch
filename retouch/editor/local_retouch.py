@@ -183,6 +183,10 @@ def _warp_pixels(pixels: np.ndarray, mask: np.ndarray, operation: str,
         if last is None or math.hypot(point[0] - last[0], point[1] - last[1]) >= spacing:
             dabs.append(point)
             last = point
+    if len(dabs) < 2:
+        # One dab (or all dabs coincident): Liquify has no motion to push
+        # with and Smudge's carried square equals what is under it.
+        raise ValueError('Drag to move pixels — a single click applies no warp.')
     if operation == 'Smudge':
         # Native pickUp: the carried square is what was under the first dab.
         cx, cy = int(round(dabs[0][0])), int(round(dabs[0][1]))

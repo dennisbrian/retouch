@@ -29,6 +29,39 @@ from .white_balance import white_balance_cat16
 
 logger = logging.getLogger(__name__)
 
+
+# Cache for _add_chromatic_aberration's full-frame grid (heaviest post-effect
+# at 24MP). The grid is a deterministic pure function of (h, w); only the
+# cheap max_disp scaling happens per call. Small LRU (OrderedDict, 2-4 entries)
+# so alternating sizes in a GUI preview loop don't thrash.
+from collections import OrderedDict
+
+_CA_GRID_CACHE: "OrderedDict[tuple, tuple]" = OrderedDict()
+_CA_GRID_CACHE_MAX = 4
+
+
+def _ca_radial_grid(h: int, w: int):
+    """Return (dx, dy, r, max_r) float32 arrays for the CA radial displacement.
+
+    dx/dy are centered coordinates (x - cx, y - cy), r = sqrt(dx²+dy²),
+    max_r = distance from center to corner. Cached per (h, w).
+    """
+    key = (h, w)
+    cached = _CA_GRID_CACHE.get(key)
+    if cached is not None:
+        _CA_GRID_CACHE.move_to_end(key)
+        return cached
+    cx, cy = w / 2.0, h / 2.0
+    y, x = np.mgrid[0:h, 0:w].astype(np.float32)
+    dx = x - cx
+    dy = y - cy
+    r = np.sqrt(dx * dx + dy * dy)
+    max_r = np.sqrt(cx * cx + cy * cy)
+    _CA_GRID_CACHE[key] = (dx, dy, r, max_r)
+    if len(_CA_GRID_CACHE) > _CA_GRID_CACHE_MAX:
+        _CA_GRID_CACHE.popitem(last=False)
+    return dx, dy, r, max_r
+
 # P6 accepted candidate constants. The noise-aware clarity path is opt-in;
 # these are intentionally not recipe/UI knobs until a separately calibrated
 # photographic set supports them. Values match the fixed variance-SNR arm in
@@ -36,6 +69,18 @@ logger = logging.getLogger(__name__)
 CLARITY_NOISE_FLOOR_L_DN = 0.25
 CLARITY_NOISE_VARIANCE_FACTOR = 1.5
 CLARITY_NOISE_VARIANCE_WINDOW = 9
+
+# Survey D2 — LUT-baked colour ops: MEASURED PESSIMIZATION on this stack
+# (2026-10-21), implementation reverted. Baking _color_ops' pure point-ops
+# into a 33³ lattice works and matches the scalar path (golden baselines
+# passed: 13/13 golden, 803 grading/color/tone), but the apply cost is the
+# blocker: retouch/lut.py trilinear_sample — 8 numpy fancy-indexed gathers —
+# costs ~2.5-3.0s per 18MP float frame, while the ~10-12 SIMD cvtColor/np
+# passes it replaces cost <0.9s total. Net 3-8x SLOWER, not the ~10x faster
+# the survey assumed. Do not re-add without a C-level 3D LUT apply
+# (scipy.ndimage.map_coordinates — scipy not installed — or a numba/OpenCV
+# remap composition). A tetrahedral variant (4 gathers) was also tested:
+# ~2.1s, still a net loss.
 
 
 def _apply_curve_f(channel: np.ndarray, curve_points: Sequence[Tuple[int, int]]) -> np.ndarray:
@@ -1132,12 +1177,10 @@ class ColorGrader:
     def _add_chromatic_aberration(self, img_bgr: np.ndarray, max_disp: float) -> np.ndarray:
         if max_disp <= 0: return img_bgr
         h, w = img_bgr.shape[:2]
-        cx, cy = w / 2.0, h / 2.0
-        y, x = np.mgrid[0:h, 0:w].astype(np.float32)
-        dx = x - cx; dy = y - cy
-        r = np.sqrt(dx*dx + dy*dy)
-        max_r = np.sqrt(cx*cx + cy*cy)
+        dx, dy, r, max_r = _ca_radial_grid(h, w)
         factor = (r / max_r) * max_disp
+        x = dx + w / 2.0
+        y = dy + h / 2.0
         map_x_r = (x + (dx / (r + 1e-5)) * factor).astype(np.float32)
         map_y_r = (y + (dy / (r + 1e-5)) * factor).astype(np.float32)
         map_x_b = (x - (dx / (r + 1e-5)) * factor).astype(np.float32)

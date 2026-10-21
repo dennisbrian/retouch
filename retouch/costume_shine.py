@@ -61,12 +61,7 @@ from typing import Any, Dict, Optional, Tuple
 import cv2
 import numpy as np
 
-from .costume_clarity import (
-    _WORK_FACE_WIDTH,
-    _as_2d,
-    costume_mask,
-    painted_skin_mask,
-)
+from .costume_clarity import costume_prepass
 
 _logger = logging.getLogger(__name__)
 
@@ -263,27 +258,18 @@ def apply_costume_shine(
         return img, diag
     H, W = img.shape[:2]
     fw_full = float(np.median([b[2] for b in face_boxes])) if face_boxes else 0.1 * min(H, W)
-    scale = min(1.0, _WORK_FACE_WIDTH / max(fw_full, 1.0))
-    size = (max(16, int(round(W * scale))), max(16, int(round(H * scale))))
-    work = img if scale >= 1.0 else cv2.resize(img, size, interpolation=cv2.INTER_AREA)
-    work = np.clip(work, 0.0, 1.0).astype(np.float32)
-    work_u8 = (work * 255.0 + 0.5).astype(np.uint8)
-    boxes_s = [
-        (int(x * scale), int(y * scale), max(1, int(bw * scale)), max(1, int(bh * scale)))
-        for (x, y, bw, bh) in face_boxes
-    ]
-    probs = segment_classes(work_u8) if segment_classes is not None else None
-    hair = hair_full(work_u8) if hair_full is not None else None
-    paint, n_painted = painted_skin_mask(work, boxes_s, _as_2d(face_skin, size), _as_2d(person_mask, size))
-    if n_painted:
-        diag["painted_faces"] = n_painted
-    mask, _, mdiag = costume_mask(
-        work, boxes_s, probs, person_mask=person_mask, hair_mask=hair,
-        protect=protect, face_skin=face_skin, paint_mask=paint,
+    pre = costume_prepass(
+        img, face_boxes, segment_classes, hair_full,
+        person_mask=person_mask, protect=protect, face_skin=face_skin,
     )
-    diag.update(mdiag)
+    scale = pre["scale"]
+    if pre["n_painted"]:
+        diag["painted_faces"] = pre["n_painted"]
+    diag.update(pre["diag"])
+    mask = pre["mask"]
     if mask is None:
         return img, diag
+    work = pre["work"]
     gate, base, gdiag = shine_gate(work, mask, fw_full * scale)
     diag.update(gdiag)
     if gate is None:
