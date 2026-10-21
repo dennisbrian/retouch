@@ -93,6 +93,13 @@ class ProjectError(ValueError):
 def _invalid(why):
     return ProjectError('invalid Compositor project: ' + why)
 
+def _effect_num(rec, key, default, layer_name):
+    """Gate effect numerics like _check_transform: type/finite before use."""
+    value = rec.get(key, default)
+    if not _is_number(value):
+        raise _invalid(f'{key} in layer {layer_name!r} effects must be a number')
+    return float(value)
+
 
 # ---------------------------------------------------------------- reading
 
@@ -322,7 +329,12 @@ def _check_layer(record, version):
     adjustment = record.get('adjustment')
     if adjustment is not None:
         from .adjustments import validate_adjustment
-        validate_adjustment(adjustment)
+        try:
+            validate_adjustment(adjustment)
+        except UnsupportedFeature:
+            raise
+        except ValueError as exc:
+            raise _invalid(str(exc)) from exc
         if is_group or image_file is not None:
             raise _invalid('invalid adjustment layer')
     if record.get('maskLinked') is False and record.get('maskFile') is None:
@@ -390,11 +402,11 @@ def _check_effects(record, layer_name):
         if unknown:
             raise _invalid(f'unknown stroke keys: {sorted(unknown)}')
         stroke = StrokeEffect(
-            size=float(stroke_rec.get('size', 4)),
-            red=float(stroke_rec.get('red', 0)),
-            green=float(stroke_rec.get('green', 0)),
-            blue=float(stroke_rec.get('blue', 0)),
-            opacity=float(stroke_rec.get('opacity', 1)),
+            size=_effect_num(stroke_rec, 'size', 4, layer_name),
+            red=_effect_num(stroke_rec, 'red', 0, layer_name),
+            green=_effect_num(stroke_rec, 'green', 0, layer_name),
+            blue=_effect_num(stroke_rec, 'blue', 0, layer_name),
+            opacity=_effect_num(stroke_rec, 'opacity', 1, layer_name),
             inside=stroke_rec.get('inside', False),
             enabled=stroke_rec.get('enabled', True))
     shadow = None
@@ -407,13 +419,13 @@ def _check_effects(record, layer_name):
         if unknown:
             raise _invalid(f'unknown shadow keys: {sorted(unknown)}')
         shadow = ShadowEffect(
-            angle=float(shadow_rec.get('angle', 90)),
-            distance=float(shadow_rec.get('distance', 20)),
-            blur=float(shadow_rec.get('blur', 20)),
-            red=float(shadow_rec.get('red', 0)),
-            green=float(shadow_rec.get('green', 0)),
-            blue=float(shadow_rec.get('blue', 0)),
-            opacity=float(shadow_rec.get('opacity', 0.5)),
+            angle=_effect_num(shadow_rec, 'angle', 90, layer_name),
+            distance=_effect_num(shadow_rec, 'distance', 20, layer_name),
+            blur=_effect_num(shadow_rec, 'blur', 20, layer_name),
+            red=_effect_num(shadow_rec, 'red', 0, layer_name),
+            green=_effect_num(shadow_rec, 'green', 0, layer_name),
+            blue=_effect_num(shadow_rec, 'blue', 0, layer_name),
+            opacity=_effect_num(shadow_rec, 'opacity', 0.5, layer_name),
             enabled=shadow_rec.get('enabled', True))
     overlay = None
     overlay_rec = record.get('colorOverlay')
@@ -424,10 +436,10 @@ def _check_effects(record, layer_name):
         if unknown:
             raise _invalid(f'unknown colorOverlay keys: {sorted(unknown)}')
         overlay = ColorOverlayEffect(
-            red=float(overlay_rec.get('red', 0)),
-            green=float(overlay_rec.get('green', 0)),
-            blue=float(overlay_rec.get('blue', 0)),
-            opacity=float(overlay_rec.get('opacity', 1)),
+            red=_effect_num(overlay_rec, 'red', 0, layer_name),
+            green=_effect_num(overlay_rec, 'green', 0, layer_name),
+            blue=_effect_num(overlay_rec, 'blue', 0, layer_name),
+            opacity=_effect_num(overlay_rec, 'opacity', 1, layer_name),
             enabled=overlay_rec.get('enabled', True))
     inner_shadow = None
     inner_rec = record.get('innerShadow')
@@ -439,13 +451,13 @@ def _check_effects(record, layer_name):
         if unknown:
             raise _invalid(f'unknown innerShadow keys: {sorted(unknown)}')
         inner_shadow = InnerShadowEffect(
-            angle=float(inner_rec.get('angle', 90)),
-            distance=float(inner_rec.get('distance', 10)),
-            blur=float(inner_rec.get('blur', 10)),
-            red=float(inner_rec.get('red', 0)),
-            green=float(inner_rec.get('green', 0)),
-            blue=float(inner_rec.get('blue', 0)),
-            opacity=float(inner_rec.get('opacity', 0.5)),
+            angle=_effect_num(inner_rec, 'angle', 90, layer_name),
+            distance=_effect_num(inner_rec, 'distance', 10, layer_name),
+            blur=_effect_num(inner_rec, 'blur', 10, layer_name),
+            red=_effect_num(inner_rec, 'red', 0, layer_name),
+            green=_effect_num(inner_rec, 'green', 0, layer_name),
+            blue=_effect_num(inner_rec, 'blue', 0, layer_name),
+            opacity=_effect_num(inner_rec, 'opacity', 0.5, layer_name),
             enabled=inner_rec.get('enabled', True))
     outer_glow = None
     outer_rec = record.get('outerGlow')
@@ -456,11 +468,11 @@ def _check_effects(record, layer_name):
         if unknown:
             raise _invalid(f'unknown outerGlow keys: {sorted(unknown)}')
         outer_glow = OuterGlowEffect(
-            size=float(outer_rec.get('size', 20)),
-            red=float(outer_rec.get('red', 1)),
-            green=float(outer_rec.get('green', 1)),
-            blue=float(outer_rec.get('blue', 1)),
-            opacity=float(outer_rec.get('opacity', 0.75)),
+            size=_effect_num(outer_rec, 'size', 20, layer_name),
+            red=_effect_num(outer_rec, 'red', 1, layer_name),
+            green=_effect_num(outer_rec, 'green', 1, layer_name),
+            blue=_effect_num(outer_rec, 'blue', 1, layer_name),
+            opacity=_effect_num(outer_rec, 'opacity', 0.75, layer_name),
             enabled=outer_rec.get('enabled', True))
     inner_glow = None
     inner_glow_rec = record.get('innerGlow')
@@ -471,11 +483,11 @@ def _check_effects(record, layer_name):
         if unknown:
             raise _invalid(f'unknown innerGlow keys: {sorted(unknown)}')
         inner_glow = InnerGlowEffect(
-            size=float(inner_glow_rec.get('size', 10)),
-            red=float(inner_glow_rec.get('red', 1)),
-            green=float(inner_glow_rec.get('green', 1)),
-            blue=float(inner_glow_rec.get('blue', 1)),
-            opacity=float(inner_glow_rec.get('opacity', 0.75)),
+            size=_effect_num(inner_glow_rec, 'size', 10, layer_name),
+            red=_effect_num(inner_glow_rec, 'red', 1, layer_name),
+            green=_effect_num(inner_glow_rec, 'green', 1, layer_name),
+            blue=_effect_num(inner_glow_rec, 'blue', 1, layer_name),
+            opacity=_effect_num(inner_glow_rec, 'opacity', 0.75, layer_name),
             enabled=inner_glow_rec.get('enabled', True))
     effects = LayerEffects(stroke=stroke, shadow=shadow, colorOverlay=overlay,
                            innerShadow=inner_shadow, outerGlow=outer_glow,
