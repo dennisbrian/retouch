@@ -79,27 +79,47 @@ def _load_snapshots() -> Dict[str, str]:
     return {}
 
 
+_SNAPSHOT_UPDATES: list = []  # (recipe, old_hash, new_hash) recorded in --update-snapshot mode
+
+
 def _save_snapshots(snapshots: Dict[str, str]) -> None:
-    with open(SNAPSHOT_PATH, "w") as f:
+    # Atomic write: dump to tempfile in same dir, then os.replace, so a
+    # crash mid-write can't truncate the snapshot file.
+    tmp_path = SNAPSHOT_PATH.with_name(SNAPSHOT_PATH.name + ".tmp")
+    with open(tmp_path, "w") as f:
         json.dump(snapshots, f, indent=2, sort_keys=True)
+    os.replace(tmp_path, SNAPSHOT_PATH)
 
 
-def _get_recipe_names() -> list:
+def _all_deterministic_recipes() -> list:
     from retouch.recipes import RECIPES
     # Skip grain-using recipes from the stability test — apply_film_grain
     # uses seed=None (non-deterministic) by design, so output hashes will
     # differ between runs. These recipes are tested for dtype/structure
     # elsewhere; the golden harness tests deterministic recipes only.
-    grain_recipes = set()
-    for name, recipe in RECIPES.items():
-        if recipe.get("grain_strength", 0) > 0:
-            grain_recipes.add(name)
+    grain_recipes = {name for name, recipe in RECIPES.items()
+                     if recipe.get("grain_strength", 0) > 0}
+    return sorted(r for r in RECIPES.keys() if r not in grain_recipes)
+
+
+def _get_recipe_names() -> list:
     # Sample a small subset (3 recipes) to keep test time under 90s.
     # The golden harness verifies P3 registry byte-identical output.
     # Full recipe coverage is in test_recipes.py (no engine run).
-    all_deterministic = sorted(r for r in RECIPES.keys() if r not in grain_recipes)
+    all_deterministic = _all_deterministic_recipes()
     sample = ["natural", "porcelain_unified_v1", "outdoor_harsh_sun_v1"]
     return [r for r in sample if r in all_deterministic]
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _snapshot_update_report():
+    """Session-end visibility for --update-snapshot runs: print every hash
+    change so updates are never silent greens."""
+    yield
+    if _SNAPSHOT_UPDATES:
+        print("\n[golden snapshot updates this session]")
+        for recipe, old, new in _SNAPSHOT_UPDATES:
+            print(f"  {recipe}: {old} -> {new}")
 
 
 @pytest.mark.slow
@@ -126,14 +146,19 @@ def test_golden_output_stable(engine, synthetic_img, recipe_name, request):
     assert result.dtype == synthetic_img.dtype
 
     if request.config.getoption("--update-snapshot"):
+        old_hash = snapshots.get(recipe_name)
         snapshots[recipe_name] = actual_hash
         _save_snapshots(snapshots)
+        _SNAPSHOT_UPDATES.append((recipe_name, old_hash, actual_hash))
+        assert old_hash is not None, (
+            f"--update-snapshot found no existing baseline for {recipe_name} "
+            f"(got {actual_hash}) — a 'new' baseline in update mode means the "
+            f"stored snapshot file is missing an entry; investigate before trusting it."
+        )
         pytest.skip(f"Snapshot updated for {recipe_name}: {actual_hash}")
 
     if recipe_name not in snapshots:
-        snapshots[recipe_name] = actual_hash
-        _save_snapshots(snapshots)
-        pytest.skip(f"New snapshot created for {recipe_name}: {actual_hash}")
+        pytest.fail(f"no baseline for {recipe_name}; run --update-snapshot to create")
 
     expected_hash = snapshots[recipe_name]
     assert actual_hash == expected_hash, (
@@ -144,15 +169,26 @@ def test_golden_output_stable(engine, synthetic_img, recipe_name, request):
 
 
 def test_snapshot_count_matches_recipes():
-    """Ensure every non-grain recipe has a snapshot (no missing entries).
+    """Snapshot keys must be exactly the sampled recipes — no missing, no stale.
 
     Grain-using recipes are excluded from the golden harness because
     apply_film_grain uses seed=None (non-deterministic by design).
     """
     snapshots = _load_snapshots()
-    recipe_names = _get_recipe_names()
-    missing = [r for r in recipe_names if r not in snapshots]
-    assert not missing, f"Missing snapshots for recipes: {missing}"
+    sample = _get_recipe_names()
+    all_deterministic = _all_deterministic_recipes()
+    # ponytail: only the 3-recipe sample has stored baselines (each engine
+    # run costs seconds; full coverage lives in test_recipes.py without the
+    # engine). Upgrade path: run every recipe in _get_recipe_names with
+    # --update-snapshot once GOLDEN_SAMPLE=all is wired up, then assert
+    # set(snapshots) == set(all_deterministic) here.
+    assert set(snapshots) == set(sample), (
+        f"Snapshot keys {sorted(snapshots)} != sampled recipes {sorted(sample)} "
+        f"(expected subset of {len(all_deterministic)} deterministic recipes)"
+    )
+    assert set(sample) <= set(all_deterministic), (
+        "Sample contains non-deterministic (grain-using) recipes"
+    )
 
 
 def test_synthetic_image_deterministic():

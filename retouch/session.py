@@ -144,9 +144,9 @@ class Session:
         load_session returns this tuple, which Gradio distributes to
         the component values.
 
-        Missing params use their defaults from the input_keys defaults.
+        Missing params become None (self.params.get returns None).
         """
-        from gui import PROCESS_INPUT_KEYS
+        from .params import PROCESS_INPUT_KEYS
         if input_keys != PROCESS_INPUT_KEYS:
             input_keys = PROCESS_INPUT_KEYS
         return tuple(self.params.get(k) for k in input_keys)

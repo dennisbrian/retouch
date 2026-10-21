@@ -1502,14 +1502,17 @@ def _process_face_core(
     # ---- Nose restore (opt-in) ----
     # Blends the nose region back toward the pre-retouch original, so an
     # already-good real nose shadow isn't left reading over-defined against
-    # now-smoother surrounding skin. See canvas_original above. Uses
+    # now-smoother surrounding skin. See pre_smooth_canvas above. Uses
     # regions.nose (full nose landmark polygon), not regions.nose_bridge
     # (a near-empty 4-point sliver meant for dodge_burn's thin highlight
     # strip, not broad enough to cover the actual shadow area).
+    # Blends toward pre_smooth_canvas (post-heal baseline), NOT the pristine
+    # canvas_original: blending the pristine copy back would reintroduce
+    # blown highlights/spot blemishes/stray hairs the heal ops removed.
     nose_restore = getattr(ctx, 'nose_restore', 0) or 0
     if nose_restore > 0 and regions.nose is not None:
         blend_amount = np.clip(nose_restore / 100.0, 0.0, 1.0) * _norm_mask(regions.nose)
-        canvas = canvas * (1.0 - blend_amount[:, :, None]) + canvas_original * blend_amount[:, :, None]
+        canvas = canvas * (1.0 - blend_amount[:, :, None]) + pre_smooth_canvas * blend_amount[:, :, None]
 
     # ---- E1: Convert canvas back to uint8 once at the end ----
     if canvas.dtype == np.float32:

@@ -771,10 +771,25 @@ class FaceDetector:
     def segment_person(self, img_bgr: np.ndarray) -> np.ndarray:
         """Return a float mask (H, W) separating person from background.
 
-        Values 0.0 = background, 1.0 = person.
+        Values 0.0 = background, 1.0 = person.  When segmentation is
+        unavailable (detector not loaded, or the segmenter returns no
+        usable mask) the method returns a ZEROS mask — "no person
+        found".  An all-ones fallback would be wrong twice over: it is
+        indistinguishable from a real whole-frame person, so downstream
+        "protect the subject" ops would grade the subject instead of the
+        background, and consumers that reject an all-ones mask as "no
+        boundary measured" (e.g. the editor's semantic selection) would
+        refuse a perfectly workable zero-region result.
         """
         if not self.available:
-            return np.ones(img_bgr.shape[:2], dtype=np.float32)
+            # Zeros, not ones: an unavailable segmenter means "person
+            # absent", never "every pixel is person" (see docstring).
+            _logger.warning(
+                "segment_person: detector unavailable (%s); returning "
+                "zeros mask (no person)",
+                self.unavailable_reason,
+            )
+            return np.zeros(img_bgr.shape[:2], dtype=np.float32)
         if self._legacy_segmenter is not None:
             img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
             result = self._legacy_segmenter.process(img_rgb)
@@ -782,7 +797,13 @@ class FaceDetector:
             if mask is not None:
                 return np.asarray(mask, dtype=np.float32)
         if self._segmenter is None:
-            return np.ones(img_bgr.shape[:2], dtype=np.float32)
+            # Zeros, not ones: no segmenter loaded means "person absent"
+            # (see docstring).
+            _logger.warning(
+                "segment_person: no segmenter loaded; returning zeros "
+                "mask (no person)"
+            )
+            return np.zeros(img_bgr.shape[:2], dtype=np.float32)
 
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
@@ -794,7 +815,13 @@ class FaceDetector:
             mask = np.squeeze(mask)
             return mask.astype(np.float32)
 
-        return np.ones(img_bgr.shape[:2], dtype=np.float32)
+        # Zeros, not ones: the segmenter ran but produced nothing usable,
+        # so no person evidence exists (see docstring).
+        _logger.warning(
+            "segment_person: segmenter returned no confidence masks; "
+            "returning zeros mask (no person)"
+        )
+        return np.zeros(img_bgr.shape[:2], dtype=np.float32)
 
     def close(self) -> None:
         """Release resources.

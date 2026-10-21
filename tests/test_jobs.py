@@ -130,3 +130,65 @@ def test_job_store_list_jobs_skips_corrupt_file(tmp_path, caplog):
 
     assert [j.job_id for j in jobs] == ["good"]
     assert "corrupt.json" in caplog.text
+
+
+def test_stale_running_job_demoted_on_list(tmp_path):
+    store = JobStore(jobs_dir=str(tmp_path))
+    stale = Job(job_id="stale", status="running", updated="2020-01-01T00:00:00+00:00")
+    (tmp_path / "stale.json").write_text(stale.to_json())
+
+    jobs = store.list_jobs()
+
+    assert jobs[0].status == "partial"
+    assert jobs[0].error_code == "worker_lost"
+    # Persisted: reloading via load() sees the recovered state too.
+    assert store.load("stale").status == "partial"
+
+
+def test_stale_running_job_demoted_on_load(tmp_path):
+    store = JobStore(jobs_dir=str(tmp_path))
+    stale = Job(job_id="stale", status="running", updated="2020-01-01T00:00:00+00:00")
+    (tmp_path / "stale.json").write_text(stale.to_json())
+
+    job = store.load("stale")
+
+    assert job.status == "partial"
+    assert job.error_code == "worker_lost"
+
+
+def test_fresh_running_job_untouched(tmp_path):
+    store = JobStore(jobs_dir=str(tmp_path))
+    fresh = Job(job_id="fresh", status="running")
+    store.save(fresh)
+
+    assert store.load("fresh").status == "running"
+    assert store.load("fresh").error_code is None
+    assert store.list_jobs()[0].status == "running"
+
+
+def test_done_and_failed_jobs_untouched(tmp_path):
+    store = JobStore(jobs_dir=str(tmp_path))
+    for jid, status in (("d", "done"), ("f", "failed"), ("p", "partial")):
+        job = Job(job_id=jid, status=status)
+        job.updated = "2020-01-01T00:00:00+00:00"
+        store.save(job)
+
+    for jid in ("d", "f", "p"):
+        loaded = store.load(jid)
+        assert loaded.status == ("partial" if jid == "p" else loaded.status)
+        assert loaded.error_code is None
+
+
+def test_stale_recovery_idempotent_no_double_write(tmp_path):
+    store = JobStore(jobs_dir=str(tmp_path))
+    stale = Job(job_id="stale", status="running", updated="2020-01-01T00:00:00+00:00")
+    (tmp_path / "stale.json").write_text(stale.to_json())
+
+    first = store.list_jobs()[0]
+    assert first.status == "partial"
+    mtime = (tmp_path / "stale.json").stat().st_mtime_ns
+    import time
+    time.sleep(0.01)
+    second = store.load("stale")
+    assert second.status == "partial"
+    assert (tmp_path / "stale.json").stat().st_mtime_ns == mtime

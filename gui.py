@@ -1182,23 +1182,9 @@ def apply_custom_style(style_name, current_recipe="natural"):
 # PROCESS_INPUT_KEYS — the ordered list of inputs the process_image() Gradio
 # event handler expects.  Generated from PROCESSING_PARAMS (in declaration
 # order) so the slider order stays in lock-step with the spec, plus the
-# fixed-prefix transport / session keys at the end.
-PROCESS_INPUT_KEYS = (
-    ["img_paths", "recipe"]
-    + [n for n in param_names() if n not in ("color_transfer_intensity", "freckle_preserve_mask")]
-    + [
-        "color_ref_img", "color_ref_strength",
-        "set_match_hero_img",
-        "show_compare",
-        "export_fmt", "export_quality", "export_res",
-        "quality_tier",
-        "debug_mode",
-        "optical_correction",
-        "look_params",
-        "face_params",
-        "face_params_json",
-    ]
-)
+# fixed-prefix transport / session keys at the end.  Construction lives in
+# retouch.params (pure data); re-exported here for the existing references.
+from retouch.params import PROCESS_INPUT_KEYS  # noqa: E402  (after registry use above)
 
 def _coerce_float(value: object, default: float = 0.0) -> float:
     """Safely coerce an arbitrary Gradio value to float, falling back on parse failure.

@@ -33,6 +33,12 @@ logger = logging.getLogger(__name__)
 
 JOB_VERSION = 1
 
+# A "running" job whose `updated` is older than this is assumed to belong to a
+# crashed batch worker; it is demoted to "partial" with error_code
+# "worker_lost" (mirrors watch_folder.py recover_stale_jobs).
+STALE_RUNNING_SECONDS = 3600.0
+STALE_ERROR_CODE = "worker_lost"
+
 # QA states:
 #   unknown — no .qa on the result (no-person short-circuit, or QA stripped
 #             by a downstream cv2 op such as the export resize or a custom
@@ -124,6 +130,7 @@ class Job:
     total_files: int = 0
     files: List[FileRecord] = field(default_factory=list)
     log: str = ""
+    error_code: Optional[str] = None  # e.g. "worker_lost" after stale recovery
 
     @property
     def flagged_count(self) -> int:
@@ -160,6 +167,7 @@ class Job:
             "total_files": self.total_files,
             "files": [f.to_dict() for f in self.files],
             "log": self.log,
+            "error_code": self.error_code,
         }
 
     def to_json(self, indent: int = 2) -> str:
@@ -171,6 +179,7 @@ class Job:
             "job_id", "created", "updated", "version", "status", "input_dir",
             "output_dir", "style_type", "recipe_or_style", "export_fmt",
             "export_quality", "export_res", "total_files", "files", "log",
+            "error_code",
         }
         unknown = set(data.keys()) - known_keys
         if unknown:
@@ -200,6 +209,7 @@ class Job:
             total_files=data.get("total_files", 0),
             files=[FileRecord.from_dict(f) for f in data.get("files", [])],
             log=data.get("log", ""),
+            error_code=data.get("error_code"),
         )
 
     @classmethod
@@ -248,7 +258,9 @@ class JobStore:
     def load(self, job_id: str) -> Job:
         path = self._path_for(job_id)
         with open(path, "r", encoding="utf-8") as f:
-            return Job.from_json(f.read())
+            job = Job.from_json(f.read())
+        self._recover_stale(job)
+        return job
 
     def list_jobs(self) -> List[Job]:
         jobs: List[Job] = []
@@ -258,5 +270,34 @@ class JobStore:
                     jobs.append(Job.from_json(f.read()))
             except (OSError, json.JSONDecodeError, KeyError) as e:
                 logger.error("Skipping unreadable job file %s: %s", path, e)
+                continue
+        for job in jobs:
+            self._recover_stale(job)
         jobs.sort(key=lambda j: j.created, reverse=True)
         return jobs
+
+    @staticmethod
+    def _is_stale_running(job: Job) -> bool:
+        if job.status != "running":
+            return False
+        try:
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(job.updated)).total_seconds()
+        except ValueError:
+            return True
+        return age >= STALE_RUNNING_SECONDS
+
+    def _recover_stale(self, job: Job) -> None:
+        """Demote stale "running" jobs (crashed worker) to "partial".
+
+        Idempotent: only writes when the status actually changes, so listing
+        and loading the same job cannot race into a double-write.
+        """
+        if not self._is_stale_running(job):
+            return
+        job.status = "partial"
+        job.error_code = STALE_ERROR_CODE
+        job.log = (job.log + "\n" if job.log else "") + "stale running job recovered (worker lost)"
+        try:
+            self.save(job)
+        except OSError as e:
+            logger.error("Could not persist stale recovery for job %s: %s", job.job_id, e)

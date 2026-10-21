@@ -220,9 +220,13 @@ class SelectedFaceRenderer:
             if self._reference.get('previous') is not None:
                 previous=_warp_regions(self._reference['previous'],matrix,(cw,ch))
             self.warped_frames+=1
-        blend=min(1.0,(stable.frame-self._reference['frame']+1)/self.params.parse_every)
+        # Crossfade: new parse ramps in over the full parse window while the
+        # previous parse (warped to current geometry) decays, so mask authority
+        # stays continuous across refreshes instead of resetting to 1/parse_every.
+        ramp = self.params.parse_every
+        blend = 1.0 if ramp <= 1 else min(1.0, (stable.frame - self._reference['frame']) / ramp)
         regions=_blend_regions(regions,previous,blend)
-        fresh_input=refresh and (previous is None or blend>=1)
+        fresh_input=refresh and previous is None
         self._shot, self._last_frame = stable.shot, stable.frame
         authority = skin_authority(regions, local, (ch, cw), ied, stable.visibility)
         if not np.any(authority > 1e-3):

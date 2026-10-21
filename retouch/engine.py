@@ -287,9 +287,11 @@ REINJECT_BASE_GAIN = 0.85
 # ProcessingContext — typed parameter bag (replaces raw dict)
 # ---------------------------------------------------------------------------
 
-# Single source of truth for the 26 fields whose dataclass default matches
-# ``ParamSpec.default``.  Mismatches (33 fields) and caller-only fields
-# (5 fields) keep their hardcoded defaults until resolved by the user.
+# Single source of truth for the 91 fields whose dataclass default matches
+# ``ParamSpec.default``.  Value-mismatches (14 fields, mostly deliberate
+# build_context() quirks, engine.py:965-1018) and caller-only fields
+# (23 fields, gated by ``_CALLER_ONLY`` sentinels) keep their hardcoded
+# defaults until resolved by the user.
 _DEFAULTS: Dict[str, Any] = {spec.name: spec.default for spec in PROCESSING_PARAMS}
 
 
@@ -1287,6 +1289,23 @@ class _CoreResult:
 # ---------------------------------------------------------------------------
 # RetouchEngine
 # ---------------------------------------------------------------------------
+
+def _worker_payload_ctx(c: "ProcessingContext") -> "ProcessingContext":
+    """Picklable per-face ctx for FaceProcessorPool workers (spawn+pickle).
+
+    NumPy-array ctx fields (freckle_preserve_mask, color_ref, hi_ref,
+    cross_region_skin_mask, cross_region_protect_mask) are picklable and are
+    consumed by _process_face_core, so they are kept for parity with the
+    inline single-process path. Only ``_effect_previews`` is dropped: it can
+    hold bulky preview buffers from earlier faces and the worker rebuilds its
+    own preview namespace (effect_preview.initialize inside
+    _process_face_core).
+    """
+    out = copy.copy(c)
+    if "_effect_previews" in out.__dict__:
+        del out._effect_previews
+    return out
+
 
 class RetouchEngine:
     """Professional-grade automated face retouching engine.
@@ -3978,10 +3997,7 @@ class RetouchEngine:
         proc_results: Optional[List[Optional[dict]]] = None
         try:
             def _slim_ctx(c):
-                return {
-                    k: v for k, v in c.__dict__.items()
-                    if not isinstance(v, np.ndarray) and k != "_effect_previews"
-                }
+                return _worker_payload_ctx(c)
             payloads = [
                 (
                     prepared_faces[i]['canvas'],
@@ -4596,15 +4612,25 @@ class RetouchEngine:
             ctx._p7_diagnostics = diagnostics.to_dict()
             return img
 
-        if float(getattr(ctx, "body_match_face", 0.0)) > 0.0:
+        if float(getattr(ctx, "body_match_face", 0.0)) > 0.0 or float(
+            getattr(ctx, "neck_tone_match", 0.0) or 0.0
+        ) > 0.0:
             # Both stages independently compute a face-to-body-skin LAB
             # correction over the same LCH skin-candidate region, and this
             # stage runs immediately after BodySkinStage in the global
             # registry, so enabling both would stack two corrections on the
-            # same pixels instead of applying one. Same failure shape as the
-            # undereye dark_circles/undereye_darken_removal double-apply
-            # (e73d3ba). Abstain rather than silently compounding the edit.
-            return _record("body_match_face_conflict")
+            # same pixels instead of applying one. ``neck_tone_match`` has
+            # the same double-correct failure shape: it too pushes the face
+            # delta onto neck/chest skin (retouch/neck_tone_match.py).
+            # Same failure shape as the undereye dark_circles/
+            # undereye_darken_removal double-apply (e73d3ba). Abstain rather
+            # than silently compounding the edit.
+            reason = (
+                "body_match_face_conflict"
+                if float(getattr(ctx, "body_match_face", 0.0)) > 0.0
+                else "neck_tone_match_conflict"
+            )
+            return _record(reason)
 
         source = getattr(ctx, "_p7_source", None)
         if source is None:
