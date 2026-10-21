@@ -423,7 +423,7 @@ _SKIN_PARAMS = [
         name="whiten_hue_stable",
         cli_flag="whiten-hue-stable",
         cli_type=bool,
-        default=False,
+        default=True,
         recipe_key="skin.whiten_hue_stable",
         conversion="bool_flag",
     ),

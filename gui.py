@@ -4238,7 +4238,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 _redness_even_state = gr.State(value=0)
                                 hb_even = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Hemoglobin Even", info="Even redness variation in linear pigment space while preserving melanin marks")
                                 hb_shift = gr.Slider(-1.0, 1.0, 0.0, step=0.05, label="Hemoglobin Shift", info="Negative reduces facial flush; positive adds it. Uses the face's own pigment range")
-                                _whiten_hue_stable_state = gr.State(value=0)
+                                _whiten_hue_stable_state = gr.State(value=1)
                                 pore_synthesis = gr.Slider(0, 100, 0, step=1, label="Pore Synthesis", info="Add micro-texture/synthesized pores to prevent artificial plastic skin")
                                 blemish = gr.Slider(0, 100, 30, step=1, label="Blemish Removal", info="AI blemish detection and inpainting for acne/spots")
                                 spot_heal = gr.Slider(0, 100, 0, step=1, label="Spot Healing", info="Heal each pimple and small red or dark spot on its own from the skin around it, like a healing brush; the rest of the skin is left untouched and moles are kept. Off by default; start near 60.")
