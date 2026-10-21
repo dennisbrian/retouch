@@ -894,3 +894,30 @@ def test_on_file_result_receives_qa_before_export_resize(monkeypatch, tmp_path):
     )
 
     assert captured["qa_list"] == fake_qa
+
+
+class TestCapWorkersByRam:
+    def test_no_budget_no_cap(self, tmp_path):
+        from retouch.batch_processor import _cap_workers_by_ram
+        assert _cap_workers_by_ram(4, [tmp_path], None) == 4
+
+    def test_budget_caps_workers(self, tmp_path):
+        from retouch.batch_processor import _cap_workers_by_ram
+        # tiny real file -> _estimate_image_working_bytes < budget
+        img = np.zeros((8, 8, 3), dtype=np.uint8)
+        f = tmp_path / "a.jpg"
+        Image.fromarray(img).save(f)
+        budget = _estimate_image_working_bytes(f)
+        assert _cap_workers_by_ram(4, [f], budget) == 1
+        assert _cap_workers_by_ram(4, [f], budget * 2) == 2
+
+    def test_floor_one(self, tmp_path):
+        from retouch.batch_processor import _cap_workers_by_ram
+        img = np.zeros((8, 8, 3), dtype=np.uint8)
+        f = tmp_path / "a.jpg"
+        Image.fromarray(img).save(f)
+        assert _cap_workers_by_ram(4, [f], 1) == 1
+
+    def test_empty_paths_unchanged(self):
+        from retouch.batch_processor import _cap_workers_by_ram
+        assert _cap_workers_by_ram(4, [], 100) == 4

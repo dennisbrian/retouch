@@ -47,6 +47,7 @@ __all__ = [
     "validate_registry",
     "SMART_INTENTS",
     "COLOR_INTENT",
+    "SKIN_INTENT",
     "get_intent",
 ]
 
@@ -453,7 +454,55 @@ COLOR_INTENT = SmartIntentSpec(
     preview_stage_hint="global",
 )
 
-SMART_INTENTS: Tuple[SmartIntentSpec, ...] = (COLOR_INTENT,)
+# Skin card (§F survey): moderate evenness-focused values, all one-sided
+# (min_val=0 params), so macros are [0, 1] with no target_negative.
+SKIN_INTENT = SmartIntentSpec(
+    intent_id="skin",
+    label="Skin",
+    description="Even out skin tone and texture: reduce blotchiness, redness, and moderate smoothing.",
+    supported_regions=("face",),
+    macro_controls=(
+        MacroSpec(
+            macro_id="evenness",
+            label="Evenness",
+            minimum=0.0,
+            maximum=1.0,
+            default=0.0,
+            writes=(
+                ParameterWrite(
+                    param_key="equalize",
+                    scope="face_local",
+                    target_positive=35.0,
+                ),
+                ParameterWrite(
+                    param_key="redness_even",
+                    scope="face_local",
+                    target_positive=25.0,
+                ),
+            ),
+        ),
+        MacroSpec(
+            macro_id="smoothness",
+            label="Smoothness",
+            minimum=0.0,
+            maximum=1.0,
+            default=0.0,
+            writes=(
+                ParameterWrite(
+                    param_key="smooth",
+                    scope="face_local",
+                    target_positive=60.0,
+                ),
+            ),
+        ),
+    ),
+    capability_requirements=(),
+    fallback_policy="none",
+    explicit_only_effects=(),
+    preview_stage_hint="face_local",
+)
+
+SMART_INTENTS: Tuple[SmartIntentSpec, ...] = (COLOR_INTENT, SKIN_INTENT)
 
 validate_registry(SMART_INTENTS)
 

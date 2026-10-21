@@ -85,6 +85,27 @@ class PipelineState:
     opacity: Dict[str, float] = field(default_factory=dict)
 
 
+def _stage_opacity(state: "PipelineState", name: str) -> float:
+    """Return stage ``name``'s F2 mixer opacity, clamped to [0, 1].
+
+    Missing entries mean 1.0 (full strength), preserving the pre-F2
+    behavior of every existing caller that never sets ``state.opacity``.
+    """
+    try:
+        value = state.opacity.get(name)
+    except AttributeError:
+        return 1.0
+    if value is None:
+        return 1.0
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return 1.0
+    if value != value:  # NaN
+        return 1.0
+    return min(max(value, 0.0), 1.0)
+
+
 @runtime_checkable
 class Stage(Protocol):
     """Protocol for pipeline stages.
@@ -187,10 +208,19 @@ class StageRegistry:
             if stage.name in state.bypass:
                 state.timings[stage.name] = 0.0
                 continue
+            # F2 stage mixer: per-stage opacity. 0 bypasses the stage; a
+            # value in (0, 1) blends the stage output with the pre-stage
+            # image. Wired here in the runner (not per-stage) so every
+            # registered stage supports it uniformly.
+            opacity = _stage_opacity(state, stage.name)
+            if opacity <= 0.0:
+                state.timings[stage.name] = 0.0
+                continue
             if not stage.enabled(state):
                 state.timings[stage.name] = 0.0
                 continue
 
+            before = state.img if opacity < 1.0 else None
             t0 = time.perf_counter()
             try:
                 state = stage.run(state)
@@ -200,6 +230,11 @@ class StageRegistry:
                     f"Stage '{stage.name}' failed: {e}", exc_info=True
                 )
                 raise
+            if before is not None:
+                state.img = (
+                    before.astype(np.float32) * (1.0 - opacity)
+                    + state.img.astype(np.float32) * opacity
+                ).astype(before.dtype)
             elapsed_ms = (time.perf_counter() - t0) * 1000
             state.timings[stage.name] = elapsed_ms
 
@@ -215,12 +250,22 @@ class StageRegistry:
             if stage.name in state.bypass:
                 state.timings[stage.name] = 0.0
                 continue
+            opacity = _stage_opacity(state, stage.name)
+            if opacity <= 0.0:
+                state.timings[stage.name] = 0.0
+                continue
             if not stage.enabled(state):
                 state.timings[stage.name] = 0.0
                 continue
 
+            before = state.img if opacity < 1.0 else None
             t0 = time.perf_counter()
             state = stage.run(state)
+            if before is not None:
+                state.img = (
+                    before.astype(np.float32) * (1.0 - opacity)
+                    + state.img.astype(np.float32) * opacity
+                ).astype(before.dtype)
             elapsed_ms = (time.perf_counter() - t0) * 1000
             state.timings[stage.name] = elapsed_ms
 

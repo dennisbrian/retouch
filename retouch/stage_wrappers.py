@@ -404,6 +404,19 @@ def build_global_registry(engine: "RetouchEngine") -> "StageRegistry":
     in ``RetouchEngine.__init__`` and ``_run_global_phases`` can optionally
     use it via ``registry.run(state)`` instead of the hardcoded stage calls.
 
+    Stage 7.6 (fabric_wrinkle_smooth) is NOT registered here yet: it still
+    runs as a hardcoded block in ``RetouchEngine._run_global_phases``
+    (engine.py, right after ``registry.run(state)``). Registering a
+    FabricWrinkleSmoothStage without deleting that block would run the
+    stage twice (behavior change), and the hardcoded block also emits
+    ``_emit_stage("fabric_wrinkle_smooth")`` via the module-level
+    progress hook, which a plain _EngineStage wrapper does not do
+    (only _ProgressStageProxy-wrapped stages emit). Move it in a
+    dedicated commit that deletes the engine.py block, registers the
+    wrapper here (after BodyReshapeStage, matching the current
+    post-registry call order), and re-verifies the golden outputs.
+    Follow-up tracked in survey §F2b.
+
     Returns:
         A ``StageRegistry`` with stages 3-6 registered in order.
     """
