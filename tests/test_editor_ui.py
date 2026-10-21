@@ -639,10 +639,10 @@ def test_bw_cb_controls_render_reload_update_and_undo(session, callbacks, tmp_pa
     assert not np.array_equal(rendered, before)
     assert view[23] == kind
     if kind == 'Black & White':
-        assert view[85:94] == (200, 300, -100, 60, 20, 80, True, 210, 65)
-        assert view[94]['visible'] is True  # tint row shows while tint is on
+        assert view[86:95] == (200, 300, -100, 60, 20, 80, True, 210, 65)
+        assert view[95]['visible'] is True  # tint row shows while tint is on
     else:
-        assert view[95:105] == (50, -25, 75, -40, 60, -20, 30, 80, -60, False)
+        assert view[96:106] == (50, -25, 75, -40, 60, -20, 30, 80, -60, False)
     target = tmp_path / (kind.replace('&', 'and').replace(' ', '_') + '.comp')
     session.history.save(target)
     reopened = load_project(target)
@@ -721,7 +721,7 @@ def test_curve_texture_controls_render_reload_update_and_undo(session, callbacks
     assert not np.array_equal(rendered, before)
     assert view[23] == kind
     assert view[67:71] == tuple(curve_tables(settings))
-    assert '<svg' in view[105]  # curves plot slot (+7 tonal/bloom rows)
+    assert '<svg' in view[78]  # curves plot slot (right after noise_monochromatic, before tonal controls)
     if kind == 'Grain':
         assert view[71:75] == (35, 2.5, 65, 12345)
     elif kind == 'Add Noise':
