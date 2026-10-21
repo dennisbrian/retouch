@@ -767,12 +767,57 @@ def export_png(document, path, *, bit_depth=8, icc_profile=None):
     16 is only honoured for PNG/TIFF; others stay 8-bit, matching the native
     Compositor exporter, which is 8-bit sRGB only.
     """
-    from ..io import get_working_srgb_icc, write_image_with_icc
+    from ..io import _png_chunk, get_working_srgb_icc, write_image_with_icc
 
     path = Path(path)
     pixels = composite_16(document) if bit_depth == 16 else composite(document)
     if icc_profile is None:
         icc_profile = get_working_srgb_icc()
+    if bit_depth == 16 and path.suffix.lower() == '.png':
+        # Streamed write: a full-canvas cv2.cvtColor BGRA copy plus
+        # cv2.imwrite internals peaked ~3.1 GB resident on a 200 MP export;
+        # feeding 256-row slices to a zlib compressobj keeps the writer's
+        # footprint to one band (~30 MB at 200 MP) beside the composite.
+        # Chunks reuse io._png_chunk; iCCP/pHYs payload formats match
+        # io._embed_png_metadata exactly (same profile name, same zlib
+        # profile compression, same ppm rounding), so read-back QA is
+        # unchanged. Pixels are bit-identical to the cv2 path: PNG is
+        # lossless and filter 0 stores raw big-endian samples.
+        import struct
+        import zlib
+        height, width = pixels.shape[:2]
+        temporary = path.with_name(f'.{path.name}.{uuid.uuid4().hex[:8]}.tmp')
+        staged = temporary.with_name(temporary.name + path.suffix)
+        try:
+            with open(staged, 'wb') as fh:
+                fh.write(b'\x89PNG\r\n\x1a\n')
+                fh.write(_png_chunk(b'IHDR', struct.pack(
+                    '>IIBBBBB', width, height, 16, 6, 0, 0, 0)))
+                if icc_profile:
+                    fh.write(_png_chunk(
+                        b'iCCP',
+                        b'RetouchICC\0\0' + zlib.compress(bytes(icc_profile))))
+                dpi = (document.resolution, document.resolution)
+                ppm = (max(1, int(round(dpi[0] * 39.3701))),
+                       max(1, int(round(dpi[1] * 39.3701))))
+                fh.write(_png_chunk(b'pHYs', struct.pack('>IIB', ppm[0], ppm[1], 1)))
+                compressor = zlib.compressobj(6)
+                for top in range(0, height, 256):
+                    band = pixels[top:top + 256]
+                    # Big-endian RGBA uint16 samples, one filter byte per row.
+                    rows = np.empty((band.shape[0], 1 + band.shape[1] * 8), np.uint8)
+                    rows[:, 0] = 0  # filter type 0 (None)
+                    rows[:, 1:] = np.asarray(
+                        band.astype('>u2')).view(np.uint8).reshape(len(band), -1)
+                    fh.write(_png_chunk(b'IDAT', compressor.compress(rows.tobytes())))
+                fh.write(_png_chunk(b'IDAT', compressor.flush()))
+                fh.write(_png_chunk(b'IEND', b''))
+            os.replace(staged, path)
+        finally:
+            for leftover in (temporary, staged):
+                if leftover.exists():
+                    leftover.unlink()
+        return path
     temporary = path.with_name(f'.{path.name}.{uuid.uuid4().hex[:8]}.tmp')
     # write_image_with_icc writes through its own atomic temp beside the target;
     # stage under our temp name so the final replace stays on one filesystem.
