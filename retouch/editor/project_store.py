@@ -1,12 +1,19 @@
 """Validated ``.comp`` reader/writer for the subset the editor core supports.
 
 Follows ``Compositor/IO/ProjectStore.swift`` and ``docs/project-format.md``:
-format versions 1-11 are read, version 11 is written, and the upstream checks
-(version gating, file naming, path safety, size limits, 8-bit PNGs, grayscale
-masks) reject a damaged package before any pixels are decoded. Constructs the
-port does not model yet (unsupported adjustment kinds, glow/inner-shadow
-effect kinds, unlinked masks, fractional layer sizes and unknown keys) raise
-:class:`UnsupportedFeature` instead of being dropped on the next save.
+format versions 1-14 are read, version 11 is written (the port saves 8-bit
+PNGs only, and v11 packages stay loadable by upstream Compositor), and the
+upstream checks (version gating, file naming, path safety, size limits, 8-bit
+PNGs, grayscale masks) reject a damaged package before any pixels are
+decoded. A version-12 16-bit PNG layer image is loaded through upstream's
+``dither_quantize16`` (DitherPixels.c) rather than plain rounding; a
+version-13 ``.exr`` layer and any other construct the port does not model
+yet (unsupported adjustment kinds, glow/inner-shadow effect kinds, unlinked
+masks, fractional layer sizes and unknown keys) raise
+:class:`UnsupportedFeature` instead of being dropped on the next save. A
+version-14 shape's ``smoothing`` flag is deliberately ignored on read and
+dropped on the next save: the port's shape rendering has no squircle path,
+and keeping the flag would write a v11 package upstream refuses.
 
 Saving builds the whole package beside the target and swaps it in with
 renames, so a failed save leaves the previous package untouched. Layer arrays
@@ -23,6 +30,7 @@ import math
 import os
 import shutil
 import struct
+import tempfile
 import threading
 import time
 import uuid
@@ -40,6 +48,7 @@ from .document import (
     MAX_SURFACE_PIXELS,
     SAMPLING,
     Document,
+    _document_budget_pixels,
     ColorOverlayEffect,
     InnerGlowEffect,
     InnerShadowEffect,
@@ -54,7 +63,7 @@ from .document import (
 
 FORMAT = 'com.compositor.project'
 CURRENT_VERSION = 11
-SUPPORTED_VERSIONS = range(1, CURRENT_VERSION + 1)
+SUPPORTED_VERSIONS = range(1, 15)   # read 1-14; writes stay at 11 (8-bit PNGs only)
 MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 MAX_ASSET_BYTES = 512 * 1024 * 1024
 
@@ -109,7 +118,7 @@ def _read_manifest(package):
     version = manifest.get('version')
     if not _is_int(version) or version not in SUPPORTED_VERSIONS:
         raise ProjectError('project format version %r; supported %d-%d'
-                           % (version, SUPPORTED_VERSIONS[0], CURRENT_VERSION))
+                           % (version, SUPPORTED_VERSIONS[0], SUPPORTED_VERSIONS[-1]))
     return manifest, version
 
 
@@ -150,9 +159,14 @@ def _check_manifest(manifest, version):
             raise _invalid('activeLayerID names no layer')
     document_id = _uuid(manifest.get('documentID'))
     surfaces = [fields['size'] for _, fields in parsed if fields['image_file']]
-    if any(max(size) > MAX_SIDE for size in surfaces) or sum(
-            width * height for width, height in surfaces) > MAX_SURFACE_PIXELS:
-        raise ProjectError('rendered layers exceed the size limits')
+    if any(max(size) > MAX_SIDE for size in surfaces) or any(
+            width * height > MAX_SURFACE_PIXELS for width, height in surfaces) or sum(
+            width * height for width, height in surfaces) > _document_budget_pixels():
+        # Each surface alone stays inside maxSurfacePixels; the sum across
+        # layers follows the RAM-scaled document budget (upstream
+        # DocumentLimits). Checked here so a hostile manifest fails before
+        # any PNG bytes are decoded.
+        raise ProjectError('rendered layers exceed the document pixel budget')
     # Validate graph dependencies before opening any referenced PNG.
     metadata = [Layer(id=layer_id, **{key: value for key, value in fields.items()
                                      if key not in ('image_file', 'mask_file')})
@@ -170,20 +184,26 @@ def _decode(manifest, version, package):
 
     recipes = _read_recipes(package, document_id, {lid for lid, _ in parsed})
     budget = {'image': 0, 'mask': 0}
+    wide_ids = set()   # 16-bit loads must not be copied verbatim on save
     layers = []
     for layer_id, fields in parsed:
         pixels = mask = None
         if fields.pop('image_file'):
-            pixels = _read_png(package, layer_id + '.png', budget, 'image')
+            depth_box = []
+            pixels = _read_png(package, layer_id + '.png', budget, 'image', version,
+                               depth_box)
+            if depth_box:
+                wide_ids.add(layer_id)
         if fields.pop('mask_file'):
-            mask = _read_png(package, layer_id + '.mask.png', budget, 'mask')
+            mask = _read_png(package, layer_id + '.mask.png', budget, 'mask', version)
         source = None
         saved = recipes.get(layer_id)
         if saved:
             from .recipe_state import pixel_digest
             if pixels is None:
                 raise _invalid('recipe settings require a raster layer')
-            source = _read_png(package, layer_id + '.recipe-source.png', budget, 'image')
+            source = _read_png(package, layer_id + '.recipe-source.png', budget,
+                               'image', version)
             if (pixel_digest(source) != saved['source_sha256']
                     or pixel_digest(pixels) != saved['result_sha256']):
                 raise _invalid('recipe source/result changed outside Retouch')
@@ -193,7 +213,10 @@ def _decode(manifest, version, package):
                             **fields))
     images = package / 'images'
     for layer in layers:
-        _remember(layer.pixels, images / (layer.id + '.png'))
+        # An unchanged asset is normally copied verbatim on save; a 16-bit
+        # original must not be (a version-11 package can never carry one).
+        if layer.id not in wide_ids:
+            _remember(layer.pixels, images / (layer.id + '.png'))
         _remember(layer.mask, images / (layer.id + '.mask.png'))
         _remember(layer.recipe_source, images / (layer.id + '.recipe-source.png'))
     document = Document(width=width, height=height, layers=layers,
@@ -231,8 +254,22 @@ def _check_layer(record, version):
     if version < 3 and (opacity != 1 or blend != 'Normal'):
         raise _invalid('opacity/blend mode need format version 3')
     image_file = record.get('imageFile')
-    if image_file is not None and image_file != layer_id + '.png':
-        raise _invalid('imageFile must be <layer id>.png')
+    if image_file is not None:
+        # Upstream validate(): only `<uuid>.png`, plus `<uuid>.exr` on v13+.
+        if image_file == layer_id + '.exr':
+            if version < 13:
+                raise _invalid('EXR layer assets need format version 13')
+            # Deliberate refusal, not a decode attempt: an EXR is HDR (half
+            # floats, light brighter than white) and the port composites 8-bit
+            # sRGB only. Pillow has no EXR codec (or a broken one, which is
+            # process-wide-poisonous once a plugin registers), and silently
+            # clipping HDR to white would misrepresent the document. Refuse
+            # the whole package, before opening any image bytes.
+            raise UnsupportedFeature(
+                'HDR (EXR) layers from format version 13 are not supported '
+                f'yet (layer {name!r})')
+        if image_file != layer_id + '.png':
+            raise _invalid('imageFile must be <layer id>.png')
     mask_file = record.get('maskFile')
     if mask_file is not None and (version < (6 if is_group else 4)
                                   or mask_file != layer_id + '.mask.png'):
@@ -252,6 +289,23 @@ def _check_layer(record, version):
     shape = record.get('shape')
     if shape is not None and not isinstance(shape, dict):
         raise _invalid('shape metadata')
+    if shape is not None:
+        smoothing = shape.get('smoothing')
+        if smoothing is not None and not isinstance(smoothing, bool):
+            raise _invalid('shape smoothing must be a bool')
+        if smoothing and version < 14:
+            # Upstream validate(): smoothing == true requires version >= 14.
+            raise _invalid('shape smoothing needs format version 14')
+        if 'smoothing' in shape:
+            # Ignored, deliberately: upstream's smoothing draws Figma-style
+            # 60%-smoothed (squircle) rectangle corners when the shape is
+            # redrawn; the port has no shape renderer and composites the
+            # shape's pixels, which were rasterized upstream with the
+            # smoothing baked in — only a scaled redraw upstream would
+            # differ. Stripped here so a save (version 11, whose schema has
+            # no smoothing key) round-trips cleanly.
+            shape = {key: value for key, value in shape.items()
+                     if key != 'smoothing'}
     transform = _check_transform(record.get('transform'))
 
     # Valid upstream, not modelled here yet: refuse rather than drop.
@@ -453,10 +507,83 @@ def _check_guides(guides, version):
         seen.add(gid)
 
 
-def _read_png(package, filename, budget, kind):
-    """Decode one embedded PNG after checking its header against the limits."""
+def _hash_noise(x, y, draw):
+    """Upstream DitherPixels.c hash_noise: a murmur-ish triangular dither."""
+    h = ((np.uint64(x) * np.uint64(0x9E3779B1))
+         ^ (np.uint64(y) * np.uint64(0x85EBCA77))
+         ^ (np.uint64(draw) * np.uint64(0xC2B2AE3D))).astype(np.uint64)
+    h = (h ^ (h >> np.uint64(15))) * np.uint64(0x2C1B3C6D)
+    h = (h ^ (h >> np.uint64(12))) * np.uint64(0x297A2D39)
+    h = h ^ (h >> np.uint64(15))
+    return ((h & np.uint64(0xFFFFFF00)) >> np.uint64(8)).astype(np.float64) / float(1 << 24)
+
+
+def _dither_quantize16(premult16_rgba):
+    """Upstream dither_quantize16: (H,W,4) uint16 premultiplied -> uint8 premultiplied.
+
+    alpha8 = lround(a16 * 255/65535); color8 = lround(c16 * 255/65535
+    + hash(x,y,c) + hash(x,y,c+3) - 1) clamped to [0, alpha8].
+    """
+    height, width, _ = premult16_rgba.shape
+    x = np.arange(width, dtype=np.uint32)[None, :].repeat(height, 0)
+    y = np.arange(height, dtype=np.uint32)[:, None].repeat(width, 1)
+    out = np.empty((height, width, 4), np.uint8)
+    alpha = np.rint(premult16_rgba[..., 3].astype(np.float64) * (255.0 / 65535.0))
+    out[..., 3] = np.clip(alpha, 0, 255).astype(np.uint8)
+    for c in range(3):
+        value = (premult16_rgba[..., c].astype(np.float64) * (255.0 / 65535.0)
+                 + _hash_noise(x, y, c) + _hash_noise(x, y, c + 3) - 1.0)
+        rounded = np.clip(np.rint(value), 0, out[..., 3].astype(np.float64))
+        out[..., c] = rounded.astype(np.uint8)
+    return out
+
+
+def _read_png(package, filename, budget, kind, version=CURRENT_VERSION,
+              depth_box=None):
+    """Decode one embedded PNG after checking its header against the limits.
+
+    A version-12+ 16-bit layer *image* (masks stay 8-bit) is decoded the way
+    upstream's DeepLayer feeds the 8-bit layer model: dithered in premultiplied
+    space with ``_dither_quantize16``, then converted to the straight-alpha
+    RGBA the port's ``Layer.pixels`` holds. Any other depth but 8 is refused.
+    """
     data = _read_file(package / 'images' / filename, package, MAX_ASSET_BYTES)
     width, height, depth, colour = _png_header(data, filename)
+    if depth == 16:
+        if kind != 'image' or version < 12:
+            # ProjectStore.swift:192 — depth 16 is valid only for layer
+            # images, only from format version 12; masks stay 8-bit.
+            raise ProjectError(f'{filename}: only 8-bit PNGs are supported')
+        if depth_box is not None:
+            depth_box.append(16)
+        if not (1 <= width <= MAX_SIDE and 1 <= height <= MAX_SIDE) or (
+                budget[kind] + width * height > MAX_SURFACE_PIXELS):
+            raise ProjectError(f'{filename} exceeds the size limits')
+        budget[kind] += width * height
+        import cv2   # deferred: only the v12 16-bit path needs it
+        try:
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as fh:
+                fh.write(data)
+                tmp = fh.name
+            try:
+                img = cv2.imread(tmp, cv2.IMREAD_UNCHANGED)
+            finally:
+                os.unlink(tmp)
+        except OSError as exc:
+            raise ProjectError(f'{filename} is damaged: {exc}') from exc
+        if img is None or img.dtype != np.uint16 or img.ndim != 3 or img.shape[2] != 4:
+            raise ProjectError(f'{filename} is damaged: expected 16-bit RGBA')
+        rgba16 = img[..., [2, 1, 0, 3]]                      # BGRA -> RGBA
+        alpha16 = rgba16[..., 3:4].astype(np.float64)
+        premult = np.rint(rgba16.astype(np.float64) * (alpha16 / 65535.0)).astype(np.uint16)
+        dithered = _dither_quantize16(premult)
+        alpha8 = dithered[..., 3:4].astype(np.float64)       # back to straight alpha
+        with np.errstate(divide='ignore', invalid='ignore'):
+            straight = np.where(alpha8 > 0,
+                                np.rint(dithered[..., :3].astype(np.float64)
+                                        * 255.0 / alpha8), 0.0)
+        return np.clip(np.concatenate([straight, alpha8], axis=-1),
+                       0, 255).astype(np.uint8)
     if depth != 8:
         # ProjectStore rejects >8-bit assets; 1/2/4-bit ones never come from
         # Compositor and would be widened silently by Pillow.

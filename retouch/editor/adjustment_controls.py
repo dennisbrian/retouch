@@ -5,6 +5,7 @@ from typing import Any
 
 import numpy as np
 
+from .adjustments import UnsupportedFeature
 from .adjustments import _curve_value, adjustment, validate_adjustment
 
 
@@ -36,12 +37,38 @@ def curve_channels(tables: Any) -> list:
     return channels
 
 
+def gradient_color(value: Any) -> dict:
+    """A ``#rrggbb`` picker value into a native AdjustmentColor record."""
+    text = str(value or '').lstrip('#')
+    if len(text) == 3:
+        text = ''.join(ch * 2 for ch in text)
+    if len(text) != 6:
+        raise ValueError('Choose the gradient map colours as #rrggbb.')
+    try:
+        red, green, blue = (int(text[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+    except ValueError as exc:
+        raise ValueError('Choose the gradient map colours as #rrggbb.') from exc
+    return dict(red=red, green=green, blue=blue)
+
+
 def controls_adjustment(*args: Any, existing: dict | None = None) -> dict:
     """Build a complete record; retain imported Curves' ancillary settings."""
     record = adjustment(*args[:16])
     if len(args) <= 16:
         return record
-    tables, amount, size, roughness, seed, noise_amount, gaussian, monochromatic = args[16:]
+    # Callers pass the curve tables grouped as args[16] (a list of 4) with the
+    # texture controls flat after it, then B&W, Color Balance and the two
+    # Gradient Map colour pickers — exactly the extras order the UI registers.
+    (tables, amount, size, roughness, seed, noise_amount, gaussian,
+     monochromatic, *rest) = args[16:]
+    bw, cb, gradient = rest[:9], rest[9:19], rest[19:]
+    if len(rest) >= 19 and record['kind'] not in ('Black & White', 'Color Balance',
+                                                  'Gradient Map') and (
+            tuple(bw) != (40, 60, 40, 60, 20, 80, False, 40, 20)
+            or tuple(cb) != (0, 0, 0, 0, 0, 0, 0, 0, 0, True)):
+        # Other kinds may only carry the controls' default values; a record
+        # with moved B&W / Color-Balance sliders would silently drop them.
+        raise UnsupportedFeature('Adjustment settings do not match its kind')
     if record['kind'] == 'Curves':
         if existing and existing['kind'] == 'Curves':
             record = deepcopy(existing)
@@ -55,6 +82,22 @@ def controls_adjustment(*args: Any, existing: dict | None = None) -> dict:
         else:
             record.update(noiseAmount=noise_amount, noiseGaussian=gaussian,
                           noiseMonochromatic=monochromatic, noiseSeed=int(seed))
+    elif record['kind'] == 'Black & White' and len(bw) >= 9:
+        record['blackWhiteSettings'] = dict(
+            reds=bw[0], yellows=bw[1], greens=bw[2], cyans=bw[3],
+            blues=bw[4], magentas=bw[5], tint=bw[6], tintHue=bw[7],
+            tintSaturation=bw[8])
+    elif record['kind'] == 'Color Balance' and len(cb) >= 10:
+        record['colorBalanceSettings'] = dict(
+            shadowCyanRed=cb[0], shadowMagentaGreen=cb[1],
+            shadowYellowBlue=cb[2], midCyanRed=cb[3],
+            midMagentaGreen=cb[4], midYellowBlue=cb[5],
+            highlightCyanRed=cb[6], highlightMagentaGreen=cb[7],
+            highlightYellowBlue=cb[8], preserveLuminosity=cb[9])
+    elif record['kind'] == 'Gradient Map' and len(gradient) >= 3:
+        record['gradientMapSettings'] = dict(shadows=gradient_color(gradient[0]),
+                                             highlights=gradient_color(gradient[1]),
+                                             reversed=bool(gradient[2]))
     validate_adjustment(record)
     return record
 

@@ -14,6 +14,7 @@ from .composite import composite, export_jpeg, export_png
 from .commands import DocumentHistory
 from .document import Document, Layer, UnsupportedFeature
 from .project_store import ProjectError, load_project, save_project
+from .shapes import shape_image, shape_layer, shape_style, validate_shape_style
 
 __all__ = [
     'Document',

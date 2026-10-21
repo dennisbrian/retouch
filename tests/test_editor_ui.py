@@ -209,7 +209,7 @@ def test_open_requires_discard_and_failed_open_preserves_session(session, callba
         assert replacement.history.document.width == 3
         assert replacement.history.dirty
         assert not Path(session.workspace).exists()
-        assert len(loaded) == 80
+        assert len(loaded) == 103
     finally:
         replacement.close()
 
@@ -224,7 +224,7 @@ def test_save_and_export_gate_unapplied_strokes(session, callbacks, tmp_path):
         export(session, stroke_canvas(), 'PNG (8-bit sRGB)')
     assert not target.exists() and session.history.dirty
     result = save(session, str(target), None)
-    assert len(result) == 79 and not session.history.dirty
+    assert len(result) == 102 and not session.history.dirty
     np.testing.assert_array_equal(composite(load_project(target)),
                                   composite(session.history.document))
     path = export(session, None, 'PNG (8-bit sRGB)')
@@ -242,7 +242,7 @@ def test_save_and_export_gate_unapplied_strokes(session, callbacks, tmp_path):
 def test_ui_edit_callbacks_change_layer_and_restore_with_undo(session, callbacks):
     edits = [fn for fn in callbacks if fn.__name__ == 'edit']
     result = edits[0](session, session.selected_id, None, 'New name', False, 50, True)
-    assert len(result) == 79
+    assert len(result) == 102
     layer = session.selected()
     assert (layer.name, layer.visible, layer.opacity) == ('New name', False, 0.5)
     undo = next(fn for fn in edits if fn.__kwdefaults__['operation'] == 'undo')
@@ -295,7 +295,7 @@ def test_reset_mask_callback_reveals_layer_and_undo_restores_coverage(session, c
     painted = composite(session.history.document)
     assert not np.array_equal(painted, expected)
     result = edits['reset_mask'](session, lid, None)
-    assert len(result) == 79 and session.selected_id == lid
+    assert len(result) == 102 and session.selected_id == lid
     assert session.selected().mask is None
     np.testing.assert_array_equal(composite(session.history.document), expected)
     session.history.save(tmp_path / 'reset.comp')
@@ -373,7 +373,7 @@ def test_recipe_callbacks_attach_one_masked_layer_and_block_overlapping_jobs(ses
     render_worker(session.job.directory, Engine)
     session.job.status = 'completed'
     result = finish(session, None)
-    assert len(result) == 82 and session.job.finalized
+    assert len(result) == 105 and session.job.finalized
     assert session.selected().name == 'Retouch · natural'
     assert session.selected().opacity == 0.5
     assert composite(session.history.document)[0, 0].tolist() == [150, 150, 150, 255]
@@ -602,6 +602,66 @@ def _texture_curve_args(kind):
             *tables, 35, 2.5, 65, 12345, 12.5, True, True]
 
 
+def _bw_cb_args(kind, bw=(200, 300, -100, 60, 20, 80, True, 210, 65),
+                cb=(50, -25, 75, -40, 60, -20, 30, 80, -60, False)):
+    return [kind, 0, 0, 1, 0, 255, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0] \
+        + [[[0, 0], [255, 255]]] * 4 + [35, 2.5, 65, 12345, 12.5, True, True] \
+        + list(bw) + list(cb)
+
+
+@pytest.mark.parametrize('kind, key, view_slice', [
+    ('Black & White', 'blackWhiteSettings', (78, 88)),
+    ('Color Balance', 'colorBalanceSettings', (88, 98)),
+])
+def test_bw_cb_controls_render_reload_update_and_undo(session, callbacks, tmp_path,
+                                                      kind, key, view_slice):
+    # The shared session fixture is flat gray, which both kinds leave nearly
+    # unchanged; swap in a colorful base so the grade visibly moves.
+    colorful = np.tile(np.array([[[200, 40, 90, 255], [30, 180, 60, 255],
+                                  [10, 20, 230, 255], [240, 200, 30, 255]]],
+                                np.uint8), (6, 2, 1))
+    session.history.replace_pixels(session.selected_id, colorful)
+    edits = {fn.__kwdefaults__['operation']: fn for fn in callbacks if fn.__name__ == 'edit'}
+    before = composite(session.history.document)
+    args = _bw_cb_args(kind)
+    view = edits['add_grade'](session, session.selected_id, None, *args)
+    layer_id = session.selected_id
+    settings = session.selected().adjustment
+    rendered = composite(session.history.document)
+    assert not np.array_equal(rendered, before)
+    assert view[23] == kind
+    if kind == 'Black & White':
+        assert view[78:87] == (200, 300, -100, 60, 20, 80, True, 210, 65)
+        assert view[87]['visible'] is True  # tint row shows while tint is on
+    else:
+        assert view[88:98] == (50, -25, 75, -40, 60, -20, 30, 80, -60, False)
+    target = tmp_path / (kind.replace('&', 'and').replace(' ', '_') + '.comp')
+    session.history.save(target)
+    reopened = load_project(target)
+    assert reopened.layer(layer_id).adjustment == settings
+    np.testing.assert_array_equal(composite(reopened), rendered)
+    if kind == 'Black & White':
+        args[27] = -200  # a B&W weight; reds 200 -> -200 visibly changes gray
+    else:
+        args[36] = 100  # shadows cyan/red: 50 -> 100 visibly changes color
+    edits['update_grade'](session, layer_id, None, *args)
+    assert not np.array_equal(composite(session.history.document), rendered)
+    edits['undo'](session, layer_id, None)
+    np.testing.assert_array_equal(composite(session.history.document), rendered)
+    edits['redo'](session, layer_id, None)
+    assert not np.array_equal(composite(session.history.document), rendered)
+
+
+def test_bw_cb_reject_other_kinds_settings(session, callbacks):
+    from retouch.editor import UnsupportedFeature
+    add = next(fn for fn in callbacks if fn.__name__ == 'edit'
+               and fn.__kwdefaults__['operation'] == 'add_grade')
+    revision = session.history.revision
+    with pytest.raises(gr.Error):
+        add(session, session.selected_id, None, *_bw_cb_args('Curves'))
+    assert session.history.revision == revision
+
+
 def test_adjustment_visibility_callbacks_match_their_registered_outputs():
     from retouch.editor.adjustments import KINDS
     with gr.Blocks() as app:
@@ -653,10 +713,11 @@ def test_curve_texture_controls_render_reload_update_and_undo(session, callbacks
     assert not np.array_equal(rendered, before)
     assert view[23] == kind
     assert view[67:71] == tuple(curve_tables(settings))
-    assert '<svg' in view[78]
+    assert '<svg' in view[98]
     if kind == 'Grain':
         assert view[71:75] == (35, 2.5, 65, 12345)
     elif kind == 'Add Noise':
+        # 74 is the shared seed slot; the noise controls follow it.
         assert view[74:78] == (12345, 12.5, True, True)
     else:
         assert settings['curves']['channels'][1][1]['y'] == 145
@@ -782,7 +843,7 @@ def test_local_retouch_callbacks_load_apply_save_and_reject_stale_drafts(session
     with pytest.raises(gr.Error, match='Create a selection'):
         apply(session, captured, draft, None, 'Dodge', 100, 'Telea', True)
     result = apply(session, captured, draft, None, 'Dodge', 100, 'Telea', False)
-    assert len(result) == 82
+    assert len(result) == 105
     assert session.selected().name == 'Dodge'
     assert result[-3]['layers'] == [] and result[-2].revision == session.history.revision
     assert result[-2].revision != captured.revision

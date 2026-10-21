@@ -4,7 +4,8 @@ import numpy as np
 import pytest
 
 from retouch.editor import Document, DocumentHistory, composite, load_project
-from retouch.editor.local_retouch import capture_composite, painted_mask, apply_local_retouch
+from retouch.editor.local_retouch import (
+    capture_composite, painted_mask, apply_local_retouch, _warp_pixels)
 from retouch.regions import apply_local_adjustment
 
 
@@ -186,3 +187,184 @@ def test_invalid_clone_source_preserves_document(offset):
         apply_local_retouch(edits, captured, brush(captured), 'Clone', clone_offset=offset)
     assert edits.revision == captured.revision and len(edits.document.layers) == 1
     np.testing.assert_array_equal(composite(edits.document), before)
+
+
+# --- Blur / Smudge / Liquify -------------------------------------------------
+
+def edge_history():
+    """A hard vertical edge, as upstream BlurBrushTests uses."""
+    doc = Document(200, 100)
+    pixels = np.zeros((100, 200, 3), np.uint8)
+    pixels[:, 100:] = 255
+    doc.add_image(pixels, 'Edge')
+    return DocumentHistory(doc)
+
+
+def blur_brush(capture):
+    width, height = capture.preview_size
+    strokes = np.zeros((height, width, 4), np.uint8)
+    strokes[35:65, 80:120] = [255, 0, 0, 255]
+    return {'layers': [strokes]}
+
+
+@pytest.mark.parametrize('operation', ['Blur', 'Smudge', 'Liquify'])
+def test_warp_operation_is_separate_undoable_layer(tmp_path, operation):
+    edits = edge_history()
+    before = composite(edits.document)
+    _, captured = capture_composite(edits)
+    strokes = blur_brush(captured)
+    mask = painted_mask(strokes, captured)
+    layer_id = apply_local_retouch(edits, captured, strokes, operation,
+                                   brush_size=24, brush_strength=90)
+    layer = edits.document.layer(layer_id)
+    assert layer.name == operation and len(edits.document.layers) == 2
+    after = composite(edits.document)
+    assert not np.array_equal(after[mask > 0], before[mask > 0])
+    np.testing.assert_array_equal(after[mask == 0], before[mask == 0])
+    target = tmp_path / 'warp.comp'
+    edits.save(target)
+    np.testing.assert_array_equal(composite(load_project(target)), after)
+    assert edits.undo()
+    np.testing.assert_array_equal(composite(edits.document), before)
+    assert edits.redo()
+    np.testing.assert_array_equal(composite(edits.document), after)
+
+
+def test_blur_radius_sets_how_far_it_softens():
+    """Translated from upstream BlurBrushTests.radiusSetsHowFarItSoftens:
+    the softening reach grows with the brush radius, independent of stroke."""
+    def spread(brush_size):
+        edits = edge_history()
+        _, captured = capture_composite(edits)
+        apply_local_retouch(edits, captured, blur_brush(captured), 'Blur',
+                            brush_size=brush_size)
+        row = composite(edits.document)[50, :, 0]
+        return int(((row > 10) & (row < 245)).sum())
+    narrow, wide = spread(8), spread(48)
+    assert wide > narrow * 2, f'wider radius spreads further: {narrow} vs {wide}'
+
+
+def test_blur_matches_gaussian_oracle():
+    edits = edge_history()
+    _, captured = capture_composite(edits)
+    strokes = blur_brush(captured)
+    mask = painted_mask(strokes, captured)
+    before = composite(edits.document)
+    apply_local_retouch(edits, captured, strokes, 'Blur', brush_size=24)
+    expected = cv2.GaussianBlur(before, (0, 0), sigmaX=12, sigmaY=12,
+                                borderType=cv2.BORDER_REPLICATE)
+    a = mask[..., None].astype(np.uint32)
+    expected = ((expected.astype(np.uint32) * a + before.astype(np.uint32) * (255 - a) + 127)
+                // 255).astype(np.uint8)
+    np.testing.assert_array_equal(composite(edits.document), expected)
+
+
+def test_smudge_drags_colour_along_the_stroke():
+    """Upstream: a smudged bright region leaves one trail that fades, not ghost copies."""
+    rng = np.random.default_rng(0)
+    region = np.zeros((21, 41, 4), np.uint8)
+    region[..., 3] = 255
+    region[:, 20:] = 255
+    mask = np.zeros((21, 41), np.uint8)
+    mask[7:14, 8:33] = 255
+    out = _warp_pixels(region.copy(), mask, 'Smudge', 6, 0.5, 0.9)
+    # What the first dab picked up (black) darkens the far end of the stroke.
+    assert out[10, 28:33, 0].mean() < 200
+    # A dab's circle is wider than the painted line (native: the brush, not
+    # the stroke shape, decides what moves). Rows/columns no dab reached are intact.
+    np.testing.assert_array_equal(out[:1, :, :], region[:1, :, :])
+    np.testing.assert_array_equal(out[20:, :, :], region[20:, :, :])
+    np.testing.assert_array_equal(out[:, :3, :], region[:, :3, :])
+    np.testing.assert_array_equal(out[:, 38:, :], region[:, 38:, :])
+
+
+def test_liquify_pushes_pixels_with_the_stroke():
+    region = np.zeros((21, 41, 4), np.uint8)
+    region[..., 3] = 255
+    region[:, 20:] = 255
+    mask = np.zeros((21, 41), np.uint8)
+    mask[7:14, 8:33] = 255
+    out = _warp_pixels(region.copy(), mask, 'Liquify', 6, 0.5, 0.9)
+    # The white half pushed left into the black half at the stroke centre.
+    assert out[10, 18, 0] < 255
+    np.testing.assert_array_equal(out[:1, :, :], region[:1, :, :])
+    np.testing.assert_array_equal(out[20:, :, :], region[20:, :, :])
+    np.testing.assert_array_equal(out[:, :3, :], region[:, :3, :])
+    np.testing.assert_array_equal(out[:, 38:, :], region[:, 38:, :])
+
+
+@pytest.mark.parametrize('operation', ['Blur', 'Smudge', 'Liquify'])
+def test_soft_warp_strokes_blend_once(operation):
+    edits = edge_history()
+    before = composite(edits.document)
+    _, captured = capture_composite(edits)
+    strokes = blur_brush(captured)
+    strokes['layers'] = [strokes['layers'][0].copy()]
+    strokes['layers'][0][..., 3] = (strokes['layers'][0][..., 3].astype(np.uint32) * 128 // 255).astype(np.uint8)
+    mask = painted_mask(strokes, captured)
+    apply_local_retouch(edits, captured, strokes, operation, brush_size=24, brush_strength=90)
+    after = composite(edits.document)
+    # Half-alpha strokes land halfway between original and the full-strength result.
+    edits2 = edge_history()
+    _, captured2 = capture_composite(edits2)
+    full = blur_brush(captured2)
+    apply_local_retouch(edits2, captured2, full, operation, brush_size=24, brush_strength=90)
+    strong = composite(edits2.document)
+    midpoint = ((before.astype(np.uint32) + strong.astype(np.uint32)) // 2).astype(np.uint8)
+    assert np.abs(after.astype(np.int16) - midpoint).max() <= 1
+
+
+@pytest.mark.parametrize('args', [
+    {'brush_size': 1}, {'brush_size': 201}, {'brush_size': 40.5},
+    {'brush_size': True}, {'brush_strength': 0}, {'brush_strength': 101},
+    {'brush_strength': float('nan')}, {'brush_hardness': -1}, {'brush_hardness': 101},
+])
+def test_invalid_warp_settings_never_touch_history(args):
+    edits = edge_history()
+    before = composite(edits.document)
+    _, captured = capture_composite(edits)
+    with pytest.raises(ValueError, match='Brush'):
+        apply_local_retouch(edits, captured, blur_brush(captured), 'Smudge', **args)
+    assert edits.revision == captured.revision
+    np.testing.assert_array_equal(composite(edits.document), before)
+
+
+def test_warp_area_budget_refusal():
+    doc = Document(1200, 900)
+    rng = np.random.default_rng(1)
+    doc.add_image(rng.integers(0, 256, (900, 1200, 3), dtype=np.uint8), 'Noise')
+    edits = DocumentHistory(doc)
+    before = composite(edits.document)
+    _, captured = capture_composite(edits)
+    width, height = captured.preview_size  # (w, h); numpy rows are height
+    strokes = np.zeros((height, width, 4), np.uint8)
+    yy, xx = np.mgrid[0:height, 0:width]
+    strokes[((yy - height / 2) ** 2 + (xx - width / 2) ** 2) < (width * 0.45) ** 2] = [255, 0, 0, 255]
+    with pytest.raises(ValueError, match='too large'):
+        apply_local_retouch(edits, captured, {'layers': [strokes]}, 'Smudge', brush_size=60)
+    assert edits.revision == captured.revision
+    np.testing.assert_array_equal(composite(edits.document), before)
+
+
+@pytest.mark.parametrize('operation', ['Blur', 'Smudge', 'Liquify'])
+def test_warp_rejects_stale_capture(operation):
+    edits = edge_history()
+    _, captured = capture_composite(edits)
+    edits.update_layer(edits.document.layers[0].id, name='Changed')
+    with pytest.raises(ValueError, match='Document changed'):
+        apply_local_retouch(edits, captured, blur_brush(captured), operation, brush_size=24)
+    assert len(edits.document.layers) == 1
+
+
+def test_warp_selection_limits_the_stroke():
+    edits = edge_history()
+    _, captured = capture_composite(edits)
+    strokes = blur_brush(captured)
+    selection = np.zeros((100, 200), np.uint8)
+    selection[:, :100] = 255  # left half only
+    before = composite(edits.document)
+    apply_local_retouch(edits, captured, strokes, 'Blur', brush_size=24,
+                        selection=selection)
+    after = composite(edits.document)
+    assert not np.array_equal(after[:, 80:100], before[:, 80:100])
+    np.testing.assert_array_equal(after[:, 100:], before[:, 100:])

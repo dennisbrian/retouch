@@ -259,7 +259,7 @@ class _BandRenderer:
             from .adjustments import grade
             # Adjust colors in place; alpha remains exactly the captured coverage.
             straight = dest / np.where(a > 0, a, 1)[..., None]
-            changed = grade(straight, layer.adjustment, y0=float(top))
+            changed = grade(straight, layer.adjustment, y0=float(top), alpha=a)
             if layer.blend_mode != 'Normal':
                 changed = _blend(straight, changed, layer.blend_mode)
             weight = self.opacity(layer) * self.own(layer, top, bottom, True)[1]

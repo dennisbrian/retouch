@@ -80,7 +80,7 @@ def test_scaled_project_budget_is_checked_before_png_decode(tmp_path, monkeypatc
     manifest['layers'][0]['transform']['size'] = [20000, 20000]
     (path / 'manifest.json').write_text(json.dumps(manifest))
     monkeypatch.setattr(store, '_read_png', lambda *args: pytest.fail('PNG decode reached'))
-    with pytest.raises(ValueError, match='size limits'):
+    with pytest.raises(ValueError, match='document pixel budget'):
         load_project(path)
 
 
@@ -209,10 +209,13 @@ def test_fit_noop_and_missing_layer_preserve_redo():
 
 
 def test_fit_rejects_total_render_budget_without_changing_document():
+    # The document budget scales with RAM (min 200 MP, upstream formula), so
+    # push the layer sum past the 800 MP ceiling the formula can never exceed.
     doc = Document(14000, 14000)
     layer = doc.add_image(np.full((1, 1, 4), 255, np.uint8), 'Fit me')
-    other = doc.add_image(np.full((1, 1, 4), 255, np.uint8), 'Other')
-    other.size = (3000, 2000)
+    for _ in range(110):
+        other = doc.add_image(np.full((1, 1, 4), 255, np.uint8), 'Other')
+        other.size = (3000, 2000)
     history = DocumentHistory(doc, saved=True)
     with pytest.raises(ValueError, match='budget'):
         history.fit_layer(layer.id)

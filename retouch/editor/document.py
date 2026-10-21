@@ -12,6 +12,7 @@ Derived from Compositor (MIT, Copyright (c) 2026 Wonder Assembly LLC), pinned
 at 11d8d7a; see ``third_party/compositor/``.
 """
 import math
+import sys
 import uuid
 from dataclasses import dataclass, field
 
@@ -23,6 +24,39 @@ import numpy as np
 MAX_SIDE = 30_000
 MAX_SURFACE_PIXELS = 200_000_000
 MAX_LAYERS = 10_000
+
+
+def _ram_budget() -> int:
+    """Physical RAM / 16, for the document pixel budget (upstream formula)."""
+    if sys.platform == 'darwin':
+        import subprocess
+        try:
+            out = subprocess.run(['sysctl', '-n', 'hw.memsize'],
+                                 capture_output=True, text=True).stdout.strip()
+            if out.isdigit():
+                return int(out) // 16
+        except OSError:
+            pass
+    elif sys.platform.startswith('linux'):
+        try:
+            with open('/proc/meminfo') as fh:
+                for line in fh:
+                    if line.startswith('MemTotal:'):
+                        return int(line.split()[1]) * 1024 // 16
+        except OSError:
+            pass
+    return MAX_SURFACE_PIXELS
+
+
+# Resolved once at import: tests monkeypatch subprocess afterwards, and a
+# mocked sysctl must never leak into the budget.
+_DOCUMENT_BUDGET_PIXELS = min(800_000_000, max(MAX_SURFACE_PIXELS, _ram_budget()))
+
+
+def _document_budget_pixels() -> int:
+    """min(800 MP, max(200 MP, RAM/16)) - upstream DocumentLimits.swift."""
+    return _DOCUMENT_BUDGET_PIXELS
+
 
 # Every name the format accepts (docs/writing-comp-files.md). Rendering supports
 # the subset in composite.RENDER_BLEND_MODES; the rest round-trip unchanged.
@@ -397,6 +431,11 @@ class Layer:
                     or self.recipe_source.shape != self.pixels.shape
                     or not (self.recipe_source[..., 3] == 255).all()):
                 raise ValueError('Recipe source must match an opaque raster layer')
+        if self.shape is not None:
+            # Port-only guard: keep the shape style valid so redraws keep
+            # working; upstream keeps a typed LayerShapeStyle instead.
+            from .shapes import validate_shape_style
+            validate_shape_style(self.shape)
         if (not isinstance(self.rotation, (int, float)) or isinstance(self.rotation, bool)
                 or not math.isfinite(self.rotation)):
             raise ValueError('layer rotation must be finite')
@@ -575,8 +614,16 @@ class Document:
                     raise ValueError('clipping source must be a pixel or blank layer')
                 seen.add(source)
                 source = node.mask_source_id
-        if max(image_pixels, mask_pixels, rendered_pixels) > MAX_SURFACE_PIXELS:
+        # Upstream DocumentLimits keeps two budgets: maxSurfacePixels for a
+        # single surface and a RAM-scaled documentPixelBudget for the sum
+        # across layers, so a document at the surface cap can still gain
+        # pixel layers (heal patches, pastes). The port had collapsed both
+        # into one constant, which blocked every add at the legal max.
+        document_budget = min(800_000_000,
+                              max(MAX_SURFACE_PIXELS,
+                                  _document_budget_pixels()))
+        if max(image_pixels, mask_pixels, rendered_pixels) > document_budget:
             raise ValueError('document exceeds the %d MP layer budget'
-                             % (MAX_SURFACE_PIXELS // 1_000_000))
+                             % (document_budget // 1_000_000))
         if self.active_layer_id is not None and self.active_layer_id not in ids:
             raise ValueError('active layer is not in the document')

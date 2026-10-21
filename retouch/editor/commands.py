@@ -390,6 +390,24 @@ class DocumentHistory:
                        label: str = 'Replace pixels') -> bool:
         return self._edit(label, lambda doc: doc.layer(layer_id).replace_pixels(pixels))
 
+    def update_shape(self, layer_id: str, style: dict) -> bool:
+        """Redraw a shape layer from a new style as one undoable edit.
+
+        The pixels and the ``shape`` style change together, so undo returns
+        both (upstream's redraw is likewise part of the size edit).
+        """
+        from .shapes import redraw_shape, validate_shape_style
+        validate_shape_style(style)
+
+        def apply(doc: Document) -> None:
+            layer = doc.layer(layer_id)
+            pixels = redraw_shape(layer, style)
+            if pixels is None:
+                raise ValueError('Select a shape layer first')
+            layer.pixels = pixels
+            layer.shape = deepcopy(style)
+        return self._edit('Change shape', apply)
+
     def copy_selection_as_layer(self, selection, source_id=None, *, cut=False) -> bool:
         """Copy the visible composite inside a selection as a new layer above
         the active one; ``cut`` also clears the selected pixels of ``source_id``.

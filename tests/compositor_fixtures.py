@@ -62,6 +62,28 @@ def solid(width, height, rgba):
     return np.tile(np.array(rgba, np.uint8), (height, width, 1))
 
 
+def png16(path, width, height, rgba16):
+    """Write a 16-bit RGBA PNG from (width, height, 4) big-endian uint16.
+
+    Pillow cannot write 16-bit RGBA, so the file is assembled by hand;
+    header-first reads (``_png_header``) work on it exactly like Pillow's.
+    """
+    import struct
+    import zlib
+    rows = np.asarray(rgba16, dtype='>u2').reshape(height, width * 4)
+    raw = b''.join(b'\x00' + row.tobytes() for row in rows)
+
+    def chunk(tag, data):
+        body = tag + data
+        return (struct.pack('>I', len(data)) + body
+                + struct.pack('>I', zlib.crc32(body)))
+    out = b'\x89PNG\r\n\x1a\n'
+    out += chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 16, 6, 0, 0, 0))
+    out += chunk(b'IDAT', zlib.compress(raw))
+    out += chunk(b'IEND', b'')
+    Path(path).write_bytes(out)
+
+
 def two_grays(path, top_opacity=1.0):
     """LayerAppearanceTests: an 80% gray layer over a 40% gray one, 4x4."""
     low, high = round(0.4 * 255), round(0.8 * 255)

@@ -270,7 +270,7 @@ class TestRejections:
         import retouch.editor.project_store as store
         monkeypatch.setattr(store, 'MAX_SURFACE_PIXELS', 3)
         monkeypatch.setattr(store.Image, 'open', None)   # never reached
-        with pytest.raises(ProjectError, match='size limits'):
+        with pytest.raises(ProjectError, match='document pixel budget'):
             load_project(project)
 
     def test_opacity_needs_version_3(self, project):
@@ -743,6 +743,146 @@ class TestLayerEffects:
         path = fx.write_package(tmp_path / 'bad_shadow.comp', 4, 4, [bad_shadow],
                                images={0: fx.solid(4, 4, (1, 1, 1, 255))})
         with pytest.raises(ProjectError, match='unknown shadow keys'):
+            load_project(path)
+
+
+class TestFormats12To14:
+    """Read-side rehearsal of upstream c70a12f's versions 12-14 (writes stay
+    at 11): 16-bit layer PNGs (12), OpenEXR layer assets (13), shape
+    smoothing (14). Upstream citations: ProjectStore.swift's
+    ``depth == 16 && !isMask && manifest.version >= 12`` load gate, its
+    ``imageFile == "<uuid>.exr"`` naming valid from 13, and validate()'s
+    ``smoothing == true`` requiring 14; MIT, Copyright (c) 2026 Wonder
+    Assembly LLC for the mirrored cases."""
+
+    def _wide_layer(self, path, version=12):
+        """A 2x2 layer whose 16-bit PNG carries 0x0000, 0x0101, 0x8080 and
+        0xFFFF in the red channel (one per pixel): widened by >>8 that is
+        0, 1, 128, 255. Alpha stays 255 so the straight-alpha decode is
+        observable (a premultiplying decoder zeroes the low-alpha colours)."""
+        record = fx.layer_record(0, 'Deep', 2, 2)
+        path = fx.write_package(path, 2, 2, [record], version=version)
+        reds = [0x0000, 0x0101, 0x8080, 0xFFFF]
+        values = []
+        for red in reds:
+            values += [red, 0, 0, 0xFFFF]
+        fx.png16(path / 'images' / (fx.IDS[0] + '.png'), 2, 2, values)
+        return path
+
+    def test_v12_16_bit_layer_loads_widened(self, tmp_path):
+        doc = load_project(self._wide_layer(tmp_path / 'deep.comp'))
+        # Widened with the upstream dither (hash_noise(x, y, draw)), not a
+        # plain >>8: 0x8080 dithers to 129 on even draw draws, 0x0101 to 0/1
+        # per (x, y, channel). Compare against the vectorised replica.
+        from retouch.editor.project_store import _dither_quantize16
+        rgba16 = np.array(
+            [[0x0000, 0x0101], [0x8080, 0xFFFF]], '>u2')[:, :, None]
+        rgba16 = np.concatenate([rgba16, np.zeros((2, 2, 3), '>u2')], axis=2)
+        rgba16[..., 3] = 0xFFFF
+        alpha16 = rgba16[..., 3:4].astype(np.float64)
+        premult = np.rint(rgba16.astype(np.float64)
+                          * (alpha16 / 65535.0)).astype(np.uint16)
+        want = _dither_quantize16(premult)[..., 0]
+        assert (doc.layers[0].pixels[..., 0] == want).all()
+        assert (doc.layers[0].pixels[..., 3] == 255).all()
+
+    def test_16_bit_layer_in_v11_refused(self, tmp_path):
+        path = self._wide_layer(tmp_path / 'old.comp', version=11)
+        with pytest.raises(ProjectError, match='8-bit'):
+            load_project(path)
+
+    def test_16_bit_mask_refused_even_on_v12(self, tmp_path):
+        record = fx.layer_record(0, 'Red', 2, 2,
+                                 maskFile=fx.IDS[0] + '.mask.png')
+        path = fx.write_package(tmp_path / 'm.comp', 2, 2, [record],
+                                images={0: fx.solid(2, 2, (255, 0, 0, 255))},
+                                version=12)
+        fx.png16(path / 'images' / (fx.IDS[0] + '.mask.png'), 2, 2, [0xFFFF] * 16)
+        with pytest.raises(ProjectError, match='8-bit'):
+            load_project(path)
+
+    def test_v12_loaded_project_round_trips_as_v11_8_bit(self, tmp_path):
+        doc = load_project(self._wide_layer(tmp_path / 'deep.comp'))
+        path = tmp_path / 'saved.comp'
+        save_project(doc, path)
+        manifest = _manifest(path)
+        assert manifest['version'] == 11
+        with Image.open(path / 'images' / (fx.IDS[0] + '.png')) as image:
+            assert image.mode == 'RGBA' and image.info.get('bits', 8) != 16
+        # Re-saved pixels match the widened load exactly.
+        assert (load_project(path).layers[0].pixels == doc.layers[0].pixels).all()
+
+    def test_v13_exr_layer_refused_cleanly(self, tmp_path):
+        # EXR is the one v13 feature refused outright: HDR half-float light
+        # brighter than white cannot be represented in the port's 8-bit sRGB
+        # compositing, and decoding via a plugin EXR codec is unsafe.
+        record = fx.layer_record(0, 'HDR', 2, 2)
+        record['imageFile'] = fx.IDS[0] + '.exr'
+        path = fx.write_package(tmp_path / 'hdr.comp', 2, 2, [record], version=13)
+        (path / 'images' / (fx.IDS[0] + '.exr')).write_bytes(b'\x76\x2f\x31\x01')
+        with pytest.raises(UnsupportedFeature,
+                           match=r'HDR \(EXR\) layers from format version 13'):
+            load_project(path)
+
+    def test_exr_layer_in_v12_refused_before_the_feature_check(self, tmp_path):
+        # A v12 file cannot name an EXR at all (upstream validate(): the
+        # .exr suffix is only legal from version 13), so the version gate
+        # fires as a plain invalid, not as the HDR refusal.
+        record = fx.layer_record(0, 'HDR', 2, 2)
+        record['imageFile'] = fx.IDS[0] + '.exr'
+        path = fx.write_package(tmp_path / 'old.exr.comp', 2, 2, [record], version=12)
+        (path / 'images' / (fx.IDS[0] + '.exr')).write_bytes(b'\x76\x2f\x31\x01')
+        with pytest.raises(ProjectError, match='format version 13'):
+            load_project(path)
+
+    def _smooth_shape(self, path, version):
+        # As rasterized by upstream: a shape layer's pixels carry the
+        # smoothing; the style only redraws it when the layer is scaled.
+        shape = {'kind': 'Rectangle', 'red': 1, 'green': 0, 'blue': 0,
+                 'cornerRadius': 4, 'smoothing': True}
+        record = fx.layer_record(0, 'Smoothed rect', 2, 2, shape=shape)
+        return fx.write_package(path, 2, 2, [record],
+                                images={0: fx.solid(2, 2, (255, 0, 0, 255))},
+                                version=version)
+
+    def test_v14_smoothing_shape_loads_and_is_ignored(self, tmp_path):
+        doc = load_project(self._smooth_shape(tmp_path / 's14.comp', version=14))
+        layer = doc.layers[0]
+        assert layer.shape is not None and layer.shape['kind'] == 'Rectangle'
+        assert 'smoothing' not in layer.shape     # ignored, deliberately
+        assert layer.shape['cornerRadius'] == 4
+        # The style rides along; the pixels composite unchanged.
+        np.testing.assert_array_equal(
+            composite(doc)[..., :3], fx.solid(2, 2, (255, 0, 0, 255))[..., :3])
+
+    def test_v14_smoothing_shape_saves_as_v11_without_the_flag(self, tmp_path):
+        doc = load_project(self._smooth_shape(tmp_path / 's14.comp', version=14))
+        path = save_project(doc, tmp_path / 'saved.comp')
+        assert _manifest(path)['version'] == 11
+        assert 'smoothing' not in _manifest(path)['layers'][0]['shape']
+        again = load_project(path)
+        assert again.layers[0].shape['cornerRadius'] == 4
+
+    def test_smoothing_in_v13_refused(self, tmp_path):
+        path = self._smooth_shape(tmp_path / 's13.comp', version=13)
+        with pytest.raises(ProjectError, match='format version 14'):
+            load_project(path)
+
+    def test_smoothing_false_is_legal_below_v14(self, tmp_path):
+        shape = {'kind': 'Rectangle', 'red': 1, 'green': 0, 'blue': 0,
+                 'cornerRadius': 4, 'smoothing': False}
+        record = fx.layer_record(0, 'Rect', 2, 2, shape=shape)
+        path = fx.write_package(tmp_path / 'plain.comp', 2, 2, [record],
+                                images={0: fx.solid(2, 2, (255, 0, 0, 255))},
+                                version=13)
+        assert load_project(path).layers[0].shape['cornerRadius'] == 4
+
+    def test_v15_refused(self, tmp_path):
+        path = fx.write_package(tmp_path / 'future.comp', 2, 2,
+                                [fx.layer_record(0, 'Layer', 2, 2)],
+                                images={0: fx.solid(2, 2, (1, 1, 1, 255))},
+                                version=15)
+        with pytest.raises(ProjectError, match='supported 1-14'):
             load_project(path)
 
 

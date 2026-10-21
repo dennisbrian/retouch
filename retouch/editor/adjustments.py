@@ -10,13 +10,15 @@ import numpy as np
 
 from .document import UnsupportedFeature
 
-KINDS = ('Exposure', 'Levels', 'Curves', 'Invert', 'Saturation', 'Vibrance', 'Temperature', 'Tint', 'Brightness', 'Contrast', 'Hue', 'Grain', 'Add Noise')
+KINDS = ('Exposure', 'Levels', 'Curves', 'Invert', 'Saturation', 'Vibrance', 'Temperature', 'Tint', 'Brightness', 'Contrast', 'Hue', 'Gradient Map', 'Grain', 'Add Noise', 'Black & White', 'Color Balance')
 CHANNELS = ('RGB', 'Red', 'Green', 'Blue')
 _KIND_RANGES = ('master', 'reds', 'yellows', 'greens', 'cyans', 'blues', 'magentas')
 _COMMON_KEYS = {'kind', 'hue', 'saturation', 'lightness', 'colorize', 'range', 'invertRange', 'levels', 'curves'}
 _SETTINGS_KEYS = {'exposureSettings', 'saturationSettings', 'vibranceSettings', 'temperatureSettings',
                   'tintSettings', 'brightnessSettings', 'contrastSettings', 'hueSettings',
-                  'grainSettings', 'noiseAmount', 'noiseGaussian', 'noiseMonochromatic', 'noiseSeed'}
+                  'gradientMapSettings',
+                  'grainSettings', 'noiseAmount', 'noiseGaussian', 'noiseMonochromatic', 'noiseSeed',
+                  'blackWhiteSettings', 'colorBalanceSettings'}
 # A record carries the union of every kind's keys (upstream stores one struct
 # with every settings object optional), but each settings object belongs to
 # one kind: only its own kind's settings may be present.
@@ -27,8 +29,11 @@ _KEYS_BY_KIND = {
     'Temperature': {'temperatureSettings'}, 'Tint': {'tintSettings'},
     'Brightness': {'brightnessSettings'}, 'Contrast': {'contrastSettings'},
     'Hue': {'hueSettings'},
+    'Gradient Map': {'gradientMapSettings'},
     'Grain': {'grainSettings'},
     'Add Noise': {'noiseAmount', 'noiseGaussian', 'noiseMonochromatic', 'noiseSeed'},
+    'Black & White': {'blackWhiteSettings'},
+    'Color Balance': {'colorBalanceSettings'},
 }
 
 
@@ -36,8 +41,15 @@ def adjustment(kind='Exposure', exposure=0, offset=0, gamma=1,
                black=0, white=255, red_gamma=1, green_gamma=1, blue_gamma=1,
                saturation=0, vibrance=0, temperature=0, tint=0,
                brightness=0, contrast=0, hue=0,
+               shadows=(0, 0, 0), highlights=(1, 1, 1), reversed=False,
                amount=25, size=1.5, roughness=50, seed=0,
-               gaussian=False, monochromatic=False):
+               gaussian=False, monochromatic=False,
+               reds=40, yellows=60, greens=40, cyans=60, blues=20, magentas=80,
+               bw_tint=False, tint_hue=40, tint_saturation=20,
+               shadow_cyan_red=0, shadow_magenta_green=0, shadow_yellow_blue=0,
+               mid_cyan_red=0, mid_magenta_green=0, mid_yellow_blue=0,
+               highlight_cyan_red=0, highlight_magenta_green=0, highlight_yellow_blue=0,
+               preserve_luminosity=True):
     """Build a native-format record; all channels use identity by default."""
     if kind not in ('Levels', 'Saturation', 'Vibrance', 'Temperature', 'Tint', 'Brightness', 'Contrast', 'Hue'):
         black, white = 0, 255
@@ -67,11 +79,36 @@ def adjustment(kind='Exposure', exposure=0, offset=0, gamma=1,
         record['contrastSettings'] = dict(contrast=contrast)
     if kind == 'Hue':
         record['hueSettings'] = dict(hue=hue)
+    if kind == 'Gradient Map':
+        try:
+            shadow_color, highlight_color = tuple(shadows), tuple(highlights)
+            if len(shadow_color) != 3 or len(highlight_color) != 3:
+                raise IndexError
+            record['gradientMapSettings'] = dict(
+                shadows=dict(red=shadow_color[0], green=shadow_color[1], blue=shadow_color[2]),
+                highlights=dict(red=highlight_color[0], green=highlight_color[1], blue=highlight_color[2]),
+                reversed=reversed)
+        except (TypeError, ValueError, IndexError) as exc:
+            raise ValueError('Invalid gradient map settings') from exc
     if kind == 'Grain':
         record['grainSettings'] = dict(amount=amount, size=size, roughness=roughness, seed=seed)
     if kind == 'Add Noise':
         record.update(noiseAmount=amount, noiseGaussian=gaussian,
                       noiseMonochromatic=monochromatic, noiseSeed=seed)
+    if kind == 'Black & White':
+        record['blackWhiteSettings'] = dict(
+            reds=reds, yellows=yellows, greens=greens, cyans=cyans, blues=blues,
+            magentas=magentas, tint=bw_tint, tintHue=tint_hue,
+            tintSaturation=tint_saturation)
+    if kind == 'Color Balance':
+        record['colorBalanceSettings'] = dict(
+            shadowCyanRed=shadow_cyan_red, shadowMagentaGreen=shadow_magenta_green,
+            shadowYellowBlue=shadow_yellow_blue, midCyanRed=mid_cyan_red,
+            midMagentaGreen=mid_magenta_green, midYellowBlue=mid_yellow_blue,
+            highlightCyanRed=highlight_cyan_red,
+            highlightMagentaGreen=highlight_magenta_green,
+            highlightYellowBlue=highlight_yellow_blue,
+            preserveLuminosity=preserve_luminosity)
     validate_adjustment(record)
     return deepcopy(record)
 
@@ -85,7 +122,9 @@ def validate_adjustment(record):
     if not isinstance(record, dict):
         raise ValueError('Adjustment must be a settings record')
     if record.get('kind') not in KINDS or set(record) - _KEYS:
-        raise UnsupportedFeature('Supported adjustments are ' + ', '.join(KINDS))
+        raise UnsupportedFeature('Supported adjustments are Exposure, Levels, Invert, '
+                                 'Saturation, Vibrance, Temperature, Tint, Brightness, '
+                                 'Contrast, Hue, Black & White and Color Balance')
     if any(not _number(record.get(k), -lim, lim) for k, lim in
            (('hue', 360), ('saturation', 100), ('lightness', 100))):
         raise ValueError('Invalid adjustment color settings')
@@ -153,6 +192,17 @@ def validate_adjustment(record):
     if hsett is not None and (not isinstance(hsett, dict) or set(hsett) != {'hue'}
             or not _number(hsett['hue'], -180, 180)):
         raise ValueError('Invalid hue settings')
+    gmap = record.get('gradientMapSettings')
+    if gmap is not None and (not isinstance(gmap, dict)
+            or set(gmap) != {'shadows', 'highlights', 'reversed'}
+            or not isinstance(gmap['reversed'], bool)
+            or any(not isinstance(gmap[end], dict)
+                   or set(gmap[end]) != {'red', 'green', 'blue'}
+                   or any(not _number(gmap[end][c], 0, 1)
+                          for c in ('red', 'green', 'blue'))
+                   for end in ('shadows', 'highlights'))
+            or not isinstance(gmap.get('shadows'), dict)):
+        raise ValueError('Invalid gradient map settings')
     grain = record.get('grainSettings')
     if grain is not None and (not isinstance(grain, dict)
             or set(grain) != {'amount', 'size', 'roughness', 'seed'}
@@ -171,6 +221,30 @@ def validate_adjustment(record):
     if 'noiseSeed' in record and (not isinstance(record.get('noiseSeed'), int)
             or isinstance(record['noiseSeed'], bool) or not 0 <= record['noiseSeed'] <= 0xFFFFFFFF):
         raise ValueError('Invalid noise settings')
+    bw = record.get('blackWhiteSettings')
+    if bw is not None and (
+            not isinstance(bw, dict)
+            or set(bw) != {'reds', 'yellows', 'greens', 'cyans', 'blues', 'magentas',
+                           'tint', 'tintHue', 'tintSaturation'}
+            or any(not _number(bw[k], -200, 300) for k in
+                   ('reds', 'yellows', 'greens', 'cyans', 'blues', 'magentas'))
+            or not isinstance(bw['tint'], bool)
+            or not _number(bw['tintHue'], 0, 360)
+            or not _number(bw['tintSaturation'], 0, 100)):
+        raise ValueError('Invalid black & white settings')
+    cb = record.get('colorBalanceSettings')
+    if cb is not None and (
+            not isinstance(cb, dict)
+            or set(cb) != {'shadowCyanRed', 'shadowMagentaGreen', 'shadowYellowBlue',
+                           'midCyanRed', 'midMagentaGreen', 'midYellowBlue',
+                           'highlightCyanRed', 'highlightMagentaGreen',
+                           'highlightYellowBlue', 'preserveLuminosity'}
+            or any(not _number(cb[k], -100, 100) for k in (
+                'shadowCyanRed', 'shadowMagentaGreen', 'shadowYellowBlue',
+                'midCyanRed', 'midMagentaGreen', 'midYellowBlue',
+                'highlightCyanRed', 'highlightMagentaGreen', 'highlightYellowBlue'))
+            or not isinstance(cb['preserveLuminosity'], bool)):
+        raise ValueError('Invalid color balance settings')
     # Every settings object belongs to one kind; a record may only carry its own.
     if set(record) & _SETTINGS_KEYS - _KEYS_BY_KIND.get(record.get('kind'), set()):
         raise UnsupportedFeature('Adjustment settings do not match its kind')
@@ -530,14 +604,160 @@ def _grade_noise(rgb, a, settings, x0=0, y0=0):
     return out
 
 
-def grade(rgb, record, x0=0.0, y0=0.0, units_per_pixel=1.0):
+def _grade_black_white(rgb, a, settings):
+    """Black & White, C ``adjust_black_white`` (AdjustPixels.c).
+
+    Photoshop's split: a color is its gray floor plus the secondary range
+    (cyan/magenta/yellow) between its two darkest channels and the primary
+    (red/green/blue) of its brightest, each range weighted per record. The
+    kernel runs in the byte domain through the unpremultiply-repremultiply
+    chain, like the other C ports.
+    """
+    weights = np.array([settings.get('reds', 40), settings.get('yellows', 60),
+                        settings.get('greens', 40), settings.get('cyans', 60),
+                        settings.get('blues', 20), settings.get('magentas', 80)],
+                       np.float32) / np.float32(100)
+    tint = bool(settings.get('tint', False))
+    tint_hue = float(settings.get('tintHue', 40))
+    tint_saturation = float(settings.get('tintSaturation', 20)) / 100.0
+    a8 = np.rint(a * np.float32(255.0)).astype(np.uint8)
+    a32 = a8.astype(np.float32)
+    unpre = np.where(a8 == 255, np.float32(1.0), np.float32(255.0) / a32)
+    c = np.rint(np.clip(rgb, 0, 1) * np.float32(255.0)).astype(np.uint8) \
+        .astype(np.float32) * (unpre / np.float32(255.0))[..., None]
+    c = np.minimum(c, np.float32(1.0))
+    r, g, b = c[..., 0], c[..., 1], c[..., 2]
+    mx = np.maximum(np.maximum(r, g), b)
+    mn = np.minimum(np.minimum(r, g), b)
+    md = r + g + b - mx - mn
+    # primary/secondary indices exactly as the C kernel picks them; ties
+    # resolve to the earlier branch (mx == r checked first, g >= b etc.).
+    primary = np.where(mx == r, 0, np.where(mx == g, 2, 4))
+    secondary = np.where(
+        mx == r, np.where(g >= b, 1, 5),
+        np.where(mx == g, np.where(r >= b, 1, 3), np.where(g >= r, 3, 5)))
+    gray = mn + (md - mn) * weights[secondary] + (mx - md) * weights[primary]
+    gray = np.minimum(np.float32(1.0), np.maximum(np.float32(0.0), gray))
+    if tint and tint_saturation > 0:
+        # The gray becomes the lightness of a color at the chosen hue; the
+        # kernel computes the tint in float64 from the float32 gray.
+        chroma = (1.0 - np.abs(2.0 * gray.astype(np.float64) - 1.0)) * tint_saturation
+        hp = np.mod(tint_hue, 360.0) / 60.0
+        xx = chroma * (1.0 - np.abs(np.mod(hp, 2.0) - 1.0))
+        z = np.zeros_like(chroma)
+        r1 = np.where(hp < 1, chroma, np.where(hp < 2, xx,
+              np.where(hp < 4, z, np.where(hp < 5, xx, chroma))))
+        g1 = np.where(hp < 1, xx, np.where(hp < 3, chroma,
+              np.where(hp < 4, xx, z)))
+        b1 = np.where(hp < 2, z, np.where(hp < 3, xx,
+              np.where(hp < 5, chroma, xx)))
+        m = gray.astype(np.float64) - chroma / 2.0
+        out = np.stack([r1 + m, g1 + m, b1 + m], axis=-1)
+        out = np.clip(out, 0.0, 1.0).astype(np.float32)
+    else:
+        out = np.repeat(gray[..., None], 3, axis=-1)
+    val = np.clip(out * a32[..., None], 0, a32[..., None])
+    res = np.floor(val + np.float32(0.5))  # C roundf: half away from zero
+    mask = (a > 0)[..., None]
+    return np.where(mask, res / np.float32(255.0), rgb)
+
+
+def _tonal_weights(v):
+    """C ``tonal_weights``: shadow/mid/highlight band weights over one channel."""
+    a = np.float32(0.25)
+    b = np.float32(0.333)
+    scale = np.float32(0.7)
+    s = np.clip((v - b) / -a + np.float32(0.5), 0, 1)
+    h = np.clip((v + b - np.float32(1.0)) / a + np.float32(0.5), 0, 1)
+    m1 = np.clip((v - b) / a + np.float32(0.5), 0, 1)
+    m2 = np.clip((v + b - np.float32(1.0)) / -a + np.float32(0.5), 0, 1)
+    return s * scale, m1 * m2 * scale, h * scale
+
+
+def _grade_color_balance(rgb, a, settings):
+    """Color Balance, C ``adjust_color_balance`` (AdjustPixels.c).
+
+    Per-channel shadow/mid/highlight offsets (cyan/red, magenta/green,
+    yellow/blue) weighted by tonal band membership, optionally restoring each
+    pixel's 601 luminance afterwards. Byte-domain kernel like the others.
+    """
+    shadows = np.array([settings.get('shadowCyanRed', 0),
+                        settings.get('shadowMagentaGreen', 0),
+                        settings.get('shadowYellowBlue', 0)], np.float32) / np.float32(100)
+    midtones = np.array([settings.get('midCyanRed', 0),
+                         settings.get('midMagentaGreen', 0),
+                         settings.get('midYellowBlue', 0)], np.float32) / np.float32(100)
+    highlights = np.array([settings.get('highlightCyanRed', 0),
+                           settings.get('highlightMagentaGreen', 0),
+                           settings.get('highlightYellowBlue', 0)], np.float32) / np.float32(100)
+    keep = bool(settings.get('preserveLuminosity', True))
+    a8 = np.rint(a * np.float32(255.0)).astype(np.uint8)
+    a32 = a8.astype(np.float32)
+    unpre = np.where(a8 == 255, np.float32(1.0), np.float32(255.0) / a32)
+    c = np.rint(np.clip(rgb, 0, 1) * np.float32(255.0)).astype(np.uint8) \
+        .astype(np.float32) * (unpre / np.float32(255.0))[..., None]
+    c = np.minimum(c, np.float32(1.0))
+    if keep:
+        before = (np.float32(0.299) * c[..., 0] + np.float32(0.587) * c[..., 1]
+                  + np.float32(0.114) * c[..., 2])
+    for i in range(3):
+        s, m, h = _tonal_weights(c[..., i])
+        c[..., i] = np.clip(c[..., i] + shadows[i] * s + midtones[i] * m
+                            + highlights[i] * h, 0, 1)
+    if keep:
+        after = (np.float32(0.299) * c[..., 0] + np.float32(0.587) * c[..., 1]
+                 + np.float32(0.114) * c[..., 2])
+        ratio = np.where(after > np.float32(0.0001), before / np.where(
+            after > np.float32(0.0001), after, np.float32(1.0)), np.float32(1.0))
+        c = np.clip(c * ratio[..., None], 0, 1)
+    val = np.clip(c * a32[..., None], 0, a32[..., None])
+    res = np.floor(val + np.float32(0.5))  # C roundf: half away from zero
+    mask = (a > 0)[..., None]
+    return np.where(mask, res / np.float32(255.0), rgb)
+
+
+# --- Gradient Map ------------------------------------------------------------
+#
+# Native GradientMapSettings (ImageAdjustments.swift) + C kernel
+# ``adjust_gradient_map`` (Rendering/AdjustPixels.c): a 256-entry RGB LUT
+# lerped dark→light in straight sRGB (no smoothstep, no linearisation),
+# indexed by the Rec. 709 luminance of each pixel's bytes.
+
+def _grade_gradient_map(rgb, settings):
+    """Gradient Map: luminance picks a colour between the dark and light ends.
+
+    Byte-domain port of the C kernel: input floats are rounded to bytes
+    exactly as the kernel reads them, the LUT is the Swift ``channel()``
+    lerp with round-to-nearest, and the index is the kernel's integer
+    luminance ``(2126r + 7152g + 722b + 5000) / 10000`` clamped to 255.
+    Alpha stays with the caller, as everywhere else in grade().
+    """
+    ends = ((settings['highlights'], settings['shadows'])
+            if settings.get('reversed') else (settings['shadows'], settings['highlights']))
+    dark, light = ends
+    t = np.arange(256, dtype=np.float64) / 255.0
+    channels = []
+    for c in ('red', 'green', 'blue'):
+        value = dark[c] + (light[c] - dark[c]) * t
+        channels.append(np.clip(np.rint(value * 255.0), 0, 255).astype(np.uint8))
+    lut = np.stack(channels, axis=-1)
+    s = np.rint(np.clip(rgb, 0, 1) * 255.0).astype(np.uint32)
+    level = (2126 * s[..., 0] + 7152 * s[..., 1] + 722 * s[..., 2] + 5000) // 10000
+    np.minimum(level, 255, out=level)
+    return lut[level].astype(np.float32) / np.float32(255.0)
+
+
+def grade(rgb, record, x0=0.0, y0=0.0, units_per_pixel=1.0, alpha=None):
     """Grade straight encoded RGB floats, preserving alpha in the caller.
 
     ``x0``/``y0``/``units_per_pixel`` place the band in document space; only
     the field adjustments (Grain, Add Noise) read them, so the pattern stays
-    fixed however the canvas splits its drawing.
+    fixed however the canvas splits its drawing. ``alpha`` is the band's
+    coverage for the byte-domain kernels (Black & White, Color Balance);
+    opaque when omitted, as their callers before this parameter passed.
     """
     kind = record['kind']
+    a = np.ones(rgb.shape[:-1], np.float32) if alpha is None else alpha
     if kind == 'Invert':
         return 1 - rgb
     if kind == 'Saturation':
@@ -568,6 +788,11 @@ def grade(rgb, record, x0=0.0, y0=0.0, units_per_pixel=1.0):
                               colorize=record.get('colorize', False),
                               rng=record.get('range', 'master'),
                               invert=record.get('invertRange', False))
+    if kind == 'Gradient Map':
+        settings = record.get('gradientMapSettings') or dict(
+            shadows=dict(red=0, green=0, blue=0),
+            highlights=dict(red=1, green=1, blue=1), reversed=False)
+        return _grade_gradient_map(rgb, settings)
     if kind == 'Curves':
         return _grade_curves(rgb, record['curves'])
     if kind == 'Grain':
@@ -580,6 +805,17 @@ def grade(rgb, record, x0=0.0, y0=0.0, units_per_pixel=1.0):
                         noiseMonochromatic=record.get('noiseMonochromatic', False),
                         noiseSeed=record.get('noiseSeed', 0))
         return _grade_noise(rgb, np.ones(rgb.shape[:2], np.float32), settings, int(x0), int(y0))
+    if kind == 'Black & White':
+        settings = record.get('blackWhiteSettings') or {}
+        return _grade_black_white(rgb, a, settings)
+    if kind == 'Color Balance':
+        settings = record.get('colorBalanceSettings') or {}
+        if all(settings.get(k, 0) == 0 for k in
+               ('shadowCyanRed', 'shadowMagentaGreen', 'shadowYellowBlue',
+                'midCyanRed', 'midMagentaGreen', 'midYellowBlue',
+                'highlightCyanRed', 'highlightMagentaGreen', 'highlightYellowBlue')):
+            return rgb
+        return _grade_color_balance(rgb, a, settings)
     if kind == 'Exposure':
         s = record.get('exposureSettings') or dict(exposure=0, offset=0, gamma=1)
         linear = np.where(rgb <= .04045, rgb / 12.92, ((rgb + .055) / 1.055) ** 2.4)

@@ -39,9 +39,9 @@ EDITOR_HOTKEYS_JS = """() => {
         if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA'
             || t.tagName === 'SELECT' || t.isContentEditable)) return;
         const M = e.metaKey || e.ctrlKey;
+        if (!M && k !== ']' && k !== '[') return;
         const S = e.shiftKey;
         const k = e.key.toLowerCase();
-        if (!M && k !== ']' && k !== '[') return;
         const hit = (id) => {
             const btn = document.getElementById(id);
             if (btn) { e.preventDefault(); btn.click(); }
@@ -387,6 +387,11 @@ def _tool_view(session):
     tables = curve_tables(settings)
     grain = settings.get('grainSettings') or {}
     seed = grain.get('seed', 0) if settings.get('kind') == 'Grain' else settings.get('noiseSeed', 0)
+    gmap = settings.get('gradientMapSettings') or {}
+    black, white = dict(red=0, green=0, blue=0), dict(red=1, green=1, blue=1)
+    gradient_ends = (gmap.get('shadows') or black, gmap.get('highlights') or white)
+    bw = settings.get('blackWhiteSettings') or {}
+    cb = settings.get('colorBalanceSettings') or {}
     effects = layer.effects if layer and layer.effects else None
     shadow = effects.shadow if effects and effects.shadow else None
     overlay = effects.colorOverlay if effects and effects.colorOverlay else None
@@ -429,7 +434,21 @@ def _tool_view(session):
             *tables, grain.get('amount', 25), grain.get('size', 1.5),
             grain.get('roughness', 50), seed, settings.get('noiseAmount', 25),
             settings.get('noiseGaussian', False), settings.get('noiseMonochromatic', False),
-            curve_graph(*tables))
+            bw.get('reds', 40), bw.get('yellows', 60), bw.get('greens', 40),
+            bw.get('cyans', 60), bw.get('blues', 20), bw.get('magentas', 80),
+            bw.get('tint', False), bw.get('tintHue', 40), bw.get('tintSaturation', 20),
+            gr.update(visible=bool(bw.get('tint', False))),
+            cb.get('shadowCyanRed', 0), cb.get('shadowMagentaGreen', 0),
+            cb.get('shadowYellowBlue', 0), cb.get('midCyanRed', 0),
+            cb.get('midMagentaGreen', 0), cb.get('midYellowBlue', 0),
+            cb.get('highlightCyanRed', 0), cb.get('highlightMagentaGreen', 0),
+            cb.get('highlightYellowBlue', 0), cb.get('preserveLuminosity', True),
+            curve_graph(*tables),
+            gr.update(value=_hex_color(gradient_ends[0]['red'], gradient_ends[0]['green'],
+                                       gradient_ends[0]['blue'])),
+            gr.update(value=_hex_color(gradient_ends[1]['red'], gradient_ends[1]['green'],
+                                       gradient_ends[1]['blue'])),
+            bool(gmap.get('reversed', False)))
 
 
 def _hex_color(red, green, blue):
@@ -518,6 +537,34 @@ def build_editor_tab():
                 mask_enabled = gr.Checkbox(label='Mask enabled', value=True)
                 blend = gr.Dropdown(label='Blend mode', choices=list(RENDER_BLEND_MODES), value='Normal')
                 properties = gr.Button('Apply layer properties')
+                with gr.Accordion('Add shape layer', open=False):
+                    gr.Markdown('Draws a Rectangle, Ellipse or Line as a new layer '
+                                'above the selected one. X/Y/W/H (or the line ends '
+                                'X1/Y1/X2/Y2) are canvas pixels from the top-left. '
+                                'Shapes carry their style, so changing the values '
+                                'later redraws the shape; both undo as one step.')
+                    shape_kind = gr.Radio(['Rectangle', 'Ellipse', 'Line'],
+                                          value='Rectangle', label='Shape')
+                    with gr.Row():
+                        shape_x = gr.Number(label='X', value=0, precision=0)
+                        shape_y = gr.Number(label='Y', value=0, precision=0)
+                    with gr.Row():
+                        shape_w = gr.Number(label='Width', value=40, precision=0)
+                        shape_h = gr.Number(label='Height', value=30, precision=0)
+                    with gr.Row():
+                        shape_x1 = gr.Number(label='Line X1', value=0, precision=0)
+                        shape_y1 = gr.Number(label='Line Y1', value=0, precision=0)
+                    with gr.Row():
+                        shape_x2 = gr.Number(label='Line X2', value=40, precision=0)
+                        shape_y2 = gr.Number(label='Line Y2', value=30, precision=0)
+                    shape_fill = gr.Checkbox(label='Filled', value=True)
+                    shape_color = gr.ColorPicker(label='Colour', value='#ff0000')
+                    shape_stroke = gr.Slider(1, 100, value=4, step=1,
+                                             label='Line width / stroke width')
+                    shape_corner = gr.Slider(0, 200, value=0, step=1,
+                                             label='Corner radius (Rectangle)')
+                    add_shape = gr.Button('Add shape layer')
+                    update_shape = gr.Button('Redraw selected shape with these values')
                 with gr.Row():
                     duplicate = gr.Button('Duplicate layer')
                     invert_mask = gr.Button('Invert mask', elem_id='editor-invert-mask')
@@ -613,7 +660,7 @@ def build_editor_tab():
                     cr_button = gr.Button('Create colour range selection')
                     gr.Markdown('Colour range selects every pixel within the fuzziness of each '
                                 'include colour on all RGB channels (per-channel distance), minus '
-                                'any exclude colour. Sampled over the visible composite.')
+                                'the excluded ones. Combine works like the wand.')
                     from .semantic_selection import REGIONS
                     semantic_region = gr.Dropdown(list(REGIONS), value='Skin', label='Automatic selection region')
                     auto_select = gr.Button('Create automatic selection')
@@ -679,6 +726,32 @@ def build_editor_tab():
                         texture_seed = gr.Number(label='Grain / noise seed', value=0, precision=0,
                                                  minimum=0, maximum=4294967295)
                         gr.Markdown('The same seed keeps the texture repeatable after saving and reopening.')
+                    with gr.Group(visible=False) as gradient_controls:
+                        gradient_shadows = gr.ColorPicker(label='Shadows colour', value='#000000')
+                        gradient_highlights = gr.ColorPicker(label='Highlights colour', value='#ffffff')
+                        gradient_reversed = gr.Checkbox(label='Reverse the gradient', value=False)
+                    with gr.Group(visible=False) as bw_controls:
+                        bw_reds = gr.Slider(-200, 300, value=40, step=1, label='B&W reds (%)')
+                        bw_yellows = gr.Slider(-200, 300, value=60, step=1, label='B&W yellows (%)')
+                        bw_greens = gr.Slider(-200, 300, value=40, step=1, label='B&W greens (%)')
+                        bw_cyans = gr.Slider(-200, 300, value=60, step=1, label='B&W cyans (%)')
+                        bw_blues = gr.Slider(-200, 300, value=20, step=1, label='B&W blues (%)')
+                        bw_magentas = gr.Slider(-200, 300, value=80, step=1, label='B&W magentas (%)')
+                        bw_tint = gr.Checkbox(label='B&W tint (sepia-style color)', value=False)
+                        with gr.Group(visible=False) as bw_tint_row:
+                            bw_tint_hue = gr.Slider(0, 360, value=40, step=1, label='Tint hue (degrees)')
+                            bw_tint_saturation = gr.Slider(0, 100, value=20, step=1, label='Tint saturation')
+                    with gr.Group(visible=False) as cb_controls:
+                        cb_shadow_cyan_red = gr.Slider(-100, 100, value=0, step=1, label='Shadows cyan / red')
+                        cb_shadow_magenta_green = gr.Slider(-100, 100, value=0, step=1, label='Shadows magenta / green')
+                        cb_shadow_yellow_blue = gr.Slider(-100, 100, value=0, step=1, label='Shadows yellow / blue')
+                        cb_mid_cyan_red = gr.Slider(-100, 100, value=0, step=1, label='Midtones cyan / red')
+                        cb_mid_magenta_green = gr.Slider(-100, 100, value=0, step=1, label='Midtones magenta / green')
+                        cb_mid_yellow_blue = gr.Slider(-100, 100, value=0, step=1, label='Midtones yellow / blue')
+                        cb_highlight_cyan_red = gr.Slider(-100, 100, value=0, step=1, label='Highlights cyan / red')
+                        cb_highlight_magenta_green = gr.Slider(-100, 100, value=0, step=1, label='Highlights magenta / green')
+                        cb_highlight_yellow_blue = gr.Slider(-100, 100, value=0, step=1, label='Highlights yellow / blue')
+                        cb_preserve = gr.Checkbox(label='Preserve luminosity', value=True)
                     add_grade = gr.Button('Add adjustment layer')
                     update_grade = gr.Button('Update selected adjustment')
                     gr.Markdown('Adjustments change the layers below and preserve alpha. '
@@ -877,7 +950,14 @@ def build_editor_tab():
                    effect_outer_glow, outer_glow_size, outer_glow_opacity, outer_glow_color,
                    effect_inner_glow, inner_glow_size, inner_glow_opacity, inner_glow_color,
                    *curve_inputs, grain_amount, grain_size, grain_roughness, texture_seed,
-                   noise_amount, noise_gaussian, noise_monochromatic, curves_plot]
+                   noise_amount, noise_gaussian, noise_monochromatic, curves_plot,
+                   bw_reds, bw_yellows, bw_greens, bw_cyans, bw_blues, bw_magentas,
+                   bw_tint, bw_tint_hue, bw_tint_saturation, bw_tint_row,
+                   cb_shadow_cyan_red, cb_shadow_magenta_green, cb_shadow_yellow_blue,
+                   cb_mid_cyan_red, cb_mid_magenta_green, cb_mid_yellow_blue,
+                   cb_highlight_cyan_red, cb_highlight_magenta_green,
+                   cb_highlight_yellow_blue, cb_preserve,
+                   gradient_shadows, gradient_highlights, gradient_reversed]
 
         def loading_local(current, strokes, local_strokes, discard):
             from .local_retouch import capture_composite
@@ -1244,16 +1324,6 @@ def build_editor_tab():
                         # An empty Replace deselects, matching invert_selection.
                         current.selection = None if (not merged.any()
                                                      and args[5] == 'Replace') else merged
-                    elif operation == 'color_range':
-                        from .selections import color_range_selection, combine
-                        doc = current.history.document
-                        new, count = color_range_selection(composite(doc), args[0],
-                                                           args[1], args[2])
-                        old = current.selection if current.selection is not None \
-                            else np.zeros(new.shape, np.uint8)
-                        merged = combine(old, new, args[3])
-                        current.selection = None if (not merged.any()
-                                                     and args[3] == 'Replace') else merged
                     elif operation == 'automatic_selection':
                         from .semantic_selection import automatic_selection
                         from .selections import combine
@@ -1295,6 +1365,10 @@ def build_editor_tab():
                             raise ValueError('Create a selection first')
                         current.history.selection_mask(layer.id, current.selection, args[0])
                     elif operation in ('add_grade', 'update_grade'):
+                        # 16 base controls, curve tables grouped as args[16],
+                        # texture controls flat, then the B&W / Color-Balance
+                        # controls: exactly the unpack order in
+                        # controls_adjustment.
                         control_args = ((*args[:16], list(args[16:20]), *args[20:])
                                         if len(args) > 16 else args)
                         settings = controls_adjustment(
@@ -1320,6 +1394,16 @@ def build_editor_tab():
                         current.selected_id = current.history.document.active_layer_id
                         # Upstream addPixelLayer drops the selection on paste.
                         current.selection = None
+                    elif operation == 'color_range':
+                        from .selections import color_range_selection, combine
+                        doc = current.history.document
+                        new, count = color_range_selection(composite(doc), args[0],
+                                                           args[1], args[2])
+                        old = current.selection if current.selection is not None \
+                            else np.zeros(new.shape, np.uint8)
+                        merged = combine(old, new, args[3])
+                        current.selection = None if (not merged.any()
+                                                     and args[3] == 'Replace') else merged
                     elif operation in ('crop', 'crop_selection'):
                         from .selections import selection_bbox
                         if operation == 'crop':
@@ -1365,6 +1449,41 @@ def build_editor_tab():
                         new = Layer(Path(args[0]).stem, pixels=pixels)
                         current.history.add_layer(new)
                         current.selected_id = new.id
+                    elif operation in ('add_shape', 'update_shape'):
+                        from .shapes import shape_layer, shape_style
+                        # (kind, x, y, w, h, x1, y1, x2, y2, fill, colour,
+                        #  stroke, corner)
+                        kind, x, y, w, h, x1, y1, x2, y2, fill, colour, stroke, corner = args[:13]
+                        red, green, blue = _rgb(colour)
+                        width, height = (max(1, round(w)), max(1, round(h)))
+                        for label, value in (('X', x), ('Y', y), ('Width', w), ('Height', h)):
+                            if (not isinstance(value, (int, float)) or isinstance(value, bool)
+                                    or not math.isfinite(value)):
+                                raise ValueError(f'Shape {label} must be a finite number')
+                        if kind == 'Line':
+                            if not fill:
+                                raise ValueError('A line is a stroke; tick Filled')
+                            style = shape_style(
+                                kind, red, green, blue,
+                                line_width=max(1, stroke),
+                                start=[(x1 - x) / width, (y1 - y) / height],
+                                end=[(x2 - x) / width, (y2 - y) / height])
+                        else:
+                            style = shape_style(kind, red, green, blue,
+                                                corner_radius=max(0, corner))
+                        if operation == 'add_shape':
+                            if x * y != 0 and (x < 0 or y < 0 or w <= 0 or h <= 0):
+                                raise ValueError('Shape width and height must be positive')
+                            new = shape_layer('%s 1' % kind, style,
+                                              origin=(float(x), float(y)), size=(width, height))
+                            doc = current.history.document
+                            current.history.add_layer(
+                                new, doc.index_of(layer.id) + 1 if layer else None)
+                            current.selected_id = new.id
+                        else:
+                            if layer is None or layer.shape is None:
+                                raise ValueError('Select a shape layer first')
+                            current.history.update_shape(layer.id, style)
                     elif operation == 'undo':
                         current.history.undo()
                     elif operation == 'redo':
@@ -1379,6 +1498,7 @@ def build_editor_tab():
         layers.input(select, [session, layers, canvas], outputs, concurrency_id='layer-editor')
         for button, operation in ((properties, 'properties'), (up, 'up'), (down, 'down'),
                                   (remove, 'remove'), (apply_mask, 'mask'), (heal, 'heal'), (clone, 'clone'), (add, 'add'),
+                                  (add_shape, 'add_shape'), (update_shape, 'update_shape'),
                                   (undo, 'undo'), (redo, 'redo'), (transform, 'transform'), (resize, 'resize'),
                                   (duplicate, 'duplicate'), (invert_mask, 'invert_mask'),
                                   (reset_mask, 'reset_mask'), (fit, 'fit'), (links, 'links'), (group, 'group'),
@@ -1402,6 +1522,12 @@ def build_editor_tab():
                 'transform': [position_x, position_y, flip_x, flip_y, rotation],
                 'resize': [layer_width, layer_height, keep_aspect, resize_axis],
                 'add': [add_photo], 'links': [parent_folder, clipping_source],
+                'add_shape': [shape_kind, shape_x, shape_y, shape_w, shape_h,
+                              shape_x1, shape_y1, shape_x2, shape_y2,
+                              shape_fill, shape_color, shape_stroke, shape_corner],
+                'update_shape': [shape_kind, shape_x, shape_y, shape_w, shape_h,
+                                 shape_x1, shape_y1, shape_x2, shape_y2,
+                                 shape_fill, shape_color, shape_stroke, shape_corner],
                 'crop': [crop_x, crop_y, crop_width, crop_height],
                 'mask': [mask_action],
                 'heal': [heal_mode, heal_opacity],
@@ -1424,13 +1550,27 @@ def build_editor_tab():
                               grade_saturation, grade_vibrance, grade_temperature, grade_tint,
                               grade_brightness, grade_contrast, grade_hue,
                               *curve_inputs, grain_amount, grain_size, grain_roughness, texture_seed,
-                              noise_amount, noise_gaussian, noise_monochromatic],
+                              noise_amount, noise_gaussian, noise_monochromatic,
+                              bw_reds, bw_yellows, bw_greens, bw_cyans, bw_blues, bw_magentas,
+                              bw_tint, bw_tint_hue, bw_tint_saturation,
+                              cb_shadow_cyan_red, cb_shadow_magenta_green, cb_shadow_yellow_blue,
+                              cb_mid_cyan_red, cb_mid_magenta_green, cb_mid_yellow_blue,
+                              cb_highlight_cyan_red, cb_highlight_magenta_green,
+                              cb_highlight_yellow_blue, cb_preserve,
+                              gradient_shadows, gradient_highlights, gradient_reversed],
                 'update_grade': [grade_kind, grade_exposure, grade_offset, grade_gamma,
                                  grade_black, grade_white, grade_red, grade_green, grade_blue,
                                  grade_saturation, grade_vibrance, grade_temperature, grade_tint,
                                  grade_brightness, grade_contrast, grade_hue,
                                  *curve_inputs, grain_amount, grain_size, grain_roughness, texture_seed,
-                                 noise_amount, noise_gaussian, noise_monochromatic],
+                                 noise_amount, noise_gaussian, noise_monochromatic,
+                                 bw_reds, bw_yellows, bw_greens, bw_cyans, bw_blues, bw_magentas,
+                                 bw_tint, bw_tint_hue, bw_tint_saturation,
+                                 cb_shadow_cyan_red, cb_shadow_magenta_green, cb_shadow_yellow_blue,
+                                 cb_mid_cyan_red, cb_mid_magenta_green, cb_mid_yellow_blue,
+                                 cb_highlight_cyan_red, cb_highlight_magenta_green,
+                                 cb_highlight_yellow_blue, cb_preserve,
+                                 gradient_shadows, gradient_highlights, gradient_reversed],
                 'apply_effects': [effect_stroke, stroke_size, stroke_inside, stroke_opacity,
                                   stroke_color, effect_shadow, shadow_angle, shadow_distance,
                                   shadow_blur, shadow_opacity, shadow_color, effect_overlay,
@@ -1450,8 +1590,13 @@ def build_editor_tab():
             lambda kind: [gr.update(visible=kind == 'Curves'),
                           gr.update(visible=kind == 'Grain'),
                           gr.update(visible=kind == 'Add Noise'),
-                          gr.update(visible=kind in ('Grain', 'Add Noise'))],
-            grade_kind, [curves_controls, grain_controls, noise_controls, seed_controls], queue=False)
+                          gr.update(visible=kind in ('Grain', 'Add Noise')),
+                          gr.update(visible=kind == 'Gradient Map'),
+                          gr.update(visible=kind == 'Black & White'),
+                          gr.update(visible=kind == 'Color Balance')],
+            grade_kind, [curves_controls, grain_controls, noise_controls, seed_controls,
+                         gradient_controls, bw_controls, cb_controls], queue=False)
+        bw_tint.change(lambda on: gr.update(visible=on), bw_tint, bw_tint_row, queue=False)
         for table in curve_inputs:
             table.input(curve_graph, curve_inputs, curves_plot, queue=False)
 
