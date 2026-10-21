@@ -38,7 +38,8 @@ The supported ``conversion`` codes are:
   default.  The GUI just initialises to the engine default (e.g.
   ``relight_azimuth``, ``bloom_threshold``).
 * ``"alias"`` — derives from another parameter (used when two GUI sliders
-  share the same recipe source, like ``blemish`` mirroring ``smooth``).
+  share the same recipe source, like ``blemish`` mirroring ``smooth``; a
+  recipe can still set ``skin.blemish`` itself, see ``_special_cases_gui``).
 * ``"dropdown"`` — string-typed parameter (e.g. ``lip_tint``, ``whiten_tone``,
   ``color_grade``).  Uses the recipe value verbatim and falls back to the
   engine default when the recipe has no entry.
@@ -3153,7 +3154,11 @@ def _special_cases_gui(spec: ParamSpec, rec: Dict[str, Any]) -> Any:
     if name == "whiten_tone":
         return "porcelain" if "porcelain" in rec.get("skin", {}) else "rosy"
     if name == "blemish":
-        # Historically mirrored `smooth` in the GUI
+        # A recipe's own ``skin.blemish`` (0-1) wins; otherwise mirror
+        # `smooth`, as the GUI always has.
+        own = rec.get("skin", {}).get("blemish")
+        if own is not None:
+            return int(round(float(own) * 100.0))
         return int(round(float(rec.get("frequency", {}).get("smooth", 0.30)) * 100.0))
     if name == "catchlight":
         eyes = rec.get("eyes", {})
