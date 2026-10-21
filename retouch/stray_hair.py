@@ -84,6 +84,10 @@ _RAW_FLOOR = 1.0
 _EDGE_RATIO_MAX = 0.6
 # Hair confidence above which a pixel counts as the wig itself (never searched).
 _HAIR_CORE = 0.6
+# Detection (the Hessian/integration filter chain) runs with the face scaled
+# to about this width, as wig_hairline does; healing blends at full res.
+# Faces at or under this width keep scale 1: byte-identical to full res.
+_WORK_FACE_WIDTH = 400.0
 
 
 def _robust_sigma(v: np.ndarray) -> float:
@@ -479,12 +483,38 @@ def remove_stray_hairs(
         return m[y0:y1, x0:x1]
 
     skin_c = skin[y0:y1, x0:x1]
-    strands, nx, ny, diags = detect_stray_hairs(
-        crop, skin_c, face_width, strength,
-        hair_mask=_c(hair_mask), feature_mask=_c(feature_mask),
-    )
-    if not strands.any():
-        return img_bgr, diags
+    hair_c, feat_c = _c(hair_mask), _c(feature_mask)
+
+    # Detection filter chain at a work scale set by the face width (same
+    # pattern as wig_hairline): the Hessian scales, integration kernels and
+    # masks all shrink with the scale; healing below blends at full res.
+    scale = min(1.0, _WORK_FACE_WIDTH / face_width)
+    if scale < 1.0:
+        cw, ch = max(8, int(round(crop.shape[1] * scale))), max(8, int(round(crop.shape[0] * scale)))
+        size = (cw, ch)
+        crop_s = cv2.resize(crop, size, interpolation=cv2.INTER_AREA)
+        skin_s = cv2.resize(skin_c, size, interpolation=cv2.INTER_LINEAR)
+        hair_s = None if hair_c is None else cv2.resize(hair_c, size, interpolation=cv2.INTER_LINEAR)
+        feat_s = None if feat_c is None else cv2.resize(feat_c, size, interpolation=cv2.INTER_LINEAR)
+        strands_s, nx_s, ny_s, diags = detect_stray_hairs(
+            crop_s, skin_s, face_width * scale, strength,
+            hair_mask=hair_s, feature_mask=feat_s,
+        )
+        if not strands_s.any():
+            return img_bgr, diags
+        full = (crop.shape[1], crop.shape[0])
+        # Hard threshold on the upscaled binary mask; 0.05 keeps the one-pixel
+        # feather from INTER_LINEAR while dropping sub-pixel dregs.
+        strands = np.where(cv2.resize(strands_s, full, interpolation=cv2.INTER_LINEAR) > 0.05, 1.0, 0.0).astype(np.float32)
+        nx = cv2.resize(nx_s, full, interpolation=cv2.INTER_LINEAR)
+        ny = cv2.resize(ny_s, full, interpolation=cv2.INTER_LINEAR)
+    else:
+        strands, nx, ny, diags = detect_stray_hairs(
+            crop, skin_c, face_width, strength,
+            hair_mask=hair_c, feature_mask=feat_c,
+        )
+        if not strands.any():
+            return img_bgr, diags
 
     sig = max(_SIGMA_FLOOR_PX, max(_SIGMAS_FW) * face_width)
     r = int(np.ceil(1.2 * sig)) + 1

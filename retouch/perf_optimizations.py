@@ -1609,6 +1609,7 @@ def _get_worker_processors() -> dict[str, Any]:
         from .makeup_v2 import MakeupEngineV2
         from .hair import HairEnhancer
         from .relight import Relighter
+        from .frequency import FrequencySeparator
         _WORKER_PROCESSORS = {
             "skin": SkinProcessor(),
             "relighter": Relighter(),
@@ -1620,6 +1621,12 @@ def _get_worker_processors() -> dict[str, Any]:
             "makeup": MakeupEngine(),
             "makeup_v2": MakeupEngineV2(),
             "hair": HairEnhancer(),
+            # Parity with engine.py's inline processor dict: 'frequency' was
+            # previously omitted here and _process_face_core silently fell
+            # back to a transient FrequencySeparator() per face. The class is
+            # stateless and its constructor takes no config, so one shared
+            # worker-process instance is exactly equivalent.
+            "frequency": FrequencySeparator(),
         }
     return _WORKER_PROCESSORS
 

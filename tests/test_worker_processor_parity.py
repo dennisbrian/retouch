@@ -76,18 +76,12 @@ class TestProcessorKeyParity:
         worker = _get_worker_processors()
         assert INLINE_PROCESSOR_KEYS - {"frequency"} <= set(worker)
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason="perf_optimizations._get_worker_processors omits 'frequency'; "
-               "fix belongs in perf_optimizations.py (excluded this wave). "
-               "Behavior nominal due to the FrequencySeparator() fallback "
-               "in _process_face_core.",
-    )
     def test_worker_dict_parity_with_inline(self):
         """Worker dict must expose the same key set as the inline dict.
 
-        Fails today: worker dict is missing 'frequency'. See module docstring
-        and perf_optimizations.py:_get_worker_processors.
+        Fixed: perf_optimizations._get_worker_processors now constructs a
+        shared stateless FrequencySeparator for the 'frequency' key, matching
+        the inline dict in engine.py.
         """
         worker = _get_worker_processors()
         assert set(worker) == INLINE_PROCESSOR_KEYS
