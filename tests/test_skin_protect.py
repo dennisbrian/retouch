@@ -43,6 +43,44 @@ class TestSkinMaskIdentification:
         assert mask.max() <= 1.0
 
 
+class TestRelativeChromaGate:
+    """House rule: no absolute chroma floors — the gate scales with L*."""
+
+    def test_deep_skin_low_chroma_now_detected(self):
+        # Deep skin: L* 30, chroma 6 (below the old absolute 8.0 floor),
+        # hue at the skin centre. Previously excluded, now included.
+        lch = np.array([[[30.0, 6.0, 25.0]]], dtype=np.float32)
+        old_floor = 8.0
+        assert not (lch[0, 0, 1] > old_floor)  # sanity: old gate excluded it
+        mask = skin_mask_lch(lch, chroma_ref_lightness=60.0)
+        assert mask[0, 0] > 0.9
+
+    def test_deep_skin_gray_still_excluded(self):
+        # Near-neutral deep-toned pixel (grey wall/hair in shadow): chroma ~0
+        # stays excluded at every lightness.
+        lch = np.array([[[30.0, 1.0, 25.0]]], dtype=np.float32)
+        mask = skin_mask_lch(lch, chroma_ref_lightness=60.0)
+        assert mask[0, 0] == 0.0
+
+    def test_mid_tone_unchanged(self):
+        # L* at/above the 60 reference: full 8.0 floor, same verdicts.
+        kept = np.array([[[60.0, 8.5, 25.0]]], dtype=np.float32)
+        dropped = np.array([[[60.0, 7.5, 25.0]]], dtype=np.float32)
+        assert skin_mask_lch(kept, chroma_ref_lightness=60.0)[0, 0] > 0.9
+        assert skin_mask_lch(dropped, chroma_ref_lightness=60.0)[0, 0] == 0.0
+
+    def test_protect_skin_covers_deep_skin(self):
+        # End-to-end: a deep-skin face patch (L* 30, chroma 6 — under the old
+        # absolute 8.0 floor) is now protected by protect_skin at full strength.
+        from retouch.color_space import lch_to_bgr
+
+        deep = lch_to_bgr(np.array([[[30.0, 6.0, 25.0]]], dtype=np.float32))
+        out = protect_skin(
+            deep, lambda x: np.full_like(x, 255), strength=1.0
+        )
+        assert np.allclose(out[0, 0], deep[0, 0], atol=6)
+
+
 class TestBlendSkin:
     def test_full_mask_preserves_image(self):
         img = np.full((4, 4, 3), 100, dtype=np.uint8)
