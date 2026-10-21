@@ -474,6 +474,7 @@ class ProcessingContext:
     color_transfer_intensity: float = 1.0
     chromatic_aberration: Optional[float] = None
     halation: Optional[Union[float, Dict[str, Any]]] = None
+    halation_mode: str = "classic"
     grain: Optional[float] = None
     lut: Optional[str] = None
     tonal_curve_strength: float = _DEFAULTS["tonal_curve_strength"]
@@ -1632,6 +1633,7 @@ class RetouchEngine:
         impact: Optional[float] = None,
         chromatic_aberration: Optional[float] = None,
         halation: Optional[Union[float, Dict[str, Any]]] = None,
+        halation_mode: Optional[str] = None,
         grain: Optional[float] = None,
         skin_flatten: Optional[float] = None,
         skin_quantize: Optional[float] = None,
@@ -1962,6 +1964,7 @@ class RetouchEngine:
             "impact": impact,
             "chromatic_aberration": chromatic_aberration,
             "halation": halation,
+            "halation_mode": halation_mode,
             "grain": grain,
             "skin_flatten": skin_flatten,
             "skin_quantize": skin_quantize,
@@ -3399,6 +3402,13 @@ class RetouchEngine:
             post_effects["chromatic_aberration"] = ctx.chromatic_aberration
         if ctx.halation is not None:
             post_effects["halation"] = ctx.halation
+            if (
+                getattr(ctx, "halation_mode", "classic") == "point_light"
+                and isinstance(ctx.halation, (int, float))
+            ):
+                post_effects["halation"] = {
+                    "mode": "point_light", "intensity": float(ctx.halation),
+                }
         if ctx.grain is not None:
             post_effects["grain"] = ctx.grain
         if ctx.lut is not None:

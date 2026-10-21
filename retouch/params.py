@@ -1842,6 +1842,17 @@ _GRADING_PARAMS = [
         conversion="gui_div100",
     ),
     ParamSpec(
+        # "classic" = the original grey>200 / 15 px glow every halation recipe
+        # uses; "point_light" = retouch/halation.py (film-style glow around
+        # real lights, sized to the photo, skin never a source). Recipe-only.
+        name="halation_mode",
+        cli_flag=None,
+        cli_type=None,
+        default="classic",
+        recipe_key="halation_mode",
+        conversion="dropdown",
+    ),
+    ParamSpec(
         name="lut",
         cli_flag="lut",
         cli_type=str,

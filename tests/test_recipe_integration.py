@@ -169,7 +169,10 @@ class TestRecipeDefaults:
         # the arisaff47/arisaedited shoot).
         # 65 -> 68: 2026-09-25 added cosplay_neon_night_v1,
         # cosplay_dark_villain_v1 and cosplay_feed_pop_v1 (cosplay scene set).
-        assert len(CURATED_RECIPE_NAMES) == 68
+        # 68 -> 72: 2026-10-21 added cosplay_pastel_soft_v1,
+        # cosplay_ink_wash_v1, cosplay_anime_sky_v1 and cosplay_night_film_v1
+        # (cosplay look set).
+        assert len(CURATED_RECIPE_NAMES) == 72
         assert set(RECOMMENDED_RECIPE_NAMES).isdisjoint(CONDITIONAL_RECIPE_NAMES)
         assert set(CURATED_RECIPE_NAMES) == (
             set(RECOMMENDED_RECIPE_NAMES) | set(CONDITIONAL_RECIPE_NAMES)

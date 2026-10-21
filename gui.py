@@ -4139,6 +4139,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         _film_skew_state = gr.State(value=0.0)
                         _background_harmonize_state = gr.State(value=0.0)
                         _background_harmonize_mode_state = gr.State(value="split")
+                        _halation_mode_state = gr.State(value="classic")
                         _background_blur_state = gr.State(value=0.0)
                         _background_desaturation_state = gr.State(value=0.0)
                         _light_wrap_state = gr.State(value=0.0)
@@ -5884,6 +5885,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "chromatic_aberration": chromatic_aberration,
         "grain": grain,
         "halation": halation,
+        "halation_mode": _halation_mode_state,
         "lut": lut,
         "tonal_curve_strength": tonal_curve_strength,
         "skin_protect_strength": skin_protect_strength,

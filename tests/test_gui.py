@@ -131,8 +131,10 @@ EXPECTED_RECIPE_KEYS.append("iris_pop")
 EXPECTED_RECIPE_KEYS.append("face_shadow_fill")
 EXPECTED_RECIPE_KEYS.append("costume_shine")
 EXPECTED_RECIPE_KEYS.append("teeth_brighten")
+# Recipe-only halation mode (classic / point_light), a gr.State in the GUI.
+EXPECTED_RECIPE_KEYS.append("halation_mode")
 
-EXPECTED_RECIPE_KEY_COUNT = 278
+EXPECTED_RECIPE_KEY_COUNT = 279
 # Self-updating: the recipe/smart-style slider tuple length is the contract
 # defined by RECIPE_OUTPUT_KEYS, so this constant can never go stale.
 EXPECTED_UI_OUTPUT_COUNT = len(gui.RECIPE_OUTPUT_KEYS)
@@ -195,7 +197,7 @@ class TestRecipeDefaults:
         # String fields in recipe_defaults
         string_fields = {
             "lip_tint", "whiten_tone", "lip_finish", "specular_bloom_tone", "color_grade", "lut", "mask_feather_mode",
-            "background_harmonize_mode", "saturation_mode", "smooth_engine", "specular_finish", "mark_policy", "heal_engine",
+            "background_harmonize_mode", "halation_mode", "saturation_mode", "smooth_engine", "specular_finish", "mark_policy", "heal_engine",
             "fa02_texture_mode", "gamut_target",
             "mv2_brows_color", "mv2_eyeliner_color", "mv2_eyeliner_style",
             "mv2_eyeshadow_color", "mv2_eyeshadow_style", "mv2_ombre_color1", "mv2_ombre_color2"
