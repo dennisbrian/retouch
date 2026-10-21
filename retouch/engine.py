@@ -6423,8 +6423,14 @@ class RetouchEngine:
             logger.warning("FaceProcessorPool shutdown raised", exc_info=True)
         parser = getattr(self, "_parser", None)
         if parser is not None and hasattr(parser, "close"):
-            parser.close()
-        self._detector.close()
+            try:
+                parser.close()
+            except Exception:
+                logger.warning("parser close raised", exc_info=True)
+        try:
+            self._detector.close()
+        except Exception:
+            logger.warning("detector close raised", exc_info=True)
 
     def __enter__(self):
         return self
