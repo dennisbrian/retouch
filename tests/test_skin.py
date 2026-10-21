@@ -1488,3 +1488,51 @@ def test_equalize_keeps_broad_shading(monkeypatch):
     assert abs(grad(new) - gi) < 0.5 * abs(grad(old) - gi)
     # Small blotches are not made any deeper than before.
     assert spot(new) >= spot(old) - 0.5
+
+
+def test_unify_hue_line_keeps_broad_blush():
+    """Chroma/hue evening pulled every pixel toward the face median, so a
+    broad cheek blush flattened along with the blotches."""
+    import numpy as np
+    from retouch.skin import SkinProcessor
+    import retouch.skin as skin_mod
+
+    h = w = 256
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    base = np.array([150.0, 165.0, 215.0], np.float32)
+    blush = np.exp(-((yy - 140) ** 2 + (xx - 70) ** 2) / (2 * 30.0 ** 2))
+    img = base[None, None, :] * np.ones((h, w, 1), np.float32)
+    img[..., 2] += 25.0 * blush  # redder cheek
+    img[..., 1] -= 12.0 * blush
+    img = np.clip(img, 0, 255).astype(np.float32)
+    mask = np.ones((h, w), np.float32)
+    import cv2
+    a = lambda x: cv2.cvtColor(np.clip(x, 0, 255).astype(np.uint8), cv2.COLOR_BGR2Lab)[..., 1].astype(float)
+    spread = lambda x: a(x)[130:150, 60:80].mean() - a(x)[130:150, 190:210].mean()
+    new = SkinProcessor().unify_hue_line(img, mask, 60, 60)
+    old_sigma = skin_mod._UNIFY_MAKEUP_SIGMA
+    try:
+        skin_mod._UNIFY_MAKEUP_SIGMA = 10.0  # broad term = face mean: give-back off, the old behaviour
+        old = SkinProcessor().unify_hue_line(img, mask, 60, 60)
+    finally:
+        skin_mod._UNIFY_MAKEUP_SIGMA = old_sigma
+    assert spread(new) >= 0.9 * spread(img)
+    assert spread(new) > spread(old) + 1.0
+
+
+def test_porcelain_tone_cuts_chroma_without_turning_pink():
+    """whiten is hue-stable by default now; its porcelain tone is a chroma
+    cut there, not the LAB b* shift that also rotated the hue."""
+    import cv2
+    import numpy as np
+    from retouch.skin import SkinProcessor
+
+    img = np.full((64, 64, 3), (140.0, 165.0, 210.0), np.float32)
+    mask = np.ones((64, 64), np.float32)
+    out = SkinProcessor().whiten(img, mask, 55, tone="porcelain", hue_stable=True)
+    lab = lambda x: cv2.cvtColor(np.clip(x, 0, 255).astype(np.uint8), cv2.COLOR_BGR2Lab)[32, 32].astype(float) - [0, 128, 128]
+    li, lo = lab(img), lab(out)
+    ci, co = np.hypot(li[1], li[2]), np.hypot(lo[1], lo[2])
+    assert co < 0.92 * ci
+    hue = lambda v: np.degrees(np.arctan2(v[2], v[1]))
+    assert abs(hue(lo) - hue(li)) < 3.0

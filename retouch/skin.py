@@ -145,6 +145,12 @@ def _bgr_from_lab(lab: np.ndarray, is_float: bool) -> np.ndarray:
 # equalize(): scale of the CLAHE change given back as broad shading, as a
 # fraction of sqrt(skin pixels) (about a tenth of the face width).
 _EQ_SHADING_SIGMA = 0.05
+# whiten(hue_stable=True, tone="porcelain"): share of skin chroma removed at
+# strength 100, matching the LAB path's b* cut (about -16% chroma at 55).
+_PORCELAIN_CHROMA_CUT = 0.30
+# unify_hue_line(): scale above which its colour change is given back so
+# blush and contour makeup survive (fraction of sqrt(skin pixels)).
+_UNIFY_MAKEUP_SIGMA = 0.05
 
 class SkinProcessor:
     """Skin smoothing, whitening, and tone equalization."""
@@ -265,6 +271,13 @@ class SkinProcessor:
             else:
                 L_new = L + L * skin_color_mask * lift_factor * shadow_protection
             oklch[:, :, 0] = np.clip(L_new, 0.0, 1.0)
+            if tone == "porcelain":
+                # The porcelain tone as a pure chroma cut: the LAB path's
+                # b* shift also turned the hue pink. Rosy adds no tint here
+                # (that tint was the ~10 deg magenta cast).
+                oklch[:, :, 1] = oklch[:, :, 1] * (
+                    1.0 - _PORCELAIN_CHROMA_CUT * abs(s) * skin_color_mask
+                )
             oklab_out = oklch_to_oklab(oklch)
             out = oklab_to_bgr(oklab_out, float32_out=is_float)
             return blend_masked(img_bgr, out, skin_mask)
@@ -1451,8 +1464,30 @@ class SkinProcessor:
         oklch_out[..., 1] = C_new
         oklch_out[..., 2] = h_new
 
-        # Convert back to BGR
         oklab_out = oklch_to_oklab(oklch_out)
+
+        # Keep blush and contour makeup (2026-10-21). The pull evens chroma
+        # and hue toward the face median everywhere, so a cheek/nose blush,
+        # which is broad, flattened with the blotches (finished cosplay
+        # photos under meitu_porcelain_v1: a* spread across the face -35%).
+        # The broad part of the change, minus its face-wide mean (the
+        # intended overall hue/chroma move), is given back, so only
+        # blotch-scale unevenness is evened. The give-back only undoes part
+        # of each pixel's own pull (clipped between 0 and it), so pixels the
+        # pull left alone (hair, makeup, highlights) gain nothing.
+        sw = eligible.astype(np.float32)
+        if np.any(skin_idx) and float(sw.sum()) > 1.0:
+            sigma = max(2.0, _UNIFY_MAKEUP_SIGMA * math.sqrt(float(skin_idx.sum())))
+            den = cv2.GaussianBlur(sw, (0, 0), sigma)
+            for ch in (1, 2):
+                d = (oklab_out[..., ch] - oklab[..., ch]).astype(np.float32)
+                num = cv2.GaussianBlur(d * sw, (0, 0), sigma)
+                broad = np.where(den > 1e-3, num / np.maximum(den, 1e-3), 0.0)
+                broad = broad - float((d * sw).sum() / sw.sum())
+                kept = np.clip(d - broad, np.minimum(d, 0.0), np.maximum(d, 0.0))
+                oklab_out[..., ch] = oklab[..., ch] + kept
+
+        # Convert back to BGR
         out = oklab_to_bgr(oklab_out, float32_out=is_float)
 
         return blend_masked(img_bgr, out, skin_mask)
