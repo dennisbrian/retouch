@@ -22,6 +22,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import weakref
 from PIL import Image
 
 from .document import MAX_SURFACE_PIXELS, UnsupportedFeature
@@ -57,6 +58,51 @@ _MAX_EFFECTS_WINDOW_PIXELS = 80_000_000  # upstream LayerEffectsSurface.swift:47
 # renderer holds at most ~384 MB per effects layer. Larger canvases fall
 # back to the per-band window path above.
 _MAX_EFFECTS_CACHE_PIXELS = 24_000_000
+
+# --- Composite memo ----------------------------------------------------------
+# Single-slot content digest: re-compositing an unchanged document (the UI's
+# read-render loop after every edit callback) returned identical output, so
+# the plain 8-bit composite of the same state is served from cache. The key
+# digests every field the band renderer reads; margin windows and whole-plane
+# adjustments derive purely from the digested adjustment/effects records.
+# Frozen pixel/mask buffers are shared across snapshots
+# (``commands._snapshot`` keeps buffer identity), so ``id()`` is stable while
+# any history state retains the buffer; the entry keeps weak references to
+# the key's buffers, and a dead weakref is a miss, so a freed buffer whose
+# address a later array reuses can never alias to a false hit. Direct pixel
+# mutation cannot corrupt the key: buffers are frozen read-only
+# (``document._frozen``), and property edits change the digest. Results are
+# returned read-only; every caller copies before writing (audited).
+_COMPOSITE_MEMO = {}
+
+def _composite_key(document):
+    """Digest of every field the band renderer reads."""
+    return (document.document_id, document.width, document.height,
+            tuple((layer.id, id(layer.pixels), id(layer.mask),
+                   id(layer.recipe_source), layer.visible, layer.opacity,
+                   layer.blend_mode, layer.origin, layer.size, layer.rotation,
+                   layer.flip_x, layer.flip_y, layer.sampling, layer.mask_enabled,
+                   layer.mask_source_id, layer.parent_id, layer.is_group,
+                   repr(layer.adjustment), repr(layer.effects),
+                   repr(layer.mask_placement), repr(layer.text),
+                   repr(layer.shape))
+                  for layer in document.layers))
+
+def _memo_hit(key):
+    entry = _COMPOSITE_MEMO.get('entry')
+    if entry is None or entry[0] != key:
+        return None
+    if any(ref() is None for ref in entry[2]):
+        return None  # a key buffer died; its id() may have been reused
+    return entry[1]
+
+def _memo_store(key, rgba, document):
+    buffers = [weakref.ref(a) for layer in document.layers
+               for a in (layer.pixels, layer.mask, layer.recipe_source)
+               if a is not None]
+    rgba = rgba.view()  # read-only result: callers copy before writing
+    rgba.flags.writeable = False
+    _COMPOSITE_MEMO['entry'] = (key, rgba, buffers)
 
 
 def _downsample_level(factor):
@@ -125,14 +171,22 @@ def composite(document, band_rows=256):
     if width * height > MAX_SURFACE_PIXELS:
         raise ValueError('canvas exceeds the %d MP export limit'
                          % (MAX_SURFACE_PIXELS // 1_000_000))
-    renderer = _BandRenderer(document)
-    out = np.zeros((height, width, 4), np.uint8)
     if not isinstance(band_rows, int) or isinstance(band_rows, bool) or band_rows < 1:
         raise ValueError('band_rows must be a positive integer')
+    if band_rows == 256 and width * height <= _MAX_EFFECTS_CACHE_PIXELS:
+        key = _composite_key(document)
+        cached = _memo_hit(key)
+        if cached is not None:
+            return cached
+    renderer = _BandRenderer(document)
+    out = np.zeros((height, width, 4), np.uint8)
     for top in range(0, height, band_rows):
         bottom = min(height, top + band_rows)
         rgb, alpha = renderer.render(top, bottom)
         out[top:bottom] = _straight(rgb, alpha)
+    if band_rows == 256 and width * height <= _MAX_EFFECTS_CACHE_PIXELS:
+        _memo_store(key, out, document)
+        return _COMPOSITE_MEMO['entry'][1]
     return out
 
 def composite_16(document, band_rows=256):
