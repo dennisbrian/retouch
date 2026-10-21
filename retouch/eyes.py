@@ -205,7 +205,18 @@ class EyeEnhancer:
                     continue
                 lab = _to_lab(result, is_float)
                 l_chan = lab[:, :, 0]
-                specular = np.clip((l_chan - 220.0) / 20.0, 0.0, 1.0) * (iris_m > 0.1).astype(np.float32)
+                # Tone-invariance house rule (see CLAUDE.md): no absolute
+                # intensity gate on a tone-scaled signal. Mirror this
+                # module's own relative catchlight detector (mean + 1.2·std
+                # of the iris region) so genuine specular highlights on
+                # darker eyes/skin are boosted exactly like bright ones.
+                iris_vals = l_chan[iris_m > 0.1]
+                if iris_vals.size < 8:
+                    continue
+                iris_mean = float(iris_vals.mean())
+                iris_std = max(float(iris_vals.std()), 1.0)
+                spec_lo = iris_mean + iris_std * 1.2
+                specular = np.clip((l_chan - spec_lo) / 20.0, 0.0, 1.0) * (iris_m > 0.1).astype(np.float32)
                 if specular.max() < 0.01:
                     continue
                 h, w = l_chan.shape

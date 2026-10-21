@@ -130,8 +130,12 @@ class HairEnhancer:
             mean_val = hair_pixels.mean()
             std_val = max(hair_pixels.std(), 1.0)
             
-            # Specular highlight threshold (must be reasonably bright)
-            thresh = max(mean_val + std_val * 0.8, 120.0)
+            # Specular highlight threshold — relative to this hair region's
+            # own statistics (mean + k·std), never an absolute floor: dark
+            # hair (raven/deep brown) rarely crosses an absolute cutoff, so
+            # shine care would never fire on exactly the hair that needs it.
+            # Tone-invariance house rule; see CLAUDE.md.
+            thresh = mean_val + std_val * 0.8
 
             # Hair highlight mask
             specular_mask = ((l_chan_new > thresh) & (h_mask > 0.3)).astype(np.float32)
