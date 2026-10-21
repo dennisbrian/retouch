@@ -177,9 +177,10 @@ def _gradient_args(shadow_hex, highlight_hex, reversed_=False):
     cb = (0, 0, 0, 0, 0, 0, 0, 0, 0, True)
     tonal = (50, 16, 40, 60, 30)
     bloom = (40, 24)
+    scan = (4, 70, 0, 0, 0, 0, 50, 0, 0, 0, 0, 0, 'Black & White')
     return ['Gradient Map', 0, 0, 1, 0, 255, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0,
             *tables, 35, 2.5, 65, 12345, 12.5, True, True,
-            *tonal, *bloom, *bw, *cb, shadow_hex, highlight_hex, reversed_]
+            *tonal, *bloom, *bw, *cb, shadow_hex, highlight_hex, reversed_, *scan]
 
 
 def test_gradient_map_ui_adds_updates_and_round_trips(session, callbacks, tmp_path):

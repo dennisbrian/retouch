@@ -209,7 +209,7 @@ def test_open_requires_discard_and_failed_open_preserves_session(session, callba
         assert replacement.history.document.width == 3
         assert replacement.history.dirty
         assert not Path(session.workspace).exists()
-        assert len(loaded) == 110
+        assert len(loaded) == 123
     finally:
         replacement.close()
 
@@ -224,7 +224,7 @@ def test_save_and_export_gate_unapplied_strokes(session, callbacks, tmp_path):
         export(session, stroke_canvas(), 'PNG (8-bit sRGB)')
     assert not target.exists() and session.history.dirty
     result = save(session, str(target), None)
-    assert len(result) == 109 and not session.history.dirty
+    assert len(result) == 122 and not session.history.dirty
     np.testing.assert_array_equal(composite(load_project(target)),
                                   composite(session.history.document))
     path = export(session, None, 'PNG (8-bit sRGB)')
@@ -242,7 +242,7 @@ def test_save_and_export_gate_unapplied_strokes(session, callbacks, tmp_path):
 def test_ui_edit_callbacks_change_layer_and_restore_with_undo(session, callbacks):
     edits = [fn for fn in callbacks if fn.__name__ == 'edit']
     result = edits[0](session, session.selected_id, None, 'New name', False, 50, True)
-    assert len(result) == 109
+    assert len(result) == 122
     layer = session.selected()
     assert (layer.name, layer.visible, layer.opacity) == ('New name', False, 0.5)
     undo = next(fn for fn in edits if fn.__kwdefaults__['operation'] == 'undo')
@@ -295,7 +295,7 @@ def test_reset_mask_callback_reveals_layer_and_undo_restores_coverage(session, c
     painted = composite(session.history.document)
     assert not np.array_equal(painted, expected)
     result = edits['reset_mask'](session, lid, None)
-    assert len(result) == 109 and session.selected_id == lid
+    assert len(result) == 122 and session.selected_id == lid
     assert session.selected().mask is None
     np.testing.assert_array_equal(composite(session.history.document), expected)
     session.history.save(tmp_path / 'reset.comp')
@@ -373,7 +373,7 @@ def test_recipe_callbacks_attach_one_masked_layer_and_block_overlapping_jobs(ses
     render_worker(session.job.directory, Engine)
     session.job.status = 'completed'
     result = finish(session, None)
-    assert len(result) == 112 and session.job.finalized
+    assert len(result) == 125 and session.job.finalized
     assert session.selected().name == 'Retouch · natural'
     assert session.selected().opacity == 0.5
     assert composite(session.history.document)[0, 0].tolist() == [150, 150, 150, 255]
@@ -600,7 +600,11 @@ def _texture_curve_args(kind):
               [[0, 0], [255, 255]], [[0, 0], [255, 255]]]
     return [kind, 0, 0, 1, 0, 255, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0,
             *tables, 35, 2.5, 65, 12345, 12.5, True, True,
-            50, 16, 40, 60, 30, 40, 24]
+            50, 16, 40, 60, 30, 40, 24,
+            40, 60, 40, 60, 20, 80, False, 40, 20,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, True,
+            '#000000', '#ffffff', False,
+            4, 70, 0, 0, 0, 0, 50, 0, 0, 0, 0, 0, 'Black & White']
 
 
 def _bw_cb_args(kind, bw=(200, 300, -100, 60, 20, 80, True, 210, 65),
@@ -608,7 +612,9 @@ def _bw_cb_args(kind, bw=(200, 300, -100, 60, 20, 80, True, 210, 65),
     return [kind, 0, 0, 1, 0, 255, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0] \
         + [[[0, 0], [255, 255]]] * 4 + [35, 2.5, 65, 12345, 12.5, True, True] \
         + [50, 16, 40, 60, 30] + [40, 24] \
-        + list(bw) + list(cb)
+        + list(bw) + list(cb) \
+        + ['#000000', '#ffffff', False] \
+        + [4, 70, 0, 0, 0, 0, 50, 0, 0, 0, 0, 0, 'Black & White']
 
 
 @pytest.mark.parametrize('kind, key, view_slice', [
@@ -845,7 +851,7 @@ def test_local_retouch_callbacks_load_apply_save_and_reject_stale_drafts(session
     with pytest.raises(gr.Error, match='Create a selection'):
         apply(session, captured, draft, None, 'Dodge', 100, 'Telea', True)
     result = apply(session, captured, draft, None, 'Dodge', 100, 'Telea', False)
-    assert len(result) == 112
+    assert len(result) == 125
     assert session.selected().name == 'Dodge'
     assert result[-3]['layers'] == [] and result[-2].revision == session.history.revision
     assert result[-2].revision != captured.revision

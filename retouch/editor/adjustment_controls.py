@@ -64,13 +64,17 @@ def controls_adjustment(*args: Any, existing: dict | None = None) -> dict:
      monochromatic, *rest) = args[16:]
     tonal = rest[:5]
     bloom = rest[5:7]
-    bw, cb, gradient = rest[7:16], rest[16:26], rest[26:]
-    if len(rest) >= 26 and record['kind'] not in ('Black & White', 'Color Balance',
-                                                  'Gradient Map', 'Tonal Contrast', 'Bloom') and (
-            tuple(bw) != (40, 60, 40, 60, 20, 80, False, 40, 20)
-            or tuple(cb) != (0, 0, 0, 0, 0, 0, 0, 0, 0, True)
-            or tuple(tonal) != (50, 16, 40, 60, 30)
-            or tuple(bloom) != (40, 24)):
+    bw, cb, gradient = rest[7:16], rest[16:26], rest[26:29]
+    scan = rest[29:42]
+    if record['kind'] not in ('Black & White', 'Color Balance',
+                              'Gradient Map', 'Tonal Contrast', 'Bloom',
+                              'Scanlines') and (
+            (len(bw) >= 9 and tuple(bw) != (40, 60, 40, 60, 20, 80, False, 40, 20))
+            or (len(cb) >= 10 and tuple(cb) != (0, 0, 0, 0, 0, 0, 0, 0, 0, True))
+            or (len(tonal) >= 5 and tuple(tonal) != (50, 16, 40, 60, 30))
+            or (len(bloom) >= 2 and tuple(bloom) != (40, 24))
+            or (len(scan) >= 13 and (tuple(scan[:12]) != (4, 70, 0, 0, 0, 0, 50, 0, 0, 0, 0, 0)
+                                     or scan[12] != 'Black & White'))):
         # Other kinds may only carry the controls' default values; a record
         # with moved B&W / Color-Balance sliders would silently drop them.
         raise UnsupportedFeature('Adjustment settings do not match its kind')
@@ -109,6 +113,12 @@ def controls_adjustment(*args: Any, existing: dict | None = None) -> dict:
         record['gradientMapSettings'] = dict(shadows=gradient_color(gradient[0]),
                                              highlights=gradient_color(gradient[1]),
                                              reversed=bool(gradient[2]))
+    elif record['kind'] == 'Scanlines' and len(scan) >= 13:
+        record['scanlinesSettings'] = dict(
+            lineSpacing=scan[0], thickness=scan[1], glow=scan[2], dots=scan[3],
+            wobble=scan[4], displace=scan[5], smoothness=scan[6],
+            threshold=scan[7], split=scan[8], density=scan[9],
+            contrast=scan[10], blackLevel=scan[11], colors=scan[12])
     validate_adjustment(record)
     return record
 

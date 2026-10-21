@@ -11,7 +11,7 @@ import numpy as np
 
 from .document import UnsupportedFeature
 
-KINDS = ('Exposure', 'Levels', 'Curves', 'Invert', 'Saturation', 'Vibrance', 'Temperature', 'Tint', 'Brightness', 'Contrast', 'Hue', 'Gradient Map', 'Tonal Contrast', 'Bloom', 'Grain', 'Add Noise', 'Black & White', 'Color Balance')
+KINDS = ('Exposure', 'Levels', 'Curves', 'Invert', 'Saturation', 'Vibrance', 'Temperature', 'Tint', 'Brightness', 'Contrast', 'Hue', 'Gradient Map', 'Tonal Contrast', 'Bloom', 'Grain', 'Add Noise', 'Black & White', 'Color Balance', 'Scanlines')
 CHANNELS = ('RGB', 'Red', 'Green', 'Blue')
 _KIND_RANGES = ('master', 'reds', 'yellows', 'greens', 'cyans', 'blues', 'magentas')
 _COMMON_KEYS = {'kind', 'hue', 'saturation', 'lightness', 'colorize', 'range', 'invertRange', 'levels', 'curves'}
@@ -20,12 +20,15 @@ _SETTINGS_KEYS = {'exposureSettings', 'saturationSettings', 'vibranceSettings', 
                   'gradientMapSettings',
                   'grainSettings', 'noiseAmount', 'noiseGaussian', 'noiseMonochromatic', 'noiseSeed',
                   'blackWhiteSettings', 'colorBalanceSettings',
-                  'tonalSettings', 'bloomSettings'}
+                  'tonalSettings', 'bloomSettings',
+                  'scanlinesSettings'}
 
 # A record carries the union of every kind's keys (upstream stores one struct
 # with every settings object optional), but each settings object belongs to
 # one kind: only its own kind's settings may be present.
 _KEYS = _COMMON_KEYS | _SETTINGS_KEYS
+_SCANLINE_COLORS = ('Black & White', 'Two Colors', 'Original')
+
 _KEYS_BY_KIND = {
     'Exposure': {'exposureSettings'}, 'Levels': set(), 'Curves': set(), 'Invert': set(),
     'Saturation': {'saturationSettings'}, 'Vibrance': {'vibranceSettings'},
@@ -35,6 +38,7 @@ _KEYS_BY_KIND = {
     'Gradient Map': {'gradientMapSettings'},
     'Tonal Contrast': {'tonalSettings'},
     'Bloom': {'bloomSettings'},
+    'Scanlines': {'scanlinesSettings'},
     'Grain': {'grainSettings'},
     'Add Noise': {'noiseAmount', 'noiseGaussian', 'noiseMonochromatic', 'noiseSeed'},
     'Black & White': {'blackWhiteSettings'},
@@ -51,6 +55,9 @@ def adjustment(kind='Exposure', exposure=0, offset=0, gamma=1,
                gaussian=False, monochromatic=False,
                radius=16, tonal_shadows=40, midtones=60, tonal_highlights=30,
                bloom_radius=24,
+               lineSpacing=4, thickness=70, glow=0, dots=0, wobble=0, displace=0,
+               smoothness=50, threshold=0, split=0, density=0,
+               blackLevel=0, colors='Black & White',
                reds=40, yellows=60, greens=40, cyans=60, blues=20, magentas=80,
                bw_tint=False, tint_hue=40, tint_saturation=20,
                shadow_cyan_red=0, shadow_magenta_green=0, shadow_yellow_blue=0,
@@ -103,6 +110,12 @@ def adjustment(kind='Exposure', exposure=0, offset=0, gamma=1,
                                        highlights=tonal_highlights)
     if kind == 'Bloom':
         record['bloomSettings'] = dict(amount=40 if amount == 25 else amount, radius=bloom_radius)
+    if kind == 'Scanlines':
+        record['scanlinesSettings'] = dict(
+            lineSpacing=lineSpacing, thickness=thickness, glow=glow, dots=dots,
+            wobble=wobble, displace=displace, smoothness=smoothness,
+            threshold=threshold, split=split, density=density,
+            contrast=contrast, blackLevel=blackLevel, colors=colors)
     if kind == 'Grain':
         record['grainSettings'] = dict(amount=amount, size=size, roughness=roughness, seed=seed)
     if kind == 'Add Noise':
@@ -231,6 +244,25 @@ def validate_adjustment(record):
             or not _number(bloom['amount'], 0, 100)
             or not _number(bloom['radius'], 1, 150)):
         raise ValueError('Invalid bloom settings')
+    scan = record.get('scanlinesSettings')
+    if scan is not None and (not isinstance(scan, dict)
+            or set(scan) != {'lineSpacing', 'thickness', 'glow', 'dots', 'wobble',
+                            'displace', 'smoothness', 'threshold', 'split', 'density',
+                            'contrast', 'blackLevel', 'colors'}
+            or not _number(scan['lineSpacing'], 2, 32)
+            or not _number(scan['thickness'], 0, 100)
+            or not _number(scan['glow'], 0, 100)
+            or not _number(scan['dots'], 0, 100)
+            or not _number(scan['wobble'], 0, 64)
+            or not _number(scan['displace'], -100, 100)
+            or not _number(scan['smoothness'], 0, 100)
+            or not _number(scan['threshold'], 0, 100)
+            or not _number(scan['split'], 0, 16)
+            or not _number(scan['density'], -100, 100)
+            or not _number(scan['contrast'], -100, 100)
+            or not _number(scan['blackLevel'], 0, 100)
+            or scan['colors'] not in _SCANLINE_COLORS):
+        raise ValueError('Invalid scanlines settings')
     grain = record.get('grainSettings')
     if grain is not None and (not isinstance(grain, dict)
             or set(grain) != {'amount', 'size', 'roughness', 'seed'}
@@ -853,6 +885,251 @@ def _grade_bloom(rgb, settings):
     return np.clip(screen, 0.0, 1.0)
 
 
+# --- Scanlines ------------------------------------------------------------------
+#
+# Port of Compositor's ``scanlines_apply`` (Rendering/DitherPixels.c) with the
+# Swift-side glow (Document/Scanlines.swift ``glowing``): the picture as a CRT
+# draws it, lines of light on a dark screen. The C kernel runs on premultiplied
+# 8-bit RGBA in place; grade() holds straight float RGB with the caller's
+# coverage in ``a``, so the port enters the kernel's byte domain (uint8
+# premultiplied via the same 255/alpha chain the grain and noise ports use)
+# and unpremultiplies the result back to straight floats.
+#
+# Band-splitting: stages 1 (tone), 2 (scan, per line = per row band) and 5
+# (split, per row) are row-local; stage 3's across-line blur and stage 4's
+# per-column horizon-occlusion painter are not, so the whole kind is admitted
+# as one whole plane by ``composite._adjustment_needs_whole_plane`` — grade()
+# is only ever called with the full canvas for this kind.
+
+def _scanline_tone(v, gamma, contrast_k):
+    """C ``adjust_tone``: density gamma then contrast pivot on mid gray."""
+    v = np.clip(v, 0.0, 1.0) ** gamma
+    return np.clip((v - 0.5) * contrast_k + 0.5, 0.0, 1.0)
+
+
+def _scanline_box_passes(rows, radius):
+    """Three sliding-window box passes along each row, edge-clamped (C draw_lines)."""
+    if radius <= 0:
+        return rows
+    width = rows.shape[-1]
+    out = rows
+    for _ in range(3):
+        padded = np.pad(out, ((0, 0), (radius, radius)), mode='edge')
+        cs = np.cumsum(padded, axis=-1, dtype=np.float64)
+        # window [x, x+2r] over the padded row: cs[x+2r] - cs[x-1], with
+        # cs[-1] := 0, exactly the C running sum over clamped neighbours.
+        head = np.concatenate([np.zeros(cs.shape[:-1] + (1,)), cs[..., :-1]], axis=-1)
+        total = (cs[..., 2 * radius:] - head[..., :width]) / (2 * radius + 1)
+        out = total.astype(np.float32)
+    return out
+
+
+def _grade_scanlines(rgb, a, settings):
+    """Scanlines on straight float RGB with coverage ``a`` (both 0..1).
+
+    Mirrors ``scanlines_apply`` + ``ScanlinesSettings.glowing`` upstream:
+    transparent pixels stay untouched, alpha is preserved exactly, and the
+    kernel's rounding happens in its own byte domain.
+    """
+    height, width = rgb.shape[:2]
+    if height == 0 or width == 0:
+        return rgb
+    s = settings
+    spacing = max(2, int(round(s['lineSpacing'])))
+    original = s['colors'] == 'Original'
+    planes = 3 if original else 1
+
+    # Enter the kernel's byte domain: the C code reads premultiplied uint8.
+    a8 = np.rint(a * 255.0).astype(np.uint8)
+    pre = np.rint(np.clip(rgb, 0, 1) * 255.0).astype(np.uint8)
+    for c in range(3):
+        pre[..., c] = np.minimum(pre[..., c], a8)  # premultiplied clamp
+
+    # 1. tone: unpremultiply -> density gamma, contrast, luma (or per-channel).
+    #    The C kernel unpremultiplies into 0..255 floats and its helpers work
+    #    in 0..1, so scale straight colour down before the tone curve.
+    nz = a8 > 0
+    scale = np.where(nz, 1.0 / np.maximum(a8, 1), 0.0)
+    straight = pre.astype(np.float32) * scale[..., None]
+    gamma = 2.0 ** (s['density'] / 100.0 * 1.5)
+    contrast = s['contrast'] / 100.0
+    contrast_k = 1.0 / (1.0 - 0.95 * contrast) if contrast >= 0 else 1.0 + contrast
+    if original:
+        tone = np.stack([_scanline_tone(straight[..., c], gamma, contrast_k)
+                         for c in range(3)])
+    else:
+        luma = (0.2126 * straight[..., 0] + 0.7152 * straight[..., 1]
+                + 0.0722 * straight[..., 2])
+        tone = _scanline_tone(luma, gamma, contrast_k)[None]
+
+    lines = (height + spacing - 1) // spacing
+
+    # 2. scan: each line's mean tone over the rows it covers, x-shifted by the
+    #    wobble wave (a slow wave with a quicker one over it).
+    scan = np.zeros((planes, lines, width), np.float32)
+    nz_rows = nz.astype(np.float32)
+    weights = tone * nz_rows[None]
+    for line in range(lines):
+        top, bottom = line * spacing, min(height, (line + 1) * spacing)
+        wave = math.sin(line * 0.45) * 0.7 + math.sin(line * 1.7 + 1.3) * 0.3
+        shift = int(round(s['wobble'] * wave))
+        counts = nz_rows[top:bottom].sum(axis=0)  # per column, opaque rows in band
+        for c in range(planes):
+            band = weights[c, top:bottom]
+            sums = band.sum(axis=0)
+            for x in range(width):
+                sx = x - shift
+                if 0 <= sx < width and counts[sx] > 0:
+                    scan[c, line, x] = sums[sx] / counts[sx]
+    # tone-mapped scan for the painter's decisions (luma of the planes).
+    if original:
+        tone_scan = 0.2126 * scan[0] + 0.7152 * scan[1] + 0.0722 * scan[2]
+    else:
+        tone_scan = scan[0]
+
+    # 3. lift: tone blurred along each line (3 box passes) then across
+    #    neighbors ([1 2 1]/4), only when displacing.
+    lift = tone_scan
+    if s['displace'] != 0:
+        smoothness = min(1.0, max(0.0, s['smoothness'] / 100.0))
+        radius = int(round(smoothness * spacing * 2))
+        if radius > 0:
+            lift = _scanline_box_passes(lift, radius)
+        across = int(round(smoothness * 2))
+        for _ in range(across):
+            padded = np.pad(lift, ((1, 1), (0, 0)), mode='edge')
+            lift = (padded[:-2] + 2 * padded[1:-1] + padded[2:]) / 4.0
+
+    # 4. draw_lines: per column, nearest-line-first painter with horizon
+    #    occlusion (after the Rutt-Etra synthesizer).
+    middle = spacing / 2.0
+    dots = min(1.0, max(0.0, s['dots'] / 100.0))
+    threshold = min(1.0, max(0.0, s['threshold'] / 100.0))
+    displace = s['displace']
+    thickness = min(1.0, max(0.0, s['thickness'] / 100.0))
+    black_level = min(1.0, max(0.0, s['blackLevel'] / 100.0))
+    rising = displace >= 0
+    if s['colors'] == 'Two Colors':
+        dark = np.zeros(3, np.float32)
+        light = np.ones(3, np.float32)
+    else:  # Black & White and Original both draw on a black screen
+        dark = np.zeros(3, np.float32)
+        light = np.ones(3, np.float32)
+    out = pre.copy()
+    for x in range(width):
+        cover = np.zeros(height, np.float32)
+        color = np.zeros((height, 3), np.float32)
+        along = ((x + 0.5) % spacing) - middle
+        horizon = math.inf if rising else -math.inf
+        for step in range(lines):
+            line = lines - 1 - step if rising else step
+            beading = min(1.0, max(0.0, (dots - tone_scan[line, x]) / 0.2)) \
+                if dots > 0 else 0.0
+            across_off = along * beading
+            centered = int(round(x - across_off))
+            at = max(0, min(width - 1, centered))
+            t = tone_scan[line, at]
+            lit = min(1.0, max(0.0, (t - threshold) / 0.04)) if threshold > 0 else 1.0
+            if lit <= 0:
+                continue
+            base = line * spacing + middle
+            here = base - displace * lift[line, at]
+            before = base - displace * lift[line, at - 1] if at > 0 else here
+            lo, hi = min(here, before), max(here, before)
+            level = black_level + (1 - black_level) * t
+            if original:
+                c = np.array([black_level + (1 - black_level) * scan[k, line, at]
+                              for k in range(3)], np.float32)
+            else:
+                c = dark + (light - dark) * level
+            beam = middle * thickness * (0.29 + 0.71 * math.sqrt(min(1.0, max(0.0, level))))
+            top_y = int(math.floor(lo - beam - 1 if rising
+                                   else max(lo - beam - 1, horizon - 1)))
+            bot_y = int(math.ceil(hi + beam + 1 if not rising
+                                  else min(hi + beam + 1, horizon + 1)))
+            top_y, bot_y = max(0, top_y), min(height, bot_y)
+            if bot_y <= top_y:
+                if lit > 0.5:
+                    horizon = min(horizon, lo - beam) if rising else max(horizon, hi + beam)
+                continue
+            ys = np.arange(top_y, bot_y, dtype=np.float32) + 0.5
+            off = np.where(ys < lo, lo - ys, np.where(ys > hi, ys - hi, 0.0))
+            distance = np.hypot(off, across_off)
+            hidden = np.clip(horizon - ys + 0.5, 0, 1) if rising \
+                else np.clip(ys - horizon + 0.5, 0, 1)
+            shown = np.clip(beam - distance + 0.5, 0, 1) * lit * hidden
+            better = shown > cover[top_y:bot_y]
+            region = slice(top_y, bot_y)
+            cover[region] = np.where(better, shown, cover[region])
+            color[region] = np.where(better[..., None], c, color[region])
+            if lit > 0.5:
+                horizon = min(horizon, lo - beam) if rising else max(horizon, hi + beam)
+        rows = np.nonzero(nz[:, x])[0]
+        if rows.size:
+            shown = cover[rows]
+            value = dark + (color[rows] * 1.35 - dark) * shown[..., None]
+            # C write_pixel: straight colour through the beam, rounded in the
+            # premultiplied byte domain and clamped to the pixel's own alpha.
+            value = np.rint(np.clip(value, 0, 1) * a8[rows, x][..., None])
+            out[rows, x, :3] = np.minimum(value, a8[rows, x][..., None]).astype(np.uint8)
+
+    # 5. split: red one way, blue the other, clamped to alpha.
+    sp = int(round(s['split']))
+    if sp > 0:
+        copy = out.copy()
+        xs = np.arange(width)
+        r_from = np.where(xs - sp >= 0, copy[:, np.maximum(xs - sp, 0), 0], 0)
+        b_from = np.where(xs + sp < width, copy[:, np.minimum(xs + sp, width - 1), 2], 0)
+        out[..., 0] = np.minimum(r_from, a8)
+        out[..., 2] = np.minimum(b_from, a8)
+
+    # 6. glow (Scanlines.swift): the drawn image blurred wide and soft at a
+    #    reduced scale, added back under a soft-clip room formula.
+    glow = s['glow'] / 100.0
+    if glow > 0:
+        sigma = spacing * 3 + 3
+        shrink = max(1, int(sigma // 4))
+        plane = cv2_gaussian(np.dstack([out, a8]), sigma, shrink)
+        amount = np.float32(glow * 2.5)
+        a32 = a8.astype(np.float32)[..., None]
+        v = out.astype(np.float32)
+        added = plane * amount * a32 / 255.0
+        room = (a32 - v) * 0.7
+        safe_room = np.where(room > 0, room, 1.0)
+        v = v + np.where(room > 0, room * (-np.expm1(-added / safe_room)), 0.0)
+        out[...] = np.rint(np.minimum(v, a32)).astype(np.uint8)
+
+    # Back to straight floats for the caller; transparent pixels untouched.
+    result = rgb.copy()
+    back = out.astype(np.float32) / np.where(nz, a8, 1)[..., None]
+    back = np.clip(back, 0, 1)
+    result[nz] = back[nz]
+    return result
+
+
+def cv2_gaussian(rgba, sigma, shrink):
+    """The Swift glow chain: clamp-to-edge, downscale, blur, upscale, crop.
+
+    Core Image's ``clampedToExtent`` + gaussian blur at the reduced scale;
+    the port pads by the kernel reach, shrinks with area interpolation,
+    blurs with the same effective sigma, and scales back up with bilinear.
+    """
+    import cv2
+    reach = int(math.ceil(3 * sigma)) // shrink + 2
+    rgba = rgba.astype(np.float32)
+    padded = cv2.copyMakeBorder(rgba, reach, reach, reach, reach, cv2.BORDER_REPLICATE)
+    small = cv2.resize(padded, (max(1, (padded.shape[1]) // shrink),
+                                max(1, (padded.shape[0]) // shrink)),
+                       interpolation=cv2.INTER_AREA)
+    blurred = cv2.GaussianBlur(small, (0, 0), sigma / shrink,
+                               borderType=cv2.BORDER_REPLICATE)
+    full = cv2.resize(blurred, (padded.shape[1], padded.shape[0]),
+                      interpolation=cv2.INTER_LINEAR)
+    h, w = rgba.shape[:2]
+    return full[reach:reach + h, reach:reach + w, :3]
+
+
+
 def adjustment_margin(record):
     """Rows of context above a band a blur-based adjustment needs.
 
@@ -937,6 +1214,11 @@ def grade(rgb, record, x0=0.0, y0=0.0, units_per_pixel=1.0, alpha=None):
     if kind == 'Bloom':
         return _grade_bloom(rgb, record.get('bloomSettings')
                             or dict(amount=40, radius=24))
+    if kind == 'Scanlines':
+        return _grade_scanlines(rgb, alpha if alpha is not None
+                                else np.ones(rgb.shape[:2], np.float32),
+                                record.get('scanlinesSettings')
+                                or adjustment('Scanlines')['scanlinesSettings'])
     if kind == 'Add Noise':
         settings = dict(noiseAmount=record.get('noiseAmount', 10),
                         noiseGaussian=record.get('noiseGaussian', False),

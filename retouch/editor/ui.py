@@ -394,6 +394,7 @@ def _tool_view(session):
     cb = settings.get('colorBalanceSettings') or {}
     tonal = settings.get('tonalSettings') or {}
     bloom = settings.get('bloomSettings') or {}
+    scan = settings.get('scanlinesSettings') or {}
     effects = layer.effects if layer and layer.effects else None
     shadow = effects.shadow if effects and effects.shadow else None
     overlay = effects.colorOverlay if effects and effects.colorOverlay else None
@@ -453,7 +454,12 @@ def _tool_view(session):
                                        gradient_ends[0]['blue'])),
             gr.update(value=_hex_color(gradient_ends[1]['red'], gradient_ends[1]['green'],
                                        gradient_ends[1]['blue'])),
-            bool(gmap.get('reversed', False)))
+            bool(gmap.get('reversed', False)),
+            scan.get('lineSpacing', 4), scan.get('thickness', 70), scan.get('glow', 0),
+            scan.get('dots', 0), scan.get('wobble', 0), scan.get('displace', 0),
+            scan.get('smoothness', 50), scan.get('threshold', 0), scan.get('split', 0),
+            scan.get('density', 0), scan.get('contrast', 0), scan.get('blackLevel', 0),
+            scan.get('colors', 'Black & White'))
 
 
 def _hex_color(red, green, blue):
@@ -740,6 +746,21 @@ def build_editor_tab():
                         texture_seed = gr.Number(label='Grain / noise seed', value=0, precision=0,
                                                  minimum=0, maximum=4294967295)
                         gr.Markdown('The same seed keeps the texture repeatable after saving and reopening.')
+                    with gr.Group(visible=False) as scanlines_controls:
+                        scan_spacing = gr.Slider(2, 32, value=4, step=1, label='Line spacing (pixels)')
+                        scan_thickness = gr.Slider(0, 100, value=70, step=1, label='Line thickness (%)')
+                        scan_glow = gr.Slider(0, 100, value=0, step=1, label='Glow (%)')
+                        scan_dots = gr.Slider(0, 100, value=0, step=1, label='Dots (%)')
+                        scan_wobble = gr.Slider(0, 64, value=0, step=1, label='Wobble (pixels)')
+                        scan_displace = gr.Slider(-100, 100, value=0, step=1, label='Displace')
+                        scan_smoothness = gr.Slider(0, 100, value=50, step=1, label='Smoothness (%)')
+                        scan_threshold = gr.Slider(0, 100, value=0, step=1, label='Threshold (%)')
+                        scan_split = gr.Slider(0, 16, value=0, step=1, label='Red/blue split (pixels)')
+                        scan_density = gr.Slider(-100, 100, value=0, step=1, label='Density')
+                        scan_contrast = gr.Slider(-100, 100, value=0, step=1, label='Contrast')
+                        scan_black_level = gr.Slider(0, 100, value=0, step=1, label='Black level (%)')
+                        scan_colors = gr.Radio(['Black & White', 'Two Colors', 'Original'],
+                                                value='Black & White', label='Scanline colors')
                     with gr.Group(visible=False) as gradient_controls:
                         gradient_shadows = gr.ColorPicker(label='Shadows colour', value='#000000')
                         gradient_highlights = gr.ColorPicker(label='Highlights colour', value='#ffffff')
@@ -973,7 +994,10 @@ def build_editor_tab():
                    cb_mid_cyan_red, cb_mid_magenta_green, cb_mid_yellow_blue,
                    cb_highlight_cyan_red, cb_highlight_magenta_green,
                    cb_highlight_yellow_blue, cb_preserve,
-                   gradient_shadows, gradient_highlights, gradient_reversed]
+                   gradient_shadows, gradient_highlights, gradient_reversed,
+                   scan_spacing, scan_thickness, scan_glow, scan_dots, scan_wobble,
+                   scan_displace, scan_smoothness, scan_threshold, scan_split,
+                   scan_density, scan_contrast, scan_black_level, scan_colors]
 
         def loading_local(current, strokes, local_strokes, discard):
             from .local_retouch import capture_composite
@@ -1574,7 +1598,10 @@ def build_editor_tab():
                               cb_mid_cyan_red, cb_mid_magenta_green, cb_mid_yellow_blue,
                               cb_highlight_cyan_red, cb_highlight_magenta_green,
                               cb_highlight_yellow_blue, cb_preserve,
-                              gradient_shadows, gradient_highlights, gradient_reversed],
+                              gradient_shadows, gradient_highlights, gradient_reversed,
+                              scan_spacing, scan_thickness, scan_glow, scan_dots, scan_wobble,
+                              scan_displace, scan_smoothness, scan_threshold, scan_split,
+                              scan_density, scan_contrast, scan_black_level, scan_colors],
                 'update_grade': [grade_kind, grade_exposure, grade_offset, grade_gamma,
                                  grade_black, grade_white, grade_red, grade_green, grade_blue,
                                  grade_saturation, grade_vibrance, grade_temperature, grade_tint,
@@ -1589,7 +1616,10 @@ def build_editor_tab():
                                  cb_mid_cyan_red, cb_mid_magenta_green, cb_mid_yellow_blue,
                                  cb_highlight_cyan_red, cb_highlight_magenta_green,
                                  cb_highlight_yellow_blue, cb_preserve,
-                                 gradient_shadows, gradient_highlights, gradient_reversed],
+                                 gradient_shadows, gradient_highlights, gradient_reversed,
+                                 scan_spacing, scan_thickness, scan_glow, scan_dots, scan_wobble,
+                                 scan_displace, scan_smoothness, scan_threshold, scan_split,
+                                 scan_density, scan_contrast, scan_black_level, scan_colors],
                 'apply_effects': [effect_stroke, stroke_size, stroke_inside, stroke_opacity,
                                   stroke_color, effect_shadow, shadow_angle, shadow_distance,
                                   shadow_blur, shadow_opacity, shadow_color, effect_overlay,
@@ -1614,10 +1644,11 @@ def build_editor_tab():
                           gr.update(visible=kind == 'Bloom'),
                           gr.update(visible=kind == 'Gradient Map'),
                           gr.update(visible=kind == 'Black & White'),
-                          gr.update(visible=kind == 'Color Balance')],
+                          gr.update(visible=kind == 'Color Balance'),
+                          gr.update(visible=kind == 'Scanlines')],
             grade_kind, [curves_controls, grain_controls, noise_controls, seed_controls,
                          tonal_controls, bloom_controls, gradient_controls,
-                         bw_controls, cb_controls], queue=False)
+                         bw_controls, cb_controls, scanlines_controls], queue=False)
         bw_tint.change(lambda on: gr.update(visible=on), bw_tint, bw_tint_row, queue=False)
         for table in curve_inputs:
             table.input(curve_graph, curve_inputs, curves_plot, queue=False)

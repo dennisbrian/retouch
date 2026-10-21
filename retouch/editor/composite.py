@@ -169,6 +169,18 @@ def _over(rgb, alpha, source, a, mode):
     alpha += a
 
 
+def _adjustment_needs_whole_plane(record):
+    """True for kinds that can't band-split by rows.
+
+    Scanlines' draw_lines stage (DitherPixels.c) paints per column with a
+    horizon-occlusion landscape: every output row can be claimed by any line
+    in the column, not just the rows its band covers, and its ``scan`` stage
+    averages rows over the whole column band. A row band cannot reproduce
+    that, so the kind takes the whole-plane admission below.
+    """
+    return isinstance(record, dict) and record.get('kind') == 'Scanlines'
+
+
 class _BandRenderer:
     """Pass-through hierarchy and live clipping, with only band-sized scratch arrays."""
     def __init__(self, document):
@@ -179,6 +191,7 @@ class _BandRenderer:
                         and l.visible and all(p.visible for p in self.parents[l.id])]
         self.prepared = {}
         self.effect_planes = {}
+        self.adjustment_planes = {}
         self._coverage_caches = {}
         self.stacks, self.stacked = {}, set()
         for i, base in enumerate(self.visible):
@@ -286,6 +299,63 @@ class _BandRenderer:
                 _over(stack_rgb, stack_alpha, child_rgb, child_a, child.blend_mode)
         return stack_rgb, stack_alpha
 
+    def _stack_base_of(self, layer):
+        """The clipping-stack base id for a stacked child, else None."""
+        for base_id, children in self.stacks.items():
+            if layer.id in {c.id for c in children}:
+                return base_id
+        return None
+
+    def render_plane_under(self, layer):
+        """Backdrop under ``layer`` over the full canvas: a throwaway renderer
+        restricted to the layers below it (first whole-plane kind wins —
+        a second such layer above would recurse; refuse that mix)."""
+        below = [l for l in self.visible[:self.visible.index(layer)]
+                 if l.id not in self.stacked]
+        if any(l.adjustment is not None
+               and _adjustment_needs_whole_plane(l.adjustment)
+               for l in below):
+            raise UnsupportedFeature(
+                'whole-plane adjustments cannot stack over each other yet')
+        renderer = _BandRenderer(self.doc)
+        renderer.visible = below
+        renderer.stacks = {l.id: self.stacks[l.id] for l in below
+                           if l.id in self.stacks}
+        renderer.stacked = {c.id for l in renderer.stacks.values() for c in l}
+        out_rgb = np.zeros((self.doc.height, self.doc.width, 3), np.float32)
+        out_a = np.zeros((self.doc.height, self.doc.width), np.float32)
+        for plane_top in range(0, self.doc.height, 256):
+            plane_bottom = min(self.doc.height, plane_top + 256)
+            r, plane_band_a = renderer.render(plane_top, plane_bottom)
+            out_rgb[plane_top:plane_bottom] = r
+            out_a[plane_top:plane_bottom] = plane_band_a
+        return out_rgb, out_a
+
+    def whole_plane_adjust(self, layer, rgb, top, bottom):
+        """Non-band-splittable kinds (Scanlines) graded once over the whole
+        canvas, then re-blended into each band exactly as ``apply_adjust``
+        would have, so opacity/masks/folders keep their per-band meaning."""
+        from .adjustments import grade
+        if layer.id not in self.adjustment_planes:
+            pixels = self.doc.width * self.doc.height
+            if pixels > _MAX_EFFECTS_CACHE_PIXELS:
+                raise ValueError(
+                    'whole-plane adjustment exceeds the %d MP cache limit'
+                    % (_MAX_EFFECTS_CACHE_PIXELS // 1_000_000))
+            plane_rgb, plane_a = self.render_plane_under(layer)
+            plane_straight = plane_rgb / np.where(plane_a > 0, plane_a, 1)[..., None]
+            graded = grade(plane_straight, layer.adjustment, y0=0.0)
+            if layer.blend_mode != 'Normal':
+                graded = _blend(plane_straight, graded, layer.blend_mode)
+            self.adjustment_planes[layer.id] = (graded, plane_straight)
+        graded, plane_straight = self.adjustment_planes[layer.id]
+        delta = graded[top:bottom] - plane_straight[top:bottom]
+        weight = self.opacity(layer) * self.own(layer, top, bottom, True)[1]
+        weight *= self.folder_clip(layer, top, bottom)
+        if layer.mask_source_id:
+            weight *= self.coverage(self.by_id[layer.mask_source_id], top, bottom)
+        rgb[:] = rgb + delta * weight[..., None]
+
     def apply_adjust(self, layer, dest, a, top, bottom, in_stack=False, stack=None):
         """Grade ``dest`` (the backdrop ``layer`` adjusts) in place over the band.
 
@@ -350,7 +420,11 @@ class _BandRenderer:
             if layer.id in self.stacked:
                 continue
             if layer.adjustment is not None:
-                self.apply_adjust(layer, rgb, alpha, top, bottom)
+                if (not (stacked_base := self._stack_base_of(layer))
+                        and _adjustment_needs_whole_plane(layer.adjustment)):
+                    self.whole_plane_adjust(layer, rgb, top, bottom)
+                else:
+                    self.apply_adjust(layer, rgb, alpha, top, bottom)
                 continue
             source, a = self.own(layer, top, bottom)
             if layer.effects is not None and not layer.effects.is_empty():
