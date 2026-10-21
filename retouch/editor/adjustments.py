@@ -6,11 +6,12 @@ Copyright 2026 Wonder Assembly LLC), pinned at 11d8d7a; see third_party/composit
 from copy import deepcopy
 import math
 
+import cv2
 import numpy as np
 
 from .document import UnsupportedFeature
 
-KINDS = ('Exposure', 'Levels', 'Curves', 'Invert', 'Saturation', 'Vibrance', 'Temperature', 'Tint', 'Brightness', 'Contrast', 'Hue', 'Gradient Map', 'Grain', 'Add Noise', 'Black & White', 'Color Balance')
+KINDS = ('Exposure', 'Levels', 'Curves', 'Invert', 'Saturation', 'Vibrance', 'Temperature', 'Tint', 'Brightness', 'Contrast', 'Hue', 'Gradient Map', 'Tonal Contrast', 'Bloom', 'Grain', 'Add Noise', 'Black & White', 'Color Balance')
 CHANNELS = ('RGB', 'Red', 'Green', 'Blue')
 _KIND_RANGES = ('master', 'reds', 'yellows', 'greens', 'cyans', 'blues', 'magentas')
 _COMMON_KEYS = {'kind', 'hue', 'saturation', 'lightness', 'colorize', 'range', 'invertRange', 'levels', 'curves'}
@@ -18,7 +19,9 @@ _SETTINGS_KEYS = {'exposureSettings', 'saturationSettings', 'vibranceSettings', 
                   'tintSettings', 'brightnessSettings', 'contrastSettings', 'hueSettings',
                   'gradientMapSettings',
                   'grainSettings', 'noiseAmount', 'noiseGaussian', 'noiseMonochromatic', 'noiseSeed',
-                  'blackWhiteSettings', 'colorBalanceSettings'}
+                  'blackWhiteSettings', 'colorBalanceSettings',
+                  'tonalSettings', 'bloomSettings'}
+
 # A record carries the union of every kind's keys (upstream stores one struct
 # with every settings object optional), but each settings object belongs to
 # one kind: only its own kind's settings may be present.
@@ -30,6 +33,8 @@ _KEYS_BY_KIND = {
     'Brightness': {'brightnessSettings'}, 'Contrast': {'contrastSettings'},
     'Hue': {'hueSettings'},
     'Gradient Map': {'gradientMapSettings'},
+    'Tonal Contrast': {'tonalSettings'},
+    'Bloom': {'bloomSettings'},
     'Grain': {'grainSettings'},
     'Add Noise': {'noiseAmount', 'noiseGaussian', 'noiseMonochromatic', 'noiseSeed'},
     'Black & White': {'blackWhiteSettings'},
@@ -44,6 +49,8 @@ def adjustment(kind='Exposure', exposure=0, offset=0, gamma=1,
                shadows=(0, 0, 0), highlights=(1, 1, 1), reversed=False,
                amount=25, size=1.5, roughness=50, seed=0,
                gaussian=False, monochromatic=False,
+               radius=16, tonal_shadows=40, midtones=60, tonal_highlights=30,
+               bloom_radius=24,
                reds=40, yellows=60, greens=40, cyans=60, blues=20, magentas=80,
                bw_tint=False, tint_hue=40, tint_saturation=20,
                shadow_cyan_red=0, shadow_magenta_green=0, shadow_yellow_blue=0,
@@ -90,6 +97,12 @@ def adjustment(kind='Exposure', exposure=0, offset=0, gamma=1,
                 reversed=reversed)
         except (TypeError, ValueError, IndexError) as exc:
             raise ValueError('Invalid gradient map settings') from exc
+    if kind == 'Tonal Contrast':
+        record['tonalSettings'] = dict(amount=50 if amount == 25 else amount, radius=radius,
+                                       shadows=tonal_shadows, midtones=midtones,
+                                       highlights=tonal_highlights)
+    if kind == 'Bloom':
+        record['bloomSettings'] = dict(amount=40 if amount == 25 else amount, radius=bloom_radius)
     if kind == 'Grain':
         record['grainSettings'] = dict(amount=amount, size=size, roughness=roughness, seed=seed)
     if kind == 'Add Noise':
@@ -203,6 +216,21 @@ def validate_adjustment(record):
                    for end in ('shadows', 'highlights'))
             or not isinstance(gmap.get('shadows'), dict)):
         raise ValueError('Invalid gradient map settings')
+    tonal = record.get('tonalSettings')
+    if tonal is not None and (not isinstance(tonal, dict)
+            or set(tonal) != {'amount', 'radius', 'shadows', 'midtones', 'highlights'}
+            or not _number(tonal['amount'], 0, 100)
+            or not _number(tonal['radius'], 1, 100)
+            or not _number(tonal['shadows'], -100, 100)
+            or not _number(tonal['midtones'], -100, 100)
+            or not _number(tonal['highlights'], -100, 100)):
+        raise ValueError('Invalid tonal contrast settings')
+    bloom = record.get('bloomSettings')
+    if bloom is not None and (not isinstance(bloom, dict)
+            or set(bloom) != {'amount', 'radius'}
+            or not _number(bloom['amount'], 0, 100)
+            or not _number(bloom['radius'], 1, 150)):
+        raise ValueError('Invalid bloom settings')
     grain = record.get('grainSettings')
     if grain is not None and (not isinstance(grain, dict)
             or set(grain) != {'amount', 'size', 'roughness', 'seed'}
@@ -747,6 +775,109 @@ def _grade_gradient_map(rgb, settings):
     return lut[level].astype(np.float32) / np.float32(255.0)
 
 
+# --- Tonal Contrast & Bloom --------------------------------------------------
+#
+# Ports of Compositor's FilterSettings cases (Filters.swift): tonalContrast is
+# the C kernel ``adjust_tonal_contrast`` (Rendering/AdjustPixels.c) over a
+# Gaussian base plane (sigma = tonalRadius); bloomGlow is CIBloom — blur of
+# the bright pass, screen-blended back with intensity = amount / 50.
+#
+# Both need a spatial window: the scan (filters_scan) proved band invariance
+# at margin = ceil(3 * sigma) with a truncate-3.0 Gaussian — scipy's default
+# truncate=4.0 leaks past the margin and breaks it. ``adjustment_margin``
+# publishes each kind's need so the banded compositor can grow its fetch
+# window and crop after grading, exactly as it does for layer effects.
+_TRUNCATE = 3.0
+
+
+def _gaussian_blur_3(plane, sigma):
+    """Gaussian blur rows-only, truncated at 3 sigma, clamped borders.
+
+    cv2 has no truncate parameter (its default reaches 4 sigma, which leaks
+    past the 3-sigma margin and breaks band invariance), so the 1-D kernel is
+    built explicitly with ``ceil(3 * sigma)`` half-width.
+
+    ponytail: kernel built per call; cache by sigma if profiling shows it hot.
+    """
+    if sigma <= 0:
+        return plane
+    half = int(math.ceil(sigma * _TRUNCATE))
+    half = min(half, max(1, plane.shape[0] - 1))  # keep the kernel inside the window
+    xs = np.arange(-half, half + 1, dtype=np.float64)
+    kernel = np.exp(-(xs * xs) / (2.0 * sigma * sigma))
+    kernel /= kernel.sum()
+    return cv2.sepFilter2D(plane, -1, kernel, np.array([1.0], kernel.dtype),
+                           borderType=cv2.BORDER_REPLICATE)
+
+
+def _grade_tonal_contrast(rgb, settings):
+    """``adjust_tonal_contrast`` on a Gaussian base plane (sigma = radius)."""
+    amount = settings.get('amount', 50)
+    shadows = settings.get('shadows', 40)
+    midtones = settings.get('midtones', 60)
+    highlights = settings.get('highlights', 30)
+    if amount <= 0 or (shadows == 0 and midtones == 0 and highlights == 0):
+        return rgb
+    radius = settings.get('radius', 16)
+    strength = amount / 50.0
+    lum = (0.2126 * rgb[..., 0] + 0.7152 * rgb[..., 1] + 0.0722 * rgb[..., 2])
+    if radius >= 1:
+        base_lum = _gaussian_blur_3(lum, float(radius))
+    else:
+        base_lum = lum
+    shadow_w = 1.0 - _tonal_smooth(0.15, 0.5, base_lum)
+    highlight_w = _tonal_smooth(0.5, 0.85, base_lum)
+    midtone_w = 1.0 - shadow_w - highlight_w
+    weight = (shadows * shadow_w + midtones * midtone_w + highlights * highlight_w) / 100.0
+    detail = lum - base_lum
+    delta = 0.18 * np.tanh(detail * 6.0) * weight * strength * (4.0 * lum * (1.0 - lum))
+    return np.clip(rgb + delta[..., None], 0.0, 1.0)
+
+
+def _tonal_smooth(low, high, value):
+    """C ``tonal_smooth``: smoothstep clamp between ``low`` and ``high``."""
+    t = np.clip((value - low) / (high - low), 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
+def _grade_bloom(rgb, settings):
+    """CIBloom: blur of the bright pass, screen-blended at intensity/50."""
+    amount = settings.get('amount', 40)
+    radius = settings.get('radius', 24)
+    if amount <= 0:
+        return rgb
+    intensity = amount / 50.0
+    bright = np.clip(rgb - 0.5, 0.0, None)
+    blurred = _gaussian_blur_3(bright, float(radius)) if radius >= 1 else bright
+    screen = 1.0 - (1.0 - rgb) * (1.0 - np.clip(blurred * intensity, 0.0, 1.0))
+    return np.clip(screen, 0.0, 1.0)
+
+
+def adjustment_margin(record):
+    """Rows of context above a band a blur-based adjustment needs.
+
+    The compositor consults this before grading a band: kinds needing a
+    spatial window grow the band's fetch window by this many rows and crop
+    back after ``grade()``. MUST match the kernel truncate: a Gaussian cut at
+    3 sigma needs ceil(3 * sigma) rows (Bloom follows upstream's own
+    ``blurMargin`` budget, 3r + 2). Point and field adjustments need none.
+    """
+    if not isinstance(record, dict):
+        return 0
+    kind = record.get('kind')
+    if kind == 'Tonal Contrast':
+        s = record.get('tonalSettings') or {}
+        radius = s.get('radius', 16)
+        if s.get('amount', 50) > 0 and radius >= 1:
+            return int(math.ceil(float(radius) * _TRUNCATE))
+    if kind == 'Bloom':
+        s = record.get('bloomSettings') or {}
+        radius = s.get('radius', 24)
+        if s.get('amount', 40) > 0 and radius >= 1:
+            return int(math.ceil(float(radius) * 3 + 2))
+    return 0
+
+
 def grade(rgb, record, x0=0.0, y0=0.0, units_per_pixel=1.0, alpha=None):
     """Grade straight encoded RGB floats, preserving alpha in the caller.
 
@@ -799,6 +930,13 @@ def grade(rgb, record, x0=0.0, y0=0.0, units_per_pixel=1.0, alpha=None):
         settings = record.get('grainSettings') or dict(amount=25, size=1.5, roughness=50, seed=0)
         return _grade_grain(rgb, np.ones(rgb.shape[:2], np.float32), settings,
                             x0, y0, units_per_pixel)
+    if kind == 'Tonal Contrast':
+        return _grade_tonal_contrast(rgb, record.get('tonalSettings')
+                                     or dict(amount=50, radius=16, shadows=40,
+                                             midtones=60, highlights=30))
+    if kind == 'Bloom':
+        return _grade_bloom(rgb, record.get('bloomSettings')
+                            or dict(amount=40, radius=24))
     if kind == 'Add Noise':
         settings = dict(noiseAmount=record.get('noiseAmount', 10),
                         noiseGaussian=record.get('noiseGaussian', False),

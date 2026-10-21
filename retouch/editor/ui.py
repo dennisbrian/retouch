@@ -39,9 +39,9 @@ EDITOR_HOTKEYS_JS = """() => {
         if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA'
             || t.tagName === 'SELECT' || t.isContentEditable)) return;
         const M = e.metaKey || e.ctrlKey;
-        if (!M && k !== ']' && k !== '[') return;
         const S = e.shiftKey;
         const k = e.key.toLowerCase();
+        if (!M && k !== ']' && k !== '[') return;
         const hit = (id) => {
             const btn = document.getElementById(id);
             if (btn) { e.preventDefault(); btn.click(); }
@@ -392,6 +392,8 @@ def _tool_view(session):
     gradient_ends = (gmap.get('shadows') or black, gmap.get('highlights') or white)
     bw = settings.get('blackWhiteSettings') or {}
     cb = settings.get('colorBalanceSettings') or {}
+    tonal = settings.get('tonalSettings') or {}
+    bloom = settings.get('bloomSettings') or {}
     effects = layer.effects if layer and layer.effects else None
     shadow = effects.shadow if effects and effects.shadow else None
     overlay = effects.colorOverlay if effects and effects.colorOverlay else None
@@ -434,6 +436,9 @@ def _tool_view(session):
             *tables, grain.get('amount', 25), grain.get('size', 1.5),
             grain.get('roughness', 50), seed, settings.get('noiseAmount', 25),
             settings.get('noiseGaussian', False), settings.get('noiseMonochromatic', False),
+            tonal.get('amount', 50), tonal.get('radius', 16), tonal.get('shadows', 40),
+            tonal.get('midtones', 60), tonal.get('highlights', 30),
+            bloom.get('amount', 40), bloom.get('radius', 24),
             bw.get('reds', 40), bw.get('yellows', 60), bw.get('greens', 40),
             bw.get('cyans', 60), bw.get('blues', 20), bw.get('magentas', 80),
             bw.get('tint', False), bw.get('tintHue', 40), bw.get('tintSaturation', 20),
@@ -714,6 +719,15 @@ def build_editor_tab():
                                         interactive=True, label=channel + ' curve'))
                         curves_plot = gr.HTML(curve_graph(*curve_tables({})))
                         reset_curves = gr.Button('Reset all curves to identity')
+                    with gr.Group(visible=False) as tonal_controls:
+                        tonal_amount = gr.Slider(0, 100, value=50, step=.1, label='Tonal amount')
+                        tonal_radius = gr.Slider(1, 100, value=16, step=.1, label='Tonal radius (pixels)')
+                        tonal_shadows = gr.Slider(-100, 100, value=40, step=1, label='Tonal shadows')
+                        tonal_midtones = gr.Slider(-100, 100, value=60, step=1, label='Tonal midtones')
+                        tonal_highlights = gr.Slider(-100, 100, value=30, step=1, label='Tonal highlights')
+                    with gr.Group(visible=False) as bloom_controls:
+                        bloom_amount = gr.Slider(0, 100, value=40, step=.1, label='Bloom amount')
+                        bloom_radius = gr.Slider(1, 150, value=24, step=.1, label='Bloom radius (pixels)')
                     with gr.Group(visible=False) as grain_controls:
                         grain_amount = gr.Slider(0, 100, value=25, step=.1, label='Grain amount')
                         grain_size = gr.Slider(.5, 20, value=1.5, step=.1, label='Grain size')
@@ -951,6 +965,8 @@ def build_editor_tab():
                    effect_inner_glow, inner_glow_size, inner_glow_opacity, inner_glow_color,
                    *curve_inputs, grain_amount, grain_size, grain_roughness, texture_seed,
                    noise_amount, noise_gaussian, noise_monochromatic, curves_plot,
+                   tonal_amount, tonal_radius, tonal_shadows, tonal_midtones,
+                   tonal_highlights, bloom_amount, bloom_radius,
                    bw_reds, bw_yellows, bw_greens, bw_cyans, bw_blues, bw_magentas,
                    bw_tint, bw_tint_hue, bw_tint_saturation, bw_tint_row,
                    cb_shadow_cyan_red, cb_shadow_magenta_green, cb_shadow_yellow_blue,
@@ -1369,8 +1385,7 @@ def build_editor_tab():
                         # texture controls flat, then the B&W / Color-Balance
                         # controls: exactly the unpack order in
                         # controls_adjustment.
-                        control_args = ((*args[:16], list(args[16:20]), *args[20:])
-                                        if len(args) > 16 else args)
+                        control_args = ((*args[:16], list(args[16:20]), *args[20:])                                        if len(args) > 16 else args)
                         settings = controls_adjustment(
                             *control_args, existing=layer.adjustment
                             if operation == 'update_grade' and layer else None)
@@ -1551,6 +1566,8 @@ def build_editor_tab():
                               grade_brightness, grade_contrast, grade_hue,
                               *curve_inputs, grain_amount, grain_size, grain_roughness, texture_seed,
                               noise_amount, noise_gaussian, noise_monochromatic,
+                              tonal_amount, tonal_radius, tonal_shadows, tonal_midtones,
+                              tonal_highlights, bloom_amount, bloom_radius,
                               bw_reds, bw_yellows, bw_greens, bw_cyans, bw_blues, bw_magentas,
                               bw_tint, bw_tint_hue, bw_tint_saturation,
                               cb_shadow_cyan_red, cb_shadow_magenta_green, cb_shadow_yellow_blue,
@@ -1564,6 +1581,8 @@ def build_editor_tab():
                                  grade_brightness, grade_contrast, grade_hue,
                                  *curve_inputs, grain_amount, grain_size, grain_roughness, texture_seed,
                                  noise_amount, noise_gaussian, noise_monochromatic,
+                                 tonal_amount, tonal_radius, tonal_shadows, tonal_midtones,
+                                 tonal_highlights, bloom_amount, bloom_radius,
                                  bw_reds, bw_yellows, bw_greens, bw_cyans, bw_blues, bw_magentas,
                                  bw_tint, bw_tint_hue, bw_tint_saturation,
                                  cb_shadow_cyan_red, cb_shadow_magenta_green, cb_shadow_yellow_blue,
@@ -1591,11 +1610,14 @@ def build_editor_tab():
                           gr.update(visible=kind == 'Grain'),
                           gr.update(visible=kind == 'Add Noise'),
                           gr.update(visible=kind in ('Grain', 'Add Noise')),
+                          gr.update(visible=kind == 'Tonal Contrast'),
+                          gr.update(visible=kind == 'Bloom'),
                           gr.update(visible=kind == 'Gradient Map'),
                           gr.update(visible=kind == 'Black & White'),
                           gr.update(visible=kind == 'Color Balance')],
             grade_kind, [curves_controls, grain_controls, noise_controls, seed_controls,
-                         gradient_controls, bw_controls, cb_controls], queue=False)
+                         tonal_controls, bloom_controls, gradient_controls,
+                         bw_controls, cb_controls], queue=False)
         bw_tint.change(lambda on: gr.update(visible=on), bw_tint, bw_tint_row, queue=False)
         for table in curve_inputs:
             table.input(curve_graph, curve_inputs, curves_plot, queue=False)

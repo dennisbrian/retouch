@@ -57,15 +57,20 @@ def controls_adjustment(*args: Any, existing: dict | None = None) -> dict:
     if len(args) <= 16:
         return record
     # Callers pass the curve tables grouped as args[16] (a list of 4) with the
-    # texture controls flat after it, then B&W, Color Balance and the two
-    # Gradient Map colour pickers — exactly the extras order the UI registers.
+    # texture controls flat after it, then Tonal Contrast, Bloom, B&W, Color
+    # Balance and the two Gradient Map colour pickers — exactly the extras
+    # order the UI registers for add_grade/update_grade.
     (tables, amount, size, roughness, seed, noise_amount, gaussian,
      monochromatic, *rest) = args[16:]
-    bw, cb, gradient = rest[:9], rest[9:19], rest[19:]
-    if len(rest) >= 19 and record['kind'] not in ('Black & White', 'Color Balance',
-                                                  'Gradient Map') and (
+    tonal = rest[:5]
+    bloom = rest[5:7]
+    bw, cb, gradient = rest[7:16], rest[16:26], rest[26:]
+    if len(rest) >= 26 and record['kind'] not in ('Black & White', 'Color Balance',
+                                                  'Gradient Map', 'Tonal Contrast', 'Bloom') and (
             tuple(bw) != (40, 60, 40, 60, 20, 80, False, 40, 20)
-            or tuple(cb) != (0, 0, 0, 0, 0, 0, 0, 0, 0, True)):
+            or tuple(cb) != (0, 0, 0, 0, 0, 0, 0, 0, 0, True)
+            or tuple(tonal) != (50, 16, 40, 60, 30)
+            or tuple(bloom) != (40, 24)):
         # Other kinds may only carry the controls' default values; a record
         # with moved B&W / Color-Balance sliders would silently drop them.
         raise UnsupportedFeature('Adjustment settings do not match its kind')
@@ -82,6 +87,12 @@ def controls_adjustment(*args: Any, existing: dict | None = None) -> dict:
         else:
             record.update(noiseAmount=noise_amount, noiseGaussian=gaussian,
                           noiseMonochromatic=monochromatic, noiseSeed=int(seed))
+    elif record['kind'] == 'Tonal Contrast':
+        record['tonalSettings'] = dict(amount=tonal[0], radius=tonal[1],
+                                       shadows=tonal[2], midtones=tonal[3],
+                                       highlights=tonal[4])
+    elif record['kind'] == 'Bloom':
+        record['bloomSettings'] = dict(amount=bloom[0], radius=bloom[1])
     elif record['kind'] == 'Black & White' and len(bw) >= 9:
         record['blackWhiteSettings'] = dict(
             reds=bw[0], yellows=bw[1], greens=bw[2], cyans=bw[3],

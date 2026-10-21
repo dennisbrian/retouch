@@ -179,6 +179,7 @@ class _BandRenderer:
                         and l.visible and all(p.visible for p in self.parents[l.id])]
         self.prepared = {}
         self.effect_planes = {}
+        self._coverage_caches = {}
         self.stacks, self.stacked = {}, set()
         for i, base in enumerate(self.visible):
             if base.mask_source_id is not None or base.adjustment is not None:
@@ -244,35 +245,112 @@ class _BandRenderer:
                 clip *= self.own(parent, top, bottom, True)[1]
         return clip
 
-    def render(self, top, bottom):
-        shape = (bottom - top, self.doc.width)
-        rgb, alpha = np.zeros(shape + (3,), np.float32), np.zeros(shape, np.float32)
-        coverage_cache = {}
-        def coverage(layer):
-            if layer.id not in coverage_cache:
-                a = self.own(layer, top, bottom)[1]
-                if layer.mask_source_id:
-                    a *= coverage(self.by_id[layer.mask_source_id])
-                coverage_cache[layer.id] = a
-            return coverage_cache[layer.id]
-        def adjust(layer, dest, a, in_stack=False):
-            from .adjustments import grade
-            # Adjust colors in place; alpha remains exactly the captured coverage.
+    def _stack_surface(self, base, top, bottom, upto=None):
+        """The stack's internal backdrop over [top, bottom): the base layer
+        (made opaque for internal blending, its effects applied) plus stack
+        children before ``upto``. Shared by the band and the adjustment
+        margin windows, so a blur adjustment inside a stack sees identical
+        context whatever the band split."""
+        source, a = self.own(base, top, bottom)
+        if base.effects is not None and not base.effects.is_empty():
+            if (self.doc.width * self.doc.height <= _MAX_EFFECTS_CACHE_PIXELS
+                    and base.id not in self.stacks):
+                if base.id not in self.effect_planes:
+                    plane_src, plane_a = self.own(base, 0, self.doc.height)
+                    self.effect_planes[base.id] = _apply_effects_plane(
+                        plane_src, plane_a, base.effects)
+                source = self.effect_planes[base.id][0][top:bottom]
+                a = self.effect_planes[base.id][1][top:bottom]
+            else:
+                margin = _effect_margin(base.effects)
+                ext_top, ext_bottom = max(0, top - margin), min(self.doc.height, bottom + margin)
+                if (ext_bottom - ext_top) * self.doc.width > _MAX_EFFECTS_WINDOW_PIXELS:
+                    raise ValueError(
+                        'layer effects window exceeds the %d MP live budget'
+                        % (_MAX_EFFECTS_WINDOW_PIXELS // 1_000_000))
+                ext_source, ext_a = ((source, a) if (ext_top, ext_bottom) == (top, bottom)
+                                     else self.own(base, ext_top, ext_bottom))
+                eff_rgb, eff_a = _apply_effects(ext_source, ext_a, base.effects)
+                source = eff_rgb[top - ext_top:bottom - ext_top]
+                a = eff_a[top - ext_top:bottom - ext_top]
+        stack_rgb = source.copy()
+        stack_alpha = np.ones((bottom - top, self.doc.width), np.float32)
+        for child in self.stacks[base.id]:
+            if upto is not None and child.id == upto:
+                break
+            if child.adjustment is not None:
+                self.apply_adjust(child, stack_rgb, stack_alpha, top, bottom,
+                                  in_stack=True, stack=(base, child.id))
+            else:
+                child_rgb, child_a = self.own(child, top, bottom)
+                _over(stack_rgb, stack_alpha, child_rgb, child_a, child.blend_mode)
+        return stack_rgb, stack_alpha
+
+    def apply_adjust(self, layer, dest, a, top, bottom, in_stack=False, stack=None):
+        """Grade ``dest`` (the backdrop ``layer`` adjusts) in place over the band.
+
+        Blur-based kinds (Tonal Contrast, Bloom) read rows outside the band,
+        so their backdrop is recomputed over the margin window — the same
+        extended-window-then-crop contract the layer-effects path uses — and
+        cropped back after grading; the window only fetches what exists
+        (clamped at canvas edges), so band splits stay invisible and the
+        margin may exceed ``band_rows``. ``dest``/``a`` are refilled from the
+        window, keeping the window's own alpha for the weighted change.
+        """
+        from .adjustments import adjustment_margin, grade
+        margin = adjustment_margin(layer.adjustment)
+        g_top = max(0, top - margin) if margin else top
+        g_bottom = min(self.doc.height, bottom + margin) if margin else bottom
+        if margin and (g_top, g_bottom) != (top, bottom):
+            if (g_bottom - g_top) * self.doc.width > _MAX_EFFECTS_WINDOW_PIXELS:
+                raise ValueError(
+                    'adjustment window exceeds the %d MP live budget'
+                    % (_MAX_EFFECTS_WINDOW_PIXELS // 1_000_000))
+            if in_stack:
+                sub_rgb, sub_alpha = self._stack_surface(
+                    stack[0], g_top, g_bottom, upto=stack[1])
+            else:
+                sub_rgb, sub_alpha = self.render(g_top, g_bottom, up_to=layer.id)
+            straight_full = sub_rgb / np.where(sub_alpha > 0, sub_alpha, 1)[..., None]
+            changed_full = grade(straight_full, layer.adjustment, y0=float(g_top))
+            straight = straight_full[top - g_top:bottom - g_top]
+            changed = changed_full[top - g_top:bottom - g_top]
+            dest[:] = sub_rgb[top - g_top:bottom - g_top]
+            a[:] = sub_alpha[top - g_top:bottom - g_top]
+        else:
             straight = dest / np.where(a > 0, a, 1)[..., None]
             changed = grade(straight, layer.adjustment, y0=float(top), alpha=a)
-            if layer.blend_mode != 'Normal':
-                changed = _blend(straight, changed, layer.blend_mode)
-            weight = self.opacity(layer) * self.own(layer, top, bottom, True)[1]
-            if not in_stack:
-                weight *= self.folder_clip(layer, top, bottom)
-            if layer.mask_source_id and not in_stack:
-                weight *= coverage(self.by_id[layer.mask_source_id])
-            dest[:] = (straight + (changed - straight) * weight[..., None]) * a[..., None]
+        if layer.blend_mode != 'Normal':
+            changed = _blend(straight, changed, layer.blend_mode)
+        weight = self.opacity(layer) * self.own(layer, top, bottom, True)[1]
+        if not in_stack:
+            weight *= self.folder_clip(layer, top, bottom)
+            if layer.mask_source_id:
+                weight *= self.coverage(self.by_id[layer.mask_source_id], top, bottom)
+        dest[:] = (straight + (changed - straight) * weight[..., None]) * a[..., None]
+
+    def coverage(self, layer, top, bottom):
+        """A clipped layer's effective coverage over a window, cached per window."""
+        cache = self._coverage_caches.setdefault((top, bottom), {})
+        if layer.id not in cache:
+            value = self.own(layer, top, bottom)[1]
+            if layer.mask_source_id:
+                value = value * self.coverage(self.by_id[layer.mask_source_id], top, bottom)
+            cache[layer.id] = value
+        return cache[layer.id]
+
+    def render(self, top, bottom, up_to=None):
+        """Composite one band. ``up_to`` stops before that layer, so
+        :meth:`apply_adjust` can rebuild the backdrop over a margin window."""
+        shape = (bottom - top, self.doc.width)
+        rgb, alpha = np.zeros(shape + (3,), np.float32), np.zeros(shape, np.float32)
         for layer in self.visible:
+            if up_to is not None and layer.id == up_to:
+                break
             if layer.id in self.stacked:
                 continue
             if layer.adjustment is not None:
-                adjust(layer, rgb, alpha)
+                self.apply_adjust(layer, rgb, alpha, top, bottom)
                 continue
             source, a = self.own(layer, top, bottom)
             if layer.effects is not None and not layer.effects.is_empty():
@@ -311,16 +389,9 @@ class _BandRenderer:
             if layer.id in self.stacks:
                 # Native clipping stacks make the base opaque for internal blending,
                 # then restore its alpha before placing the stack on the backdrop.
-                stack_rgb, stack_alpha = source.copy(), np.ones(shape, np.float32)
-                for child in self.stacks[layer.id]:
-                    if child.adjustment is not None:
-                        adjust(child, stack_rgb, stack_alpha, in_stack=True)
-                    else:
-                        child_rgb, child_a = self.own(child, top, bottom)
-                        _over(stack_rgb, stack_alpha, child_rgb, child_a, child.blend_mode)
-                source = stack_rgb
+                source, _ = self._stack_surface(layer, top, bottom)
             elif layer.mask_source_id:
-                a *= coverage(self.by_id[layer.mask_source_id])
+                a *= self.coverage(self.by_id[layer.mask_source_id], top, bottom)
             a *= self.folder_clip(layer, top, bottom)
             _over(rgb, alpha, source, a, layer.blend_mode)
         return rgb, alpha

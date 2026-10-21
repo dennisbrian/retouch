@@ -175,9 +175,11 @@ def _gradient_args(shadow_hex, highlight_hex, reversed_=False):
     tables = [[[0, 0], [255, 255]]] * 4
     bw = (40, 60, 40, 60, 20, 80, False, 40, 20)
     cb = (0, 0, 0, 0, 0, 0, 0, 0, 0, True)
+    tonal = (50, 16, 40, 60, 30)
+    bloom = (40, 24)
     return ['Gradient Map', 0, 0, 1, 0, 255, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0,
             *tables, 35, 2.5, 65, 12345, 12.5, True, True,
-            *bw, *cb, shadow_hex, highlight_hex, reversed_]
+            *tonal, *bloom, *bw, *cb, shadow_hex, highlight_hex, reversed_]
 
 
 def test_gradient_map_ui_adds_updates_and_round_trips(session, callbacks, tmp_path):
@@ -194,10 +196,11 @@ def test_gradient_map_ui_adds_updates_and_round_trips(session, callbacks, tmp_pa
         reversed=True)
     rendered = composite(session.history.document)
     assert not np.array_equal(rendered, before)
-    # The view hands the stored colours back to the pickers.
-    assert view[99] == gr.update(value='#003399')
-    assert view[100] == gr.update(value='#ff8020')
-    assert view[101] is True
+    # The view hands the stored colours back to the pickers (indices shifted
+    # past the Tonal Contrast and Bloom rows added before the B&W block).
+    assert view[106] == gr.update(value='#003399')
+    assert view[107] == gr.update(value='#ff8020')
+    assert view[108] is True
     target = tmp_path / 'gradient.comp'
     session.history.save(target)
     reopened = load_project(target)
