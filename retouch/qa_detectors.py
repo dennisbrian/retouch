@@ -933,7 +933,7 @@ def detect_halo(
     L = img_lab[:, :, 0]  # float32, [0, 100]
 
     # Detect strong edges via Canny
-    L_uint8 = np.clip(L, 0, 100).astype(np.uint8) * 255 // 100
+    L_uint8 = (np.clip(L, 0, 100) * 2.55).astype(np.uint8)
     edges = cv2.Canny(L_uint8, 50, 150)  # Returns binary edge map
 
     if edges.sum() == 0:

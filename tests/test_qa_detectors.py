@@ -234,6 +234,21 @@ class TestDetectHalo:
         # May show overshoot due to sharpening
         assert "mean_overshoot" in result
         assert "edge_count" in result
+        # Canny now sees the real L range (uint8 overflow bug made it always 0)
+        assert result["edge_count"] > 0
+
+    def test_synthetic_edge_overshoot_detected(self):
+        """Synthetic halo (bright ring around a dark shape) must find edges."""
+        img = np.full((100, 100, 3), 120, dtype=np.uint8)
+        img[30:70, 30:70] = 30  # dark square on grey
+        # bright 3-px ring just outside the square = halo
+        img[27:73, 27:30] = 230
+        img[27:73, 70:73] = 230
+        img[27:30, 27:73] = 230
+        img[70:73, 27:73] = 230
+
+        result = detect_halo(img)
+        assert result["edge_count"] > 0
 
     def test_with_mask_restricts_edges(self):
         """Halo detection should respect a mask."""
