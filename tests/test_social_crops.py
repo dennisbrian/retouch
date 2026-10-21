@@ -125,8 +125,7 @@ class TestFormats:
             assert abs(fmt.width / fmt.height - rw / rh) < 1e-6
 
     def test_default_formats(self):
-        assert DEFAULT_FORMATS == ("4:5", "9:16", "1:1")
-        assert "3:4" not in DEFAULT_FORMATS
+        assert DEFAULT_FORMATS == ("3:4", "4:5", "9:16", "1:1")
 
 
 # ---------------------------------------------------------------------------

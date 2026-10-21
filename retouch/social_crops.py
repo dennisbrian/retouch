@@ -83,7 +83,8 @@ FORMATS = {
         SocialFormat("3:4", "3x4", "Instagram grid / Threads", (3, 4), 1080, 1440),
     )
 }
-DEFAULT_FORMATS = ("4:5", "9:16", "1:1")
+# 3:4 first: Instagram shows 1080x1440 feed posts natively and previews the grid at 3:4.
+DEFAULT_FORMATS = ("3:4", "4:5", "9:16", "1:1")
 
 
 def parse_formats(spec: Union[str, Iterable[str]]) -> List[SocialFormat]:
@@ -345,7 +346,7 @@ def export_social_crops(
     *,
     detector=None,
     size: str = "platform",
-    quality: int = 92,
+    quality: int = 95,
     force: bool = False,
     watermark=None,
 ) -> List[CropResult]:
@@ -436,7 +437,7 @@ def export_folder(
     formats: Sequence[SocialFormat],
     *,
     size: str = "platform",
-    quality: int = 92,
+    quality: int = 95,
     force: bool = False,
     detector=None,
     progress=None,
@@ -488,7 +489,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                              f"(default: {','.join(DEFAULT_FORMATS)})")
     parser.add_argument("--size", choices=["platform", "full"], default="platform",
                         help="platform = 1080 px wide (default); full = native crop resolution")
-    parser.add_argument("--quality", type=int, default=92, help="JPEG quality (default: 92)")
+    parser.add_argument("--quality", type=int, default=95, help="JPEG quality (default: 95)")
     parser.add_argument("-f", "--force", action="store_true", help="Overwrite existing crops")
     parser.add_argument("-r", "--recursive", action="store_true", help="Include subfolders")
     args = parser.parse_args(argv)
