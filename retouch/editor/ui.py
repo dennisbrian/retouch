@@ -39,9 +39,9 @@ EDITOR_HOTKEYS_JS = """() => {
         if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA'
             || t.tagName === 'SELECT' || t.isContentEditable)) return;
         const M = e.metaKey || e.ctrlKey;
-        if (!M) return;
         const S = e.shiftKey;
         const k = e.key.toLowerCase();
+        if (!M && k !== ']' && k !== '[') return;
         const hit = (id) => {
             const btn = document.getElementById(id);
             if (btn) { e.preventDefault(); btn.click(); }
@@ -50,6 +50,16 @@ EDITOR_HOTKEYS_JS = """() => {
         if (M && k === 'z') return hit('editor-undo');
         if (M && k === 'y' && !S) return hit('editor-redo');
         if (M && k === 'd') return hit('editor-clear-selection');
+        if (M && S && k === 'i') return hit('editor-invert-selection');
+        if (M && k === 'i') return hit('editor-invert-mask');
+        if (M && k === 'j') return hit('editor-copy-selection');
+        if (M && k === 'x') return hit('editor-cut-selection');
+        if (M && S && k === 'g') return hit('editor-ungroup');
+        if (M && k === 'g') return hit('editor-group');
+        if (k === ']') return hit('editor-move-up');
+        if (k === '[') return hit('editor-move-down');
+        if (M && k === 's') return hit('editor-save');
+        if (M && S && k === 'e') return hit('editor-export');
     });
 }"""
 
@@ -510,7 +520,7 @@ def build_editor_tab():
                 properties = gr.Button('Apply layer properties')
                 with gr.Row():
                     duplicate = gr.Button('Duplicate layer')
-                    invert_mask = gr.Button('Invert mask')
+                    invert_mask = gr.Button('Invert mask', elem_id='editor-invert-mask')
                     reset_mask = gr.Button('Reset mask')
                 gr.Markdown('Invert mask swaps revealed and hidden areas. '
                             'A layer without a mask becomes fully masked out; '
@@ -560,8 +570,8 @@ def build_editor_tab():
                     clipping_source = gr.Dropdown(label='Clip to layer alpha', choices=[('None', '')], value='')
                     links = gr.Button('Apply folder & clipping')
                     group_members = gr.Dropdown(label='Adjacent layers to group', choices=[], multiselect=True)
-                    group = gr.Button('Group selected layers')
-                    ungroup = gr.Button('Ungroup selected folder')
+                    group = gr.Button('Group selected layers', elem_id='editor-group')
+                    ungroup = gr.Button('Ungroup selected folder', elem_id='editor-ungroup')
                     gr.Markdown('Folders pass through: opacity and masks affect each child. '
                                 'Removing a folder removes its children. Duplicate copies the whole folder. '
                                 'Adjacent clipped siblings share the base alpha; other links act as live alpha masks.')
@@ -579,7 +589,7 @@ def build_editor_tab():
                     create_selection = gr.Button('Create selection')
                     selection_preview = gr.Image(label='Selection coverage (white selected)', interactive=False, image_mode='L')
                     with gr.Row():
-                        invert_selection = gr.Button('Invert selection')
+                        invert_selection = gr.Button('Invert selection', elem_id='editor-invert-selection')
                         clear_selection = gr.Button('Clear selection', elem_id='editor-clear-selection')
                     selection_amount = gr.Number(label='Expand / contract / border (px)', value=10, precision=0)
                     expand_selection = gr.Button('Expand selection')
@@ -614,8 +624,8 @@ def build_editor_tab():
                                 'with Reveal/Hide strokes. Hair and eye boundaries may need correction.')
                     mask_mode = gr.Radio(['Replace', 'Add', 'Subtract', 'Intersect'], value='Replace', label='Combine with layer mask')
                     mask_selection = gr.Button('Apply selection to selected layer mask')
-                    copy_selection_layer = gr.Button('Copy selection as layer')
-                    cut_selection_layer = gr.Button('Cut selection as layer')
+                    copy_selection_layer = gr.Button('Copy selection as layer', elem_id='editor-copy-selection')
+                    cut_selection_layer = gr.Button('Cut selection as layer', elem_id='editor-cut-selection')
                     gr.Markdown('Copy takes the visible composite inside the selection '
                                 'as a new layer above the active one, feathered edges kept '
                                 'as partial alpha. Cut also clears the selected pixels of '
@@ -733,8 +743,8 @@ def build_editor_tab():
                     gr.Markdown('Effects need a plain raster layer. Clear removes every effect; '
                                 'each apply is one undo step.')
                 with gr.Row():
-                    up = gr.Button('Move up')
-                    down = gr.Button('Move down')
+                    up = gr.Button('Move up', elem_id='editor-move-up')
+                    down = gr.Button('Move down', elem_id='editor-move-down')
                     remove = gr.Button('Remove layer')
                 add_photo = gr.File(label='Photo to add as layer', file_types=['image'], type='filepath')
                 add = gr.Button('Add photo layer')
@@ -771,11 +781,11 @@ def build_editor_tab():
                 cancel = gr.Button('Cancel recipe render', interactive=False)
                 render_status = gr.Markdown('Recipe renderer ready.')
                 save_path = gr.Textbox(label='Save project folder', placeholder='/path/to/photo.comp')
-                save = gr.Button('Save project')
+                save = gr.Button('Save project', elem_id='editor-save')
                 export_format = gr.Dropdown(
                     label='Export format', value='PNG (8-bit sRGB)',
                     choices=['PNG (8-bit sRGB)', 'TIFF (16-bit sRGB)'])
-                export = gr.Button('Export flattened image')
+                export = gr.Button('Export flattened image', elem_id='editor-export')
                 export_jpeg_button = gr.Button('Export JPEG')
                 jpeg_quality = gr.Slider(
                     label='JPEG quality', minimum=1, maximum=100, step=1, value=85)

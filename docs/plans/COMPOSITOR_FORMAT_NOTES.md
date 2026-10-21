@@ -83,9 +83,16 @@ Retouch-specific sidecar inside the transactional package, added by `6a366ff`:
   re-entrant since `568cd2c`.
 - Other apps may discard the extension; Retouch refuses the mismatch if a
   retained sidecar disagrees with edited rasters.
+- Destructive edits that replace a recipe layer's pixels — including Cut
+  selection as layer (`c4d785f`) — clear `recipe_source`/`recipe_settings`
+  in memory, so the sidecar entry disappears on the next save and the layer
+  reopens as a plain raster. Copy selection as layer creates a plain raster
+  layer with no recipe provenance.
 
 Not stored: clone anchors (`aa1c80f`), local-retouch drafts, wand/selection
-state — all session-only, never persisted.
+state (including colour-range selections and the donor/destination
+selections used by texture-aware healing, `c4d785f`) — all session-only,
+never persisted.
 
 ## Colour and precision
 

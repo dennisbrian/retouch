@@ -56,7 +56,9 @@ def wand_selection(rgba, x, y, tolerance=32, radius=0, contiguous=True):
     n = box.shape[0] * box.shape[1]
     # Round-half-up like the C average (WandPixels.c): sum + n/2 over n.
     ref = (box.sum(axis=(0, 1)) + n // 2) // n
-    diff = np.abs(rgba.astype(np.int64) - ref)
+    # int16 holds |0..255 - 0..255| exactly; int64 doubles the pass cost on
+    # multi-megapixel canvases for the same bit-exact result.
+    diff = np.abs(rgba.astype(np.int16) - ref.astype(np.int16))
     match = np.all(diff <= t, axis=2)
     if not contiguous:
         m = (match * np.uint8(255)).astype(np.uint8)

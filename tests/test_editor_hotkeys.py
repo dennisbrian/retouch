@@ -29,6 +29,27 @@ def test_editor_buttons_carry_elem_ids():
                 for c in app.get_config_file()['components']}
     assert {'editor-undo', 'editor-redo',
             'editor-clear-selection'} <= elem_ids
+    # Tier 2: KeyboardShortcuts.swift chords added with c4d785f's ops.
+    assert {'editor-invert-selection', 'editor-invert-mask',
+            'editor-copy-selection', 'editor-cut-selection',
+            'editor-group', 'editor-ungroup', 'editor-move-up',
+            'editor-move-down', 'editor-save', 'editor-export'} <= elem_ids
+
+
+def test_tier2_chord_branches_present():
+    for token in ("hit('editor-invert-selection')", "hit('editor-invert-mask')",
+                  "hit('editor-copy-selection')", "hit('editor-cut-selection')",
+                  "hit('editor-group')", "hit('editor-ungroup')",
+                  "hit('editor-move-up')", "hit('editor-move-down')",
+                  "hit('editor-save')", "hit('editor-export')"):
+        assert token in EDITOR_HOTKEYS_JS, token
+    # Shift variants must be tested before their plain-modifier siblings.
+    assert (EDITOR_HOTKEYS_JS.index("S && k === 'i'")
+            < EDITOR_HOTKEYS_JS.index("M && k === 'i'"))
+    assert (EDITOR_HOTKEYS_JS.index("S && k === 'g'")
+            < EDITOR_HOTKEYS_JS.index("M && k === 'g'"))
+    # Bare bracket chords are the only ones allowed without a modifier.
+    assert "if (!M && k !== ']' && k !== '[') return;" in EDITOR_HOTKEYS_JS
 
 
 def test_gui_blocks_attaches_editor_js():

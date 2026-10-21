@@ -326,8 +326,13 @@ edge softness, paint, then **Apply paint strokes**: one undo step
 (`Paint on layer` / `Erase on layer`) that saves and reopens like any pixel edit.
 
 `retouch/editor/layer_paint.py` ports the colour path of upstream
-`Document/BrushStroke.swift`: stroke coverage is capped at the brush opacity
-(overlapping strokes never exceed it) and recomposed as premultiplied
+`Document/BrushStroke.swift`. Since the c4d785f native-oracle audit, each
+canvas layer is one native stroke: `stroke_coverage` bakes the brush opacity
+into each stroke's alpha and combines separate strokes by screen
+accumulation — `1-(1-a1)(1-a2)` — so two 50% strokes stack toward 75%,
+matching BrushStroke.swift's per-stroke fill composition. Within one canvas
+layer the browser has already flattened overlapping dabs, so the cap still
+holds there. Coverage is then recomposed as premultiplied
 source-over of one sRGB colour, 8 bits per channel; Erase takes
 `coverage x opacity` out of alpha (`destinationOut`) and leaves colour alone.
 The current selection can clip strokes (mapped through the layer's placement,
@@ -337,8 +342,12 @@ Deliberate differences: the browser rasterises a hard round tip, so softness
 blurs coverage instead of upstream's per-dab Gaussian falloff; paint stays
 inside the layer's rectangle (upstream grows a painted layer to the canvas).
 
-Tests: `tests/test_editor_layer_paint.py` (12), including a Porter-Duff
-oracle (Pillow `alpha_composite`, within 2 levels), opacity cap on overlaps,
+Tests: `tests/test_editor_layer_paint.py` (13), including a Porter-Duff
+oracle (Pillow `alpha_composite`, within 2 levels), per-stroke screen
+accumulation (two 50% canvas-layer strokes overlap at 75%,
+`test_separate_canvas_layers_accumulate_like_native_strokes`) and the
+single-canvas-layer opacity cap
+(`test_opacity_caps_strokes_within_one_canvas_layer`),
 native-grid mapping from a reduced preview, flips, placed selections, undo and
 `.comp` round trip, and the UI callbacks. Browser check on DSCF3503 (headless
 Chromium): new paint layer, colour change updates the brush live, a stroke
@@ -382,6 +391,65 @@ selection created and saved a Texture-aware layer; independent reopening found
 local measurements, not runtime guarantees or
 broad skin/fabric quality certification. Temporary evidence:
 `/tmp/retouch-texture-heal/`.
+
+Finalized in `c4d785f` (was WIP): the UI wires donor-area and search-distance
+controls into `applying_local` (donor choice validated; **Current selection**
+requires a live selection), the apply status names the created layer, and the
+heal auto-radius for Telea/Navier-Strokes local strokes is clamped to 8 with
+padding <= 64 — a 40x100 preview stroke previously padded to a ~470x710 inpaint
+region at radius 42, costing 2.3 s in `cv2.inpaint` alone. The committed suite
+adds the real donor-constrained search (source-map verified against the donor
+mask), unmocked seed determinism, the donor-exhausted refusal, degenerate
+fallback naming, and an 8-way invalid-input parametrize asserting history is
+never touched (`tests/test_editor_texture_heal.py`, 6 tests / 13 cases, plus
+the UI fallback-reporting callback test in `tests/test_editor_ui.py`).
+
+### Colour range selection — 2026-10-21
+
+Layer Editor → Selections gains **Create colour range selection** (port of
+upstream `WandPixels.c color_range_mask`): include colours as
+`[[R, G, B], ...]` text, optional exclude colours, and a 0-200 fuzziness
+slider. A pixel matches when its straight RGB is within the fuzziness of any
+include colour on **every** channel — a per-channel box distance, not a
+vector norm and not hue/HSV (hue-equal darker pixels do not match) — and not
+within range of any exclude colour. The mask is binary 0/255; fully
+transparent pixels never match; an empty include list yields an empty mask
+(native `hasColors` guard) rather than an error. Sampled over the visible
+composite like the wand; combines Replace/Add/Subtract/Intersect with the
+current selection, and an empty Replace deselects. Creating a selection never
+edits pixels or history.
+
+`retouch/editor/selections.py` `color_range_selection` validates the triplet
+text (finite 0-255 values, `[[255, 0, 0]]`-shaped), the fuzziness (finite,
+clamped 0-255) and the canvas budget. Tests:
+`tests/test_editor_color_range_selection.py` (13) cover exact-match,
+box-vs-norm and RGB-vs-HSV semantics, include union, exclude subtraction,
+fuzziness boundaries, binary mask values, transparent pixels, empty include,
+validation raises, combine modes, UI wiring and selection ephemerality.
+
+### Copy/Cut selection as layer — 2026-10-21
+
+Native Cmd-J / Cmd-X parity (upstream `SelectionClipboard.swift`):
+**Copy selection as layer** takes the visible composite inside the selection's
+whole-pixel bounds as a new raster layer above the active one (inside its
+folder), named `Layer N` like upstream. Feathered edges become partial alpha
+via a straight-alpha coverage multiply. **Cut selection as layer** is that
+copy plus clearing the active layer's selected pixels — transparent holes,
+never a content fill — and drops the layer's recipe source/settings since the
+recipe no longer matches the edited pixels. Both are one undo step
+(`Copy/Cut selection as layer`), clear the selection (upstream's
+`addPixelLayer` drops it on paste), and select the new layer. Folders,
+adjustment, text, shape and empty layers are refused for cut; an absent,
+empty or wrong-shaped selection raises like crop-to-selection. Pixels outside
+the selection and the other layers are untouched; adding the copy back over
+the stack is a composite identity.
+
+`retouch/editor/commands.py` `DocumentHistory.copy_selection_as_layer`.
+Tests: `tests/test_editor_copy_selection.py` (11): bbox extraction and
+composite identity, soft-selection alpha weights, cut holes vs fill, gates,
+empty-selection raises, undo/redo of both layers, off-canvas clamp, blended
+multi-layer identity, `.comp` save/load round trip, UI wiring (selection
+dropped, labels) and UI refusals.
 
 ### Click-to-place clone anchors — 2026-10-16
 

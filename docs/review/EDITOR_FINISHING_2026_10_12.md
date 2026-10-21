@@ -345,6 +345,36 @@ against its commit diff.
   fixture only on macOS; `638f14a` widens the 12 MP hue/sat timing margin on
   CI.
 
+
+- **Texture-aware healing, colour range, brush stroke parity, copy/cut
+  selection** (`c4d785f`): Heal method **Texture-aware** reuses the
+  deterministic PatchMatch primitive (seed 0, patch 7, 3 passes, 64
+  candidates) with an optional donor selection and 16-256 search distance;
+  budget guards (4,096 painted px, 512x512 search window) run before the
+  composite is built, and a degenerate donor set abstains into the
+  donor-constrained Telea fallback with explicit layer naming.
+  `color_range_selection` in `retouch/editor/selections.py` ports
+  `WandPixels.c color_range_mask` (per-channel RGB box distance, include
+  union minus exclude, fuzziness 0-200, transparent never matches).
+  `stroke_coverage` fixes a native-oracle divergence: separate canvas layers
+  are separate native strokes that accumulate by screen `1-(1-a1)(1-a2)`
+  (two 50% strokes stack toward 75%), replacing `np.maximum`; within one
+  canvas layer the browser flatten still caps. `DocumentHistory.
+  copy_selection_as_layer` ports Cmd-J/Cmd-X (feathered-edge partial alpha;
+  cut clears to transparent holes and drops recipe provenance; one undo
+  step; selection dropped). Also in this commit: `export_jpeg` flattens in
+  512-row chunks (peak was ~1.9 GB above the composite at 80 MP; output
+  bit-identical); deeply nested JSON in a manifest, recipe sidecar, recovery
+  entry or save-over target fails as a clean ValueError instead of a raw
+  RecursionError (worst case crashed `list_recoveries` at editor startup);
+  8-bit PNG delivery encodes via cv2 `IMWRITE_PNG_COMPRESSION 3` (12 MP
+  2.6 s to 1.3 s, pixels identical, ~0.2% larger files); local heal
+  auto-radius clamped to 8 with padding <= 64; `validate_adjustment`'s
+  error string derives from `KINDS`. Acceptance sections added in
+  COMPOSITOR_PYTHON_PORT.md; suites: `test_editor_texture_heal.py` (6),
+  `test_editor_color_range_selection.py` (13),
+  `test_editor_copy_selection.py` (11), layer-paint parity tests updated.
+
 Engine-only commits (`50a6521` Costume Shine, `191c1e2` Teeth Brightening)
 touch `retouch/` and the main GUI, not the editor package; see their own
 doc entries in README/RECIPE_GUIDE. The retained EXR worktree noted in this
