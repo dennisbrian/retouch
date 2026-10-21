@@ -413,7 +413,11 @@ def _run_async_batch_queue(
             try:
                 if item is _POISON:
                     break
-                res_path = worker_fn(item)
+                try:
+                    res_path = worker_fn(item)
+                except Exception:
+                    logger.exception("Batch worker crashed on %s", item)
+                    res_path = None
                 if res_path is not None:
                     with results_lock:
                         results.append(res_path)
@@ -422,8 +426,13 @@ def _run_async_batch_queue(
                     completed[0] += 1
                     done = completed[0]
                 if progress_callback:
-                    prog = 0.2 + (0.6 * done / total_files)
-                    progress_callback(prog, f"Processed {done}/{total_files} files...")
+                    try:
+                        prog = 0.2 + (0.6 * done / total_files)
+                        progress_callback(
+                            prog, f"Processed {done}/{total_files} files..."
+                        )
+                    except Exception:
+                        logger.exception("Batch progress callback failed")
                 work_q.task_done()
 
     prod_thread = threading.Thread(target=producer, daemon=True)
