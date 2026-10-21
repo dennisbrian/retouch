@@ -569,6 +569,11 @@ class ColorGrader:
             h_conf = settings["halation"]
             if isinstance(h_conf, (int, float)):
                 result = self._add_halation(result, intensity=float(h_conf))
+            elif h_conf.get("mode") == "point_light":
+                from .halation import apply_point_light_halation
+                result = apply_point_light_halation(
+                    result, float(h_conf.get("intensity", 0.3)), skin_mask=skin_mask
+                )
             else:
                 result = self._add_halation(
                     result, threshold=h_conf.get("threshold", 200),

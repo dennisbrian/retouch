@@ -662,6 +662,10 @@ Cosplay looks for specific scenes (all under "Scene / creative" in the app):
 | `cosplay_neon_night_v1` | Night shots under neon, LED signs or RGB stage light. Keeps the scene's colour, pulls skin back to its own tone, makes signs glow. |
 | `cosplay_dark_villain_v1` | Villain, gothic and dark-fantasy characters. Low-key and cool, keeps dark lipstick, contour and drawn marks, no added blush. |
 | `cosplay_feed_pop_v1` | Posts for Instagram, Reels and TikTok. Extra punch and subject sharpness that survive the app's compression, highlights held for white wigs. |
+| `cosplay_pastel_soft_v1` | Magical girl, idol, Vocaloid and lolita looks. Milky lifted blacks, softer greens and cyans, peach highlights and lavender shadows, a gentle glow. Skin keeps its colour. |
+| `cosplay_ink_wash_v1` | Hanfu, wuxia, xianxia and Genshin Liyue characters. Muted jade greens, a cool ink cast in the shadows, soft haze around the subject, reds kept as the accent, fine grain. |
+| `cosplay_anime_sky_v1` | Outdoor daytime shoots. Deeper blue skies and warm sunlit highlights in the anime-film style; faces keep their own colour. Blue and teal wigs get a little more colour too. |
+| `cosplay_night_film_v1` | Night photowalks. A CineStill 800T style film look: teal shadows, a red-orange glow around lamps, neon and street lights, grain. Faces, white face paint and white wigs never glow. |
 
 `python3 cli.py --list-recipes` shows every recipe in the cookbook, including
 older looks such as `cosplay`, `anime_v2` and the Fuji film sims. Those are not
