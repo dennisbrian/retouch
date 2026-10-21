@@ -20,6 +20,7 @@ import os
 import threading
 import onnxruntime as ort
 from .model_fetch import model_status
+from .skin_objects import exclude_foreign_objects
 from .utils import create_polygon_mask, feather_mask, get_points, normalize_mask
 
 logger = logging.getLogger(__name__)
@@ -935,6 +936,7 @@ class FaceParser:
         if regions.skin is None or regions.skin.max() < 0.01:
             regions = self._landmark_fallback(landmarks, img_bgr, person_mask, ied)
         else:
+            exclude_foreign_objects(regions, img_bgr, ied)
             self._add_landmark_subregions(regions, landmarks, h_img, w_img, ied, feather)
 
         return regions
@@ -1185,6 +1187,7 @@ class FaceParser:
                         landmarks_compat_list[idx_face], crop_list[idx_face], person_masks[idx_face], ieds[idx_face]
                     )
                 else:
+                    exclude_foreign_objects(regions, crop_list[idx_face], ieds[idx_face])
                     self._add_landmark_subregions(regions, landmarks_compat_list[idx_face], h_img, w_img, ieds[idx_face], feather)
 
                 results[idx_face] = regions
@@ -1417,6 +1420,7 @@ class FaceParser:
         if have_classes:
             self._refine_fallback_with_classes(regions, class_probs, img_bgr, feather, person_mask=pm)
 
+        exclude_foreign_objects(regions, img_bgr, ied)
         self._add_landmark_subregions(regions, landmarks, h_img, w_img, ied, feather)
         return regions
 

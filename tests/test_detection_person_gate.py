@@ -180,6 +180,14 @@ def _centre_skin(ch, cw):
     return m
 
 
+def _torso_only(bbox):
+    """Person mask with a body below ``bbox`` and nothing on the head."""
+    x, y, bw, bh = bbox
+    mask = np.zeros((H, W), np.float32)
+    mask[y + bh + 20:, max(0, x - bw // 2):x + bw + bw // 2] = 1.0
+    return mask
+
+
 class TestFaceSkinRescue:
     def _det(self, faces, mask, seg):
         det = _legacy_detector([_legacy_result(faces), _legacy_result([])], person_mask=mask)
@@ -211,7 +219,7 @@ class TestFaceSkinRescue:
     def test_rescue_threshold_is_the_boundary(self):
         """Face skin just under the threshold drops; at it, keeps."""
         det = FaceDetector.__new__(FaceDetector)
-        det.segment_person = MagicMock(return_value=np.zeros((H, W), np.float32))
+        det.segment_person = MagicMock(return_value=_torso_only((900, 500, 300, 300)))
         face = FaceData(landmarks=_LandmarkCompat([]), bbox=(900, 500, 300, 300), ied=60.0)
         for value, expect in ((0.449, []), (0.45, [face])):
             det._face_skin_coverage = MagicMock(return_value=value)
@@ -240,7 +248,8 @@ class TestFaceSkinRescue:
         monkeypatch.setattr(model_fetch, "get_model_path", boom)
         det = FaceDetector.__new__(FaceDetector)
         det._face_skin_segmenter, det._face_skin_segmenter_failed = None, False
-        det.segment_person = MagicMock(return_value=np.zeros((H, W), np.float32))
+        det.segment_person = MagicMock(
+            return_value=np.maximum(_torso_only((300, 500, 300, 300)), _torso_only((1200, 500, 300, 300))))
         faces = [FaceData(landmarks=_LandmarkCompat([]), bbox=(b, 500, 300, 300), ied=60.0)
                  for b in (300, 1200)]
         kept, _ = det._person_gate(_make_img(), faces)
@@ -250,7 +259,8 @@ class TestFaceSkinRescue:
     def test_dual_scale_addition_uses_the_rescue(self):
         """A 1024-pass-only face the mask lost is added when it is face skin."""
         mask = np.zeros((H, W), np.float32)
-        mask[400:1000, 300:800] = 1.0  # main subject at left only
+        mask[400:1000, 300:800] = 1.0  # main subject at left
+        mask[800:, 1300:1800] = 1.0  # second person: body found, head lost
         main, extra = _face_at(0.27, 0.5), _face_at(0.75, 0.5)
         det = _legacy_detector(
             [_legacy_result([main]), _legacy_result([main, extra])], person_mask=mask
@@ -259,3 +269,31 @@ class TestFaceSkinRescue:
             _skin_segmenter(_centre_skin), False
         )
         assert len(_detect(det, _make_img())) == 2
+
+    def test_face_skin_with_no_body_below_is_not_rescued(self):
+        """A poster or painting face on the wall: it reads as face skin, but
+        no person stands under it (golden case background_poster_face)."""
+        mask = np.zeros((H, W), np.float32)
+        mask[250:, 1300:1900] = 1.0  # the real subject, head and body
+        seg = _skin_segmenter(_centre_skin)
+        det = self._det([_face_at(0.78, 0.3), _face_at(0.2, 0.3)], mask, seg)
+        faces = _detect(det, _make_img())
+        assert len(faces) == 1
+        x, _, bw, _ = faces[0].bbox
+        assert abs((x + bw / 2) - W * 0.78) < 50
+        assert seg.segment.call_count == 0  # no model call needed
+
+    def test_close_up_cut_at_the_chin_keeps_the_rescue(self):
+        """No room below the face to look for a body: rescue as before."""
+        det = FaceDetector.__new__(FaceDetector)
+        det.segment_person = MagicMock(return_value=np.zeros((H, W), np.float32))
+        det._face_skin_coverage = MagicMock(return_value=0.9)
+        face = FaceData(landmarks=_LandmarkCompat([]), bbox=(900, H - 320, 300, 300), ied=60.0)
+        kept, _ = det._person_gate(_make_img(), [face])
+        assert kept == [face]
+
+    def test_torso_zone_reaches_shoulders_below_a_short_box(self):
+        mask = np.zeros((H, W), np.float32)
+        mask[900:, 600:1450] = 1.0
+        assert FaceDetector._torso_supports(mask, (389, 616, 327, 132))
+        assert not FaceDetector._torso_supports(np.zeros((H, W), np.float32), (389, 616, 327, 132))

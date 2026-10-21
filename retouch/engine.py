@@ -5781,10 +5781,15 @@ class RetouchEngine:
                 result = _film_engine.apply_from_context(result, ctx)
 
         if ctx.tonal_curve_strength > 0 and not film_tonemap_active:
-            # inherently-uint8: tonal.apply_hd_curve uses cv2.LUT which requires uint8 input
-            result_u8 = _to_uint8_if_float(result)
-            result_u8 = tonal.apply_hd_curve(result_u8, strength=ctx.tonal_curve_strength)
-            result = _to_float_if_needed(result_u8, is_float)
+            if is_float:
+                # Float path: no uint8 snapshot (it turned sub-level float
+                # differences into whole-step jumps on dark pixels).
+                curved = tonal.apply_hd_curve(
+                    np.clip(result * 255.0, 0.0, 255.0).astype(np.float32),
+                    strength=ctx.tonal_curve_strength)
+                result = np.clip(curved / 255.0, 0.0, 1.0).astype(np.float32)
+            else:
+                result = tonal.apply_hd_curve(result, strength=ctx.tonal_curve_strength)
 
         # Run core color grading (grade() now supports float natively)
         if ctx.color_grade_stack:
@@ -5867,7 +5872,15 @@ class RetouchEngine:
         # See retouch/skin_warmth.py.
         if getattr(ctx, "skin_warmth", 0) > 0 and acc_skin is not None:
             from .skin_warmth import skin_warmth
-            result = skin_warmth(result, acc_skin, ctx.skin_warmth, person_mask=person_mask)
+            # The colour key must not reach a wig that matches pale skin.
+            try:
+                src = result if result.dtype == np.uint8 else np.clip(result * 255.0, 0, 255).astype(np.uint8)
+                warm_exclude = self._parser.parse_hair_full_image(src)
+            except Exception as exc:  # model trouble: warm as before
+                logger.warning("skin_warmth: full-frame hair mask failed: %s", exc)
+                warm_exclude = None
+            result = skin_warmth(result, acc_skin, ctx.skin_warmth,
+                                 person_mask=person_mask, exclude_mask=warm_exclude)
 
         if ctx.highlight_rolloff_strength > 0:
             # F1/E2: apply_highlight_rolloff now dtype-aware (float32 [0,255] path)

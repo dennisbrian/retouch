@@ -623,9 +623,22 @@ class FaceDetector:
         img_bgr: np.ndarray,
         bbox: Tuple[int, int, int, int],
         coverage: float,
+        person_mask: Optional[np.ndarray] = None,
     ) -> bool:
         """True when a person-gate reject is a real face on a person the
-        full-frame mask lost (face-skin coverage of a face-scale crop)."""
+        full-frame mask lost (face-skin coverage of a face-scale crop).
+
+        With ``person_mask``, the person must also be there below the face:
+        the mask loses a wig-covered head but keeps the torso, while a
+        poster or a painting on the wall has no body under it (golden case
+        background_poster_face: face skin 1.000, torso coverage 0.000).
+        """
+        if person_mask is not None and not self._torso_supports(person_mask, bbox):
+            _logger.info(
+                "Person gate: no person below detection bbox=%s; not rescued",
+                tuple(int(v) for v in bbox),
+            )
+            return False
         skin = self._face_skin_coverage(img_bgr, bbox)
         if skin is None or skin < self._FACE_SKIN_RESCUE_COVERAGE:
             return False
@@ -636,6 +649,33 @@ class FaceDetector:
             self._FACE_SKIN_RESCUE_COVERAGE,
         )
         return True
+
+    # Torso zone for the rescue: as wide as two face boxes, from the chin
+    # down two face sizes (max of box width and height, so a short landmark
+    # box still reaches the shoulders). When most of that zone is off the frame (a
+    # close-up cut at the chin) there is nothing to check and the rescue
+    # behaves as before.
+    _TORSO_MIN_COVERAGE = 0.25
+    _TORSO_MIN_IN_FRAME = 0.25
+
+    @classmethod
+    def _torso_supports(cls, person_mask: np.ndarray, bbox: Tuple[int, int, int, int]) -> bool:
+        mask = np.asarray(person_mask, dtype=np.float32)
+        if mask.ndim != 2:
+            mask = np.squeeze(mask)
+        if mask.ndim != 2:
+            return True
+        mh, mw = mask.shape[:2]
+        x, y, bw, bh = (int(v) for v in bbox)
+        cx = x + bw / 2.0
+        zx1, zx2 = int(cx - bw), int(cx + bw)
+        zy1, zy2 = y + bh, int(y + bh + 2.0 * max(bw, bh))
+        full = max(1, (zx2 - zx1) * (zy2 - zy1))
+        x1, x2 = max(0, zx1), min(mw, zx2)
+        y1, y2 = max(0, zy1), min(mh, zy2)
+        if x2 <= x1 or y2 <= y1 or (x2 - x1) * (y2 - y1) < cls._TORSO_MIN_IN_FRAME * full:
+            return True
+        return float((mask[y1:y2, x1:x2] > 0.5).mean()) >= cls._TORSO_MIN_COVERAGE
 
     def _face_skin_coverage(
         self, img_bgr: np.ndarray, bbox: Tuple[int, int, int, int]
@@ -757,7 +797,7 @@ class FaceDetector:
             coverage = self._central_person_coverage(mask, face.bbox)
             if coverage is None or coverage >= self._MAIN_PERSON_GATE_COVERAGE:
                 kept.append(face)
-            elif self._face_skin_rescue(img_bgr, face.bbox, coverage):
+            elif self._face_skin_rescue(img_bgr, face.bbox, coverage, person_mask=mask):
                 kept.append(face)
             else:
                 _logger.info(
@@ -1051,7 +1091,7 @@ class FaceDetector:
             if coverage is None:
                 continue
             if coverage >= self._PERSON_GATE_COVERAGE or self._face_skin_rescue(
-                img_bgr, cand.bbox, coverage
+                img_bgr, cand.bbox, coverage, person_mask=mask
             ):
                 additions.append(cand)
         return additions

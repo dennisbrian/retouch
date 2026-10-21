@@ -126,3 +126,25 @@ class TestLiftGammaGain:
         img = np.full((32, 32, 3), 128, dtype=np.uint8)
         result = apply_lift_gamma_gain(img, lift=0.0, gamma=1.0, gain=1.0)
         assert np.array_equal(result, img)
+
+
+class TestApplyHDCurveFloat:
+    """Float path: the curve is interpolated, so sub-level differences in the
+    input stay sub-level (golden case portrait_studio / aaa_photoreal_v2: the
+    old uint8 snapshot turned them into 4-13 level speckle on a dark suit)."""
+
+    def test_float_path_is_smooth(self):
+        rng = np.random.default_rng(0)
+        grey = rng.uniform(10, 230, (64, 64, 1))
+        img = (grey + rng.uniform(-15, 15, (64, 64, 3))).astype(np.float32)  # in gamut
+        nudged = img + 0.3
+        a = apply_hd_curve(img, strength=0.25)
+        b = apply_hd_curve(nudged, strength=0.25)
+        assert a.dtype == np.float32
+        assert float(np.abs(b - a).max()) < 1.5
+
+    def test_float_path_matches_uint8_on_whole_levels(self):
+        img = np.random.default_rng(1).integers(0, 256, (32, 32, 3)).astype(np.uint8)
+        u8 = apply_hd_curve(img, strength=0.5).astype(np.float32)
+        f32 = apply_hd_curve(img.astype(np.float32), strength=0.5)
+        assert float(np.abs(u8 - f32).mean()) < 1.0

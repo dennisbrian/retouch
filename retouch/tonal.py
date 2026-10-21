@@ -190,11 +190,12 @@ def apply_hd_curve(
 
     if luma_only:
         lab_f32 = bgr_f32_to_lab_f32(img_bgr)
-        l_f32 = lab_f32[:, :, 0]
-        l_u8 = np.clip(l_f32, 0, 255).astype(np.uint8)
-        l_mapped_u8 = cv2.LUT(l_u8, lut)
-        delta = l_mapped_u8.astype(np.float32) - l_u8.astype(np.float32)
-        lab_f32[:, :, 0] = np.clip(l_f32 + delta, 0.0, 255.0)
+        # Interpolate the 256-entry curve so the float canvas keeps its
+        # precision (a uint8 snapshot turns sub-level differences into
+        # whole-step jumps).
+        l_f32 = np.clip(lab_f32[:, :, 0], 0.0, 255.0)
+        lab_f32[:, :, 0] = np.interp(l_f32, np.arange(256, dtype=np.float32),
+                                     lut.reshape(-1).astype(np.float32)).astype(np.float32)
         return lab_f32_to_bgr_f32(lab_f32)
 
     out = img_bgr.copy()

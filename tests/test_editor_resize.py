@@ -208,12 +208,14 @@ def test_fit_noop_and_missing_layer_preserve_redo():
     assert history.can_redo and history.revision == 0
 
 
-def test_fit_rejects_total_render_budget_without_changing_document():
-    # The document budget scales with RAM (min 200 MP, upstream formula), so
-    # push the layer sum past the 800 MP ceiling the formula can never exceed.
+def test_fit_rejects_total_render_budget_without_changing_document(monkeypatch):
+    # The document budget scales with RAM (200-800 MP), so pin it: the setup
+    # must be valid and only the fit may push the layer sum past it.
+    import retouch.editor.document as document_module
+    monkeypatch.setattr(document_module, '_DOCUMENT_BUDGET_PIXELS', 400_000_000)
     doc = Document(14000, 14000)
     layer = doc.add_image(np.full((1, 1, 4), 255, np.uint8), 'Fit me')
-    for _ in range(110):
+    for _ in range(40):
         other = doc.add_image(np.full((1, 1, 4), 255, np.uint8), 'Other')
         other.size = (3000, 2000)
     history = DocumentHistory(doc, saved=True)
