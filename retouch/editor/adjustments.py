@@ -54,7 +54,7 @@ def adjustment(kind='Exposure', exposure=0, offset=0, gamma=1,
                amount=25, size=1.5, roughness=50, seed=0,
                gaussian=False, monochromatic=False,
                radius=16, tonal_shadows=40, midtones=60, tonal_highlights=30,
-               bloom_radius=24,
+               bloom_radius=24, bloom_threshold=None, bloom_softness=None,
                lineSpacing=4, thickness=70, glow=0, dots=0, wobble=0, displace=0,
                smoothness=50, threshold=0, split=0, density=0,
                blackLevel=0, colors='Black & White',
@@ -110,6 +110,10 @@ def adjustment(kind='Exposure', exposure=0, offset=0, gamma=1,
                                        highlights=tonal_highlights)
     if kind == 'Bloom':
         record['bloomSettings'] = dict(amount=40 if amount == 25 else amount, radius=bloom_radius)
+        if bloom_threshold is not None:
+            record['bloomSettings']['threshold'] = bloom_threshold
+        if bloom_softness is not None:
+            record['bloomSettings']['softness'] = bloom_softness
     if kind == 'Scanlines':
         record['scanlinesSettings'] = dict(
             lineSpacing=lineSpacing, thickness=thickness, glow=glow, dots=dots,
@@ -240,9 +244,11 @@ def validate_adjustment(record):
         raise ValueError('Invalid tonal contrast settings')
     bloom = record.get('bloomSettings')
     if bloom is not None and (not isinstance(bloom, dict)
-            or set(bloom) != {'amount', 'radius'}
+            or not {'amount', 'radius'} <= set(bloom) <= {'amount', 'radius', 'threshold', 'softness'}
             or not _number(bloom['amount'], 0, 100)
-            or not _number(bloom['radius'], 1, 150)):
+            or not _number(bloom['radius'], 1, 150)
+            or ('threshold' in bloom and not _number(bloom['threshold'], 0, 255))
+            or ('softness' in bloom and not _number(bloom['softness'], 0, 255))):
         raise ValueError('Invalid bloom settings')
     scan = record.get('scanlinesSettings')
     if scan is not None and (not isinstance(scan, dict)
@@ -873,13 +879,32 @@ def _tonal_smooth(low, high, value):
 
 
 def _grade_bloom(rgb, settings):
-    """CIBloom: blur of the bright pass, screen-blended at intensity/50."""
+    """CIBloom: blur of the bright pass, screen-blended at intensity/50.
+
+    ``threshold`` (0-255 GUI scale, or 0-1) selects the bright-pass cut,
+    defaulting to the historic 0.5; ``softness`` > 0 widens the cut into a
+    smoothstep knee centred on the threshold (0-255 or 0-1 scale, default 0
+    keeps the hard knee bit-identical).
+    """
     amount = settings.get('amount', 40)
     radius = settings.get('radius', 24)
     if amount <= 0:
         return rgb
     intensity = amount / 50.0
-    bright = np.clip(rgb - 0.5, 0.0, None)
+    threshold = settings.get('threshold', 0.5)
+    if threshold > 1.0:
+        threshold /= 255.0
+    softness = settings.get('softness', 0.0)
+    if softness > 1.0:
+        softness /= 255.0
+    if softness > 0:
+        # Smoothstep around the threshold: the pass fades in over
+        # [thr - softness, thr + softness] instead of a hard cut.
+        knee = _tonal_smooth(max(threshold - softness, 0.0),
+                             min(threshold + softness, 1.0), rgb)
+        bright = np.clip(rgb - threshold, 0.0, None) * knee
+    else:
+        bright = np.clip(rgb - threshold, 0.0, None)
     blurred = _gaussian_blur_3(bright, float(radius)) if radius >= 1 else bright
     screen = 1.0 - (1.0 - rgb) * (1.0 - np.clip(blurred * intensity, 0.0, 1.0))
     return np.clip(screen, 0.0, 1.0)

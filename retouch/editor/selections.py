@@ -126,6 +126,9 @@ def color_range_selection(rgba, include, exclude, fuzziness):
 
 
 def selection(width, height, kind, x=0, y=0, box_width=1, box_height=1, points='[]', feather=0):
+    for v in (width, height):
+        if isinstance(v, bool) or not isinstance(v, int) or v <= 0:
+            raise ValueError('Selection dimensions must be positive integers')
     if width * height > MAX_SURFACE_PIXELS:
         raise ValueError('Selection exceeds the canvas budget')
     if any(not isinstance(v, (int, float)) or isinstance(v, bool)
@@ -197,7 +200,8 @@ def _check_amount(op_name, amount):
 def expand(mask, amount):
     """Grow a selection by amount pixels (round-kernel dilate)."""
     _check_amount('Expand', amount)
-    return _morph(mask, int(amount), math.ceil(int(amount) / 16), cv2.dilate)
+    amount = round(amount)
+    return _morph(mask, amount, math.ceil(amount / 16), cv2.dilate)
 
 
 def contract(mask, amount):
@@ -207,7 +211,8 @@ def contract(mask, amount):
     erode rather than treating off-canvas as selected.
     """
     _check_amount('Contract', amount)
-    return _morph(mask, int(amount), math.ceil(int(amount) / 16), cv2.erode)
+    amount = round(amount)
+    return _morph(mask, amount, math.ceil(amount / 16), cv2.erode)
 
 
 def move(mask, dx, dy):
@@ -225,7 +230,7 @@ def move(mask, dx, dy):
 def border(mask, amount):
     """Ring of pixels within amount of the selection outline."""
     _check_amount('Border', amount)
-    radius = int(amount)
+    radius = round(amount)
     grown = _morph(mask, radius, math.ceil(radius / 16), cv2.dilate)
     shrunk = _morph(mask, radius, math.ceil(radius / 16), cv2.erode)
     return cv2.subtract(grown, shrunk)
