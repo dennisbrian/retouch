@@ -500,9 +500,14 @@ class FaceDetector:
                         break
 
         # 2. Fallback: MediaPipe on full image
-        # Run if RetinaFace found nothing, OR if some RetinaFace boxes
-        # failed crop-landmarking (partial coverage).
-        retinaface_lost_some = retinaface_box_count > 0 and len(faces) < retinaface_box_count
+        # Run if RetinaFace found nothing, OR if a MAJORITY of RetinaFace
+        # boxes failed crop-landmarking (genuine coverage gap). Boxes that
+        # fail all pad retries are disproportionately RetinaFace false
+        # positives (wall/bokeh), so a single lost box is not worth the
+        # ~60-100ms full-image fallback at 24MP. Single-box loss still
+        # falls back via `not faces`.
+        lost = retinaface_box_count - len(faces)
+        retinaface_lost_some = retinaface_box_count > 0 and lost * 2 >= retinaface_box_count
         if not faces or retinaface_lost_some:
             # OPTIMIZATION: Run detection on downscaled copy to speed up inference on 4K/high-res frames
             max_dim = 1024

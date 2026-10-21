@@ -664,13 +664,15 @@ def _module_render_artifact(
     output_path: Path,
     row: Mapping[str, Any],
     recipe: str,
+    observed: Optional[Mapping[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Use the canonical v2 artifact builder when it is available."""
     module = _optional_module("retouch.certification_evidence_v2")
     builder = getattr(module, "build_render_artifact_evidence", None) if module else None
     if not callable(builder):
         return None
-    observed = _decode_image(output_path) if output_path.is_file() else {"decoded": False}
+    if observed is None:
+        observed = _decode_image(output_path) if output_path.is_file() else {"decoded": False}
     dimensions = [observed.get("width"), observed.get("height")]
     supplied = row.get("render_evidence")
     if isinstance(supplied, Mapping):
@@ -729,6 +731,7 @@ def _render_evidence(
     outputs = case_manifest.get("outputs")
     reasons: List[str] = []
     rows: List[Dict[str, Any]] = []
+    source_sha256 = _sha256_file(source_path)
     if not isinstance(outputs, list) or len(outputs) != len(expected_recipes):
         reasons.append("output_count_mismatch")
         outputs = outputs if isinstance(outputs, list) else []
@@ -745,7 +748,7 @@ def _render_evidence(
             "status": row.get("status"),
             "output_sha256": _sha256_file(output_path) if _path_within(output_path, case_output) else None,
             "output_bytes": output_path.stat().st_size if _path_within(output_path, case_output) and output_path.is_file() else 0,
-            "source_sha256": _sha256_file(source_path),
+            "source_sha256": source_sha256,
             "row": _json_safe(row),
         }
         if recipe not in expected_recipes:
@@ -764,7 +767,7 @@ def _render_evidence(
             reasons.append(f"output_hash_mismatch:{recipe}")
         module_artifact = None
         if output_path.is_file() and _path_within(output_path, case_output):
-            module_artifact = _module_render_artifact(output_path, row, recipe)
+            module_artifact = _module_render_artifact(output_path, row, recipe, artifact["decode"])
             if module_artifact is not None:
                 artifact["canonical_v2"] = module_artifact
                 artifact["render_completed"] = bool(module_artifact.get("render_completed"))
@@ -801,7 +804,7 @@ def _render_evidence(
     return {
         "passed": not reasons,
         "reasons": reasons,
-        "source_sha256": _sha256_file(source_path),
+        "source_sha256": source_sha256,
         "outputs": rows,
         "contact_sheet": contact,
     }

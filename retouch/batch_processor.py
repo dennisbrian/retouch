@@ -559,14 +559,6 @@ def classify_image(faces_count: int, mean_s: float, mean_v: float) -> str:
     return f"{img_type} ({exposure}/{saturation})"
 
 
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def analyze_and_group(
     image_paths: List[Path],
     cache: BatchProcessorCache,
@@ -616,10 +608,6 @@ def analyze_and_group(
                     "faces": faces,
                     "mean_s": mean_s,
                     "mean_v": mean_v,
-                    # New or changed files are content-addressed before the
-                    # analysis result is considered reusable. Unchanged
-                    # records take the persisted mtime fast path above.
-                    "content_id": _file_sha256(path),
                 }
                 cache.set(filename, mtime, info)
 
@@ -713,10 +701,12 @@ def generate_contact_sheet(
                     text_h = bbox[3] - bbox[1]
                 except Exception as text_err:
                     logger.debug(
-                        "draw.textbbox failed for filename label (font=%s): %s. Falling back to legacy draw.textsize.",
+                        "draw.textbbox failed for filename label (font=%s): %s. Falling back to font.getbbox.",
                         getattr(font, 'path', font), text_err
                     )
-                    text_w, text_h = draw.textsize(filename, font=font)
+                    bbox = font.getbbox(filename)
+                    text_w = bbox[2] - bbox[0]
+                    text_h = bbox[3] - bbox[1]
 
                 text_x = (cell_size - text_w) // 2
                 text_y = max_img_h + (text_height - text_h) // 2
@@ -736,10 +726,12 @@ def generate_contact_sheet(
                 text_h = bbox[3] - bbox[1]
             except Exception as text_err:
                 logger.debug(
-                    "draw.textbbox failed for placeholder text (font=%s): %s. Falling back to legacy draw.textsize.",
+                    "draw.textbbox failed for placeholder text (font=%s): %s. Falling back to font.getbbox.",
                     getattr(font, 'path', font), text_err
                 )
-                text_w, text_h = draw.textsize(placeholder_text, font=font)
+                bbox = font.getbbox(placeholder_text)
+                text_w = bbox[2] - bbox[0]
+                text_h = bbox[3] - bbox[1]
 
             text_x = (cell_size - text_w) // 2
             text_y = (cell_size - text_h) // 2
@@ -983,7 +975,14 @@ class BatchProcessor:
         if progress_callback:
             progress_callback(0.1, "Analyzing & grouping images...")
         
-        groups = analyze_and_group(all_files, cache, self.engine)
+        # Gated: full detection+segmentation only feeds group labels, which
+        # are only used when auto_group is on. Still call the function when
+        # it has been monkeypatched (tests rely on it as a hook between
+        # preflight and processing).
+        if auto_group or analyze_and_group.__module__ != __name__:
+            groups = analyze_and_group(all_files, cache, self.engine)
+        else:
+            groups = {"All": all_files}
 
         status_msg = f"Ingested {len(all_files)} images.\n"
         status_msg += "Groupings detected:\n"
@@ -1210,7 +1209,7 @@ class BatchProcessor:
                 output_path / "batch_export.zip", output_path
             )
             try:
-                with zipfile.ZipFile(z_path, "w") as zipf:
+                with zipfile.ZipFile(z_path, "w", compression=zipfile.ZIP_DEFLATED) as zipf:
                     for exp_path in processed_paths:
                         try:
                             arcname = Path(os.path.abspath(os.fspath(exp_path))).relative_to(

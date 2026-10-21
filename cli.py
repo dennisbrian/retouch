@@ -707,6 +707,22 @@ def _process_single(args):
     return Path(name).name, status, info
 
 
+def _warn_16bit_upcast(result, bit_depth):
+    """Visible warning when --bit-depth 16 writes an upcast from 8-bit processing.
+
+    The engine quantizes to uint8 (engine.py) and io stretches x257 on export,
+    so an 8-bit source yields 256 unique levels in a uint16 file.
+    Mirrors the io.write_image_16bit warning wording.
+    """
+    if bit_depth != 16 or result.dtype != np.uint8:
+        return
+    tqdm.write(
+        "  ⚠ --bit-depth 16 output is an upcast from 8-bit processing "
+        "(256 unique levels; x257 stretch adds no real precision); "
+        "true 16-bit requires RAW/16-bit sources"
+    )
+
+
 def _process_single_with_evidence(args, info=None, sink=None, credentials=None):
     if info is None:
         info = {}
