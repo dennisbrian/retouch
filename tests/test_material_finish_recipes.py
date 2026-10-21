@@ -51,7 +51,9 @@ def test_vascular_refine_recipe_is_low_strength_and_texture_preserving() -> None
     resolved = resolve_recipe("vascular_refine_v1")
     assert RECIPES["vascular_refine_v1"]["extends"] == "natural_polish_v1"
     assert resolved["skin"]["hemoglobin_smooth"] == 0.18
-    assert resolved["skin"]["vein_attenuate"] == 0.12
+    # Off since the 2026-10-21 Vein Softening rebuild: the old 0.12 drove a
+    # whole-skin tint, so keeping the recipe's look means leaving it off.
+    assert resolved["skin"]["vein_attenuate"] == 0.0
     assert resolved["texture"]["opacity"] == 1.0
 
 

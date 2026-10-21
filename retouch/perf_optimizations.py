@@ -469,6 +469,23 @@ def _process_face_core(
         )
         logger.debug("spot_heal: %s", _spot_diags)
 
+    # ---- Vein Softening (opt-in, before any smoothing) ----
+    # Calms faint blue-green line-shaped colour on face skin (temples,
+    # cheeks, eyelids); marks, makeup lines and paint are left alone. Runs
+    # on the pristine crop: smoothing and whitening blur a vein into the
+    # skin's own variation. Body skin is done in the body stage. See
+    # retouch/vein_soften.py.
+    if ctx.vein_attenuate > 0:
+        from .vein_soften import soften_veins
+        _features = [_norm_mask(m) for m in (
+            regions.left_eye, regions.right_eye, regions.left_eyebrow,
+            regions.right_eyebrow, regions.lips, regions.mouth_interior)
+            if m is not None]
+        _exclude = np.clip(np.max(np.stack(_features), axis=0), 0, 1) if _features else None
+        canvas = soften_veins(canvas, skin_n_marks_protected, ctx.vein_attenuate / 100.0,
+                              face_width=face_width, value_scale=255.0,
+                              exclude_mask=_exclude)
+
     stray_hair_preview = None
     # ---- Stray hair cleanup (opt-in, before any smoothing) ----
     # Heals loose wig fibres and flyaways lying across face and neck skin
@@ -983,10 +1000,6 @@ def _process_face_core(
     # ---- R10: Hemoglobin-guided smoothing (edge-preserving freckle-aware smoothing) ----
     if ctx.hemoglobin_smooth > 0:
         canvas = skin.apply_hemoglobin_guided_smooth(canvas, skin_n_marks_protected, ctx.hemoglobin_smooth)
-
-    # ---- R10: Vein attenuation (reduce blue-green veins) ----
-    if ctx.vein_attenuate > 0:
-        canvas = skin.apply_vein_attenuate(canvas, skin_n_marks_protected, ctx.vein_attenuate)
 
     # ---- Skin equalization ----
     if ctx.equalize > 0:

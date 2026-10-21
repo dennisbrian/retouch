@@ -906,14 +906,17 @@ _SKIN_PARAMS = [
         max_val=1.0,
     ),
     ParamSpec(
+        # Vein Softening (retouch/vein_soften.py): calms visible blue-green
+        # veins on face and body skin. 0-100 since the 2026-10-21 rebuild
+        # (the old 0-1 op tinted all skin instead of finding veins).
         name="vein_attenuate",
         cli_flag="vein-attenuate",
-        cli_type=float,
-        default=0.0,
+        cli_type=int,
+        default=0,
         recipe_key="skin.vein_attenuate",
-        conversion="recipe_direct",
-        min_val=0.0,
-        max_val=1.0,
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
     ),
     ParamSpec(
         name="skin_flatten",

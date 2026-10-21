@@ -3766,7 +3766,10 @@ RECIPES["vascular_refine_v1"] = {
     "extends": "natural_polish_v1",
     "skin": {
         "hemoglobin_smooth": 0.18,
-        "vein_attenuate": 0.12,
+        # 0.12 drove the old whole-skin vein op (it tinted all skin rather
+        # than finding veins); the rebuilt Vein Softening would change how
+        # this recipe looks, so it stays off here.
+        "vein_attenuate": 0.0,
     },
     "texture": {"opacity": 1.0},
 }
