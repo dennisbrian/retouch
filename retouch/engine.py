@@ -1307,6 +1307,76 @@ def _worker_payload_ctx(c: "ProcessingContext") -> "ProcessingContext":
     return out
 
 
+def _f01_to_f255(arr: np.ndarray) -> np.ndarray:
+    """float32 [0,1] BGR -> float32 [0,255] BGR (scale-around-the-call).
+
+    Shared by _no_face_fallback and _stage_grade for every op that runs
+    through bgr_f32_to_lab_f32 / bgr_f32_to_lch_f32.  The temp product is
+    purely local (a fresh array from ``arr * 255.0``), so the multiply and
+    the clip write in place — one live buffer instead of three.
+    """
+    if arr.dtype == np.float32:
+        tmp = arr * np.float32(255.0)
+        np.clip(tmp, 0.0, 255.0, out=tmp)
+        return tmp
+    return np.clip(arr * 255.0, 0.0, 255.0).astype(np.float32)
+
+
+def _f255_to_f01(arr: np.ndarray) -> np.ndarray:
+    """float32 [0,255] BGR -> float32 [0,1] BGR (scale-around-the-call).
+
+    The input array is always a callee-returned buffer with no other
+    references in the caller (out-params of the grading ops), so it is
+    divided and clipped in place.  Only reachable from the float paths of
+    _no_face_fallback / _stage_grade.
+    """
+    arr /= np.float32(255.0)
+    np.clip(arr, 0.0, 1.0, out=arr)
+    return arr
+
+
+def _wb_hsl_film_f01_block(
+    grader: Any,
+    result: np.ndarray,
+    ctx: "ProcessingContext",
+) -> np.ndarray:
+    """Shared float32 [0,1] grading block: white balance -> master HSL ->
+    C3 film density.
+
+    Extracted from the duplicated chains in _no_face_fallback (engine.py
+    ~3466-3498) and _stage_grade (~5680-5781).  Both sites run the same
+    ops in the same order with the same scale-around-the-call conversions
+    (white_balance_lch, adjust_hsl_lch, FilmDensityEngine.apply_from_context
+    all expect float BGR in [0,255]); the helpers above fold each site's
+    three temporaries into one live buffer per boundary.
+    """
+    if ctx.white_balance_kelvin != _DEFAULTS["white_balance_kelvin"] or ctx.white_balance_tint != _DEFAULTS["white_balance_tint"]:
+        wb_out = grader.white_balance_lch(
+            _f01_to_f255(result),
+            temperature=ctx.white_balance_kelvin,
+            tint=ctx.white_balance_tint,
+        )
+        result = _f255_to_f01(wb_out)
+
+    if ctx.hsl_hue_global != 0 or ctx.hsl_sat_global != 0 or ctx.hsl_lum_global != 0:
+        hsl_out = grader.adjust_hsl_lch(
+            _f01_to_f255(result),
+            hue_shift=ctx.hsl_hue_global * 0.6,
+            sat_scale=1.0 + ctx.hsl_sat_global / 100.0,
+            lum_shift=ctx.hsl_lum_global * 0.5,
+        )
+        result = _f255_to_f01(hsl_out)
+
+    if ctx.film_enable:
+        from .film import FilmDensityEngine
+        film_out = FilmDensityEngine().apply_from_context(
+            _f01_to_f255(result), ctx
+        )
+        result = _f255_to_f01(film_out)
+
+    return result
+
+
 class RetouchEngine:
     """Professional-grade automated face retouching engine.
 
@@ -3463,39 +3533,9 @@ class RetouchEngine:
             result_u8 = tonal.apply_hd_curve(result_u8, strength=ctx.tonal_curve_strength)
             result = to_float(result_u8)
 
-        # --- White balance (linear CAT16, source white -> D65) ---
-        if ctx.white_balance_kelvin != _DEFAULTS["white_balance_kelvin"] or ctx.white_balance_tint != _DEFAULTS["white_balance_tint"]:
-            # CAT16 is dtype-aware and stays float-native.  The grade API's
-            # historic float contract is BGR [0,255], while this path is [0,1].
-            wb_in = np.clip(result * 255.0, 0.0, 255.0).astype(np.float32)
-            wb_out = self._grader.white_balance_lch(
-                wb_in,
-                temperature=ctx.white_balance_kelvin,
-                tint=ctx.white_balance_tint,
-            )
-            result = np.clip(wb_out / 255.0, 0.0, 1.0).astype(np.float32)
-
-        # --- Master HSL (Phase 1.d) — global LCH adjustments ---
-        if ctx.hsl_hue_global != 0 or ctx.hsl_sat_global != 0 or ctx.hsl_lum_global != 0:
-            # F1/E2: adjust_hsl_lch is dtype-aware -- same float-native
-            # scale-around-the-call pattern as white balance above.
-            hsl_in = np.clip(result * 255.0, 0.0, 255.0).astype(np.float32)
-            hsl_out = self._grader.adjust_hsl_lch(
-                hsl_in,
-                hue_shift=ctx.hsl_hue_global * 0.6,
-                sat_scale=1.0 + ctx.hsl_sat_global / 100.0,
-                lum_shift=ctx.hsl_lum_global * 0.5,
-            )
-            result = np.clip(hsl_out / 255.0, 0.0, 1.0).astype(np.float32)
-
-        # --- C3: Parametric film-density engine (no-face path) ---
-        if ctx.film_enable:
-            from .film import FilmDensityEngine
-            _film_engine = FilmDensityEngine()
-            # film expects float32 [0,255] (or uint8); result here is [0,1]
-            film_in = np.clip(result * 255.0, 0.0, 255.0).astype(np.float32)
-            film_out = _film_engine.apply_from_context(film_in, ctx)
-            result = np.clip(film_out / 255.0, 0.0, 1.0).astype(np.float32)
+        # --- White balance / Master HSL / C3 film density (shared float
+        # [0,1] grading block — see _wb_hsl_film_f01_block) ---
+        result = _wb_hsl_film_f01_block(self._grader, result, ctx)
 
         post_effects = self._assemble_post_effects(ctx)
         skip_glows = ctx.bloom > 0.0
@@ -5682,11 +5722,11 @@ class RetouchEngine:
             # CAT16 accepts float BGR [0,255]; keep this [0,1] float path free
             # of uint8 compatibility conversions.
             if is_float:
-                wb_in = np.clip(result * 255.0, 0.0, 255.0).astype(np.float32)
                 wb_out = self._grader.white_balance_lch(
-                    wb_in, temperature=ctx.white_balance_kelvin, tint=ctx.white_balance_tint,
+                    _f01_to_f255(result),
+                    temperature=ctx.white_balance_kelvin, tint=ctx.white_balance_tint,
                 )
-                result = np.clip(wb_out / 255.0, 0.0, 1.0).astype(np.float32)
+                result = _f255_to_f01(wb_out)
             else:
                 result = self._grader.white_balance_lch(
                     result,
@@ -5707,15 +5747,14 @@ class RetouchEngine:
             if acc_skin is not None and acc_skin.shape[:2] == result.shape[:2]:
                 skin_m = np.clip(acc_skin.astype(np.float32), 0.0, 1.0)
                 if is_float:
-                    mi_in = np.clip(result * 255.0, 0.0, 255.0).astype(np.float32)
                     mi_out = adapt_multi_illuminant_skin(
-                        mi_in,
+                        _f01_to_f255(result),
                         skin_mask=skin_m,
                         key_wp=tuple(source_white_xyz(float(mi_key))),
                         fill_wp=tuple(source_white_xyz(float(mi_fill))),
                         mix_factor=float(np.clip(mi_mix / 100.0, 0.0, 1.0)),
                     )
-                    result = np.clip(mi_out / 255.0, 0.0, 1.0).astype(np.float32)
+                    result = _f255_to_f01(mi_out)
                 else:
                     result = adapt_multi_illuminant_skin(
                         result,
@@ -5731,14 +5770,13 @@ class RetouchEngine:
             # BGR in [0,255]; `result` is [0,1] here, so scale around the call
             # (otherwise the LCh L collapses and the image crushes to black).
             if is_float:
-                hsl_in = np.clip(result * 255.0, 0.0, 255.0).astype(np.float32)
                 hsl_out = self._grader.adjust_hsl_lch(
-                    hsl_in,
+                    _f01_to_f255(result),
                     hue_shift=ctx.hsl_hue_global * 0.6,
                     sat_scale=1.0 + ctx.hsl_sat_global / 100.0,
                     lum_shift=ctx.hsl_lum_global * 0.5,
                 )
-                result = np.clip(hsl_out / 255.0, 0.0, 1.0).astype(np.float32)
+                result = _f255_to_f01(hsl_out)
             else:
                 result = self._grader.adjust_hsl_lch(
                     result,
@@ -5773,10 +5811,10 @@ class RetouchEngine:
                 film_tonemap_active = True
             _film_engine = FilmDensityEngine()
             if is_float:
-                # film expects float32 [0,255] (or uint8); result here is [0,1]
-                film_in = np.clip(result * 255.0, 0.0, 255.0).astype(np.float32)
-                film_out = _film_engine.apply_from_context(film_in, ctx)
-                result = np.clip(film_out / 255.0, 0.0, 1.0).astype(np.float32)
+                film_out = _film_engine.apply_from_context(
+                    _f01_to_f255(result), ctx
+                )
+                result = _f255_to_f01(film_out)
             else:
                 result = _film_engine.apply_from_context(result, ctx)
 
@@ -5785,9 +5823,9 @@ class RetouchEngine:
                 # Float path: no uint8 snapshot (it turned sub-level float
                 # differences into whole-step jumps on dark pixels).
                 curved = tonal.apply_hd_curve(
-                    np.clip(result * 255.0, 0.0, 255.0).astype(np.float32),
+                    _f01_to_f255(result),
                     strength=ctx.tonal_curve_strength)
-                result = np.clip(curved / 255.0, 0.0, 1.0).astype(np.float32)
+                result = _f255_to_f01(curved)
             else:
                 result = tonal.apply_hd_curve(result, strength=ctx.tonal_curve_strength)
 
@@ -6000,13 +6038,12 @@ class RetouchEngine:
             # float BGR in [0,255]; `result` is [0,1] here, so scale around the
             # call (otherwise the LCh L collapses and it crushes to black).
             if is_float:
-                nst_in = np.clip(result * 255.0, 0.0, 255.0).astype(np.float32)
                 nst_out = self._grader.negative_split_tone(
-                    nst_in,
+                    _f01_to_f255(result),
                     shadow_desat=ctx.negative_split_tone_shadow / 100.0,
                     highlight_desat=ctx.negative_split_tone_highlight / 100.0,
                 )
-                result = np.clip(nst_out / 255.0, 0.0, 1.0).astype(np.float32)
+                result = _f255_to_f01(nst_out)
             else:
                 result = self._grader.negative_split_tone(
                     result,
