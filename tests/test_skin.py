@@ -1457,3 +1457,34 @@ class TestPerRegionWrinkle:
             out = proc.wrinkle_soften(img, regions, 0, region_strengths=rs)
             assert out.shape == img.shape
             assert out.dtype == np.uint8
+
+
+def test_equalize_keeps_broad_shading(monkeypatch):
+    """CLAHE used to lift the shaded side of the face toward the lit side
+    (finished cosplay photos: darkest 5% of face skin +3 L, contour
+    flattened). The broad part of its change is now given back."""
+    import cv2
+    import numpy as np
+    import retouch.skin as skin_mod
+    from retouch.skin import SkinProcessor
+
+    h = w = 256
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    shade = 0.55 + 0.45 * (xx / w)  # broad side lighting
+    base = np.array([120.0, 150.0, 200.0], np.float32)
+    img = base[None, None, :] * shade[..., None]
+    blot = np.exp(-((yy - 128) ** 2 + (xx - 150) ** 2) / (2 * 5.0 ** 2))
+    img = np.clip(img * (1.0 - 0.18 * blot[..., None]), 0, 255).astype(np.float32)
+    mask = np.ones((h, w), np.float32)
+    L = lambda x: cv2.cvtColor(np.clip(x, 0, 255).astype(np.uint8), cv2.COLOR_BGR2Lab)[..., 0].astype(float)
+    grad = lambda x: x[:, 200:230].mean() - x[:, 20:50].mean()
+    spot = lambda x: x[124:133, 146:155].mean() - 0.5 * (x[124:133, 130:139].mean() + x[124:133, 161:170].mean())
+
+    new = L(SkinProcessor().equalize(img, mask, 60))
+    # A huge give-back scale is a constant shift, i.e. the old behaviour.
+    monkeypatch.setattr(skin_mod, "_EQ_SHADING_SIGMA", 10.0)
+    old = L(SkinProcessor().equalize(img, mask, 60))
+    gi = grad(L(img))
+    assert abs(grad(new) - gi) < 0.5 * abs(grad(old) - gi)
+    # Small blotches are not made any deeper than before.
+    assert spot(new) >= spot(old) - 0.5

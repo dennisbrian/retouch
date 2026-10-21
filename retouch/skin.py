@@ -141,6 +141,11 @@ def _bgr_from_lab(lab: np.ndarray, is_float: bool) -> np.ndarray:
     return cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
 
 
+
+# equalize(): scale of the CLAHE change given back as broad shading, as a
+# fraction of sqrt(skin pixels) (about a tenth of the face width).
+_EQ_SHADING_SIGMA = 0.05
+
 class SkinProcessor:
     """Skin smoothing, whitening, and tone equalization."""
 
@@ -516,6 +521,21 @@ class SkinProcessor:
         protection = self._get_highlight_protection(lab)
         l_clahe_f = l_clahe.astype(np.float32)
         l_final_f = l_clahe_f * protection + lab[:, :, 0] * (1.0 - protection)
+
+        # Keep the face's broad shading (2026-10-21). CLAHE equalizes each
+        # 1/8 tile's histogram, which also lifts the cheek hollow, the side of
+        # the nose and the jaw shadow toward the lit side: on finished cosplay
+        # photos the darkest 5% of face skin rose ~3 L and the contour went
+        # flat. Only the blotch-scale part of its change is wanted, so the
+        # broad part (masked blur at ~1/10 of the skin's size) is given back.
+        if np.any(skin_indices):
+            skin_w = skin_indices.astype(np.float32)
+            sigma = max(2.0, _EQ_SHADING_SIGMA * math.sqrt(float(skin_indices.sum())))
+            dL = l_final_f - l_orig
+            num = cv2.GaussianBlur(dL * skin_w, (0, 0), sigma)
+            den = cv2.GaussianBlur(skin_w, (0, 0), sigma)
+            dL_broad = np.where(den > 1e-3, num / np.maximum(den, 1e-3), 0.0).astype(np.float32)
+            l_final_f = l_final_f - dL_broad
 
         # Preserve mean skin luminance: CLAHE redistributes a bright, low-contrast
         # histogram downward, shifting exposure. equalize should even out tone,
