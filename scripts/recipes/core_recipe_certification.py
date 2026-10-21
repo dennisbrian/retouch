@@ -23,6 +23,7 @@ import json
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
@@ -1321,6 +1322,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Generate a diagnostic matrix without the required six-case corpus gate",
     )
     parser.add_argument("--stop-on-fail", action="store_true")
+    parser.add_argument(
+        "--serial",
+        action="store_true",
+        help="Run cases sequentially (debugging; parallel renders are the default)",
+    )
     return parser
 
 
@@ -1395,8 +1401,8 @@ def run(args: argparse.Namespace) -> int:
     output = Path(args.output).expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
     recipes = ",".join(CORE_RECIPE_NAMES)
-    rows: List[Dict[str, object]] = []
-    for case_name, image_path in cases:
+
+    def _run_case(case_name: str, image_path: Path) -> Tuple[Dict[str, object], int]:
         case_output = output / case_name
         command = [
             sys.executable,
@@ -1494,9 +1500,24 @@ def run(args: argparse.Namespace) -> int:
                     human_review="pending",
                 ),
             }
-        rows.append(row)
-        if completed.returncode != 0 and args.stop_on_fail:
-            break
+        return row, completed.returncode
+
+    serial = bool(getattr(args, "serial", False)) or bool(args.stop_on_fail)
+    worker_count = min(len(cases), max(1, min(os.cpu_count() or 1, 8)))
+    collected: List[Optional[Tuple[Dict[str, object], int]]] = [None] * len(cases)
+    if serial or worker_count <= 1:
+        for index, (case_name, image_path) in enumerate(cases):
+            collected[index] = _run_case(case_name, image_path)
+            if collected[index][1] != 0 and args.stop_on_fail:
+                break
+    else:
+        # Each case renders inside its own recipe_sweep.py child process,
+        # so threads here only wait on subprocess I/O; rows keep case order.
+        with ThreadPoolExecutor(max_workers=worker_count) as pool:
+            futures = [pool.submit(_run_case, name, path) for name, path in cases]
+            for index, future in enumerate(futures):
+                collected[index] = future.result()
+    rows: List[Dict[str, object]] = [item[0] for item in collected if item is not None]
 
     matrix = {
         "version": V2_SCHEMA_VERSION if v2 else 1,
