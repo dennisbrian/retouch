@@ -214,6 +214,43 @@ def test_facepaint_crack_repair():
 
 # --- R11 paint_coverage_even -----------------------------------------------
 
+def test_facepaint_crack_relative_gate_dark_and_light_paint():
+    # Same RELATIVE contrast crack on deep vs light paint: both detected.
+    def crack_filled(base_val, crack_val):
+        h = w = 40
+        img = _flat(h, w, base_val)
+        paint = _full_mask(h, w)
+        img[18:22, :] = crack_val
+        out = facepaint_crack_repair(img, paint_mask=paint, strength=1.0)
+        return out[20, 20, 0] > crack_val + 0.5 * (base_val - crack_val)
+
+    # deep paint: 90 -> crack at 78 (~13% dip); light paint: 230 -> 200
+    assert crack_filled(90.0, 78.0)
+    assert crack_filled(230.0, 200.0)
+
+
+def test_paint_coverage_even_preserves_gradient_removes_splotch():
+    h = w = 40
+    img = _flat(h, w, 180.0)
+    paint = _full_mask(h, w)
+    # legitimate broad linear shading across the region
+    grad = np.linspace(-40.0, 40.0, w, dtype=np.float32)
+    img += grad[None, :, None]
+    img_before = img.copy()
+    out = paint_coverage_even(img, paint_mask=paint, strength=0.9)
+    # gradient survives (within 15% of its original spread)
+    spread_before = float(img_before[:, -5, 0].mean() - img_before[:, 5, 0].mean())
+    spread_after = float(out[:, -5, 0].mean() - out[:, 5, 0].mean())
+    assert spread_after > 0.85 * spread_before
+    # a splotch (compact dark patch) on top of the gradient is evened out
+    img2 = img_before.copy()
+    img2[16:24, 16:24, :] -= 40.0
+    out2 = paint_coverage_even(img2, paint_mask=paint, strength=0.9)
+    centre_in = img2[18:22, 18:22, 0].mean() - img2[26:30, 18:22, 0].mean()
+    centre_out = out2[18:22, 18:22, 0].mean() - out2[26:30, 18:22, 0].mean()
+    assert abs(centre_out) < 0.5 * abs(centre_in)
+
+
 def test_paint_coverage_even_reduces_variance():
     h = w = 40
     img = _flat(h, w, 200.0)
