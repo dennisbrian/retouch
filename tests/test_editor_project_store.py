@@ -766,3 +766,39 @@ def test_known_file_callback_does_not_deadlock_under_the_lock(tmp_path):
     worker.start()
     worker.join(5)
     assert not worker.is_alive()
+
+
+class TestRecursionGuard:
+    """Deeply nested JSON must fail as a clean refusal, never a RecursionError.
+
+    The stdlib json decoder recurses per nesting level; the original handlers
+    only caught ValueError-family errors, so a crafted manifest crashed
+    callers — worst case the recovery listing that runs at editor startup.
+    """
+
+    def test_deeply_nested_manifest_is_refused(self, tmp_path):
+        path = fx.write_package(tmp_path / 'deep.comp', 5, 3,
+                                [fx.layer_record(0, 'Background', 5, 3)],
+                                images={0: fx.solid(5, 3, (1, 2, 3, 255))})
+        (path / 'manifest.json').write_text('{"x": ' + '[' * 1500 + ']' * 1500 + '}')
+        with pytest.raises(ProjectError, match='manifest is not JSON'):
+            load_project(path)
+
+    def test_deeply_nested_recipe_extension_is_refused(self, tmp_path):
+        path = fx.write_package(tmp_path / 'recdeep.comp', 5, 3,
+                                [fx.layer_record(0, 'Background', 5, 3)],
+                                images={0: fx.solid(5, 3, (1, 2, 3, 255))})
+        (path / 'retouch-recipes.json').write_text(
+            '{"x": ' + '[' * 1500 + ']' * 1500 + '}')
+        with pytest.raises(ProjectError, match='recipe extension'):
+            load_project(path)
+
+    def test_saving_over_deeply_nested_existing_refuses_cleanly(self, tmp_path):
+        path = fx.write_package(tmp_path / 'over.comp', 5, 3,
+                                [fx.layer_record(0, 'Background', 5, 3)],
+                                images={0: fx.solid(5, 3, (1, 2, 3, 255))})
+        (path / 'manifest.json').write_text('{"x": ' + '[' * 1500 + ']' * 1500 + '}')
+        doc = Document(5, 3)
+        doc.add_image(fx.solid(5, 3, (9, 9, 9, 255)), 'Base')
+        with pytest.raises(FileExistsError):
+            save_project(doc, path)

@@ -102,7 +102,7 @@ def _read_manifest(package):
     data = _read_file(package / 'manifest.json', package, MAX_MANIFEST_BYTES)
     try:
         manifest = json.loads(data.decode('utf-8'))
-    except (UnicodeDecodeError, ValueError) as exc:
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
         raise _invalid('manifest is not JSON') from exc
     if not isinstance(manifest, dict) or manifest.get('format') != FORMAT:
         raise _invalid('not a Compositor manifest')
@@ -606,7 +606,7 @@ def _read_recipes(package, document_id, layer_ids):
                 if not isinstance(value, str) or len(value) != 64 or set(value) - set('0123456789abcdef'):
                     raise ValueError('invalid recipe asset checksum')
         return record['layers']
-    except (ValueError, TypeError) as exc:
+    except (ValueError, TypeError, RecursionError) as exc:
         raise _invalid('Retouch recipe extension: ' + str(exc)) from exc
 
 

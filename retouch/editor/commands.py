@@ -390,6 +390,70 @@ class DocumentHistory:
                        label: str = 'Replace pixels') -> bool:
         return self._edit(label, lambda doc: doc.layer(layer_id).replace_pixels(pixels))
 
+    def copy_selection_as_layer(self, selection, source_id=None, *, cut=False) -> bool:
+        """Copy the visible composite inside a selection as a new layer above
+        the active one; ``cut`` also clears the selected pixels of ``source_id``.
+
+        Upstream Cmd-J (Layer via Copy) draws the selection's pixels through the
+        selection clip — a feathered edge becomes partial alpha
+        (SelectionClipboard.swift, renderSelectedPixels/renderMergedPixels) —
+        and Cmd-X Cut is that copy plus clearSelectedPixels on the active
+        layer, leaving transparent holes, never a content fill. The region is
+        the selection's whole-pixel bounds, clamped to the canvas by the
+        selection mask itself. One undo step; the edit drops the selection,
+        as upstream's addPixelLayer does. An absent or empty selection raises,
+        like crop-to-selection.
+        """
+        from .composite import composite
+        from .layer_paint import selection_on_layer
+        from .selections import selection_bbox
+
+        def apply(doc: Document) -> None:
+            if (selection is None or selection.shape != (doc.height, doc.width)
+                    or not selection.any()):
+                raise ValueError('Create a selection first')
+            box = selection_bbox(selection)
+            if box is None:
+                raise ValueError('Create a selection first')
+            x, y, w, h = box
+            copy_pixels = composite(doc)[y:y + h, x:x + w].copy()
+            # Straight alpha scaled by the selection coverage, feather kept.
+            weight = selection[y:y + h, x:x + w].astype(np.float32) / 255.0
+            copy_pixels[..., 3] = np.rint(
+                copy_pixels[..., 3] * weight).astype(np.uint8)
+            copy_pixels[copy_pixels[..., 3] == 0, :3] = 0
+            if cut:
+                source = doc.layer(source_id)
+                if source.is_group or source.adjustment is not None:
+                    raise ValueError('Folders and adjustment layers have no '
+                                     'pixels to cut. Select an image layer first.')
+                if source.text is not None or source.shape is not None:
+                    raise ValueError('Cutting would flatten this text or shape '
+                                     'layer. Copy it instead, or add a paint layer.')
+                if source.pixels is None:
+                    raise ValueError('This layer is empty; there is nothing to cut.')
+                coverage = selection_on_layer(selection, source)
+                cleared = source.pixels.copy()
+                cleared[..., 3] = np.rint(
+                    cleared[..., 3] * (1.0 - coverage)).astype(np.uint8)
+                cleared[cleared[..., 3] == 0, :3] = 0
+                source.pixels = rgba_from(cleared)
+                # The recipe source no longer matches the edited pixels.
+                source.recipe_source = source.recipe_settings = None
+            names = {item.name for item in doc.layers}
+            number = 1
+            while f'Layer {number}' in names:
+                number += 1
+            new = Layer(f'Layer {number}', pixels=copy_pixels, origin=(x, y))
+            active = doc.layer(doc.active_layer_id) if doc.active_layer_id else None
+            if active is not None:
+                new.parent_id = active.id if active.is_group else active.parent_id
+                index = doc.index_of(active.id) + 1
+            else:
+                index = None
+            doc.add_layer(new, index)
+        return self._edit('Cut selection as layer' if cut else 'Copy selection as layer', apply)
+
     def replace_recipe_result(self, layer_id, pixels, source, settings):
         """One undo step; preserve the target's mask, placement and properties."""
         def apply(doc):

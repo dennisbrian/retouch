@@ -81,7 +81,14 @@ def test_8bit_bytes_identical_to_direct_write(tmp_path, img_u8, name, pil_format
     write_image_with_icc(atomic_dir / name, img_u8, bit_depth=8, quality=95)
     _direct_pil_write(direct_dir / name, img_u8, pil_format, quality=95)
 
-    assert (atomic_dir / name).read_bytes() == (direct_dir / name).read_bytes()
+    if name.endswith(".png"):
+        # 8-bit PNG now encodes via cv2 (IMWRITE_PNG_COMPRESSION 3) for
+        # speed; the compressed stream legitimately differs from Pillow's
+        # level 6, so compare decoded pixels instead of bytes.
+        with Image.open(atomic_dir / name) as left, Image.open(direct_dir / name) as right:
+            np.testing.assert_array_equal(np.asarray(left), np.asarray(right))
+    else:
+        assert (atomic_dir / name).read_bytes() == (direct_dir / name).read_bytes()
     assert _dir_names(atomic_dir) == {name}
 
 

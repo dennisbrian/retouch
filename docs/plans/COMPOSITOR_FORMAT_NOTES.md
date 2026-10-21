@@ -56,6 +56,37 @@ duplicate ids, image/mask files not named `<id>.png` / `<id>.mask.png`, paths
 that leave the package or are symlinks, missing or non-PNG assets, assets over
 the side, pixel or byte limits, masks with colour or alpha, non-8-bit PNGs.
 
+## Retouch recipe extension (retouch-recipes.json)
+
+The manifest stays at native format version 11; recipe provenance is a
+Retouch-specific sidecar inside the transactional package, added by `6a366ff`:
+
+- `retouch-recipes.json`: `{version: 1, documentID, layers: {<layer-id>: {
+  settings, source_sha256, result_sha256}}}`. `settings` is
+  `retouch/editor/recipe_state.py`'s validated state: `{version: 1, recipe
+  (str ≤200), overrides, source_revision}`. `overrides` keys are engine
+  ParamSpec names (`smooth`, `whiten`, `iris_pop`, `catchlight`, `blush`,
+  `nose_tip_blush`, `face_shadow_fill`, `texture_opacity` — the latter set
+  added by `034ab60`); each value is validated against the engine's
+  ParamSpec min/max, not a fixed 0–100.
+- Per editable recipe layer: a `<layer-id>.recipe-source.png` RGBA asset
+  holding the immutable original composite, counted in the image budget.
+- Read path: header/schema/checksum validation; `pixel_digest` (sha256 of
+  raw RGBA bytes) must match both the source asset and the current layer
+  pixels, otherwise the package is refused ("recipe source/result changed
+  outside Retouch"). Unknown layer ids, foreign document ids and non-hex
+  checksums are refused. Absent file (and non-symlink) loads as a plain
+  raster document.
+- Size cap: the JSON must fit `MAX_MANIFEST_BYTES` (4 MiB) or save fails.
+- Fast save (`project_store`) remembers the source PNG per array so unchanged
+  recipe sources copy rather than re-encode; the saved-array cache lock is
+  re-entrant since `568cd2c`.
+- Other apps may discard the extension; Retouch refuses the mismatch if a
+  retained sidecar disagrees with edited rasters.
+
+Not stored: clone anchors (`aa1c80f`), local-retouch drafts, wand/selection
+state — all session-only, never persisted.
+
 ## Colour and precision
 
 - The 2026-10-08 finishing slice adds Multiply, Screen, Overlay and Difference;

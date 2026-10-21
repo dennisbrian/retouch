@@ -41,13 +41,18 @@ def _layer_grid(layer) -> tuple[int, int]:
     return int(round(layer.size[0])), int(round(layer.size[1]))
 
 
-def stroke_coverage(canvas: Any, layer) -> Optional[np.ndarray]:
-    """Unapplied strokes as float32 0..1 coverage on the layer's source grid.
+def stroke_coverage(canvas: Any, layer: Layer, stroke_opacity: float = 1.0) -> Optional[np.ndarray]:
+    """Brush coverage on the layer's own pixel grid, in 0..1 per stroke.
 
-    The brush canvas shows the layer in its displayed (flipped) orientation at
-    preview size; coverage is resampled to native pixels and unflipped so the
-    compositor flips pixels and paint together. ``None`` when nothing is
-    painted. Stroke RGB is ignored: the colour comes from the colour picker.
+    Each canvas layer is one native stroke: its alpha is scaled by
+    ``stroke_opacity`` (native sets alpha per stroke at publish time, so two
+    50% strokes stack toward 75%), then strokes combine by screen
+    accumulation — 1-(1-a1)(1-a2) — which caps at 1 per stroke while letting
+    separate strokes build up, matching BrushStroke.swift's per-stroke fill
+    composition. Within one canvas layer the browser has already flattened
+    overlapping dabs.
+
+    Stroke RGB is ignored: the colour comes from the colour picker.
     """
     width, height = _layer_grid(layer)
     coverage = None
@@ -59,9 +64,9 @@ def stroke_coverage(canvas: Any, layer) -> Optional[np.ndarray]:
             continue
         alpha = np.asarray(Image.fromarray(np.ascontiguousarray(stroke[..., 3])).resize(
             (width, height), Image.Resampling.BILINEAR)).astype(np.float32) / 255.0
-        # Strokes within one canvas layer are already flattened by the browser;
-        # across layers keep the strongest, so overlaps never exceed the cap.
-        coverage = alpha if coverage is None else np.maximum(coverage, alpha)
+        if stroke_opacity != 1.0:
+            alpha = alpha * np.float32(stroke_opacity)
+        coverage = alpha if coverage is None else coverage + alpha - coverage * alpha
     if coverage is None or not coverage.any():
         return None
     if layer.flip_y:
@@ -190,7 +195,7 @@ def paint_layer(history: DocumentHistory, layer_id: str, canvas: Any, *,
                          'Add a new paint layer above it instead.')
     if layer.pixels is None and mode == 'Erase':
         raise ValueError('This layer is empty; there is nothing to erase.')
-    coverage = stroke_coverage(canvas, layer)
+    coverage = stroke_coverage(canvas, layer, stroke_opacity=opacity / 100.0)
     if coverage is None:
         return False
     if softness > 0:
@@ -211,7 +216,7 @@ def paint_layer(history: DocumentHistory, layer_id: str, canvas: Any, *,
     width, height = _layer_grid(layer)
     base = (layer.pixels if layer.pixels is not None
             else np.zeros((height, width, 4), np.uint8))
-    painted = compose_paint(base, coverage, color, opacity / 100.0, erase=mode == 'Erase')
+    painted = compose_paint(base, coverage, color, 1.0, erase=mode == 'Erase')
     if layer.pixels is not None and np.array_equal(painted, layer.pixels):
         raise ValueError('The strokes made no visible change.')
     return history.replace_pixels(layer.id, painted,

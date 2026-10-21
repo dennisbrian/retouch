@@ -866,6 +866,31 @@ def test_clone_picker_callbacks_map_clicks_and_refuse_stale_state(session, callb
         pick(session, result[1], 'Source', gr.SelectData(None, dict(index=[2, 2], value=None)))
 
 
+def test_texture_heal_callback_requires_donor_selection_and_reports_fallback(session, callbacks, monkeypatch):
+    from retouch.editor import local_retouch as local
+    load = next(fn for fn in callbacks if fn.__name__ == 'loading_local')
+    apply = next(fn for fn in callbacks if fn.__name__ == 'applying_local')
+    _, captured, _, _ = load(session, None, None, False)
+    stroke = np.zeros((6, 8, 4), np.uint8)
+    stroke[2:4, 3:5] = [255, 0, 0, 255]
+    with pytest.raises(gr.Error, match='donor selection'):
+        apply(session, captured, {'layers': [stroke]}, None, 'Heal', 100, 'Texture-aware',
+              False, 0, 0, 'Current selection', 32)
+    session.selection = np.zeros((6, 8), np.uint8)
+    session.selection[0, 0] = 255
+    def fallback(image, mask, source_mask, **options):
+        assert source_mask[0, 0] == 255 and np.count_nonzero(source_mask) == 1
+        options['report']['executed'] = 'telea_donor_constrained'
+        result = image.copy()
+        result[mask > 0] = 150
+        return result
+    monkeypatch.setattr(local, 'patchmatch_fill', fallback)
+    result = apply(session, captured, {'layers': [stroke]}, None, 'Heal', 100, 'Texture-aware',
+                   False, 0, 0, 'Current selection', 32)
+    assert 'donor-constrained fallback' in result[-1]
+    assert session.selected().name == 'Heal · Texture-aware · donor-constrained fallback'
+
+
 def test_extra_recipe_controls_are_independent_and_reload_after_reopen(session, callbacks, tmp_path):
     from retouch.editor import DocumentHistory
     from retouch.editor.retouch_jobs import render_worker

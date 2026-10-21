@@ -596,6 +596,14 @@ def build_editor_tab():
                     wand_sample = gr.Radio(['Point', '3x3', '5x5'], value='Point', label='Wand sample size')
                     wand_contiguous = gr.Checkbox(label='Contiguous', value=True)
                     wand_button = gr.Button('Magic wand selection')
+                    cr_include = gr.Textbox(label='Include colours [[R, G, B]]',
+                                            value='[[255, 0, 0]]')
+                    cr_exclude = gr.Textbox(label='Exclude colours [[R, G, B]]', value='[]')
+                    cr_fuzziness = gr.Slider(0, 200, value=40, step=1, label='Colour range fuzziness')
+                    cr_button = gr.Button('Create colour range selection')
+                    gr.Markdown('Colour range selects every pixel within the fuzziness of each '
+                                'include colour on all RGB channels (per-channel distance), minus '
+                                'any exclude colour. Sampled over the visible composite.')
                     from .semantic_selection import REGIONS
                     semantic_region = gr.Dropdown(list(REGIONS), value='Skin', label='Automatic selection region')
                     auto_select = gr.Button('Create automatic selection')
@@ -606,6 +614,13 @@ def build_editor_tab():
                                 'with Reveal/Hide strokes. Hair and eye boundaries may need correction.')
                     mask_mode = gr.Radio(['Replace', 'Add', 'Subtract', 'Intersect'], value='Replace', label='Combine with layer mask')
                     mask_selection = gr.Button('Apply selection to selected layer mask')
+                    copy_selection_layer = gr.Button('Copy selection as layer')
+                    cut_selection_layer = gr.Button('Cut selection as layer')
+                    gr.Markdown('Copy takes the visible composite inside the selection '
+                                'as a new layer above the active one, feathered edges kept '
+                                'as partial alpha. Cut also clears the selected pixels of '
+                                'the selected layer, leaving transparent holes. Both are '
+                                'one undo step and clear the selection.')
                     gr.Markdown('Selections use canvas coordinates and remain temporary. '
                                 'Apply to a layer or folder mask to save them; this is one undo step.')
                 with gr.Accordion('Grading adjustment layers', open=False):
@@ -780,7 +795,19 @@ def build_editor_tab():
                 brush=gr.Brush(colors=['#ff3366'], color_mode='fixed', default_color='#ff3366'))
             with gr.Row():
                 local_operation = gr.Radio(['Heal', 'Clone', 'Dodge', 'Burn'], value='Heal', label='Local operation')
-                heal_method = gr.Radio(['Telea', 'Navier-Stokes'], value='Telea', label='Healing method')
+                heal_method = gr.Radio(['Telea', 'Navier-Stokes', 'Texture-aware'], value='Telea',
+                                       label='Healing method')
+            with gr.Column(visible=False) as texture_heal_controls:
+                gr.Markdown('Texture-aware healing searches nearby skin, fabric or background texture. '
+                            'Use small repairs (up to 4096 native pixels); it cannot reconstruct hidden objects. '
+                            'Select clean matching material to restrict donors. The selected donor area must '
+                            'lie within the search distance of the painted repair. Nearby pixels can '
+                            'copy unrelated trim or detail; a clean donor selection gives more control. For a donor-only '
+                            'selection, leave Limit local strokes to the current selection off.')
+                texture_donors = gr.Radio(['Nearby pixels', 'Current selection'], value='Current selection',
+                                          label='Texture donor area')
+                texture_distance = gr.Slider(16, 256, value=64, step=1,
+                                             label='Texture search distance (native pixels)')
             with gr.Column(visible=False) as clone_controls:
                 gr.Markdown('Paint the destination. Each painted pixel copies from the visible '
                             'composite at that pixel plus this source offset, in native image pixels. '
@@ -861,7 +888,8 @@ def build_editor_tab():
                          concurrency_id='layer-editor')
 
         def applying_local(current, captured, local_strokes, strokes, operation,
-                           amount, method, limit, source_x=0, source_y=0):
+                           amount, method, limit, source_x=0, source_y=0,
+                           donor_area='Current selection', distance=64):
             from .local_retouch import apply_local_retouch, capture_composite
             if current is None:
                 raise gr.Error('Open a document first')
@@ -869,26 +897,39 @@ def build_editor_tab():
                 raise gr.Error('Apply or erase the layer-mask strokes first.')
             if limit and current.selection is None:
                 raise gr.Error('Create a selection first, or turn off the selection limit.')
+            if operation == 'Heal' and method == 'Texture-aware':
+                if donor_area not in ('Nearby pixels', 'Current selection'):
+                    raise gr.Error('Choose a texture donor area.')
+                if donor_area == 'Current selection' and current.selection is None:
+                    raise gr.Error('Create a donor selection first, or choose Nearby pixels.')
             try:
                 layer_id = apply_local_retouch(
                     current.history, captured, local_strokes, operation, amount, method,
                     selection=current.selection if limit else None,
-                    clone_offset=(source_x, source_y))
+                    clone_offset=(source_x, source_y),
+                    donor_selection=(current.selection if donor_area == 'Current selection' else None),
+                    search_distance=distance)
                 current.selected_id = layer_id
                 brush, captured = capture_composite(current.history)
             except (ValueError, OSError, cv2.error) as exc:
                 raise gr.Error(str(exc)) from exc
-            return (*_view(current), brush, captured, operation + ' added as a masked layer. Undo restores the previous image.')
+            return (*_view(current), brush, captured, current.selected().name
+                    + ' added as a masked layer. Undo restores the previous image.')
 
         apply_local.click(applying_local,
                           [session, local_capture, local_canvas, canvas, local_operation,
-                           local_opacity, heal_method, limit_local, clone_x, clone_y],
+                           local_opacity, heal_method, limit_local, clone_x, clone_y,
+                           texture_donors, texture_distance],
                           outputs + [local_canvas, local_capture, local_status], concurrency_id='layer-editor')
         local_operation.change(
-            lambda value: (gr.update(visible=value == 'Heal'),
+            lambda value, method: (gr.update(visible=value == 'Heal'),
                            gr.update(value=100 if value in ('Heal', 'Clone') else 25),
-                           gr.update(visible=value == 'Clone')),
-            local_operation, [heal_method, local_opacity, clone_controls], queue=False)
+                           gr.update(visible=value == 'Clone'),
+                           gr.update(visible=value == 'Heal' and method == 'Texture-aware')),
+            [local_operation, heal_method], [heal_method, local_opacity, clone_controls,
+                                            texture_heal_controls], queue=False)
+        heal_method.change(lambda op, method: gr.update(visible=op == 'Heal' and method == 'Texture-aware'),
+                           [local_operation, heal_method], texture_heal_controls, queue=False)
 
         def _paint_load(current, layer):
             from .layer_paint import paint_canvas_background
@@ -1193,6 +1234,16 @@ def build_editor_tab():
                         # An empty Replace deselects, matching invert_selection.
                         current.selection = None if (not merged.any()
                                                      and args[5] == 'Replace') else merged
+                    elif operation == 'color_range':
+                        from .selections import color_range_selection, combine
+                        doc = current.history.document
+                        new, count = color_range_selection(composite(doc), args[0],
+                                                           args[1], args[2])
+                        old = current.selection if current.selection is not None \
+                            else np.zeros(new.shape, np.uint8)
+                        merged = combine(old, new, args[3])
+                        current.selection = None if (not merged.any()
+                                                     and args[3] == 'Replace') else merged
                     elif operation == 'automatic_selection':
                         from .semantic_selection import automatic_selection
                         from .selections import combine
@@ -1249,6 +1300,16 @@ def build_editor_tab():
                                         parent_id=(layer.id if layer.is_group else layer.parent_id) if layer else None)
                             current.history.add_layer(new, doc.index_of(layer.id) + 1 if layer else None)
                             current.selected_id = new.id
+                    elif operation in ('copy_selection_as_layer', 'cut_selection_as_layer'):
+                        cut = operation == 'cut_selection_as_layer'
+                        if cut and layer is None:
+                            raise ValueError('Select a layer first')
+                        current.history.copy_selection_as_layer(
+                            current.selection,
+                            layer.id if cut and layer else None, cut=cut)
+                        current.selected_id = current.history.document.active_layer_id
+                        # Upstream addPixelLayer drops the selection on paste.
+                        current.selection = None
                     elif operation in ('crop', 'crop_selection'):
                         from .selections import selection_bbox
                         if operation == 'crop':
@@ -1312,8 +1373,10 @@ def build_editor_tab():
                                   (duplicate, 'duplicate'), (invert_mask, 'invert_mask'),
                                   (reset_mask, 'reset_mask'), (fit, 'fit'), (links, 'links'), (group, 'group'),
                                   (ungroup, 'ungroup'), (create_selection, 'selection'),
-                                  (wand_button, 'wand'), (auto_select, 'automatic_selection'),
+                                  (wand_button, 'wand'), (cr_button, 'color_range'), (auto_select, 'automatic_selection'),
                                   (crop_canvas, 'crop'), (crop_selection, 'crop_selection'),
+                                  (copy_selection_layer, 'copy_selection_as_layer'),
+                                  (cut_selection_layer, 'cut_selection_as_layer'),
                                   (clear_selection, 'clear_selection'), (invert_selection, 'invert_selection'),
                                   (expand_selection, 'expand_selection'),
                                   (contract_selection, 'contract_selection'),
@@ -1340,6 +1403,8 @@ def build_editor_tab():
                 'automatic_selection': [semantic_region, feather, selection_mode],
                 'wand': [wand_x, wand_y, wand_tolerance, wand_sample,
                          wand_contiguous, selection_mode],
+                'color_range': [cr_include, cr_exclude, cr_fuzziness,
+                                selection_mode],
                 'expand_selection': [selection_amount],
                 'contract_selection': [selection_amount],
                 'border_selection': [selection_amount],

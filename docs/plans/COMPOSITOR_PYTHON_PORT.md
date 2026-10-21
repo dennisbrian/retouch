@@ -111,35 +111,6 @@ automatically preserved by a Python translation.
 
 ### Progress
 
-- 2026-10-14, milestone 5 healing and cloning: the Layer Editor's "Spot
-  healing & clone stamp" panel uses the same brush canvas as mask painting.
-  Brush over a spot and choose Spot heal (Content-Aware, Create Texture or
-  Proximity Match, with opacity) or Clone stamp (a whole-pixel source offset in
-  the layer's own unflipped pixels, opacity and an edge softness, because the
-  canvas brush is hard while native Clone Stamp defaults to a soft tip). Both
-  change the selected photo/pixel layer's own pixels at native resolution as one
-  undo step; pixels outside the strokes are bit-identical; folders and
-  adjustments are refused. `retouch/editor/healing.py` ports upstream
-  `Rendering/HealPixels.c` (patch search over 24 angles x 5 distances plus a
-  7 x 7 refinement, ring scoring, membrane fill, hashed grain) and the Clone
-  Stamp copy (`Document/CloneStamp.swift`, source-over through the brush
-  coverage, nothing drawn where the source leaves the layer). Differences: the
-  membrane uses red-black over-relaxation instead of the C row-major sweep;
-  layers are straight alpha, so pixels are premultiplied around the kernel;
-  separate dabs in one pass heal one at a time; aligned/non-aligned source
-  points and Sample All Layers are not offered (the offset simply stays until
-  changed). Parity: `tests/test_editor_healing.py` compiles the pinned
-  `HealPixels.c` from `third_party/compositor/source-11d8d7a.tar.gz` when a C
-  compiler exists; on upstream's own striped-blemish fixture Content-Aware and
-  Proximity Match are byte-identical, Create Texture differs by at most 16
-  levels (mean under 3) where the stripes meet the spot edge, and on a smooth
-  ramp all three modes are within 1 level. Upstream's SpotHealing and
-  CloneStamp test contracts are ported as tests. Real photo (DSCF3503, 4160 x
-  6240, cloud sandbox): six planted 8-20 px spots healed in 2.5 s (mean error
-  against the clean photo 28-98 -> 2-3 levels), a soft clone removing a strap
-  piece in 2.6 s, undo exact; the sheet was viewed. Not checked against the Mac
-  app's own UI or with a pointer in the browser.
-
 - 2026-10-11, milestone 6 crash recovery: the Layer Editor autosaves unsaved
   work. After any edit that leaves the document dirty, `retouch/editor/recovery.py`
   writes the current revision in a background thread as an ordinary `.comp`
@@ -373,6 +344,44 @@ native-grid mapping from a reduced preview, flips, placed selections, undo and
 Chromium): new paint layer, colour change updates the brush live, a stroke
 applied, then part of it erased; evidence in
 `/mnt/project-files/retouch/layer-paint/`. Not compared with the Mac app.
+
+### Texture-aware local healing — 2026-10-16
+
+Local retouch → Heal → **Texture-aware** reuses Retouch's deterministic classical
+PatchMatch primitive to fill small painted defects from nearby texture. **Nearby
+pixels** uses eligible pixels outside the stroke; **Current selection** (the
+default) restricts
+donor patches to selected material within the search area. The donor selection
+is separate from the optional destination-selection limit; leave the latter off
+for donor-only selections. The 16–256 native-pixel search distance controls the
+local context. Soft brush alpha is applied once after filling. The operation
+creates a separate masked raster layer with existing opacity/save/undo support.
+
+Search uses a fixed seed, 7-pixel patches, three passes and up to 64 random
+candidates per destination. Repairs above 4,096 painted native pixels or 262,144
+search pixels are rejected before composition/search. No donors, invalid options,
+stale captures and no-change results leave history untouched. A donor region too
+small for a full patch can use the existing donor-constrained Telea fallback;
+the resulting layer name and status explicitly report that fallback. Source
+layers and all pixels outside painted support remain exact. This is texture
+filling, not semantic reconstruction of a hidden object. Good matching material
+is still necessary: unrestricted search copied nearby costume trim into plain
+fabric in the browser test. No seamless/lighting blend is applied: a real speck test
+showed the existing optional seamless primitive could retain the defect.
+
+Focused local/editor/clone/picker/recipe/worker and PatchMatch suites:
+**179 passed** (194 including the healing suite). Real-photo testing repaired a labeled planted costume speck
+using a selected fabric donor region; source preservation, outside support,
+save/reopen and undo/redo were exact. The portrait and enlarged comparison with
+Telea were inspected. The 49-pixel texture repair took about 0.032 s locally;
+a separate synthetic 4,096-pixel repair with a 36,864-pixel search area took
+1.57 s. A browser pointer-painted repair with a preloaded clean-fabric donor
+selection created and saved a Texture-aware layer; independent reopening found
+562 changed pixels, exact source preservation and exact output outside its
+562-pixel stroke support. That output was also inspected. These are individual
+local measurements, not runtime guarantees or
+broad skin/fabric quality certification. Temporary evidence:
+`/tmp/retouch-texture-heal/`.
 
 ### Click-to-place clone anchors — 2026-10-16
 
@@ -615,8 +624,6 @@ performance guarantee.
 Remaining separate gates: exact rotated-mask sampling parity, representative
 large stacks, packaged desktop recovery/interaction, Windows qualification,
 high-bit/color-managed editor export, dirty-tile caching and acceleration.
-Spot Healing and Clone Stamp (2026-10-14) heal and clone a layer's own pixels;
-painting colour onto layer pixels with a normal brush is still open.
 The finishing backlog categories now have usable implementations; they do not
 cover every upstream adjustment, selection tool or blend mode. All seven layer
 effect kinds render (stroke, drop shadow, colour overlay, inner shadow, outer

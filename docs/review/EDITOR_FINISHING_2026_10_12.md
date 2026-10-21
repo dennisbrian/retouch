@@ -290,3 +290,71 @@ Before the scoped brush commit, `tests/test_editor_ui.py` passed all 37 tests
 with the current shared workspace, and governance again reported zero errors
 and warnings. Concurrent renderer/resampling test edits are excluded from this
 commit; the broader native-parity qualification remains their owner's work.
+
+## Changelog after the 2026-10-12 review (ff3516a..e765e06)
+
+Editor-side commits landed since this review's base; each entry verified
+against its commit diff.
+
+- **JPEG export and Select→Modify** (`b8f0d8f`): `export_jpeg` in
+  `retouch/editor/composite.py` flattens over an opaque sRGB background in
+  gamma-encoded space (upstream `ImageExporter.swift:125-133` parity), embeds
+  the sRGB ICC profile, honours quality (0..1) with 4:4:4 subsampling and
+  carries document resolution. `retouch/editor/selections.py` gains Expand,
+  Contract, Border (round-disk kernels, capped at radius 16 per cv2 pass,
+  canvas edges erode like an unbounded canvas) and Move (nearest-neighbour
+  warp, zeros fill). Amounts validate 1–500 px.
+- **Core Graphics float fixture** (`f751da1`):
+  `scripts/dev/cg_float_adjustment_fixture.swift` plus a 5,400-line pinned
+  reference; `tests/test_editor_finishing.py` pins float adjustments to the
+  native fixture. Test-only; no editor behavior change.
+- **Canvas resize and crop** (`0d83b38`): `DocumentHistory.canvas_resize`
+  (3×3 numpad anchor, optional explicit `content_offset`, guides and mask
+  placements shift with content; out-of-canvas layers kept and shifted) and
+  `crop_document` (crop rectangle as one undo step via `canvas_resize`).
+  `selection_bbox` added to selections for crop-from-selection.
+- **True 16-bit export + EXR read guard** (`fb02002`): `composite_16`
+  quantizes the float band renderer directly to uint16 (no 8-bit detour);
+  `export_png(bit_depth=16)` uses it. `retouch/io.py` `read_image_16bit`
+  gains `allow_exr=False` — EXR decode is opt-in with a hard clamp above
+  1.0, refusing by default. `_embed_png_metadata` gains a `dpi` pHYs chunk
+  splice (cv2 PNG encoder has no DPI params).
+- **Magic wand + Tier-1 hotkeys** (`a3e5c69`): `wand_selection` (box-average
+  seed sample with C-style round-half-up, per-channel tolerance, 4-connected
+  `FLOODFILL_MASK_ONLY` or global match). `EDITOR_HOTKEYS_JS` wired via
+  `gui.py` `Blocks(js=...)`: cmd/ctrl+Z undo, cmd/ctrl+shift+Z / cmd/ctrl+Y
+  redo, cmd/ctrl+D clear selection, skipping text inputs.
+- **Spot Healing and Clone Stamp on layer pixels** (`316531f`):
+  `retouch/editor/healing.py` (Poisson-style `_solve`/`_relax` content-aware
+  fill, `spot_heal`, `clone_stamp`); `paint_pixels` applies brushed coverage
+  (flip-aware, softness via Gaussian falloff) directly to the selected
+  raster layer as one undo step. `replace_pixels` gains a label override.
+- **Colour brush on layer pixels** (`c0299d1`): see the Colour brush section
+  of COMPOSITOR_PYTHON_PORT.md (already documented there).
+- **Grading controls, region selections, local retouch; recipe layers;
+  local clone; clone anchors** (`9edef8c`, `6a366ff`, `034ab60`, `aa1c80f`):
+  documented in COMPOSITOR_PYTHON_PORT.md's acceptance sections; editor-relevant
+  summary: adjustment picker Curves/Grain/Noise, semantic region selections,
+  Heal/Dodge/Burn/Clone overlay layers, re-editable recipe layers persisted as
+  a `retouch-recipes.json` extension, and a preview-based click-to-place clone
+  picker (`clone_picker.py`).
+- **Fixes**: `568cd2c` makes the saved-array cache lock re-entrant
+  (`threading.RLock`), fixing a deadlock when a weakref callback fires under
+  a held lock; `ebde387` adds `from __future__ import annotations` to
+  `clone_picker.py` for Python 3.9; `9e0d65b` builds the Core Image blend
+  fixture only on macOS; `638f14a` widens the 12 MP hue/sat timing margin on
+  CI.
+
+Engine-only commits (`50a6521` Costume Shine, `191c1e2` Teeth Brightening)
+touch `retouch/` and the main GUI, not the editor package; see their own
+doc entries in README/RECIPE_GUIDE. The retained EXR worktree noted in this
+review was integrated as `ff3516a` (EXR delivery contract) plus the
+`fb02002` read guard.
+
+## Notes for the owner
+
+- The "Remaining gates" bullet "High-bit/color-managed editor export: closed
+  by f45176d" can be extended: `fb02002` supersedes the 257-lift widening
+  with true float→uint16 rendering for 16-bit PNG/TIFF export.
+- The retained-work table row about the EXR worktree (`de346b1`) is now
+  stale — cherry-picked as `ff3516a` per its own commit message.

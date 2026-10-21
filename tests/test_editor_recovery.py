@@ -309,3 +309,14 @@ def test_live_staging_dir_survives_listing(tmp_path):
     os.utime(stale, (old, old))
     assert [e.entry_id for e in list_recoveries(tmp_path)] == [eid]
     assert live.exists() and not stale.exists()
+
+
+def test_deeply_nested_meta_is_skipped_not_fatal(tmp_path, monkeypatch):
+    # A crafted recovery entry must not crash the startup listing; it is
+    # skipped like any other malformed entry (RecursionError guard).
+    root = tmp_path / 'recovery'
+    root.mkdir()
+    (root / 'deep12345.json').write_text('{"x": ' + '[' * 1500 + ']' * 1500 + '}')
+    monkeypatch.setenv('RETOUCH_EDITOR_RECOVERY_DIR', str(root))
+    import retouch.editor.recovery as rec
+    assert rec.list_recoveries(rec.recovery_dir()) == []

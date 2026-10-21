@@ -9,11 +9,15 @@ import cv2
 import numpy as np
 
 from retouch.heal import _auto_radius, heal_region
+from retouch.patchmatch import patchmatch_fill
 from retouch.regions import apply_local_adjustment
 
 from .commands import DocumentHistory
 from .composite import composite
 from .document import Layer
+
+MAX_TEXTURE_REPAIR_PIXELS = 4096
+MAX_TEXTURE_SEARCH_PIXELS = 512 * 512
 
 
 @dataclass(frozen=True)
@@ -61,7 +65,9 @@ def painted_mask(canvas: Any, capture: LocalCapture) -> np.ndarray:
 def apply_local_retouch(history: DocumentHistory, capture: LocalCapture, canvas: Any,
                         operation: str, opacity: float = 100, method: str = 'Telea',
                         selection: np.ndarray | None = None,
-                        clone_offset: tuple[int, int] = (0, 0)) -> str:
+                        clone_offset: tuple[int, int] = (0, 0),
+                        donor_selection: np.ndarray | None = None,
+                        search_distance: int = 64) -> str:
     """Bake the existing op once into a masked patch; preserve all source layers."""
     doc = history.document
     if not isinstance(capture, LocalCapture):
@@ -74,8 +80,17 @@ def apply_local_retouch(history: DocumentHistory, capture: LocalCapture, canvas:
     if (isinstance(opacity, bool) or not isinstance(opacity, (int, float))
             or not math.isfinite(opacity) or not 0 < opacity <= 100):
         raise ValueError('Result opacity must be greater than 0 and at most 100.')
-    if method not in ('Telea', 'Navier-Stokes'):
-        raise ValueError('Choose Telea or Navier-Stokes healing.')
+    if method not in ('Telea', 'Navier-Stokes', 'Texture-aware'):
+        raise ValueError('Choose Telea, Navier-Stokes or Texture-aware healing.')
+    texture_heal = operation == 'Heal' and method == 'Texture-aware'
+    if texture_heal:
+        if (isinstance(search_distance, bool) or not isinstance(search_distance, (int, float))
+                or not math.isfinite(search_distance) or search_distance != int(search_distance)
+                or not 16 <= search_distance <= 256):
+            raise ValueError('Texture search distance must be a whole number from 16 to 256 pixels.')
+        if donor_selection is not None and (not isinstance(donor_selection, np.ndarray)
+                or donor_selection.dtype != np.uint8 or donor_selection.shape != (doc.height, doc.width)):
+            raise ValueError('Donor selection does not match the current document.')
     if operation == 'Clone':
         if (not isinstance(clone_offset, (tuple, list)) or len(clone_offset) != 2
                 or any(isinstance(v, bool) or not isinstance(v, (int, float))
@@ -92,16 +107,27 @@ def apply_local_retouch(history: DocumentHistory, capture: LocalCapture, canvas:
         mask = np.minimum(mask, selection)
         if not mask.any():
             raise ValueError('The strokes do not overlap the current selection.')
-    pixels = composite(doc)
-    if not (pixels[..., 3] == 255).all():
-        raise ValueError('Local retouch currently requires an opaque composite.')
     x, y, width, height = cv2.boundingRect(mask)
     if operation == 'Clone' and (x + dx < 0 or y + dy < 0
             or x + width + dx > doc.width or y + height + dy > doc.height):
         raise ValueError('The clone source falls outside the canvas. Adjust the offset or repaint.')
-    padding = max(32, 4 * _auto_radius(mask)) if operation == 'Heal' else 0
+    if texture_heal and np.count_nonzero(mask) > MAX_TEXTURE_REPAIR_PIXELS:
+        raise ValueError('Texture-aware healing supports up to 4096 painted native pixels. '
+                         'Use smaller strokes or the fast healing methods.')
+    # Local strokes are brush-sized: the auto radius scales with the stroke's
+    # bounding-box diagonal, which made a 40x100 preview stroke pad to a
+    # ~470x710 inpaint region at radius 42 (2.3 s in cv2.inpaint alone).
+    # Clamped, the heal still converges on brush-sized defects.
+    heal_radius = min(_auto_radius(mask), 8)
+    padding = (int(search_distance) if texture_heal else
+               min(64, max(32, 4 * heal_radius)) if operation == 'Heal' else 0)
     left, top = max(0, x - padding), max(0, y - padding)
     right, bottom = min(doc.width, x + width + padding), min(doc.height, y + height + padding)
+    if texture_heal and (right - left) * (bottom - top) > MAX_TEXTURE_SEARCH_PIXELS:
+        raise ValueError('Texture search area is too large. Reduce search distance or paint a smaller area.')
+    pixels = composite(doc)
+    if not (pixels[..., 3] == 255).all():
+        raise ValueError('Local retouch currently requires an opaque composite.')
     coverage = mask[top:bottom, left:right]
     original = pixels[top:bottom, left:right]
     if operation == 'Clone':
@@ -113,9 +139,25 @@ def apply_local_retouch(history: DocumentHistory, capture: LocalCapture, canvas:
                    + original.astype(np.uint32) * (255 - alpha) + 127) // 255).astype(np.uint8)
     else:
         bgr = cv2.cvtColor(original, cv2.COLOR_RGBA2BGR)
-        if operation == 'Heal':
+        if texture_heal:
+            donor = (None if donor_selection is None else donor_selection[top:bottom, left:right])
+            if donor is not None and not np.any((donor > 0) & (coverage == 0)):
+                raise ValueError('No donor pixels in the search area outside the strokes. '
+                                 'Expand the donor selection or search distance.')
+            report = {}
+            result = patchmatch_fill(bgr, coverage, source_mask=donor, patch_size=7,
+                                     iterations=3, seed=0, max_candidates=64, report=report)
+            if report.get('executed') == 'abstain':
+                raise ValueError('No suitable donor pixels. Change the selection or search distance.')
+            alpha = coverage[..., None].astype(np.uint32)
+            result = ((result.astype(np.uint32) * alpha
+                       + bgr.astype(np.uint32) * (255-alpha) + 127) // 255).astype(np.uint8)
+            if report.get('executed') != 'patchmatch':
+                method += ' · donor-constrained fallback'
+        elif operation == 'Heal':
             result = heal_region(bgr, coverage.astype(np.float32) / 255,
-                                 method='telea' if method == 'Telea' else 'ns')
+                                 method='telea' if method == 'Telea' else 'ns',
+                                 radius=heal_radius)
         else:
             result = apply_local_adjustment(bgr, coverage.astype(np.float32) / 255,
                                             operation.lower(), 1.0)

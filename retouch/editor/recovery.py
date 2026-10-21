@@ -111,7 +111,7 @@ def list_recoveries(root: Path | None = None, now: float | None = None
             entry = RecoveryEntry(entry_id, str(meta['title']), int(meta['width']),
                                   int(meta['height']), int(meta['layers']),
                                   float(meta['updated']), package)
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, ValueError, KeyError, TypeError, RecursionError):
             continue
         if not package.is_dir() or now - entry.updated > MAX_AGE_SECONDS:
             _remove(root, entry_id)

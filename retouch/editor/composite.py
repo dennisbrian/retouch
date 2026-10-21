@@ -579,11 +579,19 @@ def export_jpeg(document, path, *, quality=0.85, background=(1.0, 1.0, 1.0), icc
     rgba = composite(document)
     if icc_profile is None:
         icc_profile = get_working_srgb_icc()
-    rgb = rgba[..., :3].astype(np.float32) / 255.0
-    alpha = rgba[..., 3:4].astype(np.float32) / 255.0
+    # Flatten in row chunks: full-canvas float32 temporaries peaked at
+    # ~1.9 GB above the composite on an 80 MP export; per-slice buffers
+    # are ~30 MB and the output is bit-identical (same ops, same order).
+    height = rgba.shape[0]
+    flat = np.empty((height, rgba.shape[1], 3), np.uint8)
     bg = np.asarray(background, np.float32)
-    flat = rgb * alpha + bg * (1.0 - alpha)
-    flat = np.rint(np.clip(flat, 0.0, 1.0) * 255.0).astype(np.uint8)
+    for top in range(0, height, 512):
+        bottom = min(height, top + 512)
+        chunk = rgba[top:bottom]
+        rgb = chunk[..., :3].astype(np.float32) / 255.0
+        alpha = chunk[..., 3:4].astype(np.float32) / 255.0
+        merged = rgb * alpha + bg * (1.0 - alpha)
+        flat[top:bottom] = np.rint(np.clip(merged, 0.0, 1.0) * 255.0).astype(np.uint8)
     temporary = path.with_name(f'.{path.name}.{uuid.uuid4().hex[:8]}.tmp')
     staged = temporary.with_name(temporary.name + path.suffix)
     try:

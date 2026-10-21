@@ -78,16 +78,27 @@ def test_paint_is_one_undo_step_and_round_trips(tmp_path):
     np.testing.assert_array_equal(composite(edits.document), before)
 
 
-def test_opacity_caps_overlapping_strokes():
+def test_separate_canvas_layers_accumulate_like_native_strokes():
     edits = history()
     layer = edits.document.layers[0]
     first = strokes(96, 80, (10, 30, 10, 30))['layers'][0]
     second = strokes(96, 80, (20, 40, 20, 40))['layers'][0]
     paint_layer(edits, layer.id, {'layers': [first, second]}, color=(0, 0, 0), opacity=50)
     pixels = edits.document.layers[0].pixels
-    # Overlap region gets the same 50% as single coverage: never 75%.
-    np.testing.assert_array_equal(pixels[25, 25], pixels[15, 15])
-    np.testing.assert_array_equal(pixels[25, 25, :3], [80, 60, 45])
+    # Single-stroke regions sit at 50%; the overlap of two separate canvas
+    # layers (two native strokes) stacks toward 75%: 1-(0.5)(0.5).
+    np.testing.assert_array_equal(pixels[15, 15, :3], [80, 60, 45])
+    np.testing.assert_allclose(pixels[25, 25, :3], [40, 30, 22], atol=1)
+
+def test_opacity_caps_strokes_within_one_canvas_layer():
+    edits = history()
+    layer = edits.document.layers[0]
+    first = strokes(96, 80, (10, 30, 10, 30))['layers'][0]
+    # One canvas layer: the browser already flattened overlapping dabs
+    # inside it, so only one alpha plane exists and the 50% cap holds.
+    paint_layer(edits, layer.id, {'layers': [first]}, color=(0, 0, 0), opacity=50)
+    pixels = edits.document.layers[0].pixels
+    np.testing.assert_array_equal(pixels[15, 15, :3], [80, 60, 45])
 
 
 def test_new_blank_layer_paints_into_transparent_pixels():

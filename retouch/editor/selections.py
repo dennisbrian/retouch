@@ -73,6 +73,56 @@ def wand_selection(rgba, x, y, tolerance=32, radius=0, contiguous=True):
     return m, int((m > 0).sum())
 
 
+def _color_list(value, name):
+    """Parse '[[r, g, b], ...]' text (or an already-parsed list) to an Nx3 int array."""
+    try:
+        colors = json.loads(value) if isinstance(value, str) else value
+        valid = (isinstance(colors, list)
+                 and all(isinstance(c, (list, tuple)) and len(c) == 3
+                         and all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                                 and math.isfinite(v) and 0 <= v <= 255 for v in c)
+                         for c in colors))
+    except (ValueError, TypeError):
+        valid = False
+    if not valid:
+        raise ValueError(f'{name} needs RGB triplets like [[255, 0, 0]]')
+    if not colors:
+        return np.zeros((0, 3), np.int64)
+    return np.rint(np.asarray(colors, np.float64)).astype(np.int64)
+
+
+def color_range_selection(rgba, include, exclude, fuzziness):
+    """Color-range mask matching the C kernel (WandPixels.c color_range_mask).
+
+    A pixel matches when its straight RGB is within ``fuzziness`` of any
+    include colour on every channel (per-channel box distance, not a
+    vector norm), and not within range of any exclude colour. Fully
+    transparent pixels never match. The mask is binary 0/255 like the
+    native one; returns (mask, selected pixel count).
+    """
+    h, w = rgba.shape[:2]
+    if rgba.ndim != 3 or rgba.shape[2] != 4 or rgba.dtype != np.uint8:
+        raise ValueError('color_range_selection needs an HxWx4 uint8 array')
+    if h * w > MAX_SURFACE_PIXELS:
+        raise ValueError('Selection exceeds the canvas budget')
+    if isinstance(fuzziness, bool) or not isinstance(fuzziness, (int, float)) \
+            or not math.isfinite(fuzziness):
+        raise ValueError('Fuzziness must be a finite number')
+    f = min(255, max(0, int(fuzziness)))
+    inc = _color_list(include, 'Include colours')
+    exc = _color_list(exclude, 'Exclude colours')
+    if inc.size == 0:
+        return np.zeros((h, w), np.uint8), 0
+    rgb = rgba[..., :3].astype(np.int64)
+    near = np.zeros((h, w), bool)
+    for c in inc:
+        near |= np.all(np.abs(rgb - c) <= f, axis=2)
+    for c in exc:
+        near &= ~np.all(np.abs(rgb - c) <= f, axis=2)
+    near &= rgba[..., 3] != 0
+    return (near * np.uint8(255)).astype(np.uint8), int(near.sum())
+
+
 def selection(width, height, kind, x=0, y=0, box_width=1, box_height=1, points='[]', feather=0):
     if width * height > MAX_SURFACE_PIXELS:
         raise ValueError('Selection exceeds the canvas budget')
