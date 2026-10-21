@@ -167,17 +167,6 @@ class BlemishRemover:
         skin_binary = (skin_mask > 0.3).astype(np.uint8) * 255
         blemish_candidates = cv2.bitwise_and(blemish_candidates, skin_binary)
 
-        # Also check for reddish spots (common for acne)
-        hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
-        redness = np.zeros_like(gray, dtype=np.uint8)
-        # Red hue range in HSV
-        red_low1 = cv2.inRange(hsv, (0, 80, 50), (10, 255, 255))
-        red_low2 = cv2.inRange(hsv, (170, 80, 50), (180, 255, 255))
-        red_combined = cv2.bitwise_or(red_low1, red_low2)
-        # Only count red that's also a contrast anomaly (dark spot)
-        red_blemish = cv2.bitwise_and(red_combined, blemish_candidates)
-        blemish_candidates = cv2.bitwise_or(blemish_candidates, red_blemish)
-
         # Size filter: remove large regions (those are shadows, not blemishes)
         # and very tiny noise
         k_open = max(int(2 * scale), 1)

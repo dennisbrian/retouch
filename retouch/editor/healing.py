@@ -235,7 +235,7 @@ def spot_heal(pixels, coverage, mode='Content-Aware', opacity=1.0, seed=0):
         raise ValueError('coverage must be uint8 and match the layer size')
     opacity = float(opacity)
     if not 0 <= opacity <= 1:
-        raise ValueError('Healing opacity must be within 0..100')
+        raise ValueError('Healing opacity must be between 0 and 1.')
     if not coverage.any() or opacity == 0:
         return pixels
     count, labels, stats, _ = cv2.connectedComponentsWithStats((coverage > 0).astype(np.uint8), connectivity=8)
@@ -278,7 +278,7 @@ def clone_stamp(pixels, coverage, offset, opacity=1.0):
         raise ValueError('Set a clone source offset first')
     opacity = float(opacity)
     if not 0 <= opacity <= 1:
-        raise ValueError('Clone opacity must be within 0..100')
+        raise ValueError('Clone opacity must be between 0 and 1.')
     height, width = coverage.shape
     ys, xs = np.nonzero(coverage)
     sy, sx = ys + dy, xs + dx
