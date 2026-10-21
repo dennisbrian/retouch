@@ -21,6 +21,7 @@ from retouch.face_params import FACE_LOCAL_PARAM_NAMES
 from retouch.params import get_param
 from retouch.smart_intents import (
     COLOR_INTENT,
+    SKIN_INTENT,
     SMART_INTENTS,
     MacroSpec,
     ParameterWrite,
@@ -534,3 +535,47 @@ class TestShippedColorRegistry:
     def test_get_intent_unknown_raises_key_error(self):
         with pytest.raises(KeyError):
             get_intent("does_not_exist")
+
+
+# ---------------------------------------------------------------------------
+# Shipped Skin registry
+# ---------------------------------------------------------------------------
+
+
+class TestShippedSkinRegistry:
+    def test_skin_intent_present(self):
+        assert get_intent("skin") is SKIN_INTENT
+
+    def test_skin_macros_are_evenness_smoothness(self):
+        macro_ids = [m.macro_id for m in SKIN_INTENT.macro_controls]
+        assert macro_ids == ["evenness", "smoothness"]
+
+    def test_skin_writes_are_all_face_local_scope(self):
+        for macro in SKIN_INTENT.macro_controls:
+            for write in macro.writes:
+                assert write.scope == "face_local"
+                assert write.param_key in FACE_LOCAL_PARAM_NAMES
+
+    def test_skin_macros_are_one_sided_zero_to_one(self):
+        for macro in SKIN_INTENT.macro_controls:
+            assert macro.minimum == 0.0
+            assert macro.maximum == 1.0
+            for write in macro.writes:
+                spec = get_param(write.param_key)
+                assert spec.min_val == 0
+                assert write.target_negative is None
+                assert 0 <= write.target_positive <= spec.max_val
+
+    def test_skin_writes_hit_expected_params(self):
+        keys = {
+            w.param_key
+            for m in SKIN_INTENT.macro_controls
+            for w in m.writes
+        }
+        assert keys == {"equalize", "redness_even", "smooth"}
+
+    def test_skin_registry_passes_validate_registry(self):
+        validate_registry((SKIN_INTENT,))  # must not raise
+
+    def test_full_registry_passes_validate_registry(self):
+        validate_registry(SMART_INTENTS)  # must not raise

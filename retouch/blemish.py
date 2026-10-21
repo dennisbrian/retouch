@@ -137,34 +137,57 @@ class BlemishRemover:
     ) -> np.ndarray:
         """Detect blemishes via local contrast anomalies.
 
-        Strategy:
+        Strategy (survey §E fairness fix, pattern from marks.py robust stats):
             1. Convert to grayscale.
-            2. Compare each pixel to its local neighbourhood mean.
-            3. Pixels significantly darker than surroundings (within skin)
-               are potential blemishes.
+            2. Compare each pixel to the local neighbourhood MEDIAN (robust:
+               the reference is not dragged toward the spot itself, so the
+               measured contrast is the full spot delta at every skin tone).
+            3. Threshold is tone-invariant: a fixed floor (so low-contrast
+               blemishes on deep skin still fire) OR a multiple of the
+               skin's own robust spread, 1.4826*MAD (so noisy skin does not
+               fire everywhere). BOTH polarities: darker spots AND
+               whiteheads (lighter than skin).
             4. Filter by size: only small spots (not shadows or features).
 
         Returns:
             uint8 binary mask of blemish pixels (255 = blemish).
         """
-        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        gray_u8 = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        gray = gray_u8.astype(np.float32)
 
         # Scale parameters based on face width
         scale = face_width / 500.0
 
-        # Local mean (adaptive neighbourhood)
-        ksize = max(int(31 * scale), 9) | 1
-        local_mean = cv2.GaussianBlur(gray, (ksize, ksize), 0)
+        # Robust local reference (adaptive neighbourhood). Capped: medianBlur
+        # costs O(ksize) per pixel, so a face_width-scaled 100+ window would
+        # be prohibitively slow; a spot must be under half the window to be
+        # measured at full contrast, and 51 px still dwarfs any blemish.
+        ksize = min(max(int(31 * scale), 9), 51) | 1
+        local_ref = cv2.medianBlur(gray_u8, ksize).astype(np.float32)
 
-        # Deviation from local mean
-        deviation = local_mean - gray  # positive = darker than surroundings
-
-        # Threshold: pixels that are notably darker
-        threshold = 8.0 + (1.0 - sensitivity) * 15.0  # lower sensitivity = higher threshold
-        blemish_candidates = (deviation > threshold).astype(np.uint8) * 255
+        # Deviation from local skin reference (magnitude only: polarity-free,
+        # catches both darker spots and whiteheads)
+        deviation = local_ref - gray
 
         # Restrict to skin region
         skin_binary = (skin_mask > 0.3).astype(np.uint8) * 255
+
+        # Robust spread of the skin's own luminance (marks.py-style MAD)
+        skin_pixels = gray[skin_mask > 0.3] if skin_mask is not None else gray.reshape(-1)
+        if skin_pixels.size:
+            med = float(np.median(skin_pixels))
+            mad = float(np.median(np.abs(skin_pixels - med)))
+        else:
+            mad = 0.0
+        spread = max(1.4826 * mad, 1.0)
+
+        # Tone-invariant threshold: the legacy floor (kept so mid-tone
+        # sensitivity is unchanged) or a multiple of the skin's own robust
+        # spread, whichever is HIGHER — noisy skin needs a higher bar, smooth
+        # skin keeps the legacy sensitivity. Lower sensitivity = higher floor.
+        threshold = max(8.0 + (1.0 - sensitivity) * 15.0, 2.5 * spread)
+        blemish_candidates = (np.abs(deviation) > threshold).astype(np.uint8) * 255
+
         blemish_candidates = cv2.bitwise_and(blemish_candidates, skin_binary)
 
         # Size filter: remove large regions (those are shadows, not blemishes)

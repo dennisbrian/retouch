@@ -235,7 +235,13 @@ class PluginManager:
         return newly_loaded
 
     def _load_plugin_file(self, path: Path, mod_name: str) -> Optional[Plugin]:
-        """Import *path* as an isolated module and return a plugin instance."""
+        """Import *path* as an isolated module and return a plugin instance.
+
+        The module is imported under a synthetic name required by the
+        import machinery, then always removed from ``sys.modules`` — the
+        plugin instance is fully extracted before returning, so no other
+        code should be able to re-import the module behind our back.
+        """
         safe_path = _safe_resolve_plugin_path(path, self._plugins_dir)
         spec = importlib.util.spec_from_file_location(mod_name, str(safe_path))
         if spec is None or spec.loader is None:
@@ -244,10 +250,9 @@ class PluginManager:
         sys.modules[mod_name] = module
         try:
             spec.loader.exec_module(module)
-        except Exception:
+            return self._extract_plugin(module)
+        finally:
             sys.modules.pop(mod_name, None)
-            raise
-        return self._extract_plugin(module)
 
     @staticmethod
     def _extract_plugin(module: Any) -> Optional[Plugin]:
@@ -296,14 +301,35 @@ class PluginManager:
     def register_all(self, registry: Optional[StageRegistry] = None) -> StageRegistry:
         """Call ``register_stages(registry)`` on every loaded plugin.
 
+        Registration is two-phase per plugin: the plugin's stages are
+        first collected into a scratch registry (validating every stage,
+        including name collisions against *target*), and only committed
+        if ALL of them validate. A plugin whose stage names collide with
+        already-registered stages (built-in or otherwise) is skipped
+        whole — with a warning — so it is never left half-registered.
+        On collision the existing stage wins (plugin loses).
+
         If *registry* is None, the manager's own registry is used.
         Returns the registry stages were registered into.
         """
         target = registry if registry is not None else self._registry
         with self._lock:
             for plugin in list(self._plugins):
+                scratch: Optional[StageRegistry] = None
                 try:
-                    plugin.register_stages(target)
+                    # Phase 1: collect + validate into a scratch registry.
+                    scratch = StageRegistry()
+                    plugin.register_stages(scratch)
+                    collisions = [
+                        name for name in scratch.names() if target.get(name) is not None
+                    ]
+                    if collisions:
+                        raise ValueError(
+                            "stage name(s) already registered: " + ", ".join(sorted(collisions))
+                        )
+                    # Phase 2: commit — cannot fail (names validated above).
+                    for stage in scratch:
+                        target.add(stage)
                 except Exception as exc:  # noqa: BLE001 — report, don't crash
                     self._errors.append(PluginError(
                         plugin_path=plugin.name,

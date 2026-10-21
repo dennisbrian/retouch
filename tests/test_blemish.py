@@ -168,3 +168,54 @@ def test_remove_leaves_protected_gap_unchanged(engine):
     d = _np.abs(out.astype(_np.int16) - img.astype(_np.int16)).max(axis=2)
     assert d[prot].max() <= 2
     assert (d[blem] > 2).any(), "defects must still be repaired"
+
+
+# --- Survey §E fairness: tone-invariant detection (both polarities) ----------
+
+
+def _tone_scene(base_l, spot_l, wh_base=None):
+    """Synthetic 'face': uniform gray level + light noise, one 5x5 spot.
+
+    Returns (img_bgr, skin_mask) with the spot at the centre.
+    """
+    rng = np.random.default_rng(7)
+    img = np.clip(
+        rng.normal(base_l, 2.0, (256, 256, 3)), 0, 255
+    ).astype(np.uint8)
+    img[126:131, 126:131] = spot_l
+    mask = np.ones((256, 256), dtype=np.float32)
+    return img, mask
+
+
+class TestToneInvariance:
+    """Same relative spot contrast must fire at every skin tone, and
+    whiteheads (lighter than skin) must fire too (survey §E)."""
+
+    @pytest.mark.parametrize(
+        "base_l",
+        [70, 128, 190],  # deep / mid / pale skin (L-channel proxy)
+        ids=["deep", "mid", "pale"],
+    )
+    def test_dark_spot_fires_at_all_tones(self, remover, base_l):
+        img, mask = _tone_scene(base_l, base_l - 45)
+        result = remover._detect(img, mask, 0.9, 200)
+        assert result[128, 128] > 0, (
+            f"dark blemish at base_l={base_l} not detected"
+        )
+
+    @pytest.mark.parametrize(
+        "base_l",
+        [70, 128, 190],
+        ids=["deep", "mid", "pale"],
+    )
+    def test_whitehead_fires_at_all_tones(self, remover, base_l):
+        img, mask = _tone_scene(base_l, base_l + 45)
+        result = remover._detect(img, mask, 0.9, 200)
+        assert result[128, 128] > 0, (
+            f"whitehead at base_l={base_l} not detected"
+        )
+
+    def test_flat_skin_still_silent(self, remover):
+        img, mask = _tone_scene(128, 128)
+        result = remover._detect(img, mask, 0.9, 200)
+        assert result.sum() == 0

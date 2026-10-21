@@ -108,6 +108,33 @@ _PROGRESS_CB: ContextVar[Optional[ProgressCallback]] = ContextVar(
     "retouch_engine_progress_cb", default=None
 )
 
+# Cooperative cancellation for stills, mirroring retouch/video/export.py's
+# ``cancelled=`` callable + ``--cancel-file`` pattern. Same ContextVar scope
+# rules as the progress callback: per-run, per-thread, never a processing
+# parameter, never pickled into face workers.
+CancelCheck = Callable[[], bool]
+_CANCEL_CHECK: ContextVar[Optional[CancelCheck]] = ContextVar(
+    "retouch_engine_cancel_check", default=None
+)
+
+
+class RetouchCancelled(Exception):
+    """A requested stop, not a processing failure (see video export's
+    ``VideoExportCancelled``). Raised at stage boundaries and face
+    completions; propagates to the caller before any result is returned."""
+
+
+def _check_cancel() -> None:
+    """Raise :class:`RetouchCancelled` if the run's cancel check says stop.
+
+    Deliberately NOT called inside :func:`_emit_progress`: that helper
+    swallows all callback exceptions by design, which would swallow the
+    cancel. Cancel escalation happens here, before the emit.
+    """
+    check = _CANCEL_CHECK.get()
+    if check is not None and check():
+        raise RetouchCancelled("retouch processing cancelled")
+
 
 def _emit_progress(kind: str, payload: Dict[str, Any]) -> None:
     """Invoke the active progress callback, if any; never raises.
@@ -128,7 +155,13 @@ def _emit_progress(kind: str, payload: Dict[str, Any]) -> None:
 
 
 def _emit_stage(name: str) -> None:
-    """Report that pipeline stage ``name`` is starting."""
+    """Report that pipeline stage ``name`` is starting.
+
+    Also the engine's stage-boundary cancellation point: the cancel check
+    runs before the (exception-swallowing) progress emit so a cancel
+    escalates even when no callback is active.
+    """
+    _check_cancel()
     _emit_progress("stage", {"stage": name})
 
 
@@ -149,17 +182,52 @@ class _FaceProgress:
     def done(self, face_idx: int) -> None:
         if face_idx in self._done:
             return
+        _check_cancel()
         self._done.add(face_idx)
         _emit_progress("face", {"index": len(self._done), "total": self.total})
+
+
+def _resolve_cancel_check(
+    cancelled: Any, cancel_event: Any, cancel_file: Any,
+) -> Optional[CancelCheck]:
+    """Build the cancel check callable from caller-supplied options.
+
+    Accepts, in priority order: ``cancelled`` (a callable returning truthy,
+    the same shape as ``retouch.video.export.export_video(cancelled=...)``),
+    ``cancel_event`` (a ``threading.Event``-like with ``is_set()``) and
+    ``cancel_file`` (a path; existence means cancel, mirroring the video
+    module's ``--cancel-file``). At most one is used.
+    """
+    if cancelled is not None:
+        if not callable(cancelled):
+            logger.warning(
+                "cancelled is not callable (%s); ignoring", type(cancelled).__name__
+            )
+            return None
+        return cancelled
+    if cancel_event is not None:
+        if not callable(getattr(cancel_event, "is_set", None)):
+            logger.warning("cancel_event has no is_set(); ignoring")
+            return None
+        return cancel_event.is_set
+    if cancel_file is not None:
+        from pathlib import Path
+
+        path = Path(cancel_file)
+        return path.exists
+    return None
 
 
 def _scoped_progress_cb(fn: Callable[..., Any]) -> Callable[..., Any]:
     """Install ``progress_cb`` into ``_PROGRESS_CB`` for one ``process()`` call.
 
-    Always resets in ``finally`` so a callback can never leak into a later
-    call (or into direct stage-method calls) on the same thread — including
-    when processing raises. A non-callable value (e.g. a stray key from a
-    session file, which ``batch_processor`` filters by signature) is ignored.
+    Also installs the cooperative cancel check (``cancelled`` /
+    ``cancel_event`` / ``cancel_file``) into ``_CANCEL_CHECK`` with the same
+    scope guarantees. Always resets in ``finally`` so neither can leak into a
+    later call (or into direct stage-method calls) on the same thread —
+    including when processing raises. A non-callable value (e.g. a stray key
+    from a session file, which ``batch_processor`` filters by signature) is
+    ignored.
     """
 
     @functools.wraps(fn)
@@ -170,11 +238,18 @@ def _scoped_progress_cb(fn: Callable[..., Any]) -> Callable[..., Any]:
                 "progress_cb is not callable (%s); ignoring", type(cb).__name__
             )
             cb = None
-        token = _PROGRESS_CB.set(cb)
+        check = _resolve_cancel_check(
+            kwargs.get("cancelled"),
+            kwargs.get("cancel_event"),
+            kwargs.get("cancel_file"),
+        )
+        cb_token = _PROGRESS_CB.set(cb)
+        cancel_token = _CANCEL_CHECK.set(check)
         try:
             return fn(self, *args, **kwargs)
         finally:
-            _PROGRESS_CB.reset(token)
+            _PROGRESS_CB.reset(cb_token)
+            _CANCEL_CHECK.reset(cancel_token)
 
     return wrapper
 
@@ -1432,23 +1507,28 @@ class RetouchEngine:
             import logging
             logging.getLogger(__name__).info(f"Loaded {len(loaded)} user recipes: {loaded}")
 
+        # P3: Stage registry for global phases (stages 3-6).
+        # Built once; used by _run_global_phases when use_registry=True.
+        from .stage_wrappers import build_global_registry
+        self._global_registry = build_global_registry(self)
+
         # T4: best-effort plugin discovery + init. A broken or missing plugin
         # must never crash engine startup; failures are logged and swallowed.
+        # NOTE: must run AFTER _global_registry is built — plugin stages are
+        # registered into the live global registry via register_all().
         try:
             from .plugin_api import PluginManager
             self._plugin_manager = PluginManager()
             self._plugin_manager.discover()
             self._plugin_manager.init_all(self)
+            # Survey §F/A6: without register_all(), plugin stages landed in
+            # the manager's private registry and never ran. Register them
+            # into the engine's global stage registry (skip+warn on collisions
+            # with built-in stage names — handled two-phase in PluginManager).
+            self._plugin_manager.register_all(self._global_registry)
         except Exception as exc:  # noqa: BLE001 — plugins are optional
             import logging as _logging
             _logging.getLogger(__name__).warning("Plugin discovery failed: %s", exc)
-
-        # Warm up JIT kernels on engine startup (safe fallback if Numba is missing)
-
-        # P3: Stage registry for global phases (stages 3-6).
-        # Built once; used by _run_global_phases when use_registry=True.
-        from .stage_wrappers import build_global_registry
-        self._global_registry = build_global_registry(self)
 
     # ------------------------------------------------------------------
     # Public API
@@ -1882,6 +1962,11 @@ class RetouchEngine:
         cross_region_skin_mask: Optional[np.ndarray] = None,
         cross_region_protect_mask: Optional[np.ndarray] = None,
         progress_cb: Optional[Callable[[str, dict], None]] = None,
+        # Cooperative cancellation (see _check_cancel); kept next to
+        # progress_cb so neither ever becomes a processing parameter.
+        cancelled: Optional[Callable[[], bool]] = None,
+        cancel_event: Any = None,
+        cancel_file: Any = None,
         collect_effect_previews: bool = False,
         **kwargs: Any,
     ) -> ProcessingResult:
@@ -1892,7 +1977,10 @@ class RetouchEngine:
         """
         # Installed in the scoped ContextVar by the decorator. Keeping it out
         # of overrides ensures it never reaches ProcessingContext or sessions.
-        del progress_cb
+        del progress_cb, cancelled, cancel_event, cancel_file
+        # A pre-cancelled run must stop before any work: the first
+        # _emit_stage may be conditional (e.g. ai_denoise gated off).
+        _check_cancel()
         timings: Dict[str, float] = {}
         if (
             not isinstance(img_bgr, np.ndarray)
@@ -4062,6 +4150,11 @@ class RetouchEngine:
                 )
             else:
                 proc_results = self._face_pool.process_faces(payloads)
+        except RetouchCancelled:
+            # Cancel escalation from face_progress.done (on_face_done) must
+            # not be mistaken for a pool failure; the ThreadPool fallback
+            # below would keep processing faces after the caller said stop.
+            raise
         except Exception:
             logger.exception("FaceProcessorPool failed; falling back to ThreadPoolExecutor")
             proc_results = None

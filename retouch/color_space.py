@@ -23,6 +23,8 @@ point shift between sRGB (D65) and ProPhoto (D50) is not compensated.
 
 from __future__ import annotations
 
+from typing import Optional
+
 import cv2
 import numpy as np
 
@@ -545,16 +547,32 @@ def skin_mask_lch(
     hue_center: float = 25.0,
     hue_tolerance: float = 25.0,
     chroma_min: float = 8.0,
+    chroma_ref_lightness: Optional[float] = None,
 ) -> np.ndarray:
     """Detect skin tones in LCH space.
 
-    Output is ``exp(-((H - hue_center) / hue_tolerance) ** 2) * (C > chroma_min)``.
+    Output is ``exp(-((H - hue_center) / hue_tolerance) ** 2) * chroma_gate``.
+
+    With ``chroma_ref_lightness=None`` (default) the gate is the legacy
+    absolute test ``C > chroma_min``.
+
+    With a float ``chroma_ref_lightness`` the gate is *relative* instead
+    (house rule: no absolute intensity thresholds on skin-tone-scaled
+    signals): the required chroma scales with lightness as
+    ``chroma_min * clip(L / chroma_ref_lightness, 1/3, 1)``. Deep skin,
+    whose chroma is naturally lower in Lab/LCH, gets a proportionally
+    scaled-down floor; mid and light skin (L* at or above the reference)
+    use the full ``chroma_min``. Near-neutral pixels (grey walls, hair)
+    stay excluded at every tone because their chroma is ~0.
 
     Args:
         lch: (H, W, 3) float32 LCH.
         hue_center: Hue center in degrees. Default 25° covers red-orange-yellow.
         hue_tolerance: Hue falloff width in degrees.
-        chroma_min: Minimum chroma required to be classified as skin.
+        chroma_min: Minimum chroma at ``chroma_ref_lightness`` and above
+            (or the absolute floor when ``chroma_ref_lightness`` is None).
+        chroma_ref_lightness: L* at which ``chroma_min`` applies in full.
+            None keeps the legacy absolute gate.
 
     Returns:
         (H, W) float32 mask in [0, 1].
@@ -562,7 +580,14 @@ def skin_mask_lch(
     h = lch[:, :, 2]
     c = lch[:, :, 1]
     hue_term = np.exp(-((h - hue_center) / hue_tolerance) ** 2)
-    chroma_gate = (c > chroma_min).astype(np.float32)
+    if chroma_ref_lightness is None:
+        chroma_threshold: np.ndarray = np.asarray(chroma_min, dtype=np.float32)
+    else:
+        l_star = lch[:, :, 0]
+        chroma_threshold = chroma_min * np.clip(
+            l_star / float(chroma_ref_lightness), 1.0 / 3.0, 1.0
+        )
+    chroma_gate = (c > chroma_threshold).astype(np.float32)
     return (hue_term * chroma_gate).astype(np.float32)
 
 

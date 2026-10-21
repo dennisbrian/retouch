@@ -460,8 +460,20 @@ def facepaint_crack_repair(
 
     lab = bgr_f32_to_lab_f32(img)
     lum = lab[:, :, 0].astype(np.float32)
-    mean_l = float(lum[pm > 0.5].mean()) if (pm > 0.5).any() else float(lum.mean())
-    crack = (lum < mean_l - 12.0) & (pm > 0.5)
+    inside = pm > 0.5
+    # Relative crack gate (teeth.py-style median/MAD): each pixel is compared
+    # to its LOCAL low-pass of the paint luminance, and the threshold scales
+    # with the paint region's own robust spread. A fixed absolute 12/255 gate
+    # under/over-fired depending on paint tone; deep paint cracks at the same
+    # relative contrast now detect the same as light paint.
+    local = _lowpass(lum, max(4.0, min(h, w) * 0.05))
+    dev = np.clip(local - lum, 0.0, None)
+    vals = dev[inside]
+    if vals.size == 0:
+        return img
+    sigma = 1.4826 * float(np.median(np.abs(vals - np.median(vals))))
+    thresh = max(2.0, 2.5 * sigma)
+    crack = (dev > thresh) & inside
     if not crack.any():
         return img
 
@@ -501,8 +513,16 @@ def paint_coverage_even(
 
     lab = bgr_f32_to_lab_f32(img)
     lum = lab[:, :, 0].astype(np.float32)
-    mean_l = float(lum[pm > 0.5].mean()) if (pm > 0.5).any() else float(lum.mean())
-    corrected = lum + strength * pm * (mean_l - lum)
+    # LOCAL smoothness target: a large-kernel low-pass of the coverage itself
+    # (mask-normalized so background does not bleed in). A global-mean pull
+    # flattened legitimate broad shading (one-side shadow); against the local
+    # mean only splotches deviate, so shading survives and splotches even out.
+    fw = _face_width(img, pm)
+    sigma = max(8.0, fw * 0.25)
+    num = _lowpass(lum * pm, sigma)
+    den = _lowpass(pm, sigma)
+    target = np.where(den > 1e-6, num / np.maximum(den, 1e-6), lum)
+    corrected = lum + strength * pm * (target - lum)
     lab[:, :, 0] = np.clip(corrected, 0.0, 255.0)
     return lab_f32_to_bgr_f32(lab)
 

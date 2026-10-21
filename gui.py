@@ -203,6 +203,8 @@ from gui_advanced import (
     advanced_clear_mask_handler,
     advanced_save_snapshot_handler,
     advanced_compare_snapshot_handler,
+    HistoryState,
+    _advanced_load_rgb_state,
 )
 
 _logger = logging.getLogger(__name__)
@@ -1301,19 +1303,34 @@ def load_advanced_session_handler(session_file, source_rgb, base_contract=None):
     """Restore serialized Advanced Retouch edits when a source is available."""
     from retouch.session import Session
 
-    def _finish(values, review_support=None):
-        values = list(values)
+    def _finish(state, review_support=None):
         if review_support is not None:
-            values[4] = mask_overlay(values[2], review_support, 0.42)
-            values[8] = review_support
-            values[9] += " The saved effective-mask support is highlighted; review it before continuing or exporting."
-            return tuple(values) + (
+            state.mask_overlay_image = mask_overlay(state.current_rgb, review_support, 0.42)
+            state.mask = review_support
+            state.status += " The saved effective-mask support is highlighted; review it before continuing or exporting."
+        # Output order here differs from HistoryState.output(): this handler
+        # feeds _advanced_pending_session_state at slot 1 and has no
+        # base_contract output.
+        values = (
+            state.source_rgb,
+            state.pending_session,
+            state.current_rgb,
+            state.editor,
+            state.mask_overlay_image,
+            state.before_after_image,
+            state.history,
+            state.edit_log,
+            state.mask,
+            state.status,
+        )
+        if review_support is not None:
+            return values + (
                 True,
                 gr.update(value=False, visible=True, interactive=True),
                 gr.update(value=True),
                 gr.update(value=42),
             )
-        return tuple(values) + (
+        return values + (
             False,
             gr.update(value=False, visible=False, interactive=True),
             gr.update(),
@@ -1321,110 +1338,57 @@ def load_advanced_session_handler(session_file, source_rgb, base_contract=None):
         )
 
     if session_file is None:
-        return _finish((
-            source_rgb,
-            [],
-            source_rgb,
-            source_rgb,
-            None,
-            before_after(source_rgb, source_rgb) if source_rgb is not None else None,
-            AdvancedHistory().to_state(),
-            [],
-            None,
-            "",
-        ))
+        return _finish(_advanced_load_rgb_state(source_rgb, ""))
     try:
         path = session_file.name if hasattr(session_file, "name") else str(session_file)
         session = Session.from_file(path)
         raw_advanced = session.advanced_retouch or {}
         if not raw_advanced:
-            return _finish((
-                source_rgb,
-                [],
-                source_rgb,
-                source_rgb,
-                None,
-                before_after(source_rgb, source_rgb) if source_rgb is not None else None,
-                AdvancedHistory().to_state(),
-                [],
-                None,
-                "Session contains no Advanced Retouch edits.",
+            return _finish(_advanced_load_rgb_state(
+                source_rgb, "Session contains no Advanced Retouch edits."
             ))
         advanced = parse_advanced_session_payload(raw_advanced)
         edits = list(advanced.get("edits") or [])
     except Exception as exc:
         _logger.warning("Failed to load Advanced Retouch session data: %s", exc)
-        return _finish((
-            source_rgb,
-            [],
-            source_rgb,
-            source_rgb,
-            None,
-            before_after(source_rgb, source_rgb) if source_rgb is not None else None,
-            AdvancedHistory().to_state(),
-            [],
-            None,
-            f"Advanced Retouch session data unavailable: {exc}",
+        return _finish(_advanced_load_rgb_state(
+            source_rgb, f"Advanced Retouch session data unavailable: {exc}"
         ))
 
     if advanced.get("legacy_unverified"):
-        return _finish((
+        return _finish(_advanced_load_rgb_state(
             source_rgb,
-            advanced,
-            source_rgb,
-            source_rgb,
-            None,
-            before_after(source_rgb, source_rgb) if source_rgb is not None else None,
-            AdvancedHistory().to_state(),
-            [],
-            None,
             f"Loaded {len(edits)} legacy Advanced Retouch edit(s) as pending. "
             "Legacy sessions have no base hash; use Bind legacy session edits to apply them explicitly.",
+            pending_session=advanced,
         ))
     if source_rgb is None or base_contract is None:
-        return _finish((
-            source_rgb,
-            advanced,
-            source_rgb,
-            None,
-            None,
-            None,
-            _advanced_history_from_edits(edits).to_state(),
-            edits,
-            None,
-            f"Loaded {len(edits)} Advanced Retouch edit(s) as pending. "
-            "Load the exact recorded base to verify and replay them.",
+        return _finish(HistoryState(
+            source_rgb=source_rgb,
+            current_rgb=source_rgb,
+            before_after_image=None,
+            history=_advanced_history_from_edits(edits).to_state(),
+            edit_log=edits,
+            status=f"Loaded {len(edits)} Advanced Retouch edit(s) as pending. "
+                   "Load the exact recorded base to verify and replay them.",
+            pending_session=advanced,
         ))
     comparison = compare_base_contracts(advanced.get("base"), base_contract)
     if not comparison["matches"]:
-        return _finish((
+        return _finish(_advanced_load_rgb_state(
             source_rgb,
-            advanced,
-            source_rgb,
-            source_rgb,
-            None,
-            before_after(source_rgb, source_rgb),
-            AdvancedHistory().to_state(),
-            [],
-            None,
             "Advanced Retouch session base mismatch; edits remain pending ({}).".format(
                 ", ".join(comparison["reasons"])
             ),
+            pending_session=advanced,
         ))
     try:
         review_support = _advanced_rebase_support_mask(edits, np.asarray(source_rgb).shape)
     except Exception as exc:
-        return _finish((
+        return _finish(_advanced_load_rgb_state(
             source_rgb,
-            advanced,
-            source_rgb,
-            source_rgb,
-            None,
-            before_after(source_rgb, source_rgb),
-            AdvancedHistory().to_state(),
-            [],
-            None,
             f"Could not verify Advanced Retouch mask geometry; edits remain pending: {exc}",
+            pending_session=advanced,
         ))
     try:
         current = _replay_advanced_state(source_rgb, edits)
@@ -1433,31 +1397,24 @@ def load_advanced_session_handler(session_file, source_rgb, base_contract=None):
             raise AdvancedContractError(
                 "replay result mismatch: %s" % ", ".join(replay_check["reasons"])
             )
-        return _finish((
-            source_rgb,
-            [],
-            current,
-            current,
-            None,
-            before_after(source_rgb, current),
-            _advanced_history_from_edits(edits).to_state(),
-            edits,
-            None,
-            f"Verified and replayed {len(edits)} Advanced Retouch edit(s) on the recorded base.",
+        return _finish(HistoryState(
+            source_rgb=source_rgb,
+            current_rgb=current,
+            editor=current,
+            before_after_image=before_after(source_rgb, current),
+            history=_advanced_history_from_edits(edits).to_state(),
+            edit_log=edits,
+            status=f"Verified and replayed {len(edits)} Advanced Retouch edit(s) on the recorded base.",
         ), review_support=review_support)
     except Exception as exc:
         _logger.warning("Failed to replay Advanced Retouch session data: %s", exc)
-        return _finish((
-            source_rgb,
-            advanced,
-            source_rgb,
-            source_rgb,
-            None,
-            before_after(source_rgb, source_rgb),
-            _advanced_history_from_edits(edits).to_state(),
-            [],
-            None,
-            f"Could not verify Advanced Retouch replay; edits remain pending: {exc}",
+        return _finish(HistoryState(
+            source_rgb=source_rgb,
+            current_rgb=source_rgb,
+            before_after_image=before_after(source_rgb, source_rgb),
+            history=_advanced_history_from_edits(edits).to_state(),
+            status=f"Could not verify Advanced Retouch replay; edits remain pending: {exc}",
+            pending_session=advanced,
         ))
 
 
@@ -4282,7 +4239,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 auto_exposure = gr.Checkbox(label="Auto Exposure Correction", value=False, info="Automatically correct under/over-exposed images before processing")
                                 white_costume_lift = gr.Checkbox(label="White Costume Lift", value=False, info="Selectively boost bright clothing to create separation")
                                 face_exposure = gr.Slider(0, 100, 0, step=1, label="Face Exposure Lift", info="Brighten/darken the exposed face relative to the body (skin.face_exposure) · 0 = off")
-                                face_polish = gr.Slider(0, 100, 0, step=1, label="Face Polish", info="Porcelain finish in one control: tones oily hot spots to a satin sheen, lifts under-eye and smile-line shadows, brightens the face a little, adds soft nose and cheekbone highlights and crisper irises · 0 = off")
+                                face_polish = gr.Slider(0, 100, 0, step=1, label="Face Polish", info="Porcelain finish in one control: tones oily hot spots to a satin sheen, lifts under-eye and smile-line shadows, and brightens the face a little by raising the minimum strengths of shine removal, shadow lift and face exposure · 0 = off")
                                 powder_finish = gr.Slider(0, 100, 0, step=1, label="Powder Finish", info="Soft, powdered skin: evens shine and sheen into the skin's own colour instead of greying it, and works on white face paint too. Keeps the face's overall brightness. Off by default; start near 50.")
                                 highlight_repair = gr.Slider(0, 100, 0, step=1, label="Blown Highlight Repair", info="Rebuilds skin that flash or sun blew out to pure white (forehead, nose, cheekbones): brings back skin colour and texture from the skin around it and rolls the spot below white. Leaves white face paint, eyes, lips and props alone. Off by default; start near 60.")
                                 skin_warmth = gr.Slider(0, 100, 0, step=1, label="Skin Warmth", info="Moves natural skin toward a warm peach, face and body together; leaves face paint and already-warm skin alone. Off by default; start near 50.")

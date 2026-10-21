@@ -209,3 +209,50 @@ class TestPipelineState:
         state = PipelineState(img=img, ctx=None)
         state.img = np.ones((32, 32, 3), dtype=np.float32)
         assert state.img[0, 0, 0] == 1.0
+
+
+class TestStageOpacity:
+    """F2 stage mixer: per-stage opacity wired in StageRegistry.run."""
+
+    def test_zero_opacity_skips_stage(self, registry, state):
+        stage = _IncrementStage("s1")
+        registry.add(stage)
+        state.opacity["s1"] = 0.0
+        registry.run(state)
+        assert stage.run_count == 0
+        assert state.timings["s1"] == 0.0
+
+    def test_full_opacity_unchanged(self, registry, state):
+        stage = _IncrementStage("s1")
+        registry.add(stage)
+        state.opacity["s1"] = 1.0
+        registry.run(state)
+        assert stage.run_count == 1
+
+    def test_missing_opacity_unchanged(self, registry, state):
+        stage = _IncrementStage("s1")
+        registry.add(stage)
+        registry.run(state)
+        assert stage.run_count == 1
+
+    def test_partial_opacity_blends_output(self, registry, state):
+        class _OnesStage(BaseStage):
+            name = "ones"
+            phase = "global"
+
+            def run(self, s):
+                s.img = np.ones_like(s.img)
+                return s
+
+        registry.add(_OnesStage())
+        state.opacity["ones"] = 0.25
+        state.img = np.zeros_like(state.img)
+        registry.run(state)
+        assert np.allclose(state.img, 0.25)
+
+    def test_run_phase_respects_opacity(self, registry, state):
+        stage = _IncrementStage("s1")
+        registry.add(stage)
+        state.opacity["s1"] = 0.0
+        registry.run_phase("global", state)
+        assert stage.run_count == 0

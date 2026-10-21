@@ -807,3 +807,119 @@ class TestLoadSessionHandlerPathStripping:
         # Path key untouched (stays None), value param applied.
         assert result[idx_img] is None
         assert result[idx_recipe] == "cosplay"
+
+
+# ---------------------------------------------------------------------------
+# UndoRedoStack: serialization round-trip (to_state / from_state)
+# ---------------------------------------------------------------------------
+
+
+class TestUndoRedoStackSerialization:
+    """to_state/from_state round-trip preserves entries and cursor exactly."""
+
+    def test_round_trip_preserves_entries_and_cursor(self) -> None:
+        stack = UndoRedoStack(max_size=50)
+        stack.push({"v": 1})
+        stack.push({"v": 2})
+        stack.push({"v": 3})
+        stack.undo()  # cursor at index 1
+
+        restored = UndoRedoStack.from_state(stack.to_state())
+        assert restored.size == 3
+        assert restored.cursor == stack.cursor
+        assert restored.current() == {"v": 2}
+        assert restored.max_size == 50
+
+    def test_state_is_json_safe(self) -> None:
+        stack = UndoRedoStack()
+        stack.push({"v": 1, "name": "natural"})
+        state = stack.to_state()
+        assert json.loads(json.dumps(state)) == state
+
+    def test_undo_redo_works_across_boundary(self) -> None:
+        stack = UndoRedoStack()
+        stack.push({"v": 1})
+        stack.push({"v": 2})
+        stack.push({"v": 3})
+        state = stack.to_state()
+
+        restored = UndoRedoStack.from_state(json.loads(json.dumps(state)))
+        assert restored.undo() == {"v": 2}
+        assert restored.undo() == {"v": 1}
+        assert restored.undo() is None
+        assert restored.redo() == {"v": 2}
+        assert restored.redo() == {"v": 3}
+        assert restored.redo() is None
+
+    def test_truncated_history_round_trips(self) -> None:
+        stack = UndoRedoStack()
+        stack.push({"v": 1})
+        stack.push({"v": 2})
+        stack.push({"v": 3})
+        stack.undo()
+        stack.push({"v": 4})  # truncates v=3
+
+        restored = UndoRedoStack.from_state(stack.to_state())
+        assert restored.size == 3
+        assert restored.current() == {"v": 4}
+        assert restored.can_redo is False
+
+    def test_empty_stack_round_trip(self) -> None:
+        stack = UndoRedoStack()
+        restored = UndoRedoStack.from_state(stack.to_state())
+        assert restored.size == 0
+        assert restored.current() is None
+        assert restored.undo() is None
+
+    def test_from_state_clamps_oversized_entries(self) -> None:
+        state = {"max_size": 2, "cursor": 2, "entries": [{"v": 1}, {"v": 2}, {"v": 3}]}
+        restored = UndoRedoStack.from_state(state)
+        assert restored.size == 2
+        assert restored.current() == {"v": 3}
+
+    def test_from_state_rejects_non_dict(self) -> None:
+        with pytest.raises(TypeError):
+            UndoRedoStack.from_state(["not", "a", "dict"])
+
+
+# ---------------------------------------------------------------------------
+# Session persistence of undo history
+# ---------------------------------------------------------------------------
+
+
+class TestSessionUndoHistoryPersistence:
+    """UndoRedoStack survives session save/load like advanced_retouch does."""
+
+    def test_session_round_trip_preserves_undo_history(self, tmp_path: Path) -> None:
+        stack = UndoRedoStack()
+        stack.push({"v": 1})
+        stack.push({"v": 2})
+        stack.push({"v": 3})
+
+        session = create_session_from_params({"v": 3})
+        session.undo_history = stack.to_state()
+        path = tmp_path / "s.session.json"
+        session.to_file(str(path))
+
+        loaded = Session.from_file(str(path))
+        assert loaded.undo_history == stack.to_state()
+
+        restored = UndoRedoStack.from_state(loaded.undo_history)
+        assert restored.undo() == {"v": 2}
+        assert restored.undo() == {"v": 1}
+        assert restored.redo() == {"v": 2}
+        assert restored.redo() == {"v": 3}
+
+    def test_session_without_history_has_no_key(self, tmp_path: Path) -> None:
+        session = create_session_from_params({"v": 1})
+        path = tmp_path / "s.session.json"
+        session.to_file(str(path))
+        data = json.loads(Path(path).read_text())
+        assert "undo_history" not in data
+        assert Session.from_file(str(path)).undo_history == {}
+
+    def test_merge_params_carries_undo_history(self) -> None:
+        session = create_session_from_params({"v": 1})
+        session.undo_history = {"max_size": 50, "cursor": 0, "entries": [{"v": 1}]}
+        merged = session.merge_params({"v": 2})
+        assert merged.undo_history == session.undo_history

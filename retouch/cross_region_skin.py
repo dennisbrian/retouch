@@ -155,11 +155,14 @@ def infer_same_person_skin_support(
     owner = (labels == int(owner_ids[0])).astype(np.float32)
 
     lch = bgr_f32_to_lch_f32(source * 255.0)
+    # Relative chroma gate (scales with L*): deep skin keeps its support
+    # where an absolute floor would drop it (survey §E).
     skin_likelihood = skin_mask_lch(
         lch,
         hue_center=25.0,
         hue_tolerance=25.0,
         chroma_min=8.0,
+        chroma_ref_lightness=60.0,
     )
 
     exclusion = face.copy()

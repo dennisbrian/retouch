@@ -17,7 +17,9 @@ pixel. Because ``c`` is shared across channels it cancels when we difference
 the channels, so we solve the 2x2 subsystem (R-B, G-B) via the pseudo-inverse
 of ``M`` with the blue column removed.
 
-Both maps are returned float32 in [0, ~1+] (clamped at 0). The exported names
+Both maps are returned float32, non-negative (floored at the per-image
+minimum, see ``_tone_aware_floor`` — no per-pixel truncation). The exported
+names
 ``decompose_chromophores`` and ``hemoglobin_breakdown_phase`` are stable: they
 are imported by the R10 (chromophore suite) and R11 (cosplay moat) agents.
 
@@ -59,16 +61,49 @@ _M_PINV = np.linalg.pinv(_M_PRIME)  # (2, 3)
 _PHASE_HUE = np.array([150.0, 60.0, 30.0], dtype=np.float32)  # purple, green, yellow
 
 
+def _srgb_to_linear(srgb: np.ndarray) -> np.ndarray:
+    """Decode encoded sRGB to linear light (v2 parity, fairness A23)."""
+    return np.where(
+        srgb <= 0.04045,
+        srgb / 12.92,
+        np.power((srgb + 0.055) / 1.055, 2.4),
+    ).astype(np.float32)
+
+
 def _bgr_to_log_rgb(img_bgr: np.ndarray) -> np.ndarray:
     """Convert BGR uint8/float in [0,255] to log-RGB optical density.
 
-    Returns float32 HxWx3 with L = -log(rgb) where rgb is in [0, 1].
+    The input is treated as encoded sRGB and linearised first: Beer–Lambert
+    additivity (L = M @ c) only holds in linear-light space, and skipping the
+    decode makes the decomposition tone-dependent on deep skin (survey §E,
+    A23). Returns float32 HxWx3 with L = -log(linear rgb), rgb in [0, 1].
     """
     rgb = img_bgr[..., ::-1].astype(np.float32)
     if rgb.max() > 1.0:
         rgb = rgb / 255.0
-    rgb = np.clip(rgb, 1e-4, 1.0)
-    return -np.log(rgb)
+    rgb = np.clip(rgb, 0.0, 1.0)
+    linear = _srgb_to_linear(rgb)
+    return -np.log(np.clip(linear, 1e-5, 1.0))
+
+
+def _tone_aware_floor(conc: np.ndarray) -> np.ndarray:
+    """Floor a chromophore map without a tone-dependent absolute clip.
+
+    An absolute ``clip(0)`` throws away different amounts of signal depending
+    on how dark the skin is: the same physical pigmentation sits at a lower
+    (possibly negative) baseline on deep skin than on pale skin, so deep-skin
+    negatives are real signal, not noise. Instead shift the whole map by its
+    per-image minimum (a single camera/scene constant per decomposition, as
+    with the shared ``c``), which preserves every relative difference and
+    keeps the non-negative output contract. A tiny absolute floor is kept so
+    constant maps stay at 0 rather than picking up -min noise.
+    """
+    mn = float(np.nanmin(conc))
+    if not np.isfinite(mn):
+        return np.zeros_like(conc, dtype=np.float32)
+    if mn >= 0.0:
+        return np.maximum(conc, 0.0).astype(np.float32)
+    return (conc - np.float32(mn)).astype(np.float32)
 
 
 def decompose_chromophores(img_bgr: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -81,7 +116,8 @@ def decompose_chromophores(img_bgr: np.ndarray) -> Tuple[np.ndarray, np.ndarray]
         Tuple of two float32 HxW maps:
             melanin    — eumelanin concentration (higher = darker/brown/tan).
             hemoglobin — blood concentration (higher = red/rosacea/vein).
-        Both are clamped to >= 0.
+        Both are non-negative (per-image tone-aware floor, see
+        ``_tone_aware_floor``).
 
     Raises:
         ValueError: if input is not a 3-channel HxWx3 array.
@@ -101,8 +137,8 @@ def decompose_chromophores(img_bgr: np.ndarray) -> Tuple[np.ndarray, np.ndarray]
     melanin = conc[..., 0]
     hemoglobin = conc[..., 1]
 
-    melanin = np.clip(melanin, 0.0, None).astype(np.float32)
-    hemoglobin = np.clip(hemoglobin, 0.0, None).astype(np.float32)
+    melanin = _tone_aware_floor(conc[..., 0])
+    hemoglobin = _tone_aware_floor(conc[..., 1])
     return melanin, hemoglobin
 
 

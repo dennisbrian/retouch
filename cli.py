@@ -723,6 +723,20 @@ def _warn_16bit_upcast(result, bit_depth):
     )
 
 
+def _snapshot_original(img_bgr, compare_flag: bool):
+    """Snapshot the pre-retouch original for the compare image.
+
+    16-bit RAF ingest returns float32 [0,255]; comparison stitching is
+    uint8-only, so normalize any non-uint8 array before the copy. Used by
+    both the serial and pool worker paths so their dtypes cannot diverge.
+    """
+    if not compare_flag:
+        return None
+    if img_bgr.dtype != np.uint8:
+        return np.clip(img_bgr, 0, 255).astype(np.uint8)
+    return img_bgr.copy()
+
+
 def _process_single_with_evidence(args, info=None, sink=None, credentials=None):
     if info is None:
         info = {}
@@ -788,10 +802,7 @@ def _process_single_with_evidence(args, info=None, sink=None, credentials=None):
         orig_shape = img_bgr.shape[:2]
         # 16-bit RAF ingest returns float32 [0,255]; comparison stitching is
         # uint8-only, so snapshot a uint8 original for the compare image.
-        original_full = (
-            (np.clip(img_bgr, 0, 255).astype(np.uint8) if img_bgr.dtype != np.uint8 else img_bgr.copy())
-            if compare_flag else None
-        )
+        original_full = _snapshot_original(img_bgr, compare_flag)
         before_thumb = _report_thumb(img_bgr) if credentials else None
         img_bgr, _scale = resize_for_processing(img_bgr, max_dim)
 
@@ -1340,6 +1351,89 @@ def _add_processing_arg(parser, spec):
     )
 
 
+def _parse_set_value(spec, raw: str, flag: str) -> Any:
+    """Coerce one ``--set name=value`` string by the spec's declared type.
+
+    Raises ``ValueError`` with a user-facing message on any mismatch.
+    """
+    # ``cli_type is None`` means "argparse store_true flag" for dedicated
+    # flags, but some of those params are numeric (e.g. relight_azimuth);
+    # infer the real type from the declared default for --set purposes.
+    if spec.cli_type in (None, bool):
+        default_type = type(spec.default)
+        if default_type in (int, float):
+            spec_type: Any = default_type
+        elif default_type is str:
+            spec_type = str
+        else:
+            spec_type = bool
+    else:
+        spec_type = spec.cli_type
+    if spec_type is bool:
+        low = raw.strip().lower()
+        if low in ("true", "1", "yes", "on"):
+            return True
+        if low in ("false", "0", "no", "off"):
+            return False
+        raise ValueError(f"{flag}: expected true/false, got {raw!r}")
+    try:
+        if spec_type is int:
+            value: Any = int(raw)
+        elif spec_type is float:
+            value = float(raw)
+        else:  # str
+            value = raw
+    except ValueError:
+        raise ValueError(
+            f"{flag}: expected {spec_type.__name__}, got {raw!r}"
+        ) from None
+    if spec.choices and value not in spec.choices:
+        raise ValueError(
+            f"{flag}: {value!r} not in {sorted(spec.choices)}"
+        )
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if spec.min_val is not None and value < spec.min_val:
+            raise ValueError(
+                f"{flag}: {value} below minimum {spec.min_val}"
+            )
+        if spec.max_val is not None and value > spec.max_val:
+            raise ValueError(
+                f"{flag}: {value} above maximum {spec.max_val}"
+            )
+    return value
+
+
+def _build_set_params(set_args, parser=None) -> Dict[str, Any]:
+    """Parse repeated ``name=value`` strings into an engine-params dict.
+
+    Unknown names raise a ``ValueError`` listing the valid names; values
+    are coerced by each param's declared ``cli_type`` (see
+    ``retouch.params.ParamSpec``).
+    """
+    from retouch.params import get_param, param_names
+
+    out: Dict[str, Any] = {}
+    if not set_args:
+        return out
+    for item in set_args:
+        name, sep, raw = item.partition("=")
+        name = name.strip()
+        if not sep or not name:
+            raise ValueError(
+                f"--set expects name=value, got {item!r} "
+                "(run --list-params for valid names)"
+            )
+        try:
+            spec = get_param(name)
+        except KeyError:
+            raise ValueError(
+                f"Unknown engine param {name!r} for --set "
+                f"(valid names: {', '.join(param_names())})"
+            ) from None
+        out[name] = _parse_set_value(spec, raw, f"--set {name}")
+    return out
+
+
 def build_params(args: argparse.Namespace) -> dict:
     params = {}
     if getattr(args, "recipe", None):
@@ -1428,6 +1522,11 @@ def build_params(args: argparse.Namespace) -> dict:
         color_transfer_intensity = getattr(args, "color_ref_strength", None)
     if color_transfer_intensity is not None:
         params["color_transfer_intensity"] = float(color_transfer_intensity)
+
+    # Generic --set overrides come last: they beat the specific flags and
+    # the recipe defaults, and only lose to --extract-look look params and
+    # --smart per-image suggestions (both applied later in main()).
+    params.update(_build_set_params(getattr(args, "set", None)))
 
     return params
 
@@ -1573,6 +1672,24 @@ def main() -> None:
     # Auto-generate processing parameter arguments from PROCESSING_PARAMS
     for spec in PROCESSING_PARAMS:
         _add_processing_arg(parser, spec)
+
+    parser.add_argument(
+        "--set",
+        action="append",
+        default=None,
+        metavar="PARAM=VALUE",
+        help="Set any engine parameter by name (repeatable); validates the "
+             "name and coerces the value against the params registry, so "
+             "this reaches every param including the ones with no dedicated "
+             "flag. Wins over specific flags and recipe defaults; loses to "
+             "--extract-look and --smart per-image overrides. "
+             "Use --list-params to see names, ranges and help",
+    )
+    parser.add_argument(
+        "--list-params",
+        action="store_true",
+        help="Print every engine parameter (name, type, range, help) and exit",
+    )
 
     # Batch
     parser.add_argument("--workers", type=int, default=max(1, cpu_count() // 2),
@@ -1788,6 +1905,33 @@ def main() -> None:
         for info in infos:
             print(f"  [{info.category}] {info.name}: {info.description}")
         return
+
+    if args.list_params:
+        for spec in PROCESSING_PARAMS:
+            rng = ""
+            if spec.min_val is not None or spec.max_val is not None:
+                rng = f" [{spec.min_val if spec.min_val is not None else '-∞'},"
+                f"{spec.max_val if spec.max_val is not None else '∞'}]"
+            elif spec.choices:
+                rng = f" one of {sorted(spec.choices)}"
+            if spec.cli_type in (None, bool):
+                default_type = type(spec.default)
+                if default_type in (int, float, str):
+                    dtype = default_type.__name__
+                else:
+                    dtype = "bool"
+            else:
+                dtype = spec.cli_type.__name__
+            flag = f" (--{spec.cli_flag})" if spec.cli_flag else ""
+            print(f"{spec.name} ({dtype}){rng}{flag}")
+        print(f"({len(PROCESSING_PARAMS)} params; set any with --set name=value)")
+        return
+
+    if args.set:
+        try:
+            _build_set_params(args.set)
+        except ValueError as e:
+            parser.error(str(e))
 
     args.signing = None
     if args.sign_cert or args.sign_key:
@@ -2384,7 +2528,7 @@ def main() -> None:
                     continue
 
                 orig_shape = img_bgr.shape[:2]
-                original_full = img_bgr.copy() if args.compare else None
+                original_full = _snapshot_original(img_bgr, args.compare)
                 before_thumb = _report_thumb(img_bgr) if credentials_options else None
                 img_bgr, _scale = resize_for_processing(img_bgr, args.max_dim)
 

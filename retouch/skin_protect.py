@@ -69,7 +69,10 @@ def protect_skin(
         H×W×3 uint8 BGR image with skin protection applied.
     """
     lch = bgr_to_lch(img_bgr)
-    mask = skin_mask_lch(lch)
+    # Relative chroma gate (scales with L*) so deep skin — naturally lower
+    # chroma — is protected too; absolute floors fail the tones that need
+    # protection most (survey §E).
+    mask = skin_mask_lch(lch, chroma_ref_lightness=60.0)
     op_result = op(img_bgr)
     return _blend_skin(img_bgr, op_result, mask, strength)
 
@@ -98,7 +101,8 @@ def protect_skin_chromatic(
         H×W×3 uint8 BGR image with skin-protected chromatic edits.
     """
     lch = bgr_to_lch(img_bgr)
-    mask = skin_mask_lch(lch)
+    # Relative chroma gate — see protect_skin.
+    mask = skin_mask_lch(lch, chroma_ref_lightness=60.0)
     weight = np.clip(mask.astype(np.float32), 0.0, 1.0) * float(strength)
     keep = 1.0 - weight
 

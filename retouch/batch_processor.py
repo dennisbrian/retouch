@@ -382,6 +382,24 @@ def _compute_queue_depth(
     return depth
 
 
+def _cap_workers_by_ram(
+    num_workers: int,
+    image_paths: List[Path],
+    ram_budget_bytes: Optional[int],
+) -> int:
+    """Cap workers so in-flight images fit a RAM budget (mirrors cli.py).
+
+    cli.py's --ram-budget-gib heuristic caps workers at
+    ``budget // largest_estimated_input``. Estimate per-image peak from the
+    same ``_estimate_image_working_bytes`` sampler so the GUI batch path
+    gets the same protection the CLI has.
+    """
+    if ram_budget_bytes is None or ram_budget_bytes <= 0 or not image_paths:
+        return num_workers
+    largest = max(_estimate_image_working_bytes(p) for p in image_paths)
+    return max(1, min(num_workers, int(ram_budget_bytes // max(largest, 1))))
+
+
 def _run_async_batch_queue(
     image_paths: List[Path],
     worker_fn: Callable[[Path], Optional[Path]],
@@ -797,6 +815,7 @@ class BatchProcessor:
         progress_callback: Optional[Callable[[float, str], None]] = None,
         session: _SessionInput = None,
         num_workers: int = 4,
+        ram_budget_bytes: Optional[int] = None,
         on_file_result: Optional[
             Callable[[Path, Optional[Path], Optional[List[Any]], Optional[str]], None]
         ] = None,
@@ -1028,6 +1047,16 @@ class BatchProcessor:
                 effective_workers = 1
             else:
                 effective_workers = min(int(num_workers), total_files)
+                # RAM budget: cap so in-flight workers fit the budget
+                # (same heuristic as cli.py --ram-budget-gib).
+                effective_workers = _cap_workers_by_ram(
+                    effective_workers, all_files, ram_budget_bytes
+                )
+                if effective_workers < min(int(num_workers), total_files):
+                    logger.info(
+                        "RAM budget caps batch workers from %d to %d",
+                        min(int(num_workers), total_files), effective_workers,
+                    )
 
             if effective_workers == 1:
                 # Keep the queue contract (and its bounded backpressure) even
