@@ -554,6 +554,9 @@ class TestMain:
         assert crop.exists()
         h, w = cv2.imread(str(crop)).shape[:2]
         assert w / h == pytest.approx(0.8, abs=0.01)
+        tall = shoot / "cover-hook" / "3x4" / "a_red_3x4.jpg"
+        h, w = cv2.imread(str(tall)).shape[:2]
+        assert w / h == pytest.approx(0.75, abs=0.01)
         assert self.detector.closed
         assert main([str(shoot), "-r"]) == 0      # the second run must not score its own crop
         data = json.loads((shoot / "cover-hook" / cover_hook.SCORES_JSON).read_text())

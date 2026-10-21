@@ -442,7 +442,7 @@ python3 cli.py "/path/to/input" -o "/path/to/output" --recipe cosplay_clear_v1 -
 
 ## 5. Social Crops for Instagram, Reels & Stories
 
-Automatically export face-aware crops of your retouched photos in popular social media formats. The engine detects the subject's face, centers the crop on it, preserves headroom for wigs and headpieces, and ignores small background faces. Each crop is output as sRGB JPEG (quality 92, no EXIF), downscaled to `1080px` width with light sharpening, and never upscaled.
+Automatically export face-aware crops of your retouched photos in popular social media formats. The engine detects the subject's face, centers the crop on it, preserves headroom for wigs and headpieces, and ignores small background faces. Each crop is output as sRGB JPEG (quality 95, 4:4:4, no EXIF), downscaled to `1080px` width with light sharpening, and never upscaled.
 
 ### Supported Formats
 
@@ -458,7 +458,7 @@ Automatically export face-aware crops of your retouched photos in popular social
 Add the `--social-crops` flag when running a batch to export crops alongside the retouched images:
 
 ```bash
-# Export default formats (4:5, 9:16, 1:1)
+# Export default formats (3:4, 4:5, 9:16, 1:1)
 python3 cli.py "/path/to/input" -o "/path/to/output" --recipe natural --social-crops
 
 # Export specific formats

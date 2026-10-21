@@ -67,7 +67,7 @@ framing, checked with the [duplicate finder](DUPLICATES.md)).
 
 - `cover-hook/cover_scores.json` and `cover_scores.csv`: every photo with its
   rank, score, per-check values and notes.
-- `cover-hook/4x5/<name>_4x5.jpg`: the cover's feed crop (skip with `--no-crop`).
+- `cover-hook/4x5/<name>_4x5.jpg` and `cover-hook/3x4/<name>_3x4.jpg`: the cover's 4:5 feed crop and 1080x1440 3:4 crop (Instagram shows 3:4 posts natively; skip both with `--no-crop`).
 - `--manifest PATH`: also records the score on assets a shoot-review manifest
   already lists, when path and content match. The next shoot scan rebuilds
   that evidence and drops the entry.
