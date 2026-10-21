@@ -56,6 +56,8 @@ class Session:
     image_hash: Optional[str] = None
     local_adjustments: List[Dict[str, Any]] = field(default_factory=list)
     advanced_retouch: Dict[str, Any] = field(default_factory=dict)
+    # UndoRedoStack.to_state() output — param dicts + cursor, JSON-safe.
+    undo_history: Dict[str, Any] = field(default_factory=dict)
     # P4 instrumentation: parameter/evidence metadata only. Face pixels and
     # image arrays are intentionally never stored here.
     style_events: List[Dict[str, Any]] = field(default_factory=list)
@@ -78,6 +80,10 @@ class Session:
         # log needed to reproduce the manual canvas.
         if self.advanced_retouch:
             payload["advanced_retouch"] = self.advanced_retouch
+        # Keep legacy sessions schema-compatible when there is no undo
+        # history (fresh session, or saved before this field existed).
+        if self.undo_history:
+            payload["undo_history"] = self.undo_history
         return json.dumps(payload, indent=indent, sort_keys=True, ensure_ascii=False)
 
     def to_file(self, path: str) -> str:
@@ -104,7 +110,7 @@ class Session:
 
         Forward-compatible: unknown keys warn, missing keys use defaults.
         """
-        known_keys = {"version", "recipe", "params", "image_path", "created", "image_hash", "local_adjustments", "advanced_retouch", "style_events"}
+        known_keys = {"version", "recipe", "params", "image_path", "created", "image_hash", "local_adjustments", "advanced_retouch", "style_events", "undo_history"}
         unknown = set(data.keys()) - known_keys
         if unknown:
             logger.warning(
@@ -128,6 +134,7 @@ class Session:
             local_adjustments=data.get("local_adjustments", []),
             advanced_retouch=data.get("advanced_retouch", {}),
             style_events=data.get("style_events", []),
+            undo_history=data.get("undo_history", {}),
         )
 
     @classmethod
@@ -167,6 +174,7 @@ class Session:
             local_adjustments=self.local_adjustments,
             advanced_retouch=self.advanced_retouch,
             style_events=self.style_events,
+            undo_history=self.undo_history,
         )
 
     def record_style_event(
@@ -277,6 +285,41 @@ class UndoRedoStack:
         """Clear all history."""
         self._stack.clear()
         self._cursor = -1
+
+    def to_state(self) -> Dict[str, Any]:
+        """Serialize to a JSON-safe dict for session persistence.
+
+        Mirrors AdvancedHistory.to_state. Entries are param dicts —
+        same shapes Session.params already serializes — so no
+        file-path/entries-dir indirection is needed.
+        """
+        return {
+            "max_size": self.max_size,
+            "cursor": self._cursor,
+            "entries": [dict(entry) for entry in self._stack],
+        }
+
+    @classmethod
+    def from_state(cls, state: Dict[str, Any]) -> "UndoRedoStack":
+        """Restore from to_state() output. Invalid states yield an empty stack."""
+        if not isinstance(state, dict):
+            raise TypeError("undo history state must be a dict")
+        stack = cls(max_size=int(state.get("max_size", 50)))
+        raw_entries = state.get("entries") or []
+        if isinstance(raw_entries, (str, bytes, bytearray)) or not isinstance(raw_entries, (list, tuple)):
+            raise TypeError("undo history entries must be a sequence")
+        stack._stack = [dict(entry) for entry in raw_entries if isinstance(entry, dict)]
+        stack._cursor = int(state.get("cursor", len(stack._stack) - 1))
+        stack._cursor = max(-1, min(stack._cursor, len(stack._stack) - 1))
+        if stack._stack:
+            trim = max(0, len(stack._stack) - stack.max_size)
+            if trim:
+                stack._stack = stack._stack[trim:]
+                stack._cursor -= trim
+            stack._cursor = max(0, stack._cursor)
+        else:
+            stack._cursor = -1
+        return stack
 
 
 @dataclass

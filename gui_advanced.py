@@ -8,6 +8,7 @@ Advanced Retouch workspace. gui.py re-exports every public name and wires
 """
 
 import base64
+import dataclasses
 import logging
 
 import cv2
@@ -42,6 +43,53 @@ _logger = logging.getLogger(__name__)
 ADVANCED_PREVIEW_MAX_DIM = 640
 ADVANCED_SNAPSHOT_MAX_COUNT = 20
 ADVANCED_REBASE_REVIEW_MIN_OPACITY = 20
+
+
+@dataclasses.dataclass
+class HistoryState:
+    """Named construction shape for every Advanced handler return.
+
+    The Gradio wiring still consumes positional output tuples, so handlers
+    emit ``HistoryState.output()`` in one canonical field order. The old
+    code hand-built 11/14/15-slot literals per branch with drifting index
+    arithmetic (``result[3]``, ``values[8]`` …); this class is the single
+    place where field <-> position is defined.
+    """
+
+    source_rgb: object = None
+    current_rgb: object = None
+    editor: object = None
+    mask_overlay_image: object = None
+    before_after_image: object = None
+    history: object = None
+    edit_log: object = None
+    mask: object = None
+    status: str = ""
+    pending_session: object = None
+    base_contract: object = None
+
+    # Output order must match the Advanced output component lists in gui.py:
+    # source, current, editor, overlay, before_after, history, edit_log,
+    # mask, status, pending_session, base_contract.
+    def output(self):
+        return (
+            self.source_rgb,
+            self.current_rgb,
+            self.editor,
+            self.mask_overlay_image,
+            self.before_after_image,
+            self.history,
+            self.edit_log,
+            self.mask,
+            self.status,
+            self.pending_session,
+            self.base_contract,
+        )
+
+    @classmethod
+    def from_output(cls, values):
+        """Re-wrap a canonical 11-slot output tuple into named fields."""
+        return cls(*values)
 
 
 def advanced_rebase_overlay_is_reviewable(visible, opacity):
@@ -170,21 +218,29 @@ def _replay_advanced_state(source_rgb, edits):
     return replay_advanced_edits(source_rgb, edits, detector, parser)
 
 
-def _advanced_empty_state(source_rgb=None, status=""):
+def _advanced_load_rgb_state(source_rgb=None, status="", pending_session=None, base_contract=None):
+    """Empty/rejected Advanced state: nothing replayed, edit log empty."""
     current = source_rgb.copy() if isinstance(source_rgb, np.ndarray) else source_rgb
-    return (
-        source_rgb,
-        current,
-        current,
-        None,
-        before_after(source_rgb, current) if source_rgb is not None and current is not None else None,
-        AdvancedHistory().to_state(),
-        [],
-        None,
-        status,
-        [],
-        None,
+    return HistoryState(
+        source_rgb=source_rgb,
+        current_rgb=current,
+        editor=current,
+        before_after_image=(
+            before_after(source_rgb, current)
+            if source_rgb is not None and current is not None
+            else None
+        ),
+        history=AdvancedHistory().to_state(),
+        edit_log=[],
+        status=status,
+        pending_session=pending_session or [],
+        base_contract=base_contract,
     )
+
+
+def _advanced_empty_state(source_rgb=None, status=""):
+    """Empty Advanced Retouch state, as the canonical HistoryState output."""
+    return _advanced_load_rgb_state(source_rgb, status).output()
 
 
 def _advanced_load_rgb_source(
@@ -199,7 +255,9 @@ def _advanced_load_rgb_source(
 ):
     """Initialize the Advanced Retouch state from an already-decoded RGB image."""
     if source_rgb is None:
-        return _advanced_empty_state(None, "Process an image or upload one to begin Advanced Retouch.")
+        return _advanced_load_rgb_state(
+            None, "Process an image or upload one to begin Advanced Retouch."
+        ).output()
     source = np.ascontiguousarray(source_rgb).copy()
     base_contract = build_base_contract(
         source,
@@ -215,38 +273,24 @@ def _advanced_load_rgb_source(
 
     edits = list(pending_payload.get("edits") or []) if pending_payload else []
     if pending_payload and pending_payload.get("legacy_unverified") and not explicit_legacy_replay:
-        return (
+        return _advanced_load_rgb_state(
             source,
-            source.copy(),
-            source.copy(),
-            None,
-            before_after(source, source),
-            AdvancedHistory().to_state(),
-            [],
-            None,
             f"{status_prefix}. {len(edits)} legacy edit(s) remain pending because their base cannot be verified; "
             "use Bind legacy session edits to apply them explicitly.",
-            pending_payload,
-            base_contract,
-        )
+            pending_session=pending_payload,
+            base_contract=base_contract,
+        ).output()
     if pending_payload and not pending_payload.get("legacy_unverified"):
         comparison = compare_base_contracts(pending_payload.get("base"), base_contract)
         if not comparison["matches"]:
-            return (
+            return _advanced_load_rgb_state(
                 source,
-                source.copy(),
-                source.copy(),
-                None,
-                before_after(source, source),
-                AdvancedHistory().to_state(),
-                [],
-                None,
                 "{}; saved edits remain pending because the base differs ({}).".format(
                     status_prefix, ", ".join(comparison["reasons"])
                 ),
-                pending_payload,
-                base_contract,
-            )
+                pending_session=pending_payload,
+                base_contract=base_contract,
+            ).output()
     try:
         current = _replay_advanced_state(source, edits) if edits else source.copy()
         if pending_payload and not pending_payload.get("legacy_unverified"):
@@ -256,19 +300,12 @@ def _advanced_load_rgb_source(
                     "replay result mismatch: %s" % ", ".join(replay_check["reasons"])
                 )
     except Exception as exc:
-        return (
+        return _advanced_load_rgb_state(
             source,
-            source.copy(),
-            source.copy(),
-            None,
-            before_after(source, source),
-            AdvancedHistory().to_state(),
-            [],
-            None,
             f"{status_prefix}; saved edits remain pending because replay could not be verified: {exc}",
-            pending_payload or [],
-            base_contract,
-        )
+            pending_session=pending_payload or [],
+            base_contract=base_contract,
+        ).output()
     history = _advanced_history_from_edits(edits)
     detail = base_contract.get("render", {}).get("effective_detail")
     if base_kind == BASE_KIND_PROCESSED and detail != "native":
@@ -295,19 +332,17 @@ def _advanced_load_rgb_source(
             " Rebase warning: " + "; ".join(parts)
             + ". They are not re-fitted to the new base; review the result before export."
         )
-    return (
-        source,
-        current,
-        current,
-        None,
-        before_after(source, current),
-        history.to_state(),
-        history.current_edit_log(),
-        None,
-        status,
-        [],
-        base_contract,
-    )
+    return HistoryState(
+        source_rgb=source,
+        current_rgb=current,
+        editor=current,
+        before_after_image=before_after(source, current),
+        history=history.to_state(),
+        edit_log=history.current_edit_log(),
+        status=status,
+        pending_session=[],
+        base_contract=base_contract,
+    ).output()
 
 
 def _advanced_rebase_support_mask(edits, image_shape):
@@ -375,21 +410,20 @@ def _advanced_rebase_review_guard(message):
     return (gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), message)
 
 
-def _advanced_add_rebase_review(result, support):
+def _advanced_add_rebase_review(state, support):
     """Overlay transferred mask support on a successfully replayed result."""
-    result = list(result)
     if support is not None:
-        result[3] = mask_overlay(result[1], support, 0.42)
-        result[7] = support
-        result[8] += " The stored effective-mask support is highlighted; review the overlay and result before continuing or exporting."
-    return tuple(result)
+        state.mask_overlay_image = mask_overlay(state.current_rgb, support, 0.42)
+        state.mask = support
+        state.status += " The stored effective-mask support is highlighted; review the overlay and result before continuing or exporting."
+    return state
 
 
 def on_advanced_source_change(img_paths, pending_edits=None):
     """Load the first source image into the Advanced Retouch canvas."""
     path = _resolve_image_path(img_paths)
     if not path:
-        return _advanced_empty_state(None, "Upload an image to begin Advanced Retouch.") + (
+        return _advanced_load_rgb_state(None, "Upload an image to begin Advanced Retouch.").output() + (
             False,
             gr.update(value=False, visible=False, interactive=True),
             gr.update(),
@@ -403,7 +437,7 @@ def on_advanced_source_change(img_paths, pending_edits=None):
         if image_bgr.dtype != np.uint8:
             image_bgr = np.clip(image_bgr, 0, 255).astype(np.uint8)
         source = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-        result = list(_advanced_load_rgb_source(
+        state = HistoryState.from_output(_advanced_load_rgb_source(
             source,
             pending_edits,
             "Loaded uploaded source image",
@@ -414,24 +448,24 @@ def on_advanced_source_change(img_paths, pending_edits=None):
         if (
             isinstance(pending_edits, dict)
             and not pending_edits.get("legacy_unverified")
-            and result[9] == []
+            and state.pending_session == []
         ):
             try:
-                review_support = _advanced_rebase_support_mask(result[6], source.shape)
+                review_support = _advanced_rebase_support_mask(state.edit_log, source.shape)
             except Exception as exc:
                 _logger.warning("Advanced session mask review could not be prepared: %s", exc)
                 return _advanced_rebase_blocked_result(
                     "Saved edits were not transferred because their mask support cannot be reviewed safely."
                 )
-        result = list(_advanced_add_rebase_review(result, review_support))
+        state = _advanced_add_rebase_review(state, review_support)
         if review_support is not None:
-            return tuple(result) + (
+            return state.output() + (
                 True,
                 gr.update(value=False, visible=True, interactive=True),
                 gr.update(value=True),
                 gr.update(value=42),
             )
-        return tuple(result) + (
+        return state.output() + (
             False,
             gr.update(value=False, visible=False, interactive=True),
             gr.update(),
@@ -439,7 +473,7 @@ def on_advanced_source_change(img_paths, pending_edits=None):
         )
     except Exception as exc:
         _logger.warning("Advanced Retouch source load failed: %s", exc)
-        return _advanced_empty_state(None, f"Could not load image: {exc}") + (
+        return _advanced_load_rgb_state(None, f"Could not load image: {exc}").output() + (
             False,
             gr.update(value=False, visible=False, interactive=True),
             gr.update(),
@@ -482,7 +516,7 @@ def on_advanced_processed_result(processed_rgb, pending_edits=None, preview_cach
                 "No edits were transferred.".format(exc)
             )
 
-    result = _advanced_load_rgb_source(
+    state = HistoryState.from_output(_advanced_load_rgb_source(
         processed_rgb,
         replay_payload,
         "Loaded processed recipe result",
@@ -490,28 +524,27 @@ def on_advanced_processed_result(processed_rgb, pending_edits=None, preview_cach
         source_path=evidence.get("source_path") if isinstance(evidence, dict) else None,
         render_evidence=evidence,
         explicit_legacy_replay=explicit_rebase,
-    )
-    result = list(result)
+    ))
     if review_support is None and (
         isinstance(pending_edits, dict)
         and not pending_edits.get("legacy_unverified")
-        and result[9] == []
+        and state.pending_session == []
     ):
         try:
-            review_support = _advanced_rebase_support_mask(result[6], np.asarray(processed_rgb).shape)
+            review_support = _advanced_rebase_support_mask(state.edit_log, np.asarray(processed_rgb).shape)
         except Exception as exc:
             return _advanced_rebase_blocked_result(
                 "Saved edits were not transferred because their mask support cannot be reviewed safely ({}).".format(exc)
             )
-    result = list(_advanced_add_rebase_review(result, review_support))
+    state = _advanced_add_rebase_review(state, review_support)
     if review_support is not None:
-        return tuple(result) + (
+        return state.output() + (
             True,
             gr.update(value=False, visible=True, interactive=True),
             gr.update(value=True),
             gr.update(value=42),
         )
-    return tuple(result) + (
+    return state.output() + (
         False,
         gr.update(value=False, visible=False, interactive=True),
         gr.update(),
