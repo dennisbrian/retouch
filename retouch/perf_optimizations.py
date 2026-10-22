@@ -178,6 +178,9 @@ class _FaceResult:
     # Extra composite support for eye edits that must land at full weight
     # (Iris Pop); None when no such edit ran.
     eye_edit_mask: Optional[np.ndarray] = None
+    # What this face skipped or dampened, and why (eye gate, painted face,
+    # Safe Auto review, ...). JSON-safe dicts; see _process_face_core.
+    notes: list[Dict[str, Any]] = field(default_factory=list)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -195,6 +198,51 @@ def _ctx_get(ctx: Any, name: str, default: Any = None) -> Any:
     if isinstance(ctx, dict):
         return ctx.get(name, default)
     return getattr(ctx, name, default)
+
+
+def _face_protect_mask(ctx: Any, roi_h: int, roi_w: int) -> Optional[np.ndarray]:
+    """This face's user protection mask on its ROI canvas, or None.
+
+    The engine crops the render's mask to the face ROI (``_protect_roi``).
+    Direct callers of the core may instead set ``protect_mask`` or the old
+    ``freckle_preserve_mask`` already at ROI size; a mask of any other size
+    is a whole-frame mask and is ignored here (resizing a frame to a crop
+    would move every stroke).
+    """
+    from .protect_mask import coerce_mask
+
+    roi = _ctx_get(ctx, "_protect_roi")
+    candidates = (roi,) if roi is not None else (
+        _ctx_get(ctx, "protect_mask"), _ctx_get(ctx, "freckle_preserve_mask"),
+    )
+    out = None
+    for raw in candidates:
+        if raw is None:
+            continue
+        m = coerce_mask(raw)
+        if m is None:
+            continue
+        if m.shape != (roi_h, roi_w):
+            logger.warning(
+                "protect mask %s does not match face ROI %s; ignored for this face",
+                m.shape, (roi_h, roi_w),
+            )
+            continue
+        out = m if out is None else np.maximum(out, m)
+    return out
+
+
+# Ops that edit the eye openings: the eye-visibility gate and the eye
+# artifact guard only matter (and are only reported) when one of them is on.
+_EYE_OP_NAMES: Tuple[str, ...] = (
+    "eye_enhance", "catchlight", "eye_sclera_vessel_remove", "corneal_shading",
+    "eye_sclera_brighten", "eye_iris_saturate", "eye_iris_brightness", "iris_pop",
+)
+# Ops that are skipped when a face has no landmarks.
+_LANDMARK_OP_NAMES: Tuple[str, ...] = (
+    "iris_pop", "teeth_brighten", "nose_highlight", "nose_tip_blush",
+)
+_SIDE_LABEL = {"left": "left-hand eye", "right": "right-hand eye"}
 
 
 # Face polish (``face_polish`` 0-100): the porcelain "reference look" as one
@@ -273,9 +321,18 @@ def _process_face_core(
     # but it must not erase/dampen these user-requested pixels. A future
     # inferred automatic delta must carry its own baseline and decision.
     safe_auto_decisions: list[Dict[str, Any]] = []
+    # Skips and dampening this face met, for the GUI caption and the edit
+    # report: {"op", "action": "skipped"|"dampened"|"review", "reason"}.
+    notes: list[Dict[str, Any]] = []
+
+    def _note(op: str, action: str, reason: str, **extra: Any) -> None:
+        notes.append({"op": op, "action": action, "reason": reason, **extra})
 
     # One-control porcelain look; raises component floors only (see helper).
     ctx = _face_polish_ctx(ctx)
+    _eye_ops_on = any(
+        float(_ctx_get(ctx, n, 0) or 0) != 0 for n in _EYE_OP_NAMES
+    )
 
     # Gate once at the per-face pipeline boundary so every downstream
     # consumer—including the selective-sharpening mask built near the end—
@@ -293,19 +350,49 @@ def _process_face_core(
 
         spot_feature_mask = feature_mask_from_regions(regions)
 
+    # Render pixels per source pixel (< 1 only in the fast preview); size
+    # thresholds below are in source pixels so preview matches export.
+    _native_px = float(getattr(ctx, "_native_pixel_scale", 1.0) or 1.0)
     if getattr(ctx, "eye_gate", True):
+        _gate_decisions: Dict[str, Any] = {}
         regions = gate_occluded_eye_regions(
             regions,
             landmarks=getattr(shifted_face, "landmarks", None),
             img_bgr=canvas,
+            decisions_out=_gate_decisions,
+            pixel_scale=_native_px,
         )
+        if _eye_ops_on:
+            for _side, _d in sorted(_gate_decisions.items()):
+                _why = f"{_SIDE_LABEL.get(_side, _side)}: {_d['reason']}"
+                if _d.get("borderline"):
+                    _why += " (borderline, preview and export can differ)"
+                _note("eye_edits", "skipped" if _d.get("gated", True) else "review",
+                      _why, side=_side, gate="eye_visibility",
+                      borderline=bool(_d.get("borderline")),
+                      ear=_d.get("ear"), contrast=_d.get("contrast"))
 
     # The visibility gate answers whether an eye may be edited at all.  This
     # second guard answers how strongly the overlapping legacy/v0 eye stacks
     # can be rendered at the source's native support.  Small irises and
     # already-saturated eye colour smoothly back off; ordinary close portraits
     # retain scale 1.0.  Compute once before either eye stack changes pixels.
-    eye_artifact_scales = assess_eye_artifact_scales(canvas, regions)
+    eye_artifact_scales = assess_eye_artifact_scales(canvas, regions, pixel_scale=_native_px)
+    if _eye_ops_on:
+        for _side in ("left", "right"):
+            _d = eye_artifact_scales.get(_side) or {}
+            _scale = float(_d.get("scale", 1.0) or 1.0)
+            if _scale < 0.999:
+                _why = {
+                    "small_iris": "small iris",
+                    "limited_chroma_headroom": "already saturated (coloured contacts)",
+                }
+                _reason = " and ".join(
+                    _why.get(r, r) for r in str(_d.get("reason", "")).split("+") if r
+                )
+                _note("eye_edits", "dampened",
+                      f"{_SIDE_LABEL[_side]}: {_reason}, to {int(round(_scale * 100))}%",
+                      side=_side, gate="eye_artifact_safety", scale=round(_scale, 3))
 
     skin = processors['skin']
     relighter = processors['relighter']
@@ -440,6 +527,34 @@ def _process_face_core(
         _policy_preserve = _policy_preserve * skin_n
         skin_n_marks_protected = np.clip(skin_n - _policy_preserve, 0.0, 1.0)
 
+    # ---- User protection mask ("keep this", retouch/protect_mask.py) ----
+    # One path with the mark-policy protection above: the painted area joins
+    # mark_protect_mask (spot heal, guided smoothing, FA-02 eligibility), the
+    # freckle and blemish exclusions and the stray-hair / highlight-repair
+    # feature masks, so no detector picks a protected spot. keep_protected()
+    # at the end of this function is the hard guarantee for every other op.
+    # It is deliberately NOT cut out of skin_n_marks_protected: the evening
+    # ops take face-wide statistics over that mask, so a cut would shift the
+    # whole face by a few levels (measured: up to 6 levels 200 px away);
+    # keep_protected() restores the painted area instead.
+    user_protect = _face_protect_mask(ctx, roi_h, roi_w)
+    user_protect_bin = user_protect_soft = None
+    if user_protect is not None:
+        from .protect_mask import FACE_FEATHER, soft_mask
+
+        user_protect_bin = (user_protect > 0.5).astype(np.float32)
+        user_protect_soft = soft_mask(user_protect, max(FACE_FEATHER * face_width, 1.0))
+        if skin_n is not None:
+            _user_on_skin = user_protect_bin * skin_n
+            mark_protect_mask = (
+                _user_on_skin if mark_protect_mask is None
+                else np.maximum(mark_protect_mask, _user_on_skin)
+            )
+        if spot_feature_mask is not None:
+            spot_feature_mask = np.maximum(
+                _norm_mask(spot_feature_mask), user_protect_bin,
+            )
+
     # ---- Blown highlight repair (opt-in, before any smoothing) ----
     # Rebuilds skin that flash blew out to white from the skin around it
     # (tone roll-off, local skin colour, donor texture), so later skin ops
@@ -453,6 +568,9 @@ def _process_face_core(
             feature_mask=spot_feature_mask,
         )
         logger.debug("highlight_repair: %s", _hl_diags)
+        if _hl_diags.get("painted"):
+            _note("highlight_repair", "skipped",
+                  "painted face (no natural skin colour to rebuild from)")
 
     # ---- Spot healing (opt-in, before any smoothing) ----
     # Heals each detected pimple / small spot on its own from the skin around
@@ -460,6 +578,9 @@ def _process_face_core(
     # detection sees the camera's own texture; marks a mark policy preserves
     # are excluded. See retouch/spot_heal_auto.py.
     _spot = float(getattr(ctx, "spot_heal", 0.0) or 0.0)
+    for _op, _on in (("highlight_repair", _hl_repair > 0), ("spot_heal", _spot > 0)):
+        if _on and skin_n is None:
+            _note(_op, "skipped", "no face skin mask")
     if _spot > 0 and skin_n is not None:
         from .spot_heal_auto import heal_spots
 
@@ -489,14 +610,22 @@ def _process_face_core(
         if _stray > 0 and skin_n is None:
             from .effect_preview import skipped
             skipped(preview_ctx, "hair_remove_flyaways", "Skipped — no face skin mask available to search for stray hairs.")
+    if _stray > 0 and skin_n is None:
+        _note("hair_remove_flyaways", "skipped", "no face skin mask")
     if _stray > 0 and skin_n is not None:
         from .stray_hair import exclusion_from_regions, remove_stray_hairs
 
         _stray_skin = skin_n if neck_n is None else np.maximum(skin_n, neck_n)
         before_stray = canvas
+        _stray_excl = exclusion_from_regions(regions, face_width)
+        if user_protect_bin is not None:
+            _stray_excl = (
+                user_protect_bin if _stray_excl is None
+                else np.maximum(_norm_mask(_stray_excl), user_protect_bin)
+            )
         canvas, _stray_diags = remove_stray_hairs(
             canvas, _stray_skin, face_width, _stray, hair_mask=hair_n,
-            feature_mask=exclusion_from_regions(regions, face_width),
+            feature_mask=_stray_excl,
         )
         logger.debug("stray_hair: %s", _stray_diags)
         if preview_ctx is not None:
@@ -693,7 +822,10 @@ def _process_face_core(
         except Exception:
             _mole_for_freckle = None
     if _freckle_removal > 0:
-        preserve_mask = getattr(ctx, 'freckle_preserve_mask', None)
+        # freckle_preserve_mask is an alias of the user protection mask; the
+        # engine hands this face its ROI crop (the old path resized a whole
+        # frame to the crop, moving every stroke).
+        preserve_mask = user_protect
         mark_policy = getattr(ctx, 'mark_policy', None)
         if mark_policy is not None:
             # Policy masks are opt-in. Only the preserve action is consumed
@@ -903,6 +1035,10 @@ def _process_face_core(
             _fa02_outcome = "abstained -- eligible but micro_restore=0 (no-op)"
         else:
             _fa02_outcome = "abstained -- fell back to no-op"
+            if ctx.micro_restore > 0:
+                _note("micro_restore", "skipped",
+                      f"texture restore abstained: {_fa02_decision['reason']}",
+                      gate="fa02_eligibility")
 
         # Structured, machine-readable counterpart to the log line below.
         # Scalars only -- no mask arrays -- so this survives the
@@ -1144,6 +1280,11 @@ def _process_face_core(
             records, canvas.shape, _mark_policy,
         ).preserve.astype(np.float32) / 255.0
         blemish_skin_mask = np.clip(blemish_skin_mask - policy_preserve, 0.0, 1.0)
+
+    if ctx.blemish > 0 and user_protect_soft is not None:
+        blemish_skin_mask = np.clip(
+            _norm_mask(blemish_skin_mask) - user_protect_soft, 0.0, 1.0,
+        )
 
     # ---- Blemish removal ----
     if ctx.blemish > 0:
@@ -1514,9 +1655,43 @@ def _process_face_core(
         blend_amount = np.clip(nose_restore / 100.0, 0.0, 1.0) * _norm_mask(regions.nose)
         canvas = canvas * (1.0 - blend_amount[:, :, None]) + pre_smooth_canvas * blend_amount[:, :, None]
 
+    # ---- User protection: the hard guarantee ----
+    # Every op above is undone inside the painted area; the area keeps its
+    # own detail and only takes the broad tone the face edits gave the skin
+    # around it, so a protected mole on a whitened face is not an island.
+    # Global stages (tone, grade, film, finish) still apply later.
+    if user_protect is not None:
+        from .protect_mask import FACE_TONE_SIGMA, keep_protected
+
+        canvas = keep_protected(
+            canvas_original, canvas.astype(np.float32), user_protect_soft,
+            tone_sigma_px=max(FACE_TONE_SIGMA * face_width, 2.0),
+        )
+
     # ---- E1: Convert canvas back to uint8 once at the end ----
     if canvas.dtype == np.float32:
         canvas = np.clip(canvas, 0, 255).astype(np.uint8)
+
+    # Painted face: Skin Warmth and Neck Tone Match (whole-frame stages)
+    # leave a face whose skin reads as paint alone; say so per face. Same
+    # gate as skin_warmth (hue band + chroma/L*, relative, no absolute L).
+    _paint_ops = [n for n in ("skin_warmth", "neck_tone_match")
+                  if float(_ctx_get(ctx, n, 0) or 0) > 0]
+    if _paint_ops and skin_n is not None and np.any(skin_n > 0.8):
+        from .skin_warmth import _paint_gate
+
+        _px = np.clip(canvas_original, 0, 255).astype(np.float32)[skin_n > 0.8] / 255.0
+        _lab = cv2.cvtColor(_px.reshape(-1, 1, 3), cv2.COLOR_BGR2Lab).reshape(-1, 3)
+        _L0, _a0, _b0 = (float(np.median(_lab[:, k])) for k in range(3))
+        if _paint_gate(float(np.degrees(np.arctan2(_b0, _a0))),
+                       float(np.hypot(_a0, _b0)), _L0) <= 0.0:
+            for _op in _paint_ops:
+                _note(_op, "skipped", "painted face (skin reads as face paint)")
+
+    if getattr(shifted_face, "landmarks", None) is None:
+        for _op in _LANDMARK_OP_NAMES:
+            if float(_ctx_get(ctx, _op, 0) or 0) > 0:
+                _note(_op, "skipped", "no face landmarks")
 
     if bool(getattr(ctx, "safe_auto", True)):
         skin_area = float(np.mean(skin_n > 0.1)) if skin_n is not None else 0.0
@@ -1568,6 +1743,11 @@ def _process_face_core(
         # decision is evidence for review/calibration; parameter-driven pixels
         # remain exactly as rendered regardless of apply/review/skip.
         safe_auto_decisions.append(decision.to_dict())
+        if decision.action != "apply":
+            _note("safe_auto", "review",
+                  f"Safe Auto would {decision.action} this face's automatic edits "
+                  f"({decision.reason}); your settings were applied as set",
+                  gate="safe_auto", confidence=round(float(decision.confidence), 3))
 
     return _FaceResult(
         canvas=canvas,
@@ -1581,6 +1761,7 @@ def _process_face_core(
         fa02_diagnostics=fa02_diagnostics,
         stray_hair_preview=stray_hair_preview,
         eye_edit_mask=eye_edit_mask,
+        notes=notes,
     )
 
 
@@ -1701,6 +1882,7 @@ def _process_single_face_worker(payload: tuple) -> Dict[str, Any]:
         "fa02_diagnostics": fr.fa02_diagnostics,
         "stray_hair_preview": fr.stray_hair_preview,
         "eye_edit_mask": fr.eye_edit_mask,
+        "notes": fr.notes,
     }
 
 

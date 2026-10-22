@@ -654,6 +654,7 @@ def _write_credentials(options, src_path, out_path, processed, final, before_thu
         after=final,
         global_only=global_only,
         source_had_credentials=had_credentials,
+        diagnostics=getattr(processed, "runtime_diagnostics", None),
     )
     signing = options.get("signing")
     signed = None
@@ -840,7 +841,8 @@ def _process_single_with_evidence(args, info=None, sink=None, credentials=None):
 
             try:
                 result = engine.process(
-                    img_bgr, progress_cb=sink, **dict(effective_params)
+                    img_bgr, progress_cb=sink,
+                    **_with_protect_mask(effective_params, img_path),
                 )
                 _result_info(result, info)
                 processing_evidence = _processing_evidence(
@@ -1434,12 +1436,52 @@ def _build_set_params(set_args, parser=None) -> Dict[str, Any]:
     return out
 
 
+_PROTECT_MASK_EXTS = (".png", ".tif", ".tiff", ".jpg", ".jpeg", ".webp")
+
+
+def _with_protect_mask(params, img_path) -> dict:
+    """``params`` with ``--protect-mask`` loaded for this photo.
+
+    The flag holds a mask file (used for every photo) or a folder holding
+    ``<photo stem>.png`` (or .tif/.jpg/.webp) per photo; a photo with no
+    file there is processed without protection. White = protected. A mask
+    of another size is resized to the photo by the engine when its aspect
+    ratio matches (painted on a smaller copy); a different framing fails
+    that photo with a clear error.
+    """
+    out = dict(params)
+    spec = out.pop("protect_mask", None)
+    if not spec:
+        return out
+    if isinstance(spec, str) and spec.startswith("data:image/"):
+        out["protect_mask"] = spec  # replayed session: the mask itself
+        return out
+    path = Path(spec)
+    if path.is_dir():
+        stem = Path(img_path).stem
+        path = next(
+            (path / f"{stem}{ext}" for ext in _PROTECT_MASK_EXTS
+             if (path / f"{stem}{ext}").is_file()),
+            None,
+        )
+        if path is None:
+            return out
+    mask = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    if mask is None:
+        raise ValueError(f"--protect-mask: could not read {path}")
+    out["protect_mask"] = mask
+    return out
+
+
 def build_params(args: argparse.Namespace) -> dict:
     params = {}
     if getattr(args, "recipe", None):
         params["recipe"] = args.recipe
     elif getattr(args, "preset", None):
         params["recipe"] = args.preset
+
+    if getattr(args, "protect_mask", None):
+        params["protect_mask"] = args.protect_mask
 
     if getattr(args, "face_params", None):
         if args.face_params.lower() == "auto":
@@ -1812,6 +1854,13 @@ def main() -> None:
                         help="JSON file of per-face overrides, e.g. "
                              '{"0": {"recipe": "cosplay", "smooth": 70}, '
                              '"1": {"recipe": "natural"}}. Engine units (0-100).')
+
+    parser.add_argument("--protect-mask", type=str, default=None,
+                        metavar="PATH",
+                        help="Protect mask: an image (white = keep) or a folder of "
+                             "<photo stem>.png masks. Retouch leaves protected areas "
+                             "alone (moles, drawn marks, makeup); grade and tone still "
+                             "apply. Resized to the photo if only its size differs.")
 
     # T5: optional true-linear RAW develop (gamma=1) before engine sRGB path.
     parser.add_argument("--linear-raw", action="store_true",
@@ -2559,7 +2608,8 @@ def main() -> None:
                     )
                 else:
                     result = engine.process(
-                        img_bgr, progress_cb=sink, **dict(effective_params)
+                        img_bgr, progress_cb=sink,
+                        **_with_protect_mask(effective_params, f),
                     )
                     _result_info(result, active_progress["info"])
                     processing_evidence = _processing_evidence(

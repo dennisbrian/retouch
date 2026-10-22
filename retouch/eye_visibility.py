@@ -76,6 +76,21 @@ logger = logging.getLogger(__name__)
 # re-checking that fixture (tests/golden_face_fixture.py), or its eye ops
 # go untested again (see CLAUDE.md's 2026-08-19 golden-face entry).
 _MIN_EAR = 0.285
+#: EAR distance from ``_MIN_EAR`` reported as borderline: MediaPipe landmarks
+#: of the same eye moved EAR by 0.006 between an 800 px preview and the
+#: 1536 px source (golden portrait, left eye 0.285 vs 0.279).
+EAR_BORDERLINE = 0.01
+#: Same for the iris contrast: downscaling softens the iris edge, so a small
+#: face's contrast read 0.505 in an 800 px preview against the 0.55 floor.
+CONTRAST_BORDERLINE = 0.08
+
+
+def _borderline(ear: Optional[float], contrast: Optional[float]) -> bool:
+    """True when either signal sits next to its gate threshold."""
+    return (
+        (ear is not None and abs(float(ear) - _MIN_EAR) < EAR_BORDERLINE)
+        or (contrast is not None and abs(float(contrast) - _MIN_CONTRAST) < CONTRAST_BORDERLINE)
+    )
 
 # Contrast: full-coverage (landmark-fallback) arm measured occluded range
 # 0.012-0.863, visible range 0.064-0.949 — wide overlap, so this stays
@@ -209,6 +224,7 @@ def _contrast_for_side(
     img_bgr: Optional[np.ndarray],
     eye_mask: Optional[np.ndarray],
     iris_mask: Optional[np.ndarray],
+    pixel_scale: float = 1.0,
 ) -> Optional[float]:
     """Return the tone-adaptive iris-vs-sclera contrast, or None.
 
@@ -233,7 +249,9 @@ def _contrast_for_side(
     if image.ndim != 3 or image.shape[:2] != eye_mask.shape or image.shape[2] != 3:
         return None
     eye_support = eye_mask > 0.25
-    if int(np.count_nonzero(eye_support)) < _MIN_EYE_MASK_PIXELS:
+    # The floor is in source pixels: a fast preview (pixel_scale < 1) fails
+    # open on the same eyes the full-resolution export does.
+    if int(np.count_nonzero(eye_support)) < _MIN_EYE_MASK_PIXELS * float(pixel_scale) ** 2:
         # BiSeNet fragility (class-5 collapse on ~65% of real portraits).
         # A missing eye mask is NOT an occlusion signal; fail open.
         return None
@@ -322,6 +340,8 @@ def gate_occluded_eye_regions(
     img_bgr: Optional[np.ndarray] = None,
     width: Optional[int] = None,
     height: Optional[int] = None,
+    decisions_out: Optional[dict] = None,
+    pixel_scale: float = 1.0,
 ) -> Any:
     """Return regions with unreliable eye masks disabled per eye.
 
@@ -339,6 +359,14 @@ def gate_occluded_eye_regions(
             contrast signal; when None, contrast is skipped.
         width, height: image dimensions for EAR.  Derived from ``img_bgr``
             when None.
+        decisions_out: optional dict filled with one entry per gated side,
+            ``{"left": {"reason": "eye closed", "gated": True, "borderline":
+            ..., "ear": ..., "contrast": ...}}``, so callers can say why an
+            eye's edits were skipped; an open eye whose EAR is within
+            ``EAR_BORDERLINE`` of the threshold gets ``"gated": False``. Not
+            filled on a memoised (cached) call.
+        pixel_scale: render pixels per source pixel (< 1 in the fast
+            preview); the eye-mask fail-open floor is in source pixels.
 
     Memoization: when ``regions`` is a ``FaceRegions`` with an
     ``_eye_gate_cache`` slot, the gated result is cached on both the original
@@ -377,11 +405,13 @@ def gate_occluded_eye_regions(
         img_bgr,
         _as_mask(getattr(regions, "left_eye", None)),
         _as_mask(getattr(regions, "left_iris", None)),
+        pixel_scale,
     )
     contrast_right = _contrast_for_side(
         img_bgr,
         _as_mask(getattr(regions, "right_eye", None)),
         _as_mask(getattr(regions, "right_iris", None)),
+        pixel_scale,
     )
 
     hair = getattr(regions, "hair", None)
@@ -394,6 +424,40 @@ def gate_occluded_eye_regions(
                         getattr(regions, "right_eye", None),
                         getattr(regions, "right_iris", None), hair):
         gated_sides.append("right")
+
+    if decisions_out is not None:
+        evidence = {
+            "left": (ear_left, contrast_left),
+            "right": (ear_right, contrast_right),
+        }
+        for side in gated_sides:
+            ear, contrast = evidence[side]
+            if ear is not None and ear < _MIN_EAR:
+                reason = "eye closed"
+            elif contrast is not None and contrast < _MIN_CONTRAST:
+                reason = "eye covered (no visible iris contrast)"
+            elif ear is None and contrast is None:
+                reason = "no eye outline found"
+            else:
+                reason = "hair over the eye"
+            decisions_out[side] = {
+                "reason": reason,
+                "gated": True,
+                "borderline": _borderline(ear, contrast),
+                "ear": None if ear is None else round(float(ear), 3),
+                "contrast": None if contrast is None else round(float(contrast), 3),
+            }
+        # Open eyes whose EAR sits next to the threshold: landmark jitter
+        # between the preview and the export can flip them, so say so.
+        for side, (ear, contrast) in evidence.items():
+            if side not in gated_sides and _borderline(ear, contrast):
+                decisions_out[side] = {
+                    "reason": "eye nearly closed or covered",
+                    "gated": False,
+                    "borderline": True,
+                    "ear": None if ear is None else round(float(ear), 3),
+                    "contrast": None if contrast is None else round(float(contrast), 3),
+                }
 
     if not gated_sides:
         result = regions

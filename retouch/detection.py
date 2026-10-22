@@ -12,6 +12,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import os
+import time
 from types import SimpleNamespace
 os.environ["TF_USE_LEGACY_KERAS"] = "1"
 from typing import Any, List, Optional, Tuple
@@ -344,6 +345,10 @@ class FaceDetector:
         unavailable or returns nothing.
         """
         h, w = img_bgr.shape[:2]
+        # Person-gate decisions of this call (dropped / rescued boxes), read
+        # by the engine for the per-face "what was skipped" report.
+        self.last_gate_events = []
+        self.last_detect_started = time.perf_counter()
         if not self.available:
             return []
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
@@ -760,6 +765,17 @@ class FaceDetector:
         self._face_skin_segmenter = seg
         return seg
 
+    def _record_gate_event(self, bbox, w: int, h: int, action: str, coverage) -> None:
+        events = getattr(self, "last_gate_events", None)
+        if events is None:
+            return
+        x, y, bw, bh = (float(v) for v in bbox)
+        events.append({
+            "bbox_norm": [round(x / w, 4), round(y / h, 4), round(bw / w, 4), round(bh / h, 4)],
+            "action": action,
+            "person_coverage": None if coverage is None else round(float(coverage), 3),
+        })
+
     def _person_gate(
         self,
         img_bgr: np.ndarray,
@@ -799,7 +815,9 @@ class FaceDetector:
                 kept.append(face)
             elif self._face_skin_rescue(img_bgr, face.bbox, coverage, person_mask=mask):
                 kept.append(face)
+                self._record_gate_event(face.bbox, w, h, "rescued", coverage)
             else:
+                self._record_gate_event(face.bbox, w, h, "dropped", coverage)
                 _logger.info(
                     "Person gate: dropped detection bbox=%s (person coverage "
                     "%.3f < %.2f) as a background false positive",
