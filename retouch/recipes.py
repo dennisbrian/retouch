@@ -4661,11 +4661,13 @@ RECIPES["natural_v2"] = {
     #   the *_protected_v1 recipes use).
     # - skin.rosy stays at natural's 0.10: skin lightening is a pending owner
     #   decision.
-    # Identity-safe extras (face shadow fill, keep nose shape, low powder
-    # finish) were tried one at a time against the identity scorecard; see
-    # the research note for which were kept.
+    # - face_shadow_fill 0.50: of the three identity-safe extras tried one at
+    #   a time against the identity scorecard, the only one that left every
+    #   scorecard flag count unchanged (keep nose shape at 100 added a
+    #   geometry flag on a real face; powder finish at 20 lost 16 of 80
+    #   planted marks). See the research note.
     "extends": "natural",
-    "skin": {"blemish": 0.0, "spot_heal": 30, "mole_protect": 0.80},
+    "skin": {"blemish": 0.0, "spot_heal": 30, "mole_protect": 0.80, "face_shadow_fill": 0.50},
     "mark_policy": "protect_identity",
 }
 

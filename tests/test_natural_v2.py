@@ -63,6 +63,8 @@ def test_natural_v2_settings():
     assert ctx.blemish == 0.0 and nat.blemish == pytest.approx(30.0)
     assert ctx.spot_heal == 30 and nat.spot_heal == 0
     assert ctx.mole_protect == pytest.approx(0.80)
+    assert ctx.face_shadow_fill == 50 and nat.face_shadow_fill == 0
+    assert ctx.nose_shape == 0 and ctx.powder_finish == 0
     gui = recipe_to_params("natural_v2")
     assert gui["blemish"] == 0 and gui["spot_heal"] == 30 and gui["mark_policy"] == "protect_identity"
     # Skin lightening is an owner decision: natural_v2 keeps natural's rosy 0.10.

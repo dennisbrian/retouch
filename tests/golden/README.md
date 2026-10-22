@@ -23,6 +23,11 @@ body-skin ops off, and compares:
 | Changed pixels on the planted object (`masks/`), eroded 1 px | < 2% | clip, rose, frames, poster |
 | SSIM (luma) against `references/` | >= 0.97 | `natural`, `cosplay_clear_v1`, `studio_porcelain_clear_v1` |
 
+`scripts/qa/golden_qa.py` also prints per-face identity columns (geometry
+drift, lightness shift in stops, survival of planted moles/freckles, AA6 face
+SSIM/D, people skipped; see `tests/golden_identity.py`). They are a report and
+never fail the run; `--no-identity` / `--no-marks` skip them.
+
 Refresh the references only after looking at the renders:
 `scripts/qa/golden_qa.py --approve --recipes natural,cosplay_clear_v1,studio_porcelain_clear_v1`.
 

@@ -21,8 +21,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
-import random
 import sys
 import time
 from pathlib import Path
@@ -36,6 +36,13 @@ sys.path.insert(0, str(ROOT))
 from tests import golden_identity as gi  # noqa: E402
 
 MIN_FACE_W = 120  # px at the working size
+
+
+def blind_order(ab, photo: str, face: int):
+    """Left/right order for one sheet: a coin from a hash of the photo and
+    face, so the order differs between sheets and runs agree with each other."""
+    coin = hashlib.sha256(f"{photo}#{face}".encode()).digest()[0] & 1
+    return list(ab) if coin else list(ab)[::-1]
 
 
 def parse_variant(text):
@@ -59,10 +66,13 @@ def darker(img, gain=0.45):
 
 
 def face_crop(img, ctx, pad=0.25, height=560):
+    """Face box grown by ``pad``; scaled to ``height`` px (0 = native pixels)."""
     x, y, w, h = (int(v) for v in ctx.face_data.bbox)
     H, W = img.shape[:2]
     px, py = int(pad * w), int(pad * h)
     t = img[max(0, y - py):min(H, y + h + py), max(0, x - px):min(W, x + w + px)]
+    if not height:
+        return np.ascontiguousarray(t)
     s = height / t.shape[0]
     interp = cv2.INTER_AREA if s < 1 else cv2.INTER_LANCZOS4
     return cv2.resize(np.ascontiguousarray(t), (int(t.shape[1] * s), height), interpolation=interp)
@@ -77,6 +87,10 @@ def main(argv=None):
     ap.add_argument("--ab", default="", help="two variant names for the blind sheets")
     ap.add_argument("--sheets", type=Path, default=None)
     ap.add_argument("--json", type=Path, default=None)
+    ap.add_argument("--crop-height", type=int, default=560,
+                    help="A/B crop height in px; 0 keeps the render's own pixels")
+    ap.add_argument("--min-face", type=int, default=MIN_FACE_W,
+                    help="skip faces narrower than this (px at the working size)")
     args = ap.parse_args(argv)
 
     from retouch.engine import RetouchEngine
@@ -84,7 +98,6 @@ def main(argv=None):
     variants = [parse_variant(v) for v in args.variant]
     ab = [a for a in args.ab.split(",") if a]
     engine = RetouchEngine()
-    rng = random.Random(20261022)
     rows, key = [], {}
     t0 = time.time()
     for pi, path in enumerate(args.photos):
@@ -96,9 +109,9 @@ def main(argv=None):
         exposures = [("as_shot", src)] + ([] if args.no_darker else [("darker_0.45x", darker(src))])
         for exposure, img in exposures:
             ctxs = engine.process(img, recipe=variants[0][1]).face_contexts or []
-            faces = [i for i, c in enumerate(ctxs) if c.face_data.bbox[2] >= MIN_FACE_W]
+            faces = [i for i, c in enumerate(ctxs) if c.face_data.bbox[2] >= args.min_face]
             if not faces:
-                print(f"{path.name}: no face >= {MIN_FACE_W}px", flush=True)
+                print(f"{path.name}: no face >= {args.min_face}px", flush=True)
                 continue
             plan = gi.plan_marks(ctxs, img.shape[:2])
             planted = gi.plant_all(img, [plan[i] for i in faces])
@@ -123,9 +136,10 @@ def main(argv=None):
             if len(ab) == 2 and args.sheets and exposure == "as_shot":
                 args.sheets.mkdir(parents=True, exist_ok=True)
                 for i in faces:
-                    left, right = (ab if rng.random() < 0.5 else ab[::-1])
-                    tag = f"{pi:02d}_face{i}"
-                    a, b = face_crop(outs[left], ctxs[i]), face_crop(outs[right], ctxs[i])
+                    left, right = blind_order(ab, path.name, i)
+                    tag = f"{path.stem[:8]}_face{i}"
+                    a = face_crop(outs[left], ctxs[i], height=args.crop_height)
+                    b = face_crop(outs[right], ctxs[i], height=args.crop_height)
                     gap = np.full((a.shape[0], 12, 3), 255, np.uint8)
                     sheet = np.hstack([a, gap, b])
                     for txt, x in (("A", 8), ("B", a.shape[1] + 20)):

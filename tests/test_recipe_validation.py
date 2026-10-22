@@ -25,7 +25,9 @@ _VALID_NESTED_ROOTS = {"skin", "eyes", "lips", "hair", "bloom", "makeup", "frequ
 # legitimately live, so the dead-key audit must not flag them — but they are
 # the only such keys, and a key like ``film.preset`` or ``skin.exposure_lock``
 # is NOT here, so re-introducing those truly-dead keys still fails the audit.
-_ENGINE_DIRECT_KEYS = {"dodge_burn.amount", "eyes.iris", "eyes.teeth_whiten"}
+# ``skin.blemish`` is read by the blemish quirk (engine.build_context and
+# params._special_cases_gui); without it blemish mirrors frequency.smooth.
+_ENGINE_DIRECT_KEYS = {"dodge_burn.amount", "eyes.iris", "eyes.teeth_whiten", "skin.blemish"}
 _VALID_KEYS.update(_ENGINE_DIRECT_KEYS)
 
 
