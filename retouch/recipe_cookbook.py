@@ -75,6 +75,7 @@ _FUJI_SIMS = {
 # here get a generated description ("Extends <parent>." or "Base recipe.").
 _DESCRIPTIONS: Dict[str, str] = {
     "natural": "Baseline natural retouch — restrained smoothing and tone.",
+    "natural_v2": "Natural review candidate: targeted spot healing, identity-mark protection, no added skin brightening or reshaping. Compare before choosing as your default.",
     "portrait": "Classic portrait: moderate smoothing, eye/lip enhancement.",
     "cosplay": "Cosplay default: stronger skin evenness, vivid eyes, lip tint.",
     "cosplay_3d": "Cosplay with equalize disabled for a 3D sculpted read.",

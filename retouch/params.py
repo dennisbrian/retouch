@@ -467,9 +467,12 @@ _SKIN_PARAMS = [
         cli_flag="blemish",
         cli_type=int,
         default=30,
-        recipe_key=None,
-        conversion="alias",
-        alias_of="smooth",
+        # Optional independent strength; absent keys retain the legacy
+        # smoothing-derived value in the engine and GUI special cases.
+        recipe_key="skin.blemish",
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
     ),
     ParamSpec(
         name="whiten_tone",
@@ -3172,12 +3175,11 @@ def _special_cases_gui(spec: ParamSpec, rec: Dict[str, Any]) -> Any:
     if name == "whiten_tone":
         return "porcelain" if "porcelain" in rec.get("skin", {}) else "rosy"
     if name == "blemish":
-        # A recipe's own ``skin.blemish`` (0-1) wins; otherwise mirror
-        # `smooth`, as the GUI always has.
-        own = rec.get("skin", {}).get("blemish")
-        if own is not None:
-            return int(round(float(own) * 100.0))
-        return int(round(float(rec.get("frequency", {}).get("smooth", 0.30)) * 100.0))
+        # Explicit zero disables legacy healing without disabling smoothing.
+        raw = _lookup_recipe(rec, "skin.blemish")
+        if raw is None:
+            raw = rec.get("frequency", {}).get("smooth", 0.30)
+        return int(round(float(raw) * 100.0))
     if name == "catchlight":
         eyes = rec.get("eyes", {})
         if "catchlight" in eyes:

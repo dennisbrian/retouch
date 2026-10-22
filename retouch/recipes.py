@@ -4656,27 +4656,13 @@ RECIPES["fa02_texture_experimental_v1"] = {
 }
 
 RECIPES["natural_v2"] = {
-    # CANDIDATE for the natural default (Phase 1 of
-    # docs/plans/PLAN_FACE_QUALITY_ROADMAP_2026_10_22.md); `natural` itself is
-    # unchanged until the owner picks after a blind A/B. Built only from ops
-    # that already exist:
-    # - spot_heal replaces legacy blemish removal (which every recipe runs at
-    #   its smoothing strength): on planted spots on 2 real bunny photos and
-    #   3 real third-party photos, as shot and at a simulated 0.45x exposure,
-    #   legacy blemish at 30 and 55 fixed no pimple while spot_heal at 30
-    #   fixed most and kept every mole
-    #   (docs/plans/RESEARCH_BLEMISH_REMEASURE_2026_10_22.md).
-    # - mark protection on (protect_identity + mole_protect 0.80, the values
-    #   the *_protected_v1 recipes use).
-    # - skin.rosy stays at natural's 0.10: skin lightening is a pending owner
-    #   decision.
-    # - face_shadow_fill 0.50: of the three identity-safe extras tried one at
-    #   a time against the identity scorecard, the only one that left every
-    #   scorecard flag count unchanged (keep nose shape at 100 added a
-    #   geometry flag on a real face; powder finish at 20 lost 16 of 80
-    #   planted marks). See the research note.
+    # Review candidate: targeted healing with protected marks and no added
+    # brightening. The reviewed local candidate keeps shadow fill off and
+    # uses full mole protection; no default recommendation until owner A/B.
+    # Current-healer evidence: docs/plans/RESEARCH_BLEMISH_REMEASURE_2026_10_22.md
+    # and docs/review/NATURAL_V2_2026_10_22.md.
     "extends": "natural",
-    "skin": {"blemish": 0.0, "spot_heal": 30, "mole_protect": 0.80, "face_shadow_fill": 0.50},
+    "skin": {"rosy": 0.0, "blemish": 0.0, "spot_heal": 30, "mole_protect": 1.0},
     "mark_policy": "protect_identity",
 }
 
@@ -4687,6 +4673,7 @@ RECIPES["natural_v2"] = {
 CURATED_RECIPE_NAMES: List[str] = [
     # Safe portrait and beauty correction
     "natural",
+    "natural_v2",
     "portrait",
     "male",
     "female",
@@ -4702,7 +4689,6 @@ CURATED_RECIPE_NAMES: List[str] = [
     "heirloom_archive_v1",
     "studio_headshot_protected_v1",
     "fa02_texture_experimental_v1",
-    "natural_v2",
     "aniso_pore_real_v1",
     "studio_porcelain_clear_v1",
     "beauty_editorial_clear_v1",
@@ -4803,6 +4789,7 @@ RECOMMENDED_RECIPE_NAMES: List[str] = [
 # considered for a default recommendation. Keep these separate from the
 # correction-first list so the UI communicates the review boundary clearly.
 EXPERIMENTAL_RECIPE_NAMES = (
+    "natural_v2",
     "meitu_porcelain_v1",
     # tired_eye_rescue_v2 exceeds the owner-set 0.35 darken_removal cap on
     # tired_eye_rescue_v1 by narrowing the subject contract (no under-eye
@@ -4835,7 +4822,7 @@ EXPERIMENTAL_RECIPE_NAMES = (
     # Candidate natural default (2026-10-22): spot_heal instead of legacy
     # blemish, mark protection on. Compare against `natural` (blind A/B) before
     # it is recommended or replaces the default; see the recipe's comment.
-    "natural_v2",
+
 )
 
 CONDITIONAL_RECIPE_NAMES: List[str] = [

@@ -24,6 +24,27 @@ Edit `retouch/recipes.py` — add a new entry to the `RECIPES` dict.
 },
 ```
 
+## Natural v2 review candidate
+
+`natural_v2` is available in the GUI and CLI as **Experimental / compare first**.
+It inherits natural's smoothing and restrained eye/finish settings, enables
+`mark_policy="protect_identity"` and `skin.mole_protect=1.0`, disables added skin
+brightening (`skin.rosy=0`), and uses targeted spot healing at 30 instead of the
+legacy blemish pass. It introduces no reshaping. Review representative real
+portraits before choosing it as your default; the application's default remains
+`natural`.
+
+```bash
+./run batch /path/to/originals -o /path/to/review --recipe natural_v2
+```
+
+Recipes can now set **`skin.blemish` independently of smoothing**, on a 0-1
+scale (`0` disables it, `0.30` means strength 30). When omitted, the legacy
+smoothing-derived value is retained. CLI `--blemish` overrides the recipe in
+0-100 units. **`skin.spot_heal` uses raw 0-100 units**, so use `30`, not `0.30`.
+Protection is heuristic; this candidate does not guarantee that every natural
+mark or makeup detail survives.
+
 ## Field Reference — All Groups (Auto-Generated)
 
 ### Nested Groups
@@ -36,6 +57,7 @@ These keys are defined inside nested dictionary blocks inside a recipe.
 | `background` | `backdrop_cleanup` | 0 to 100 | `0` | `backdrop_cleanup` |
 | `glasses` | `deglare` | 0 to 100 | `0` | `lens_glare` |
 | `eyes` | `red_eye` | 0 to 100 | `0` | `red_eye` |
+| `skin` | `blemish` | 0.0 to 1.0 | smoothing-derived if omitted | `blemish` |
 | `skin` | `spot_heal` | 0 to 100 | `0` | `spot_heal` |
 | `background` | `background_blur` | 0 to 100 | `0.0` | `background_blur` |
 | `background` | `background_desaturation` | 0 to 100 | `0.0` | `background_desaturation` |
@@ -314,7 +336,6 @@ not serialize as ordinary recipe values:
 
 - `ai_sr_scale` — output upscale factor (`1`, `2`, or `4`).
 - `set_match` — 0-100 strength of the exposure and white-balance match toward a hero frame (`--match-hero`); no effect without a hero. A hero belongs to a shoot, not a look, so recipes never set it.
-- `blemish` — legacy API control; use the recipe's smoothing and blemish fields for new presets.
 - `freckle_preserve_mask` — an in-memory mask supplied by API callers to protect selected marks (older name of `protect_mask`).
 - `face_strength` — scales every per-face retouch amount, 0-150 (a render control, not a look).
 
