@@ -118,7 +118,7 @@ def process(
     makeup_cake_reduce: Optional[float] = None,
     hemoglobin_smooth: Optional[float] = None,
     mole_protect: Optional[float] = None,
-    vein_attenuate: Optional[float] = None,
+    vein_attenuate: Optional[int] = None,
     skin_flatten: Optional[int] = None,
     skin_quantize: Optional[int] = None,
     skin_unify: Optional[int] = None,
@@ -376,7 +376,7 @@ Passing an explicit value override to these parameters takes precedence over the
 *   **`albedo_even`** (Type: `float`, Default: `0.0`, Range: `0.0` to `1.0`, Recipe key: `skin.albedo_even`): Adjusts the albedo even parameter.
 *   **`hemoglobin_smooth`** (Type: `float`, Default: `0.0`, Range: `0.0` to `1.0`, Recipe key: `skin.hemoglobin_smooth`): Adjusts the hemoglobin smooth parameter.
 *   **`mole_protect`** (Type: `float`, Default: `0.0`, Range: `0.0` to `1.0`, Recipe key: `skin.mole_protect`): Adjusts the mole protect parameter.
-*   **`vein_attenuate`** (Type: `float`, Default: `0.0`, Range: `0.0` to `1.0`, Recipe key: `skin.vein_attenuate`): Adjusts the vein attenuate parameter.
+*   **`vein_attenuate`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.vein_attenuate`): Vein Softening (`retouch/vein_soften.py`). Calms faint blue-green veins: on face skin in the per-face core before smoothing (eyes, brows and lips excluded), and on body skin in the body stage (the Body Skin Evening mask). A vein is a line (oriented matched filter, three widths 0.6-2% of the face width, side-of-a-step responses cut) of coolness in chromaticity (a*/L*, b*/L*) against the skin around it, measured in units of that skin's own fine colour spread; it must be faint (stronger lines such as tattoos and liner are kept), not much darker than the skin beside it, colour-led rather than lightness-led (creases and fold shadows are kept), not lighter (sheen), well inside skin-coloured skin, and part of a long thin connected component. Its colour is filled from the skin right beside it and its lightness dip returned. White or grey paint, and skin whose hue is outside -45..90 degrees (bluish or coloured paint), is left alone. Before the 2026-10-21 rebuild this was a 0-1 op that subtracted a blurred hemoglobin map from green and blue across all face skin. Off by default.
 *   **`skin_flatten`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.flatten`): Adjusts the skin flatten parameter.
 *   **`skin_quantize`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.quantize`): Adjusts the skin quantize parameter.
 *   **`skin_unify`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.unify`): Adjusts the skin unify parameter.
