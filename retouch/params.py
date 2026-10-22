@@ -38,7 +38,8 @@ The supported ``conversion`` codes are:
   default.  The GUI just initialises to the engine default (e.g.
   ``relight_azimuth``, ``bloom_threshold``).
 * ``"alias"`` — derives from another parameter (used when two GUI sliders
-  share the same recipe source, like ``blemish`` mirroring ``smooth``).
+  share the same recipe source, like ``blemish`` mirroring ``smooth``; a
+  recipe can still set ``skin.blemish`` itself, see ``_special_cases_gui``).
 * ``"dropdown"`` — string-typed parameter (e.g. ``lip_tint``, ``whiten_tone``,
   ``color_grade``).  Uses the recipe value verbatim and falls back to the
   engine default when the recipe has no entry.
@@ -437,7 +438,7 @@ _SKIN_PARAMS = [
         name="whiten_hue_stable",
         cli_flag="whiten-hue-stable",
         cli_type=bool,
-        default=False,
+        default=True,
         recipe_key="skin.whiten_hue_stable",
         conversion="bool_flag",
     ),
@@ -920,14 +921,17 @@ _SKIN_PARAMS = [
         max_val=1.0,
     ),
     ParamSpec(
+        # Vein Softening (retouch/vein_soften.py): calms visible blue-green
+        # veins on face and body skin. 0-100 since the 2026-10-21 rebuild
+        # (the old 0-1 op tinted all skin instead of finding veins).
         name="vein_attenuate",
         cli_flag="vein-attenuate",
-        cli_type=float,
-        default=0.0,
+        cli_type=int,
+        default=0,
         recipe_key="skin.vein_attenuate",
-        conversion="recipe_direct",
-        min_val=0.0,
-        max_val=1.0,
+        conversion="recipe_pct",
+        min_val=0,
+        max_val=100,
     ),
     ParamSpec(
         name="skin_flatten",
@@ -991,7 +995,7 @@ _SKIN_PARAMS = [
     ),
     ParamSpec(
         # Porcelain "reference look" macro (perf_optimizations._face_polish_ctx).
-        # 0 = off. Raises the floor of shine_removal, shadow_lift,
+        # 0 = off. Raises the floor of shine_removal, face_shadow_fill,
         # face_exposure, sculpt and eye_enhance together; an explicit higher
         # value for any of those still wins.
         name="face_polish",
@@ -3168,7 +3172,11 @@ def _special_cases_gui(spec: ParamSpec, rec: Dict[str, Any]) -> Any:
     if name == "whiten_tone":
         return "porcelain" if "porcelain" in rec.get("skin", {}) else "rosy"
     if name == "blemish":
-        # Historically mirrored `smooth` in the GUI
+        # A recipe's own ``skin.blemish`` (0-1) wins; otherwise mirror
+        # `smooth`, as the GUI always has.
+        own = rec.get("skin", {}).get("blemish")
+        if own is not None:
+            return int(round(float(own) * 100.0))
         return int(round(float(rec.get("frequency", {}).get("smooth", 0.30)) * 100.0))
     if name == "catchlight":
         eyes = rec.get("eyes", {})

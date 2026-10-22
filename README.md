@@ -285,6 +285,17 @@ body-skin detector can miss parts of a limb, which are then left as shot. The
 older "Body Equalize" slider next to it is a different op (it adds local
 contrast) kept for the recipes that use it.
 
+Vein Softening (`--vein-attenuate 0-100` in the CLI, the "Vein Softening"
+slider in the app's Body Skin section, or `skin.vein_attenuate` in a recipe,
+where 0.5 = 50) calms faint blue-green veins on the face (temples, cheeks,
+eyelids) and on chest, arms and legs. It only takes long, thin lines that are
+bluer than the skin right around them and fills their colour from that skin,
+so moles, freckles, creases, fold shadows, tattoos, eyeliner and white or bluish face or
+body paint stay as shot. It is off by default; start near 60. On planted
+veins it removes about a third to 40% of a vein's colour on body skin and about a quarter
+on the face (where skin smoothing already softens them) at 100. It can also
+calm a faint cool line along a hair strand or a fill-light edge on the skin.
+
 The **Effect preview** panel below the preview canvas lets you inspect Body
 Skin Evening, Neck Tone Match, Costume Clarity, Lint & Dust Cleanup, and Stray Hair Cleanup on the
 first photo. Stray Hair Cleanup shows the first detected face's crop (Face #0),
@@ -654,6 +665,11 @@ catalog (`CURATED_RECIPE_NAMES` in `retouch/recipes.py`), for example `natural`,
 ```bash
 ./run recipes
 ```
+
+`natural_v2` (under "Experimental / compare first") is a candidate for the
+natural default: `natural` with automatic spot healing instead of the old
+blemish pass, moles and drawn marks protected, and Face Shadow Fill. Compare it
+with `natural` before using it; `natural` is still the default.
 
 Cosplay looks for specific scenes (all under "Scene / creative" in the app):
 

@@ -4298,7 +4298,6 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 lines=2,
                                 info="Optional. State from picker wins if set. Engine units 0–100.",
                             )
-                        _vein_attenuate_state = gr.State(value=0.0)
                         _gamut_compress_state = gr.State(value=True)
                         _gamut_target_state = gr.State(value="srgb")
                         _saturation_mode_state = gr.State(value="additive")
@@ -4448,7 +4447,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 _redness_even_state = gr.State(value=0)
                                 hb_even = gr.Slider(0.0, 1.0, 0.0, step=0.05, label="Hemoglobin Even", info="Even redness variation in linear pigment space while preserving melanin marks")
                                 hb_shift = gr.Slider(-1.0, 1.0, 0.0, step=0.05, label="Hemoglobin Shift", info="Negative reduces facial flush; positive adds it. Uses the face's own pigment range")
-                                _whiten_hue_stable_state = gr.State(value=0)
+                                _whiten_hue_stable_state = gr.State(value=1)
                                 pore_synthesis = gr.Slider(0, 100, 0, step=1, label="Pore Synthesis", info="Add micro-texture/synthesized pores to prevent artificial plastic skin")
                                 blemish = gr.Slider(0, 100, 30, step=1, label="Blemish Removal", info="AI blemish detection and inpainting for acne/spots")
                                 spot_heal = gr.Slider(0, 100, 0, step=1, label="Spot Healing", info="Heal each pimple and small red or dark spot on its own from the skin around it, like a healing brush; the rest of the skin is left untouched and moles are kept. Off by default; start near 60.")
@@ -4503,6 +4502,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 body_smooth = gr.Slider(0, 100, 0, step=1, label="Body Smooth", info="Smoothing for arms, legs, décolletage · milder curve than face to preserve texture")
                                 body_equalize = gr.Slider(0, 100, 0, step=1, label="Body Equalize", info="Older body tone op used by some recipes: adds local contrast to body skin. To calm blotchy colour, use Body Skin Evening")
                                 body_skin_even = gr.Slider(0, 100, 0, step=1, label="Body Skin Evening", info="Calms blotchy redness and uneven tan on arms, legs and chest; keeps texture, moles, freckles and shading. Off by default; start near 50.")
+                                vein_attenuate = gr.Slider(0, 100, 0, step=1, label="Vein Softening", info="Calms faint blue-green veins on face, chest, arms and legs; keeps moles, freckles, creases, tattoos and face paint. Off by default; start near 60.")
                                 body_whiten = gr.Slider(0, 100, 0, step=1, label="Body Whiten", info="Lighten body skin to match face whitening treatment")
                                 body_match_face = gr.Slider(0, 100, 0, step=1, label="Body Match Face", info="Pull body skin L/a/b toward retouched face skin color · bounded ±8L ±6a/b")
                                 cross_region_skin = gr.Slider(
@@ -5992,7 +5992,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "makeup_cake_reduce": _makeup_cake_reduce_state,
         "hemoglobin_smooth": _hemoglobin_smooth_state,
         "mole_protect": mole_protect,
-        "vein_attenuate": _vein_attenuate_state,
+        "vein_attenuate": vein_attenuate,
         "skin_flatten": skin_flatten,
         "skin_quantize": skin_quantize,
         "skin_unify": skin_unify,

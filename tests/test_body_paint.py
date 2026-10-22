@@ -242,9 +242,10 @@ def test_engine_keeps_grey_paint_grey(engine):
         img, recipe="cosplay_clear_v1", face_contexts=[make_face_context(w, h, img)]
     )
     # Without the lock cosplay_clear_v1's skin ops tint grey paint (chroma
-    # ~0.004 -> ~0.008); with it the paint stays near the input. The grade
-    # (applied to the whole photo afterwards) may still move it a little.
+    # ~0.004 -> ~0.006; ~0.008 before hue-stable whitening became the
+    # default); with it the paint stays near the input. The grade (applied
+    # to the whole photo afterwards) may still move it a little.
     drift_off = abs(chroma(off) - chroma(img))
     drift_on = abs(chroma(on) - chroma(img))
-    assert drift_off > 0.002
+    assert drift_off > 0.0015
     assert drift_on < 0.5 * drift_off

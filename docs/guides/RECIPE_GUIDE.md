@@ -228,7 +228,7 @@ These keys are defined inside nested dictionary blocks inside a recipe.
 | `skin` | `warmth` | 0.0 to 1.0 | `0` | `skin_warmth` |
 | `skin` | `neck_tone_match` | 0.0 to 1.0 | `0` | `neck_tone_match` |
 | `skin` | `highlight_repair` | 0.0 to 1.0 | `0` | `highlight_repair` |
-| `skin` | `vein_attenuate` | 0.0 to 1.0 | `0.0` | `vein_attenuate` |
+| `skin` | `vein_attenuate` | 0 to 100 | `0` | `vein_attenuate` |
 | `skin` | `whiten_hue_stable` | 0.0 to 1.0 | `False` | `whiten_hue_stable` |
 | `skin` | `wrinkle_soften_forehead` | 0 to 100 | `0.0` | `wrinkle_soften_forehead` |
 | `skin` | `wrinkle_soften_nasolabial` | 0 to 100 | `0.0` | `wrinkle_soften_nasolabial` |
@@ -601,7 +601,7 @@ and 0–360 for split-toning hue).
 | Undereye Darken Removal | `undereye.darken_removal` | ÷ 100 |
 | Undereye Puffiness Reduction | `undereye.puffiness_reduction` | ÷ 100 |
 | Undereye Shadow Strength | `eyes.undereye_shadow_strength` | direct |
-| Vein Attenuate | `skin.vein_attenuate` | direct |
+| Vein Softening (Vein Attenuate) | `skin.vein_attenuate` | ÷ 100 |
 | Vibrance | `vibrance` | direct |
 | Vignette | `vignette` | direct |
 | White Balance Kelvin | `white_balance_kelvin` | direct |

@@ -423,7 +423,7 @@ class ProcessingContext:
     redness_even: float = 0.0
     skin_glow: float = 0.0
     mask_feather_mode: str = "gaussian"
-    whiten_hue_stable: bool = False
+    whiten_hue_stable: bool = True
     skin_locus: Optional[Dict[str, float]] = None
     smooth_exposure_lock: float = 0.0
     shine_removal: float = 0.0
@@ -1066,8 +1066,13 @@ def build_context(
         if spec.name == "whiten_tone":
             return "porcelain" if "porcelain" in rec.get("skin", {}) else "rosy"
         if spec.name == "blemish":
-            # Engine mirrors the recipe's ``frequency.smooth`` (the GUI does
-            # the same and that is what the alias spec handles separately).
+            # A recipe may set legacy blemish removal itself (``skin.blemish``,
+            # 0-1); otherwise the engine mirrors ``frequency.smooth`` (the GUI
+            # does the same and that is what the alias spec handles
+            # separately), so every recipe without the key renders as before.
+            own = rec.get("skin", {}).get("blemish")
+            if own is not None:
+                return float(own) * 100.0
             return float(rec.get("frequency", {}).get("smooth", 0.5)) * 100.0
         if spec.name == "catchlight":
             eyes = rec.get("eyes", {})
@@ -5161,7 +5166,8 @@ class RetouchEngine:
         if (ctx.body_smooth <= 0 and ctx.body_equalize <= 0 and
             ctx.body_whiten <= 0 and ctx.body_match_face <= 0 and
             ctx.body_relight <= 0 and ctx.body_dodge_burn <= 0 and
-            ctx.body_shadow_lift <= 0 and ctx.body_skin_even <= 0):
+            ctx.body_shadow_lift <= 0 and ctx.body_skin_even <= 0 and
+            ctx.vein_attenuate <= 0):
             return img
 
         if person_mask is None or person_mask.max() < 0.01:
@@ -5318,7 +5324,8 @@ class RetouchEngine:
 
         # Body Skin Evening builds its own semantic mask; the legacy colour
         # mask can be empty on valid cool-lit or low-chroma skin.
-        if body_skin_mask.max() < 0.01 and ctx.body_skin_even <= 0:
+        if (body_skin_mask.max() < 0.01 and ctx.body_skin_even <= 0
+                and ctx.vein_attenuate <= 0):
             return img
 
         # ------ Apply body skin operations ------
@@ -5410,10 +5417,11 @@ class RetouchEngine:
         # the skin around them; texture, moles, shading and gloss are kept.
         # Its mask comes from the multiclass segmenter's body-skin class, not
         # the hue heuristic above, which also takes in beige costume parts.
+        even_mask = None
+        fw = max((float(f.bbox[2]) for f in faces or []), default=0.0)
         if ctx.body_skin_even > 0:
             from .body_skin_even import even_body_skin
             even_mask = self._body_even_mask(img, pm, excluded, body_skin_mask)
-            fw = max((float(f.bbox[2]) for f in faces or []), default=0.0)
             before_even = result
             result = even_body_skin(
                 result, even_mask, ctx.body_skin_even / 100.0,
@@ -5422,6 +5430,16 @@ class RetouchEngine:
             from .effect_preview import capture
             capture(ctx, "body_skin_even", before_even, result,
                     "Skipped — no confident natural body skin or colour blotches found.")
+
+        # 3c. Vein Softening on body skin (``vein_attenuate``;
+        # retouch/vein_soften.py): the face part runs in the per-face core.
+        # Same semantic body-skin mask as Body Skin Evening.
+        if ctx.vein_attenuate > 0:
+            from .vein_soften import soften_veins
+            if even_mask is None:
+                even_mask = self._body_even_mask(img, pm, excluded, body_skin_mask)
+            result = soften_veins(result, even_mask, ctx.vein_attenuate / 100.0,
+                                  face_width=fw or None, value_scale=1.0)
 
         # 4. Body whitening (lighten L channel in body skin)
         if ctx.body_whiten > 0:

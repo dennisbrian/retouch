@@ -297,3 +297,48 @@ class TestFaceSkinRescue:
         mask[900:, 600:1450] = 1.0
         assert FaceDetector._torso_supports(mask, (389, 616, 327, 132))
         assert not FaceDetector._torso_supports(np.zeros((H, W), np.float32), (389, 616, 327, 132))
+
+
+class TestLocalTorsoCheck:
+    """The full-frame mask can lose a whole person in a dark wide frame; the
+    torso check then re-segments a crop around the face before refusing."""
+
+    @staticmethod
+    def _det(local_body):
+        def segment(img):
+            if img.shape[:2] == (H, W):
+                return np.zeros((H, W), np.float32)  # full frame: person lost
+            m = np.zeros(img.shape[:2], np.float32)
+            if local_body:
+                m[m.shape[0] // 2:, :] = 1.0  # body fills the lower crop
+            return m
+
+        det = FaceDetector.__new__(FaceDetector)
+        det.segment_person = MagicMock(side_effect=segment)
+        det._face_skin_coverage = MagicMock(return_value=0.82)
+        return det
+
+    def test_person_lost_by_full_frame_mask_is_kept(self):
+        face = FaceData(landmarks=_LandmarkCompat([]), bbox=(900, 300, 160, 180), ied=60.0)
+        kept, _ = self._det(local_body=True)._person_gate(_make_img(), [face])
+        assert kept == [face]
+
+    def test_no_body_on_the_local_crop_still_drops(self):
+        """Poster on a wall: the crop below it is wall, so no rescue."""
+        face = FaceData(landmarks=_LandmarkCompat([]), bbox=(900, 300, 160, 180), ied=60.0)
+        kept, _ = self._det(local_body=False)._person_gate(_make_img(), [face])
+        assert kept == []
+
+    def test_local_segmenter_failure_does_not_rescue(self):
+        det = FaceDetector.__new__(FaceDetector)
+
+        def segment(img):
+            if img.shape[:2] == (H, W):
+                return np.zeros((H, W), np.float32)
+            raise RuntimeError("boom")
+
+        det.segment_person = MagicMock(side_effect=segment)
+        det._face_skin_coverage = MagicMock(return_value=0.9)
+        face = FaceData(landmarks=_LandmarkCompat([]), bbox=(900, 300, 160, 180), ied=60.0)
+        kept, _ = det._person_gate(_make_img(), [face])
+        assert kept == []
