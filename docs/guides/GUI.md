@@ -227,7 +227,11 @@ The **bottleneck** is the bilateral filter in `FrequencySeparator.combine` (~600
 
 ---
 
-## 7. Job Dashboard
+## 7. Protect, Restore and Per-Face Strength
+
+The **🛡️ Protect / Restore (keep this)** accordion (paint areas the retouch must keep, or bring back one it removed), the **Face retouch strength** sliders and the "Skipped or dampened" caption under the preview are described in [PROTECT_AND_FACE_STRENGTH.md](PROTECT_AND_FACE_STRENGTH.md).
+
+## 8. Job Dashboard
 
 The **Job Dashboard** tab (after "Batch Library Ingestion") records every batch run started from that tab and lets you review per-file QA results without re-opening each output image.
 

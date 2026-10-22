@@ -339,6 +339,20 @@ _SKIN_PARAMS = [
         min_val=None,
         max_val=None,
     ),
+    # "All faces" strength (Capture One's Impact): scales every face-local
+    # amount of each face's recipe, 0 = face retouch off, 150 = stronger.
+    # Per-face values live in face_params entries ("strength"); the two
+    # multiply. See retouch/face_strength.py.
+    ParamSpec(
+        name="face_strength",
+        cli_flag="face-strength",
+        cli_type=int,
+        default=100,
+        recipe_key=None,
+        conversion="gui_direct",
+        min_val=0,
+        max_val=150,
+    ),
     ParamSpec(
         name="mark_policy",
         cli_flag="mark-policy",
@@ -2918,6 +2932,7 @@ PROCESS_INPUT_KEYS = (
         "quality_tier",
         "debug_mode",
         "optical_correction",
+        "protect_mask",
         "look_params",
         "face_params",
         "face_params_json",

@@ -92,6 +92,7 @@ class TestWorkerCtxRoundTrip:
         """ndarray ctx fields are picklable and must reach the worker."""
         ctx = ProcessingContext()
         ctx.freckle_preserve_mask = (np.arange(12, dtype=np.uint8).reshape(3, 4))
+        ctx._protect_roi = np.full((3, 4), 0.5, dtype=np.float32)
         ctx.color_ref = np.zeros((2, 2, 3), dtype=np.float32)
         ctx.hi_ref = np.full((2, 2, 3), 1.5, dtype=np.float32)
         ctx.cross_region_skin_mask = np.ones((3, 3), dtype=np.uint8)
@@ -107,8 +108,12 @@ class TestWorkerCtxRoundTrip:
         # its own preview namespace.
         assert "_effect_previews" not in payload.__dict__
 
-        # ndarray fields kept, with values intact.
-        np.testing.assert_array_equal(payload.freckle_preserve_mask, ctx.freckle_preserve_mask)
+        # ndarray fields kept, with values intact. The user protection mask
+        # travels as the face's ROI crop; the full-frame source arrays stay
+        # in the parent (the core reads only _protect_roi).
+        np.testing.assert_array_equal(payload._protect_roi, ctx._protect_roi)
+        assert payload.freckle_preserve_mask is None
+        assert ctx.freckle_preserve_mask is not None
         np.testing.assert_array_equal(payload.color_ref, ctx.color_ref)
         np.testing.assert_array_equal(payload.hi_ref, ctx.hi_ref)
         np.testing.assert_array_equal(payload.cross_region_skin_mask, ctx.cross_region_skin_mask)
@@ -117,7 +122,7 @@ class TestWorkerCtxRoundTrip:
     def test_payload_ctx_pickles_through_spawn_protocol(self):
         """The pool uses spawn+pickle; the payload ctx must survive it."""
         ctx = ProcessingContext()
-        ctx.freckle_preserve_mask = np.arange(6, dtype=np.uint8).reshape(2, 3)
+        ctx._protect_roi = np.arange(6, dtype=np.float32).reshape(2, 3) / 6.0
         ctx.smooth = 42.0
         ctx.active_recipe = "cosplay"
 
@@ -126,7 +131,7 @@ class TestWorkerCtxRoundTrip:
 
         assert rt.smooth == 42.0
         assert rt.active_recipe == "cosplay"
-        np.testing.assert_array_equal(rt.freckle_preserve_mask, ctx.freckle_preserve_mask)
+        np.testing.assert_array_equal(rt._protect_roi, ctx._protect_roi)
         # Scalar/str/dict field types survive the round trip.
         assert isinstance(rt.smooth, float)
         assert isinstance(rt.active_recipe, str)

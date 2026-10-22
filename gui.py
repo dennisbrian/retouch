@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 import sys
+import html
 import os
 import shutil
 import subprocess
@@ -72,6 +73,7 @@ from retouch.color_context import ColorContext
 from retouch.face_params import (
     ANCHOR_KEY as FACE_ANCHOR_KEY,
     ANCHOR_SOURCE_KEY as FACE_ANCHOR_SOURCE_KEY,
+    STRENGTH_KEY as FACE_STRENGTH_KEY,
     face_params_for_source,
     make_anchor as make_face_anchor,
 )
@@ -1823,6 +1825,13 @@ def process_image(
                 isinstance(preview_cache, GuiPreviewCache)
                 and first_result_rgb is None and first_combined is None
             )
+            # Protect/Restore brush: the mask is resampled to the render's
+            # frame by the engine (preview, proxy and native alike); the
+            # cached detection/parsing stays valid because the mask only
+            # gates the edits, not what is detected.
+            engine_kwargs["protect_mask"] = _protect_mask_for_render(
+                params, curr_path, len(img_paths),
+            )
             result = engine.process(img_bgr, **engine_kwargs)
             if cache_key is not None:
                 try:
@@ -1901,6 +1910,10 @@ def process_image(
                             os.path.join(temp_dir, "effects"),
                         ),
                         "backend": runtime_diagnostics,
+                        "face_notes": list(runtime_diagnostics.get("face_notes") or []),
+                        "frame_notes": list(runtime_diagnostics.get("frame_notes") or []),
+                        "protection": runtime_diagnostics.get("protection") or {"painted": False},
+                        "p7_diagnostics": dict(getattr(result, "p7_diagnostics", {}) or {}),
                         "precision": getattr(result, "precision_metadata", {}),
                         "_evidence_attempt_id": render_attempt_id,
                     },
@@ -2044,6 +2057,7 @@ def process_image(
     if qa_warnings:
         items = "".join(f'<li>⚠️ {w.message} (score: {w.score:.2f})</li>' for w in qa_warnings)
         qa_html = f'<div style="background:#fff3cd;border:1px solid #ffc107;padding:8px 12px;border-radius:6px;margin:8px 0;font-size:13px"><strong>Quality Warnings:</strong><ul style="margin:4px 0 0 16px;padding:0">{items}</ul></div>'
+    qa_html += _face_notes_html(first_result)
 
     elapsed = time.time() - start
     slide_html = _make_comparison_html(first_original, first_result) if (first_original is not None and first_result is not None) else ""
@@ -2337,24 +2351,221 @@ def on_detect_faces(img_paths):
     )
 
 
-def on_apply_face_recipe(face_idx, recipe_name, face_params):
-    """Merge {idx: {recipe: name}} into face_params State."""
+def _face_entry_summary(entry):
+    """'natural' / 'natural @ 60%' for one face_params entry."""
+    if not isinstance(entry, dict):
+        return str(entry)
+    text = str(entry.get("recipe") or "(main recipe)")
+    strength = entry.get(FACE_STRENGTH_KEY)
+    if strength is not None and abs(float(strength) - 100.0) > 1e-9:
+        text += f" @ {float(strength):g}%"
+    return text
+
+
+def on_apply_face_recipe(face_idx, recipe_name, face_params, strength=None):
+    """Merge {idx: {recipe: name, strength: %}} into face_params State.
+
+    ``strength`` (0-150, 100 = as set) is the face's own Impact-style
+    strength; it multiplies the "All faces" value. Either a recipe or a
+    strength is enough. The entry keeps the anchor that Detect Faces stored,
+    so the values stay on this person when detection order changes.
+    """
     fp = dict(face_params or {})
     if face_idx is None or face_idx == "":
         return fp, "Select a face index first."
-    if not recipe_name:
-        return fp, "Select a recipe."
     try:
         i = int(face_idx)
     except (TypeError, ValueError):
         return fp, f"Bad face index: {face_idx!r}"
     entry = dict(fp.get(i) or fp.get(str(i)) or {})
-    entry["recipe"] = recipe_name
+    if not recipe_name and strength is None:
+        return fp, "Select a recipe."
+    if recipe_name:
+        entry["recipe"] = recipe_name
+    if strength is not None:
+        pct = min(max(float(strength), 0.0), 150.0)
+        if abs(pct - 100.0) <= 1e-9:
+            entry.pop(FACE_STRENGTH_KEY, None)
+        else:
+            entry[FACE_STRENGTH_KEY] = pct
     fp[i] = entry
     # drop string-key duplicate if any
     fp.pop(str(i), None)
-    summary = ", ".join(f"{k}→{v.get('recipe', v)}" for k, v in sorted(fp.items()))
-    return fp, f"Face {i} → {recipe_name}. Active: {summary}"
+    summary = ", ".join(f"{k}→{_face_entry_summary(v)}" for k, v in sorted(fp.items()))
+    return fp, f"Face {i} → {_face_entry_summary(entry)}. Active: {summary}"
+
+
+# ---- Protect / Restore brush ("keep this") --------------------------------
+# One mask, stored in the source photo's own pixel grid (resized on decode to
+# whatever frame a render runs on, see retouch/protect_mask.py). The GUI keeps
+# it as {"mask": <PNG data URI>, "source": <photo path>} so it is JSON-safe
+# for sessions and undo history. Protect adds the painted strokes and applies
+# on the next render; Restore adds them and re-renders at once.
+PROTECT_EDITOR_MAX_SIDE = 1600
+_PROTECT_GREEN = np.array([34, 197, 94], dtype=np.float32)
+
+
+def _protect_display(rgb, mask=None, show=True):
+    """Downscaled result with the current mask tinted green."""
+    img = np.asarray(rgb)
+    if img.dtype != np.uint8:
+        img = np.clip(img, 0, 255).astype(np.uint8)
+    h, w = img.shape[:2]
+    scale = min(1.0, PROTECT_EDITOR_MAX_SIDE / float(max(h, w)))
+    if scale < 1.0:
+        img = cv2.resize(img, (max(1, int(round(w * scale))), max(1, int(round(h * scale)))),
+                         interpolation=cv2.INTER_AREA)
+    if mask is None or not show:
+        return img
+    from retouch.protect_mask import resize_mask
+
+    soft = resize_mask(mask, img.shape[:2])
+    m = soft[..., None] * 0.3
+    out = np.clip(img.astype(np.float32) * (1.0 - m) + _PROTECT_GREEN * m, 0, 255).astype(np.uint8)
+    # A thin bright outline, so the protected skin itself stays readable.
+    contours, _ = cv2.findContours((soft >= 0.5).astype(np.uint8), cv2.RETR_EXTERNAL,
+                                   cv2.CHAIN_APPROX_SIMPLE)
+    cv2.drawContours(out, contours, -1, tuple(int(c) for c in _PROTECT_GREEN), 2, cv2.LINE_AA)
+    return out
+
+
+def _protect_state_mask(state, source_path=None):
+    """The state's mask as float32 [0, 1], or None (other photo, empty)."""
+    from retouch.protect_mask import coerce_mask
+
+    if not isinstance(state, dict) or not state.get("mask"):
+        return None
+    if source_path is not None and state.get("source") not in (None, str(source_path)):
+        return None
+    try:
+        return coerce_mask(state["mask"])
+    except ValueError as exc:
+        _logger.warning("Protect mask unreadable, ignored: %s", exc)
+        return None
+
+
+def _protect_source_path(img_paths):
+    paths = _render_contract_paths(img_paths) if img_paths else []
+    return os.fsdecode(os.fspath(paths[0])) if paths else None
+
+
+def _protect_status(mask, extra=""):
+    if mask is None:
+        return ("No protected area. Paint over what to keep (a mole, a drawn mark, "
+                "makeup detail), then **Protect** (next render) or **Restore** (re-render now).")
+    pct = float((mask > 0.5).mean() * 100.0)
+    return f"Protected area: {pct:.2f}% of the photo (green). {extra}".strip()
+
+
+def on_protect_load(processed_rgb, protect_state, img_paths, show_mask=True):
+    """Put the latest result (with the current mask in green) on the canvas."""
+    if processed_rgb is None:
+        return gr.update(), "Render a preview first; the brush paints on the result."
+    mask = _protect_state_mask(protect_state, _protect_source_path(img_paths))
+    return (
+        _protect_editor_value(_protect_display(processed_rgb, mask, show_mask)),
+        _protect_status(mask),
+    )
+
+
+def _protect_editor_value(display):
+    """Editor value with ``display`` as background and one empty layer.
+
+    An empty ``layers`` list leaves the browser's old strokes on screen;
+    a transparent layer of the same size replaces them.
+    """
+    h, w = display.shape[:2]
+    return {"background": display, "layers": [np.zeros((h, w, 4), np.uint8)], "composite": display}
+
+
+def on_protect_paint(editor_value, protect_state, img_paths, processed_rgb, mode="add", show_mask=True):
+    """Merge (or erase) the painted strokes into the protect mask state.
+
+    Returns ``(state, editor, status)``. The editor is reloaded with the new
+    mask in green and no strokes, so the next stroke starts clean.
+    """
+    from retouch.advanced_retouch import extract_editor_image_and_mask
+    from retouch.protect_mask import encode_mask, resize_mask
+
+    source = _protect_source_path(img_paths)
+    try:
+        _, strokes = extract_editor_image_and_mask(editor_value)
+    except ValueError:
+        return protect_state, gr.update(), "Load the result onto the canvas first (Load result)."
+    if not np.any(strokes > 0.05):
+        return protect_state, gr.update(), "Nothing painted yet: paint on the canvas first."
+    current = _protect_state_mask(protect_state, source)
+    if processed_rgb is not None:
+        grid = np.asarray(processed_rgb).shape[:2]
+    elif current is not None:
+        grid = current.shape
+    else:
+        grid = strokes.shape
+    strokes = resize_mask(np.clip(strokes, 0.0, 1.0).astype(np.float32), grid)
+    if current is not None and current.shape != grid:
+        current = resize_mask(current, grid)
+    if mode == "erase":
+        merged = None if current is None else np.clip(current - strokes, 0.0, 1.0)
+    else:
+        merged = strokes if current is None else np.maximum(current, strokes)
+    encoded = encode_mask(merged) if merged is not None else None
+    state = {"mask": encoded, "source": source} if encoded else None
+    mask = _protect_state_mask(state, source)
+    if processed_rgb is not None:
+        editor = _protect_editor_value(_protect_display(processed_rgb, mask, show_mask))
+    else:
+        editor = gr.update()
+    verb = {"add": "added", "erase": "removed"}.get(mode, "updated")
+    return state, editor, _protect_status(mask, f"Painted area {verb}.")
+
+
+def _protect_paint_handler(mode):
+    """Click handler: merge strokes, then empty the editor.
+
+    The browser keeps drawn strokes when the editor gets a new value with
+    empty layers, so the click clears it (None) and a follow-up
+    ``on_protect_redraw`` puts the result back with the mask in green.
+    """
+    def _handler(editor_value, protect_state, img_paths, processed_rgb, show_mask=True):
+        state, editor, status_text = on_protect_paint(
+            editor_value, protect_state, img_paths, processed_rgb, mode, show_mask)
+        return state, (None if isinstance(editor, dict) else editor), status_text
+    return _handler
+
+
+def on_protect_redraw(processed_rgb, protect_state, img_paths, show_mask=True):
+    """The editor value after a paint/clear click: result + green mask."""
+    if processed_rgb is None:
+        return gr.update()
+    mask = _protect_state_mask(protect_state, _protect_source_path(img_paths))
+    return _protect_editor_value(_protect_display(processed_rgb, mask, show_mask))
+
+
+def _protect_mask_for_render(params, curr_path, n_images):
+    """Engine ``protect_mask`` for one photo of a render, or None.
+
+    A mask belongs to the photo it was painted on; with one photo in the
+    render it is used even when the upload path changed (a reloaded
+    session), and the engine refuses a mask whose framing differs.
+    """
+    state = params.get("protect_mask")
+    if not isinstance(state, dict) or not state.get("mask"):
+        return None
+    if n_images > 1 and state.get("source") not in (None, str(curr_path)):
+        return None
+    return state["mask"]
+
+
+def _face_notes_html(result):
+    from retouch.face_notes import caption_lines
+
+    lines = caption_lines(getattr(result, "runtime_diagnostics", None))
+    if not lines:
+        return ""
+    items = "".join(f"<li>{html.escape(line)}</li>" for line in lines)
+    return ('<div class="retouch-face-notes" style="border:1px solid #9ca3af;padding:8px 12px;'
+            'border-radius:6px;margin:8px 0;font-size:13px"><strong>Skipped or dampened:</strong>'
+            f'<ul style="margin:4px 0 0 16px;padding:0">{items}</ul></div>')
 
 
 def on_clear_face_params():
@@ -3883,6 +4094,37 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         # Latest full-resolution processed recipe result used by
                         # the Advanced Retouch "Edit processed result" path.
                         _processed_result_state = gr.State(value=None)
+                        _protect_mask_state = gr.State(value=None)
+                        with gr.Accordion("🛡️ Protect / Restore (keep this)", open=False):
+                            gr.Markdown(
+                                "Paint over anything the retouch should leave alone: a mole, a drawn "
+                                "tear-mole, freckles, makeup detail. **Protect** keeps it on the next "
+                                "render; **Restore** keeps it and re-renders now, so the painted area gets "
+                                "its original detail back. Every face and body-skin edit leaves the green "
+                                "area alone; colour grade and tone still apply there, so it matches the photo."
+                            )
+                            with gr.Row():
+                                protect_load_btn = gr.Button("Load result", size="sm", variant="secondary")
+                                protect_show = gr.Checkbox(value=True, label="Show mask (green)")
+                            protect_editor = gr.ImageEditor(
+                                label="Protect brush",
+                                type="numpy",
+                                image_mode="RGBA",
+                                height=520,
+                                sources=(),
+                                layers=False,
+                                transforms=(),
+                                brush=gr.Brush(default_size=24, colors=["#22c55e"], default_color="#22c55e", color_mode="fixed"),
+                                eraser=gr.Eraser(default_size=24),
+                                show_download_button=False,
+                                elem_id="protect-editor",
+                            )
+                            with gr.Row():
+                                protect_add_btn = gr.Button("Protect painted area", size="sm", variant="primary")
+                                protect_restore_btn = gr.Button("Restore painted area (re-render)", size="sm", variant="primary")
+                                protect_erase_btn = gr.Button("Unprotect painted area", size="sm")
+                                protect_clear_btn = gr.Button("Clear mask", size="sm")
+                            protect_status = gr.Markdown(_protect_status(None))
                         with gr.Accordion("✨ Advanced Retouch", open=False):
                             gr.Markdown(
                                 "Paint a mask on the canvas, choose an operation, and apply it. "
@@ -4022,6 +4264,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                         _makeup_cake_reduce_state = gr.State(value=0.0)
                         _hemoglobin_smooth_state = gr.State(value=0.0)
                         # mole_protect is a visible slider (below freckle_removal); no State
+                        face_strength = gr.Slider(
+                            0, 150, value=100, step=5,
+                            label="Face retouch strength, all faces (%)",
+                            info="Scales every face's retouch (skin, eyes, makeup, reshape). 0 = faces untouched, 100 = as set. Grade and tone still apply. Multiplies each face's own strength below.",
+                        )
                         with gr.Accordion("👥 Per-face recipes", open=False):
                             detect_faces_btn = gr.Button("Detect Faces", size="sm", variant="secondary")
                             face_gallery = gr.Gallery(
@@ -4035,6 +4282,11 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
                                 face_recipe = gr.Dropdown(
                                     label="Recipe for face",
                                     choices=RECIPE_UI_CHOICES, value=None, scale=2,
+                                )
+                                face_strength_pick = gr.Slider(
+                                    0, 150, value=100, step=5, scale=2,
+                                    label="Strength for face (%)",
+                                    info="Scales this face's retouch: 0 = off, 100 = as set, 150 = stronger.",
                                 )
                                 apply_face_btn = gr.Button("Apply to face", size="sm", scale=1)
                             clear_faces_btn = gr.Button("Clear per-face", size="sm")
@@ -5268,7 +5520,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     _mutation_events.append(_detect_faces_event)
     _apply_face_event = apply_face_btn.click(
         fn=on_apply_face_recipe,
-        inputs=[face_select, face_recipe, _face_params_state],
+        inputs=[face_select, face_recipe, _face_params_state, face_strength_pick],
         outputs=[_face_params_state, face_params_status],
         show_progress="hidden",
         queue=False,
@@ -5684,6 +5936,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "undereye_shadow_strength": undereye_shadow_strength,
         "freckle_removal": freckle_removal,
         "heal_engine": heal_engine,
+        "face_strength": face_strength,
         "mark_policy": mark_policy,
         "fa02_texture_mode": _fa02_texture_mode_state,
         "micro_restore": micro_restore,
@@ -5960,6 +6213,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
         "quality_tier": quality_tier,
         "debug_mode": debug_mode,
         "optical_correction": optical_correction,
+        "protect_mask": _protect_mask_state,
         "look_params": _look_params_state,
         "face_params": _face_params_state,
         "face_params_json": face_params_json,
@@ -6067,8 +6321,10 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
             queue=False,
         )
 
-    def _bind_process_event(_button, _mode_state):
-        _capture_event = _button.click(
+    def _bind_process_event(_button, _mode_state, after=None):
+        # ``after``: an event to chain onto instead of the button's click
+        # (Restore updates the protect mask first, then renders).
+        _capture_kwargs = dict(
             fn=capture_render_snapshot,
             inputs=_process_inputs + [
                 _settings_revision_state,
@@ -6079,6 +6335,10 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
             show_progress="hidden",
             queue=False,
         )
+        if after is None:
+            _capture_event = _button.click(**_capture_kwargs)
+        else:
+            _capture_event = after.then(**_capture_kwargs)
         _render_event = _capture_event.then(
             fn=process_image_event,
             inputs=[_render_snapshot_state, _settings_revision_state, _preview_cache_state],
@@ -6116,6 +6376,72 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     _bind_process_event(process_btn, _render_preview_mode_state)
     _bind_process_event(process_btn_bottom, _render_preview_mode_state)
     _bind_process_event(export_full_btn, _export_full_mode_state)
+
+    # Protect / Restore brush (retouch/protect_mask.py).
+    protect_load_btn.click(
+        fn=on_protect_load,
+        inputs=[_processed_result_state, _protect_mask_state, img_input, protect_show],
+        outputs=[protect_editor, protect_status],
+        show_progress="hidden", queue=False,
+    )
+    protect_show.change(
+        fn=on_protect_load,
+        inputs=[_processed_result_state, _protect_mask_state, img_input, protect_show],
+        outputs=[protect_editor, protect_status],
+        show_progress="hidden", queue=False,
+    )
+    _protect_paint_inputs = [protect_editor, _protect_mask_state, img_input, _processed_result_state]
+    _protect_add_event = protect_add_btn.click(
+        fn=_protect_paint_handler("add"),
+        inputs=_protect_paint_inputs + [protect_show],
+        outputs=[_protect_mask_state, protect_editor, protect_status],
+        show_progress="hidden", queue=False,
+    )
+    _protect_erase_event = protect_erase_btn.click(
+        fn=_protect_paint_handler("erase"),
+        inputs=_protect_paint_inputs + [protect_show],
+        outputs=[_protect_mask_state, protect_editor, protect_status],
+        show_progress="hidden", queue=False,
+    )
+    _protect_clear_event = protect_clear_btn.click(
+        fn=lambda r: (None, None if r is not None else gr.update(), _protect_status(None)),
+        inputs=[_processed_result_state],
+        outputs=[_protect_mask_state, protect_editor, protect_status],
+        show_progress="hidden", queue=False,
+    )
+    _protect_restore_event = protect_restore_btn.click(
+        fn=_protect_paint_handler("add"),
+        inputs=_protect_paint_inputs + [protect_show],
+        outputs=[_protect_mask_state, protect_editor, protect_status],
+        show_progress="hidden", queue=False,
+    )
+    for _protect_event in (_protect_add_event, _protect_erase_event, _protect_clear_event, _protect_restore_event):
+        _protect_event.then(
+            fn=on_protect_redraw,
+            inputs=[_processed_result_state, _protect_mask_state, img_input, protect_show],
+            outputs=[protect_editor],
+            show_progress="hidden", queue=False,
+        )
+    _protect_revision_events = [
+        _protect_event.success(
+            fn=on_settings_changed,
+            inputs=[_settings_revision_state],
+            outputs=[_settings_revision_state, status],
+            show_progress="hidden",
+            queue=False,
+        )
+        for _protect_event in (_protect_add_event, _protect_erase_event, _protect_clear_event, _protect_restore_event)
+    ]
+    # Restore renders only after the mask and the settings revision moved,
+    # so the render's snapshot carries the new mask and is not marked stale.
+    _bind_process_event(protect_restore_btn, _render_preview_mode_state, after=_protect_revision_events[-1])
+    # A new photo starts with no protected area.
+    img_input.change(
+        fn=lambda: (None, _protect_status(None)),
+        inputs=[],
+        outputs=[_protect_mask_state, protect_status],
+        show_progress="hidden", queue=False,
+    )
     export_all_btn.click(
         fn=export_all_handler,
         inputs=_process_inputs + [_settings_revision_state, preserve_source_profile],

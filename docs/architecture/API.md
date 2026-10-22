@@ -63,6 +63,8 @@ def process(
     undereye_shadow_strength: Optional[float] = None,
     freckle_removal: Optional[float] = None,
     freckle_preserve_mask: Optional[np.ndarray] = None,
+    protect_mask: Any = None,
+    face_strength: Optional[int] = None,
     micro_restore: Optional[int] = None,
     micro_dodge_burn: Optional[int] = None,
     redness_even: Optional[int] = None,
@@ -352,7 +354,9 @@ Passing an explicit value override to these parameters takes precedence over the
 *   **`regional_modulation`** (Type: `float`, Default: `0.0`, Range: `0.0` to `1.0`, Recipe key: `frequency.regional_modulation`): Adjusts the regional modulation parameter.
 *   **`smooth_engine`** (Type: `str`, Default: `guided`, Range: None, Recipe key: `frequency.smooth_engine`): Adjusts the smooth engine parameter.
 *   **`freckle_removal`** (Type: `float`, Default: `0.0`, Range: `0.0` to `100.0`, Recipe key: `frequency.freckle_removal`): Adjusts the freckle removal parameter.
-*   **`freckle_preserve_mask`** (Type: `float`, Default: `None`, Range: None, Recipe key: None): Adjusts the freckle preserve mask parameter.
+*   **`freckle_preserve_mask`** (Type: `float`, Default: `None`, Range: None, Recipe key: None): Older name of `protect_mask`; merged with it.
+*   **`protect_mask`** (process kwarg, not a ParamSpec): user Protect / Restore mask (array, data-URI PNG or `{"mask": ...}`; white = keep as shot), any size with the photo's aspect ratio. Per-face and body-skin ops keep the photo's detail inside it; grade, tone and film still apply. See `docs/guides/PROTECT_AND_FACE_STRENGTH.md`.
+*   **`face_strength`** (Type: `int`, Default: `100`, Range: `0` to `150`, Recipe key: None): scales every per-face retouch amount for all faces; multiplies with a per-face `strength` in `face_params` entries. 0 = face ops off. See `retouch/face_strength.py`.
 *   **`micro_restore`** (Type: `int`, Default: `20`, Range: `0` to `50`, Recipe key: `micro_restore`): Adjusts the micro restore parameter.
 *   **`micro_dodge_burn`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.micro_db`): Adjusts the micro dodge burn parameter.
 *   **`redness_even`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.redness_even`): Adjusts the redness even parameter.

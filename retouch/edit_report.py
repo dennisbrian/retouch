@@ -90,6 +90,7 @@ _NAME_CATEGORY = {
     "auto_body_reshape": "shape",
     "ai_sr_scale": "ai",
     "relight": "light",
+    "face_strength": "skin",
 }
 
 # Settings that tune *how* another edit behaves (its engine, colour, radius,
@@ -120,6 +121,7 @@ _NEUTRAL = {
     "body_reshape_hip_width": 50.0,
     "white_balance_kelvin": 6500,
     "ai_sr_scale": 1,
+    "face_strength": 100,
 }
 _NEUTRAL_STRINGS = frozenset({"", "none", "off", "false", "0"})
 
@@ -300,6 +302,7 @@ def build_edit_report(
     source_had_credentials: bool = False,
     signed: bool = False,
     include_output_hash: bool = True,
+    diagnostics: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build the "what was changed" report for one photo.
 
@@ -307,7 +310,9 @@ def build_edit_report(
     dict of setting names. ``before``/``after`` are the source and retouched
     pixels (any size; compared downscaled). ``include_output_hash`` is off
     when the report is going *inside* the output (signed credentials), where
-    the file's own hash cannot be known yet.
+    the file's own hash cannot be known yet. ``diagnostics`` is the
+    render's ``runtime_diagnostics``: when given, the report records the
+    painted protection mask and, per face, what was skipped or dampened.
     """
     from . import __version__
 
@@ -343,6 +348,19 @@ def build_edit_report(
     }
     if not_applied:
         report["not_applied_no_face"] = not_applied
+    if diagnostics is not None:
+        from .face_notes import report_section
+
+        protection = diagnostics.get("protection") or {"painted": False}
+        report["protection"] = {
+            **protection,
+            "note": (
+                "Areas painted with the Protect/Restore brush kept their own detail; "
+                "colour grade and tone still apply there."
+                if protection.get("painted") else "No protected area painted."
+            ),
+        }
+        report["skipped"] = report_section(diagnostics)
     change = pixel_change(before, after)
     if change is not None:
         report["pixels"] = change

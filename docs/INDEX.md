@@ -24,6 +24,7 @@ output verification.
 - `GETTING_STARTED.md` — Desktop one-photo workflow, CLI basics, and result checks
 - `RECIPE_GUIDE.md` — Creating custom presets
 - `GUI.md` — Gradio UI layout & components
+- `PROTECT_AND_FACE_STRENGTH.md` — Protect / Restore brush, `--protect-mask`, per-face strength and the "skipped or dampened" caption
 - `BATCH_GUIDE.md` — Batch processing via CLI, including social crops export
 - `SPLIT_SHOOT.md` — Split a shoot into folders by capture time before batching
 - `GROUP_BY_COSPLAYER.md` — Group a shoot by cosplayer (costume colours + capture time, no face recognition)

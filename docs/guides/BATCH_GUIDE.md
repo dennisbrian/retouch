@@ -63,6 +63,8 @@ condition is shown as a blocking execution warning.
 | **`--no-exif`** | | *Off* | Skip copying EXIF metadata (orientation, camera tags, etc.) from the source image. |
 | **`--edit-report`** | | *Off* | Write a "what was changed" JSON report per photo to `edit-reports/` (active edits, whether face or body shape changed, AI use, share of the frame changed). See [CONTENT_CREDENTIALS.md](CONTENT_CREDENTIALS.md). |
 | **`--sign-cert`** / **`--sign-key`** | | *Off* | Sign each output with Content Credentials (C2PA) using your own certificate and key (PEM); needs the optional `credentials` extra. See [CONTENT_CREDENTIALS.md](CONTENT_CREDENTIALS.md). |
+| **`--protect-mask`** | | *None* | A mask image (white = keep as shot) used for every photo, or a folder of `<photo stem>.png` masks. Per-face and body-skin ops leave those areas alone; the grade still applies. See [PROTECT_AND_FACE_STRENGTH.md](PROTECT_AND_FACE_STRENGTH.md). |
+| **`--face-strength`** | | `100` | Scale every per-face retouch amount, 0-150 (0 = face ops off). |
 | **`--dry-run`** | | *Off* | Print the input plan, settings, and safety conditions without creating outputs or executing retouching. |
 | **`--export-lut`** | | *None* | Save `--recipe`'s colour look as a `.cube` 3D LUT and exit (no photos needed). Takes a `.cube` path or a folder; with no value it writes `<recipe>.cube` into `-o` or the current folder. Only per-pixel colour and tone steps go in; see "Recipe looks as .cube LUTs" in the README. |
 | **`--lut-size`** | | `33` | Grid points per axis for `--export-lut`. |

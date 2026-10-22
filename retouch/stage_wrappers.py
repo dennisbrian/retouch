@@ -113,6 +113,44 @@ class BodySkinStage(_EngineStage):
         )
 
 
+class ProtectWindowOpenStage(BaseStage):
+    """Snapshot before the body-skin stages when a protection mask is painted.
+
+    The body-skin window (body skin, P7 cross-region skin, neck tone match,
+    cosplay moat, body paint, prosthetic edges, lint & dust) is closed by
+    :class:`ProtectWindowCloseStage`, which undoes those stages inside the
+    user protection mask (retouch/protect_mask.py). Both are no-ops, and
+    leave every byte alone, when nothing is painted.
+    """
+
+    name = "protect_window_open"
+    phase = "global"
+
+    def enabled(self, state: PipelineState) -> bool:
+        return getattr(state.ctx, "_protect_source", None) is not None
+
+    def run(self, state: PipelineState) -> PipelineState:
+        state.ctx._protect_window_before = np.array(state.img, copy=True)
+        return state
+
+
+class ProtectWindowCloseStage(_EngineStage):
+    """Undo the body-skin window inside the protection mask (see Open)."""
+
+    name = "protect_window_close"
+    phase = "global"
+
+    def enabled(self, state: PipelineState) -> bool:
+        return getattr(state.ctx, "_protect_window_before", None) is not None
+
+    def _call(self, state: PipelineState) -> np.ndarray:
+        before = state.ctx._protect_window_before
+        state.ctx._protect_window_before = None
+        if before.shape != state.img.shape:
+            return state.img
+        return self._engine._keep_protected_frame(before, state.img, state.ctx)
+
+
 class CrossRegionSkinStage(_EngineStage):
     """Stage 3.55: P7 — opt-in cross-region skin appearance propagation."""
 
@@ -426,6 +464,7 @@ def build_global_registry(engine: "RetouchEngine") -> "StageRegistry":
     registry.add(SubjectSeparationStage(engine))
     registry.add(BackgroundHarmonizeStage(engine))
     registry.add(BackgroundReplaceStage(engine))
+    registry.add(ProtectWindowOpenStage())
     registry.add(BodySkinStage(engine))
     registry.add(CrossRegionSkinStage(engine))
     registry.add(NeckToneMatchStage(engine))
@@ -433,6 +472,7 @@ def build_global_registry(engine: "RetouchEngine") -> "StageRegistry":
     registry.add(BodyPaintStage(engine))
     registry.add(ProstheticBlendStage(engine))
     registry.add(LintDustStage(engine))
+    registry.add(ProtectWindowCloseStage(engine))
     registry.add(GlobalStage(engine))
     registry.add(CostumeShineStage(engine))
     registry.add(CostumeClarityStage(engine))

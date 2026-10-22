@@ -324,6 +324,7 @@ from .cross_region_skin import (
     propagate_face_edit_delta,
 )
 from .params import resolve_recipe, _deep_merge, PROCESSING_PARAMS  # noqa: F401  (re-export for backward compat)
+from .face_params import make_anchor as make_face_anchor
 
 
 # ---------------------------------------------------------------------------
@@ -455,6 +456,11 @@ class ProcessingContext:
     freckle_removal: float = 0.0
     heal_engine: str = "telea"
     freckle_preserve_mask: Optional[np.ndarray] = None
+    # User protection mask ("keep this"), source-image grid; merged with the
+    # freckle_preserve_mask alias at the start of a render (protect_mask.py).
+    protect_mask: Optional[np.ndarray] = None
+    # "All faces" strength, percent (retouch/face_strength.py).
+    face_strength: float = _DEFAULTS["face_strength"]
     mark_policy: Optional[Mapping[str, Any]] = None
     hb_even: float = 0.0
     hb_shift: float = 0.0
@@ -1243,6 +1249,8 @@ def build_context(
         ),
         cross_region_skin_mask=overrides.get("cross_region_skin_mask"),
         cross_region_protect_mask=overrides.get("cross_region_protect_mask"),
+        # User "keep this" mask (caller-only; never from a recipe).
+        protect_mask=overrides.get("protect_mask"),
         # ``nose_smooth`` reads the caller override first, then the recipe's
         # ``frequency.nose_smooth`` (0-1 fraction, converted to 0-100 like
         # ``frequency.smooth``); absent → None (nose smoothed with the face).
@@ -1374,10 +1382,11 @@ class _CoreResult:
 def _worker_payload_ctx(c: "ProcessingContext") -> "ProcessingContext":
     """Picklable per-face ctx for FaceProcessorPool workers (spawn+pickle).
 
-    NumPy-array ctx fields (freckle_preserve_mask, color_ref, hi_ref,
-    cross_region_skin_mask, cross_region_protect_mask) are picklable and are
-    consumed by _process_face_core, so they are kept for parity with the
-    inline single-process path. Only ``_effect_previews`` is dropped: it can
+    NumPy-array ctx fields (color_ref, hi_ref, cross_region_skin_mask,
+    cross_region_protect_mask) are picklable and are kept for parity with
+    the inline single-process path. The user protection mask
+    (protect_mask / freckle_preserve_mask) travels as the face's own ROI
+    crop, ``_protect_roi``, which is all _process_face_core reads. Only ``_effect_previews`` is dropped: it can
     hold bulky preview buffers from earlier faces and the worker rebuilds its
     own preview namespace (effect_preview.initialize inside
     _process_face_core).
@@ -1385,6 +1394,13 @@ def _worker_payload_ctx(c: "ProcessingContext") -> "ProcessingContext":
     out = copy.copy(c)
     if "_effect_previews" in out.__dict__:
         del out._effect_previews
+    # The user protection mask reaches the core as this face's ROI crop
+    # (``_protect_roi``); the source-grid arrays and per-frame cache it was
+    # cut from would ship a full-resolution frame to every worker.
+    for name in ("_protect_source", "_protect_cache"):
+        out.__dict__.pop(name, None)
+    out.protect_mask = None
+    out.freckle_preserve_mask = None
     return out
 
 
@@ -1851,6 +1867,7 @@ class RetouchEngine:
         freckle_removal: Optional[float] = None,
         heal_engine: Optional[str] = None,
         freckle_preserve_mask: Optional[np.ndarray] = None,
+        protect_mask: Optional[np.ndarray] = None,
         hb_even: Optional[float] = None,
         hb_shift: Optional[float] = None,
         lut: Optional[str] = None,
@@ -2287,6 +2304,7 @@ class RetouchEngine:
             "freckle_removal": freckle_removal,
             "heal_engine": heal_engine,
             "freckle_preserve_mask": freckle_preserve_mask,
+            "protect_mask": protect_mask,
             "hb_even": hb_even,
             "hb_shift": hb_shift,
         }
@@ -2322,10 +2340,26 @@ class RetouchEngine:
             from .face_params import coerce_face_params
             ctx.face_params = coerce_face_params(face_params)
 
+        # One user protection mask on the source grid. freckle_preserve_mask
+        # is its old name; both are merged. Consumers resample it to the
+        # frame they run on (protect_mask.frame_mask), so the fast preview,
+        # the draft proxy and the native path protect the same area.
+        from .protect_mask import fit_to_source, merge_masks, summary as _protect_summary
+        ctx._protect_source = fit_to_source(
+            merge_masks(ctx.protect_mask, ctx.freckle_preserve_mask),
+            (orig_h, orig_w),
+        )
+        if ctx._protect_source is not None:
+            ctx._runtime_diagnostics["protection"] = _protect_summary(ctx._protect_source)
+
         # The preview path runs the face/global stages on a downscaled frame.
         # Keep caller-reviewed P7 masks aligned with that frame while leaving
         # masks at native resolution for the normal and legacy proxy paths.
         if fast and scale < 1.0:
+            # Size-based eye gates (eye-mask fail-open floor, small-iris
+            # dampening) judge in source pixels, so the fast preview makes
+            # the same call as the full-quality export it stands in for.
+            ctx._native_pixel_scale = float(scale)
             preview_shape = img_bgr.shape[:2]
             for mask_name in ("cross_region_skin_mask", "cross_region_protect_mask"):
                 mask_value = getattr(ctx, mask_name, None)
@@ -2488,6 +2522,7 @@ class RetouchEngine:
             # image inside the returned ProcessingContext.
             ctx._qa_reference_img_bgr = None
             ctx._qa_geometry_reference_img_bgr = None
+            self._finalize_face_notes(ctx)
             return ProcessingResult(
                 image=result,
                 face_count=0,
@@ -2572,6 +2607,7 @@ class RetouchEngine:
         # inside the returned ProcessingContext.
         ctx._qa_reference_img_bgr = None
         ctx._qa_geometry_reference_img_bgr = None
+        self._finalize_face_notes(ctx)
         return ProcessingResult(
             image=result,
             skin_mask=acc_skin,
@@ -2916,6 +2952,7 @@ class RetouchEngine:
                 faces_proxy = self._detector.detect(proxy_img_bgr)
         person_mask_proxy = self._detector.segment_person(proxy_img_bgr)
         timings["detection"] = (time.perf_counter() - t0) * 1000
+        self._record_person_gate(ctx, t0)
 
         # ------------------------------------------------------------------
         # No-face fallback
@@ -3234,6 +3271,7 @@ class RetouchEngine:
                 faces = self._detector.detect(img_bgr)
         person_mask = self._detector.segment_person(img_bgr)
         timings["detection"] = (time.perf_counter() - t0) * 1000
+        self._record_person_gate(ctx, t0)
 
         # ------------------------------------------------------------------
         # No-face fallback: return early with minimal data
@@ -3434,7 +3472,9 @@ class RetouchEngine:
 
                 _emit_stage("fabric_wrinkle_smooth")
                 t_fab = time.perf_counter()
+                _fab_before = result
                 result = smooth_fabric_wrinkles(result, cloth_mask, ctx.fabric_wrinkle_smooth)
+                result = self._keep_protected_frame(_fab_before, result, ctx)
                 timings["fabric_wrinkle_smooth"] = (time.perf_counter() - t_fab) * 1000
 
         # ------------------------------------------------------------------
@@ -3804,14 +3844,51 @@ class RetouchEngine:
                 diagnostics["face_param_binding"] = report
 
     def _ctx_for_face(self, ctx: ProcessingContext, face_index: int) -> ProcessingContext:
-        """Resolve per-face overrides; identity when face_params empty/missing."""
-        if not ctx.face_params or ctx.face_params == "auto":
-            return ctx
-        ov = ctx.face_params.get(face_index)
-        if not ov:
-            return ctx
-        from .face_params import resolve_face_context
-        return resolve_face_context(ctx, ov)
+        """Resolve per-face overrides and strength; identity at the defaults.
+
+        The face's recipe/overrides are resolved first, then every face-local
+        amount is scaled by the face's strength (its own value times the "All
+        faces" value, retouch/face_strength.py). With no overrides and both
+        strengths at 100% the base ``ctx`` itself is returned.
+        """
+        resolved = ctx
+        if ctx.face_params and ctx.face_params != "auto":
+            ov = ctx.face_params.get(face_index)
+            if ov:
+                from .face_params import resolve_face_context
+                resolved = resolve_face_context(ctx, ov)
+        factor = self._face_strength_factor(ctx, face_index)
+        if abs(factor - 1.0) > 1e-12:
+            from .face_strength import scale_context
+            resolved = scale_context(resolved, factor)
+        return resolved
+
+    @staticmethod
+    def _face_strength_factor(ctx: ProcessingContext, face_index: int) -> float:
+        """This face's strength factor: own value x "All faces" (1.0 = 100%)."""
+        from .face_strength import MAX_FACTOR, clamp_factor
+
+        factor = clamp_factor(getattr(ctx, "face_strength", 100))
+        fp = ctx.face_params
+        if fp and fp != "auto":
+            entry = fp.get(face_index) or {}
+            if entry.get("strength") is not None:
+                factor *= clamp_factor(entry.get("strength"))
+        return min(max(factor, 0.0), MAX_FACTOR)
+
+    @staticmethod
+    def _selected_face_index(ctx: ProcessingContext, face_index: int) -> int:
+        """The face number the user picked this face as, when anchored.
+
+        Per-face picks are numbered on the source photo; this render's own
+        detection can order faces differently (DSCF4599). The binding report
+        maps one to the other; unbound faces keep this render's number.
+        """
+        report = (getattr(ctx, "_runtime_diagnostics", None) or {}).get("face_param_binding")
+        for item in report or []:
+            if item.get("bound_index") == face_index:
+                return int(item.get("selected_index"))
+        return int(face_index)
 
     def suggest_face_params(
         self,
@@ -3846,10 +3923,39 @@ class RetouchEngine:
         return out
 
     def _face_ctxs_for_reshape(self, ctx: ProcessingContext, n_faces: int):
-        """Per-face contexts for reshape B-lite, or None when no face_params."""
-        if not ctx.face_params or n_faces <= 0:
+        """Per-face contexts for reshape B-lite, or None when nothing is per-face."""
+        if n_faces <= 0:
+            return None
+        if not ctx.face_params and all(
+            abs(self._face_strength_factor(ctx, i) - 1.0) <= 1e-12
+            for i in range(n_faces)
+        ):
             return None
         return [self._ctx_for_face(ctx, i) for i in range(n_faces)]
+
+    @staticmethod
+    def _keep_protected_frame(
+        before: np.ndarray, after: np.ndarray, ctx: ProcessingContext,
+    ) -> np.ndarray:
+        """Undo a whole-frame retouch window inside the user protection mask.
+
+        Used around lens glare and red-eye and around the body-skin stages
+        (ProtectWindowOpen/CloseStage). Sizes follow the frame's long side, so
+        preview and export protect the same area. See protect_mask.py.
+        """
+        from .protect_mask import (
+            FRAME_FEATHER, FRAME_TONE_SIGMA, frame_mask, keep_protected,
+        )
+
+        mask = frame_mask(ctx, after.shape[:2])
+        if mask is None:
+            return after
+        long_side = float(max(after.shape[:2]))
+        return keep_protected(
+            before, after, mask,
+            tone_sigma_px=max(FRAME_TONE_SIGMA * long_side, 2.0),
+            feather_px=max(FRAME_FEATHER * long_side, 0.75),
+        )
 
     def _stage_lens_glare(self, img: np.ndarray, faces, ctx: ProcessingContext, timings) -> np.ndarray:
         """Remove glasses / goggle / visor glare before any face work.
@@ -3865,6 +3971,7 @@ class RetouchEngine:
         _emit_stage("lens_glare")
         t = time.perf_counter()
         out, diags = remove_lens_glare_faces(img, faces, strength)
+        out = self._keep_protected_frame(img, out, ctx)
         ctx._runtime_diagnostics["lens_glare"] = diags
         timings["lens_glare"] = (time.perf_counter() - t) * 1000
         return out
@@ -3883,6 +3990,7 @@ class RetouchEngine:
         _emit_stage("red_eye")
         t = time.perf_counter()
         out, diags = remove_red_eye_faces(img, faces, strength)
+        out = self._keep_protected_frame(img, out, ctx)
         ctx._runtime_diagnostics["red_eye"] = diags
         timings["red_eye"] = (time.perf_counter() - t) * 1000
         return out
@@ -4044,6 +4152,25 @@ class RetouchEngine:
                 'shifted_bbox': shifted_bbox
             })
 
+        # User protection mask, cropped to each face's ROI on this frame (the
+        # crop, not the whole frame, crosses into worker processes).
+        from .protect_mask import frame_mask as _protect_frame
+        _protect = _protect_frame(ctx, (h_img, w_img))
+        protect_rois: List[Optional[np.ndarray]] = []
+        for prepared in prepared_faces:
+            x1, y1, x2, y2 = prepared['roi_box']
+            crop = None if _protect is None else _protect[y1:y2, x1:x2]
+            protect_rois.append(
+                np.ascontiguousarray(crop) if crop is not None and np.any(crop > 1e-3) else None
+            )
+
+        def _face_ctx(i: int) -> ProcessingContext:
+            fctx = self._ctx_for_face(ctx, i)
+            if protect_rois[i] is not None:
+                fctx = copy.copy(fctx)
+                fctx._protect_roi = protect_rois[i]
+            return fctx
+
         # Region parsing — or reuse cached regions from ctx.face_contexts
         cached_contexts = ctx.face_contexts
         if cached_contexts is not None and not self._cached_regions_match(
@@ -4115,6 +4242,40 @@ class RetouchEngine:
                     if face_result is not None else None
                 )
 
+        def _collect_face_notes() -> None:
+            # One entry per face in this render's detection order, keyed by
+            # position (anchor) so preview and export can be compared even
+            # when their detections are ordered differently.
+            entries = []
+            for i, face_result in enumerate(results):
+                fctx = self._ctx_for_face(ctx, i)
+                notes = list(getattr(face_result, "notes", None) or [])
+                factor = self._face_strength_factor(ctx, i)
+                if abs(factor - 1.0) > 1e-9:
+                    notes.insert(0, {
+                        "op": "face_strength",
+                        "action": "dampened" if factor < 1.0 else "boosted",
+                        "reason": f"face strength {int(round(factor * 100))}%",
+                        "factor": round(factor, 4),
+                    })
+                if protect_rois[i] is not None:
+                    notes.append({
+                        "op": "protect",
+                        "action": "kept",
+                        "reason": "painted protected area kept",
+                    })
+                entries.append({
+                    "face": i,
+                    "selected_face": self._selected_face_index(ctx, i),
+                    "anchor_bbox_norm": [
+                        round(float(v), 4)
+                        for v in make_face_anchor(faces[i].bbox, (w_img, h_img))
+                    ],
+                    "recipe": getattr(fctx, "active_recipe", None),
+                    "notes": notes,
+                })
+            ctx._runtime_diagnostics["face_notes"] = entries
+
         def _collect_effect_previews() -> None:
             if getattr(ctx, "_collect_effect_previews", False) and results:
                 preview = getattr(results[0], "stray_hair_preview", None)
@@ -4125,7 +4286,7 @@ class RetouchEngine:
 
         if len(faces) == 1:
             results[0] = self._process_one_face(
-                img, faces[0], person_mask, self._ctx_for_face(ctx, 0), h_img, w_img,
+                img, faces[0], person_mask, _face_ctx(0), h_img, w_img,
                 regions=all_regions[0], preprepared=prepared_faces[0],
                 light_direction=all_light_directions[0],
             )
@@ -4133,6 +4294,7 @@ class RetouchEngine:
             _collect_safe_auto_decisions()
             _collect_fa02_diagnostics()
             _collect_effect_previews()
+            _collect_face_notes()
             return results, built_contexts  # type: ignore[return-value]
 
         # Multi-face: try ProcessPool (FaceProcessorPool) for true parallelism,
@@ -4150,7 +4312,7 @@ class RetouchEngine:
                     ieds[i],
                     faces[i].confidence,
                     getattr(faces[i], "confidence_source", "unknown"),
-                    _slim_ctx(self._ctx_for_face(ctx, i)),
+                    _slim_ctx(_face_ctx(i)),
                     prepared_faces[i]['roi_box'],
                     prepared_faces[i]['roi_person_mask'],
                     prepared_faces[i]['roi_box'][3] - prepared_faces[i]['roi_box'][1],
@@ -4178,7 +4340,7 @@ class RetouchEngine:
             for i, pr in enumerate(proc_results):
                 if pr is None:
                     results[i] = self._process_one_face(
-                        img, faces[i], person_mask, self._ctx_for_face(ctx, i),
+                        img, faces[i], person_mask, _face_ctx(i),
                         h_img, w_img,
                         regions=all_regions[i], preprepared=prepared_faces[i],
                         light_direction=all_light_directions[i],
@@ -4197,10 +4359,12 @@ class RetouchEngine:
                         fa02_diagnostics=pr.get('fa02_diagnostics'),
                         stray_hair_preview=pr.get('stray_hair_preview'),
                         eye_edit_mask=pr.get('eye_edit_mask'),
+                        notes=pr.get('notes') or [],
                     )
             _collect_safe_auto_decisions()
             _collect_fa02_diagnostics()
             _collect_effect_previews()
+            _collect_face_notes()
             return results, built_contexts  # type: ignore[return-value]
 
         # Fallback: ThreadPoolExecutor (engine instance shared via memory)
@@ -4208,7 +4372,7 @@ class RetouchEngine:
             future_to_idx = {
                 pool.submit(
                     self._process_one_face,
-                    img, face, person_mask, self._ctx_for_face(ctx, i),
+                    img, face, person_mask, _face_ctx(i),
                     h_img, w_img,
                     regions=all_regions[i], preprepared=prepared_faces[i],
                     light_direction=all_light_directions[i],
@@ -4222,6 +4386,7 @@ class RetouchEngine:
         _collect_safe_auto_decisions()
         _collect_fa02_diagnostics()
         _collect_effect_previews()
+        _collect_face_notes()
         return results, built_contexts  # type: ignore[return-value]
 
     def _process_one_face(
@@ -4846,10 +5011,75 @@ class RetouchEngine:
             face,
             target,
             strength=strength / 100.0,
-            protect_mask=getattr(ctx, "cross_region_protect_mask", None),
+            protect_mask=self._p7_protect_mask(ctx, img.shape[:2]),
         )
         ctx._p7_diagnostics = result.to_dict()
         return result.image
+
+    @staticmethod
+    def _finalize_face_notes(ctx: ProcessingContext) -> None:
+        """Add whole-render reasons (P7 abstain, person gate) to the notes.
+
+        ``face_notes`` (per face, from the per-face stage) gets the P7
+        cross-region abstain reason; ``frame_notes`` lists detections the
+        person gate dropped or rescued (a dropped box is a face that was
+        never retouched, so it has no face entry).
+        """
+        diag = ctx._runtime_diagnostics
+        entries = diag.get("face_notes") or []
+        p7 = getattr(ctx, "_p7_diagnostics", None) or {}
+        if p7.get("abstained") and entries:
+            for entry in entries:
+                if not any(n.get("op") == "cross_region_skin" for n in entry["notes"]):
+                    entry["notes"].append({
+                        "op": "cross_region_skin",
+                        "action": "skipped",
+                        "reason": f"P7 cross-region skin abstained ({p7.get('reason')})",
+                        "gate": "p7",
+                    })
+        frame_notes = []
+        for event in diag.get("person_gate") or []:
+            dropped = event.get("action") == "dropped"
+            frame_notes.append({
+                **event,
+                "op": "detection",
+                "action": "skipped" if dropped else "kept",
+                "reason": (
+                    "face not on a person (background or poster), not retouched"
+                    if dropped else
+                    "person mask missed this face; its skin vouched for it, retouched"
+                ),
+                "gate": "person_gate",
+            })
+        if frame_notes:
+            diag["frame_notes"] = frame_notes
+
+    def _record_person_gate(self, ctx: ProcessingContext, since: float) -> None:
+        """Copy the detector's person-gate drops/rescues of this render."""
+        started = getattr(self._detector, "last_detect_started", None)
+        events = getattr(self._detector, "last_gate_events", None)
+        # A stand-in detector (tests, plug-ins) may not record gate events.
+        if not isinstance(started, (int, float)) or started < since:
+            return
+        if not isinstance(events, list) or not events:
+            return
+        ctx._runtime_diagnostics["person_gate"] = [dict(e) for e in events]
+
+    @staticmethod
+    def _p7_protect_mask(ctx: ProcessingContext, shape) -> Optional[np.ndarray]:
+        """P7's caller-reviewed protect mask joined with the user Protect mask."""
+        reviewed = getattr(ctx, "cross_region_protect_mask", None)
+        from .protect_mask import frame_mask
+
+        user = frame_mask(ctx, shape)
+        if user is None:
+            return reviewed
+        if reviewed is None:
+            return user
+        reviewed = squeeze_mask(normalize_mask(reviewed))
+        if reviewed is None or reviewed.shape != tuple(shape):
+            return user
+        return np.maximum(reviewed.astype(np.float32), user)
 
     def _stage_neck_tone_match(
         self,

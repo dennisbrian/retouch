@@ -97,12 +97,15 @@ def _neutral_evidence(reason: str) -> Dict[str, Any]:
 def assess_eye_artifact_scales(
     img_bgr: Optional[np.ndarray],
     regions: Any,
+    pixel_scale: float = 1.0,
 ) -> Dict[str, Dict[str, Any]]:
     """Return source-adaptive strength evidence for ``left`` and ``right``.
 
     The returned ``scale`` is safe to multiply into every cosmetic eye stage
     and the selective eye-sharpen mask.  The function is analysis-only and
-    never mutates ``img_bgr`` or ``regions``.
+    never mutates ``img_bgr`` or ``regions``. ``pixel_scale`` is render
+    pixels per source pixel (< 1 in the fast preview): the iris radius is
+    judged in source pixels, so the preview dampens like the export.
     """
     image_u8: Optional[np.ndarray] = None
     if isinstance(img_bgr, np.ndarray) and img_bgr.ndim == 3 and img_bgr.shape[2] == 3:
@@ -135,7 +138,7 @@ def assess_eye_artifact_scales(
             )
             continue
 
-        radius = float(np.sqrt(support_pixels / np.pi))
+        radius = float(np.sqrt(support_pixels / np.pi)) / max(float(pixel_scale), 1e-6)
         geometry = _geometry_scale(radius)
         chroma = 1.0
         saturation_p75: Optional[float] = None

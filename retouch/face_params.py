@@ -63,6 +63,9 @@ FACE_LOCAL_PARAM_NAMES: frozenset[str] = frozenset({
 ANCHOR_KEY = "anchor_bbox_norm"
 #: Optional entry key: source path the anchor was measured on.
 ANCHOR_SOURCE_KEY = "anchor_source"
+#: Optional entry key: this face's strength, percent 0-150 (Impact-style; see
+#: retouch/face_strength.py). Applied by the engine after the face's recipe.
+STRENGTH_KEY = "strength"
 #: Minimum IoU between an anchor and a detected face to accept the binding.
 ANCHOR_MIN_IOU = 0.3
 
@@ -161,7 +164,8 @@ def filter_face_local(raw: Mapping[str, Any]) -> Dict[str, Any]:
     """Keep only FACE_LOCAL keys; drop recipe + globals (log once per key)."""
     out: Dict[str, Any] = {}
     for k, v in raw.items():
-        if k in {"recipe", "tone_observation", "selection_reason", ANCHOR_KEY, ANCHOR_SOURCE_KEY}:
+        if k in {"recipe", "tone_observation", "selection_reason", STRENGTH_KEY,
+                 ANCHOR_KEY, ANCHOR_SOURCE_KEY}:
             continue
         if k in FACE_LOCAL_PARAM_NAMES:
             out[k] = v

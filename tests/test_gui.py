@@ -133,8 +133,10 @@ EXPECTED_RECIPE_KEYS.append("costume_shine")
 EXPECTED_RECIPE_KEYS.append("teeth_brighten")
 # Recipe-only halation mode (classic / point_light), a gr.State in the GUI.
 EXPECTED_RECIPE_KEYS.append("halation_mode")
+# "All faces" strength (Impact-style), not a recipe key but a GUI slider.
+EXPECTED_RECIPE_KEYS.append("face_strength")
 
-EXPECTED_RECIPE_KEY_COUNT = 279
+EXPECTED_RECIPE_KEY_COUNT = 280
 # Self-updating: the recipe/smart-style slider tuple length is the contract
 # defined by RECIPE_OUTPUT_KEYS, so this constant can never go stale.
 EXPECTED_UI_OUTPUT_COUNT = len(gui.RECIPE_OUTPUT_KEYS)
@@ -656,11 +658,12 @@ class TestProcessInputKeys:
     def test_count_matches_process_image_arity(self):
         """PROCESS_INPUT_KEYS length must equal the arity of process_image."""
         from retouch.params import param_names
-        # 2 leading + registry (minus 2 excluded) + 13 trailing transport keys
+        # 2 leading + registry (minus 2 excluded) + 14 trailing transport keys
         # (look_params + face_params State + face_params_json + the hero
-        # frame image for set matching). The dead "fast" checkbox was removed
-        # (render mode already fully determines it).
-        expected = 2 + (len(param_names()) - 2) + 13
+        # frame image for set matching + the Protect/Restore mask State).
+        # The dead "fast" checkbox was removed (render mode already fully
+        # determines it).
+        expected = 2 + (len(param_names()) - 2) + 14
         assert len(gui.PROCESS_INPUT_KEYS) == expected
 
     def test_first_key_is_img_paths(self):
@@ -1300,6 +1303,7 @@ class TestProcessImageValidation:
             "highlight_hue": 0, "highlight_sat": 0,
             "quality_tier": "Full (native face crops)",
             "debug_mode": False,
+            "protect_mask": None,
         })
         defaults.update(overrides)
         return tuple(defaults[k] for k in gui.PROCESS_INPUT_KEYS)
