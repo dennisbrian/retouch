@@ -208,9 +208,16 @@ def _ctx_get(ctx: Any, name: str, default: Any = None) -> Any:
 # these faces), eye_enhance (iris crispness already matched the references)
 # and the "powder" specular finish (subtracts equal B/G/R, so broad lit
 # cheeks went grey on pale skin, and it barely acted on darker skin).
+# 2026-10-21: the shadow component moved from Shadow Lift (60) to Face
+# Shadow Fill (60). Shadow Lift lifts any pixel below a whole-crop blur in
+# fixed Lab units, so it faded drawn beauty marks and lash lines and smoothed
+# texture (rednote shrine photo: tear-mole depth 12.2 -> 7.6 L at polish 100,
+# fine texture -8%). Shadow Fill lifts only broad shade in stops: the same
+# shadow-depth reduction on the fox, shrine and bunny photos (within 1-2 L),
+# texture kept, mark kept (with shine removal's mark guard: 11.2).
 _FACE_POLISH_COMPONENTS: Tuple[Tuple[str, float], ...] = (
     ("shine_removal", 100.0),
-    ("shadow_lift", 60.0),
+    ("face_shadow_fill", 60.0),
     ("face_exposure", 8.0),
 )
 
@@ -468,6 +475,23 @@ def _process_face_core(
             feature_mask=spot_feature_mask,
         )
         logger.debug("spot_heal: %s", _spot_diags)
+
+    # ---- Vein Softening (opt-in, before any smoothing) ----
+    # Calms faint blue-green line-shaped colour on face skin (temples,
+    # cheeks, eyelids); marks, makeup lines and paint are left alone. Runs
+    # on the pristine crop: smoothing and whitening blur a vein into the
+    # skin's own variation. Body skin is done in the body stage. See
+    # retouch/vein_soften.py.
+    if ctx.vein_attenuate > 0:
+        from .vein_soften import soften_veins
+        _features = [_norm_mask(m) for m in (
+            regions.left_eye, regions.right_eye, regions.left_eyebrow,
+            regions.right_eyebrow, regions.lips, regions.mouth_interior)
+            if m is not None]
+        _exclude = np.clip(np.max(np.stack(_features), axis=0), 0, 1) if _features else None
+        canvas = soften_veins(canvas, skin_n_marks_protected, ctx.vein_attenuate / 100.0,
+                              face_width=face_width, value_scale=255.0,
+                              exclude_mask=_exclude)
 
     stray_hair_preview = None
     # ---- Stray hair cleanup (opt-in, before any smoothing) ----
@@ -984,10 +1008,6 @@ def _process_face_core(
     if ctx.hemoglobin_smooth > 0:
         canvas = skin.apply_hemoglobin_guided_smooth(canvas, skin_n_marks_protected, ctx.hemoglobin_smooth)
 
-    # ---- R10: Vein attenuation (reduce blue-green veins) ----
-    if ctx.vein_attenuate > 0:
-        canvas = skin.apply_vein_attenuate(canvas, skin_n_marks_protected, ctx.vein_attenuate)
-
     # ---- Skin equalization ----
     if ctx.equalize > 0:
         canvas = skin.equalize(canvas, skin_n_marks_protected, ctx.equalize, ref_lab=original_lab)
@@ -1010,7 +1030,7 @@ def _process_face_core(
             _norm_mask(regions.left_eye) if regions.left_eye is not None else np.zeros((roi_h, roi_w), dtype=np.float32),
             _norm_mask(regions.right_eye) if regions.right_eye is not None else np.zeros((roi_h, roi_w), dtype=np.float32),
         )
-        canvas = skin.shine_removal(canvas, regions.skin, int(ctx.shine_removal), eyes_mask=eyes_mask)
+        canvas = skin.shine_removal(canvas, regions.skin, int(ctx.shine_removal), eyes_mask=eyes_mask, ied=shifted_face.ied)
 
     # ---- R12: Specular finish re-render (matte / powder / dewy / glass_skin) ----
     # Default ("matte", 0.5, 0) is a no-op-equivalent (post-S4 specular ~ 0),

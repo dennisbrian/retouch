@@ -31,6 +31,7 @@ def _ctx(**kw):
         face_polish=0,
         shine_removal=0,
         shadow_lift=0,
+        face_shadow_fill=0.0,
         face_exposure=0.0,
         specular_finish="matte",
         specular_finish_strength=0.5,
@@ -47,15 +48,22 @@ class TestFacePolishCtx:
     def test_raises_component_floors_and_scales_linearly(self):
         half = _face_polish_ctx(_ctx(face_polish=50))
         full = _face_polish_ctx(_ctx(face_polish=100))
-        for name in ("shine_removal", "shadow_lift", "face_exposure"):
+        for name in ("shine_removal", "face_shadow_fill", "face_exposure"):
             assert getattr(half, name) > 0
             assert getattr(full, name) == pytest.approx(2 * getattr(half, name), abs=1)
         # The powder finish greyed broad lit cheeks on pale skin; not used.
         assert full.specular_finish == "matte"
 
     def test_explicit_stronger_value_wins(self):
-        out = _face_polish_ctx(_ctx(face_polish=100, shadow_lift=95))
-        assert out.shadow_lift == 95
+        out = _face_polish_ctx(_ctx(face_polish=100, face_shadow_fill=95.0))
+        assert out.face_shadow_fill == 95.0
+
+    def test_old_shadow_lift_is_not_raised(self):
+        """Shadow Lift faded drawn beauty marks and lash lines (rednote
+        shrine photo); the macro now uses Face Shadow Fill instead."""
+        out = _face_polish_ctx(_ctx(face_polish=100))
+        assert out.shadow_lift == 0
+        assert out.face_shadow_fill == pytest.approx(60.0)
 
     def test_context_is_not_mutated(self):
         ctx = _ctx(face_polish=100)

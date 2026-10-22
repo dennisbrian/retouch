@@ -20,7 +20,9 @@ class TestParamRegistry:
         from retouch.engine import _DEFAULTS
         names = [p.name for p in _SKIN_PARAMS]
         assert "whiten_hue_stable" in names
-        assert _DEFAULTS["whiten_hue_stable"] == 0
+        # On by default since 2026-10-21: the rosy tone's plain LAB whiten
+        # shifted faces ~10 deg toward magenta (rednote fox photos).
+        assert _DEFAULTS["whiten_hue_stable"] == 1
 
     def test_redness_even_recipe_key(self):
         from retouch.params import _SKIN_PARAMS
@@ -57,7 +59,7 @@ class TestProcessingContext:
         from retouch.engine import ProcessingContext
         ctx = ProcessingContext()
         assert hasattr(ctx, "whiten_hue_stable")
-        assert ctx.whiten_hue_stable == 0
+        assert ctx.whiten_hue_stable == 1
 
     def test_context_has_micro_dodge_burn(self):
         from retouch.engine import ProcessingContext

@@ -118,7 +118,7 @@ def process(
     makeup_cake_reduce: Optional[float] = None,
     hemoglobin_smooth: Optional[float] = None,
     mole_protect: Optional[float] = None,
-    vein_attenuate: Optional[float] = None,
+    vein_attenuate: Optional[int] = None,
     skin_flatten: Optional[int] = None,
     skin_quantize: Optional[int] = None,
     skin_unify: Optional[int] = None,
@@ -356,7 +356,7 @@ Passing an explicit value override to these parameters takes precedence over the
 *   **`micro_restore`** (Type: `int`, Default: `20`, Range: `0` to `50`, Recipe key: `micro_restore`): Adjusts the micro restore parameter.
 *   **`micro_dodge_burn`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.micro_db`): Adjusts the micro dodge burn parameter.
 *   **`redness_even`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.redness_even`): Adjusts the redness even parameter.
-*   **`whiten_hue_stable`** (Type: `bool`, Default: `False`, Range: None, Recipe key: `skin.whiten_hue_stable`): Boolean flag to toggle whiten hue stable.
+*   **`whiten_hue_stable`** (Type: `bool`, Default: `True`, Range: None, Recipe key: `skin.whiten_hue_stable`): Boolean flag to toggle whiten hue stable.
 *   **`whiten`** (Type: `int`, Default: `10`, Range: `0` to `100`, Recipe key: `skin.rosy`): Adjusts the whiten parameter.
 *   **`equalize`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.equalize`): Adjusts the equalize parameter.
 *   **`fa02_texture_mode`** (Type: `str`, Default: `legacy`, Choices: `legacy`, `raw_residual`, `dog`, `multiscale`, Recipe key: `fa02_texture_mode`): Selects the opt-in FA-02 texture-restoration arm. Ordinary recipes and the default remain on `legacy`; `fa02_texture_experimental_v1` is research-only and uncalibrated.
@@ -376,7 +376,7 @@ Passing an explicit value override to these parameters takes precedence over the
 *   **`albedo_even`** (Type: `float`, Default: `0.0`, Range: `0.0` to `1.0`, Recipe key: `skin.albedo_even`): Adjusts the albedo even parameter.
 *   **`hemoglobin_smooth`** (Type: `float`, Default: `0.0`, Range: `0.0` to `1.0`, Recipe key: `skin.hemoglobin_smooth`): Adjusts the hemoglobin smooth parameter.
 *   **`mole_protect`** (Type: `float`, Default: `0.0`, Range: `0.0` to `1.0`, Recipe key: `skin.mole_protect`): Adjusts the mole protect parameter.
-*   **`vein_attenuate`** (Type: `float`, Default: `0.0`, Range: `0.0` to `1.0`, Recipe key: `skin.vein_attenuate`): Adjusts the vein attenuate parameter.
+*   **`vein_attenuate`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.vein_attenuate`): Vein Softening (`retouch/vein_soften.py`). Calms faint blue-green veins: on face skin in the per-face core before smoothing (eyes, brows and lips excluded), and on body skin in the body stage (the Body Skin Evening mask). A vein is a line (oriented matched filter, three widths 0.6-2% of the face width, side-of-a-step responses cut) of coolness in chromaticity (a*/L*, b*/L*) against the skin around it, measured in units of that skin's own fine colour spread; it must be faint (stronger lines such as tattoos and liner are kept), not much darker than the skin beside it, colour-led rather than lightness-led (creases and fold shadows are kept), not lighter (sheen), well inside skin-coloured skin, and part of a long thin connected component. Its colour is filled from the skin right beside it and its lightness dip returned. White or grey paint, and skin whose hue is outside -45..90 degrees (bluish or coloured paint), is left alone. Before the 2026-10-21 rebuild this was a 0-1 op that subtracted a blurred hemoglobin map from green and blue across all face skin. Off by default.
 *   **`skin_flatten`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.flatten`): Adjusts the skin flatten parameter.
 *   **`skin_quantize`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.quantize`): Adjusts the skin quantize parameter.
 *   **`skin_unify`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.unify`): Adjusts the skin unify parameter.
@@ -460,11 +460,11 @@ Passing an explicit value override to these parameters takes precedence over the
 
 *   **`shadow_lift`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.shadow_lift`): Adjusts the shadow lift parameter.
 *   **`face_exposure`** (Type: `float`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.face_exposure`): Adjusts the face exposure parameter.
-*   **`powder_finish`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.powder_finish`): Powder Finish. Evens shine into the skin's own colour (not grey), works on white face paint, keeps broad lit areas and overall brightness. Off by default.
+*   **`powder_finish`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.powder_finish`): Powder Finish. Evens shine into the skin's own colour (not grey), works on white face paint, keeps broad lit areas and overall brightness; small dark marks such as beauty marks keep their depth (`retouch/dark_marks.py`, shared with shine removal). Off by default.
 *   **`highlight_repair`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.highlight_repair`): Blown Highlight Repair. Rebuilds face skin whose brightest channel is at the file ceiling (flash or sun hot spots): the excess over a local skin baseline is rolled off below white by a monotone curve, the blown core takes the colour of the unclipped skin around it and fine texture from a clean patch of the same face. Runs first in the per-face pipeline. Spots not ringed by skin, eyes, brows, lips, mouth and hair are left alone; so is a painted face (skin chroma / L* < 0.06, or skin hue outside -5 to 80° CIELab, as white paint under cool light reads) and a face with over 35% of its skin blown. Off by default.
 *   **`skin_warmth`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.warmth`): Skin Warmth. Turns natural skin toward a warm peach (CIELab hue 30-42°, chroma at least 0.21 × L*), face and same-coloured body skin together, after colour grading. Face paint (blue/violet/green or near-neutral) and skin already in the band are left alone. Off by default.
 *   **`neck_tone_match`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.neck_tone_match`): Neck Tone Match. Neck, chest and shoulder skin of the same person get the brightness change (one linear-light gain, so the shadow under the chin stays) and a*/b* change the face edits made to the face, plus 60% of a pre-existing face/neck colour gap (foundation). Colour-keyed on the neck's own chromaticity (a*/L*, b*/L*), so wigs, collars and costume stay out; skipped for painted faces and body-painted necks. Runs after the body-skin stages, before body paint and the grade. When on, replaces the automatic `harmonize_neck` pass. Off by default.
-*   **`face_polish`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.face_polish`): Porcelain finish in one control. Raises the floor of `shine_removal`, `shadow_lift` and `face_exposure` together; a stronger value you set for any of those still wins. Off by default.
+*   **`face_polish`** (Type: `int`, Default: `0`, Range: `0` to `100`, Recipe key: `skin.face_polish`): Porcelain finish in one control. Raises the floor of `shine_removal`, `face_shadow_fill` and `face_exposure` together; a stronger value you set for any of those still wins. Off by default.
 *   **`contrast`** (Type: `int`, Default: `0.0`, Range: `-50` to `50`, Recipe key: `contrast`): Adjusts the contrast parameter.
 *   **`brightness`** (Type: `int`, Default: `None`, Range: `-50` to `50`, Recipe key: `brightness`): Adjusts the brightness parameter.
 *   **`highlights`** (Type: `int`, Default: `None`, Range: `-100` to `100`, Recipe key: `highlights`): Adjusts the highlights parameter.

@@ -181,3 +181,25 @@ class TestEngineWiring:
         pad = 0.5 * fw
         assert xs.min() >= x - pad and xs.max() <= x + fw + pad
         assert ys.min() >= y - pad and ys.max() <= y + fh + pad
+
+
+@pytest.mark.parametrize("scale", [1.0, 0.12])
+def test_small_dark_mark_on_shine_keeps_its_depth(scale):
+    """A beauty mark on a lit, shiny cheek: matting the shine around it used
+    to fade it (rednote shrine photo: tear-mole depth 28.7 -> 20.7 at 50).
+    Its depth below the surrounding skin is now restored; darker skin too."""
+    img, mask, spots = _scene(scale=scale)
+    yy, xx = np.mgrid[0:img.shape[0], 0:img.shape[1]]
+    mole = ((yy - 150) ** 2 + (xx - 166) ** 2) <= 4  # inside a shine spot
+    img = img.copy()
+    img[mole] *= 0.55
+
+    def depth(x):
+        L = _L(x)
+        ring = (((yy - 150) ** 2 + (xx - 166) ** 2) >= 25) & (((yy - 150) ** 2 + (xx - 166) ** 2) <= 64)
+        return float(np.median(L[ring]) - L[mole].mean())
+
+    out = powder_finish(img, mask, 60, IED)
+    assert depth(out) >= 0.85 * depth(img)
+    # The shine itself is still matted.
+    assert _shine_contrast(out, mask, spots) < 0.75 * _shine_contrast(img, mask, spots)

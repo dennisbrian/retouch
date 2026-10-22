@@ -3551,6 +3551,12 @@ RECIPES["meitu_porcelain_v1"] = {
     "hsl_sat_global": -10,
     "saturation_mode": "subtractive",
     "frequency": {"mid_reduction": 0.20},
+    # 2026-10-21: a light cheek blush. Desaturating the face also took the
+    # blush out (finished rednote cosplay photos: a* spread across the face
+    # 12.3 -> 8.0); Meitu's own porcelain output and the owner's reference
+    # edits keep pink cheeks. With unify_hue_line's makeup give-back this
+    # keeps ~80% of the input's blush spread; mean face chroma moves +0.1.
+    "blush": 20.0,
 }
 
 
@@ -3766,7 +3772,10 @@ RECIPES["vascular_refine_v1"] = {
     "extends": "natural_polish_v1",
     "skin": {
         "hemoglobin_smooth": 0.18,
-        "vein_attenuate": 0.12,
+        # 0.12 drove the old whole-skin vein op (it tinted all skin rather
+        # than finding veins); the rebuilt Vein Softening would change how
+        # this recipe looks, so it stays off here.
+        "vein_attenuate": 0.0,
     },
     "texture": {"opacity": 1.0},
 }
