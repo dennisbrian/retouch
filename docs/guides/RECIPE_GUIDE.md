@@ -315,7 +315,8 @@ not serialize as ordinary recipe values:
 - `ai_sr_scale` — output upscale factor (`1`, `2`, or `4`).
 - `set_match` — 0-100 strength of the exposure and white-balance match toward a hero frame (`--match-hero`); no effect without a hero. A hero belongs to a shoot, not a look, so recipes never set it.
 - `blemish` — legacy API control; use the recipe's smoothing and blemish fields for new presets.
-- `freckle_preserve_mask` — an in-memory mask supplied by API callers to protect selected marks.
+- `freckle_preserve_mask` — an in-memory mask supplied by API callers to protect selected marks (older name of `protect_mask`).
+- `face_strength` — scales every per-face retouch amount, 0-150 (a render control, not a look).
 
 #### `color_harmony.preset` valid values
 

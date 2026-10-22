@@ -6324,8 +6324,7 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
     def _bind_process_event(_button, _mode_state, after=None):
         # ``after``: an event to chain onto instead of the button's click
         # (Restore updates the protect mask first, then renders).
-        _start = after.then if after is not None else _button.click
-        _capture_event = _start(
+        _capture_kwargs = dict(
             fn=capture_render_snapshot,
             inputs=_process_inputs + [
                 _settings_revision_state,
@@ -6336,6 +6335,10 @@ with gr.Blocks(title="🪄 Retouch — AI Portrait Workflow Platform", theme=gr.
             show_progress="hidden",
             queue=False,
         )
+        if after is None:
+            _capture_event = _button.click(**_capture_kwargs)
+        else:
+            _capture_event = after.then(**_capture_kwargs)
         _render_event = _capture_event.then(
             fn=process_image_event,
             inputs=[_render_snapshot_state, _settings_revision_state, _preview_cache_state],
