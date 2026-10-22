@@ -633,7 +633,11 @@ class FaceDetector:
         poster or a painting on the wall has no body under it (golden case
         background_poster_face: face skin 1.000, torso coverage 0.000).
         """
-        if person_mask is not None and not self._torso_supports(person_mask, bbox):
+        if (
+            person_mask is not None
+            and not self._torso_supports(person_mask, bbox)
+            and not self._local_torso_supports(img_bgr, bbox)
+        ):
             _logger.info(
                 "Person gate: no person below detection bbox=%s; not rescued",
                 tuple(int(v) for v in bbox),
@@ -676,6 +680,58 @@ class FaceDetector:
         if x2 <= x1 or y2 <= y1 or (x2 - x1) * (y2 - y1) < cls._TORSO_MIN_IN_FRAME * full:
             return True
         return float((mask[y1:y2, x1:x2] > 0.5).mean()) >= cls._TORSO_MIN_COVERAGE
+
+    # Second look at the torso when the full-frame mask is empty below the
+    # face. The full-frame selfie mask runs at 256x144 and can lose a whole
+    # person in a dark wide frame (a reclining subject under lantern light:
+    # 4% of the frame masked, torso coverage 0.000, face-skin 0.82), which
+    # then blocked the face-skin rescue. Re-segmenting a crop around the face
+    # and the torso zone sees the person at a usable scale (torso coverage
+    # 0.89 on that frame); a poster on a wall still has wall below it.
+    _LOCAL_TORSO_HALF_WIDTH = 2.0   # face sizes either side of the face centre
+    _LOCAL_TORSO_ABOVE = 0.5        # face sizes of context above the box
+    _LOCAL_TORSO_BELOW = 2.5        # face sizes below the box
+
+    def _local_torso_supports(
+        self, img_bgr: np.ndarray, bbox: Tuple[int, int, int, int]
+    ) -> bool:
+        """Torso check on a person mask segmented from a local crop."""
+        h, w = img_bgr.shape[:2]
+        x, y, bw, bh = (int(v) for v in bbox)
+        size = max(bw, bh)
+        if size < 8:
+            return False
+        cx = x + bw / 2.0
+        x1 = int(max(0, cx - self._LOCAL_TORSO_HALF_WIDTH * size))
+        x2 = int(min(w, cx + self._LOCAL_TORSO_HALF_WIDTH * size))
+        y1 = int(max(0, y - self._LOCAL_TORSO_ABOVE * size))
+        y2 = int(min(h, y + bh + self._LOCAL_TORSO_BELOW * size))
+        if x2 - x1 < 8 or y2 - y1 < 8:
+            return False
+        try:
+            local = self.segment_person(img_bgr[y1:y2, x1:x2])
+        except Exception as exc:
+            _logger.warning(
+                "Person gate: local torso segmentation failed (%s: %s)",
+                type(exc).__name__, exc,
+            )
+            return False
+        local = np.asarray(local, dtype=np.float32)
+        if local.ndim != 2:
+            local = np.squeeze(local)
+        if local.ndim != 2:
+            return False
+        if local.shape != (y2 - y1, x2 - x1):
+            local = cv2.resize(local, (x2 - x1, y2 - y1), interpolation=cv2.INTER_LINEAR)
+        full = np.zeros((h, w), dtype=np.float32)
+        full[y1:y2, x1:x2] = local
+        supported = self._torso_supports(full, bbox)
+        if supported:
+            _logger.info(
+                "Person gate: torso found on a local crop below bbox=%s "
+                "(full-frame person mask lost it)", (x, y, bw, bh),
+            )
+        return supported
 
     def _face_skin_coverage(
         self, img_bgr: np.ndarray, bbox: Tuple[int, int, int, int]

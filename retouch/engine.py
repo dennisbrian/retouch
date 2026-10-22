@@ -422,7 +422,7 @@ class ProcessingContext:
     redness_even: float = 0.0
     skin_glow: float = 0.0
     mask_feather_mode: str = "gaussian"
-    whiten_hue_stable: bool = False
+    whiten_hue_stable: bool = True
     skin_locus: Optional[Dict[str, float]] = None
     smooth_exposure_lock: float = 0.0
     shine_removal: float = 0.0

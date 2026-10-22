@@ -338,7 +338,7 @@ class FaceReshaper:
             img_bgr,
             map_x,
             map_y,
-            cv2.INTER_LINEAR,
+            cv2.INTER_CUBIC,
             borderMode=cv2.BORDER_REFLECT_101,
         )
 
