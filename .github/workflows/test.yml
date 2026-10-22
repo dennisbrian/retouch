@@ -12,7 +12,9 @@ jobs:
 
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # ubuntu-latest is Ubuntu 26.04, which has no Python 3.9 build
+        # (MediaPipe 0.10.5 needs 3.9-3.11).
+        os: [ubuntu-24.04, macos-latest]
         python-version: ["3.9", "3.10", "3.11"]
 
     env:
@@ -119,7 +121,8 @@ jobs:
 
   icc-littlecms:
     name: ICC/LittleCMS required path
-    runs-on: ubuntu-latest
+    # Pillow builds from source here; Ubuntu 26.04's gcc rejects its _webp.c.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Set up Python 3.11
