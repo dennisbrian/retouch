@@ -232,9 +232,12 @@ def test_effect_stays_local_and_grade_still_applies(engine):
     far = cv2.dilate(mask, np.ones((12 * r + 1, 12 * r + 1), np.uint8)) == 0
     # Away from the mask only rounding-level drift: the kept spot stays in
     # the face-wide statistics later skin ops take (measured: a few hundred
-    # pixels at 1 level, a handful at 2-4).
+    # pixels at 1 level, a handful at 2-5; the exact handful differs between
+    # OpenCV builds, macOS arm64 reached 5). A leak of the restore would move
+    # whole areas by tens of levels.
     far_diff = np.abs(free - kept).max(axis=2)[far]
-    assert np.percentile(far_diff, 99.5) <= 1 and far_diff.max() <= 4
+    assert np.percentile(far_diff, 99.5) <= 1
+    assert (far_diff > 2).mean() < 1e-4 and far_diff.max() <= 8
     # Global brightness reaches the protected spot like the skin around it.
     yy, xx = np.ogrid[:img.shape[0], :img.shape[1]]
     d = np.hypot(xx - cx, yy - cy)
