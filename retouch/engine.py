@@ -5053,7 +5053,10 @@ class RetouchEngine:
         """Copy the detector's person-gate drops/rescues of this render."""
         started = getattr(self._detector, "last_detect_started", None)
         events = getattr(self._detector, "last_gate_events", None)
-        if started is None or started < since or not events:
+        # A stand-in detector (tests, plug-ins) may not record gate events.
+        if not isinstance(started, (int, float)) or started < since:
+            return
+        if not isinstance(events, list) or not events:
             return
         ctx._runtime_diagnostics["person_gate"] = [dict(e) for e in events]
 
