@@ -1060,8 +1060,13 @@ def build_context(
         if spec.name == "whiten_tone":
             return "porcelain" if "porcelain" in rec.get("skin", {}) else "rosy"
         if spec.name == "blemish":
-            # Engine mirrors the recipe's ``frequency.smooth`` (the GUI does
-            # the same and that is what the alias spec handles separately).
+            # A recipe may set legacy blemish removal itself (``skin.blemish``,
+            # 0-1); otherwise the engine mirrors ``frequency.smooth`` (the GUI
+            # does the same and that is what the alias spec handles
+            # separately), so every recipe without the key renders as before.
+            own = rec.get("skin", {}).get("blemish")
+            if own is not None:
+                return float(own) * 100.0
             return float(rec.get("frequency", {}).get("smooth", 0.5)) * 100.0
         if spec.name == "catchlight":
             eyes = rec.get("eyes", {})

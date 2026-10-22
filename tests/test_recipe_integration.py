@@ -172,7 +172,10 @@ class TestRecipeDefaults:
         # 68 -> 72: 2026-10-21 added cosplay_pastel_soft_v1,
         # cosplay_ink_wash_v1, cosplay_anime_sky_v1 and cosplay_night_film_v1
         # (cosplay look set).
-        assert len(CURATED_RECIPE_NAMES) == 72
+        # 72 -> 73: 2026-10-22 added natural_v2 (candidate natural default,
+        # experimental until the owner's blind A/B).
+        assert len(CURATED_RECIPE_NAMES) == 73
+        assert "natural_v2" in CONDITIONAL_RECIPE_NAMES
         assert set(RECOMMENDED_RECIPE_NAMES).isdisjoint(CONDITIONAL_RECIPE_NAMES)
         assert set(CURATED_RECIPE_NAMES) == (
             set(RECOMMENDED_RECIPE_NAMES) | set(CONDITIONAL_RECIPE_NAMES)

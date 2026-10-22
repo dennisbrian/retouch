@@ -666,6 +666,11 @@ catalog (`CURATED_RECIPE_NAMES` in `retouch/recipes.py`), for example `natural`,
 ./run recipes
 ```
 
+`natural_v2` (under "Experimental / compare first") is a candidate for the
+natural default: `natural` with automatic spot healing instead of the old
+blemish pass, moles and drawn marks protected, and Face Shadow Fill. Compare it
+with `natural` before using it; `natural` is still the default.
+
 Cosplay looks for specific scenes (all under "Scene / creative" in the app):
 
 | Recipe | Use it for |
