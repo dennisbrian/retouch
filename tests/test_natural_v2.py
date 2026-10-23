@@ -16,6 +16,7 @@ from retouch.engine import build_context, resolve_recipe
 from retouch.params import recipe_to_params
 from retouch.recipes import (
     CONDITIONAL_RECIPE_NAMES,
+    COSPLAY_DETAIL_RECIPE_NAMES,
     CURATED_RECIPE_NAMES,
     EXPERIMENTAL_RECIPE_NAMES,
     RECIPES,
@@ -35,7 +36,7 @@ def _mirror_gui(rec):
     return int(round(float(rec.get("frequency", {}).get("smooth", 0.30)) * 100.0))
 
 
-@pytest.mark.parametrize("name", sorted(n for n in RECIPES if n != "natural_v2"))
+@pytest.mark.parametrize("name", sorted(n for n in RECIPES if n not in ("natural_v2", *COSPLAY_DETAIL_RECIPE_NAMES)))
 def test_existing_recipes_still_mirror_smooth(name):
     rec = resolve_recipe(name)
     assert "blemish" not in rec.get("skin", {}), name

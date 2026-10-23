@@ -47,6 +47,7 @@ __all__ = [
     "highpass_std",
     "estimate_noise_sigma",
     "evaluate_face_eligibility",
+    "exclude_corrected_support",
 ]
 
 
@@ -584,6 +585,44 @@ def scaled_sigmas(face_width_px: float) -> Tuple[float, ...]:
     """
     scale = float(face_width_px) / 500.0
     return tuple(max(MINIMUM_SIGMA_PX, s * scale) for s in SIGMAS_AT_IED_200)
+
+
+def exclude_corrected_support(
+    support: Optional[np.ndarray],
+    corrected: Optional[np.ndarray],
+    mode: str,
+    face_width_px: float,
+) -> Tuple[Optional[np.ndarray], int]:
+    """Exclude healed pixels and the frozen filter footprint around them.
+
+    This is a write/support guard, not a defect detector. ``corrected`` records
+    actual changed pixels from an intervening repair. The square dilation uses
+    the largest active Gaussian's exact ceil(3*sigma) radius, matching
+    ``_gaussian`` including its diagonal footprint. Candidate texture must not
+    restore a healed spot or spread its former detail into a neighboring ring.
+    """
+    if mode == "dog":
+        last_level = 1
+    elif mode == "multiscale":
+        last_level = max(i + 1 for i, weight in enumerate(MULTISCALE_WEIGHTS) if weight)
+    else:
+        raise ValueError("correction support is only defined for dog/multiscale")
+    if not np.isfinite(face_width_px) or face_width_px <= 0:
+        return None, 0  # no measurable filter footprint: eligibility abstains
+    radius = int(np.ceil(3.0 * scaled_sigmas(face_width_px)[last_level]))
+    if support is None or corrected is None:
+        return support, radius
+    allowed = np.asarray(support, dtype=np.float32)
+    forbidden = np.asarray(corrected)
+    if allowed.ndim != 2 or forbidden.shape != allowed.shape:
+        raise ValueError("correction support must match the 2D restoration support")
+    if not np.all(np.isfinite(forbidden)):
+        raise ValueError("correction support contains non-finite values")
+    if not np.any(forbidden):
+        return support, radius
+    grown = cv2.dilate((forbidden != 0).astype(np.uint8),
+                       np.ones((2 * radius + 1, 2 * radius + 1), np.uint8))
+    return np.where(grown != 0, 0.0, allowed).astype(np.float32), radius
 
 
 def extract_detail(

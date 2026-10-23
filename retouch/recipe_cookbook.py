@@ -76,6 +76,10 @@ _FUJI_SIMS = {
 _DESCRIPTIONS: Dict[str, str] = {
     "natural": "Baseline natural retouch — restrained smoothing and tone.",
     "natural_v2": "Natural review candidate: targeted spot healing, identity-mark protection, no added skin brightening or reshaping. Compare before choosing as your default.",
+    "cosplay_paint_detail_v1": "Experimental painted-skin detail: colour-aware paint evening with spot healing off. Blue/green/grey/purple paint only; protect intentional patterns with the brush.",
+    "cosplay_wig_contacts_v1": "Experimental wigs and contacts: blend detected lace and add restrained iris depth on the natural_v2 base. Wig Shine stays off after a hand-colour failure; compare lash and hairline boundaries.",
+    "cosplay_prosthetic_detail_v1": "Experimental prosthetic edges: blend detected skin-toned forehead/ear seams. Simulated-appliance evidence only; no real-prosthetic acceptance yet.",
+    "cosplay_stage_detail_v1": "Experimental stage light: local face-shadow fill while keeping the scene's colour, makeup and natural_v2 skin tone. Compare intentional dramatic shadows.",
     "portrait": "Classic portrait: moderate smoothing, eye/lip enhancement.",
     "cosplay": "Cosplay default: stronger skin evenness, vivid eyes, lip tint.",
     "cosplay_3d": "Cosplay with equalize disabled for a 3D sculpted read.",

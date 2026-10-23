@@ -50,6 +50,8 @@ output verification.
 ## Plans (`docs/plans/`)
 - `MASTER_PLAN.md` — Overall roadmap
 - [Face retouch quality roadmap — 2026-10-22](plans/PLAN_FACE_QUALITY_ROADMAP_2026_10_22.md) — natural/identity-first default, identity scorecard, phases mapped to the graduation bar
+- [Phase 3 texture restoration — 2026-10-22](plans/PHASE3_TEXTURE_RESTORATION_2026_10_22.md) — smoothing-only residual, healed-area guard, current evidence limits
+- [Cosplay detail looks — Phase 4](guides/COSPLAY_DETAIL_LOOKS.md) — opt-in natural_v2 compositions, stage-light priority and evidence limits
 - [Blemish re-measure, identity scorecard and natural_v2 — 2026-10-22](plans/RESEARCH_BLEMISH_REMEASURE_2026_10_22.md) — legacy blemish vs spot_heal on planted spots, per-face identity columns, the natural_v2 candidate
 - [Compositor Python port plan](plans/COMPOSITOR_PYTHON_PORT.md) — staged port of the Compositor layer editor
 - [Compositor port format notes](plans/COMPOSITOR_FORMAT_NOTES.md) — supported `.comp` subset, colour rules, evidence

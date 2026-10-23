@@ -808,6 +808,16 @@ def _process_face_core(
             mark_protect=mark_protect_mask,
             )
 
+    # FA-02 A2/A3 restore only detail lost by frequency smoothing. Later
+    # operations (especially freckle healing) must never enter that signal.
+    # Allocate the residual only for the opt-in candidate arms, never legacy.
+    _fa02_band_mode = getattr(ctx, 'fa02_texture_mode', 'legacy') in ('dog', 'multiscale')
+    _fa02_smoothing_residual = (
+        pre_smooth_canvas.astype(np.float32) - canvas.astype(np.float32)
+        if _fa02_band_mode and ctx.micro_restore > 0 else None
+    )
+    _fa02_corrected = None
+
     # ---- Keep nose shape (opt-in) ----
     # Puts back the broad nose shading the smoothing above flattened, so
     # the nose keeps its form instead of reading as a flat painted patch.
@@ -876,6 +886,7 @@ def _process_face_core(
                 if existing.max() > 1.5:
                     existing /= 255.0
                 preserve_mask = np.maximum(existing, policy_preserve)
+        _before_freckle = canvas.copy() if _fa02_smoothing_residual is not None else None
         canvas = FreckleRemover().remove(
             img_bgr=canvas,
             face_mask=skin_n,
@@ -884,6 +895,11 @@ def _process_face_core(
             mole_mask=_mole_for_freckle,
             heal_engine=getattr(ctx, 'heal_engine', 'telea'),
         )
+        if _before_freckle is not None:
+            # Includes the real feathered write footprint, not a detector's
+            # proposed center; guard its filter neighborhood before restoring.
+            _fa02_corrected = np.any(canvas != _before_freckle, axis=2)
+            del _before_freckle
 
     # ---- Exposure-locked smoothing (recipe-only) ----
     # Frequency smoothing damps bright micro-speculars and drops mean skin
@@ -980,9 +996,16 @@ def _process_face_core(
         )
         from .utils import restore_outside_support
 
+        _fa02_input_support = skin_n
+        _fa02_guard_radius = 0
+        if _fa02_mode in ('dog', 'multiscale'):
+            from .fa02_texture_eligibility import exclude_corrected_support
+            _fa02_input_support, _fa02_guard_radius = exclude_corrected_support(
+                skin_n, _fa02_corrected, _fa02_mode, face_width,
+            )
         _fa02_decision = evaluate_face_eligibility(
             pre_smooth_canvas,
-            skin_n,
+            _fa02_input_support,
             face_width,
             protected_mask=mark_protect_mask,
         )
@@ -1027,11 +1050,11 @@ def _process_face_core(
                 # compositing convention deliberately mirrors
                 # skin.restore_micro_texture's: additive re-injection of a
                 # signed detail signal, scaled by strength/100 * smooth_strength,
-                # confined to a mask. Only the *detail extraction* differs, so
-                # this is an architectural comparison of representations rather
-                # than a comparison of two differently-composited ops.
-                _fa02_residual = pre_smooth_canvas.astype(np.float32) - canvas.astype(np.float32)
-                _fa02_detail = extract_detail(_fa02_residual, _fa02_mode, face_width)
+                # confined to a mask. A2/A3 now use a smoothing-only snapshot
+                # and exclude later healed supports. The legacy/raw baseline
+                # deliberately keeps its historic interval, so these live
+                # outputs are not a matched-support representation ranking.
+                _fa02_detail = extract_detail(_fa02_smoothing_residual, _fa02_mode, face_width)
                 _fa02_amount = (ctx.micro_restore / 100.0) * float(ctx.smooth / 100.0)
                 canvas = np.clip(
                     canvas.astype(np.float32)
@@ -1075,6 +1098,9 @@ def _process_face_core(
             "face_width_px": face_width,
             "roi_box": (roi_x1, roi_y1, roi_x1 + roi_w, roi_y1 + roi_h),
             "mode": _fa02_mode,
+            "residual_reference": "frequency_smoothing_only" if _fa02_mode in ('dog', 'multiscale') else "legacy_interval",
+            "corrected_pixels_excluded": int(np.count_nonzero(_fa02_corrected)) if _fa02_corrected is not None else 0,
+            "correction_guard_radius_px": _fa02_guard_radius,
             "eligible": _fa02_decision["eligible"],
             "reason": _fa02_decision["reason"],
             "measured": dict(_fa02_decision["measured"]),

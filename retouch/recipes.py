@@ -4666,6 +4666,40 @@ RECIPES["natural_v2"] = {
     "mark_policy": "protect_identity",
 }
 
+# Phase 4: explicit scene/detail candidates layered onto the natural_v2 base.
+# These are compositions of existing ops, not qualified universal defaults.
+COSPLAY_DETAIL_RECIPE_NAMES = (
+    "cosplay_paint_detail_v1",
+    "cosplay_wig_contacts_v1",
+    "cosplay_prosthetic_detail_v1",
+    "cosplay_stage_detail_v1",
+)
+
+RECIPES["cosplay_paint_detail_v1"] = {
+    "extends": "natural_v2",
+    "mark_policy": "preserve_all",
+    "frequency": {"smooth": 0.15},
+    # Do not let a pimple detector interpret painted details as defects.
+    "skin": {"spot_heal": 0, "equalize": 0.0, "body_paint": 0.45},
+}
+RECIPES["cosplay_wig_contacts_v1"] = {
+    "extends": "natural_v2",
+    # Wig Shine is off: the native review found a nearby finger recoloured
+    # by deglare. Keep this combination to lace/iris edits until ownership is fixed.
+    "hair": {"shine": 0.0, "deglare": 0},
+    "eyes": {"iris_pop": 0.25},
+    "cosplay": {"wig_lace_blend": 0.25},
+}
+RECIPES["cosplay_prosthetic_detail_v1"] = {
+    "extends": "natural_v2",
+    "skin": {"prosthetic_blend": 0.40},
+}
+RECIPES["cosplay_stage_detail_v1"] = {
+    "extends": "natural_v2",
+    # Local repair only: no global white balance, grade or hue neutralisation.
+    "skin": {"face_shadow_fill": 0.35},
+}
+
 # The consumer-facing catalog is deliberately curated. ``RECIPES`` retains
 # older experiments and specialist looks for backwards-compatible projects.
 # A curated name only means it has a maintained QA path; it does *not* mean a
@@ -4703,6 +4737,7 @@ CURATED_RECIPE_NAMES: List[str] = [
     "body_match_v1",
     "jp_transparent_v1",
     # Cosplay and convention
+    *COSPLAY_DETAIL_RECIPE_NAMES,
     "cosplay_clear_v1",
     "cosplay_clear_protected_v1",
     "cosplay_color_ref_v1",
@@ -4789,6 +4824,7 @@ RECOMMENDED_RECIPE_NAMES: List[str] = [
 # considered for a default recommendation. Keep these separate from the
 # correction-first list so the UI communicates the review boundary clearly.
 EXPERIMENTAL_RECIPE_NAMES = (
+    *COSPLAY_DETAIL_RECIPE_NAMES,
     "natural_v2",
     "meitu_porcelain_v1",
     # tired_eye_rescue_v2 exceeds the owner-set 0.35 darken_removal cap on
