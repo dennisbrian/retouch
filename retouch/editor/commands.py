@@ -263,6 +263,104 @@ class DocumentHistory:
             doc.add_layer(duplicate, doc.index_of(layer_id) + 1)
         return self._edit('Duplicate layer', apply)
 
+    def merge_plan(self, layer_id: str, selected_ids=()):
+        """What a merge would combine, or None (upstream ``LayerMerge.mergePlan``).
+
+        Several chosen layers merge together with everything their folders
+        hold; a folder merges its contents and the folder goes; one layer
+        merges with the nearest sibling beneath it, unless that is a folder.
+        Returns ``(ids, removed, name, parent_id, anchor_id, action)`` with
+        ``ids`` in stacking order.
+        """
+        doc = self._states[self._cursor].document
+        layers = doc.layers
+        active = doc.layer(layer_id)
+
+        def inside(folder_id):
+            return {item.id for item in layers
+                    if any(p.id == folder_id for p in doc.ancestors(item))}
+
+        selected = [item for item in dict.fromkeys(selected_ids or ()) if item]
+        if len(selected) > 1:
+            picked = set(selected)
+            for item in selected:
+                doc.layer(item)
+                picked |= inside(item)
+            ordered = [item for item in layers if item.id in picked]
+            tops = [item for item in ordered if item.id in selected]
+            if not any(not item.is_group for item in ordered) or not tops:
+                return None
+            top = tops[-1]
+            return ([item.id for item in ordered], picked, top.name, top.parent_id,
+                    top.id, 'Merge Layers')
+        if active.is_group:
+            members = inside(active.id)
+            if not any(item.id in members and not item.is_group for item in layers):
+                return None
+            ids = [item.id for item in layers if item.id in members or item.id == active.id]
+            return ids, set(ids), active.name, active.parent_id, active.id, 'Merge Group'
+        index = doc.index_of(active.id)
+        below = next((item for item in reversed(layers[:index])
+                      if item.parent_id == active.parent_id), None)
+        if below is None or below.is_group:
+            return None
+        return ([below.id, active.id], {below.id, active.id}, below.name,
+                active.parent_id, active.id, 'Merge Down')
+
+    def merge_layers(self, layer_id: str, selected_ids=()) -> bool:
+        """Bake the planned layers, as the canvas shows them, into one pixel layer.
+
+        Port of upstream ``LayerMerge.mergeLayers``: only the merged layers
+        are composited (blend modes, opacity, masks, clipping, adjustments and
+        effects baked in), cut loose from anything outside the merge, over a
+        transparent canvas; the result is trimmed to its non-transparent
+        bounds and takes the stack slot of the anchor as one undo step.
+        Layers outside the merge that clipped to a merged layer now clip to
+        the result.
+        """
+        from .composite import composite
+        plan = self.merge_plan(layer_id, selected_ids)
+        if plan is None:
+            raise ValueError('Nothing to merge: choose a layer with a layer (not a folder) '
+                             'beneath it in the same folder, a folder, or several layers')
+        ids, removed, name, parent_id, anchor_id, action = plan
+
+        def apply(doc: Document) -> None:
+            kept = set(ids)
+            subset = []
+            for item in doc.layers:
+                if item.id not in kept:
+                    continue
+                cut = copy(item)
+                if cut.parent_id is not None and cut.parent_id not in kept:
+                    cut.parent_id = None
+                if cut.mask_source_id is not None and cut.mask_source_id not in kept:
+                    cut.mask_source_id = None
+                subset.append(cut)
+            flat = Document(doc.width, doc.height, subset, resolution=doc.resolution)
+            full = composite(flat)
+            # PixelFilter.trimmed / brush_alpha_bounds: crop to alpha > 0; an
+            # empty result keeps the whole canvas.
+            rows = np.flatnonzero(full[..., 3].any(axis=1))
+            cols = np.flatnonzero(full[..., 3].any(axis=0))
+            if rows.size:
+                top, bottom = int(rows[0]), int(rows[-1]) + 1
+                left, right = int(cols[0]), int(cols[-1]) + 1
+            else:
+                top, bottom, left, right = 0, doc.height, 0, doc.width
+            merged = Layer(name, pixels=np.ascontiguousarray(full[top:bottom, left:right]),
+                           origin=(left, top), parent_id=parent_id)
+            slot = doc.index_of(anchor_id)
+            insertion = slot - sum(1 for item in doc.layers[:slot] if item.id in removed)
+            remaining = [item for item in doc.layers if item.id not in removed]
+            for item in remaining:
+                if item.mask_source_id in removed:
+                    item.mask_source_id = merged.id
+            remaining.insert(min(max(0, insertion), len(remaining)), merged)
+            doc.layers = remaining
+            doc.active_layer_id = merged.id
+        return self._edit(action, apply)
+
     def invert_mask(self, layer_id: str) -> bool:
         """Invert stored coverage, preserving mask enablement and source pixels.
 
