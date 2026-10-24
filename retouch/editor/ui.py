@@ -578,12 +578,16 @@ def build_editor_tab():
                     update_shape = gr.Button('Redraw selected shape with these values')
                 with gr.Row():
                     duplicate = gr.Button('Duplicate layer')
+                    merge_down = gr.Button('Merge down', elem_id='editor-merge-down')
                     invert_mask = gr.Button('Invert mask', elem_id='editor-invert-mask')
                     reset_mask = gr.Button('Reset mask')
                 gr.Markdown('Invert mask swaps revealed and hidden areas. '
                             'A layer without a mask becomes fully masked out; '
                             'enable its mask to see the change. Reset mask removes '
-                            'painted coverage and reveals the layer. Both can be undone.')
+                            'painted coverage and reveals the layer. Both can be undone. '
+                            'Merge down bakes the selected layer and the layer beneath it '
+                            '(or a selected folder and everything in it) into one pixel layer, '
+                            'as the canvas shows them.')
                 with gr.Accordion('Position, rotation & flips', open=False):
                     gr.Markdown('Position uses canvas pixels from the top-left. '
                                 'Negative positions are allowed; pixels outside the canvas are clipped. '
@@ -627,12 +631,15 @@ def build_editor_tab():
                     parent_folder = gr.Dropdown(label='Parent folder', choices=[('Canvas', '')], value='')
                     clipping_source = gr.Dropdown(label='Clip to layer alpha', choices=[('None', '')], value='')
                     links = gr.Button('Apply folder & clipping')
-                    group_members = gr.Dropdown(label='Adjacent layers to group', choices=[], multiselect=True)
+                    group_members = gr.Dropdown(label='Layers to group or merge', choices=[], multiselect=True)
                     group = gr.Button('Group selected layers', elem_id='editor-group')
                     ungroup = gr.Button('Ungroup selected folder', elem_id='editor-ungroup')
+                    merge_chosen = gr.Button('Merge chosen layers', elem_id='editor-merge-chosen')
                     gr.Markdown('Folders pass through: opacity and masks affect each child. '
                                 'Removing a folder removes its children. Duplicate copies the whole folder. '
-                                'Adjacent clipped siblings share the base alpha; other links act as live alpha masks.')
+                                'Adjacent clipped siblings share the base alpha; other links act as live alpha masks. '
+                                'Merge chosen layers bakes the layers picked above (with anything their folders hold) '
+                                'into one pixel layer at the top one\'s place.')
                 with gr.Accordion('Selections', open=False):
                     selection_kind = gr.Radio(['Rectangle', 'Ellipse', 'Polygon'], value='Rectangle', label='Selection shape')
                     with gr.Row():
@@ -1264,7 +1271,7 @@ def build_editor_tab():
                     current.selected_id = selected
                 else:
                     layer = current.selected()
-                    if operation in ('properties', 'transform', 'resize', 'fit', 'up', 'down', 'remove', 'mask', 'duplicate', 'invert_mask', 'reset_mask', 'links', 'ungroup', 'selection_mask', 'update_grade', 'apply_effects', 'clear_effects') and layer is None:
+                    if operation in ('properties', 'transform', 'resize', 'fit', 'up', 'down', 'remove', 'mask', 'duplicate', 'invert_mask', 'reset_mask', 'links', 'ungroup', 'selection_mask', 'update_grade', 'apply_effects', 'clear_effects', 'merge_down') and layer is None:
                         raise ValueError('Select a layer first')
                     if operation == 'properties':
                         chosen_blend = args[4] if len(args) > 4 else layer.blend_mode
@@ -1339,6 +1346,13 @@ def build_editor_tab():
                         current.history.update_layer(layer.id, effects=effects)
                     elif operation == 'group':
                         current.history.group_layers(args[0] or [])
+                        current.selected_id = current.history.document.active_layer_id
+                    elif operation in ('merge_down', 'merge_chosen'):
+                        chosen = (args[0] or []) if operation == 'merge_chosen' else []
+                        if operation == 'merge_chosen' and len(chosen) < 2:
+                            raise ValueError('Choose at least two layers to merge')
+                        anchor = layer.id if layer is not None else chosen[-1]
+                        current.history.merge_layers(anchor, chosen)
                         current.selected_id = current.history.document.active_layer_id
                     elif operation == 'ungroup':
                         current.history.ungroup_layer(layer.id)
@@ -1541,7 +1555,8 @@ def build_editor_tab():
                                   (undo, 'undo'), (redo, 'redo'), (transform, 'transform'), (resize, 'resize'),
                                   (duplicate, 'duplicate'), (invert_mask, 'invert_mask'),
                                   (reset_mask, 'reset_mask'), (fit, 'fit'), (links, 'links'), (group, 'group'),
-                                  (ungroup, 'ungroup'), (create_selection, 'selection'),
+                                  (ungroup, 'ungroup'), (merge_down, 'merge_down'),
+                                  (merge_chosen, 'merge_chosen'), (create_selection, 'selection'),
                                   (wand_button, 'wand'), (cr_button, 'color_range'), (auto_select, 'automatic_selection'),
                                   (crop_canvas, 'crop'), (crop_selection, 'crop_selection'),
                                   (copy_selection_layer, 'copy_selection_as_layer'),
@@ -1571,7 +1586,7 @@ def build_editor_tab():
                 'mask': [mask_action],
                 'heal': [heal_mode, heal_opacity],
                 'clone': [heal_opacity, clone_dx, clone_dy, clone_softness],
-                'group': [group_members],
+                'group': [group_members], 'merge_chosen': [group_members],
                 'selection': [selection_kind, selection_x, selection_y, selection_width,
                               selection_height, polygon, feather, selection_mode],
                 'selection_mask': [mask_mode],

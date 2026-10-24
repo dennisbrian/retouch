@@ -111,6 +111,29 @@ automatically preserved by a Python translation.
 
 ### Progress
 
+- 2026-10-24, milestone 5 layer merge: Merge Down, Merge Group and Merge
+  chosen layers, a port of upstream `Document/LayerMerge.swift`
+  (`DocumentHistory.merge_plan` / `merge_layers`). One layer merges with the
+  nearest sibling beneath it in the same folder (refused when that is a
+  folder or there is none); a selected folder merges its contents and the
+  folder goes; two or more chosen layers merge with everything their folders
+  hold and take the top chosen layer's name and folder. Only the merged
+  layers are composited (blend modes, opacity, masks, clipping, adjustments
+  and effects baked in, links to layers outside the merge cut), over a
+  transparent canvas, trimmed to alpha > 0 (`brush_alpha_bounds`); the
+  result is a Normal 100% layer in the anchor's stack slot, layers outside
+  that clipped to a merged layer clip to the result, and it is one undo
+  step. As upstream, a non-Normal layer merged on its own loses the
+  interaction with layers below the merge, and a half-transparent bake can
+  round by one level. Layer Editor: "Merge down" next to Duplicate layer,
+  "Merge chosen layers" in Folders & clipping (the multi-select is now
+  "Layers to group or merge"). Checked on both 4160 x 6240 bunny photos
+  (photo + masked 40% Soft Light layer): merged canvas byte-identical to the
+  live one, 7-8 s per merge in the cloud sandbox (one full render). In the
+  running GUI (Chromium) a shape layer at 50% merged into the photo with the
+  canvas unchanged, then undid. Tests: `tests/test_editor_merge.py` (9).
+  Not checked against the Mac app's own merge output.
+
 - 2026-10-21, milestone 6 dirty-band caching: after an edit that only swaps
   a layer's pixels or mask (brush, eraser, heal, clone, colour brush, undo of
   those) or changes a raster layer's opacity, visibility or blend mode, the
