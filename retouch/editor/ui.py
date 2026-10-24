@@ -26,6 +26,7 @@ from .recipe_state import EXTRA_RECIPE_CONTROLS, RECIPE_OVERRIDE_SPECS
 from .recovery import Autosaver, discard_recovery, list_recoveries, load_recovery
 
 PREVIEW_SIDE = 1024
+CLONE_SAMPLES = ('Current layer', 'All layers')
 
 # Tier-1 hotkey parity with the native Compositor (KeyboardShortcuts.swift):
 # cmd/ctrl+Z undo, cmd/ctrl+shift+Z and cmd/ctrl+Y redo, cmd/ctrl+D clear
@@ -267,7 +268,8 @@ class EditorSession:
 
     def stroke_coverage(self, canvas, layer):
         """Unapplied brush strokes as 8-bit coverage over the layer's own pixels."""
-        height, width = layer.pixels.shape[:2]
+        height, width = (layer.pixels.shape[:2] if layer.pixels is not None
+                         else (layer.size[1], layer.size[0]))
         coverage = np.zeros((height, width), np.float32)
         for stroke in (canvas or {}).get('layers', []):
             stroke = np.asarray(stroke)
@@ -286,14 +288,24 @@ class EditorSession:
         return np.rint(coverage).astype(np.uint8)
 
     def paint_pixels(self, canvas, tool, heal_mode='Content-Aware', opacity=100,
-                     offset=(0, 0), softness=0):
-        """Spot Healing or Clone Stamp the brushed area of the selected pixel layer."""
-        from .healing import clone_stamp, spot_heal
+                     offset=(0, 0), softness=0, sample='Current layer'):
+        """Spot Healing or Clone Stamp the brushed area of the selected pixel layer.
+
+        Clone Stamp with ``sample='All layers'`` copies the visible canvas
+        (offset in canvas pixels), so it can also paint onto an empty layer.
+        """
+        from .healing import clone_stamp, sample_all_layers, spot_heal
         layer = self.selected()
         if layer is None:
             raise ValueError('Select a layer first')
-        if layer.pixels is None or layer.is_group or layer.adjustment is not None:
+        if sample not in CLONE_SAMPLES:
+            raise ValueError('Clone from the current layer or all layers')
+        sample_all = tool == 'clone' and sample == 'All layers'
+        if layer.is_group or layer.adjustment is not None:
             raise ValueError('Healing and cloning need a photo or pixel layer')
+        if layer.pixels is None and not sample_all:
+            raise ValueError('Healing and cloning need a photo or pixel layer; '
+                             'an empty layer can take Clone Stamp from All layers')
         for value in (opacity, softness, *offset):
             if (not isinstance(value, (int, float)) or isinstance(value, bool)
                     or not math.isfinite(value)):
@@ -313,12 +325,18 @@ class EditorSession:
                                seed=self.history.revision)
             label = 'Spot Healing'
         elif tool == 'clone':
-            pixels = clone_stamp(layer.pixels, coverage,
-                                 (int(round(offset[0])), int(round(offset[1]))), opacity / 100)
+            whole = (int(round(offset[0])), int(round(offset[1])))
+            base = (layer.pixels if layer.pixels is not None
+                    else np.zeros((layer.size[1], layer.size[0], 4), np.uint8))
+            source = (sample_all_layers(composite(self.history.document), layer, coverage, whole)
+                      if sample_all else None)
+            pixels = clone_stamp(base, coverage, whole, opacity / 100, source=source)
             label = 'Clone Stamp'
         else:
             raise ValueError('Unknown pixel tool')
-        if np.array_equal(pixels, layer.pixels):
+        if layer.pixels is None and not pixels.any():
+            return False
+        if layer.pixels is not None and np.array_equal(pixels, layer.pixels):
             return False
         return self.history.replace_pixels(layer.id, pixels, label=label)
 
@@ -532,14 +550,18 @@ def build_editor_tab():
                                 'the edge of the spot; Proximity Match takes the closest good patch; '
                                 'Create Texture fills smoothly from the edges and adds matching grain.')
                     with gr.Row():
-                        clone_dx = gr.Number(label='Clone from X offset (layer pixels)', value=0, precision=0)
-                        clone_dy = gr.Number(label='Clone from Y offset (layer pixels)', value=0, precision=0)
+                        clone_dx = gr.Number(label='Clone from X offset (pixels)', value=0, precision=0)
+                        clone_dy = gr.Number(label='Clone from Y offset (pixels)', value=0, precision=0)
+                    clone_sample = gr.Radio(list(CLONE_SAMPLES), value='Current layer', label='Clone sample')
                     clone_softness = gr.Slider(0, 200, value=20, step=1,
                                                label='Clone edge softness (layer pixels)')
                     clone = gr.Button('Clone stamp strokes')
-                    gr.Markdown('Each brushed pixel copies the layer pixel that far away (positive X '
-                                'is right, positive Y is down, in the layer\'s unflipped pixels). '
-                                'The offset stays until you change it, like aligned Clone Stamp.')
+                    gr.Markdown('Each brushed pixel copies the pixel that far away (positive X '
+                                'is right, positive Y is down). Current layer copies the layer\'s own '
+                                'pixels (offset in its unflipped pixels); All layers copies the canvas '
+                                'as shown (offset in canvas pixels), so you can clone onto an empty '
+                                'layer and keep the photo untouched. The offset stays until you '
+                                'change it, like aligned Clone Stamp.')
             with gr.Column(scale=1):
                 layers = gr.Dropdown(label='Layers (top first)', choices=[])
                 name = gr.Textbox(label='Layer name')
@@ -1480,7 +1502,8 @@ def build_editor_tab():
                     elif operation == 'clone':
                         current.paint_pixels(strokes, 'clone', opacity=args[0],
                                              offset=(args[1], args[2]),
-                                             softness=args[3] if len(args) > 3 else 0)
+                                             softness=args[3] if len(args) > 3 else 0,
+                                             sample=args[4] if len(args) > 4 else 'Current layer')
                     elif operation == 'add':
                         if not args[0]:
                             raise ValueError('Choose a photo to add first')
@@ -1570,7 +1593,7 @@ def build_editor_tab():
                 'crop': [crop_x, crop_y, crop_width, crop_height],
                 'mask': [mask_action],
                 'heal': [heal_mode, heal_opacity],
-                'clone': [heal_opacity, clone_dx, clone_dy, clone_softness],
+                'clone': [heal_opacity, clone_dx, clone_dy, clone_softness, clone_sample],
                 'group': [group_members],
                 'selection': [selection_kind, selection_x, selection_y, selection_width,
                               selection_height, polygon, feather, selection_mode],

@@ -340,6 +340,37 @@ The first bridge therefore produces a new handoff per export.
 
 ## Current implementation and acceptance evidence
 
+### Clone Stamp from all layers — 2026-10-24
+
+**Spot healing & clone stamp** has a **Clone sample** choice, the port of
+upstream `CloneSettings.sampleAllLayers` (`Document/CloneStamp.swift`).
+**Current layer** is unchanged: the brushed pixels copy the selected layer's
+own pixels, offset in its unflipped pixel grid. **All layers** copies the
+canvas as shown (every visible layer, with masks, blend modes and
+adjustments), offset in canvas pixels, so the usual non-destructive workflow
+works: add an empty layer above the photo (**New paint layer**), select it and
+clone onto it. The photo layer keeps its pixels and the clone stays editable
+on its own layer. A zero offset is allowed in this mode (stamp what shows).
+
+`healing.sample_all_layers` resamples the composite into the target layer's
+grid through the same pixel-to-document matrix the compositor uses
+(`composite._doc_matrix`), so a moved, scaled, flipped or rotated layer
+samples where it shows; an axis-aligned whole-pixel placement copies exactly
+(nearest), otherwise bilinear in premultiplied space. Only the canvas around
+the brush's bounding box is premultiplied, and a source beyond the canvas
+draws nothing, as upstream. The result goes through the same source-over
+brush blend as Current layer and is one undo step.
+
+Evidence: `tests/test_editor_clone_all_layers.py` (empty-layer copy with the
+photo layer untouched and exact undo, zero offset, what-shows vs own-pixels,
+canvas-pixel offsets on a moved layer, a scaled and flipped layer against a
+hand bilinear sample, off-canvas, the GUI button's argument order). On
+Alex's two 4160 × 6240 bunny photos, a 48 px soft dab onto an empty layer
+took 1.9 s (composite included), peak RSS about 0.73 GB, the photo layer's
+pixels were byte-identical and the cloned ribbon was viewed. Not ported:
+upstream's non-aligned mode (each stroke restarting at an Option-clicked
+source); the offset here is typed or picked, so every stroke is aligned.
+
 ### Colour brush on layer pixels — 2026-10-17
 
 Open **Paint colour on a layer**. **New paint layer** adds an empty layer above

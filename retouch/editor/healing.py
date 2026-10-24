@@ -2,8 +2,8 @@
 
 Ports Compositor's ``Rendering/HealPixels.c`` (``spot_heal``, three modes) and
 the Clone Stamp copy from ``Document/CloneStamp.swift`` (pinned 11d8d7a, MIT;
-see ``third_party/compositor``). Both work on a layer's own pixels at their
-own resolution and return a new straight-alpha RGBA array; callers record the
+see ``third_party/compositor``), including its Sample: All Layers source. Both
+work on a layer's own pixels at their own resolution and return a new straight-alpha RGBA array; callers record the
 result as one undoable pixel replacement.
 
 Differences from the native kernel, kept deliberately small:
@@ -258,12 +258,17 @@ def spot_heal(pixels, coverage, mode='Content-Aware', opacity=1.0, seed=0):
     return out
 
 
-def clone_stamp(pixels, coverage, offset, opacity=1.0):
-    """Copy the layer's own pixels from ``offset`` (dx, dy) away under ``coverage``.
+def clone_stamp(pixels, coverage, offset, opacity=1.0, source=None):
+    """Copy pixels from ``offset`` (dx, dy) away under ``coverage``.
 
     A painted pixel at (x, y) takes the pixel at (x + dx, y + dy), drawn
     source-over through the brush coverage like the native Clone Stamp;
     where the source falls outside the layer nothing is drawn.
+
+    ``source`` (from :func:`sample_all_layers`) is the visible canvas already
+    resampled into this layer's grid and shifted by the offset, so a brushed
+    pixel takes ``source`` at the same position; a zero offset is then allowed
+    (stamping the canvas as shown onto an empty layer above it).
     """
     pixels = np.asarray(pixels)
     coverage = np.asarray(coverage)
@@ -274,24 +279,90 @@ def clone_stamp(pixels, coverage, offset, opacity=1.0):
     dx, dy = offset
     if not all(isinstance(v, int) and not isinstance(v, bool) for v in (dx, dy)):
         raise ValueError('Clone offsets must be whole pixels')
-    if dx == 0 and dy == 0:
+    if dx == 0 and dy == 0 and source is None:
         raise ValueError('Set a clone source offset first')
     opacity = float(opacity)
     if not 0 <= opacity <= 1:
         raise ValueError('Clone opacity must be between 0 and 1.')
     height, width = coverage.shape
     ys, xs = np.nonzero(coverage)
-    sy, sx = ys + dy, xs + dx
-    inside = (sx >= 0) & (sy >= 0) & (sx < width) & (sy < height)
-    ys, xs, sy, sx = ys[inside], xs[inside], sy[inside], sx[inside]
     out = np.array(pixels, copy=True)
-    if not len(ys) or opacity == 0:
-        return out
+    if source is None:
+        sy, sx = ys + dy, xs + dx
+        inside = (sx >= 0) & (sy >= 0) & (sx < width) & (sy < height)
+        ys, xs, sy, sx = ys[inside], xs[inside], sy[inside], sx[inside]
+        if not len(ys) or opacity == 0:
+            return out
+        src = _premultiply(pixels[sy, sx][None])[0].astype(np.float64)
+    else:
+        source = np.asarray(source)
+        if source.dtype != np.uint8 or source.shape != pixels.shape:
+            raise ValueError('the clone source must be uint8 RGBA matching the layer')
+        if not len(ys) or opacity == 0:
+            return out
+        # Already premultiplied: outside the canvas it is transparent, so draws nothing.
+        src = source[ys, xs].astype(np.float64)
     dst = _premultiply(pixels[ys, xs][None])[0].astype(np.float64)
-    src = _premultiply(pixels[sy, sx][None])[0].astype(np.float64)
     cov = (coverage[ys, xs] / 255.0 * opacity)[:, None]
     result = src * cov + dst * (1 - src[:, 3:4] / 255.0 * cov)
     result = np.floor(np.clip(result, 0, 255) + 0.5)
     result[:, :3] = np.minimum(result[:, :3], result[:, 3:4])
     out[ys, xs] = _unpremultiply(result.astype(np.uint8)[None])[0]
+    return out
+
+
+def sample_all_layers(canvas_rgba, layer, coverage, offset):
+    """The visible canvas as the clone source for ``layer`` (Sample: All Layers).
+
+    Ports ``cloneSample`` with ``sampleAllLayers`` (``CloneStamp.swift``):
+    the stroke copies from the live composite of every visible layer, placed
+    ``offset`` document pixels from where it paints, instead of from the
+    layer's own pixels. ``canvas_rgba`` is the straight-alpha composite;
+    ``coverage`` is the brush over the layer's own (unflipped) pixel grid.
+    Returns premultiplied uint8 RGBA in that grid, filled only inside the
+    brush's bounding box (transparent elsewhere and beyond the canvas), so it
+    follows the layer's placement, scale, flips and rotation.
+    """
+    from .composite import _doc_matrix
+
+    canvas_rgba = np.asarray(canvas_rgba)
+    coverage = np.asarray(coverage)
+    if canvas_rgba.dtype != np.uint8 or canvas_rgba.ndim != 3 or canvas_rgba.shape[2] != 4:
+        raise ValueError('expected a uint8 RGBA canvas')
+    dx, dy = offset
+    height, width = coverage.shape
+    out = np.zeros((height, width, 4), np.uint8)
+    ys, xs = np.nonzero(coverage)
+    if not len(ys):
+        return out
+    y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+    # Layer pixel centre (i + 0.5) -> its rectangle (scaled to layer.size) ->
+    # document (_doc_matrix, centre convention) -> canvas array index (- 0.5),
+    # then shifted by the clone offset. warpAffine with WARP_INVERSE_MAP wants
+    # that destination -> source map, measured from the box's own top-left.
+    rect_w, rect_h = layer.size
+    scale = np.diag([rect_w / width, rect_h / height])
+    doc = _doc_matrix(layer.origin, layer.size, layer.rotation, layer.flip_x, layer.flip_y)
+    linear = doc[:, :2] @ scale
+    shift = linear @ np.array([x0 + 0.5, y0 + 0.5]) + doc[:, 2] - 0.5 + np.array([dx, dy], np.float64)
+    warp = np.hstack([linear, shift[:, None]])
+    exact = (np.allclose(linear, np.eye(2)) and np.allclose(shift, np.rint(shift)))
+    flags = (cv2.INTER_NEAREST if exact or layer.sampling == 'Nearest' else cv2.INTER_LINEAR)
+    # Premultiply only the canvas the box can reach (a 26 MP canvas in float
+    # would cost close to a gigabyte for a small dab).
+    bw, bh = int(x1 - x0), int(y1 - y0)
+    corners = warp @ np.array([[0, bw, 0, bw], [0, 0, bh, bh], [1, 1, 1, 1]], np.float64)
+    cy, cx = canvas_rgba.shape[:2]
+    sx0, sy0 = (max(0, int(np.floor(v)) - 2) for v in corners.min(axis=1))
+    sx1, sy1 = min(cx, int(np.ceil(corners[0].max())) + 3), min(cy, int(np.ceil(corners[1].max())) + 3)
+    if sx0 >= sx1 or sy0 >= sy1:
+        return out
+    warp[:, 2] -= (sx0, sy0)
+    source = _premultiply(canvas_rgba[sy0:sy1, sx0:sx1]).astype(np.float32)
+    box = cv2.warpAffine(source, warp, (bw, bh),
+                         flags=flags | cv2.WARP_INVERSE_MAP,
+                         borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+    box = np.floor(np.clip(box, 0, 255) + 0.5).astype(np.uint8)
+    box[..., :3] = np.minimum(box[..., :3], box[..., 3:4])
+    out[y0:y1, x0:x1] = box
     return out
